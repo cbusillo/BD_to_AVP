@@ -34,16 +34,25 @@ export PATH="$BREW_PATH:$PATH"
 echo "Updating Homebrew..."
 "$BREW_PATH/brew" update
 
+check_app_or_install() {
+    local app_name="$1"
+    local cask_name="$2"
+    local app_path="/Applications/$app_name.app"
+
+    if [ -d "$app_path" ]; then
+        echo "$app_name is already installed at $app_path."
+    else
+        echo "$app_name not found in /Applications. Attempting to install via Homebrew Cask..."
+        "$BREW_PATH/brew" install --cask "$cask_name" || handle_error "Failed to install $cask_name"
+    fi
+}
+
 echo "Installing dependencies..."
 "$BREW_PATH/brew" install python@3.12 ffmpeg mp4box || handle_error "Failed to install dependencies"
 "$BREW_PATH/brew" install --cask --no-quarantine wine-stable || handle_error "Failed to install wine-stable"
 
-  if [ -d "/Applications/MakeMKV.app/" ]; then
-      echo "makemkv is already installed at /Applications/MakeMKV.app/."
-  else
-      echo "MakeMKV.app not found in /Applications. Attempting to install via Homebrew..."
-      brew install makemkv || handle_error "Failed to install makemkv"
-  fi
+check_app_or_install "MakeMKV" "makemkv"
+check_app_or_install "Wine Stable" "wine-stable"
 
 # Optionally handle spatial-media-kit-tool setup here if automated download and installation are feasible
 
