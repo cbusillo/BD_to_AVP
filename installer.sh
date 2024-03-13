@@ -34,14 +34,27 @@ export PATH="$BREW_PATH:$PATH"
 echo "Updating Homebrew..."
 "$BREW_PATH/brew" update
 
+install_or_upgrade() {
+    if "$BREW_PATH/brew" list "$1" &>/dev/null; then
+        echo "Upgrading $1..."
+        "$BREW_PATH/brew" upgrade "$1"
+    else
+        echo "Installing $1..."
+        "$BREW_PATH/brew" install "$1"
+    fi
+}
+
 echo "Installing dependencies..."
-"$BREW_PATH/brew" install python@3.12 ffmpeg makemkv mp4box || handle_error "Failed to install dependencies"
-"$BREW_PATH/brew" install --cask --no-quarantine wine-stable || handle_error "Failed to install wine-stable"
+install_or_upgrade python@3.12
+install_or_upgrade ffmpeg
+install_or_upgrade makemkv
+install_or_upgrade mp4box
+install_or_upgrade --cask --no-quarantine wine-stable
 
 # Optionally handle spatial-media-kit-tool setup here if automated download and installation are feasible
 
 echo "Installing Poetry..."
-"$BREW_PATH/brew" install poetry || handle_error "Failed to install Poetry"
+install_or_upgrade poetry
 
 echo "Cloning BD_to_AVP repository..."
 git clone https://github.com/cbusillo/BD_to_AVP.git || handle_error "Failed to clone BD_to_AVP repository"
