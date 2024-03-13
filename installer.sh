@@ -5,7 +5,7 @@ handle_error() {
     echo "Error: $1"
     exit 1
 }
-
+cd ~ || handle_error "Failed to change directory to ~"
 echo "Checking for Homebrew..."
 BREW_PATH=""
 if [[ -d "/opt/homebrew/bin" ]]; then
@@ -24,7 +24,8 @@ if [ -z "$BREW_PATH" ]; then
     else
         BREW_PATH="/usr/local/bin"
     fi
-    echo 'export PATH="'$BREW_PATH':$PATH"' >> ~/.zshrc
+  echo "export PATH=\"$BREW_PATH:\$PATH\"" >> ~/.zshrc
+
 else
     echo "Homebrew is already installed."
 fi
@@ -85,3 +86,4 @@ poetry install || handle_error "Failed to set up BD_to_AVP environment with Poet
 echo "BD_to_AVP environment setup complete."
 echo "You can now run BD_to_AVP with the following command:"
 echo "poetry run bd-to-avp"
+cd "$CLONE_DIR" || handle_error "Failed to change directory to $CLONE_DIR"
