@@ -48,12 +48,26 @@ check_app_or_install() {
 }
 
 echo "Installing dependencies..."
-"$BREW_PATH/brew" install python@3.12 ffmpeg mp4box || handle_error "Failed to install dependencies"
+"$BREW_PATH/brew" install python@3.12 ffmpeg mp4box jq || handle_error "Failed to install dependencies"
 
 check_app_or_install "MakeMKV" "makemkv"
 check_app_or_install "Wine Stable" "wine-stable"
 
-# Optionally handle spatial-media-kit-tool setup here if automated download and installation are feasible
+echo "Fetching the latest release of spatial-media-kit-tool..."
+release_json=$(curl -s https://api.github.com/repos/sturmen/SpatialMediaKit/releases/latest)
+
+download_url=$(echo "$release_json" | jq -r '.assets[] | select(.name | contains("spatial-media-kit-tool")) | .browser_download_url')
+
+if [[ -z "$download_url" ]]; then
+    handle_error "Failed to find download URL for spatial-media-kit-tool"
+fi
+
+echo "Downloading spatial-media-kit-tool from $download_url..."
+curl -L "$download_url" -o spatial-media-kit-tool || handle_error "Failed to download spatial-media-kit-tool"
+
+chmod +x spatial-media-kit-tool
+sudo mv spatial-media-kit-tool /usr/local/bin/ || handle_error "Failed to move spatial-media-kit-tool to /usr/local/bin"
+echo "spatial-media-kit-tool installed successfully."
 
 echo "Installing Poetry..."
 "$BREW_PATH/brew" install poetry || handle_error "Failed to install Poetry"
