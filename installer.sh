@@ -48,7 +48,7 @@ check_app_or_install() {
 }
 
 echo "Installing dependencies..."
-"$BREW_PATH/brew" install python@3.12 ffmpeg mp4box jq || handle_error "Failed to install dependencies"
+"$BREW_PATH/brew" install python@3.12 ffmpeg mp4box || handle_error "Failed to install dependencies"
 
 check_app_or_install "MakeMKV" "makemkv"
 check_app_or_install "Wine Stable" "wine-stable"
@@ -58,7 +58,7 @@ download_url="https://github.com/sturmen/SpatialMediaKit/releases/download/v0.0.
 curl -L "$download_url" -o spatial-media-kit-tool || handle_error "Failed to download spatial-media-kit-tool"
 
 chmod +x spatial-media-kit-tool
-sudo mv spatial-media-kit-tool "$BREW_PATH" || handle_error "Failed to move spatial-media-kit-tool to /usr/local/bin"
+sudo mv spatial-media-kit-tool "$BREW_PATH" || handle_error "Failed to move spatial-media-kit-tool to $BREW_PATH"
 echo "spatial-media-kit-tool installed successfully."
 
 
