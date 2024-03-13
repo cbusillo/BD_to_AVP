@@ -53,6 +53,8 @@ echo "Installing dependencies..."
 
 check_app_or_install "MakeMKV" "makemkv"
 check_app_or_install "Wine Stable" "wine-stable"
+ln -s /Applications/Wine\ Stable.app/Contents/Resources/wine/bin/wine "$BREW_PATH/wine"
+
 
 echo "Downloading spatial-media-kit-tool from the specific release..."
 download_url="https://github.com/sturmen/SpatialMediaKit/releases/download/v0.0.8-alpha/spatial-media-kit-tool"
