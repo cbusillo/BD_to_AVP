@@ -58,7 +58,7 @@ download_url="https://github.com/sturmen/SpatialMediaKit/releases/download/v0.0.
 curl -L "$download_url" -o spatial-media-kit-tool || handle_error "Failed to download spatial-media-kit-tool"
 
 chmod +x spatial-media-kit-tool
-sudo mv spatial-media-kit-tool "$BREW_PATH" || handle_error "Failed to move spatial-media-kit-tool to $BREW_PATH"
+mv spatial-media-kit-tool "$BREW_PATH" || handle_error "Failed to move spatial-media-kit-tool to $BREW_PATH"
 echo "spatial-media-kit-tool installed successfully."
 
 
