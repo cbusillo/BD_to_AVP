@@ -66,15 +66,25 @@ echo "Downloading spatial-media-kit-tool from $download_url..."
 curl -L "$download_url" -o spatial-media-kit-tool || handle_error "Failed to download spatial-media-kit-tool"
 
 chmod +x spatial-media-kit-tool
-sudo mv spatial-media-kit-tool /usr/local/bin/ || handle_error "Failed to move spatial-media-kit-tool to /usr/local/bin"
+sudo mv spatial-media-kit-tool "$BREW_PATH" || handle_error "Failed to move spatial-media-kit-tool to /usr/local/bin"
 echo "spatial-media-kit-tool installed successfully."
 
 echo "Installing Poetry..."
 "$BREW_PATH/brew" install poetry || handle_error "Failed to install Poetry"
 
 echo "Cloning BD_to_AVP repository..."
-git clone https://github.com/cbusillo/BD_to_AVP.git || handle_error "Failed to clone BD_to_AVP repository"
-cd BD_to_AVP || handle_error "Failed to change directory to BD_to_AVP"
+REPO_URL="https://github.com/cbusillo/BD_to_AVP.git"
+CLONE_DIR="BD_to_AVP"
+
+if [ -d "$CLONE_DIR" ]; then
+    echo "$CLONE_DIR directory already exists. Checking for updates..."
+    cd "$CLONE_DIR" || handle_error "Failed to change directory to $CLONE_DIR"
+    git pull || handle_error "Failed to update $CLONE_DIR repository"
+else
+    echo "Cloning BD_to_AVP repository..."
+    git clone "$REPO_URL" || handle_error "Failed to clone BD_to_AVP repository"
+    cd "$CLONE_DIR" || handle_error "Failed to change directory to $CLONE_DIR"
+fi
 
 echo "Setting up BD_to_AVP environment..."
 poetry install || handle_error "Failed to set up BD_to_AVP environment with Poetry"
