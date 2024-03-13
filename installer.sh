@@ -1,4 +1,5 @@
 #!/bin/bash
+#/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/master/installer.sh)"
 
 handle_error() {
     echo "Error: $1"
@@ -6,38 +7,41 @@ handle_error() {
 }
 
 echo "Checking for Homebrew..."
-if ! command -v brew &>/dev/null; then
+BREW_PATH=""
+if [[ -d "/opt/homebrew/bin" ]]; then
+    # Apple Silicon
+    BREW_PATH="/opt/homebrew/bin"
+elif [[ -d "/usr/local/bin/brew" ]]; then
+    # Intel Mac
+    BREW_PATH="/usr/local/bin"
+fi
+
+if [ -z "$BREW_PATH" ]; then
     echo "Homebrew not found. Installing Homebrew..."
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || handle_error "Failed to install Homebrew"
-    echo "Adding Homebrew to your PATH..."
-
-    # Homebrew will be installed in /opt/homebrew on Apple Silicon and /usr/local on Intel.
-    # We need to determine the correct path and add it to the PATH environment variable.
     if [[ -d "/opt/homebrew/bin" ]]; then
-        echo 'export PATH="/opt/homebrew/bin:$PATH"' >> ~/.zshrc
-        export PATH="/opt/homebrew/bin:$PATH"
-    elif [[ -d "/usr/local/bin" ]]; then
-        echo 'export PATH="/usr/local/bin:$PATH"' >> ~/.zshrc
-        export PATH="/usr/local/bin:$PATH"
+        BREW_PATH="/opt/homebrew/bin"
+    else
+        BREW_PATH="/usr/local/bin"
     fi
+    echo 'export PATH="'$BREW_PATH':$PATH"' >> ~/.zshrc
 else
     echo "Homebrew is already installed."
 fi
 
-# Source the .zshrc to ensure the updated PATH is used in this script
-source ~/.zshrc
+export PATH="$BREW_PATH:$PATH"
 
 echo "Updating Homebrew..."
-brew update
+"$BREW_PATH/brew" update
 
 echo "Installing dependencies..."
-brew install python@3.12 ffmpeg makemkv mp4box || handle_error "Failed to install dependencies"
-brew install --cask --no-quarantine wine-stable || handle_error "Failed to install wine-stable"
+"$BREW_PATH/brew" install python@3.12 ffmpeg makemkv mp4box || handle_error "Failed to install dependencies"
+"$BREW_PATH/brew" install --cask --no-quarantine wine-stable || handle_error "Failed to install wine-stable"
 
 # Optionally handle spatial-media-kit-tool setup here if automated download and installation are feasible
 
 echo "Installing Poetry..."
-brew install poetry || handle_error "Failed to install Poetry"
+"$BREW_PATH/brew" install poetry || handle_error "Failed to install Poetry"
 
 echo "Cloning BD_to_AVP repository..."
 git clone https://github.com/cbusillo/BD_to_AVP.git || handle_error "Failed to clone BD_to_AVP repository"
