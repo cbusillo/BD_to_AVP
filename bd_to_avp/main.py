@@ -1,5 +1,6 @@
 import argparse
 import itertools
+import os
 import shutil
 import subprocess
 import sys
@@ -8,9 +9,11 @@ import time
 from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).parent
-MAKEMKVCON_PATH = "/Applications/MakeMKV.app/Contents/MacOS/makemkvcon"
-WINE_PATH = "wine"
-FRIMDECODE_PATH = SCRIPT_PATH / "bin" / "FRIMDecode64.exe"
+MAKEMKVCON_PATH = Path("/Applications/MakeMKV.app/Contents/MacOS/makemkvcon")
+HOMEBREW_PREFIX = Path(os.getenv("HOMEBREW_PREFIX", "/opt/homebrew"))
+WINE_PATH = HOMEBREW_PREFIX / "bin" / "wine"
+SPATIAL_MEDIA = "spatial-media"
+TSMUXER_PATH = SCRIPT_PATH / "bin" / "tsMuxeR"
 
 stop_spinner_flag = False
 
@@ -49,7 +52,7 @@ def stop_spinner(thread) -> None:
 
 def run_command(command: list[str], command_name=None):
     if not command_name:
-        command_name = command_name[0]
+        command_name = command[0]
     global stop_spinner_flag
     output_lines = []
     stop_spinner_flag = False
@@ -166,16 +169,20 @@ def extract_mvc_bitstream_and_audio(input_file: Path, output_folder: Path) -> (P
 def split_mvc_to_stereo(output_folder: Path, video_input_path: Path, frame_rate: str, resolution: str) -> (Path, Path):
     left_temp_path = output_folder / "left_temp.raw"
     right_temp_path = output_folder / "right_temp.raw"
-    wine_command = [
-        str(WINE_PATH),
-        str(FRIMDECODE_PATH),
-        "-i:mvc",
-        str(video_input_path),
-        "-o",
-        str(left_temp_path),
-        str(right_temp_path),
-    ]
-    run_command(wine_command, "Splitting MVC bitstream to stereo streams.")
+
+    meta_content = """
+    MUXOPT --no-pcr-on-video-pid --new-audio-pes --demux --vbr --vbv-len=500
+    V_MPEG4/ISO/AVC, "{input_file_path}", track=1
+    V_MPEG4/ISO/MVC, "{input_file_path}", track=2
+    """.format(
+        input_file_path=video_input_path
+    )
+    video_meta_path = output_folder / "video.meta"
+    with open(video_meta_path, "w") as f:
+        f.write(meta_content)
+
+    tsmuxer_command = [str(WINE_PATH), str(TSMUXER_PATH), str(video_meta_path), str(output_folder)]
+    run_command(tsmuxer_command, "Splitting MVC bitstream to stereo streams.")
 
     left_output_path = output_folder / "left_movie.mov"
     right_output_path = output_folder / "right_movie.mov"
@@ -220,7 +227,7 @@ def split_mvc_to_stereo(output_folder: Path, video_input_path: Path, frame_rate:
 def combine_to_mv_hevc(output_folder: Path, quality: str, fov: str, left_movie: Path, right_movie: Path) -> Path:
     output_file = output_folder / f"{output_folder.stem}_MV-HEVC.mov"
     command = [
-        "spatial-media",
+        str(SPATIAL_MEDIA),
         "-s",
         str(left_movie),
         str(right_movie),
@@ -265,7 +272,7 @@ def remux_audio(mv_hevc_file: Path, audio_file: Path, final_output: Path):
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Process 3D video content.")
-    parser.add_argument("--source", required=True, help="Source disc number, MKV file path, or ISO image path.")
+    parser.add_argument("--source", required=True, help="Source disc number, mounted disk path, or ISO image path.")
     parser.add_argument("--output_folder", type=Path, default=Path.cwd(), help="Output folder path. Defaults to current directory.")
     parser.add_argument(
         "--keep_intermediate", action="store_true", default=False, help="Keep intermediate files. Defaults to false."
@@ -288,13 +295,12 @@ def find_main_feature(folder: Path) -> Path:
 
 
 def main() -> None:
-
     args = parse_arguments()
     input_path = Path(args.source)
     movie_name, output_folder, mkv_output_path = None, None, None
 
-    if "disc:" in args.source.lower() or input_path.suffix.lower() in [".iso", ".img", ".bin"]:
-        source = "iso:" + str(input_path) if input_path.suffix.lower() in [".iso", ".img", ".bin"] else args.source
+    if "disc:" in args.source.lower() or input_path.suffix.lower() in [".iso", ".img", ".FRIM"]:
+        source = "iso:" + str(input_path) if input_path.suffix.lower() in [".iso", ".img", ".FRIM"] else args.source
         movie_name, output_folder = prepare_output_folder_for_source(input_path, args.output_folder)
         mkv_output_path = rip_disc_to_mkv(source, output_folder)
     elif input_path.suffix.lower() == ".mkv":
