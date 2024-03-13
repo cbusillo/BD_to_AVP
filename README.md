@@ -56,6 +56,14 @@ chmod +x spatial-media-kit-tool
 sudo cp spatial-media-kit-tool /usr/local/bin
 ```
 
+### Installing MP4Box
+
+Install MP4Box via Homebrew:
+
+```bash
+brew install mp4box
+```
+
 ## Usage
 
 Navigate to the tool's directory in your terminal and execute the command with the required and optional parameters:
