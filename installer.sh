@@ -1,3 +1,4 @@
+#!/bin/bash
 
 handle_error() {
     echo "Error: $1"
@@ -8,15 +9,29 @@ echo "Checking for Homebrew..."
 if ! command -v brew &>/dev/null; then
     echo "Homebrew not found. Installing Homebrew..."
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || handle_error "Failed to install Homebrew"
+    echo "Adding Homebrew to your PATH..."
+
+    # Homebrew will be installed in /opt/homebrew on Apple Silicon and /usr/local on Intel.
+    # We need to determine the correct path and add it to the PATH environment variable.
+    if [[ -d "/opt/homebrew/bin" ]]; then
+        echo 'export PATH="/opt/homebrew/bin:$PATH"' >> ~/.zshrc
+        export PATH="/opt/homebrew/bin:$PATH"
+    elif [[ -d "/usr/local/bin" ]]; then
+        echo 'export PATH="/usr/local/bin:$PATH"' >> ~/.zshrc
+        export PATH="/usr/local/bin:$PATH"
+    fi
 else
     echo "Homebrew is already installed."
 fi
+
+# Source the .zshrc to ensure the updated PATH is used in this script
+source ~/.zshrc
 
 echo "Updating Homebrew..."
 brew update
 
 echo "Installing dependencies..."
-brew install python@3.12 ffmpeg makemkv mp4box git || handle_error "Failed to install dependencies"
+brew install python@3.12 ffmpeg makemkv mp4box || handle_error "Failed to install dependencies"
 brew install --cask --no-quarantine wine-stable || handle_error "Failed to install wine-stable"
 
 # Optionally handle spatial-media-kit-tool setup here if automated download and installation are feasible
