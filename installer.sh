@@ -43,13 +43,12 @@ check_app_or_install() {
         echo "$app_name is already installed at $app_path."
     else
         echo "$app_name not found in /Applications. Attempting to install via Homebrew Cask..."
-        "$BREW_PATH/brew" install --cask "$cask_name" || handle_error "Failed to install $cask_name"
+        "$BREW_PATH/brew" install --cask --no-quarantine "$cask_name" || handle_error "Failed to install $cask_name"
     fi
 }
 
 echo "Installing dependencies..."
 "$BREW_PATH/brew" install python@3.12 ffmpeg mp4box || handle_error "Failed to install dependencies"
-"$BREW_PATH/brew" install --cask --no-quarantine wine-stable || handle_error "Failed to install wine-stable"
 
 check_app_or_install "MakeMKV" "makemkv"
 check_app_or_install "Wine Stable" "wine-stable"
