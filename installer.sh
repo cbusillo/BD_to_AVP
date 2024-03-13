@@ -53,24 +53,14 @@ echo "Installing dependencies..."
 check_app_or_install "MakeMKV" "makemkv"
 check_app_or_install "Wine Stable" "wine-stable"
 
-echo "Fetching the latest release of spatial-media-kit-tool..."
-release_json=$(curl -s https://api.github.com/repos/sturmen/SpatialMediaKit/releases/latest)
+echo "Downloading spatial-media-kit-tool from the specific release..."
+download_url="https://github.com/sturmen/SpatialMediaKit/releases/download/v0.0.8-alpha/spatial-media-kit-tool"
+curl -L "$download_url" -o spatial-media-kit-tool || handle_error "Failed to download spatial-media-kit-tool"
 
-if echo "$release_json" | jq . >&/dev/null; then
-    download_url=$(echo "$release_json" | jq -r '.assets[] | select(.name | contains("spatial-media-kit-tool")) | .browser_download_url')
+chmod +x spatial-media-kit-tool
+sudo mv spatial-media-kit-tool "$BREW_PATH" || handle_error "Failed to move spatial-media-kit-tool to /usr/local/bin"
+echo "spatial-media-kit-tool installed successfully."
 
-    if [[ -z "$download_url" || "$download_url" == "null" ]]; then
-        handle_error "Failed to find download URL for spatial-media-kit-tool in the latest release"
-    else
-        echo "Downloading spatial-media-kit-tool from $download_url..."
-        curl -L "$download_url" -o spatial-media-kit-tool || handle_error "Failed to download spatial-media-kit-tool"
-        chmod +x spatial-media-kit-tool
-        sudo mv spatial-media-kit-tool /usr/local/bin/ || handle_error "Failed to move spatial-media-kit-tool to /usr/local/bin"
-        echo "spatial-media-kit-tool installed successfully."
-    fi
-else
-    handle_error "Failed to fetch or parse the latest release information for spatial-media-kit-tool"
-fi
 
 echo "Installing Poetry..."
 "$BREW_PATH/brew" install poetry || handle_error "Failed to install Poetry"
