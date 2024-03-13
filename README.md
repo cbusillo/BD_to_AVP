@@ -13,6 +13,8 @@ Ensure the following are installed on your Mac:
 - **FFmpeg**: A complete, cross-platform solution to record, convert, and stream audio and video.
 - **Wine**: A free and open-source compatibility layer allowing Windows programs to run on Unix-like operating systems.
 - **MakeMKV**: For converting disc video content into MKV files.
+- **spatial-media-kit-tool**: A tool for injecting 360° metadata into video files.
+- **MP4Box**: A multimedia packager available for Windows, Mac, and Linux.
 
 ### Installing Homebrew
 
