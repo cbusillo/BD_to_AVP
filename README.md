@@ -5,6 +5,12 @@
 This tool processes 3D video content from Blu-ray discs, ISO images, or MKV files, creating a final video file compatible with
 various viewing platforms. It uses FFmpeg, MakeMKV, and Wine for video extraction, audio transcoding, and video stream merging.
 
+## Quick install
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/master/installer.sh)"
+```
+
 ## Prerequisites
 
 Ensure the following are installed on your Mac:
