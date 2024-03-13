@@ -1,13 +1,14 @@
 import argparse
 import atexit
 import itertools
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import threading
-from asyncio import sleep
+from time import sleep
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -18,7 +19,7 @@ WINE_PATH = HOMEBREW_PREFIX / "bin/wine"
 FRIM_PATH = SCRIPT_PATH / "FRIM_x64_version_1.31" / "x64"
 FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
 MP4BOX_PATH = HOMEBREW_PREFIX / "bin" / "MP4Box"
-SPATIAL_MEDIA = "spatial-media"
+SPATIAL_MEDIA = HOMEBREW_PREFIX / "/bin/spatial-media-kit-tool"
 IMAGE_EXTENSIONS = [".iso", ".img", ".bin"]
 
 stop_spinner_flag = False
@@ -264,14 +265,18 @@ def handle_process_output(process: subprocess.Popen):
     stderr_thread.join()
 
 
-def generate_ffmpeg_command(input_fifo: Path, output_file: Path, resolution: str, frame_rate: str) -> list[str]:
-    return [
+def generate_ffmpeg_command(
+    input_fifo: Path, output_file: Path, resolution: str, frame_rate: str, input_color_depth: int
+) -> list[str]:
+    pix_fmt = "yuv420p" if input_color_depth == 8 else "yuv422p10le"
+
+    command = [
         "ffmpeg",
         "-y",
         "-f",
         "rawvideo",
         "-pix_fmt",
-        "yuv420p",
+        pix_fmt,
         "-s",
         resolution,
         "-r",
@@ -279,15 +284,21 @@ def generate_ffmpeg_command(input_fifo: Path, output_file: Path, resolution: str
         "-i",
         str(input_fifo),
         "-c:v",
-        "hevc_videotoolbox",
-        "-b:v",
-        "30M",
-        str(output_file),
+        "prores_ks",
+        "-profile:v",
+        "3",  # This is the profile option for prores_ks codec
+        "-vendor",
+        "ap10",
+        "-pix_fmt",
+        pix_fmt,
+        str(output_file),  # The output file path must be the last item
     ]
+
+    return command
 
 
 def split_mvc_to_stereo(
-    output_folder: Path, video_input_path: Path, frame_rate: str, resolution: str, disc_name: str
+    output_folder: Path, video_input_path: Path, frame_rate: str, resolution: str, disc_name: str, input_color_depth: int
 ) -> (Path, Path):
 
     if "/" in frame_rate:
@@ -301,8 +312,8 @@ def split_mvc_to_stereo(
     frim_log = output_folder / f"{disc_name}_frim.log"
 
     with temporary_fifo("left_fifo", "right_fifo") as (left_fifo, right_fifo):
-        ffmpeg_left_command = generate_ffmpeg_command(left_fifo, left_output_path, resolution, frame_rate)
-        ffmpeg_right_command = generate_ffmpeg_command(right_fifo, right_output_path, resolution, frame_rate)
+        ffmpeg_left_command = generate_ffmpeg_command(left_fifo, left_output_path, resolution, frame_rate, input_color_depth)
+        ffmpeg_right_command = generate_ffmpeg_command(right_fifo, right_output_path, resolution, frame_rate, input_color_depth)
 
         ffmpeg_left_process = run_command_async(ffmpeg_left_command, ffmpeg_left_log, "ffmpeg for left eye.")
         ffmpeg_right_process = run_command_async(ffmpeg_right_command, ffmpeg_right_log, "ffmpeg for right eye")
@@ -330,18 +341,22 @@ def split_mvc_to_stereo(
 
 
 def combine_to_mv_hevc(output_folder: Path, quality: str, fov: str, left_movie: Path, right_movie: Path) -> Path:
+
     output_file = output_folder / f"{output_folder.stem}_MV-HEVC.mov"
     command = [
         str(SPATIAL_MEDIA),
-        "-s",
+        "merge",
+        "-l",
         str(left_movie),
+        "-r",
         str(right_movie),
+        "-q",
+        quality,
+        "--left-is-primary",
+        "--horizontal-field-of-view",
+        fov,
         "-o",
         str(output_file),
-        "--fov",
-        fov,
-        "--quality",
-        quality,
     ]
     run_command(command, "Combining stereo HEVC streams to MV-HEVC.")
     return output_file
@@ -373,6 +388,40 @@ def remux_audio(mv_hevc_file: Path, audio_file: Path, final_output: Path):
         str(final_output),
     ]
     run_command(command, "Remuxing audio and video to final output.")
+
+
+def get_video_color_depth(input_file: str) -> int:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=pix_fmt",
+        "-of",
+        "json",
+        input_file,
+    ]
+    result = run_command(cmd, "Getting video color depth.")
+
+    json_start = result.find("{")
+    if json_start == -1:
+        print("No valid JSON output from ffprobe.")
+        return 8
+
+    json_output = result[json_start:]
+
+    try:
+        ffprobe_output = json.loads(json_output)
+        pix_fmt = ffprobe_output["streams"][0]["pix_fmt"]
+        if "10le" in pix_fmt or "10be" in pix_fmt:
+            return 10
+        else:
+            return 8
+    except json.JSONDecodeError:
+        print("Error decoding ffprobe JSON output.")
+        return 8
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -434,12 +483,14 @@ def main() -> None:
     # )  # TODO: uncomment this line and remove the two next lines
     video_output_path = output_folder / f"{disc_info['name']}_mvc.h264.mov"
     audio_output_path = output_folder / f"{disc_info['name']}_audio_5.1_LPCM.mov"
-    # left_eye_output_path, right_eye_output_path = split_mvc_to_stereo(
-    #     output_folder, video_output_path, disc_info["frame_rate"], disc_info["resolution"], disc_info["name"]
-    # ) # TODO: uncomment this line and remove the two next lines
 
-    left_eye_output_path = output_folder / f"{disc_info['name']}_left_movie.mov"
-    right_eye_output_path = output_folder / f"{disc_info['name']}_right_movie.mov"
+    input_color_depth = get_video_color_depth(str(video_output_path))
+    left_eye_output_path, right_eye_output_path = split_mvc_to_stereo(
+        output_folder, video_output_path, disc_info["frame_rate"], disc_info["resolution"], disc_info["name"], input_color_depth
+    )  # TODO: uncomment this line and remove the two next lines
+
+    # left_eye_output_path = output_folder / f"{disc_info['name']}_left_movie.mov"
+    # right_eye_output_path = output_folder / f"{disc_info['name']}_right_movie.mov"
 
     mv_hevc_file = combine_to_mv_hevc(output_folder, args.mv_hevc_quality, args.fov, left_eye_output_path, right_eye_output_path)
 
