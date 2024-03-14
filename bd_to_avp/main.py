@@ -435,9 +435,6 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Process 3D video content.")
     parser.add_argument("--source", required=True, help="Source disc number, MKV file path, or ISO image path.")
     parser.add_argument("--output_folder", type=Path, default=Path.cwd(), help="Output folder path. Defaults to current directory.")
-    parser.add_argument(
-        "--keep_intermediate", action="store_true", default=False, help="Keep intermediate files. Defaults to false."
-    )
     parser.add_argument("--transcode_audio", action="store_true", help="Transcode audio to AAC format.")
     parser.add_argument("--audio_bitrate", default="384k", help="Audio bitrate for transcoding.")
     parser.add_argument("--mv_hevc_quality", default="100", help="Quality factor for MV-HEVC encoding.")
@@ -509,17 +506,16 @@ def main() -> None:
     final_output = output_folder / f"{disc_info['name']}_AVP.mov"
     remux_audio(mv_hevc_file, audio_file, final_output)
 
-    # if not args.keep_intermediate:
-    #     for file_path in [
-    #         video_output_path,
-    #         audio_output_path,
-    #         left_eye_output_path,
-    #         right_eye_output_path,
-    #         mv_hevc_file,
-    #         audio_file,
-    #     ]:
-    #         if file_path.exists():
-    #             file_path.unlink()
+    # for file_path in [
+    #     video_output_path,
+    #     audio_output_path,
+    #     left_eye_output_path,
+    #     right_eye_output_path,
+    #     mv_hevc_file,
+    #     audio_file,
+    # ]:
+    #     if file_path.exists():
+    #         file_path.unlink()
 
 
 if __name__ == "__main__":

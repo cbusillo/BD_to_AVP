@@ -73,7 +73,6 @@ poetry run bd_to_avp --source <source> --output_folder <output_folder> [--keep_i
 
 - `--source`: Source disc number, MKV file path, or ISO image path (required).
 - `--output_folder`: Output folder path. Defaults to the current directory.
-- `--keep_intermediate`: Keep intermediate files (default: delete).
 - `--transcode_audio`: Enable audio transcoding to AAC (disabled by default).
 - `--audio_bitrate`: Audio bitrate for transcoding (default: "384k").
 - `--mv_hevc_quality`: Quality factor for MV-HEVC encoding (default: "75").
