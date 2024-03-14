@@ -134,7 +134,7 @@ def run_command(command: list[str], command_name: str = None, env: dict[str, str
 
 def prepare_output_folder_for_source(disc_name: str, output_folder: Path) -> (str, Path):
     output_path = output_folder / disc_name
-    remove_folder_if_exists(output_path)  # TODO: uncomment this line
+    # remove_folder_if_exists(output_path)  # TODO: uncomment this line
     output_path.mkdir(parents=True, exist_ok=True)
     return output_path
 
@@ -268,9 +268,12 @@ def handle_process_output(process: subprocess.Popen):
 
 
 def generate_ffmpeg_command(
-    input_fifo: Path, output_path: Path, resolution: str, frame_rate: str, input_color_depth: int
+    input_fifo: Path, output_path: Path, resolution: str, frame_rate: str, input_color_depth: int, bitrate: int = 50
 ) -> list[str]:
-    pix_fmt = "yuv420p10le" if input_color_depth == 10 else "yuv420p"  # Adjust pixel format for color depth
+    pix_fmt = "yuv420p10le" if input_color_depth == 10 else "yuv420p"
+    bitrate_str = f"{bitrate}M"
+    buffer_size_str = f"{bitrate * 2}M"
+
     command = [
         "ffmpeg",
         "-y",
@@ -286,12 +289,17 @@ def generate_ffmpeg_command(
         str(input_fifo),
         "-c:v",
         "hevc_videotoolbox",
+        "-b:v",
+        bitrate_str,
+        "-bufsize",
+        buffer_size_str,
         "-tag:v",
-        "hvc1",  # This tag is often necessary for compatibility
+        "hvc1",
         "-profile:v",
-        "main10" if input_color_depth == 10 else "main",  # Adjust profile for color depth
+        "main10" if input_color_depth == 10 else "main",
         str(output_path),
     ]
+
     return command
 
 
@@ -432,7 +440,7 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--transcode_audio", action="store_true", help="Transcode audio to AAC format.")
     parser.add_argument("--audio_bitrate", default="384k", help="Audio bitrate for transcoding.")
-    parser.add_argument("--mv_hevc_quality", default="75", help="Quality factor for MV-HEVC encoding.")
+    parser.add_argument("--mv_hevc_quality", default="100", help="Quality factor for MV-HEVC encoding.")
     parser.add_argument("--fov", default="90", help="Horizontal field of view for MV-HEVC.")
     parser.add_argument("--frame_rate", help="Video frame rate. Detected automatically if not provided.")
     parser.add_argument("--resolution", help="Video resolution. Detected automatically if not provided.")
@@ -480,7 +488,7 @@ def main() -> None:
     video_output_path, audio_output_path = extract_mvc_bitstream_and_audio(
         mkv_output_path, output_folder, disc_info["name"]
     )  # TODO: uncomment this line and remove the two next lines
-    # video_output_path = output_folder / f"{disc_info['name']}_mvc.h264.mov"
+    # video_output_path = output_folder / f"{disc_info['name']}_mvc.h264"
     # audio_output_path = output_folder / f"{disc_info['name']}_audio_5.1_LPCM.mov"
 
     input_color_depth = get_video_color_depth(str(video_output_path))
@@ -501,17 +509,17 @@ def main() -> None:
     final_output = output_folder / f"{disc_info['name']}_AVP.mov"
     remux_audio(mv_hevc_file, audio_file, final_output)
 
-    if not args.keep_intermediate:
-        for file_path in [
-            video_output_path,
-            audio_output_path,
-            left_eye_output_path,
-            right_eye_output_path,
-            mv_hevc_file,
-            audio_file,
-        ]:
-            if file_path.exists():
-                file_path.unlink()
+    # if not args.keep_intermediate:
+    #     for file_path in [
+    #         video_output_path,
+    #         audio_output_path,
+    #         left_eye_output_path,
+    #         right_eye_output_path,
+    #         mv_hevc_file,
+    #         audio_file,
+    #     ]:
+    #         if file_path.exists():
+    #             file_path.unlink()
 
 
 if __name__ == "__main__":
