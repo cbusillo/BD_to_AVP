@@ -134,7 +134,7 @@ def run_command(command: list[str], command_name: str = None, env: dict[str, str
 
 def prepare_output_folder_for_source(disc_name: str, output_folder: Path) -> (str, Path):
     output_path = output_folder / disc_name
-    # remove_folder_if_exists(output_path)  # TODO: uncomment this line
+    remove_folder_if_exists(output_path)  # TODO: uncomment this line
     output_path.mkdir(parents=True, exist_ok=True)
     return output_path
 
@@ -199,7 +199,7 @@ def get_disc_and_mvc_video_info(source: Path) -> dict:
 
 
 def extract_mvc_bitstream_and_audio(input_file: Path, output_folder: Path, disc_name: str) -> (Path, Path):
-    video_output_path = output_folder / f"{disc_name}_mvc.h264.mov"
+    video_output_path = output_folder / f"{disc_name}_mvc.h264"
     audio_output_path = output_folder / f"{disc_name}_audio_5.1_LPCM.mov"
     command = [
         str(FFMPEG_PATH),
@@ -268,10 +268,9 @@ def handle_process_output(process: subprocess.Popen):
 
 
 def generate_ffmpeg_command(
-    input_fifo: Path, output_file: Path, resolution: str, frame_rate: str, input_color_depth: int
+    input_fifo: Path, output_path: Path, resolution: str, frame_rate: str, input_color_depth: int
 ) -> list[str]:
-    pix_fmt = "yuv420p" if input_color_depth == 8 else "yuv422p10le"
-
+    pix_fmt = "yuv420p10le" if input_color_depth == 10 else "yuv420p"  # Adjust pixel format for color depth
     command = [
         "ffmpeg",
         "-y",
@@ -286,16 +285,13 @@ def generate_ffmpeg_command(
         "-i",
         str(input_fifo),
         "-c:v",
-        "prores_ks",
+        "hevc_videotoolbox",
+        "-tag:v",
+        "hvc1",  # This tag is often necessary for compatibility
         "-profile:v",
-        "2",  # This is the profile option for prores_ks codec
-        "-vendor",
-        "ap10",
-        "-pix_fmt",
-        pix_fmt,
-        str(output_file),  # The output file path must be the last item
+        "main10" if input_color_depth == 10 else "main",  # Adjust profile for color depth
+        str(output_path),
     ]
-
     return command
 
 
