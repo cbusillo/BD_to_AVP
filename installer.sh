@@ -85,6 +85,9 @@ fi
 echo "Setting up BD_to_AVP environment..."
 poetry install || handle_error "Failed to set up BD_to_AVP environment with Poetry"
 
+echo "Installing Rosetta 2..."
+/usr/sbin/softwareupdate --install-rosetta --agree-to-license
+
 echo "BD_to_AVP environment setup complete."
 echo "You can now run BD_to_AVP with the following command:"
 echo "poetry run bd-to-avp"

@@ -15,6 +15,10 @@ various viewing platforms. It uses FFmpeg, MakeMKV, and Wine for video extractio
 
 Ensure the following are installed on your Mac:
 
+- **macOS Sonoma**: The latest version of macOS.
+- **Rosetta 2**: A compatibility layer allowing Intel-based applications to run on Apple Silicon Macs.
+- **Python 3.12**: The latest version of Python.
+- **Poetry**: A dependency manager for Python.
 - **Homebrew**: The missing package manager for macOS (or Linux).
 - **FFmpeg**: A complete, cross-platform solution to record, convert, and stream audio and video.
 - **Wine**: A free and open-source compatibility layer allowing Windows programs to run on Unix-like operating systems.
@@ -22,54 +26,34 @@ Ensure the following are installed on your Mac:
 - **spatial-media-kit-tool**: A tool for injecting 360° metadata into video files.
 - **MP4Box**: A multimedia packager available for Windows, Mac, and Linux.
 
-### Installing Homebrew
+## Installation
 
-Open Terminal and run:
+To set up your macOS environment for video processing, including creating and handling 3D video content, follow these steps to install the necessary tools using Homebrew and manual installation. This includes the installation of Homebrew itself, FFmpeg for video encoding and decoding, Wine for running Windows applications, MakeMKV for ripping Blu-ray and DVD to MKV, spatial-media-kit-tool for handling spatial media, and MP4Box for multimedia packaging.
 
 ```bash
+# Install Rosetta 2
+/usr/sbin/softwareupdate --install-rosetta --agree-to-license
+
+# Install Homebrew
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
 
-### Installing FFmpeg
+# Install FFmpeg, MakeMKV, MP4Box, and Python 3.12
+brew install ffmpeg makemkv mp4box python@3.12
 
-With Homebrew installed:
-
-```bash
-brew install ffmpeg
-```
-
-### Installing Wine
-
-Install Wine via Homebrew:
-
-```bash
+# Install Wine
 brew tap homebrew/cask-versions
 brew install --cask --no-quarantine wine-stable
-```
 
-### Installing MakeMKV
-
-Install MakeMKV via Homebrew:
-
-```bash
-brew install makemkv
-```
-
-### Installing spatial-media-kit-tool
-
-Download spatial-media-kit-tool from the [releases](https://github.com/sturmen/SpatialMediaKit/releases) page
-
-```bash
+# Install spatial-media-kit-tool
+# Download spatial-media-kit-tool from https://github.com/sturmen/SpatialMediaKit/releases
 chmod +x spatial-media-kit-tool
-sudo cp spatial-media-kit-tool /usr/local/bin
-```
+sudo cp spatial-media-kit-tool "$HOMEBREW_PREFIX/bin"
 
-### Installing MP4Box
+# Install Poetry
+curl -sSL https://install.python-poetry.org | python3 -
 
-Install MP4Box via Homebrew:
-
-```bash
-brew install mp4box
+# Ensure Python 3.12 and Poetry are correctly installed
+python3.12 -m pip install --upgrade pip
 ```
 
 ## Usage
@@ -79,7 +63,9 @@ Navigate to the tool's directory in your terminal and execute the command with t
 ### Command Syntax
 
 ```bash
-python main.py --source <source_path> [--output_folder <output_path>] [options]
+cd /path/to/BD_to_AVP
+poetry install
+poetry run bd_to_avp --source <source> --output_folder <output_folder> [--keep_intermediate] [--transcode_audio] [--audio_bitrate <audio_bitrate>] [--mv_hevc_quality <mv_hevc_quality>] [--fov <fov>] [--frame_rate <frame_rate>] [--resolution <resolution>]
 ```
 
 ### Parameters
