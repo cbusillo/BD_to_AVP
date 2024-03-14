@@ -20,7 +20,7 @@ FFMPEG_PATH = HOMEBREW_PREFIX / "bin/ffmpeg"
 FRIM_PATH = SCRIPT_PATH / "FRIM_x64_version_1.31" / "x64"
 FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
 MP4BOX_PATH = HOMEBREW_PREFIX / "bin" / "MP4Box"
-SPATIAL_MEDIA = HOMEBREW_PREFIX / "/bin/spatial-media-kit-tool"
+SPATIAL_MEDIA = HOMEBREW_PREFIX / "bin/spatial-media-kit-tool"
 IMAGE_EXTENSIONS = [".iso", ".img", ".bin"]
 
 stop_spinner_flag = False
@@ -152,7 +152,7 @@ def create_custom_makemkv_profile(custom_profile_path: Path) -> None:
     </Profile>
 </profile>"""
     custom_profile_path.write_text(custom_profile_content)
-    print(f"Custom MakeMKV profile created at {custom_profile_path}")
+    print(f"\nCustom MakeMKV profile created at {custom_profile_path}")
 
 
 def rip_disc_to_mkv(source: str, output_folder: Path) -> Path:
