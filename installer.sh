@@ -5,32 +5,34 @@ handle_error() {
     echo "Error: $1"
     exit 1
 }
-cd ~ || handle_error "Failed to change directory to ~"
-echo "Checking for Homebrew..."
-BREW_PATH=""
-if [[ -d "/opt/homebrew/bin" ]]; then
-    # Apple Silicon
-    BREW_PATH="/opt/homebrew/bin"
-elif [[ -d "/usr/local/bin/brew" ]]; then
-    # Intel Mac
-    BREW_PATH="/usr/local/bin"
+
+echo "Checking macOS version and architecture..."
+ARCH=$(uname -m)
+MACOS_VERSION=$(sw_vers -productVersion)
+MACOS_MAJOR_VERSION=${MACOS_VERSION%%.*}
+
+if [[ "$ARCH" != "arm64" ]]; then
+    handle_error "This script is intended for use on Apple Silicon (M1+) Macs only."
 fi
 
-if [ -z "$BREW_PATH" ]; then
+if [[ "$MACOS_MAJOR_VERSION" -lt 14 ]]; then
+    handle_error "This script requires macOS Sonoma 14.0 or higher."
+fi
+
+cd ~ || handle_error "Failed to change directory to ~"
+
+echo "Checking for Homebrew..."
+if command -v /opt/homebrew/bin/brew &>/dev/null; then
+    BREW_PATH="/opt/homebrew/bin"
+else
     echo "Homebrew not found. Installing Homebrew..."
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || handle_error "Failed to install Homebrew"
-    if [[ -d "/opt/homebrew/bin" ]]; then
-        BREW_PATH="/opt/homebrew/bin"
-    else
-        BREW_PATH="/usr/local/bin"
-    fi
-  echo "export PATH=\"$BREW_PATH:\$PATH\"" >> ~/.zshrc
-
-else
-    echo "Homebrew is already installed."
+    BREW_PATH="/opt/homebrew/bin"
+    echo "export PATH=\"$BREW_PATH:\$PATH\"" >> ~/.zshrc
+    export PATH="$BREW_PATH:$PATH"
 fi
 
-export PATH="$BREW_PATH:$PATH"
+echo "Homebrew installed at $BREW_PATH."
 
 echo "Updating Homebrew..."
 "$BREW_PATH/brew" update
@@ -80,7 +82,7 @@ if [ -d "$CLONE_DIR" ]; then
     git pull || handle_error "Failed to update $CLONE_DIR repository"
 else
     echo "Cloning BD_to_AVP repository..."
-    git clone "$REPO_URL" $CLONE_DIR || handle_error "Failed to clone BD_to_AVP repository"
+    git clone "$REPO_URL" "$CLONE_DIR" || handle_error "Failed to clone BD_to_AVP repository"
     cd "$CLONE_DIR" || handle_error "Failed to change directory to $CLONE_DIR"
 fi
 
@@ -88,12 +90,13 @@ echo "Setting up BD_to_AVP environment..."
 poetry install || handle_error "Failed to set up BD_to_AVP environment with Poetry"
 
 echo "Installing Rosetta 2 (if required)..."
-if pgrep oahd >/dev/null 2>&1; then
-    echo "Rosetta 2 is already installed."
+if arch -x86_64 true 2>/dev/null; then
+    echo "Rosetta 2 support detected."
 else
-    echo "Installing Rosetta 2 (if required)..."
+    echo "Rosetta 2 not detected, attempting installation."
     /usr/sbin/softwareupdate --install-rosetta --agree-to-license
 fi
+
 
 echo "BD_to_AVP environment setup complete."
 echo "Navigate to the BD_to_AVP directory and run BD_to_AVP with the following command:"
