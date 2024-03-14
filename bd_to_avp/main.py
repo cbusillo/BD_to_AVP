@@ -268,7 +268,7 @@ def handle_process_output(process: subprocess.Popen):
 def generate_ffmpeg_command(
     input_fifo: Path, output_file: Path, resolution: str, frame_rate: str, input_color_depth: int
 ) -> list[str]:
-    pix_fmt = "yuv420p" if input_color_depth == 8 else "yuv422p10le"
+    pix_fmt = "yuv420p10le" if input_color_depth > 8 else "yuv420p"
 
     command = [
         "ffmpeg",
@@ -284,14 +284,14 @@ def generate_ffmpeg_command(
         "-i",
         str(input_fifo),
         "-c:v",
-        "prores_ks",
-        "-profile:v",
-        "3",  # This is the profile option for prores_ks codec
-        "-vendor",
-        "ap10",
-        "-pix_fmt",
-        pix_fmt,
-        str(output_file),  # The output file path must be the last item
+        "hevc_videotoolbox",
+        "-tag:v",
+        "hvc1",
+        "-movflags",
+        "+faststart",
+        "-b:v",
+        "25M",
+        str(output_file),
     ]
 
     return command
