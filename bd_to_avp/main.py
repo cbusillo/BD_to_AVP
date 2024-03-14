@@ -467,8 +467,8 @@ def main() -> None:
     if "disc:" in args.source.lower() or input_path.suffix.lower() in IMAGE_EXTENSIONS:
         source = "iso:" + str(input_path) if input_path.suffix.lower() in IMAGE_EXTENSIONS else args.source
 
-        # mkv_output_path = rip_disc_to_mkv(source, output_folder)  # TODO: uncomment this line and remove the next line
-        mkv_output_path = output_folder / f"{disc_info['name']}_t00.mkv"
+        mkv_output_path = rip_disc_to_mkv(source, output_folder)  # TODO: uncomment this line and remove the next line
+        # mkv_output_path = output_folder / f"{disc_info['name']}_t00.mkv"
     elif input_path.suffix.lower() == ".mkv":
         mkv_output_path = input_path
     elif input_path.is_dir():
@@ -478,11 +478,11 @@ def main() -> None:
         print("Could not find MKV file for processing.")
         return
 
-    # video_output_path, audio_output_path = extract_mvc_bitstream_and_audio(
-    #     mkv_output_path, output_folder, disc_info["name"]
-    # )  # TODO: uncomment this line and remove the two next lines
-    video_output_path = output_folder / f"{disc_info['name']}_mvc.h264.mov"
-    audio_output_path = output_folder / f"{disc_info['name']}_audio_5.1_LPCM.mov"
+    video_output_path, audio_output_path = extract_mvc_bitstream_and_audio(
+        mkv_output_path, output_folder, disc_info["name"]
+    )  # TODO: uncomment this line and remove the two next lines
+    # video_output_path = output_folder / f"{disc_info['name']}_mvc.h264.mov"
+    # audio_output_path = output_folder / f"{disc_info['name']}_audio_5.1_LPCM.mov"
 
     input_color_depth = get_video_color_depth(str(video_output_path))
     left_eye_output_path, right_eye_output_path = split_mvc_to_stereo(
