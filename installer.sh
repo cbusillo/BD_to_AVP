@@ -88,7 +88,12 @@ echo "Setting up BD_to_AVP environment..."
 poetry install || handle_error "Failed to set up BD_to_AVP environment with Poetry"
 
 echo "Installing Rosetta 2 (if required)..."
-/usr/sbin/softwareupdate --install-rosetta --agree-to-license
+if pgrep oahd >/dev/null 2>&1; then
+    echo "Rosetta 2 is already installed."
+else
+    echo "Installing Rosetta 2 (if required)..."
+    /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+fi
 
 echo "BD_to_AVP environment setup complete."
 echo "Navigate to the BD_to_AVP directory and run BD_to_AVP with the following command:"
