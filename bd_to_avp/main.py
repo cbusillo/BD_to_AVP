@@ -28,7 +28,7 @@ stop_spinner_flag = False
 @contextmanager
 def mounted_image(image_path: Path):
     mount_point = None
-    existing_mounts_output = run_command(["hdiutil", "info"], "Checking mounted images")
+    existing_mounts_output = run_command(["hdiutil", "info"], "Check mounted images")
     try:
         for line in existing_mounts_output.split("\n"):
             if str(image_path) in line:
@@ -40,7 +40,7 @@ def mounted_image(image_path: Path):
                 break
 
         if not mount_point:
-            mount_output = run_command(["hdiutil", "attach", str(image_path)], "Mounting image")
+            mount_output = run_command(["hdiutil", "attach", str(image_path)], "Mount image")
             for line in mount_output.split("\n"):
                 if "/Volumes/" in line:
                     mount_point = line.split("\t")[-1]
@@ -58,7 +58,7 @@ def mounted_image(image_path: Path):
 
     finally:
         if mount_point and "ISO is already mounted at" not in existing_mounts_output:
-            run_command(["hdiutil", "detach", mount_point], "Unmounting image")
+            run_command(["hdiutil", "detach", mount_point], "Unmount image")
             print(f"ISO unmounted from {mount_point}")
 
 
@@ -80,7 +80,7 @@ def setup_frim() -> None:
 
     regedit_command = [str(WINE_PATH), "regedit", str(reg_file_path)]
     regedit_env = {"WINEPREFIX": str(wine_prefix)}
-    run_command(regedit_command, "Updating the Windows registry for FRIM plugins.", regedit_env)
+    run_command(regedit_command, "Update the Windows registry for FRIM plugins.", regedit_env)
     print("Updated the Windows registry for FRIM plugins.")
 
 
@@ -165,7 +165,7 @@ def rip_disc_to_mkv(source: str, output_folder: Path) -> Path:
         "all",
         str(output_folder),
     ]
-    run_command(command, "Ripping disc to MKV file.")
+    run_command(command, "Rip disc to MKV file.")
 
     mkv_files = list(output_folder.glob("*.mkv"))
     if mkv_files:
@@ -176,7 +176,7 @@ def rip_disc_to_mkv(source: str, output_folder: Path) -> Path:
 
 def get_disc_and_mvc_video_info(source: Path) -> dict:
     command = [str(MAKEMKVCON_PATH), "--robot", "info", str(source)]
-    output = run_command(command, "Getting disc and MVC video properties")
+    output = run_command(command, "Get disc and MVC video properties")
 
     info = {
         "name": "Unknown",
@@ -217,7 +217,7 @@ def extract_mvc_bitstream_and_audio(input_file: Path, output_folder: Path, disc_
         "pcm_s24le",
         str(audio_output_path),
     ]
-    run_command(command, "Extracting MVC bitstream and audio to temporary files.")
+    run_command(command, "Extract MVC bitstream and audio to temporary files.")
     return video_output_path, audio_output_path
 
 
@@ -327,7 +327,7 @@ def split_mvc_to_stereo(
             str(left_fifo),
             str(right_fifo),
         ]
-        frim_process = run_command_async(frim_command, frim_log, "Use FRIM to split MVC to stereo.")
+        frim_process = run_command_async(frim_command, frim_log, "FRIM to split MVC to stereo.")
 
         atexit.register(cleanup_process, frim_process)
         atexit.register(cleanup_process, ffmpeg_left_process)
@@ -358,7 +358,7 @@ def combine_to_mv_hevc(output_folder: Path, quality: str, fov: str, left_movie: 
         "-o",
         str(output_file),
     ]
-    run_command(command, "Combining stereo HEVC streams to MV-HEVC.")
+    run_command(command, "Combine stereo HEVC streams to MV-HEVC.")
     return output_file
 
 
@@ -374,7 +374,7 @@ def transcode_audio(input_file: Path, output_folder: Path, bitrate: str) -> Path
         bitrate,
         str(output_file),
     ]
-    run_command(command, "Transcoding audio to AAC format.")
+    run_command(command, "Transcode audio to AAC format.")
     return output_file
 
 
@@ -387,7 +387,7 @@ def remux_audio(mv_hevc_file: Path, audio_file: Path, final_output: Path):
         str(audio_file),
         str(final_output),
     ]
-    run_command(command, "Remuxing audio and video to final output.")
+    run_command(command, "Remux audio and video to final output.")
 
 
 def get_video_color_depth(input_file: str) -> int:
@@ -403,7 +403,7 @@ def get_video_color_depth(input_file: str) -> int:
         "json",
         input_file,
     ]
-    result = run_command(cmd, "Getting video color depth.")
+    result = run_command(cmd, "Get video color depth.")
 
     json_start = result.find("{")
     if json_start == -1:
