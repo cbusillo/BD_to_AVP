@@ -16,6 +16,7 @@ SCRIPT_PATH = Path(__file__).parent
 MAKEMKVCON_PATH = Path("/Applications/MakeMKV.app/Contents/MacOS/makemkvcon")
 HOMEBREW_PREFIX = Path(os.getenv("HOMEBREW_PREFIX", "/opt/homebrew"))
 WINE_PATH = HOMEBREW_PREFIX / "bin/wine"
+FFMPEG_PATH = HOMEBREW_PREFIX / "bin/ffmpeg"
 FRIM_PATH = SCRIPT_PATH / "FRIM_x64_version_1.31" / "x64"
 FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
 MP4BOX_PATH = HOMEBREW_PREFIX / "bin" / "MP4Box"
@@ -133,7 +134,7 @@ def run_command(command: list[str], command_name: str = None, env: dict[str, str
 
 def prepare_output_folder_for_source(disc_name: str, output_folder: Path) -> (str, Path):
     output_path = output_folder / disc_name
-    remove_folder_if_exists(output_path)  # TODO: uncomment this line
+    # remove_folder_if_exists(output_path)  # TODO: uncomment this line
     output_path.mkdir(parents=True, exist_ok=True)
     return output_path
 
@@ -201,7 +202,8 @@ def extract_mvc_bitstream_and_audio(input_file: Path, output_folder: Path, disc_
     video_output_path = output_folder / f"{disc_name}_mvc.h264.mov"
     audio_output_path = output_folder / f"{disc_name}_audio_5.1_LPCM.mov"
     command = [
-        "ffmpeg",
+        str(FFMPEG_PATH),
+        "-y",
         "-i",
         str(input_file),
         "-map",
@@ -268,10 +270,10 @@ def handle_process_output(process: subprocess.Popen):
 def generate_ffmpeg_command(
     input_fifo: Path, output_file: Path, resolution: str, frame_rate: str, input_color_depth: int
 ) -> list[str]:
-    pix_fmt = "yuv420p10le" if input_color_depth > 8 else "yuv420p"
+    pix_fmt = "yuv420p" if input_color_depth == 8 else "yuv422p10le"
 
     command = [
-        "ffmpeg",
+        str(FFMPEG_PATH),
         "-y",
         "-f",
         "rawvideo",
@@ -284,14 +286,14 @@ def generate_ffmpeg_command(
         "-i",
         str(input_fifo),
         "-c:v",
-        "hevc_videotoolbox",
-        "-tag:v",
-        "hvc1",
-        "-movflags",
-        "+faststart",
-        "-b:v",
-        "25M",
-        str(output_file),
+        "prores_ks",
+        "-profile:v",
+        "2",  # This is the profile option for prores_ks codec
+        "-vendor",
+        "ap10",
+        "-pix_fmt",
+        pix_fmt,
+        str(output_file),  # The output file path must be the last item
     ]
 
     return command
@@ -365,7 +367,8 @@ def combine_to_mv_hevc(output_folder: Path, quality: str, fov: str, left_movie: 
 def transcode_audio(input_file: Path, output_folder: Path, bitrate: str) -> Path:
     output_file = output_folder / f"{output_folder.stem}_audio_AAC.mov"
     command = [
-        "ffmpeg",
+        str(FFMPEG_PATH),
+        "-y",
         "-i",
         str(input_file),
         "-c:a",
@@ -484,13 +487,13 @@ def main() -> None:
     # video_output_path = output_folder / f"{disc_info['name']}_mvc.h264.mov"
     # audio_output_path = output_folder / f"{disc_info['name']}_audio_5.1_LPCM.mov"
 
-    input_color_depth = get_video_color_depth(str(video_output_path))
-    left_eye_output_path, right_eye_output_path = split_mvc_to_stereo(
-        output_folder, video_output_path, disc_info["frame_rate"], disc_info["resolution"], disc_info["name"], input_color_depth
-    )  # TODO: uncomment this line and remove the two next lines
+    # input_color_depth = get_video_color_depth(str(video_output_path))
+    # left_eye_output_path, right_eye_output_path = split_mvc_to_stereo(
+    #     output_folder, video_output_path, disc_info["frame_rate"], disc_info["resolution"], disc_info["name"], input_color_depth
+    # )  # TODO: uncomment this line and remove the two next lines
 
-    # left_eye_output_path = output_folder / f"{disc_info['name']}_left_movie.mov"
-    # right_eye_output_path = output_folder / f"{disc_info['name']}_right_movie.mov"
+    left_eye_output_path = output_folder / f"{disc_info['name']}_left_movie.mov"
+    right_eye_output_path = output_folder / f"{disc_info['name']}_right_movie.mov"
 
     mv_hevc_file = combine_to_mv_hevc(output_folder, args.mv_hevc_quality, args.fov, left_eye_output_path, right_eye_output_path)
 
