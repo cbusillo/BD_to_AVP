@@ -67,28 +67,29 @@ echo "spatial-media-kit-tool installed successfully."
 
 echo "Installing Poetry..."
 "$BREW_PATH/brew" install poetry || handle_error "Failed to install Poetry"
+export PATH="$HOME/.poetry/bin:$PATH"
 
 echo "Cloning BD_to_AVP repository..."
 REPO_URL="https://github.com/cbusillo/BD_to_AVP.git"
-CLONE_DIR="BD_to_AVP"
+CLONE_DIR="$HOME/BD_to_AVP"
 
+cd ~ || handle_error "Failed to change directory to ~"
 if [ -d "$CLONE_DIR" ]; then
     echo "$CLONE_DIR directory already exists. Checking for updates..."
     cd "$CLONE_DIR" || handle_error "Failed to change directory to $CLONE_DIR"
     git pull || handle_error "Failed to update $CLONE_DIR repository"
 else
     echo "Cloning BD_to_AVP repository..."
-    git clone "$REPO_URL" || handle_error "Failed to clone BD_to_AVP repository"
+    git clone "$REPO_URL" $CLONE_DIR || handle_error "Failed to clone BD_to_AVP repository"
     cd "$CLONE_DIR" || handle_error "Failed to change directory to $CLONE_DIR"
 fi
 
 echo "Setting up BD_to_AVP environment..."
 poetry install || handle_error "Failed to set up BD_to_AVP environment with Poetry"
 
-echo "Installing Rosetta 2..."
+echo "Installing Rosetta 2 (if required)..."
 /usr/sbin/softwareupdate --install-rosetta --agree-to-license
 
 echo "BD_to_AVP environment setup complete."
-echo "You can now run BD_to_AVP with the following command:"
-echo "poetry run bd-to-avp"
-cd "$CLONE_DIR" || handle_error "Failed to change directory to $CLONE_DIR"
+echo "Navigate to the BD_to_AVP directory and run BD_to_AVP with the following command:"
+echo "cd $CLONE_DIR && poetry run bd-to-avp"
