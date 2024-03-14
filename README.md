@@ -15,6 +15,7 @@ the Apple Vision Pro. It uses FFmpeg, MakeMKV, and Wine for video extraction, au
 
 Ensure the following are installed on your Mac:
 
+- **Apple Silicon Mac**: A Mac with Apple Silicon, such as the M1, M1 Pro, or M1 Max.
 - **macOS Sonoma**: The latest version of macOS.
 - **Rosetta 2**: A compatibility layer allowing Intel-based applications to run on Apple Silicon Macs.
 - **Python 3.12**: The latest version of Python.
@@ -85,19 +86,19 @@ poetry run bd_to_avp --source <source> --output_folder <output_folder> [--keep_i
 Process a Blu-ray disc:
 
 ```bash
-python main.py --source disc:0 --output_folder /path/to/output
+poetry run bd-to-avp --source disc:0 --output_folder /path/to/output
 ```
 
 Process an ISO image:
 
 ```bash
-python main.py --source /path/to/movie.iso --output_folder /path/to/output
+poetry run bd-to-avp --source /path/to/movie.iso --output_folder /path/to/output
 ```
 
 Process an MKV file:
 
 ```bash
-python main.py --source /path/to/movie.mkv --output_folder /path/to/output --transcode_audio
+poetry run bd-to-avp --source /path/to/movie.mkv --output_folder /path/to/output --transcode_audio
 ```
 
 ## Contribution
