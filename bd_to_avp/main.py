@@ -133,7 +133,7 @@ def run_command(command: list[str], command_name: str = None, env: dict[str, str
 
 def prepare_output_folder_for_source(disc_name: str, output_folder: Path) -> (str, Path):
     output_path = output_folder / disc_name
-    # remove_folder_if_exists(output_path) #TODO: uncomment this line
+    remove_folder_if_exists(output_path)  # TODO: uncomment this line
     output_path.mkdir(parents=True, exist_ok=True)
     return output_path
 
