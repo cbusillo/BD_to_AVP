@@ -273,7 +273,7 @@ def generate_ffmpeg_command(
     pix_fmt = "yuv420p" if input_color_depth == 8 else "yuv422p10le"
 
     command = [
-        str(FFMPEG_PATH),
+        "ffmpeg",
         "-y",
         "-f",
         "rawvideo",
@@ -487,13 +487,13 @@ def main() -> None:
     # video_output_path = output_folder / f"{disc_info['name']}_mvc.h264.mov"
     # audio_output_path = output_folder / f"{disc_info['name']}_audio_5.1_LPCM.mov"
 
-    # input_color_depth = get_video_color_depth(str(video_output_path))
-    # left_eye_output_path, right_eye_output_path = split_mvc_to_stereo(
-    #     output_folder, video_output_path, disc_info["frame_rate"], disc_info["resolution"], disc_info["name"], input_color_depth
-    # )  # TODO: uncomment this line and remove the two next lines
+    input_color_depth = get_video_color_depth(str(video_output_path))
+    left_eye_output_path, right_eye_output_path = split_mvc_to_stereo(
+        output_folder, video_output_path, disc_info["frame_rate"], disc_info["resolution"], disc_info["name"], input_color_depth
+    )  # TODO: uncomment this line and remove the two next lines
 
-    left_eye_output_path = output_folder / f"{disc_info['name']}_left_movie.mov"
-    right_eye_output_path = output_folder / f"{disc_info['name']}_right_movie.mov"
+    # left_eye_output_path = output_folder / f"{disc_info['name']}_left_movie.mov"
+    # right_eye_output_path = output_folder / f"{disc_info['name']}_right_movie.mov"
 
     mv_hevc_file = combine_to_mv_hevc(output_folder, args.mv_hevc_quality, args.fov, left_eye_output_path, right_eye_output_path)
 
