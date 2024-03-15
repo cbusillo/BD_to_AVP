@@ -501,7 +501,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--left_right_bitrate", default=20, type=int, help="Bitrate for MV-HEVC encoding in megabits.  Default of 20Mb/s."
     )
-    parser.add_argument("--mv_hevc_quality", default=90, type=int, help="Quality factor for MV-HEVC encoding.")
+    parser.add_argument("--mv_hevc_quality", default=75, type=int, help="Quality factor for MV-HEVC encoding.")
     parser.add_argument("--fov", default=90, type=int, help="Horizontal field of view for MV-HEVC.")
     parser.add_argument("--frame_rate", help="Video frame rate. Detected automatically if not provided.")
     parser.add_argument("--resolution", help="Video resolution. Detected automatically if not provided.")

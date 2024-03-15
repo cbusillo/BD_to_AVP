@@ -77,7 +77,7 @@ poetry run bd_to_avp --source <source> --output_folder <output_folder> [--keep_i
 - `--transcode_audio`: Enable audio transcoding to AAC (disabled by default).
 - `--audio_bitrate`: Audio bitrate for transcoding in kb/s do not include unit (default: "384").
 - `--left_right_bitrate`: Bitrate for left and right views in Mb/s do not include unit (default: "20").'
-- `--mv_hevc_quality`: Quality factor for MV-HEVC encoding (default: "90").
+- `--mv_hevc_quality`: Quality factor for MV-HEVC encoding (default: "75").
 - `--fov`: Horizontal field of view for MV-HEVC (default: "90").
 - `--frame_rate`: Video frame rate (auto-detected if not provided).
 - `--resolution`: Video resolution (auto-detected if not provided).
