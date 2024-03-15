@@ -55,6 +55,9 @@ curl -sSL https://install.python-poetry.org | python3 -
 
 # Ensure Python 3.12 and Poetry are correctly installed
 python3.12 -m pip install --upgrade pip
+
+cd /path/to/BD_to_AVP
+poetry install
 ```
 
 ## Usage
@@ -64,8 +67,6 @@ Navigate to the tool's directory in your terminal and execute the command with t
 ### Command Syntax
 
 ```bash
-cd /path/to/BD_to_AVP
-poetry install
 poetry run bd_to_avp --source <source> --output_folder <output_folder> [--keep_intermediate] [--transcode_audio] [--audio_bitrate <audio_bitrate>] [--mv_hevc_quality <mv_hevc_quality>] [--fov <fov>] [--frame_rate <frame_rate>] [--resolution <resolution>]
 ```
 
