@@ -27,7 +27,7 @@ Ensure the following are installed on your Mac:
 - **spatial-media-kit-tool**: A tool for injecting 360° metadata into video files.
 - **MP4Box**: A multimedia packager available for Windows, Mac, and Linux.
 
-## Installation
+## Manual Installation
 
 To set up your macOS environment for video processing, including creating and handling 3D video content, follow these steps to install the necessary tools using Homebrew and manual installation. This includes the installation of Homebrew itself, FFmpeg for video encoding and decoding, Wine for running Windows applications, MakeMKV for ripping Blu-ray and DVD to MKV, spatial-media-kit-tool for handling spatial media, and MP4Box for multimedia packaging.
 
