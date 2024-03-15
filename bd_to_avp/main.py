@@ -31,6 +31,7 @@ class Stage(Enum):
     COMBINE_TO_MV_HEVC = auto()
     TRANSCODE_AUDIO = auto()
     CREATE_FINAL_FILE = auto()
+    MOVE_FILES = auto()
 
 
 class StageEnumAction(argparse.Action):
@@ -498,6 +499,7 @@ def parse_arguments() -> argparse.Namespace:
         default=Stage.CREATE_MKV,
         help="Stage at which to start the process. Options: " + ", ".join([stage.name for stage in Stage]),
     )
+    parser.add_argument("--remove_original", default=False, action="store_true", help="Remove original file after processing.")
     return parser.parse_args()
 
 
@@ -513,8 +515,17 @@ def main() -> None:
     left_output_path, right_output_path = create_left_right_files(disc_info, output_folder, video_output_path, terminal_args)
     mv_hevc_path = create_mv_hevc_file(left_output_path, right_output_path, output_folder, terminal_args, disc_info.name)
     audio_output_path = create_transcoded_audio_file(terminal_args, audio_output_path, output_folder)
-    create_final_file(audio_output_path, disc_info.name, mv_hevc_file, output_folder, terminal_args)
+    muxed_output_path = create_muxed_file(audio_output_path, disc_info.name, mv_hevc_path, output_folder, terminal_args)
+    move_file_to_output_root_folder(muxed_output_path, terminal_args)
+    if terminal_args.remove_original:
+        remove_folder_if_exists(input_path)
 
+
+def move_file_to_output_root_folder(muxed_output_path: Path, terminal_args: argparse.Namespace) -> None:
+    final_path = terminal_args.output_root_folder / muxed_output_path.name
+    muxed_output_path.replace(final_path)
+    if not terminal_args.keep_files:
+        remove_folder_if_exists(muxed_output_path.parent)
 
 
 def create_mv_hevc_file(left_video_path, right_video_path, output_folder, terminal_args, disc_name: str) -> Path:
