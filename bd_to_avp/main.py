@@ -52,6 +52,7 @@ MAKEMKVCON_PATH = Path("/Applications/MakeMKV.app/Contents/MacOS/makemkvcon")
 HOMEBREW_PREFIX = Path(os.getenv("HOMEBREW_PREFIX", "/opt/homebrew"))
 WINE_PATH = HOMEBREW_PREFIX / "bin/wine"
 FFMPEG_PATH = HOMEBREW_PREFIX / "bin/ffmpeg"
+FFPROBE_PATH = HOMEBREW_PREFIX / "bin/ffprobe"
 FRIM_PATH = SCRIPT_PATH / "FRIM_x64_version_1.31" / "x64"
 FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
 MP4BOX_PATH = HOMEBREW_PREFIX / "bin" / "MP4Box"
@@ -307,7 +308,7 @@ def generate_encoding_command(input_fifo: Path, output_path: Path, disc_info: Di
     buffer_size_str = f"{bitrate * 2}M"
 
     command = [
-        "ffmpeg",
+        FFMPEG_PATH,
         "-y",
         "-f",
         "rawvideo",
@@ -413,7 +414,7 @@ def transcode_audio(input_path: Path, trancoded_audio_path: Path, bitrate: int) 
 
 def remux_audio(mv_hevc_path: Path, audio_path: Path, muxed_path: Path) -> None:
     command = [
-        "mp4box",
+        MP4BOX_PATH,
         "-add",
         mv_hevc_path,
         "-add",
@@ -425,7 +426,7 @@ def remux_audio(mv_hevc_path: Path, audio_path: Path, muxed_path: Path) -> None:
 
 def get_video_color_depth(input_path: Path) -> int | None:
     command = [
-        "ffprobe",
+        FFPROBE_PATH,
         "-v",
         "error",
         "-select_streams",
@@ -441,7 +442,7 @@ def get_video_color_depth(input_path: Path) -> int | None:
         result = run_command(command, "Get video color depth.")
     except subprocess.CalledProcessError:
         if "No such file or directory" in result:
-            print(f"File not found")
+            print("File not found")
         return None  # TODO: get color depth from existing files (This is hit when the start-stage is used)
 
     json_start = result.find("{")
