@@ -560,12 +560,12 @@ def create_transcoded_audio_file(terminal_args: argparse.Namespace, original_aud
 
 
 def create_left_right_files(
-    disc_info: DiscInfo, output_folder: Path, video_output_path: Path, terminal_args: argparse.Namespace
+    disc_info: DiscInfo, output_folder: Path, mvc_video: Path, terminal_args: argparse.Namespace
 ) -> (Path, Path):
 
     if terminal_args.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
-        disc_info.color_depth = get_video_color_depth(video_output_path)
-        left_eye_output_path, right_eye_output_path = split_mvc_to_stereo(output_folder, video_output_path, disc_info, terminal_args)
+        disc_info.color_depth = get_video_color_depth(mvc_video)
+        left_eye_output_path, right_eye_output_path = split_mvc_to_stereo(output_folder, mvc_video, disc_info, terminal_args)
     else:
         disc_info.color_depth = 8
         left_eye_output_path = output_folder / f"{disc_info.name}_left_movie.mov"
