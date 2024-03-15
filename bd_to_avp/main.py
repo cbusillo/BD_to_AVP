@@ -235,7 +235,7 @@ def get_disc_and_mvc_video_info(source: Path) -> DiscInfo:
     return disc_info
 
 
-def extract_mvc_bitstream_and_audio(input_path: Path, video_output_path: Path, audio_output_path: Path) -> (Path, Path):
+def extract_mvc_audio_and_subtitle(input_path: Path, video_output_path: Path, audio_output_path: Path, subtitle_output_path) -> None:
     command = [
         FFMPEG_PATH,
         "-y",
@@ -253,6 +253,11 @@ def extract_mvc_bitstream_and_audio(input_path: Path, video_output_path: Path, a
         "-c:a",
         "pcm_s24le",
         audio_output_path,
+        "-map",
+        "0:s:0",
+        "-c:s",
+        "srt",
+        subtitle_output_path,
     ]
     run_command(command, "Extract MVC bitstream and audio to temporary files.")
 
@@ -412,13 +417,15 @@ def transcode_audio(input_path: Path, trancoded_audio_path: Path, bitrate: int) 
     run_command(command, "Transcode audio to AAC format.")
 
 
-def remux_audio(mv_hevc_path: Path, audio_path: Path, muxed_path: Path) -> None:
+def mux_video_audio_and_subtitles(mv_hevc_path: Path, audio_path: Path, subtitle_path: Path, muxed_path: Path) -> None:
     command = [
         MP4BOX_PATH,
         "-add",
         mv_hevc_path,
         "-add",
         audio_path,
+        "-add",
+        subtitle_path,
         muxed_path,
     ]
     run_command(command, "Remux audio and video to final output.")
@@ -512,11 +519,15 @@ def main() -> None:
 
     mkv_output_path = create_mkv_file(terminal_args, input_path, output_folder)
 
-    audio_output_path, video_output_path = create_mvc_and_audio_files(disc_info.name, mkv_output_path, output_folder, terminal_args)
+    audio_output_path, video_output_path, subtitle_output_path = create_mvc_audio_and_subtitle_files(
+        disc_info.name, mkv_output_path, output_folder, terminal_args
+    )
     left_output_path, right_output_path = create_left_right_files(disc_info, output_folder, video_output_path, terminal_args)
     mv_hevc_path = create_mv_hevc_file(left_output_path, right_output_path, output_folder, terminal_args, disc_info.name)
     audio_output_path = create_transcoded_audio_file(terminal_args, audio_output_path, output_folder)
-    muxed_output_path = create_muxed_file(audio_output_path, disc_info.name, mv_hevc_path, output_folder, terminal_args)
+    muxed_output_path = create_muxed_file(
+        audio_output_path, mv_hevc_path, subtitle_output_path, output_folder, disc_info.name, terminal_args
+    )
     move_file_to_output_root_folder(muxed_output_path, terminal_args)
     if terminal_args.remove_original:
         remove_folder_if_exists(input_path)
@@ -541,11 +552,11 @@ def create_mv_hevc_file(left_video_path, right_video_path, output_folder, termin
 
 
 def create_muxed_file(
-    audio_path: Path, disc_name: str, mv_hevc_path: Path, output_folder: Path, terminal_args: argparse.Namespace
+    audio_path: Path, mv_hevc_path: Path, subtitle_path: Path, output_folder: Path, disc_name: str, terminal_args: argparse.Namespace
 ) -> Path:
     muxed_path = output_folder / f"{disc_name}_AVP.mov"
     if terminal_args.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
-        remux_audio(mv_hevc_path, audio_path, muxed_path)
+        mux_video_audio_and_subtitles(mv_hevc_path, audio_path, subtitle_path, muxed_path)
 
     if not terminal_args.keep_files:
         mv_hevc_path.unlink(missing_ok=True)
@@ -577,19 +588,20 @@ def create_left_right_files(
     return left_eye_output_path, right_eye_output_path
 
 
-def create_mvc_and_audio_files(
+def create_mvc_audio_and_subtitle_files(
     disc_name: str, mkv_output_path: Path, output_folder: Path, terminal_args: argparse.Namespace
-) -> (Path, Path):
+) -> (Path, Path, Path):
 
     video_output_path = output_folder / f"{disc_name}_mvc.h264"
     audio_output_path = output_folder / f"{disc_name}_audio_PCM.mov"
+    subtitle_output_path = output_folder / f"{disc_name}_subtitle.srt"
 
     if terminal_args.start_stage.value <= Stage.EXTRACT_MVC_AUDIO.value:
-        extract_mvc_bitstream_and_audio(mkv_output_path, video_output_path, audio_output_path)
+        extract_mvc_audio_and_subtitle(mkv_output_path, video_output_path, audio_output_path, subtitle_output_path)
 
     if not terminal_args.keep_files:
         mkv_output_path.unlink(missing_ok=True)
-    return audio_output_path, video_output_path
+    return audio_output_path, video_output_path, subtitle_output_path
 
 
 def create_mkv_file(terminal_args: argparse.Namespace, input_path: Path, output_folder: Path) -> Path:
