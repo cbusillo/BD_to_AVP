@@ -3,7 +3,8 @@
 ## Introduction
 
 This tool processes 3D video content from Blu-ray discs, ISO images, or MKV files, creating a final video file compatible with
-the Apple Vision Pro. It uses FFmpeg, MakeMKV, and Wine for video extraction, audio transcoding, and video stream merging to convert from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The tool also injects 360° metadata into the video file for spatial media playback.
+the Apple Vision Pro. It uses FFmpeg, MakeMKV, and Wine for video extraction, audio transcoding, and video stream merging to convert
+from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The tool also injects 360° metadata into the video file for spatial media playback.
 
 ## Quick install
 
@@ -15,7 +16,8 @@ the Apple Vision Pro. It uses FFmpeg, MakeMKV, and Wine for video extraction, au
 
 Ensure the following are installed on your Mac:
 
-- **Apple Silicon Mac**: A Mac with Apple Silicon, such as the M1, M1 Pro, or M1 Max (Maybe, installer currently requires Apple Silicon.  If anyone can confirm that spatial-media-kit-tool works on Intel Macs, I can remove this requirement)
+- **Apple Silicon Mac**: A Mac with Apple Silicon, such as the M1, M1 Pro, or M1 Max (Maybe, installer currently requires Apple
+  Silicon. If anyone can confirm that spatial-media-kit-tool works on Intel Macs, I can remove this requirement)
 - **macOS Sonoma**: The latest version of macOS.
 - **Rosetta 2**: A compatibility layer allowing Intel-based applications to run on Apple Silicon Macs.
 - **Python 3.12**: The latest version of Python.
@@ -29,7 +31,10 @@ Ensure the following are installed on your Mac:
 
 ## Manual Installation
 
-To set up your macOS environment for video processing, including creating and handling 3D video content, follow these steps to install the necessary tools using Homebrew and manual installation. This includes the installation of Homebrew itself, FFmpeg for video encoding and decoding, Wine for running Windows applications, MakeMKV for ripping Blu-ray and DVD to MKV, spatial-media-kit-tool for handling spatial media, and MP4Box for multimedia packaging.
+To set up your macOS environment for video processing, including creating and handling 3D video content, follow these steps to
+install the necessary tools using Homebrew and manual installation. This includes the installation of Homebrew itself, FFmpeg for
+video encoding and decoding, Wine for running Windows applications, MakeMKV for ripping Blu-ray and DVD to MKV,
+spatial-media-kit-tool for handling spatial media, and MP4Box for multimedia packaging.
 
 ```bash
 # Install Rosetta 2
