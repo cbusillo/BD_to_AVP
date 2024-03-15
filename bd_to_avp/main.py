@@ -595,20 +595,20 @@ def create_mvc_and_audio_files(
 
 
 def create_mkv_file(terminal_args: argparse.Namespace, disc_name: str, input_path: Path, output_folder: Path) -> Path:
-    if "disc:" in terminal_args.source.lower() or input_path.suffix.lower() in IMAGE_EXTENSIONS:
-        if terminal_args.start_stage.value <= Stage.CREATE_MKV.value:
-            source = f"iso:{input_path}" if input_path.suffix.lower() in IMAGE_EXTENSIONS else terminal_args.source
-            mkv_output_path = rip_disc_to_mkv(source, output_folder)
-        else:
-            mkv_output_path = output_folder / f"{disc_name}_t00.mkv"
-    elif input_path.suffix.lower() == ".mkv":
-        mkv_output_path = input_path
-    elif input_path.is_dir():
-        mkv_output_path = find_main_feature(input_path, [".mkv"])
+    if input_path.suffix.lower() == ".mkv":
+        return input_path
+    elif "disc:" in terminal_args.source.lower() or input_path.is_dir():
+        source = input_path
+    elif input_path.suffix.lower() in IMAGE_EXTENSIONS:
+        source = f"iso:{input_path}"
     else:
         raise ValueError("Invalid input source.")
-    if not terminal_args.keep_files:
-        (Path(output_folder) / "custom_profile.mmcp.xml").unlink(missing_ok=True)
+
+    if terminal_args.start_stage.value <= Stage.CREATE_MKV.value:
+        mkv_output_path = rip_disc_to_mkv(source, output_folder)
+    else:
+        mkv_output_path = output_folder / f"{disc_name}_t00.mkv"
+
     return mkv_output_path
 
 
