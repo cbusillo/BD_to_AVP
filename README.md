@@ -15,7 +15,7 @@ the Apple Vision Pro. It uses FFmpeg, MakeMKV, and Wine for video extraction, au
 
 Ensure the following are installed on your Mac:
 
-- **Apple Silicon Mac**: A Mac with Apple Silicon, such as the M1, M1 Pro, or M1 Max.
+- **Apple Silicon Mac**: A Mac with Apple Silicon, such as the M1, M1 Pro, or M1 Max (Maybe, installer currently requires Apple Silicon.  If anyone can confirm that spatial-media-kit-tool works on Intel Macs, I can remove this requirement)
 - **macOS Sonoma**: The latest version of macOS.
 - **Rosetta 2**: A compatibility layer allowing Intel-based applications to run on Apple Silicon Macs.
 - **Python 3.12**: The latest version of Python.
