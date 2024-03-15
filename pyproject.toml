@@ -10,6 +10,9 @@ python = "^3.12"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.2.0"
+ruff = "^0.3.3"
+ruff-lsp = "^0.0.53"
+mypy = "^1.9.0"
 
 [build-system]
 requires = ["poetry-core"]
