@@ -352,7 +352,6 @@ def split_mvc_to_stereo(
 
     ffmpeg_left_log = output_folder / f"{disc_info.name}_ffmpeg_left.log"
     ffmpeg_right_log = output_folder / f"{disc_info.name}_ffmpeg_right.log"
-    frim_log = output_folder / f"{disc_info.name}_frim.log"
 
     with temporary_fifo("left_fifo", "right_fifo") as (left_fifo, right_fifo):
         ffmpeg_left_command = generate_encoding_command(left_fifo, left_output_path, disc_info, terminal_args.left_right_bitrate)
@@ -370,21 +369,18 @@ def split_mvc_to_stereo(
             left_fifo,
             right_fifo,
         ]
-        frim_process = run_command_async(frim_command, frim_log, "FRIM to split MVC to stereo.")
 
-        atexit.register(cleanup_process, frim_process)
         atexit.register(cleanup_process, ffmpeg_left_process)
         atexit.register(cleanup_process, ffmpeg_right_process)
 
-        frim_process.wait()
+        run_command(frim_command, "FRIM to split MVC to stereo.")
         ffmpeg_left_process.wait()
         ffmpeg_right_process.wait()
 
     if not terminal_args.keep_files:
-        video_input_path.unlink()
-        ffmpeg_right_log.unlink()
-        ffmpeg_left_log.unlink()
-        frim_log.unlink()
+        video_input_path.unlink(missing_ok=True)
+        ffmpeg_right_log.unlink(missing_ok=True)
+        ffmpeg_left_log.unlink(missing_ok=True)
 
     return left_output_path, right_output_path
 
@@ -537,8 +533,8 @@ def create_mv_hevc_file(left_eye_output_path, output_folder, right_eye_output_pa
     else:
         mv_hevc_file = output_folder / f"{disc_name}_MV-HEVC.mov"
     if not terminal_args.keep_files:
-        left_eye_output_path.unlink()
-        right_eye_output_path.unlink()
+        left_eye_output_path.unlink(missing_ok=True)
+        right_eye_output_path.unlink(missing_ok=True)
     return mv_hevc_file
 
 
@@ -548,8 +544,8 @@ def create_final_file(
     final_output = output_folder / f"{disc_name}_AVP.mov"
     remux_audio(mv_hevc_file, audio_file, final_output)
     if not terminal_args.keep_files:
-        mv_hevc_file.unlink()
-        audio_file.unlink()
+        mv_hevc_file.unlink(missing_ok=True)
+        audio_file.unlink(missing_ok=True)
     return final_output
 
 
@@ -557,7 +553,7 @@ def create_transcoded_audio_file(terminal_args: argparse.Namespace, original_aud
     if terminal_args.transcode_audio and terminal_args.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
         trancoded_audio_path = transcode_audio(original_audio_path, output_folder, terminal_args.audio_bitrate)
         if not terminal_args.keep_files:
-            original_audio_path.unlink()
+            original_audio_path.unlink(missing_ok=True)
         return trancoded_audio_path
     else:
         return original_audio_path
@@ -587,7 +583,7 @@ def create_mvc_and_audio_files(
         audio_output_path = output_folder / f"{disc_name}_audio_PCM.mov"
 
     if not terminal_args.keep_files:
-        mkv_output_path.unlink()
+        mkv_output_path.unlink(missing_ok=True)
     return audio_output_path, video_output_path
 
 
@@ -605,7 +601,7 @@ def create_mkv_file(terminal_args: argparse.Namespace, disc_name: str, input_pat
     else:
         raise ValueError("Invalid input source.")
     if not terminal_args.keep_files:
-        (Path(output_folder) / "custom_profile.mmcp.xml").unlink()
+        (Path(output_folder) / "custom_profile.mmcp.xml").unlink(missing_ok=True)
     return mkv_output_path
 
 
