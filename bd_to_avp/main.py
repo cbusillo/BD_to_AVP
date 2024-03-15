@@ -450,7 +450,13 @@ def get_video_color_depth(input_file: Path) -> int:
         "json",
         input_file,
     ]
-    result = run_command(command, "Get video color depth.")
+    result = ""
+    try:
+        result = run_command(command, "Get video color depth.")
+    except subprocess.CalledProcessError:
+        if "No such file or directory" in result:
+            print(f"File not found")
+        return 8  # TODO: get color depth from existing files (This is hit when the start-stage is used)
 
     json_start = result.find("{")
     if json_start == -1:
@@ -562,12 +568,10 @@ def create_transcoded_audio_file(terminal_args: argparse.Namespace, original_aud
 def create_left_right_files(
     disc_info: DiscInfo, output_folder: Path, mvc_video: Path, terminal_args: argparse.Namespace
 ) -> (Path, Path):
-
+    disc_info.color_depth = get_video_color_depth(mvc_video)
     if terminal_args.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
-        disc_info.color_depth = get_video_color_depth(mvc_video)
         left_eye_output_path, right_eye_output_path = split_mvc_to_stereo(output_folder, mvc_video, disc_info, terminal_args)
     else:
-        disc_info.color_depth = 8
         left_eye_output_path = output_folder / f"{disc_info.name}_left_movie.mov"
         right_eye_output_path = output_folder / f"{disc_info.name}_right_movie.mov"
 
