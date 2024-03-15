@@ -437,7 +437,7 @@ def remux_audio(mv_hevc_file: Path, audio_file: Path, final_output: Path):
     run_command(command, "Remux audio and video to final output.")
 
 
-def get_video_color_depth(input_file: Path) -> int:
+def get_video_color_depth(input_file: Path) -> int | None:
     command = [
         "ffprobe",
         "-v",
@@ -456,12 +456,12 @@ def get_video_color_depth(input_file: Path) -> int:
     except subprocess.CalledProcessError:
         if "No such file or directory" in result:
             print(f"File not found")
-        return 8  # TODO: get color depth from existing files (This is hit when the start-stage is used)
+        return None  # TODO: get color depth from existing files (This is hit when the start-stage is used)
 
     json_start = result.find("{")
     if json_start == -1:
         print("No valid JSON output from ffprobe.")
-        return 8
+        return None
 
     json_output = result[json_start:]
 
@@ -471,10 +471,10 @@ def get_video_color_depth(input_file: Path) -> int:
         if "10le" in pix_fmt or "10be" in pix_fmt:
             return 10
         else:
-            return 8
+            return None
     except json.JSONDecodeError:
         print("Error decoding ffprobe JSON output.")
-        return 8
+        return None
 
 
 def find_main_feature(folder: Path, extensions: list[str]) -> Path:
@@ -568,7 +568,8 @@ def create_transcoded_audio_file(terminal_args: argparse.Namespace, original_aud
 def create_left_right_files(
     disc_info: DiscInfo, output_folder: Path, mvc_video: Path, terminal_args: argparse.Namespace
 ) -> (Path, Path):
-    disc_info.color_depth = get_video_color_depth(mvc_video)
+    if color_depth := get_video_color_depth(mvc_video):
+        disc_info.color_depth = color_depth
     if terminal_args.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
         left_eye_output_path, right_eye_output_path = split_mvc_to_stereo(output_folder, mvc_video, disc_info, terminal_args)
     else:
