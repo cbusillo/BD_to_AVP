@@ -1,5 +1,5 @@
-#!/bin/bash
-#/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/master/installer.sh)"
+#!/bin/zsh
+#/bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/master/installer.sh)"
 
 handle_error() {
     echo "Error: $1"
@@ -78,7 +78,7 @@ else
 fi
 
 echo "Setting up BD_to_AVP environment..."
-poetry install || handle_error "Failed to set up BD_to_AVP environment with Poetry"
+"$BREW_PATH/poetry" install || handle_error "Failed to set up BD_to_AVP environment with Poetry"
 
 echo "Installing Rosetta 2 (if required)..."
 if arch -x86_64 true 2>/dev/null; then
@@ -88,7 +88,11 @@ else
     /usr/sbin/softwareupdate --install-rosetta --agree-to-license
 fi
 
+echo "Sourcing .zshrc to update PATH..."
+source "$HOME/.zshrc" || echo "Warning: Failed to source .zshrc, you might need to restart your terminal for changes to take effect."
+
 
 echo "BD_to_AVP environment setup complete."
 echo "Navigate to the BD_to_AVP directory and run BD_to_AVP with the following command:"
 echo "cd $CLONE_DIR && poetry run bd-to-avp"
+cd "$CLONE_DIR" || exit
