@@ -88,11 +88,8 @@ else
     /usr/sbin/softwareupdate --install-rosetta --agree-to-license
 fi
 
-echo "Sourcing .zshrc to update PATH..."
-source "$HOME/.zshrc" || echo "Warning: Failed to source .zshrc, you might need to restart your terminal for changes to take effect."
+echo "BD_to_AVP environment setup complete. Refresh your terminal's environment to use new paths."
+echo "1. Refresh environment: source \$HOME/.zshrc"
+echo "2. Navigate to BD_to_AVP directory: cd \$CLONE_DIR"
+echo "3. Execute BD_to_AVP: poetry run bd-to-avp"
 
-
-echo "BD_to_AVP environment setup complete."
-echo "Navigate to the BD_to_AVP directory and run BD_to_AVP with the following command:"
-echo "cd $CLONE_DIR && poetry run bd-to-avp"
-cd "$CLONE_DIR" || exit
