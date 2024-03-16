@@ -50,11 +50,6 @@ brew install ffmpeg makemkv mp4box python@3.12
 brew tap homebrew/cask-versions
 brew install --cask --no-quarantine wine-stable
 
-# Install spatial-media-kit-tool
-# Download spatial-media-kit-tool from https://github.com/sturmen/SpatialMediaKit/releases
-chmod +x spatial-media-kit-tool
-sudo cp spatial-media-kit-tool "$HOMEBREW_PREFIX/bin"
-
 # Install Poetry
 curl -sSL https://install.python-poetry.org | python3 -
 

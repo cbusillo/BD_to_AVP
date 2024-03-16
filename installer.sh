@@ -58,15 +58,6 @@ check_app_or_install "Wine Stable" "wine-stable"
 ln -s /Applications/Wine\ Stable.app/Contents/Resources/wine/bin/wine "$BREW_PATH/wine"
 
 
-echo "Downloading spatial-media-kit-tool from the specific release..."
-download_url="https://github.com/sturmen/SpatialMediaKit/releases/download/v0.0.8-alpha/spatial-media-kit-tool"
-curl -L "$download_url" -o spatial-media-kit-tool || handle_error "Failed to download spatial-media-kit-tool"
-
-chmod +x spatial-media-kit-tool
-mv spatial-media-kit-tool "$BREW_PATH" || handle_error "Failed to move spatial-media-kit-tool to $BREW_PATH"
-echo "spatial-media-kit-tool installed successfully."
-
-
 echo "Installing Poetry..."
 "$BREW_PATH/brew" install poetry || handle_error "Failed to install Poetry"
 export PATH="$HOME/.poetry/bin:$PATH"
