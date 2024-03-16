@@ -71,10 +71,10 @@ HOMEBREW_PREFIX = Path(os.getenv("HOMEBREW_PREFIX", "/opt/homebrew"))
 WINE_PATH = HOMEBREW_PREFIX / "bin/wine"
 FFMPEG_PATH = HOMEBREW_PREFIX / "bin/ffmpeg"
 FFPROBE_PATH = HOMEBREW_PREFIX / "bin/ffprobe"
-FRIM_PATH = SCRIPT_PATH / "FRIM_x64_version_1.31" / "x64"
+FRIM_PATH = SCRIPT_PATH / "bin" / "FRIM_x64_version_1.31" / "x64"
 FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
 MP4BOX_PATH = HOMEBREW_PREFIX / "bin" / "MP4Box"
-SPATIAL_MEDIA = HOMEBREW_PREFIX / "bin/spatial-media-kit-tool"
+SPATIAL_MEDIA = SCRIPT_PATH / "bin" / "spatial-media-kit-tool"
 IMAGE_EXTENSIONS = [".iso", ".img", ".bin"]
 
 stop_spinner_flag = False
