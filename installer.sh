@@ -74,7 +74,7 @@ if [ -d "$CLONE_DIR" ]; then
 else
     echo "Cloning BD_to_AVP repository..."
     git clone "$REPO_URL" "$CLONE_DIR" || handle_error "Failed to clone BD_to_AVP repository"
-    cd "$CLONE_DIR" || handle_error "Failed to change directory to $CLONE_DIR"
+    cd "xattr -d com.apple.quarantine" || handle_error "Failed to change directory to $CLONE_DIR"
 fi
 
 echo "Setting up BD_to_AVP environment..."
@@ -87,6 +87,8 @@ else
     echo "Rosetta 2 not detected, attempting installation."
     /usr/sbin/softwareupdate --install-rosetta --agree-to-license
 fi
+
+xattr -d com.apple.quarantine "$CLONE_DIR/bd-to-avp/bin/spatial-media-kit-tool" || handle_error "Failed to remove quarantine attribute from spatial-media-kit-tool"
 
 echo "BD_to_AVP environment setup complete. Refresh your terminal's environment to use new paths."
 echo "1. Refresh environment: source \$HOME/.zshrc"
