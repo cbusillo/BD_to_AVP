@@ -1,7 +1,6 @@
 import argparse
 import atexit
 import itertools
-import json
 import os
 import re
 import shutil
@@ -13,7 +12,9 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
 from time import sleep
-from typing import Any
+from typing import Any, Generator
+
+import ffmpeg  # type: ignore
 
 
 @dataclass
@@ -26,12 +27,29 @@ class DiscInfo:
 
 class Stage(Enum):
     CREATE_MKV = auto()
-    EXTRACT_MVC_AUDIO = auto()
+    EXTRACT_MVC_AUDIO_AND_SUB = auto()
     CREATE_LEFT_RIGHT_FILES = auto()
     COMBINE_TO_MV_HEVC = auto()
     TRANSCODE_AUDIO = auto()
     CREATE_FINAL_FILE = auto()
     MOVE_FILES = auto()
+
+
+@dataclass
+class InputArgs:
+    source_str: str
+    source_path: Path
+    output_root_path: Path
+    transcode_audio: bool
+    audio_bitrate: int
+    left_right_bitrate: int
+    mv_hevc_quality: int
+    fov: int
+    frame_rate: str
+    resolution: str
+    keep_files: bool
+    start_stage: Stage
+    remove_original: bool
 
 
 class StageEnumAction(argparse.Action):
