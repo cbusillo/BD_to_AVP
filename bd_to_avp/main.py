@@ -578,6 +578,8 @@ def create_mvc_audio_and_subtitle_files(
         if subtitle_formats := get_subtitle_tracks(mkv_output_path):
             subtitle_output_path = output_folder / f"{disc_name}_subtitle{subtitle_formats[0]['extension']}"
         extract_mvc_audio_and_subtitle(mkv_output_path, video_output_path, audio_output_path, subtitle_output_path)
+    else:
+        subtitle_output_path = output_folder.glob(f"{disc_name}_subtitle.*").__next__()
 
     if not input_args.keep_files and mkv_output_path:
         mkv_output_path.unlink(missing_ok=True)
