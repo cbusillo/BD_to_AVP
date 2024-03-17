@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bd_to_avp"
-version = "0.1.1"
+version = "0.1.2"
 description = "Script to convert Blu-ray Discs to Apple Vision compatible files"
 authors = ["Chris Busillo <info@shinycomputers.com>"]
 readme = "README.md"
