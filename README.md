@@ -67,7 +67,7 @@ Navigate to the tool's directory in your terminal and execute the command with t
 ### Command Syntax
 
 ```bash
-poetry run bd_to_avp --source <source> --output_folder <output_folder> [--keep_intermediate] [--transcode_audio] [--audio_bitrate <audio_bitrate>] [--mv_hevc_quality <mv_hevc_quality>] [--fov <fov>] [--frame_rate <frame_rate>] [--resolution <resolution>]
+poetry run bd-to-avp --source <source> --output_folder <output_folder> [--keep_intermediate] [--transcode_audio] [--audio_bitrate <audio_bitrate>] [--mv_hevc_quality <mv_hevc_quality>] [--fov <fov>] [--frame_rate <frame_rate>] [--resolution <resolution>]
 ```
 
 ### Parameters
