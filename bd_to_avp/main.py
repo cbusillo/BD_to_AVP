@@ -75,6 +75,8 @@ FRIM_PATH = SCRIPT_PATH / "bin" / "FRIM_x64_version_1.31" / "x64"
 FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
 MP4BOX_PATH = HOMEBREW_PREFIX / "bin" / "MP4Box"
 SPATIAL_MEDIA = SCRIPT_PATH / "bin" / "spatial-media-kit-tool"
+MKVEXTRACT_PATH = HOMEBREW_PREFIX / "bin" / "mkvextract"
+
 IMAGE_EXTENSIONS = [".iso", ".img", ".bin"]
 
 stop_spinner_flag = False
@@ -451,28 +453,30 @@ def parse_arguments() -> InputArgs:
     parser = argparse.ArgumentParser(description="Process 3D video content.")
     parser.add_argument("--source", required=True, help="Source disc number, MKV file path, or ISO image path.")
     parser.add_argument(
-        "--output_root_folder", type=Path, default=Path.cwd(), help="Output folder path. Defaults to current directory."
+        "--output-root-folder", type=Path, default=Path.cwd(), help="Output folder path. Defaults to current directory."
     )
-    parser.add_argument("--transcode_audio", action="store_true", help="Transcode audio to AAC format.")
+    parser.add_argument("--transcode-audio", action="store_true", help="Transcode audio to AAC format.")
     parser.add_argument(
-        "--audio_bitrate", default=384, type=int, help="Audio bitrate for transcoding in kilobits.  Default of 384kb/s."
+        "--audio-bitrate", default=384, type=int, help="Audio bitrate for transcoding in kilobits.  Default of 384kb/s."
     )
     parser.add_argument(
-        "--left_right_bitrate", default=20, type=int, help="Bitrate for MV-HEVC encoding in megabits.  Default of 20Mb/s."
+        "--left-right-bitrate", default=20, type=int, help="Bitrate for MV-HEVC encoding in megabits.  Default of 20Mb/s."
     )
-    parser.add_argument("--mv_hevc_quality", default=75, type=int, help="Quality factor for MV-HEVC encoding.")
+    parser.add_argument("--mv-hevc-quality", default=75, type=int, help="Quality factor for MV-HEVC encoding.")
     parser.add_argument("--fov", default=90, type=int, help="Horizontal field of view for MV-HEVC.")
     parser.add_argument("--frame_rate", help="Video frame rate. Detected automatically if not provided.")
     parser.add_argument("--resolution", help="Video resolution. Detected automatically if not provided.")
-    parser.add_argument("--keep_files", default=False, action="store_true", help="Keep temporary files after processing.")
+    parser.add_argument("--keep-files", default=False, action="store_true", help="Keep temporary files after processing.")
     parser.add_argument(
-        "--start_stage",
+        "--start-stage",
         type=Stage,
         action=StageEnumAction,
         default=Stage.CREATE_MKV,
         help="Stage at which to start the process. Options: " + ", ".join([stage.name for stage in Stage]),
     )
-    parser.add_argument("--remove_original", default=False, action="store_true", help="Remove original file after processing.")
+    parser.add_argument("--remove-original", default=False, action="store_true", help="Remove original file after processing.")
+    parser.add_argument("--source-folder", type=Path, help="Directory containing multiple image files or MKVs for processing.")
+
     args = parser.parse_args()
     input_args = InputArgs(
         source_str=args.source,
@@ -582,9 +586,33 @@ def create_mvc_audio_and_subtitle_files(
     else:
         subtitle_output_path = output_folder.glob(f"{disc_name}_subtitle.*").__next__()
 
+    if subtitle_output_path and subtitle_output_path.suffix.lower() == ".sup":
+        subtitle_output_path = convert_sup_to_sub(subtitle_output_path)
+
     if not input_args.keep_files and mkv_output_path:
         mkv_output_path.unlink(missing_ok=True)
     return audio_output_path, video_output_path, subtitle_output_path
+
+
+def convert_sup_to_sub(sup_subtitle_path: Path) -> Path:
+    temp_mkv_path = sup_subtitle_path.with_suffix(".mkv")
+    stream = ffmpeg.input(str(sup_subtitle_path))
+    subtitle_stream = ffmpeg.output(stream["s:0"], str(temp_mkv_path), format="matroska", codec="dvdsub")
+    ffmpeg.run(subtitle_stream, overwrite_output=True)
+
+    sub_subtitle_path = sup_subtitle_path.with_suffix(".sub")
+
+    mkvextract_command = [
+        MKVEXTRACT_PATH,
+        temp_mkv_path,
+        "tracks",
+        f"0:{sub_subtitle_path}",
+    ]
+    run_command(mkvextract_command, "Extract subtitle track from MKV")
+    temp_mkv_path.unlink(missing_ok=True)
+    sup_subtitle_path.unlink(missing_ok=True)
+
+    return sub_subtitle_path
 
 
 def create_mkv_file(input_args: InputArgs, output_folder: Path) -> Path | None:

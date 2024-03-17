@@ -28,6 +28,7 @@ Ensure the following are installed on your Mac:
 - **[MakeMKV]**: For converting disc video content into MKV files.
 - **[spatial-media-kit-tool]**: A tool for injecting 360° metadata into video files.
 - **[MP4Box]**: A multimedia packager available for Windows, Mac, and Linux.
+- **[MKVToolNix]**: A set of tools to create, alter, and inspect Matroska files.
 
 ## Manual Installation
 
@@ -43,8 +44,8 @@ spatial-media-kit-tool for handling spatial media, and MP4Box for multimedia pac
 # Install Homebrew
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# Install FFmpeg, MakeMKV, MP4Box, and Python 3.12
-brew install ffmpeg makemkv mp4box python@3.12
+# Install FFmpeg, MakeMKV, MP4Box, mkvtoolnix and Python 3.12
+brew install ffmpeg makemkv mp4box mkvtoolnix python@3.12 --no-quarantine 
 
 # Install Wine
 brew tap homebrew/cask-versions
@@ -73,15 +74,15 @@ poetry run bd-to-avp --source <source> --output_folder <output_folder> [--keep_i
 ### Parameters
 
 - `--source`: Source disc number, MKV file path, or ISO image path (required).
-- `--output_root_folder`: Output folder path. Defaults to the current directory.
-- `--transcode_audio`: Enable audio transcoding to AAC (disabled by default).
-- `--audio_bitrate`: Audio bitrate for transcoding in kb/s do not include unit (default: "384").
-- `--left_right_bitrate`: Bitrate for left and right views in Mb/s do not include unit (default: "20").'
-- `--mv_hevc_quality`: Quality factor for MV-HEVC encoding (default: "75").
+- `--output-root-folder`: Output folder path. Defaults to the current directory.
+- `--transcode-audio`: Enable audio transcoding to AAC (disabled by default).
+- `--audio-bitrate`: Audio bitrate for transcoding in kb/s do not include unit (default: "384").
+- `--left-right-bitrate`: Bitrate for left and right views in Mb/s do not include unit (default: "20").'
+- `--mv-hevc-quality`: Quality factor for MV-HEVC encoding (default: "75").
 - `--fov`: Horizontal field of view for MV-HEVC (default: "90").
-- `--frame_rate`: Video frame rate (auto-detected if not provided).
+- `--frame-rate`: Video frame rate (auto-detected if not provided).
 - `--resolution`: Video resolution (auto-detected if not provided).
-- `--keep_files`: Keep intermediate files (disabled by default).
+- `--keep-files`: Keep intermediate files (disabled by default).
 
 ### Examples
 
@@ -94,13 +95,13 @@ poetry run bd-to-avp --source disc:0 --output_folder /path/to/output
 Process an ISO image:
 
 ```bash
-poetry run bd-to-avp --source /path/to/movie.iso --output_folder /path/to/output
+poetry run bd-to-avp --source /path/to/movie.iso --output-folder /path/to/output
 ```
 
 Process an MKV file:
 
 ```bash
-poetry run bd-to-avp --source /path/to/movie.mkv --output_folder /path/to/output --transcode_audio
+poetry run bd-to-avp --source /path/to/movie.mkv --output-folder /path/to/output --transcode-audio
 ```
 
 ## Contribution
@@ -156,3 +157,5 @@ Big thanks to:
 [macOS Sonoma]:https://apps.apple.com/us/app/macos-sonoma/id6450717509?mt=12
 
 [Rosetta 2]: https://support.apple.com/en-us/HT211861
+
+[MKVToolNix]: https://mkvtoolnix.download/
