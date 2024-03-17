@@ -452,7 +452,7 @@ def find_main_feature(folder: Path, extensions: list[str]) -> Path | None:
 
 def parse_arguments() -> InputArgs:
     parser = argparse.ArgumentParser(description="Process 3D video content.")
-    parser.add_argument("--source", required=True, help="Source disc number, MKV file path, or ISO image path.")
+    parser.add_argument("--source", required=True, help="Source for a single disc number, MKV file path, or ISO image path.")
     parser.add_argument(
         "--source-folder",
         type=Path,

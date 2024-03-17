@@ -76,9 +76,10 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 
 ### Parameters
 
-- `--source`: Source disc number, MKV file path, or ISO image path (required).
+- `--source`: Source for a single disc number, MKV file path, or ISO image path (required).
 - `--source-folder`: Source folder path. This option will recurively scan for image files or mkv files. Will take precedence over
   --source if both are provided.
+- `--remove-original`: Remove original file after processing.
 - `--keep-files`: Keep intermediate files (disabled by default).
 - `--output-root-folder`: Output folder path. Defaults to the current directory.
 - `--transcode-audio`: Enable audio transcoding to AAC (disabled by default).
