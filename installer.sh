@@ -51,7 +51,7 @@ check_app_or_install() {
 }
 
 echo "Installing dependencies..."
-"$BREW_PATH/brew" install python@3.12 ffmpeg mp4box --no-quarantine  || handle_error "Failed to install dependencies"
+"$BREW_PATH/brew" install python@3.12 ffmpeg mp4box mkvtoolnix --no-quarantine  || handle_error "Failed to install dependencies"
 
 check_app_or_install "MakeMKV" "makemkv"
 check_app_or_install "Wine Stable" "wine-stable"
@@ -76,7 +76,6 @@ else
     git clone "$REPO_URL" "$CLONE_DIR" || handle_error "Failed to clone BD_to_AVP repository"
     cd "$CLONE_DIR" || handle_error "Failed to change directory to $CLONE_DIR"
 fi
-xattr -d com.apple.quarantine "$CLONE_DIR/bd_to_avp/bin/spatial-media-kit-tool" || handle_error "Failed to remove quarantine attribute from spatial-media-kit-tool"
 
 echo "Setting up BD_to_AVP environment..."
 "$BREW_PATH/poetry" install || handle_error "Failed to set up BD_to_AVP environment with Poetry"
