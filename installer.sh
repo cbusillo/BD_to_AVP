@@ -51,7 +51,7 @@ check_app_or_install() {
 }
 
 echo "Installing dependencies..."
-"$BREW_PATH/brew" install python@3.12 ffmpeg mp4box || handle_error "Failed to install dependencies"
+"$BREW_PATH/brew" install python@3.12 ffmpeg mp4box --no-quarantine  || handle_error "Failed to install dependencies"
 
 check_app_or_install "MakeMKV" "makemkv"
 check_app_or_install "Wine Stable" "wine-stable"
