@@ -329,7 +329,7 @@ def generate_ffmpeg_wrapper_command(input_fifo: Path, output_path: Path, disc_in
     stream = ffmpeg.input(str(input_fifo), f="rawvideo", pix_fmt=pix_fmt, s=disc_info.resolution, r=disc_info.frame_rate)
     stream = ffmpeg.output(
         stream,
-        output_path,
+        str(output_path),
         vcodec="hevc_videotoolbox",
         video_bitrate=f"{bitrate}M",
         bufsize=f"{bitrate * 2}M",
