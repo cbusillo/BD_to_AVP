@@ -50,6 +50,7 @@ class InputArgs:
     keep_files: bool
     start_stage: Stage
     remove_original: bool
+    source_folder: Path | None
 
 
 class StageEnumAction(argparse.Action):
@@ -475,7 +476,11 @@ def parse_arguments() -> InputArgs:
         help="Stage at which to start the process. Options: " + ", ".join([stage.name for stage in Stage]),
     )
     parser.add_argument("--remove-original", default=False, action="store_true", help="Remove original file after processing.")
-    parser.add_argument("--source-folder", type=Path, help="Directory containing multiple image files or MKVs for processing.")
+    parser.add_argument(
+        "--source-folder",
+        type=Path,
+        help="Directory containing multiple image files or MKVs for processing (will search recusively).",
+    )
 
     args = parser.parse_args()
     input_args = InputArgs(
@@ -492,17 +497,25 @@ def parse_arguments() -> InputArgs:
         keep_files=args.keep_files,
         start_stage=args.start_stage,
         remove_original=args.remove_original,
+        source_folder=args.source_folder,
     )
     return input_args
 
 
 def main() -> None:
     input_args = parse_arguments()
+    if input_args.source_folder:
+        for source in input_args.source_folder.rglob("*"):
+            if source.suffix.lower() in IMAGE_EXTENSIONS and source.is_file():
+                input_args.source_path = source
+                process_each(input_args)
+    else:
+        process_each(input_args)
 
+
+def process_each(input_args: InputArgs) -> None:
     disc_info, output_folder = setup_conversion_parameters(input_args)
-
     mkv_output_path = create_mkv_file(input_args, output_folder)
-
     audio_output_path, video_output_path, subtitle_output_path = create_mvc_audio_and_subtitle_files(
         disc_info.name, mkv_output_path, output_folder, input_args
     )

@@ -74,6 +74,9 @@ poetry run bd-to-avp --source <source> --output_folder <output_folder> [--keep_i
 ### Parameters
 
 - `--source`: Source disc number, MKV file path, or ISO image path (required).
+- `--source-folder`: Source folder path. This option will recurively scan for image files or mkv files. Will take precedence over
+  --source if both are provided.
+- `--keep-files`: Keep intermediate files (disabled by default).
 - `--output-root-folder`: Output folder path. Defaults to the current directory.
 - `--transcode-audio`: Enable audio transcoding to AAC (disabled by default).
 - `--audio-bitrate`: Audio bitrate for transcoding in kb/s do not include unit (default: "384").
@@ -82,7 +85,6 @@ poetry run bd-to-avp --source <source> --output_folder <output_folder> [--keep_i
 - `--fov`: Horizontal field of view for MV-HEVC (default: "90").
 - `--frame-rate`: Video frame rate (auto-detected if not provided).
 - `--resolution`: Video resolution (auto-detected if not provided).
-- `--keep-files`: Keep intermediate files (disabled by default).
 
 ### Examples
 
