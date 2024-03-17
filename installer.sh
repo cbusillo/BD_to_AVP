@@ -89,7 +89,9 @@ else
     /usr/sbin/softwareupdate --install-rosetta --agree-to-license
 fi
 
-xattr -d com.apple.quarantine "$CLONE_DIR/bd-to-avp/bin/spatial-media-kit-tool" || handle_error "Failed to remove quarantine attribute from spatial-media-kit-tool"
+if xattr -p com.apple.quarantine "$CLONE_DIR/bd-to-avp/bin/spatial-media-kit-tool" &> /dev/null; then
+    xattr -d com.apple.quarantine "$CLONE_DIR/bd-to-avp/bin/spatial-media-kit-tool" || handle_error_no_exit "Failed to remove quarantine attribute from spatial-media-kit-tool"
+fi
 
 echo "BD_to_AVP environment setup complete. Refresh your terminal's environment to use new paths."
 echo "1. Refresh environment: source \$HOME/.zshrc"
