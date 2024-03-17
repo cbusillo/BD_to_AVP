@@ -23,6 +23,7 @@ class DiscInfo:
     frame_rate: str = "23.976"
     resolution: str = "1920x1080"
     color_depth: int = 8
+    main_title_number: int = 0
 
 
 class Stage(Enum):
@@ -147,7 +148,7 @@ def setup_frim() -> None:
 
 def remove_folder_if_exists(folder_path: Path) -> None:
     if folder_path.is_dir():
-        shutil.rmtree(folder_path)
+        shutil.rmtree(folder_path, ignore_errors=True)
         print(f"Removed existing directory: {folder_path}")
 
 
@@ -222,7 +223,7 @@ def create_custom_makemkv_profile(custom_profile_path: Path) -> None:
     print(f"Custom MakeMKV profile created at {custom_profile_path}")
 
 
-def rip_disc_to_mkv(input_args: InputArgs, output_folder: Path) -> None:
+def rip_disc_to_mkv(input_args: InputArgs, output_folder: Path, disc_info: DiscInfo) -> None:
     custom_profile_path = output_folder / "custom_profile.mmcp.xml"
     create_custom_makemkv_profile(custom_profile_path)
 
@@ -235,7 +236,7 @@ def rip_disc_to_mkv(input_args: InputArgs, output_folder: Path) -> None:
         f"--profile={custom_profile_path}",
         "mkv",
         source,
-        "all",
+        disc_info.main_title_number,
         output_folder,
     ]
     run_command(command, "Rip disc to MKV file.")
@@ -262,6 +263,21 @@ def get_disc_and_mvc_video_info(source: str) -> DiscInfo:
     disc_info.frame_rate = first_match.group(2)
     if "/" in disc_info.frame_rate:
         disc_info.frame_rate = disc_info.frame_rate.split(" ")[0]
+
+    title_info_pattern = re.compile(r'TINFO:(?P<index>\d+),\d+,\d+,"(?P<duration>\d+:\d+:\d+)"')
+    longest_duration = 0
+    main_feature_index = 0
+
+    for match in title_info_pattern.finditer(output):
+        title_index = int(match.group("index"))
+        h, m, s = map(int, match.group("duration").split(":"))
+        duration_seconds = h * 3600 + m * 60 + s
+
+        if duration_seconds > longest_duration:
+            longest_duration = duration_seconds
+            main_feature_index = title_index
+
+    disc_info.main_title_number = main_feature_index
 
     return disc_info
 
@@ -422,8 +438,9 @@ def mux_video_audio_and_subtitles(mv_hevc_path: Path, audio_path: Path, subtitle
         "-add",
         audio_path,
     ]
-    if subtitle_path and subtitle_path.suffix.lower() not in [".sup", ".sub"]:
+    if subtitle_path and subtitle_path.suffix.lower() != ".sup":
         command += ["-add", subtitle_path]
+
     command.append(muxed_path)
     run_command(command, "Remux audio and video to final output.")
 
@@ -442,7 +459,7 @@ def get_video_color_depth(input_path: Path) -> int | None:
     return None
 
 
-def find_main_feature(folder: Path, extensions: list[str]) -> Path | None:
+def find_largest_file_with_extensions(folder: Path, extensions: list[str]) -> Path | None:
     files: list[Path] = []
     for ext in extensions:
         files.extend(folder.glob(f"**/*{ext}"))
@@ -456,8 +473,10 @@ def find_main_feature(folder: Path, extensions: list[str]) -> Path | None:
 
 def parse_arguments() -> InputArgs:
     parser = argparse.ArgumentParser(description="Process 3D video content.")
-    parser.add_argument("--source", required=True, help="Source for a single disc number, MKV file path, or ISO image path.")
-    parser.add_argument(
+    source_group = parser.add_mutually_exclusive_group(required=True)
+
+    source_group.add_argument("--source", help="Source for a single disc number, MKV file path, or ISO image path.")
+    source_group.add_argument(
         "--source-folder",
         type=Path,
         help="Directory containing multiple image files or MKVs for processing (will search recusively).",
@@ -489,7 +508,7 @@ def parse_arguments() -> InputArgs:
     args = parser.parse_args()
     input_args = InputArgs(
         source_str=args.source,
-        source_path=Path(args.source) if not args.source.startswith("disc:") else args.source,
+        source_path=Path(args.source) if args.source and not args.source.startswith("disc:") else args.source,
         output_root_path=Path(args.output_root_folder),
         transcode_audio=args.transcode_audio,
         audio_bitrate=args.audio_bitrate,
@@ -524,7 +543,7 @@ def main() -> None:
 
 def process_each(input_args: InputArgs) -> None:
     disc_info, output_folder = setup_conversion_parameters(input_args)
-    mkv_output_path = create_mkv_file(input_args, output_folder)
+    mkv_output_path = create_mkv_file(input_args, output_folder, disc_info)
     audio_output_path, video_output_path, subtitle_output_path = create_mvc_audio_and_subtitle_files(
         disc_info.name, mkv_output_path, output_folder, input_args
     )
@@ -606,21 +625,27 @@ def create_mvc_audio_and_subtitle_files(
             subtitle_output_path = output_folder / f"{disc_name}_subtitle{subtitle_formats[0]['extension']}"
         extract_mvc_audio_and_subtitle(mkv_output_path, video_output_path, audio_output_path, subtitle_output_path)
     else:
-        subtitle_output_path = output_folder.glob(f"{disc_name}_subtitle.*").__next__()
+        subtitle_extensions = [".idx", ".sup", ".srt"]
+        subtitle_files = (
+            file
+            for file in output_folder.glob(f"{disc_name}_subtitle*")
+            if file.suffix.lower() in (ext.lower() for ext in subtitle_extensions)
+        )
+        subtitle_output_path = next(subtitle_files, None)
 
     if subtitle_output_path and subtitle_output_path.suffix.lower() == ".sup":
-        subtitle_output_path = convert_sup_to_sub(subtitle_output_path)
+        subtitle_output_path = convert_sup_to_idx(subtitle_output_path)
 
     if not input_args.keep_files and mkv_output_path:
         mkv_output_path.unlink(missing_ok=True)
     return audio_output_path, video_output_path, subtitle_output_path
 
 
-def convert_sup_to_sub(sup_subtitle_path: Path) -> Path:
+def convert_sup_to_idx(sup_subtitle_path: Path) -> Path:
     temp_mkv_path = sup_subtitle_path.with_suffix(".mkv")
     stream = ffmpeg.input(str(sup_subtitle_path))
     subtitle_stream = ffmpeg.output(stream["s:0"], str(temp_mkv_path), format="matroska", codec="dvdsub")
-    ffmpeg.run(subtitle_stream, overwrite_output=True)
+    ffmpeg.run(subtitle_stream, overwrite_output=True, quiet=True)
 
     sub_subtitle_path = sup_subtitle_path.with_suffix(".sub")
 
@@ -634,17 +659,17 @@ def convert_sup_to_sub(sup_subtitle_path: Path) -> Path:
     temp_mkv_path.unlink(missing_ok=True)
     sup_subtitle_path.unlink(missing_ok=True)
 
-    return sub_subtitle_path
+    return sub_subtitle_path.with_suffix(".idx")
 
 
-def create_mkv_file(input_args: InputArgs, output_folder: Path) -> Path | None:
+def create_mkv_file(input_args: InputArgs, output_folder: Path, disc_info: DiscInfo) -> Path | None:
     if input_args.source_path.suffix.lower() == ".mkv":
         return input_args.source_path
 
     if input_args.start_stage.value <= Stage.CREATE_MKV.value:
-        rip_disc_to_mkv(input_args, output_folder)
+        rip_disc_to_mkv(input_args, output_folder, disc_info)
 
-    if mkv_file := find_main_feature(output_folder, [".mkv"]):
+    if mkv_file := find_largest_file_with_extensions(output_folder, [".mkv"]):
         return mkv_file
     return None
 
