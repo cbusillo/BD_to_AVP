@@ -454,6 +454,12 @@ def parse_arguments() -> InputArgs:
     parser = argparse.ArgumentParser(description="Process 3D video content.")
     parser.add_argument("--source", required=True, help="Source disc number, MKV file path, or ISO image path.")
     parser.add_argument(
+        "--source-folder",
+        type=Path,
+        help="Directory containing multiple image files or MKVs for processing (will search recusively).",
+    )
+    parser.add_argument("--remove-original", default=False, action="store_true", help="Remove original file after processing.")
+    parser.add_argument(
         "--output-root-folder", type=Path, default=Path.cwd(), help="Output folder path. Defaults to current directory."
     )
     parser.add_argument("--transcode-audio", action="store_true", help="Transcode audio to AAC format.")
@@ -474,12 +480,6 @@ def parse_arguments() -> InputArgs:
         action=StageEnumAction,
         default=Stage.CREATE_MKV,
         help="Stage at which to start the process. Options: " + ", ".join([stage.name for stage in Stage]),
-    )
-    parser.add_argument("--remove-original", default=False, action="store_true", help="Remove original file after processing.")
-    parser.add_argument(
-        "--source-folder",
-        type=Path,
-        help="Directory containing multiple image files or MKVs for processing (will search recusively).",
     )
 
     args = parser.parse_args()
