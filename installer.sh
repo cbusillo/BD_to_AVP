@@ -90,6 +90,8 @@ fi
 
 xattr -p com.apple.quarantine "$CLONE_DIR/bd-to-avp/bin/spatial-media-kit-tool" &> /dev/null;
 
+$BREW_PATH/wine &> /dev/null;
+
 echo "BD_to_AVP environment setup complete. Refresh your terminal's environment to use new paths."
 echo "1. Refresh environment: source $HOME/.zshrc"
 echo "2. Navigate to BD_to_AVP directory: cd $CLONE_DIR"
