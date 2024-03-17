@@ -57,29 +57,8 @@ check_app_or_install "MakeMKV" "makemkv"
 check_app_or_install "Wine Stable" "wine-stable"
 ln -s /Applications/Wine\ Stable.app/Contents/Resources/wine/bin/wine "$BREW_PATH/wine"
 
-
-echo "Installing Poetry..."
-"$BREW_PATH/brew" install poetry || handle_error "Failed to install Poetry"
-export PATH="$HOME/.poetry/bin:$PATH"
-
-echo "Cloning BD_to_AVP repository..."
-REPO_URL="https://github.com/cbusillo/BD_to_AVP.git"
-CLONE_DIR="$HOME/BD_to_AVP"
-
-cd ~ || handle_error "Failed to change directory to ~"
-if [ -d "$CLONE_DIR" ]; then
-    echo "$CLONE_DIR directory already exists. Checking for updates..."
-    cd "$CLONE_DIR" || handle_error "Failed to change directory to $CLONE_DIR"
-    git pull || handle_error "Failed to update $CLONE_DIR repository"
-else
-    echo "Cloning BD_to_AVP repository..."
-    git clone "$REPO_URL" "$CLONE_DIR" || handle_error "Failed to clone BD_to_AVP repository"
-    cd "$CLONE_DIR" || handle_error "Failed to change directory to $CLONE_DIR"
-fi
-
-echo "Setting up BD_to_AVP environment..."
-"$BREW_PATH/poetry" lock || handle_error "Failed to run Poetry lock"
-"$BREW_PATH/poetry" install || handle_error "Failed to set up BD_to_AVP environment with Poetry"
+echo "Installing BD_to_AVP from PyPI..."
+python3 -m pip install bd_to_avp || handle_error "Failed to install BD_to_AVP from PyPI"
 
 echo "Installing Rosetta 2 (if required)..."
 if arch -x86_64 true 2>/dev/null; then
@@ -89,14 +68,10 @@ else
     /usr/sbin/softwareupdate --install-rosetta --agree-to-license
 fi
 
-xattr -p com.apple.quarantine "$CLONE_DIR/bd-to-avp/bin/spatial-media-kit-tool" &> /dev/null;
-
 $BREW_PATH/wineboot &> /dev/null;
 
 
 
 echo "BD_to_AVP environment setup complete. Refresh your terminal's environment to use new paths."
 echo "1. Refresh environment: source $HOME/.zshrc"
-echo "2. Navigate to BD_to_AVP directory: cd $CLONE_DIR"
-echo "3. Execute BD_to_AVP: poetry run bd-to-avp"
-
+echo "2. Execute BD_to_AVP: bd-to-avp"
