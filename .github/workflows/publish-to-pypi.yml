@@ -1,8 +1,9 @@
 name: Publish Python 🐍 distribution 📦 to PyPI and Bump Version
 
+permissions:
+  contents: write
+
 on:
-  permissions:
-    contents: write
   push:
     branches:
       - release
