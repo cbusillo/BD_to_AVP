@@ -251,13 +251,17 @@ def get_disc_and_mvc_video_info(source: str) -> DiscInfo:
     if disc_name_match:
         disc_info.name = disc_name_match.group(1)
 
-    mvc_video_matches = re.finditer(r"SINFO:\d+,1,19,0,\"(\d+x\d+)\".*?SINFO:\d+,1,21,0,\"(.*?)\"", output, re.DOTALL)
-    for match in mvc_video_matches:
-        disc_info.resolution = match.group(1)
-        disc_info.frame_rate = match.group(2)
-        if "/" in disc_info.frame_rate:
-            disc_info.frame_rate = disc_info.frame_rate.split(" ")[0]
-        break
+    mvc_video_matches = list(re.finditer(r"SINFO:\d+,1,19,0,\"(\d+x\d+)\".*?SINFO:\d+,1,21,0,\"(.*?)\"", output, re.DOTALL))
+
+    if not mvc_video_matches:
+        print("No MVC video found in disc info.")
+        raise ValueError("No MVC video found in disc info.")
+
+    first_match = mvc_video_matches[0]
+    disc_info.resolution = first_match.group(1)
+    disc_info.frame_rate = first_match.group(2)
+    if "/" in disc_info.frame_rate:
+        disc_info.frame_rate = disc_info.frame_rate.split(" ")[0]
 
     return disc_info
 
@@ -506,9 +510,14 @@ def main() -> None:
     input_args = parse_arguments()
     if input_args.source_folder:
         for source in input_args.source_folder.rglob("*"):
-            if source.suffix.lower() in IMAGE_EXTENSIONS and source.is_file():
-                input_args.source_path = source
+            if source.suffix.lower() not in IMAGE_EXTENSIONS or not source.is_file():
+                continue
+            input_args.source_path = source
+            try:
                 process_each(input_args)
+            except ValueError:
+                continue
+
     else:
         process_each(input_args)
 
