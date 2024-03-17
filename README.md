@@ -91,7 +91,7 @@ poetry run bd-to-avp --source <source> --output_folder <output_folder> [--keep_i
 Process a Blu-ray disc:
 
 ```bash
-poetry run bd-to-avp --source disc:0 --output_folder /path/to/output
+poetry run bd-to-avp --source disc:0 --output-root-folder /path/to/output
 ```
 
 Process an ISO image:
