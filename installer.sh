@@ -75,8 +75,8 @@ else
     echo "Cloning BD_to_AVP repository..."
     git clone "$REPO_URL" "$CLONE_DIR" || handle_error "Failed to clone BD_to_AVP repository"
     cd "$CLONE_DIR" || handle_error "Failed to change directory to $CLONE_DIR"
-    xattr -d com.apple.quarantine "$CLONE_DIR/bd-to-avp/bin/spatial-media-kit-tool" || handle_error "Failed to remove quarantine attribute from spatial-media-kit-tool"
 fi
+xattr -d com.apple.quarantine "$CLONE_DIR/bd_to_avp/bin/spatial-media-kit-tool" || handle_error "Failed to remove quarantine attribute from spatial-media-kit-tool"
 
 echo "Setting up BD_to_AVP environment..."
 "$BREW_PATH/poetry" install || handle_error "Failed to set up BD_to_AVP environment with Poetry"
