@@ -74,7 +74,8 @@ if [ -d "$CLONE_DIR" ]; then
 else
     echo "Cloning BD_to_AVP repository..."
     git clone "$REPO_URL" "$CLONE_DIR" || handle_error "Failed to clone BD_to_AVP repository"
-    cd "xattr -d com.apple.quarantine" || handle_error "Failed to change directory to $CLONE_DIR"
+    cd "$CLONE_DIR" || handle_error "Failed to change directory to $CLONE_DIR"
+    xattr -d com.apple.quarantine "$CLONE_DIR/bd-to-avp/bin/spatial-media-kit-tool" || handle_error "Failed to remove quarantine attribute from spatial-media-kit-tool"
 fi
 
 echo "Setting up BD_to_AVP environment..."
