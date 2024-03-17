@@ -8,20 +8,21 @@ from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The tool also injects 360° metada
 
 ## Quick install
 
+To quickly install `BD_to_AVP`, run the following command in your terminal:
+
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/release/installer.sh)"
 ```
 
 ## Prerequisites
 
-Ensure the following are installed on your Mac:
+Ensure the following are installed on your Mac *(If not using the Quick Install)*:
 
 - **Apple Silicon [Mac]**: A Mac with Apple Silicon, such as the M1, M1 Pro, or M1 Max (Maybe, installer currently requires Apple
   Silicon. If anyone can confirm that spatial-media-kit-tool works on Intel Macs, I can remove this requirement)
 - **[macOS Sonoma]**: The latest version of macOS.
 - **[Rosetta 2]**: A compatibility layer allowing Intel-based applications to run on Apple Silicon Macs.
 - **[Python] 3.12**: The latest version of Python.
-- **[Poetry]**: A dependency manager for Python.
 - **[Homebrew]**: The missing package manager for macOS (or Linux).
 - **[FFmpeg]**: A complete, cross-platform solution to record, convert, and stream audio and video.
 - **[Wine]**: A free and open-source compatibility layer allowing Windows programs to run on Unix-like operating systems.
@@ -51,14 +52,16 @@ brew install ffmpeg makemkv mp4box mkvtoolnix python@3.12 --no-quarantine
 brew tap homebrew/cask-versions
 brew install --cask --no-quarantine wine-stable
 
-# Install Poetry
-curl -sSL https://install.python-poetry.org | python3 -
-
-# Ensure Python 3.12 and Poetry are correctly installed
+# Ensure Python 3.12 is correctly installed then create a virtual environment
 python3.12 -m pip install --upgrade pip
+python3.12 -m venv ~/.bd_to_avp_venv
 
-cd /path/to/BD_to_AVP
-poetry install
+# Activate the virtual environment and install BD_to_AVP
+source ~/.bd_to_avp_venv/bin/activate
+pip install bd_to_avp
+
+# Create a symbolic link to the bd-to-avp command
+ln -s ~/.bd_to_avp_venv/bin/bd-to-avp /opt/homebrew/bin/bd-to-avp
 ```
 
 ## Usage
@@ -68,7 +71,7 @@ Navigate to the tool's directory in your terminal and execute the command with t
 ### Command Syntax
 
 ```bash
-poetry run bd-to-avp --source <source> --output_folder <output_folder> [--keep_intermediate] [--transcode_audio] [--audio_bitrate <audio_bitrate>] [--mv_hevc_quality <mv_hevc_quality>] [--fov <fov>] [--frame_rate <frame_rate>] [--resolution <resolution>]
+bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 ```
 
 ### Parameters
@@ -91,19 +94,19 @@ poetry run bd-to-avp --source <source> --output_folder <output_folder> [--keep_i
 Process a Blu-ray disc:
 
 ```bash
-poetry run bd-to-avp --source disc:0 --output-root-folder /path/to/output
+bd-to-avp --source disc:0 --output-root-folder /path/to/output
 ```
 
 Process an ISO image:
 
 ```bash
-poetry run bd-to-avp --source /path/to/movie.iso --output-folder /path/to/output
+bd-to-avp --source /path/to/movie.iso --output-folder /path/to/output
 ```
 
 Process an MKV file:
 
 ```bash
-poetry run bd-to-avp --source /path/to/movie.mkv --output-folder /path/to/output --transcode-audio
+bd-to-avp --source /path/to/movie.mkv --output-folder /path/to/output --transcode-audio
 ```
 
 ## Contribution
@@ -149,8 +152,6 @@ Big thanks to:
 [Wine]: https://www.winehq.org/
 
 [Homebrew]: https://brew.sh/
-
-[Poetry]: https://python-poetry.org/
 
 [Python]: https://www.python.org/
 
