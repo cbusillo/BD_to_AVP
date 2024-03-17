@@ -78,6 +78,7 @@ else
 fi
 
 echo "Setting up BD_to_AVP environment..."
+"$BREW_PATH/poetry" lock || handle_error "Failed to run Poetry lock"
 "$BREW_PATH/poetry" install || handle_error "Failed to set up BD_to_AVP environment with Poetry"
 
 echo "Installing Rosetta 2 (if required)..."
