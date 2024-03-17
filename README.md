@@ -1,4 +1,4 @@
-# BD-to-AVP Blu-ray Disc to Apple Vision Pro README
+# BD-to-AVP 3D Blu-ray Disc to Apple Vision Pro README
 
 ## Introduction
 
