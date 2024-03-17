@@ -317,18 +317,19 @@ def cleanup_process(process: subprocess.Popen) -> None:
         process.terminate()
 
 
-def run_ffmpeg_async(command, log_path):
+def run_ffmpeg_async(command: list[Any], log_path: Path) -> subprocess.Popen:
+    command = normalize_command_elements(command)
     with open(log_path, "w") as log_file:
         process = subprocess.Popen(command, stdout=log_file, stderr=subprocess.STDOUT, text=True)
     return process
 
 
-def generate_ffmpeg_wrapper_command(input_fifo, output_path, disc_info, bitrate):
+def generate_ffmpeg_wrapper_command(input_fifo: Path, output_path: Path, disc_info: DiscInfo, bitrate: int) -> list[Any]:
     pix_fmt = "yuv420p10le" if disc_info.color_depth == 10 else "yuv420p"
     stream = ffmpeg.input(str(input_fifo), f="rawvideo", pix_fmt=pix_fmt, s=disc_info.resolution, r=disc_info.frame_rate)
     stream = ffmpeg.output(
         stream,
-        str(output_path),
+        output_path,
         vcodec="hevc_videotoolbox",
         video_bitrate=f"{bitrate}M",
         bufsize=f"{bitrate * 2}M",
@@ -414,7 +415,7 @@ def mux_video_audio_and_subtitles(mv_hevc_path: Path, audio_path: Path, subtitle
         "-add",
         audio_path,
     ]
-    if subtitle_path:
+    if subtitle_path and subtitle_path.suffix.lower() != ".sup":
         command += ["-add", subtitle_path]
     command.append(muxed_path)
     run_command(command, "Remux audio and video to final output.")
