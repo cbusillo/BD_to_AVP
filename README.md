@@ -9,7 +9,7 @@ from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The tool also injects 360° metada
 ## Quick install
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/master/installer.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/release/installer.sh)"
 ```
 
 ## Prerequisites

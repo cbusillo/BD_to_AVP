@@ -1,5 +1,5 @@
 #!/bin/zsh
-#/bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/master/installer.sh)"
+#/bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/release/installer.sh)"
 
 handle_error() {
     echo "Error: $1"
