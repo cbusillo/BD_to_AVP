@@ -417,7 +417,7 @@ def mux_video_audio_and_subtitles(mv_hevc_path: Path, audio_path: Path, subtitle
         "-add",
         audio_path,
     ]
-    if subtitle_path and subtitle_path.suffix.lower() != ".sup":
+    if subtitle_path and subtitle_path.suffix.lower() not in [".sup", ".sub"]:
         command += ["-add", subtitle_path]
     command.append(muxed_path)
     run_command(command, "Remux audio and video to final output.")
