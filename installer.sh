@@ -28,10 +28,14 @@ else
     echo "Homebrew not found. Installing Homebrew..."
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || handle_error "Failed to install Homebrew"
     BREW_PATH="/opt/homebrew/bin"
-    touch ~/.zshrc
-    echo "export PATH=\"$BREW_PATH:\$PATH\"" >> ~/.zshrc
-    export PATH="$BREW_PATH:$PATH"
+
 fi
+
+touch ~/.zshrc
+if ! grep -q "$BREW_PATH" ~/.zshrc; then
+    echo "export PATH=\"$BREW_PATH:\$PATH\"" >> ~/.zshrc
+fi
+export PATH="$BREW_PATH:$PATH"
 
 echo "Homebrew installed at $BREW_PATH."
 
