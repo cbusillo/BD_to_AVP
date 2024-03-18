@@ -72,8 +72,6 @@ SCRIPT_PATH = Path(__file__).parent
 MAKEMKVCON_PATH = Path("/Applications/MakeMKV.app/Contents/MacOS/makemkvcon")
 HOMEBREW_PREFIX = Path(os.getenv("HOMEBREW_PREFIX", "/opt/homebrew"))
 WINE_PATH = HOMEBREW_PREFIX / "bin/wine"
-FFMPEG_PATH = HOMEBREW_PREFIX / "bin/ffmpeg"
-FFPROBE_PATH = HOMEBREW_PREFIX / "bin/ffprobe"
 FRIM_PATH = SCRIPT_PATH / "bin" / "FRIM_x64_version_1.31" / "x64"
 FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
 MP4BOX_PATH = HOMEBREW_PREFIX / "bin" / "MP4Box"
@@ -526,8 +524,10 @@ def get_video_color_depth(input_path: Path) -> int | None:
             if "10le" in pix_fmt or "10be" in pix_fmt:
                 return 10
             return None
-    except ffmpeg.Error as e:
-        print(f"FFmpeg error: {e.stderr}")
+    except ffmpeg.Error:
+        print(
+            f"Error getting video color depth, using default of {DiscInfo().color_depth}"
+        )
     return None
 
 
