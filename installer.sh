@@ -28,6 +28,7 @@ else
     echo "Homebrew not found. Installing Homebrew..."
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || handle_error "Failed to install Homebrew"
     BREW_PATH="/opt/homebrew/bin"
+    touch ~/.zshrc
     echo "export PATH=\"$BREW_PATH:\$PATH\"" >> ~/.zshrc
     export PATH="$BREW_PATH:$PATH"
 fi
@@ -51,7 +52,7 @@ check_app_or_install() {
 }
 
 echo "Installing dependencies..."
-"$BREW_PATH/brew" install python@3.12 ffmpeg mp4box mkvtoolnix --no-quarantine  || handle_error "Failed to install dependencies"
+"$BREW_PATH/brew" install python@3.12 ffmpeg mp4box mkvtoolnix --no-quarantine 2>/dev/null || handle_error "Failed to install dependencies"
 
 check_app_or_install "MakeMKV" "makemkv"
 check_app_or_install "Wine Stable" "wine-stable"
