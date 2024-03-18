@@ -71,8 +71,9 @@ python3.12 -m venv "$VENV_PATH" || handle_error "Failed to create a virtual envi
 echo "Activating the virtual environment..."
 source "$VENV_PATH/bin/activate"
 
-echo "Installing BD_to_AVP from PyPI..."
-pip install bd_to_avp || handle_error "Failed to install BD_to_AVP from PyPI"
+echo "Installing or updating BD_to_AVP from PyPI..."
+pip install --upgrade bd_to_avp || echo "Failed to install/update BD_to_AVP from PyPI"
+
 
 echo "Making BD_to_AVP executable accessible system-wide..."
 
