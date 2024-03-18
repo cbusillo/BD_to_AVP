@@ -555,7 +555,10 @@ def process_each(input_args: InputArgs) -> None:
     )
     move_file_to_output_root_folder(muxed_output_path, input_args)
     if input_args.remove_original and input_args.source_path:
-        remove_folder_if_exists(input_args.source_path)
+        if input_args.source_path.is_dir():
+            remove_folder_if_exists(input_args.source_path)
+        else:
+            input_args.source_path.unlink(missing_ok=True)
 
 
 def move_file_to_output_root_folder(muxed_output_path: Path, input_args: InputArgs) -> None:
