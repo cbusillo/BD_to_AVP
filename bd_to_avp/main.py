@@ -90,14 +90,21 @@ stop_spinner_flag = False
 def mounted_image(image_path: Path):
     mount_point = None
     existing_mounts_command = ["hdiutil", "info"]
-    existing_mounts_output = run_command(existing_mounts_command, "Check mounted images")
+    existing_mounts_output = run_command(
+        existing_mounts_command, "Check mounted images"
+    )
     try:
         for line in existing_mounts_output.split("\n"):
             if str(image_path) in line:
                 mount_line_index = existing_mounts_output.split("\n").index(line) + 1
-                while "/dev/disk" not in existing_mounts_output.split("\n")[mount_line_index]:
+                while (
+                    "/dev/disk"
+                    not in existing_mounts_output.split("\n")[mount_line_index]
+                ):
                     mount_line_index += 1
-                mount_point = existing_mounts_output.split("\n")[mount_line_index].split("\t")[-1]
+                mount_point = existing_mounts_output.split("\n")[
+                    mount_line_index
+                ].split("\t")[-1]
                 print(f"ISO is already mounted at {mount_point}")
                 break
 
@@ -144,7 +151,9 @@ def setup_frim() -> None:
 
     regedit_command = [WINE_PATH, "regedit", reg_file_path]
     regedit_env = {"WINEPREFIX": str(wine_prefix)}
-    run_command(regedit_command, "Update the Windows registry for FRIM plugins.", regedit_env)
+    run_command(
+        regedit_command, "Update the Windows registry for FRIM plugins.", regedit_env
+    )
     print("Updated the Windows registry for FRIM plugins.")
 
 
@@ -166,10 +175,15 @@ def spinner(command_name: str = "command...") -> None:
 
 
 def normalize_command_elements(command: list[Any]) -> list[str | os.PathLike | bytes]:
-    return [str(item) if not isinstance(item, (str, bytes, os.PathLike)) else item for item in command]
+    return [
+        str(item) if not isinstance(item, (str, bytes, os.PathLike)) else item
+        for item in command
+    ]
 
 
-def run_command(command_list: list[Any], command_name: str = "", env: dict[str, str] | None = None) -> str:
+def run_command(
+    command_list: list[Any], command_name: str = "", env: dict[str, str] | None = None
+) -> str:
     command_list = normalize_command_elements(command_list)
     if not command_name:
         command_name = str(command_list[0])
@@ -200,7 +214,9 @@ def run_command(command_list: list[Any], command_name: str = "", env: dict[str, 
         if process.returncode != 0:
             print("Error running command:", command_name)
             print("\n".join(output_lines))
-            raise subprocess.CalledProcessError(process.returncode, command_list, output="".join(output_lines))
+            raise subprocess.CalledProcessError(
+                process.returncode, command_list, output="".join(output_lines)
+            )
     finally:
         stop_spinner_flag = True
         spinner_thread.join()
@@ -232,7 +248,9 @@ def create_custom_makemkv_profile(custom_profile_path: Path) -> None:
     print(f"Custom MakeMKV profile created at {custom_profile_path}")
 
 
-def rip_disc_to_mkv(input_args: InputArgs, output_folder: Path, disc_info: DiscInfo) -> None:
+def rip_disc_to_mkv(
+    input_args: InputArgs, output_folder: Path, disc_info: DiscInfo
+) -> None:
     custom_profile_path = output_folder / "custom_profile.mmcp.xml"
     create_custom_makemkv_profile(custom_profile_path)
 
@@ -279,7 +297,9 @@ def get_disc_and_mvc_video_info(source: str) -> DiscInfo:
     if "/" in disc_info.frame_rate:
         disc_info.frame_rate = disc_info.frame_rate.split(" ")[0]
 
-    title_info_pattern = re.compile(r'TINFO:(?P<index>\d+),\d+,\d+,"(?P<duration>\d+:\d+:\d+)"')
+    title_info_pattern = re.compile(
+        r'TINFO:(?P<index>\d+),\d+,\d+,"(?P<duration>\d+:\d+:\d+)"'
+    )
     longest_duration = 0
     main_feature_index = 0
 
@@ -313,7 +333,9 @@ def get_subtitle_tracks(input_path: Path) -> list[dict]:
             index = stream.get("index")
             extension = subtitle_format_extensions.get(codec_name, "")
             if extension:
-                subtitle_tracks.append({"index": index, "extension": extension, "codec_name": codec_name})
+                subtitle_tracks.append(
+                    {"index": index, "extension": extension, "codec_name": codec_name}
+                )
     except ffmpeg.Error as e:
         print(f"Error getting subtitle tracks: {e}")
     return subtitle_tracks
@@ -327,12 +349,16 @@ def extract_mvc_audio_and_subtitle(
 ) -> None:
     stream = ffmpeg.input(str(input_path))
 
-    video_stream = ffmpeg.output(stream["v:0"], str(video_output_path), c="copy", bsf="h264_mp4toannexb")
+    video_stream = ffmpeg.output(
+        stream["v:0"], str(video_output_path), c="copy", bsf="h264_mp4toannexb"
+    )
     audio_stream = ffmpeg.output(stream["a:0"], str(audio_output_path), c="pcm_s24le")
 
     print("Running ffmpeg to extract video, audio, and subtitles from MKV")
     if subtitle_output_path:
-        subtitle_stream = ffmpeg.output(stream["s:0"], str(subtitle_output_path), c="copy")
+        subtitle_stream = ffmpeg.output(
+            stream["s:0"], str(subtitle_output_path), c="copy"
+        )
         ffmpeg.run(
             [video_stream, audio_stream, subtitle_stream],
             overwrite_output=True,
@@ -364,11 +390,15 @@ def cleanup_process(process: subprocess.Popen) -> None:
 def run_ffmpeg_async(command: list[Any], log_path: Path) -> subprocess.Popen:
     command = normalize_command_elements(command)
     with open(log_path, "w") as log_file:
-        process = subprocess.Popen(command, stdout=log_file, stderr=subprocess.STDOUT, text=True)
+        process = subprocess.Popen(
+            command, stdout=log_file, stderr=subprocess.STDOUT, text=True
+        )
     return process
 
 
-def generate_ffmpeg_wrapper_command(input_fifo: Path, output_path: Path, disc_info: DiscInfo, bitrate: int) -> list[Any]:
+def generate_ffmpeg_wrapper_command(
+    input_fifo: Path, output_path: Path, disc_info: DiscInfo, bitrate: int
+) -> list[Any]:
     pix_fmt = "yuv420p10le" if disc_info.color_depth == 10 else "yuv420p"
     stream = ffmpeg.input(
         str(input_fifo),
@@ -400,7 +430,9 @@ def split_mvc_to_stereo(
     ffmpeg_left_log = left_output_path.with_suffix(".log")
     ffmpeg_right_log = right_output_path.with_suffix(".log")
     with temporary_fifo("left_fifo", "right_fifo") as (left_fifo, right_fifo):
-        ffmpeg_left_command = generate_ffmpeg_wrapper_command(left_fifo, left_output_path, disc_info, input_args.left_right_bitrate)
+        ffmpeg_left_command = generate_ffmpeg_wrapper_command(
+            left_fifo, left_output_path, disc_info, input_args.left_right_bitrate
+        )
         ffmpeg_right_command = generate_ffmpeg_wrapper_command(
             right_fifo, right_output_path, disc_info, input_args.left_right_bitrate
         )
@@ -460,11 +492,15 @@ def combine_to_mv_hevc(
 
 def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int):
     audio_input = ffmpeg.input(str(input_path))
-    audio_transcoded = ffmpeg.output(audio_input, str(transcoded_audio_path), c_a="aac", b_a=f"{bitrate}k")
+    audio_transcoded = ffmpeg.output(
+        audio_input, str(transcoded_audio_path), c_a="aac", b_a=f"{bitrate}k"
+    )
     ffmpeg.run(audio_transcoded, overwrite_output=True, quiet=True)
 
 
-def mux_video_audio_and_subtitles(mv_hevc_path: Path, audio_path: Path, subtitle_path: Path | None, muxed_path: Path) -> None:
+def mux_video_audio_and_subtitles(
+    mv_hevc_path: Path, audio_path: Path, subtitle_path: Path | None, muxed_path: Path
+) -> None:
     command = [
         MP4BOX_PATH,
         "-add",
@@ -481,7 +517,9 @@ def mux_video_audio_and_subtitles(mv_hevc_path: Path, audio_path: Path, subtitle
 
 def get_video_color_depth(input_path: Path) -> int | None:
     try:
-        probe = ffmpeg.probe(str(input_path), select_streams="v:0", show_entries="stream=pix_fmt")
+        probe = ffmpeg.probe(
+            str(input_path), select_streams="v:0", show_entries="stream=pix_fmt"
+        )
         streams = probe.get("streams", [])
         if streams:
             pix_fmt = streams[0].get("pix_fmt")
@@ -493,7 +531,9 @@ def get_video_color_depth(input_path: Path) -> int | None:
     return None
 
 
-def find_largest_file_with_extensions(folder: Path, extensions: list[str]) -> Path | None:
+def find_largest_file_with_extensions(
+    folder: Path, extensions: list[str]
+) -> Path | None:
     files: list[Path] = []
     for ext in extensions:
         files.extend(folder.glob(f"**/*{ext}"))
@@ -536,7 +576,9 @@ def parse_arguments() -> InputArgs:
         default=Path.cwd(),
         help="Output folder path. Defaults to current directory.",
     )
-    parser.add_argument("--transcode-audio", action="store_true", help="Transcode audio to AAC format.")
+    parser.add_argument(
+        "--transcode-audio", action="store_true", help="Transcode audio to AAC format."
+    )
     parser.add_argument(
         "--audio-bitrate",
         default=384,
@@ -555,9 +597,15 @@ def parse_arguments() -> InputArgs:
         type=int,
         help="Quality factor for MV-HEVC encoding.",
     )
-    parser.add_argument("--fov", default=90, type=int, help="Horizontal field of view for MV-HEVC.")
-    parser.add_argument("--frame_rate", help="Video frame rate. Detected automatically if not provided.")
-    parser.add_argument("--resolution", help="Video resolution. Detected automatically if not provided.")
+    parser.add_argument(
+        "--fov", default=90, type=int, help="Horizontal field of view for MV-HEVC."
+    )
+    parser.add_argument(
+        "--frame_rate", help="Video frame rate. Detected automatically if not provided."
+    )
+    parser.add_argument(
+        "--resolution", help="Video resolution. Detected automatically if not provided."
+    )
     parser.add_argument(
         "--keep-files",
         default=False,
@@ -569,13 +617,18 @@ def parse_arguments() -> InputArgs:
         type=Stage,
         action=StageEnumAction,
         default=Stage.CREATE_MKV,
-        help="Stage at which to start the process. Options: " + ", ".join([stage.name for stage in Stage]),
+        help="Stage at which to start the process. Options: "
+        + ", ".join([stage.name for stage in Stage]),
     )
 
     args = parser.parse_args()
     input_args = InputArgs(
         source_str=args.source,
-        source_path=Path(args.source) if args.source and not args.source.startswith("disc:") else args.source,
+        source_path=(
+            Path(args.source)
+            if args.source and not args.source.startswith("disc:")
+            else args.source
+        ),
         output_root_path=Path(args.output_root_folder),
         transcode_audio=args.transcode_audio,
         audio_bitrate=args.audio_bitrate,
@@ -611,16 +664,28 @@ def main() -> None:
 
 def process_each(input_args: InputArgs) -> None:
     disc_info, output_folder = setup_conversion_parameters(input_args)
-    if (output_folder / f"{disc_info.name}{FINAL_FILE_TAG}.mov").exists() and not input_args.overwrite:
-        raise FileExistsError(f"Output file already exists for {disc_info.name}. Use --overwrite to replace.")
+    if (
+        output_folder / f"{disc_info.name}{FINAL_FILE_TAG}.mov"
+    ).exists() and not input_args.overwrite:
+        raise FileExistsError(
+            f"Output file already exists for {disc_info.name}. Use --overwrite to replace."
+        )
 
     mkv_output_path = create_mkv_file(input_args, output_folder, disc_info)
-    audio_output_path, video_output_path, subtitle_output_path = create_mvc_audio_and_subtitle_files(
-        disc_info.name, mkv_output_path, output_folder, input_args
+    audio_output_path, video_output_path, subtitle_output_path = (
+        create_mvc_audio_and_subtitle_files(
+            disc_info.name, mkv_output_path, output_folder, input_args
+        )
     )
-    left_output_path, right_output_path = create_left_right_files(disc_info, output_folder, video_output_path, input_args)
-    mv_hevc_path = create_mv_hevc_file(left_output_path, right_output_path, output_folder, input_args, disc_info.name)
-    audio_output_path = create_transcoded_audio_file(input_args, audio_output_path, output_folder)
+    left_output_path, right_output_path = create_left_right_files(
+        disc_info, output_folder, video_output_path, input_args
+    )
+    mv_hevc_path = create_mv_hevc_file(
+        left_output_path, right_output_path, output_folder, input_args, disc_info.name
+    )
+    audio_output_path = create_transcoded_audio_file(
+        input_args, audio_output_path, output_folder
+    )
     muxed_output_path = create_muxed_file(
         audio_output_path,
         mv_hevc_path,
@@ -637,14 +702,18 @@ def process_each(input_args: InputArgs) -> None:
             input_args.source_path.unlink(missing_ok=True)
 
 
-def move_file_to_output_root_folder(muxed_output_path: Path, input_args: InputArgs) -> None:
+def move_file_to_output_root_folder(
+    muxed_output_path: Path, input_args: InputArgs
+) -> None:
     final_path = input_args.output_root_path / muxed_output_path.name
     muxed_output_path.replace(final_path)
     if not input_args.keep_files:
         remove_folder_if_exists(muxed_output_path.parent)
 
 
-def create_mv_hevc_file(left_video_path, right_video_path, output_folder, input_args, disc_name: str) -> Path:
+def create_mv_hevc_file(
+    left_video_path, right_video_path, output_folder, input_args, disc_name: str
+) -> Path:
     mv_hevc_path = output_folder / f"{disc_name}_MV-HEVC.mov"
     if input_args.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
         combine_to_mv_hevc(left_video_path, right_video_path, mv_hevc_path, input_args)
@@ -665,7 +734,9 @@ def create_muxed_file(
 ) -> Path:
     muxed_path = output_folder / f"{disc_name}{FINAL_FILE_TAG}.mov"
     if input_args.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
-        mux_video_audio_and_subtitles(mv_hevc_path, audio_path, subtitle_path, muxed_path)
+        mux_video_audio_and_subtitles(
+            mv_hevc_path, audio_path, subtitle_path, muxed_path
+        )
 
     if not input_args.keep_files:
         mv_hevc_path.unlink(missing_ok=True)
@@ -673,10 +744,17 @@ def create_muxed_file(
     return muxed_path
 
 
-def create_transcoded_audio_file(input_args: InputArgs, original_audio_path: Path, output_folder: Path) -> Path:
-    if input_args.transcode_audio and input_args.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
+def create_transcoded_audio_file(
+    input_args: InputArgs, original_audio_path: Path, output_folder: Path
+) -> Path:
+    if (
+        input_args.transcode_audio
+        and input_args.start_stage.value <= Stage.TRANSCODE_AUDIO.value
+    ):
         trancoded_audio_path = output_folder / f"{output_folder.stem}_audio_AAC.mov"
-        transcode_audio(original_audio_path, trancoded_audio_path, input_args.audio_bitrate)
+        transcode_audio(
+            original_audio_path, trancoded_audio_path, input_args.audio_bitrate
+        )
         if not input_args.keep_files:
             original_audio_path.unlink(missing_ok=True)
         return trancoded_audio_path
@@ -684,7 +762,9 @@ def create_transcoded_audio_file(input_args: InputArgs, original_audio_path: Pat
         return original_audio_path
 
 
-def create_left_right_files(disc_info: DiscInfo, output_folder: Path, mvc_video: Path, input_args: InputArgs) -> tuple[Path, Path]:
+def create_left_right_files(
+    disc_info: DiscInfo, output_folder: Path, mvc_video: Path, input_args: InputArgs
+) -> tuple[Path, Path]:
     left_eye_output_path = output_folder / f"{disc_info.name}_left_movie.mov"
     right_eye_output_path = output_folder / f"{disc_info.name}_right_movie.mov"
     if color_depth := get_video_color_depth(mvc_video):
@@ -712,10 +792,18 @@ def create_mvc_audio_and_subtitle_files(
 
     subtitle_output_path = None
 
-    if input_args.start_stage.value <= Stage.EXTRACT_MVC_AUDIO_AND_SUB.value and mkv_output_path:
+    if (
+        input_args.start_stage.value <= Stage.EXTRACT_MVC_AUDIO_AND_SUB.value
+        and mkv_output_path
+    ):
         if subtitle_formats := get_subtitle_tracks(mkv_output_path):
-            subtitle_output_path = output_folder / f"{disc_name}_subtitle{subtitle_formats[0]['extension']}"
-        extract_mvc_audio_and_subtitle(mkv_output_path, video_output_path, audio_output_path, subtitle_output_path)
+            subtitle_output_path = (
+                output_folder
+                / f"{disc_name}_subtitle{subtitle_formats[0]['extension']}"
+            )
+        extract_mvc_audio_and_subtitle(
+            mkv_output_path, video_output_path, audio_output_path, subtitle_output_path
+        )
     else:
         subtitle_extensions = [".idx", ".sup", ".srt"]
         subtitle_files = (
@@ -736,7 +824,9 @@ def create_mvc_audio_and_subtitle_files(
 def convert_sup_to_idx(sup_subtitle_path: Path) -> Path:
     temp_mkv_path = sup_subtitle_path.with_suffix(".mkv")
     stream = ffmpeg.input(str(sup_subtitle_path))
-    subtitle_stream = ffmpeg.output(stream["s:0"], str(temp_mkv_path), format="matroska", codec="dvdsub")
+    subtitle_stream = ffmpeg.output(
+        stream["s:0"], str(temp_mkv_path), format="matroska", codec="dvdsub"
+    )
     ffmpeg.run(subtitle_stream, overwrite_output=True, quiet=True)
 
     sub_subtitle_path = sup_subtitle_path.with_suffix(".sub")
@@ -754,7 +844,9 @@ def convert_sup_to_idx(sup_subtitle_path: Path) -> Path:
     return sub_subtitle_path.with_suffix(".idx")
 
 
-def create_mkv_file(input_args: InputArgs, output_folder: Path, disc_info: DiscInfo) -> Path | None:
+def create_mkv_file(
+    input_args: InputArgs, output_folder: Path, disc_info: DiscInfo
+) -> Path | None:
     if input_args.source_path.suffix.lower() == ".mkv":
         return input_args.source_path
 
@@ -767,7 +859,9 @@ def create_mkv_file(input_args: InputArgs, output_folder: Path, disc_info: DiscI
 
 
 def setup_conversion_parameters(input_args: InputArgs) -> tuple[DiscInfo, Path]:
-    disc_info = get_disc_and_mvc_video_info(str(input_args.source_path) or input_args.source_str)
+    disc_info = get_disc_and_mvc_video_info(
+        str(input_args.source_path) or input_args.source_str
+    )
     output_folder = prepare_output_folder_for_source(disc_info.name, input_args)
     if input_args.frame_rate:
         disc_info.frame_rate = input_args.frame_rate
