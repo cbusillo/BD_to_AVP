@@ -102,13 +102,13 @@ bd-to-avp --source disc:0 --output-root-folder /path/to/output
 Process an ISO image:
 
 ```bash
-bd-to-avp --source /path/to/movie.iso --output-folder /path/to/output
+bd-to-avp --source /path/to/movie.iso --output-root-folder /path/to/output
 ```
 
 Process an MKV file:
 
 ```bash
-bd-to-avp --source /path/to/movie.mkv --output-folder /path/to/output --transcode-audio
+bd-to-avp --source /path/to/movie.mkv --output-root-folder /path/to/output --transcode-audio
 ```
 
 ## Contribution
