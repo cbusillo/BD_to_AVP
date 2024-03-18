@@ -491,7 +491,10 @@ def combine_to_mv_hevc(
 def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int):
     audio_input = ffmpeg.input(str(input_path))
     audio_transcoded = ffmpeg.output(
-        audio_input, str(transcoded_audio_path), c_a="aac", b_a=f"{bitrate}k"
+        audio_input,
+        str(transcoded_audio_path),
+        acodec="aac",
+        audio_bitrate=f"{bitrate}k",
     )
     ffmpeg.run(audio_transcoded, overwrite_output=True, quiet=True)
 
