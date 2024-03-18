@@ -41,6 +41,7 @@ class InputArgs:
     source_str: str
     source_path: Path
     output_root_path: Path
+    overwrite: bool
     transcode_audio: bool
     audio_bitrate: int
     left_right_bitrate: int
@@ -79,6 +80,7 @@ MP4BOX_PATH = HOMEBREW_PREFIX / "bin" / "MP4Box"
 SPATIAL_MEDIA = SCRIPT_PATH / "bin" / "spatial-media-kit-tool"
 MKVEXTRACT_PATH = HOMEBREW_PREFIX / "bin" / "mkvextract"
 
+FINAL_FILE_TAG = "_AVP"
 IMAGE_EXTENSIONS = [".iso", ".img", ".bin"]
 
 stop_spinner_flag = False
@@ -482,6 +484,7 @@ def parse_arguments() -> InputArgs:
         help="Directory containing multiple image files or MKVs for processing (will search recusively).",
     )
     parser.add_argument("--remove-original", default=False, action="store_true", help="Remove original file after processing.")
+    parser.add_argument("--overwrite", default=False, action="store_true", help="Overwrite existing output file.")
     parser.add_argument(
         "--output-root-folder", type=Path, default=Path.cwd(), help="Output folder path. Defaults to current directory."
     )
@@ -521,6 +524,7 @@ def parse_arguments() -> InputArgs:
         start_stage=args.start_stage,
         remove_original=args.remove_original,
         source_folder=args.source_folder,
+        overwrite=args.overwrite,
     )
     return input_args
 
@@ -534,7 +538,7 @@ def main() -> None:
             input_args.source_path = source
             try:
                 process_each(input_args)
-            except ValueError:
+            except (ValueError, FileExistsError):
                 continue
 
     else:
@@ -543,6 +547,9 @@ def main() -> None:
 
 def process_each(input_args: InputArgs) -> None:
     disc_info, output_folder = setup_conversion_parameters(input_args)
+    if (output_folder / f"{disc_info.name}{FINAL_FILE_TAG}.mov").exists() and not input_args.overwrite:
+        raise FileExistsError(f"Output file already exists for {disc_info.name}. Use --overwrite to replace.")
+
     mkv_output_path = create_mkv_file(input_args, output_folder, disc_info)
     audio_output_path, video_output_path, subtitle_output_path = create_mvc_audio_and_subtitle_files(
         disc_info.name, mkv_output_path, output_folder, input_args
@@ -582,7 +589,7 @@ def create_mv_hevc_file(left_video_path, right_video_path, output_folder, input_
 def create_muxed_file(
     audio_path: Path, mv_hevc_path: Path, subtitle_path: Path | None, output_folder: Path, disc_name: str, input_args: InputArgs
 ) -> Path:
-    muxed_path = output_folder / f"{disc_name}_AVP.mov"
+    muxed_path = output_folder / f"{disc_name}{FINAL_FILE_TAG}.mov"
     if input_args.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
         mux_video_audio_and_subtitles(mv_hevc_path, audio_path, subtitle_path, muxed_path)
 
