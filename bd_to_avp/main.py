@@ -669,9 +669,10 @@ def main() -> None:
 
 def process_each(input_args: InputArgs) -> None:
     disc_info, output_folder = setup_conversion_parameters(input_args)
-    if (
-        output_folder / f"{disc_info.name}{FINAL_FILE_TAG}.mov"
-    ).exists() and not input_args.overwrite:
+    compeleted_path = (
+        input_args.output_root_path / f"{disc_info.name}{FINAL_FILE_TAG}.mov"
+    )
+    if compeleted_path.exists() and not input_args.overwrite:
         raise FileExistsError(
             f"Output file already exists for {disc_info.name}. Use --overwrite to replace."
         )
