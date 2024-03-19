@@ -668,6 +668,7 @@ def main() -> None:
 
 
 def process_each(input_args: InputArgs) -> None:
+    print(f"\nProcessing {input_args.source_path}")
     disc_info, output_folder = setup_conversion_parameters(input_args)
     compeleted_path = (
         input_args.output_root_path / f"{disc_info.name}{FINAL_FILE_TAG}.mov"
