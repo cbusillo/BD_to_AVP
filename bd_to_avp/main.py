@@ -653,7 +653,9 @@ def main() -> None:
     input_args = parse_arguments()
     if input_args.source_folder:
         for source in input_args.source_folder.rglob("*"):
-            if source.suffix.lower() not in IMAGE_EXTENSIONS or not source.is_file():
+            if not source.is_file() or source.suffix.lower() not in IMAGE_EXTENSIONS + [
+                ".mkv"
+            ]:
                 continue
             input_args.source_path = source
             try:
