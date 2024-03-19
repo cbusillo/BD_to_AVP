@@ -90,6 +90,7 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - `--fov`: Horizontal field of view for MV-HEVC (default: "90").
 - `--frame-rate`: Video frame rate (auto-detected if not provided).
 - `--resolution`: Video resolution (auto-detected if not provided).
+- `--swap-eyes`: Swap left and right views (disabled by default).
 
 ### Examples
 

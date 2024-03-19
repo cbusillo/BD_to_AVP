@@ -53,6 +53,7 @@ class InputArgs:
     start_stage: Stage
     remove_original: bool
     source_folder: Path | None
+    swap_eyes: bool
 
 
 class StageEnumAction(argparse.Action):
@@ -427,12 +428,12 @@ def split_mvc_to_stereo(
 ):
     ffmpeg_left_log = left_output_path.with_suffix(".log")
     ffmpeg_right_log = right_output_path.with_suffix(".log")
-    with temporary_fifo("left_fifo", "right_fifo") as (left_fifo, right_fifo):
+    with temporary_fifo("left_fifo", "right_fifo") as (primary_fifo, secondary_fifo):
         ffmpeg_left_command = generate_ffmpeg_wrapper_command(
-            left_fifo, left_output_path, disc_info, input_args.left_right_bitrate
+            primary_fifo, left_output_path, disc_info, input_args.left_right_bitrate
         )
         ffmpeg_right_command = generate_ffmpeg_wrapper_command(
-            right_fifo, right_output_path, disc_info, input_args.left_right_bitrate
+            secondary_fifo, right_output_path, disc_info, input_args.left_right_bitrate
         )
 
         left_process = run_ffmpeg_async(ffmpeg_left_command, ffmpeg_left_log)
@@ -444,9 +445,11 @@ def split_mvc_to_stereo(
             "-i:mvc",
             video_input_path,
             "-o",
-            left_fifo,
-            right_fifo,
         ]
+        if input_args.swap_eyes:
+            frim_command += [secondary_fifo, primary_fifo]
+        else:
+            frim_command += [primary_fifo, secondary_fifo]
 
         atexit.register(cleanup_process, left_process)
         atexit.register(cleanup_process, right_process)
@@ -610,6 +613,12 @@ def parse_arguments() -> InputArgs:
         "--resolution", help="Video resolution. Detected automatically if not provided."
     )
     parser.add_argument(
+        "--swap-eyes",
+        default=False,
+        action="store_true",
+        help="Swap left and right eye video streams.",
+    )
+    parser.add_argument(
         "--keep-files",
         default=False,
         action="store_true",
@@ -645,6 +654,7 @@ def parse_arguments() -> InputArgs:
         remove_original=args.remove_original,
         source_folder=args.source_folder,
         overwrite=args.overwrite,
+        swap_eyes=args.swap_eyes,
     )
     return input_args
 
@@ -668,6 +678,7 @@ def main() -> None:
 
 
 def process_each(input_args: InputArgs) -> None:
+    print(f"\nProcessing {input_args.source_path}")
     disc_info, output_folder = setup_conversion_parameters(input_args)
     compeleted_path = (
         input_args.output_root_path / f"{disc_info.name}{FINAL_FILE_TAG}.mov"
