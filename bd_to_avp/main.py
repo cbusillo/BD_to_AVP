@@ -653,12 +653,14 @@ def main() -> None:
     input_args = parse_arguments()
     if input_args.source_folder:
         for source in input_args.source_folder.rglob("*"):
-            if source.suffix.lower() not in IMAGE_EXTENSIONS or not source.is_file():
+            if not source.is_file() or source.suffix.lower() not in IMAGE_EXTENSIONS + [
+                ".mkv"
+            ]:
                 continue
             input_args.source_path = source
             try:
                 process_each(input_args)
-            except (ValueError, FileExistsError):
+            except (ValueError, FileExistsError, subprocess.CalledProcessError):
                 continue
 
     else:
@@ -667,9 +669,10 @@ def main() -> None:
 
 def process_each(input_args: InputArgs) -> None:
     disc_info, output_folder = setup_conversion_parameters(input_args)
-    if (
-        output_folder / f"{disc_info.name}{FINAL_FILE_TAG}.mov"
-    ).exists() and not input_args.overwrite:
+    compeleted_path = (
+        input_args.output_root_path / f"{disc_info.name}{FINAL_FILE_TAG}.mov"
+    )
+    if compeleted_path.exists() and not input_args.overwrite:
         raise FileExistsError(
             f"Output file already exists for {disc_info.name}. Use --overwrite to replace."
         )
@@ -819,7 +822,11 @@ def create_mvc_audio_and_subtitle_files(
     if subtitle_output_path and subtitle_output_path.suffix.lower() == ".sup":
         subtitle_output_path = convert_sup_to_idx(subtitle_output_path)
 
-    if not input_args.keep_files and mkv_output_path:
+    if (
+        not input_args.keep_files
+        and mkv_output_path
+        and input_args.source_path != mkv_output_path
+    ):
         mkv_output_path.unlink(missing_ok=True)
     return audio_output_path, video_output_path, subtitle_output_path
 
