@@ -822,7 +822,11 @@ def create_mvc_audio_and_subtitle_files(
     if subtitle_output_path and subtitle_output_path.suffix.lower() == ".sup":
         subtitle_output_path = convert_sup_to_idx(subtitle_output_path)
 
-    if not input_args.keep_files and mkv_output_path:
+    if (
+        not input_args.keep_files
+        and mkv_output_path
+        and input_args.source_path != mkv_output_path
+    ):
         mkv_output_path.unlink(missing_ok=True)
     return audio_output_path, video_output_path, subtitle_output_path
 
