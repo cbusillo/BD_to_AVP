@@ -660,7 +660,7 @@ def main() -> None:
             input_args.source_path = source
             try:
                 process_each(input_args)
-            except (ValueError, FileExistsError):
+            except (ValueError, FileExistsError, subprocess.CalledProcessError):
                 continue
 
     else:
