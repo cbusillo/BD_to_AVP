@@ -690,13 +690,26 @@ def main() -> None:
         process_each(input_args)
 
 
+def normalize_name(name: str) -> str:
+    return name.lower().replace("_", " ").replace(" ", "_")
+
+
+def file_exists_normalized(target_path: Path) -> bool:
+    target_dir = target_path.parent
+    normalized_target_name = normalize_name(target_path.name)
+    for item in target_dir.iterdir():
+        if normalize_name(item.name) == normalized_target_name:
+            return True
+    return False
+
+
 def process_each(input_args: InputArgs) -> None:
     print(f"\nProcessing {input_args.source_path}")
     disc_info, output_folder = setup_conversion_parameters(input_args)
-    compeleted_path = (
+    completed_path = (
         input_args.output_root_path / f"{disc_info.name}{FINAL_FILE_TAG}.mov"
     )
-    if compeleted_path.exists() and not input_args.overwrite:
+    if not input_args.overwrite and file_exists_normalized(completed_path):
         raise FileExistsError(
             f"Output file already exists for {disc_info.name}. Use --overwrite to replace."
         )
