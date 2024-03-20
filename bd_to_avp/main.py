@@ -54,6 +54,7 @@ class InputArgs:
     remove_original: bool
     source_folder: Path | None
     swap_eyes: bool
+    skip_subtitles: bool
 
 
 class StageEnumAction(argparse.Action):
@@ -557,15 +558,18 @@ def parse_arguments() -> InputArgs:
 
     source_group.add_argument(
         "--source",
+        "-s",
         help="Source for a single disc number, MKV file path, or ISO image path.",
     )
     source_group.add_argument(
         "--source-folder",
+        "-f",
         type=Path,
         help="Directory containing multiple image files or MKVs for processing (will search recusively).",
     )
     parser.add_argument(
         "--remove-original",
+        "-r",
         default=False,
         action="store_true",
         help="Remove original file after processing.",
@@ -578,6 +582,7 @@ def parse_arguments() -> InputArgs:
     )
     parser.add_argument(
         "--output-root-folder",
+        "-o",
         type=Path,
         default=Path.cwd(),
         help="Output folder path. Defaults to current directory.",
@@ -590,6 +595,13 @@ def parse_arguments() -> InputArgs:
         default=384,
         type=int,
         help="Audio bitrate for transcoding in kilobits.  Default of 384kb/s.",
+    )
+    parser.add_argument(
+        "--skip-freaking-subtitles-because-I-dont-care",
+        "--skip-subtitles",
+        default=False,
+        action="store_true",
+        help="Skip extracting subtitles from MKV.",
     )
     parser.add_argument(
         "--left-right-bitrate",
@@ -655,6 +667,7 @@ def parse_arguments() -> InputArgs:
         source_folder=args.source_folder,
         overwrite=args.overwrite,
         swap_eyes=args.swap_eyes,
+        skip_subtitles=args.skip_freaking_subtitles_because_I_dont_care,
     )
     return input_args
 
@@ -813,7 +826,10 @@ def create_mvc_audio_and_subtitle_files(
         input_args.start_stage.value <= Stage.EXTRACT_MVC_AUDIO_AND_SUB.value
         and mkv_output_path
     ):
-        if subtitle_formats := get_subtitle_tracks(mkv_output_path):
+        if not input_args.skip_subtitles and (
+            subtitle_formats := get_subtitle_tracks(mkv_output_path)
+        ):
+
             subtitle_output_path = (
                 output_folder
                 / f"{disc_name}_subtitle{subtitle_formats[0]['extension']}"
