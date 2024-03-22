@@ -915,7 +915,9 @@ def create_mkv_file(
 
 def setup_conversion_parameters(input_args: InputArgs) -> tuple[DiscInfo, Path]:
     disc_info = get_disc_and_mvc_video_info(
-        str(input_args.source_path) or input_args.source_str
+        input_args.source_path.as_posix()
+        if input_args.source_path
+        else input_args.source_str
     )
     output_folder = prepare_output_folder_for_source(disc_info.name, input_args)
     if input_args.frame_rate:
