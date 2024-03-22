@@ -254,10 +254,15 @@ def rip_disc_to_mkv(
     custom_profile_path = output_folder / "custom_profile.mmcp.xml"
     create_custom_makemkv_profile(custom_profile_path)
 
-    if input_args.source_path.suffix.lower() in IMAGE_EXTENSIONS:
+    if (
+        input_args.source_path
+        and input_args.source_path.suffix.lower() in IMAGE_EXTENSIONS
+    ):
         source = f"iso:{input_args.source_path}"
+    elif input_args.source_path:
+        source = input_args.source_path
     else:
-        source = input_args.source_path.as_posix() or input_args.source_str
+        source = input_args.source_str
     command = [
         MAKEMKVCON_PATH,
         f"--profile={custom_profile_path}",
@@ -690,13 +695,26 @@ def main() -> None:
         process_each(input_args)
 
 
+def normalize_name(name: str) -> str:
+    return name.lower().replace("_", " ").replace(" ", "_")
+
+
+def file_exists_normalized(target_path: Path) -> bool:
+    target_dir = target_path.parent
+    normalized_target_name = normalize_name(target_path.name)
+    for item in target_dir.iterdir():
+        if normalize_name(item.name) == normalized_target_name:
+            return True
+    return False
+
+
 def process_each(input_args: InputArgs) -> None:
     print(f"\nProcessing {input_args.source_path}")
     disc_info, output_folder = setup_conversion_parameters(input_args)
-    compeleted_path = (
+    completed_path = (
         input_args.output_root_path / f"{disc_info.name}{FINAL_FILE_TAG}.mov"
     )
-    if compeleted_path.exists() and not input_args.overwrite:
+    if not input_args.overwrite and file_exists_normalized(completed_path):
         raise FileExistsError(
             f"Output file already exists for {disc_info.name}. Use --overwrite to replace."
         )
