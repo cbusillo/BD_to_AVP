@@ -254,10 +254,15 @@ def rip_disc_to_mkv(
     custom_profile_path = output_folder / "custom_profile.mmcp.xml"
     create_custom_makemkv_profile(custom_profile_path)
 
-    if input_args.source_path.suffix.lower() in IMAGE_EXTENSIONS:
+    if (
+        input_args.source_path
+        and input_args.source_path.suffix.lower() in IMAGE_EXTENSIONS
+    ):
         source = f"iso:{input_args.source_path}"
+    elif input_args.source_path:
+        source = input_args.source_path
     else:
-        source = input_args.source_path.as_posix() or input_args.source_str
+        source = input_args.source_str
     command = [
         MAKEMKVCON_PATH,
         f"--profile={custom_profile_path}",
