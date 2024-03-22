@@ -39,7 +39,7 @@ class Stage(Enum):
 @dataclass
 class InputArgs:
     source_str: str
-    source_path: Path
+    source_path: Path | None
     output_root_path: Path
     overwrite: bool
     transcode_audio: bool
@@ -260,7 +260,7 @@ def rip_disc_to_mkv(
     ):
         source = f"iso:{input_args.source_path}"
     elif input_args.source_path:
-        source = input_args.source_path
+        source = input_args.source_path.as_posix()
     else:
         source = input_args.source_str
     command = [
@@ -656,7 +656,7 @@ def parse_arguments() -> InputArgs:
         source_path=(
             Path(args.source)
             if args.source and not args.source.startswith("disc:")
-            else args.source
+            else None
         ),
         output_root_path=Path(args.output_root_folder),
         transcode_audio=args.transcode_audio,
@@ -902,7 +902,7 @@ def convert_sup_to_idx(sup_subtitle_path: Path) -> Path:
 def create_mkv_file(
     input_args: InputArgs, output_folder: Path, disc_info: DiscInfo
 ) -> Path | None:
-    if input_args.source_path.suffix.lower() == ".mkv":
+    if input_args.source_path and input_args.source_path.suffix.lower() == ".mkv":
         return input_args.source_path
 
     if input_args.start_stage.value <= Stage.CREATE_MKV.value:
