@@ -72,7 +72,9 @@ class StageEnumAction(argparse.Action):
 
 SCRIPT_PATH = Path(__file__).parent
 MAKEMKVCON_PATH = Path("/Applications/MakeMKV.app/Contents/MacOS/makemkvcon")
-HOMEBREW_PREFIX = Path(os.getenv("HOMEBREW_PREFIX", "/opt/homebrew"))
+HOMEBREW_PREFIX = Path(
+    "/opt/homebrew"
+)  # Path(os.getenv("HOMEBREW_PREFIX", "/opt/homebrew"))
 WINE_PATH = HOMEBREW_PREFIX / "bin/wine"
 FRIM_PATH = SCRIPT_PATH / "bin" / "FRIM_x64_version_1.31" / "x64"
 FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
