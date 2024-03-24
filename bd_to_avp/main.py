@@ -72,9 +72,8 @@ class StageEnumAction(argparse.Action):
 
 SCRIPT_PATH = Path(__file__).parent
 MAKEMKVCON_PATH = Path("/Applications/MakeMKV.app/Contents/MacOS/makemkvcon")
-HOMEBREW_PREFIX = Path(
-    "/opt/homebrew"
-)  # Path(os.getenv("HOMEBREW_PREFIX", "/opt/homebrew"))
+# HOMEBREW_PREFIX =  Path(os.getenv("HOMEBREW_PREFIX = HOMEBREW_PREFIX", "/opt/homebrew"))
+HOMEBREW_PREFIX = Path("/opt/homebrew")
 WINE_PATH = HOMEBREW_PREFIX / "bin/wine"
 FRIM_PATH = SCRIPT_PATH / "bin" / "FRIM_x64_version_1.31" / "x64"
 FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
@@ -364,7 +363,7 @@ def extract_mvc_audio_and_subtitle(
     print("Running ffmpeg to extract video, audio, and subtitles from MKV")
     if subtitle_output_path:
         subtitle_stream = ffmpeg.output(
-            stream["s:0"], str(subtitle_output_path), c="copy"
+            stream["s:0"], str(f"file:{subtitle_output_path}"), c="copy"
         )
         ffmpeg.run(
             [video_stream, audio_stream, subtitle_stream],
@@ -503,7 +502,7 @@ def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int)
     audio_input = ffmpeg.input(str(input_path))
     audio_transcoded = ffmpeg.output(
         audio_input,
-        str(transcoded_audio_path),
+        str(f"file:{transcoded_audio_path}"),
         acodec="aac",
         audio_bitrate=f"{bitrate}k",
     )
@@ -882,7 +881,7 @@ def convert_sup_to_idx(sup_subtitle_path: Path) -> Path:
     temp_mkv_path = sup_subtitle_path.with_suffix(".mkv")
     stream = ffmpeg.input(str(sup_subtitle_path))
     subtitle_stream = ffmpeg.output(
-        stream["s:0"], str(temp_mkv_path), format="matroska", codec="dvdsub"
+        stream["s:0"], str(f"file:{temp_mkv_path}"), format="matroska", codec="dvdsub"
     )
     ffmpeg.run(subtitle_stream, overwrite_output=True, quiet=True)
 
