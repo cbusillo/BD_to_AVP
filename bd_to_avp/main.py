@@ -356,14 +356,16 @@ def extract_mvc_audio_and_subtitle(
     stream = ffmpeg.input(str(input_path))
 
     video_stream = ffmpeg.output(
-        stream["v:0"], str(video_output_path), c="copy", bsf="h264_mp4toannexb"
+        stream["v:0"], f"file:{video_output_path}", c="copy", bsf="h264_mp4toannexb"
     )
-    audio_stream = ffmpeg.output(stream["a:0"], str(audio_output_path), c="pcm_s24le")
+    audio_stream = ffmpeg.output(
+        stream["a:0"], f"file:{audio_output_path}", c="pcm_s24le"
+    )
 
     print("Running ffmpeg to extract video, audio, and subtitles from MKV")
     if subtitle_output_path:
         subtitle_stream = ffmpeg.output(
-            stream["s:0"], str(f"file:{subtitle_output_path}"), c="copy"
+            stream["s:0"], f"file:{subtitle_output_path}", c="copy"
         )
         ffmpeg.run(
             [video_stream, audio_stream, subtitle_stream],
@@ -415,7 +417,7 @@ def generate_ffmpeg_wrapper_command(
     )
     stream = ffmpeg.output(
         stream,
-        str(output_path),
+        f"file:{output_path}",
         vcodec="hevc_videotoolbox",
         video_bitrate=f"{bitrate}M",
         bufsize=f"{bitrate * 2}M",
