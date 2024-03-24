@@ -718,6 +718,11 @@ def process_each(input_args: InputArgs) -> None:
         input_args.output_root_path / f"{disc_info.name}{FINAL_FILE_TAG}.mov"
     )
     if not input_args.overwrite and file_exists_normalized(completed_path):
+        if output_folder.exists():
+            try:
+                output_folder.rmdir()
+            except OSError:
+                print(f"Failed to remove {output_folder}")
         raise FileExistsError(
             f"Output file already exists for {disc_info.name}. Use --overwrite to replace."
         )
