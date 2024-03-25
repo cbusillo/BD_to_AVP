@@ -367,13 +367,11 @@ def extract_mvc_audio_and_subtitle(
         subtitle_stream = ffmpeg.output(
             stream["s:0"], f"file:{subtitle_output_path}", c="copy"
         )
-        ffmpeg.run(
-            [video_stream, audio_stream, subtitle_stream],
-            overwrite_output=True,
-            quiet=True,
+        run_ffmpeg_print_errors(
+            [video_stream, audio_stream, subtitle_stream], overwrite_output=True
         )
     else:
-        ffmpeg.run([video_stream, audio_stream], overwrite_output=True, quiet=True)
+        run_ffmpeg_print_errors([video_stream, audio_stream], overwrite_output=True)
 
 
 @contextmanager
@@ -508,7 +506,7 @@ def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int)
         acodec="aac",
         audio_bitrate=f"{bitrate}k",
     )
-    ffmpeg.run(audio_transcoded, overwrite_output=True, quiet=True)
+    run_ffmpeg_print_errors(audio_transcoded, overwrite_output=True)
 
 
 def mux_video_audio_and_subtitles(
@@ -890,12 +888,7 @@ def convert_sup_to_idx(sup_subtitle_path: Path) -> Path:
     subtitle_stream = ffmpeg.output(
         stream["s:0"], str(f"file:{temp_mkv_path}"), format="matroska", codec="dvdsub"
     )
-    try:
-        ffmpeg.run(subtitle_stream, overwrite_output=True)
-    except ffmpeg.Error as e:
-        print("STDOUT:", e.stdout.decode("utf-8"))
-        print("STDERR:", e.stderr.decode("utf-8"))
-        raise
+    run_ffmpeg_print_errors(subtitle_stream, overwrite_output=True)
 
     sub_subtitle_path = sup_subtitle_path.with_suffix(".sub")
 
@@ -938,6 +931,17 @@ def setup_conversion_parameters(input_args: InputArgs) -> tuple[DiscInfo, Path]:
     if input_args.resolution:
         disc_info.resolution = input_args.resolution
     return disc_info, output_folder
+
+
+def run_ffmpeg_print_errors(stream_spec: Any, quiet: bool = True, **kwargs) -> None:
+    kwargs["quiet"] = quiet
+    try:
+        ffmpeg.run(stream_spec, **kwargs)
+    except ffmpeg.Error as e:
+        print("FFmpeg Error:")
+        print("STDOUT:", e.stdout.decode("utf-8"))
+        print("STDERR:", e.stderr.decode("utf-8"))
+        raise
 
 
 if __name__ == "__main__":
