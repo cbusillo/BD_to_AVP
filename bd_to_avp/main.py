@@ -275,6 +275,11 @@ def rip_disc_to_mkv(
     run_command(command, "Rip disc to MKV file.")
 
 
+def sanitize_filename(name: str) -> str:
+    allowed_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-"
+    return "".join(c if c in allowed_chars else "" for c in name)
+
+
 def get_disc_and_mvc_video_info(source: str) -> DiscInfo:
     command = [MAKEMKVCON_PATH, "--robot", "info", source]
     output = run_command(command, "Get disc and MVC video properties")
@@ -283,7 +288,7 @@ def get_disc_and_mvc_video_info(source: str) -> DiscInfo:
 
     disc_name_match = re.search(r"CINFO:2,0,\"(.*?)\"", output)
     if disc_name_match:
-        disc_info.name = disc_name_match.group(1)
+        disc_info.name = sanitize_filename(disc_name_match.group(1))
 
     mvc_video_matches = list(
         re.finditer(
