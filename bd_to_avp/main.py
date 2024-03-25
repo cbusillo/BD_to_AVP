@@ -890,7 +890,12 @@ def convert_sup_to_idx(sup_subtitle_path: Path) -> Path:
     subtitle_stream = ffmpeg.output(
         stream["s:0"], str(f"file:{temp_mkv_path}"), format="matroska", codec="dvdsub"
     )
-    ffmpeg.run(subtitle_stream, overwrite_output=True, quiet=True)
+    try:
+        ffmpeg.run(subtitle_stream, overwrite_output=True)
+    except ffmpeg.Error as e:
+        print("STDOUT:", e.stdout.decode("utf-8"))
+        print("STDERR:", e.stderr.decode("utf-8"))
+        raise
 
     sub_subtitle_path = sup_subtitle_path.with_suffix(".sub")
 
