@@ -430,6 +430,8 @@ def generate_ffmpeg_wrapper_command(
         s=disc_info.resolution,
         r=disc_info.frame_rate,
     )
+    if crop_params:
+        stream = ffmpeg.filter(stream, "crop", *crop_params.split(":"))
     stream = ffmpeg.output(
         stream,
         f"file:{output_path}",
@@ -441,8 +443,6 @@ def generate_ffmpeg_wrapper_command(
     )
 
     args = ffmpeg.compile(stream, overwrite_output=True)
-    if crop_params:
-        args = args.filter("crop", crop_params)
     return args
 
 
