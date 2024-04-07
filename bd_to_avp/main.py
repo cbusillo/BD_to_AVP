@@ -439,7 +439,7 @@ def generate_ffmpeg_wrapper_command(
         video_bitrate=f"{bitrate}M",
         bufsize=f"{bitrate * 2}M",
         tag="hvc1",
-        profile="main10" if disc_info.color_depth == 10 else "main",
+        vprofile="main10" if disc_info.color_depth == 10 else "main",
     )
 
     args = ffmpeg.compile(stream, overwrite_output=True)
