@@ -197,6 +197,7 @@ def run_command(
     spinner_thread = threading.Thread(target=spinner, args=(command_name,))
     spinner_thread.start()
 
+    process = None
     try:
 
         process = subprocess.Popen(
@@ -219,6 +220,12 @@ def run_command(
             raise subprocess.CalledProcessError(
                 process.returncode, command_list, output="".join(output_lines)
             )
+    except KeyboardInterrupt:
+        print("\nCommand interrupted.")
+        if process:
+            process.terminate()
+        raise
+
     finally:
         stop_spinner_flag = True
         spinner_thread.join()
