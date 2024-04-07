@@ -794,11 +794,15 @@ def process_each(input_args: InputArgs) -> None:
 
 
 def detect_crop_parameters(
-    video_path: Path, input_args: InputArgs, duration: int = 180, num_frames: int = 10
+    video_path: Path,
+    input_args: InputArgs,
+    start_seconds: int = 600,
+    num_frames: int = 300,
 ) -> str:
+    print("Detecting crop parameters...")
     if not input_args.crop_black_bars:
         return ""
-    stream = ffmpeg.input(str(video_path), ss=duration // 2)
+    stream = ffmpeg.input(str(video_path), ss=start_seconds)
     stream = ffmpeg.output(
         stream,
         "null",
@@ -806,18 +810,21 @@ def detect_crop_parameters(
         vframes=num_frames,
         vf="cropdetect",
     )
-    output = []
 
-    def process_output(line: str) -> None:
-        output.append(line)
+    try:
+        _, stdout = ffmpeg.run(stream, capture_stdout=True, capture_stderr=True)
+        output = stdout.decode("utf-8").split("\n")
+    except ffmpeg.Error as e:
+        print("FFmpeg Error:")
+        print(e.stderr.decode("utf-8"))
+        raise
 
-    run_ffmpeg_print_errors(stream, capture_stdout=process_output)
-
+    crop_param_lines = []
     for output_line in output:
         if "crop=" in output_line:
-            crop_params = output_line.split("crop=")[1].split(" ")[0]
-            return crop_params
-    return ""
+            crop_param_lines.append(output_line.split("crop=")[1].split(" ")[0])
+
+    return max(crop_param_lines, key=len, default="")
 
 
 def move_file_to_output_root_folder(
