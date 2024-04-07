@@ -55,6 +55,7 @@ class InputArgs:
     source_folder: Path | None
     swap_eyes: bool
     skip_subtitles: bool
+    crop_black_bars: bool
 
 
 class StageEnumAction(argparse.Action):
@@ -408,7 +409,11 @@ def run_ffmpeg_async(command: list[Any], log_path: Path) -> subprocess.Popen:
 
 
 def generate_ffmpeg_wrapper_command(
-    input_fifo: Path, output_path: Path, disc_info: DiscInfo, bitrate: int
+    input_fifo: Path,
+    output_path: Path,
+    disc_info: DiscInfo,
+    bitrate: int,
+    crop_params: str,
 ) -> list[Any]:
     pix_fmt = "yuv420p10le" if disc_info.color_depth == 10 else "yuv420p"
     stream = ffmpeg.input(
@@ -427,7 +432,10 @@ def generate_ffmpeg_wrapper_command(
         tag="hvc1",
         profile="main10" if disc_info.color_depth == 10 else "main",
     )
+
     args = ffmpeg.compile(stream, overwrite_output=True)
+    if crop_params:
+        args = args.filter("crop", crop_params)
     return args
 
 
@@ -437,15 +445,24 @@ def split_mvc_to_stereo(
     left_output_path: Path,
     right_output_path: Path,
     disc_info: DiscInfo,
+    crop_params: str,
 ):
     ffmpeg_left_log = left_output_path.with_suffix(".log")
     ffmpeg_right_log = right_output_path.with_suffix(".log")
     with temporary_fifo("left_fifo", "right_fifo") as (primary_fifo, secondary_fifo):
         ffmpeg_left_command = generate_ffmpeg_wrapper_command(
-            primary_fifo, left_output_path, disc_info, input_args.left_right_bitrate
+            primary_fifo,
+            left_output_path,
+            disc_info,
+            input_args.left_right_bitrate,
+            crop_params,
         )
         ffmpeg_right_command = generate_ffmpeg_wrapper_command(
-            secondary_fifo, right_output_path, disc_info, input_args.left_right_bitrate
+            secondary_fifo,
+            right_output_path,
+            disc_info,
+            input_args.left_right_bitrate,
+            crop_params,
         )
 
         left_process = run_ffmpeg_async(ffmpeg_left_command, ffmpeg_left_log)
@@ -636,6 +653,12 @@ def parse_arguments() -> InputArgs:
         "--resolution", help="Video resolution. Detected automatically if not provided."
     )
     parser.add_argument(
+        "--crop-black-bars",
+        default=False,
+        action="store_true",
+        help="Automatically Crop black bars.",
+    )
+    parser.add_argument(
         "--swap-eyes",
         default=False,
         action="store_true",
@@ -679,6 +702,7 @@ def parse_arguments() -> InputArgs:
         overwrite=args.overwrite,
         swap_eyes=args.swap_eyes,
         skip_subtitles=args.skip_freaking_subtitles_because_I_dont_care,
+        crop_black_bars=args.crop_black_bars,
     )
     return input_args
 
@@ -731,13 +755,14 @@ def process_each(input_args: InputArgs) -> None:
         )
 
     mkv_output_path = create_mkv_file(input_args, output_folder, disc_info)
+    crop_params = detect_crop_parameters(mkv_output_path, input_args)
     audio_output_path, video_output_path, subtitle_output_path = (
         create_mvc_audio_and_subtitle_files(
             disc_info.name, mkv_output_path, output_folder, input_args
         )
     )
     left_output_path, right_output_path = create_left_right_files(
-        disc_info, output_folder, video_output_path, input_args
+        disc_info, output_folder, video_output_path, crop_params, input_args
     )
     mv_hevc_path = create_mv_hevc_file(
         left_output_path, right_output_path, output_folder, input_args, disc_info.name
@@ -759,6 +784,33 @@ def process_each(input_args: InputArgs) -> None:
             remove_folder_if_exists(input_args.source_path)
         else:
             input_args.source_path.unlink(missing_ok=True)
+
+
+def detect_crop_parameters(
+    video_path: Path, input_args: InputArgs, duration: int = 180, num_frames: int = 10
+) -> str:
+    if not input_args.crop_black_bars:
+        return ""
+    stream = ffmpeg.input(str(video_path), ss=duration // 2)
+    stream = ffmpeg.output(
+        stream,
+        "null",
+        format="null",
+        vframes=num_frames,
+        vf="cropdetect",
+    )
+    output = []
+
+    def process_output(line: str) -> None:
+        output.append(line)
+
+    run_ffmpeg_print_errors(stream, capture_stdout=process_output)
+
+    for output_line in output:
+        if "crop=" in output_line:
+            crop_params = output_line.split("crop=")[1].split(" ")[0]
+            return crop_params
+    return ""
 
 
 def move_file_to_output_root_folder(
@@ -822,7 +874,11 @@ def create_transcoded_audio_file(
 
 
 def create_left_right_files(
-    disc_info: DiscInfo, output_folder: Path, mvc_video: Path, input_args: InputArgs
+    disc_info: DiscInfo,
+    output_folder: Path,
+    mvc_video: Path,
+    crop_params: str,
+    input_args: InputArgs,
 ) -> tuple[Path, Path]:
     left_eye_output_path = output_folder / f"{disc_info.name}_left_movie.mov"
     right_eye_output_path = output_folder / f"{disc_info.name}_right_movie.mov"
@@ -835,6 +891,7 @@ def create_left_right_files(
             left_eye_output_path,
             right_eye_output_path,
             disc_info,
+            crop_params,
         )
 
     return left_eye_output_path, right_eye_output_path
@@ -912,7 +969,7 @@ def convert_sup_to_idx(sup_subtitle_path: Path) -> Path:
 
 def create_mkv_file(
     input_args: InputArgs, output_folder: Path, disc_info: DiscInfo
-) -> Path | None:
+) -> Path:
     if input_args.source_path and input_args.source_path.suffix.lower() == ".mkv":
         return input_args.source_path
 
@@ -921,7 +978,7 @@ def create_mkv_file(
 
     if mkv_file := find_largest_file_with_extensions(output_folder, [".mkv"]):
         return mkv_file
-    return None
+    raise ValueError("No MKV file created.")
 
 
 def setup_conversion_parameters(input_args: InputArgs) -> tuple[DiscInfo, Path]:
