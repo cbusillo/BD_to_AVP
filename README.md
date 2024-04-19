@@ -6,9 +6,9 @@ This tool processes 3D video content from Blu-ray discs, ISO images, or MKV file
 the Apple Vision Pro. It uses FFmpeg, MakeMKV, and Wine for video extraction, audio transcoding, and video stream merging to convert
 from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The tool also injects 360° metadata into the video file for spatial media playback.
 
-## Quick install
+## Quick install (or update)
 
-To quickly install `BD_to_AVP`, run the following command in your terminal:
+To quickly install or update `BD_to_AVP`, run the following command in your terminal:
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/release/installer.sh)"
