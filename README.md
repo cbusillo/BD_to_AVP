@@ -91,6 +91,8 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - `--frame-rate`: Video frame rate (auto-detected if not provided).
 - `--resolution`: Video resolution (auto-detected if not provided).
 - `--swap-eyes`: Swap left and right views (disabled by default).
+- `--start-stage`: Start processing at a specific stage.
+- `--output-commands`: Output commands used to console.
 
 ### Examples
 
