@@ -94,6 +94,16 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - `--start-stage`: Start processing at a specific stage.
 - `--output-commands`: Output commands used to console.
 
+#### Stage Names
+
+- CREATE_MKV
+- EXTRACT_MVC_AUDIO_AND_SUB
+- CREATE_LEFT_RIGHT_FILES
+- COMBINE_TO_MV_HEVC
+- TRANSCODE_AUDIO
+- CREATE_FINAL_FILE
+- MOVE_FILES
+
 ### Examples
 
 Process a Blu-ray disc:
