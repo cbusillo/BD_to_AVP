@@ -56,6 +56,7 @@ class InputArgs:
     swap_eyes: bool
     skip_subtitles: bool
     crop_black_bars: bool
+    output_commands: bool
 
 
 class StageEnumAction(argparse.Action):
@@ -73,7 +74,6 @@ class StageEnumAction(argparse.Action):
 
 SCRIPT_PATH = Path(__file__).parent
 MAKEMKVCON_PATH = Path("/Applications/MakeMKV.app/Contents/MacOS/makemkvcon")
-# HOMEBREW_PREFIX =  Path(os.getenv("HOMEBREW_PREFIX = HOMEBREW_PREFIX", "/opt/homebrew"))
 HOMEBREW_PREFIX = Path("/opt/homebrew")
 WINE_PATH = HOMEBREW_PREFIX / "bin/wine"
 FRIM_PATH = SCRIPT_PATH / "bin" / "FRIM_x64_version_1.31" / "x64"
@@ -189,6 +189,8 @@ def run_command(
     command_list = normalize_command_elements(command_list)
     if not command_name:
         command_name = str(command_list[0])
+
+    print(f"Running command:\n{' '.join(str(command) for command in command_list)}")
 
     env = env if env else os.environ.copy()
     global stop_spinner_flag
@@ -406,11 +408,12 @@ def cleanup_process(process: subprocess.Popen) -> None:
         process.terminate()
 
 
-def run_ffmpeg_async(command: list[Any], log_path: Path) -> subprocess.Popen:
-    command = normalize_command_elements(command)
+def run_ffmpeg_async(command_list: list[Any], log_path: Path) -> subprocess.Popen:
+    command_list = normalize_command_elements(command_list)
+    print(f"Running command:\n{' '.join(str(command) for command in command_list)}")
     with open(log_path, "w") as log_file:
         process = subprocess.Popen(
-            command, stdout=log_file, stderr=subprocess.STDOUT, text=True
+            command_list, stdout=log_file, stderr=subprocess.STDOUT, text=True
         )
     return process
 
@@ -685,6 +688,12 @@ def parse_arguments() -> InputArgs:
         help="Stage at which to start the process. Options: "
         + ", ".join([stage.name for stage in Stage]),
     )
+    parser.add_argument(
+        "--output-commands",
+        default=False,
+        action="store_true",
+        help="Output commands for debugging.",
+    )
 
     args = parser.parse_args()
     input_args = InputArgs(
@@ -710,6 +719,7 @@ def parse_arguments() -> InputArgs:
         swap_eyes=args.swap_eyes,
         skip_subtitles=args.skip_freaking_subtitles_because_I_dont_care,
         crop_black_bars=args.crop_black_bars,
+        output_commands=args.output_commands,
     )
     return input_args
 

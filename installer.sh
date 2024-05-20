@@ -56,8 +56,9 @@ check_app_or_install() {
 }
 
 echo "Installing dependencies..."
-"$BREW_PATH/brew" install python@3.12 ffmpeg mp4box mkvtoolnix --no-quarantine 2>/dev/null || handle_error "Failed to install dependencies"
+"$BREW_PATH/brew" install python@3.12 ffmpeg mp4box mkvtoolnix spatial --no-quarantine 2>/dev/null || handle_error "Failed to install dependencies"
 
+"$BREW_PATH/brew" uninstall "makemkv"
 check_app_or_install "MakeMKV" "makemkv"
 check_app_or_install "Wine Stable" "wine-stable"
 if [ ! -L "$BREW_PATH/wine" ]; then
