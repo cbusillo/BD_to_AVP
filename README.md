@@ -93,6 +93,7 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - `--swap-eyes`: Swap left and right views (disabled by default).
 - `--start-stage`: Start processing at a specific stage.
 - `--output-commands`: Output commands used to console.
+- `--software-encoder`: Use software encoder for MV-HEVC encoding (disabled by default).
 
 #### Stage Names
 
