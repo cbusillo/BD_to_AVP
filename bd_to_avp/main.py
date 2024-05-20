@@ -59,6 +59,7 @@ class InputArgs:
     skip_subtitles: bool
     crop_black_bars: bool
     output_commands: bool
+    software_encoder: bool
 
 
 class StageEnumAction(argparse.Action):
@@ -428,6 +429,7 @@ def generate_ffmpeg_wrapper_command(
     disc_info: DiscInfo,
     bitrate: int,
     crop_params: str,
+    software_encoder: bool,
 ) -> list[Any]:
     pix_fmt = "yuv420p10le" if disc_info.color_depth == 10 else "yuv420p"
     stream = ffmpeg.input(
@@ -442,7 +444,7 @@ def generate_ffmpeg_wrapper_command(
     stream = ffmpeg.output(
         stream,
         f"file:{output_path}",
-        vcodec="hevc_videotoolbox",
+        vcodec="hevc_videotoolbox" if not software_encoder else "libx265",
         video_bitrate=f"{bitrate}M",
         bufsize=f"{bitrate * 2}M",
         tag="hvc1",
@@ -470,6 +472,7 @@ def split_mvc_to_stereo(
             disc_info,
             input_args.left_right_bitrate,
             crop_params,
+            input_args.software_encoder,
         )
         ffmpeg_right_command = generate_ffmpeg_wrapper_command(
             secondary_fifo,
@@ -477,6 +480,7 @@ def split_mvc_to_stereo(
             disc_info,
             input_args.left_right_bitrate,
             crop_params,
+            input_args.software_encoder,
         )
 
         left_process = run_ffmpeg_async(ffmpeg_left_command, ffmpeg_left_log)
@@ -698,6 +702,12 @@ def parse_arguments() -> InputArgs:
         action="store_true",
         help="Output commands for debugging.",
     )
+    parser.add_argument(
+        "--software-encoder",
+        default=False,
+        action="store_true",
+        help="Use software encoder for HEVC encoding.",
+    )
 
     args = parser.parse_args()
     input_args = InputArgs(
@@ -724,6 +734,7 @@ def parse_arguments() -> InputArgs:
         skip_subtitles=args.skip_freaking_subtitles_because_I_dont_care,
         crop_black_bars=args.crop_black_bars,
         output_commands=args.output_commands,
+        software_encoder=args.software_encoder,
     )
     return input_args
 
