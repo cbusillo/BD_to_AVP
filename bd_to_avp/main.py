@@ -16,6 +16,8 @@ from typing import Any, Generator
 
 import ffmpeg  # type: ignore
 
+global_output_commands = False
+
 
 @dataclass
 class DiscInfo:
@@ -190,7 +192,8 @@ def run_command(
     if not command_name:
         command_name = str(command_list[0])
 
-    print(f"Running command:\n{' '.join(str(command) for command in command_list)}")
+    if global_output_commands:
+        print(f"Running command:\n{' '.join(str(command) for command in command_list)}")
 
     env = env if env else os.environ.copy()
     global stop_spinner_flag
@@ -410,7 +413,8 @@ def cleanup_process(process: subprocess.Popen) -> None:
 
 def run_ffmpeg_async(command_list: list[Any], log_path: Path) -> subprocess.Popen:
     command_list = normalize_command_elements(command_list)
-    print(f"Running command:\n{' '.join(str(command) for command in command_list)}")
+    if global_output_commands:
+        print(f"Running command:\n{' '.join(str(command) for command in command_list)}")
     with open(log_path, "w") as log_file:
         process = subprocess.Popen(
             command_list, stdout=log_file, stderr=subprocess.STDOUT, text=True
@@ -725,7 +729,9 @@ def parse_arguments() -> InputArgs:
 
 
 def main() -> None:
+    global global_output_commands
     input_args = parse_arguments()
+    global_output_commands = input_args.output_commands
     if input_args.source_folder:
         for source in input_args.source_folder.rglob("*"):
             if not source.is_file() or source.suffix.lower() not in IMAGE_EXTENSIONS + [
