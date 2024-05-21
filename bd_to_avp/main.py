@@ -659,10 +659,13 @@ def parse_arguments() -> InputArgs:
         "--mv-hevc-quality",
         default=75,
         type=int,
-        help="Quality factor for MV-HEVC encoding.",
+        help="Quality factor for MV-HEVC encoding with a scale of 0 to 100.  Default of 75",
     )
     parser.add_argument(
-        "--fov", default=90, type=int, help="Horizontal field of view for MV-HEVC."
+        "--fov",
+        default=90,
+        type=int,
+        help="Horizontal field of view for MV-HEVC.  Default of 90",
     )
     parser.add_argument(
         "--frame_rate", help="Video frame rate. Detected automatically if not provided."
