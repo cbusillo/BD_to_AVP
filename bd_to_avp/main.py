@@ -81,8 +81,8 @@ HOMEBREW_PREFIX = Path("/opt/homebrew")
 WINE_PATH = HOMEBREW_PREFIX / "bin/wine"
 FRIM_PATH = SCRIPT_PATH / "bin" / "FRIM_x64_version_1.31" / "x64"
 FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
-MP4BOX_PATH = HOMEBREW_PREFIX / "bin" / "MP4Box"
-SPATIAL_MEDIA = SCRIPT_PATH / "bin" / "spatial-media-kit-tool"
+SPATIAL_PATH = HOMEBREW_PREFIX / "bin" / "spatial"
+SPATIAL_MEDIA_PATH = SCRIPT_PATH / "bin" / "spatial-media-kit-tool"
 MKVEXTRACT_PATH = HOMEBREW_PREFIX / "bin" / "mkvextract"
 
 FINAL_FILE_TAG = "_AVP"
@@ -521,7 +521,7 @@ def combine_to_mv_hevc(
 ) -> None:
     output_path.unlink(missing_ok=True)
     command = [
-        SPATIAL_MEDIA,
+        SPATIAL_MEDIA_PATH,
         "merge",
         "-l",
         left_video_path,
@@ -549,20 +549,19 @@ def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int)
     run_ffmpeg_print_errors(audio_transcoded, overwrite_output=True)
 
 
-def mux_video_audio_and_subtitles(
-    mv_hevc_path: Path, audio_path: Path, subtitle_path: Path | None, muxed_path: Path
-) -> None:
+def mux_video_audio(mv_hevc_path: Path, audio_path: Path, muxed_path: Path) -> None:
     command = [
-        MP4BOX_PATH,
-        "-add",
-        mv_hevc_path,
-        "-add",
+        SPATIAL_PATH,
+        "combine",
+        "--audio",
         audio_path,
+        "--video",
+        mv_hevc_path,
+        "--output",
+        muxed_path,
+        "--overwrite",
     ]
-    if subtitle_path and subtitle_path.suffix.lower() != ".sup":
-        command += ["-add", subtitle_path]
 
-    command.append(muxed_path)
     run_command(command, "Remux audio and video to final output.")
 
 
@@ -659,10 +658,13 @@ def parse_arguments() -> InputArgs:
         "--mv-hevc-quality",
         default=75,
         type=int,
-        help="Quality factor for MV-HEVC encoding.",
+        help="Quality factor for MV-HEVC encoding with a scale of 0 to 100.  Default of 75",
     )
     parser.add_argument(
-        "--fov", default=90, type=int, help="Horizontal field of view for MV-HEVC."
+        "--fov",
+        default=90,
+        type=int,
+        help="Horizontal field of view for MV-HEVC.  Default of 90",
     )
     parser.add_argument(
         "--frame_rate", help="Video frame rate. Detected automatically if not provided."
@@ -807,12 +809,14 @@ def process_each(input_args: InputArgs) -> None:
     muxed_output_path = create_muxed_file(
         audio_output_path,
         mv_hevc_path,
-        subtitle_output_path,
         output_folder,
         disc_info.name,
         input_args,
     )
     move_file_to_output_root_folder(muxed_output_path, input_args)
+    if subtitle_output_path:
+        move_file_to_output_root_folder(subtitle_output_path, input_args)
+
     if input_args.remove_original and input_args.source_path:
         if input_args.source_path.is_dir():
             remove_folder_if_exists(input_args.source_path)
@@ -879,16 +883,13 @@ def create_mv_hevc_file(
 def create_muxed_file(
     audio_path: Path,
     mv_hevc_path: Path,
-    subtitle_path: Path | None,
     output_folder: Path,
     disc_name: str,
     input_args: InputArgs,
 ) -> Path:
     muxed_path = output_folder / f"{disc_name}{FINAL_FILE_TAG}.mov"
     if input_args.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
-        mux_video_audio_and_subtitles(
-            mv_hevc_path, audio_path, subtitle_path, muxed_path
-        )
+        mux_video_audio(mv_hevc_path, audio_path, muxed_path)
 
     if not input_args.keep_files:
         mv_hevc_path.unlink(missing_ok=True)
@@ -958,8 +959,7 @@ def create_mvc_audio_and_subtitle_files(
         ):
 
             subtitle_output_path = (
-                output_folder
-                / f"{disc_name}_subtitle{subtitle_formats[0]['extension']}"
+                output_folder / f"{disc_name}_AVP{subtitle_formats[0]['extension']}"
             )
         extract_mvc_audio_and_subtitle(
             mkv_output_path, video_output_path, audio_output_path, subtitle_output_path
