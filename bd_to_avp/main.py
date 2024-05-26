@@ -814,8 +814,6 @@ def process_each(input_args: InputArgs) -> None:
         input_args,
     )
     move_file_to_output_root_folder(muxed_output_path, input_args)
-    if subtitle_output_path:
-        move_file_to_output_root_folder(subtitle_output_path, input_args)
 
     if input_args.remove_original and input_args.source_path:
         if input_args.source_path.is_dir():
