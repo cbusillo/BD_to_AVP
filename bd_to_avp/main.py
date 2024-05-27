@@ -560,20 +560,34 @@ def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int)
 def mux_video_audio_subs(
     mv_hevc_path: Path, audio_path: Path, muxed_path: Path, sub_path: Path | None
 ) -> None:
-    output_ffmpeg = ffmpeg.output(
+    inputs = [
         ffmpeg.input(str(mv_hevc_path)),
-        ffmpeg.input(str(audio_path)),
-        ffmpeg.input(str(sub_path)) if sub_path else None,
+        ffmpeg.input(str(audio_path)).audio,
+    ]
+    if sub_path:
+        inputs.append(ffmpeg.input(str(sub_path))["s"])
+    output_ffmpeg = ffmpeg.output(
+        *inputs,
         str(muxed_path),
         acodec="copy",
         vcodec="copy",
-        scodec="mov_text",
+        scodec="mov_text" if sub_path else None,
         stag="tx3g",
-        **{"metadata:s:s:0": ["language=eng", "title=English Subtitles"]},
+        map_metadata=0,
+        **(
+            {"metadata:s:s:0": ["language=eng", "title=English Subtitles"]}
+            if sub_path
+            else {}
+        ),
     )
 
     print("Running ffmpeg to mux video, audio, and subtitles.")
     run_ffmpeg_print_errors(output_ffmpeg, overwrite_output=True)
+
+    spatial_command = [
+        SPATIAL_PATH,
+        "metadata",
+    ]
 
 
 def get_video_color_depth(input_path: Path) -> int | None:
@@ -1041,12 +1055,14 @@ def setup_conversion_parameters(input_args: InputArgs) -> tuple[DiscInfo, Path]:
 
 def run_ffmpeg_print_errors(stream_spec: Any, quiet: bool = True, **kwargs) -> None:
     kwargs["quiet"] = quiet
+    if global_output_commands:
+        print(f"Running command:\n{ffmpeg.compile(stream_spec)}")
     try:
         ffmpeg.run(stream_spec, **kwargs)
     except ffmpeg.Error as e:
         print("FFmpeg Error:")
-        print("STDOUT:", e.stdout.decode("utf-8"))
-        print("STDERR:", e.stderr.decode("utf-8"))
+        print("STDOUT:", e.stdout.decode("utf-8") if e.stdout else "")
+        print("STDERR:", e.stderr.decode("utf-8") if e.stderr else "")
         raise
 
 
