@@ -87,7 +87,7 @@ FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
 SPATIAL_PATH = HOMEBREW_PREFIX / "bin" / "spatial"
 SPATIAL_MEDIA_PATH = SCRIPT_PATH / "bin" / "spatial-media-kit-tool"
 MKVEXTRACT_PATH = HOMEBREW_PREFIX / "bin" / "mkvextract"
-MP4BOX_PATH = HOMEBREW_PREFIX / "/Applications/GPAC.app/Contents/MacOS/MP4Box"
+MP4BOX_PATH = Path("/Applications/GPAC.app/Contents/MacOS/MP4Box")
 
 FINAL_FILE_TAG = "_AVP"
 IMAGE_EXTENSIONS = [".iso", ".img", ".bin"]
