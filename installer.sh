@@ -78,10 +78,6 @@ source "$VENV_PATH/bin/activate"
 echo "Installing or updating BD_to_AVP from PyPI..."
 pip install --upgrade bd_to_avp || echo "Failed to install/update BD_to_AVP from PyPI"
 
-MP4BOX_PKG="$VENV_PATH/lib/python3.12/site-packages/bd_to_avp/bin/gpac-2.2.1.pkg"
-
-installer -pkg "$MP4BOX_PKG" -target / || handle_error "Failed to install MP4Box"
-
 echo "Making BD_to_AVP executable accessible system-wide..."
 
 EXECUTABLE_PATH="$VENV_PATH/bin/bd-to-avp"
@@ -102,6 +98,9 @@ else
     echo "Rosetta 2 not detected, attempting installation."
     /usr/sbin/softwareupdate --install-rosetta --agree-to-license
 fi
+
+echo "Installing MP4Box..."
+installer -pkg "$VENV_PATH/lib/python3.12/site-packages/bd_to_avp/bin/gpac-2.2.1.pkg" -target / || handle_error "Failed to install MP4Box"
 
 $BREW_PATH/wineboot &> /dev/null;
 
