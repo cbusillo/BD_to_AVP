@@ -560,34 +560,25 @@ def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int)
 def mux_video_audio_subs(
     mv_hevc_path: Path, audio_path: Path, muxed_path: Path, sub_path: Path | None
 ) -> None:
-    inputs = [
-        ffmpeg.input(str(mv_hevc_path)),
-        ffmpeg.input(str(audio_path)).audio,
+
+    command = [
+        MP4BOX_PATH,
+        "-new",
+        "-lang",
+        "eng",
+        "-add",
+        mv_hevc_path,
+        "-add",
+        audio_path,
     ]
     if sub_path:
-        inputs.append(ffmpeg.input(str(sub_path))["s"])
-    output_ffmpeg = ffmpeg.output(
-        *inputs,
-        str(muxed_path),
-        acodec="copy",
-        vcodec="copy",
-        scodec="mov_text" if sub_path else None,
-        stag="tx3g",
-        map_metadata=0,
-        **(
-            {"metadata:s:s:0": ["language=eng", "title=English Subtitles"]}
-            if sub_path
-            else {}
-        ),
-    )
+        command += [
+            "-add",
+            f"{sub_path}:hdlr=sbtl:group=2:name=English Subtitles:tx3g",
+        ]
 
-    print("Running ffmpeg to mux video, audio, and subtitles.")
-    run_ffmpeg_print_errors(output_ffmpeg, overwrite_output=True)
-
-    spatial_command = [
-        SPATIAL_PATH,
-        "metadata",
-    ]
+    command += [muxed_path]
+    run_command(command, "Mux video, audio, and subtitles.")
 
 
 def get_video_color_depth(input_path: Path) -> int | None:
