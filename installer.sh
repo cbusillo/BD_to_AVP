@@ -56,7 +56,7 @@ check_app_or_install() {
 }
 
 echo "Installing dependencies..."
-"$BREW_PATH/brew" install python@3.12 ffmpeg mp4box mkvtoolnix tesseract --no-quarantine 2>/dev/null || handle_error "Failed to install dependencies"
+"$BREW_PATH/brew" install python@3.12 ffmpeg mkvtoolnix tesseract --no-quarantine 2>/dev/null || handle_error "Failed to install dependencies"
 
 "$BREW_PATH/brew" uninstall "makemkv"
 check_app_or_install "MakeMKV" "makemkv"
@@ -75,6 +75,9 @@ source "$VENV_PATH/bin/activate"
 echo "Installing or updating BD_to_AVP from PyPI..."
 pip install --upgrade bd_to_avp || echo "Failed to install/update BD_to_AVP from PyPI"
 
+MP4BOX_PKG="$VENV_PATH/lib/python3.12/site-packages/bd_to_avp/bin/gpac-2.2.1.pkg"
+
+installer -pkg "$MP4BOX_PKG" -target / || handle_error "Failed to install MP4Box"
 
 echo "Making BD_to_AVP executable accessible system-wide..."
 
