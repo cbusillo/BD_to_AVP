@@ -16,6 +16,9 @@ from typing import Any, Generator
 
 import ffmpeg  # type: ignore
 
+from pgsrip import pgsrip, Sup, Options  # type: ignore
+from babelfish import Language  # type: ignore
+
 global_output_commands = False
 
 
@@ -353,9 +356,13 @@ def get_subtitle_tracks(input_path: Path) -> list[dict]:
         print(f"Getting subtitle tracks from {input_path}")
         probe = ffmpeg.probe(str(input_path), select_streams="s")
         subtitle_streams = probe.get("streams", [])
-        for stream in subtitle_streams:
+        for index, stream in enumerate(subtitle_streams):
+            tags = stream.get("tags", {})
+            language = tags.get("language", "")
+            if language != "eng":
+                continue
+
             codec_name = stream.get("codec_name", "")
-            index = stream.get("index")
             extension = subtitle_format_extensions.get(codec_name, "")
             if extension:
                 subtitle_tracks.append(
@@ -371,6 +378,7 @@ def extract_mvc_audio_and_subtitle(
     video_output_path: Path,
     audio_output_path: Path,
     subtitle_output_path: Path | None,
+    subtitle_track: int,
 ) -> None:
     stream = ffmpeg.input(str(input_path))
 
@@ -384,7 +392,7 @@ def extract_mvc_audio_and_subtitle(
     print("Running ffmpeg to extract video, audio, and subtitles from MKV")
     if subtitle_output_path:
         subtitle_stream = ffmpeg.output(
-            stream["s:0"], f"file:{subtitle_output_path}", c="copy"
+            stream[f"s:{subtitle_track}"], f"file:{subtitle_output_path}", c="copy"
         )
         run_ffmpeg_print_errors(
             [video_stream, audio_stream, subtitle_stream], overwrite_output=True
@@ -549,20 +557,23 @@ def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int)
     run_ffmpeg_print_errors(audio_transcoded, overwrite_output=True)
 
 
-def mux_video_audio(mv_hevc_path: Path, audio_path: Path, muxed_path: Path) -> None:
-    command = [
-        SPATIAL_PATH,
-        "combine",
-        "--audio",
-        audio_path,
-        "--video",
-        mv_hevc_path,
-        "--output",
-        muxed_path,
-        "--overwrite",
-    ]
+def mux_video_audio_subs(
+    mv_hevc_path: Path, audio_path: Path, muxed_path: Path, sub_path: Path | None
+) -> None:
+    output_ffmpeg = ffmpeg.output(
+        ffmpeg.input(str(mv_hevc_path)),
+        ffmpeg.input(str(audio_path)),
+        ffmpeg.input(str(sub_path)) if sub_path else None,
+        str(muxed_path),
+        acodec="copy",
+        vcodec="copy",
+        scodec="mov_text",
+        stag="tx3g",
+        **{"metadata:s:s:0": ["language=eng", "title=English Subtitles"]},
+    )
 
-    run_command(command, "Remux audio and video to final output.")
+    print("Running ffmpeg to mux video, audio, and subtitles.")
+    run_ffmpeg_print_errors(output_ffmpeg, overwrite_output=True)
 
 
 def get_video_color_depth(input_path: Path) -> int | None:
@@ -809,6 +820,7 @@ def process_each(input_args: InputArgs) -> None:
     muxed_output_path = create_muxed_file(
         audio_output_path,
         mv_hevc_path,
+        subtitle_output_path,
         output_folder,
         disc_info.name,
         input_args,
@@ -881,13 +893,14 @@ def create_mv_hevc_file(
 def create_muxed_file(
     audio_path: Path,
     mv_hevc_path: Path,
+    subtitle_path: Path | None,
     output_folder: Path,
     disc_name: str,
     input_args: InputArgs,
 ) -> Path:
     muxed_path = output_folder / f"{disc_name}{FINAL_FILE_TAG}.mov"
     if input_args.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
-        mux_video_audio(mv_hevc_path, audio_path, muxed_path)
+        mux_video_audio_subs(mv_hevc_path, audio_path, muxed_path, subtitle_path)
 
     if not input_args.keep_files:
         mv_hevc_path.unlink(missing_ok=True)
@@ -947,32 +960,33 @@ def create_mvc_audio_and_subtitle_files(
     audio_output_path = output_folder / f"{disc_name}_audio_PCM.mov"
 
     subtitle_output_path = None
+    subtitle_tracks: list[dict[str, Any]] = []
 
     if (
         input_args.start_stage.value <= Stage.EXTRACT_MVC_AUDIO_AND_SUB.value
         and mkv_output_path
     ):
         if not input_args.skip_subtitles and (
-            subtitle_formats := get_subtitle_tracks(mkv_output_path)
+            subtitle_tracks := get_subtitle_tracks(mkv_output_path)
         ):
 
             subtitle_output_path = (
-                output_folder / f"{disc_name}_AVP{subtitle_formats[0]['extension']}"
+                output_folder
+                / f"{disc_name}_subtitles{subtitle_tracks[0]['extension']}"
             )
-        extract_mvc_audio_and_subtitle(
-            mkv_output_path, video_output_path, audio_output_path, subtitle_output_path
-        )
-    else:
-        subtitle_extensions = [".idx", ".sup", ".srt"]
-        subtitle_files = (
-            file
-            for file in output_folder.glob(f"{disc_name}_subtitle*")
-            if file.suffix.lower() in (ext.lower() for ext in subtitle_extensions)
-        )
-        subtitle_output_path = next(subtitle_files, None)
 
-    if subtitle_output_path and subtitle_output_path.suffix.lower() == ".sup":
-        subtitle_output_path = convert_sup_to_idx(subtitle_output_path)
+        extract_mvc_audio_and_subtitle(
+            mkv_output_path,
+            video_output_path,
+            audio_output_path,
+            subtitle_output_path,
+            subtitle_tracks[0].get("index", 0) if subtitle_tracks else 0,
+        )
+        if subtitle_output_path and subtitle_output_path.suffix.lower() == ".sup":
+            subtitle_output_path = convert_sup_to_srt(subtitle_output_path)
+    else:
+        if (output_folder / f"{disc_name}_subtitles.srt").exists():
+            subtitle_output_path = output_folder / f"{disc_name}_subtitles.srt"
 
     if (
         not input_args.keep_files
@@ -980,30 +994,21 @@ def create_mvc_audio_and_subtitle_files(
         and input_args.source_path != mkv_output_path
     ):
         mkv_output_path.unlink(missing_ok=True)
+        if subtitle_output_path:
+            subtitle_output_path.unlink(missing_ok=True)
     return audio_output_path, video_output_path, subtitle_output_path
 
 
-def convert_sup_to_idx(sup_subtitle_path: Path) -> Path:
-    temp_mkv_path = sup_subtitle_path.with_suffix(".mkv")
-    stream = ffmpeg.input(str(sup_subtitle_path))
-    subtitle_stream = ffmpeg.output(
-        stream["s:0"], str(f"file:{temp_mkv_path}"), format="matroska", codec="dvdsub"
+def convert_sup_to_srt(sup_subtitle_path: Path) -> Path:
+    sub_file = Sup(str(sup_subtitle_path))
+    sub_options = Options(
+        languages={Language("eng")}, overwrite=True, one_per_lang=False
     )
-    run_ffmpeg_print_errors(subtitle_stream, overwrite_output=True)
+    print(f"Converting {sup_subtitle_path} to SRT")
+    os.environ["TESSDATA_PREFIX"] = str(Path(__file__).parent / "bin")
+    pgsrip.rip(sub_file, sub_options)
 
-    sub_subtitle_path = sup_subtitle_path.with_suffix(".sub")
-
-    mkvextract_command = [
-        MKVEXTRACT_PATH,
-        temp_mkv_path,
-        "tracks",
-        f"0:{sub_subtitle_path}",
-    ]
-    run_command(mkvextract_command, "Extract subtitle track from MKV")
-    temp_mkv_path.unlink(missing_ok=True)
-    sup_subtitle_path.unlink(missing_ok=True)
-
-    return sub_subtitle_path.with_suffix(".idx")
+    return sup_subtitle_path.with_suffix(".srt")
 
 
 def create_mkv_file(
