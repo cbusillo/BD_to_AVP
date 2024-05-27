@@ -99,8 +99,8 @@ else
     /usr/sbin/softwareupdate --install-rosetta --agree-to-license
 fi
 
-echo "Installing MP4Box..."
-installer -pkg "$VENV_PATH/lib/python3.12/site-packages/bd_to_avp/bin/gpac-2.2.1.pkg" -target / || handle_error "Failed to install MP4Box"
+echo "Checking MP4Box Version..."
+installer -pkg "$VENV_PATH/lib/python3.12/site-packages/bd_to_avp/bin/gpac-2.2.1.pkg" -target "$BREW_PATH/.." || handle_error "Failed to install MP4Box"
 
 $BREW_PATH/wineboot &> /dev/null;
 
