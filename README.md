@@ -31,7 +31,7 @@ Ensure the following are installed on your Mac *(If not using the Quick Install)
 - **[MP4Box]**: A multimedia packager available for Windows, Mac, and Linux.
 - **[MKVToolNix]**: A set of tools to create, alter, and inspect Matroska files.
 
-## Manual Installation
+## Manual Installation (Out of date)
 
 To set up your macOS environment for video processing, including creating and handling 3D video content, follow these steps to
 install the necessary tools using Homebrew and manual installation. This includes the installation of Homebrew itself, FFmpeg for
@@ -94,6 +94,7 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - `--start-stage`: Start processing at a specific stage.
 - `--output-commands`: Output commands used to console.
 - `--software-encoder`: Use software encoder for MV-HEVC encoding (disabled by default).
+- `--skip-subtitles`: Skip subtitle extraction (disabled by default).
 
 #### Stage Names
 
