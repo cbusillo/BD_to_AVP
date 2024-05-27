@@ -7,9 +7,9 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.12"
-ffmpeg-python =  { git = "https://github.com/kkroening/ffmpeg-python.git" }
 pgsrip = "^0.1.9"
 setuptools = "^70.0.0"
+ffmpeg-python = "^0.2.0"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.2.0"
