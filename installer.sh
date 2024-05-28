@@ -56,7 +56,7 @@ check_app_or_install() {
 }
 
 echo "Installing dependencies..."
-"$BREW_PATH/brew" install python@3.12 ffmpeg mkvtoolnix tesseract --no-quarantine 2>/dev/null || handle_error "Failed to install dependencies"
+"$BREW_PATH/brew" install python@3.12 ffmpeg mkvtoolnix --no-quarantine 2>/dev/null || handle_error "Failed to install dependencies"
 
 if [ -d "/Applications/MakeMKV.app" ]; then
   "$BREW_PATH/brew" uninstall "makemkv"
