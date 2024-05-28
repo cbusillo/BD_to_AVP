@@ -102,9 +102,10 @@ fi
 check_mp4box_version() {
     local required_version="2.2.1"
     local info_plist="/Applications/GPAC.app/Contents/Info.plist"
+    local installed_version=""
 
     if [ -f "$info_plist" ]; then
-        local installed_version=$(grep -A1 "<key>CFBundleShortVersionString</key>" "$info_plist" | grep -o '2\.2\.1')
+        installed_version=$(grep -A1 "<key>CFBundleShortVersionString</key>" "$info_plist" | grep -o '2\.2\.1')
 
         if [ "$installed_version" == "$required_version" ]; then
             echo "MP4Box $required_version is already installed."
