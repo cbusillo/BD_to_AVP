@@ -99,8 +99,43 @@ else
     /usr/sbin/softwareupdate --install-rosetta --agree-to-license
 fi
 
-echo "Installing MP4Box 2.2.1..."
-sudo installer -pkg "$VENV_PATH/lib/python3.12/site-packages/bd_to_avp/bin/gpac-2.2.1.pkg" -target / || handle_error "Failed to install MP4Box"
+check_mp4box_version() {
+    local required_version="2.2.1"
+    local info_plist="/Applications/GPAC.app/Contents/Info.plist"
+
+    if [ -f "$info_plist" ]; then
+        local installed_version=$(grep -A1 "<key>CFBundleShortVersionString</key>" "$info_plist" | grep -o '2\.2\.1')
+
+        if [ "$installed_version" == "$required_version" ]; then
+            echo "MP4Box $required_version is already installed."
+            return 0
+        else
+            echo "MP4Box is installed, but the version is not $required_version."
+            return 1
+        fi
+    else
+        echo "MP4Box is not installed."
+        return 1
+    fi
+}
+
+install_mp4box() {
+    local pkg_path="$VENV_PATH/lib/python3.12/site-packages/bd_to_avp/bin/gpac-2.2.1.pkg"
+
+    if check_mp4box_version; then
+        echo "Skipping MP4Box installation."
+    else
+        if [ -d "/Applications/GPAC.app" ]; then
+            echo "Removing existing MP4Box installation..."
+            sudo rm -rf "/Applications/GPAC.app"
+        fi
+
+        echo "Installing MP4Box 2.2.1..."
+        sudo installer -pkg "$pkg_path" -target / || handle_error "Failed to install MP4Box"
+    fi
+}
+
+install_mp4box
 
 $BREW_PATH/wineboot &> /dev/null;
 
