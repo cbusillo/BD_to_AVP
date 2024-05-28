@@ -1000,8 +1000,6 @@ def create_mvc_audio_and_subtitle_files(
         and input_args.source_path != mkv_output_path
     ):
         mkv_output_path.unlink(missing_ok=True)
-        if subtitle_output_path:
-            subtitle_output_path.unlink(missing_ok=True)
     return audio_output_path, video_output_path, subtitle_output_path
 
 
