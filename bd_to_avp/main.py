@@ -16,6 +16,9 @@ from typing import Any, Generator
 
 import ffmpeg  # type: ignore
 
+from pgsrip import pgsrip, Sup, Options  # type: ignore
+from babelfish import Language  # type: ignore
+
 global_output_commands = False
 
 
@@ -986,10 +989,10 @@ def create_mvc_audio_and_subtitle_files(
             subtitle_tracks[0].get("index", 0) if subtitle_tracks else 0,
         )
         if subtitle_output_path and subtitle_output_path.suffix.lower() == ".sup":
-            subtitle_output_path = convert_sup_to_idx(subtitle_output_path)
+            subtitle_output_path = convert_sup_to_srt(subtitle_output_path)
     else:
-        if (output_folder / f"{disc_name}_subtitles.idx").exists():
-            subtitle_output_path = output_folder / f"{disc_name}_subtitles.idx"
+        if (output_folder / f"{disc_name}_subtitles.srt").exists():
+            subtitle_output_path = output_folder / f"{disc_name}_subtitles.srt"
 
     if (
         not input_args.keep_files
@@ -997,29 +1000,21 @@ def create_mvc_audio_and_subtitle_files(
         and input_args.source_path != mkv_output_path
     ):
         mkv_output_path.unlink(missing_ok=True)
+        if subtitle_output_path:
+            subtitle_output_path.unlink(missing_ok=True)
     return audio_output_path, video_output_path, subtitle_output_path
 
 
-def convert_sup_to_idx(sup_subtitle_path: Path) -> Path:
-    temp_mkv_path = sup_subtitle_path.with_suffix(".mkv")
-    stream = ffmpeg.input(str(sup_subtitle_path))
-    subtitle_stream = ffmpeg.output(
-        stream["s:0"], str(f"file:{temp_mkv_path}"), format="matroska", codec="dvdsub"
+def convert_sup_to_srt(sup_subtitle_path: Path) -> Path:
+    sub_file = Sup(str(sup_subtitle_path))
+    sub_options = Options(
+        languages={Language("eng")}, overwrite=True, one_per_lang=False
     )
-    run_ffmpeg_print_errors(subtitle_stream, overwrite_output=True)
+    print(f"Converting {sup_subtitle_path} to SRT")
+    os.environ["TESSDATA_PREFIX"] = str(Path(__file__).parent / "bin")
+    pgsrip.rip(sub_file, sub_options)
 
-    sub_subtitle_path = sup_subtitle_path.with_suffix(".sub")
-
-    mkvextract_command = [
-        MKVEXTRACT_PATH,
-        temp_mkv_path,
-        "tracks",
-        f"0:{sub_subtitle_path}",
-    ]
-    run_command(mkvextract_command, "Extract subtitle track from MKV")
-    temp_mkv_path.unlink(missing_ok=True)
-
-    return sub_subtitle_path.with_suffix(".idx")
+    return sup_subtitle_path.with_suffix(".srt")
 
 
 def create_mkv_file(
