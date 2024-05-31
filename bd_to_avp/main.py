@@ -10,11 +10,13 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum, auto
+from importlib.metadata import version
 from pathlib import Path
 from time import sleep
 from typing import Any, Generator
 
 import ffmpeg  # type: ignore
+
 
 from pgsrip import pgsrip, Sup, Options  # type: ignore
 from babelfish import Language  # type: ignore
@@ -615,7 +617,9 @@ def find_largest_file_with_extensions(
 
 
 def parse_arguments() -> InputArgs:
-    parser = argparse.ArgumentParser(description="Process 3D video content.")
+    parser = argparse.ArgumentParser(
+        description="Process 3D Blu-ray to MV-HEVC compatible with the Apple Vision Pro."
+    )
     source_group = parser.add_mutually_exclusive_group(required=True)
 
     source_group.add_argument(
@@ -727,7 +731,11 @@ def parse_arguments() -> InputArgs:
         action="store_true",
         help="Use software encoder for HEVC encoding.",
     )
-
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"BD-to_AVP Version {version("bd_to_avp")}",
+    )
     args = parser.parse_args()
     input_args = InputArgs(
         source_str=args.source,
