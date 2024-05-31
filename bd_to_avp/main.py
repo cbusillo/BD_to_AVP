@@ -734,7 +734,7 @@ def parse_arguments() -> InputArgs:
     parser.add_argument(
         "--version",
         action="version",
-        version=f"BD-to_AVP Version {version("bd_to_avp")}",
+        version=f"BD-to_AVP Version {version('bd_to_avp')}",
     )
     args = parser.parse_args()
     input_args = InputArgs(
