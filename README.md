@@ -95,6 +95,7 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - `--output-commands`: Output commands used to console.
 - `--software-encoder`: Use software encoder for MV-HEVC encoding (disabled by default).
 - `--skip-subtitles`: Skip subtitle extraction (disabled by default).
+- `--version`: Show the version number and exit.
 
 #### Stage Names
 
