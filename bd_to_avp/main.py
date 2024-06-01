@@ -741,11 +741,11 @@ def parse_arguments() -> InputArgs:
     input_args = InputArgs(
         source_str=args.source,
         source_path=(
-            Path(args.source)
+            Path(args.source).expanduser()
             if args.source and not args.source.startswith("disc:")
             else None
         ),
-        output_root_path=Path(args.output_root_folder),
+        output_root_path=Path(args.output_root_folder).expanduser(),
         transcode_audio=args.transcode_audio,
         audio_bitrate=args.audio_bitrate,
         left_right_bitrate=args.left_right_bitrate,
