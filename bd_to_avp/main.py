@@ -411,6 +411,7 @@ def temporary_fifo(*names: str) -> Generator[list[Path], None, None]:
     fifos = [Path(f"/tmp/{name}") for name in names]
     try:
         for fifo in fifos:
+            fifo.unlink(missing_ok=True)
             os.mkfifo(fifo)
         yield fifos
     finally:
