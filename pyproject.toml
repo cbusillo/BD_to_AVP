@@ -11,6 +11,7 @@ pgsrip = "^0.1.9"
 setuptools = "^70.0.0"
 ffmpeg-python = "^0.2.0"
 tesseract = "^0.1.3"
+opencv-python = "4.9.0.80"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.2.0"
@@ -24,4 +25,3 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
 bd-to-avp = "bd_to_avp.main:main"
-#1
