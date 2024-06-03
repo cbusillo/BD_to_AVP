@@ -37,6 +37,7 @@ class Stage(Enum):
     CREATE_MKV = auto()
     EXTRACT_MVC_AUDIO_AND_SUB = auto()
     CREATE_LEFT_RIGHT_FILES = auto()
+    UPSCALE_VIDEO = auto()
     COMBINE_TO_MV_HEVC = auto()
     TRANSCODE_AUDIO = auto()
     CREATE_FINAL_FILE = auto()
@@ -65,6 +66,7 @@ class InputArgs:
     crop_black_bars: bool
     output_commands: bool
     software_encoder: bool
+    fx_upscale: bool
 
 
 class StageEnumAction(argparse.Action):
@@ -90,6 +92,7 @@ SPATIAL_PATH = HOMEBREW_PREFIX / "bin" / "spatial"
 SPATIAL_MEDIA_PATH = SCRIPT_PATH / "bin" / "spatial-media-kit-tool"
 MKVEXTRACT_PATH = HOMEBREW_PREFIX / "bin" / "mkvextract"
 MP4BOX_PATH = Path("/Applications/GPAC.app/Contents/MacOS/MP4Box")
+FX_UPSCALE_PATH = HOMEBREW_PREFIX / "bin" / "fx-upscale"
 
 FINAL_FILE_TAG = "_AVP"
 IMAGE_EXTENSIONS = [".iso", ".img", ".bin"]
@@ -189,6 +192,7 @@ def normalize_command_elements(command: list[Any]) -> list[str | os.PathLike | b
     return [
         str(item) if not isinstance(item, (str, bytes, os.PathLike)) else item
         for item in command
+        if item is not None
     ]
 
 
@@ -301,6 +305,17 @@ def sanitize_filename(name: str) -> str:
 
 
 def get_disc_and_mvc_video_info(source: str) -> DiscInfo:
+    if source.lower().endswith(".mts"):
+        filename_with_extension = os.path.basename(source)
+        filename = os.path.splitext(filename_with_extension)[0]
+        disc_info = DiscInfo(name=filename)
+
+        ffmpeg_probe_output = ffmpeg.probe(source)["streams"][0]
+        disc_info.resolution = f"{ffmpeg_probe_output.get('width', 1920)}x{ffmpeg_probe_output.get('height')}"
+        disc_info.frame_rate = ffmpeg_probe_output.get("r_frame_rate")
+        disc_info.color_depth = 10 if "10" in ffmpeg_probe_output.get("pix_fmt") else 8
+        return disc_info
+
     command = [MAKEMKVCON_PATH, "--robot", "info", source]
     output = run_command(command, "Get disc and MVC video properties")
 
@@ -383,6 +398,7 @@ def extract_mvc_audio_and_subtitle(
     subtitle_output_path: Path | None,
     subtitle_track: int,
 ) -> None:
+
     stream = ffmpeg.input(str(input_path))
 
     video_stream = ffmpeg.output(
@@ -477,6 +493,10 @@ def split_mvc_to_stereo(
 ):
     ffmpeg_left_log = left_output_path.with_suffix(".log")
     ffmpeg_right_log = right_output_path.with_suffix(".log")
+    is_mts = None
+    if input_args.source_path and input_args.source_path.suffix.lower() == ".mts":
+        is_mts = video_input_path
+        video_input_path = input_args.source_path
     with temporary_fifo("left_fifo", "right_fifo") as (primary_fifo, secondary_fifo):
         ffmpeg_left_command = generate_ffmpeg_wrapper_command(
             primary_fifo,
@@ -501,8 +521,10 @@ def split_mvc_to_stereo(
         frim_command = [
             WINE_PATH,
             FRIMDECODE_PATH,
+            "-ts" if is_mts else None,
             "-i:mvc",
             video_input_path,
+            video_input_path if is_mts else None,
             "-o",
         ]
         if input_args.swap_eyes:
@@ -518,9 +540,12 @@ def split_mvc_to_stereo(
         right_process.wait()
 
     if not input_args.keep_files:
-        video_input_path.unlink(missing_ok=True)
         left_output_path.with_suffix(".log").unlink(missing_ok=True)
         right_output_path.with_suffix(".log").unlink(missing_ok=True)
+        if is_mts:
+            is_mts.unlink(missing_ok=True)
+        else:
+            video_input_path.unlink(missing_ok=True)
 
     return left_output_path, right_output_path
 
@@ -737,6 +762,12 @@ def parse_arguments() -> InputArgs:
         action="version",
         version=f"BD-to_AVP Version {version('bd_to_avp')}",
     )
+    parser.add_argument(
+        "--fx-upscale",
+        default=False,
+        action="store_true",
+        help="Use the FX Upscale plugin for AI 4K upscaling.",
+    )
     args = parser.parse_args()
     input_args = InputArgs(
         source_str=args.source,
@@ -763,6 +794,7 @@ def parse_arguments() -> InputArgs:
         crop_black_bars=args.crop_black_bars,
         output_commands=args.output_commands,
         software_encoder=args.software_encoder,
+        fx_upscale=args.fx_upscale,
     )
     return input_args
 
@@ -774,7 +806,8 @@ def main() -> None:
     if input_args.source_folder:
         for source in input_args.source_folder.rglob("*"):
             if not source.is_file() or source.suffix.lower() not in IMAGE_EXTENSIONS + [
-                ".mkv"
+                ".mkv",
+                ".mts",
             ]:
                 continue
             input_args.source_path = source
@@ -832,6 +865,7 @@ def process_each(input_args: InputArgs) -> None:
     audio_output_path = create_transcoded_audio_file(
         input_args, audio_output_path, output_folder
     )
+
     muxed_output_path = create_muxed_file(
         audio_output_path,
         mv_hevc_path,
@@ -962,7 +996,26 @@ def create_left_right_files(
             crop_params,
         )
 
+    if (
+        input_args.fx_upscale
+        and input_args.start_stage.value <= Stage.UPSCALE_VIDEO.value
+    ):
+        left_eye_output_path = upscale_file(left_eye_output_path, input_args)
+        right_eye_output_path = upscale_file(right_eye_output_path, input_args)
+
     return left_eye_output_path, right_eye_output_path
+
+
+def upscale_file(input_path: Path, input_args: InputArgs) -> Path:
+    upscale_command = [
+        FX_UPSCALE_PATH,
+        input_path,
+    ]
+    run_command(upscale_command, "Upscale video with FX Upscale plugin.")
+
+    if not input_args.keep_files:
+        input_path.unlink(missing_ok=True)
+    return input_path.with_stem(f"{input_path.stem} Upscaled")
 
 
 def create_mvc_audio_and_subtitle_files(
@@ -1003,12 +1056,12 @@ def create_mvc_audio_and_subtitle_files(
         if (output_folder / f"{disc_name}_subtitles.srt").exists():
             subtitle_output_path = output_folder / f"{disc_name}_subtitles.srt"
 
-    if (
-        not input_args.keep_files
-        and mkv_output_path
-        and input_args.source_path != mkv_output_path
-    ):
-        mkv_output_path.unlink(missing_ok=True)
+    # if (
+    #     not input_args.keep_files
+    #     and mkv_output_path
+    #     and input_args.source_path != mkv_output_path
+    # ):
+    #     mkv_output_path.unlink(missing_ok=True)
     return audio_output_path, video_output_path, subtitle_output_path
 
 
@@ -1027,7 +1080,10 @@ def convert_sup_to_srt(sup_subtitle_path: Path) -> Path:
 def create_mkv_file(
     input_args: InputArgs, output_folder: Path, disc_info: DiscInfo
 ) -> Path:
-    if input_args.source_path and input_args.source_path.suffix.lower() == ".mkv":
+    if input_args.source_path and input_args.source_path.suffix.lower() in [
+        ".mkv",
+        ".mts",
+    ]:
         return input_args.source_path
 
     if input_args.start_stage.value <= Stage.CREATE_MKV.value:
