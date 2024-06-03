@@ -996,17 +996,17 @@ def create_left_right_files(
             crop_params,
         )
 
-    if (
-        input_args.fx_upscale
-        and input_args.start_stage.value <= Stage.UPSCALE_VIDEO.value
-    ):
-        left_eye_output_path = upscale_file(left_eye_output_path, input_args)
-        right_eye_output_path = upscale_file(right_eye_output_path, input_args)
+    if input_args.fx_upscale:
+        if input_args.start_stage.value <= Stage.UPSCALE_VIDEO.value:
+            upscale_file(left_eye_output_path, input_args)
+            upscale_file(right_eye_output_path, input_args)
+        left_eye_output_path = left_eye_output_path.with_stem(f"{left_eye_output_path.stem} Upscaled")
+        right_eye_output_path = right_eye_output_path.with_stem(f"{right_eye_output_path.stem} Upscaled")
 
     return left_eye_output_path, right_eye_output_path
 
 
-def upscale_file(input_path: Path, input_args: InputArgs) -> Path:
+def upscale_file(input_path: Path, input_args: InputArgs) -> None:
     upscale_command = [
         FX_UPSCALE_PATH,
         input_path,
@@ -1015,7 +1015,6 @@ def upscale_file(input_path: Path, input_args: InputArgs) -> Path:
 
     if not input_args.keep_files:
         input_path.unlink(missing_ok=True)
-    return input_path.with_stem(f"{input_path.stem} Upscaled")
 
 
 def create_mvc_audio_and_subtitle_files(
