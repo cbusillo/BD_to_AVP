@@ -103,6 +103,7 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - CREATE_MKV
 - EXTRACT_MVC_AUDIO_AND_SUB
 - CREATE_LEFT_RIGHT_FILES
+- UPSCALE_VIDEO
 - COMBINE_TO_MV_HEVC
 - TRANSCODE_AUDIO
 - CREATE_FINAL_FILE
