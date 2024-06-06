@@ -1,3 +1,4 @@
+import io
 import os
 import subprocess
 import sys
@@ -5,7 +6,7 @@ import threading
 import time
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 import ffmpeg  # type: ignore
 
@@ -169,16 +170,24 @@ def generate_ffmpeg_wrapper_command(
     return args
 
 
-class OutputHandler:
-    def __init__(self, write_func: Callable[[str], None] | None = None):
-        self.write_func = write_func
+class OutputHandler(io.TextIOBase):
+    def __init__(self, emit_signal: Callable[[str], None]) -> None:
+        self.emit_signal = emit_signal
 
-    def write(self, text: str) -> None:
-        if text:  # Ignore empty lines
-            sys.__stdout__.write(text)  # Write to the terminal
-            if self.write_func:
-                self.write_func(text.rstrip("\n"))  # Emit the signal for the GUI
+    def write(self, text: str) -> int:
+        if text:
+            sys.__stdout__.write(text)
+            if self.emit_signal is not None:
+                self.emit_signal(text.rstrip("\n"))
 
-    @staticmethod
-    def flush() -> None:
-        sys.__stdout__.flush()
+        return len(text)
+
+    def writelines(self, lines: Iterable[str]) -> None:  # type: ignore
+        for line in lines:
+            self.write(line)
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass

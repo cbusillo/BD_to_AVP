@@ -15,6 +15,32 @@ class Stage(Enum):
     CREATE_FINAL_FILE = auto()
     MOVE_FILES = auto()
 
+    def __str__(self) -> str:
+        return f"{self.value} - {self.human_readable()}"
+
+    def human_readable(self) -> str:
+        return {
+            "CREATE_MKV": "Create MKV",
+            "EXTRACT_MVC_AUDIO_AND_SUB": "Extract MVC Audio and Sub",
+            "CREATE_LEFT_RIGHT_FILES": "Create Left Right Files",
+            "UPSCALE_VIDEO": "Upscale Video",
+            "COMBINE_TO_MV_HEVC": "Combine to MV HEVC",
+            "TRANSCODE_AUDIO": "Transcode Audio",
+            "CREATE_FINAL_FILE": "Create Final File",
+            "MOVE_FILES": "Move Files",
+        }[self.name]
+
+    @classmethod
+    def list(cls) -> list[str]:
+        return list(map(str, cls))
+
+    @classmethod
+    def get_stage(cls, value: int) -> "Stage":
+        for stage in Stage:
+            if stage.value == value:
+                return stage
+        raise ValueError(f"Invalid stage value: {value}")
+
 
 class StageEnumAction(argparse.Action):
     def __init__(self, **kwargs) -> None:
