@@ -47,8 +47,9 @@ class Config:
     IMAGE_EXTENSIONS = [".iso", ".img", ".bin"]
 
     def __init__(self) -> None:
-        self.source_str = None
+        self.source_str: str | None = None
         self.source_path: Path | None = None
+        self.source_folder: Path | None = None
         self.output_root_path = Path.cwd()
         self.overwrite = False
         self.transcode_audio = False
@@ -61,7 +62,6 @@ class Config:
         self.keep_files = False
         self.start_stage = Stage.CREATE_MKV
         self.remove_original = False
-        self.source_folder = None
         self.swap_eyes = False
         self.skip_subtitles = False
         self.crop_black_bars = False

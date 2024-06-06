@@ -1,12 +1,11 @@
-import itertools
 import os
 import subprocess
 import sys
 import threading
+import time
 
 from pathlib import Path
-from time import sleep
-from typing import Any
+from typing import Any, Callable
 
 import ffmpeg  # type: ignore
 
@@ -14,28 +13,39 @@ from bd_to_avp.config import config
 
 
 class Spinner:
-    def __init__(self, command_name: str = "command..."):
+    symbols = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+
+    def __init__(self, command_name: str = "command...", update_interval: float = 0.5):
         self.command_name = command_name
         self.stop_spinner_flag = False
-        self.spinner_thread = threading.Thread(target=self._spinner)
+        self.update_interval = update_interval
+        self.current_symbol = 0
 
-    def _spinner(self) -> None:
-        spinner_symbols = itertools.cycle(["-", "/", "|", "\\"])
-        print(f"Running {self.command_name} ", end="", flush=True)
-        while not self.stop_spinner_flag:
-            sys.stdout.write(next(spinner_symbols))
+    def _update_spinner(self) -> None:
+        if not self.stop_spinner_flag:
+            sys.stdout.write(
+                f"\rRunning {self.command_name} {self.symbols[self.current_symbol]}"
+            )
             sys.stdout.flush()
-            sleep(0.1)
-            sys.stdout.write("\b")
-        print("\n")
+            self.current_symbol = (self.current_symbol + 1) % len(self.symbols)
 
-    def start(self) -> None:
+    def start(self, update_func: Callable[[str], None] | None = None) -> None:
         self.stop_spinner_flag = False
-        self.spinner_thread.start()
+        if update_func:
+            update_func(f"Running {self.command_name}")
+        else:
+            print(f"Running {self.command_name}", end="", flush=True)
 
-    def stop(self) -> None:
+        while not self.stop_spinner_flag:
+            self._update_spinner()
+            time.sleep(self.update_interval)
+
+    def stop(self, update_func: Callable[[str], None] | None = None) -> None:
         self.stop_spinner_flag = True
-        self.spinner_thread.join()
+        if update_func:
+            update_func(f"Finished {self.command_name}")
+        else:
+            print(f"\rFinished {self.command_name}")
 
 
 def normalize_command_elements(command: list[Any]) -> list[str | Path | bytes]:
@@ -59,7 +69,8 @@ def run_command(
     env = env if env else os.environ.copy()
     output_lines = []
     spinner = Spinner(command_name)
-    spinner.start()
+    spinner_thread = threading.Thread(target=spinner.start)
+    spinner_thread.start()
     process = None
     try:
 
@@ -91,6 +102,7 @@ def run_command(
 
     finally:
         spinner.stop()
+        spinner_thread.join()
     return "".join(output_lines)
 
 
@@ -155,3 +167,18 @@ def generate_ffmpeg_wrapper_command(
 
     args = ffmpeg.compile(stream, overwrite_output=True)
     return args
+
+
+class OutputHandler:
+    def __init__(self, write_func: Callable[[str], None] | None = None):
+        self.write_func = write_func
+
+    def write(self, text: str) -> None:
+        if text:  # Ignore empty lines
+            sys.__stdout__.write(text)  # Write to the terminal
+            if self.write_func:
+                self.write_func(text.rstrip("\n"))  # Emit the signal for the GUI
+
+    @staticmethod
+    def flush() -> None:
+        sys.__stdout__.flush()
