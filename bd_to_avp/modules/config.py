@@ -1,8 +1,12 @@
 import argparse
+import configparser
 
 from enum import Enum, auto
 from importlib.metadata import version
 from pathlib import Path
+
+
+CONFIG_FILE = Path.home() / ".bd_to_avp.ini"
 
 
 class Stage(Enum):
@@ -56,18 +60,34 @@ class StageEnumAction(argparse.Action):
 
 
 class Config:
+    BREW_CASKS_TO_INSTALL = [
+        "makemkv",
+        "wine-stable",
+    ]
+    BREW_PACKAGES_TO_INSTALL = [
+        "python@3.12",
+        "ffmpeg",
+        "mkvtoolnix",
+        "tesseract",
+        "finnvoor/tools/fx-upscale",
+    ]
+
     MAKEMKVCON_PATH = Path("/Applications/MakeMKV.app/Contents/MacOS/makemkvcon")
     SCRIPT_PATH = Path(__file__).parent
+    SCRIPT_PATH_BIN = SCRIPT_PATH / "bin"
 
     HOMEBREW_PREFIX = Path("/opt/homebrew")
-    WINE_PATH = HOMEBREW_PREFIX / "bin/wine"
-    FRIM_PATH = SCRIPT_PATH / "bin" / "FRIM_x64_version_1.31" / "x64"
+    HOMEBREW_PREFIX_BIN = HOMEBREW_PREFIX / "bin"
+
+    WINE_PATH = HOMEBREW_PREFIX_BIN / "wine"
+    FRIM_PATH = SCRIPT_PATH_BIN / "FRIM_x64_version_1.31" / "x64"
     FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
-    SPATIAL_PATH = HOMEBREW_PREFIX / "bin" / "spatial"
-    SPATIAL_MEDIA_PATH = SCRIPT_PATH / "bin" / "spatial-media-kit-tool"
-    MKVEXTRACT_PATH = HOMEBREW_PREFIX / "bin" / "mkvextract"
+    SPATIAL_PATH = HOMEBREW_PREFIX_BIN / "spatial"
+    SPATIAL_MEDIA_PATH = SCRIPT_PATH_BIN / "spatial-media-kit-tool"
+    MKVEXTRACT_PATH = HOMEBREW_PREFIX_BIN / "mkvextract"
+    MP4BOX_VERSION = "2.2.1"
     MP4BOX_PATH = Path("/Applications/GPAC.app/Contents/MacOS/MP4Box")
-    FX_UPSCALE_PATH = HOMEBREW_PREFIX / "bin" / "fx-upscale"
+    FX_UPSCALE_PATH = HOMEBREW_PREFIX_BIN / "fx-upscale"
 
     FINAL_FILE_TAG = "_AVP"
     IMAGE_EXTENSIONS = [".iso", ".img", ".bin"]
@@ -94,6 +114,107 @@ class Config:
         self.output_commands = False
         self.software_encoder = False
         self.fx_upscale = False
+
+        self.installed_version: str | None = None
+
+    @property
+    def code_version(self) -> str:
+        project_version = version(__package__.split(".")[0])
+        return project_version
+
+    def load_version(self) -> str | None:
+        config_file = configparser.ConfigParser()
+        config_file.read(CONFIG_FILE)
+        if (
+            "Application" in config_file
+            and "installed_version" in config_file["Application"]
+        ):
+            self.installed_version = config_file.get("Application", "installed_version")
+        return self.installed_version
+
+    def save_version(self) -> None:
+        config_file = configparser.ConfigParser()
+        config_file.read(CONFIG_FILE)
+
+        if not config_file.has_section("Application"):
+            config_file.add_section("Application")
+        config_file.set("Application", "installed_version", self.code_version)
+
+        with open(CONFIG_FILE, "w") as configfile:
+            config_file.write(configfile)
+
+    def save_config(self) -> None:
+        config_file = configparser.ConfigParser()
+        config_file.read(CONFIG_FILE)
+
+        if not config_file.has_section("Paths"):
+            config_file.add_section("Paths")
+        config_file.set(
+            "Paths",
+            "source_folder",
+            self.source_folder.as_posix() if self.source_folder else "",
+        )
+        config_file.set("Paths", "output_root_path", self.output_root_path.as_posix())
+
+        if not config_file.has_section("Options"):
+            config_file.add_section("Options")
+        config_file.set("Options", "overwrite", str(self.overwrite))
+        config_file.set("Options", "transcode_audio", str(self.transcode_audio))
+        config_file.set("Options", "audio_bitrate", str(self.audio_bitrate))
+        config_file.set("Options", "left_right_bitrate", str(self.left_right_bitrate))
+        config_file.set("Options", "mv_hevc_quality", str(self.mv_hevc_quality))
+        config_file.set("Options", "fov", str(self.fov))
+        config_file.set("Options", "frame_rate", self.frame_rate)
+        config_file.set("Options", "resolution", self.resolution)
+        config_file.set("Options", "keep_files", str(self.keep_files))
+        config_file.set("Options", "start_stage", str(self.start_stage.value))
+        config_file.set("Options", "remove_original", str(self.remove_original))
+        config_file.set("Options", "swap_eyes", str(self.swap_eyes))
+        config_file.set("Options", "skip_subtitles", str(self.skip_subtitles))
+        config_file.set("Options", "crop_black_bars", str(self.crop_black_bars))
+        config_file.set("Options", "output_commands", str(self.output_commands))
+        config_file.set("Options", "software_encoder", str(self.software_encoder))
+        config_file.set("Options", "fx_upscale", str(self.fx_upscale))
+
+        with open(CONFIG_FILE, "w") as configfile:
+            config_file.write(configfile)
+
+    def load_config(self) -> None:
+        config_file = configparser.ConfigParser()
+        config_file.read(CONFIG_FILE)
+
+        if "Paths" in config_file:
+            self.source_folder = (
+                Path(config_file.get("Paths", "source_folder"))
+                if config_file.get("Paths", "source_folder")
+                else None
+            )
+            self.output_root_path = Path(config_file.get("Paths", "output_root_path"))
+
+        if "Options" in config_file:
+            self.overwrite = config_file.getboolean("Options", "overwrite")
+            self.transcode_audio = config_file.getboolean("Options", "transcode_audio")
+            self.audio_bitrate = config_file.getint("Options", "audio_bitrate")
+            self.left_right_bitrate = config_file.getint(
+                "Options", "left_right_bitrate"
+            )
+            self.mv_hevc_quality = config_file.getint("Options", "mv_hevc_quality")
+            self.fov = config_file.getint("Options", "fov")
+            self.frame_rate = config_file.get("Options", "frame_rate")
+            self.resolution = config_file.get("Options", "resolution")
+            self.keep_files = config_file.getboolean("Options", "keep_files")
+            self.start_stage = Stage.get_stage(
+                config_file.getint("Options", "start_stage")
+            )
+            self.remove_original = config_file.getboolean("Options", "remove_original")
+            self.swap_eyes = config_file.getboolean("Options", "swap_eyes")
+            self.skip_subtitles = config_file.getboolean("Options", "skip_subtitles")
+            self.crop_black_bars = config_file.getboolean("Options", "crop_black_bars")
+            self.output_commands = config_file.getboolean("Options", "output_commands")
+            self.software_encoder = config_file.getboolean(
+                "Options", "software_encoder"
+            )
+            self.fx_upscale = config_file.getboolean("Options", "fx_upscale")
 
     def parse_args(self) -> None:
         parser = argparse.ArgumentParser(
@@ -204,7 +325,7 @@ class Config:
         parser.add_argument(
             "--version",
             action="version",
-            version=f"BD-to_AVP Version {version('bd_to_avp')}",
+            version=f"BD-to_AVP Version {self.code_version}",
         )
         parser.add_argument(
             "--fx-upscale",

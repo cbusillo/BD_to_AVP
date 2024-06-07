@@ -4,9 +4,9 @@ from pathlib import Path
 
 import ffmpeg  # type: ignore
 
-from bd_to_avp.config import config, Stage
-from bd_to_avp.file import find_largest_file_with_extensions, sanitize_filename
-from bd_to_avp.util import run_command
+from bd_to_avp.modules.config import config, Stage
+from bd_to_avp.modules.file import find_largest_file_with_extensions, sanitize_filename
+from bd_to_avp.modules.util import run_command
 
 
 @dataclass

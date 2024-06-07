@@ -5,8 +5,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator
 
-from bd_to_avp.config import Stage, config
-from bd_to_avp.util import run_command
+from bd_to_avp.modules.config import Stage, config
+from bd_to_avp.modules.util import run_command
 
 
 def normalize_name(name: str) -> str:

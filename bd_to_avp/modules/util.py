@@ -10,7 +10,7 @@ from typing import Any, Callable, Iterable
 
 import ffmpeg  # type: ignore
 
-from bd_to_avp.config import config
+from bd_to_avp.modules.config import config
 
 
 class Spinner:

@@ -1,5 +1,5 @@
 #!/bin/zsh
-#/bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/release/installer.sh)"
+#/bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/release/bd_to_avp/installers/installer.sh)"
 
 handle_error() {
     echo "Error: $1"
@@ -68,36 +68,6 @@ if [ ! -L "$BREW_PATH/wine" ]; then
     ln -s /Applications/Wine\ Stable.app/Contents/Resources/wine/bin/wine "$BREW_PATH/wine"
 fi
 
-echo "Creating a virtual environment for BD_to_AVP..."
-VENV_PATH="$HOME/.bd_to_avp_venv"
-python3.12 -m venv "$VENV_PATH" || handle_error "Failed to create a virtual environment"
-
-echo "Activating the virtual environment..."
-source "$VENV_PATH/bin/activate"
-
-echo "Installing or updating BD_to_AVP from PyPI..."
-pip install --upgrade bd_to_avp || echo "Failed to install/update BD_to_AVP from PyPI"
-
-echo "Making BD_to_AVP executable accessible system-wide..."
-
-EXECUTABLE_PATH="$VENV_PATH/bin/bd-to-avp"
-SYSTEM_WIDE_PATH="/opt/homebrew/bin/bd-to-avp"
-
-if [ -L "$SYSTEM_WIDE_PATH" ] || [ -e "$SYSTEM_WIDE_PATH" ]; then
-    echo "Existing BD_to_AVP executable or symlink found. Removing..."
-    rm -f "$SYSTEM_WIDE_PATH"
-fi
-
-ln -s "$EXECUTABLE_PATH" "$SYSTEM_WIDE_PATH" || handle_error "Failed to link BD_to_AVP executable system-wide"
-echo "BD_to_AVP is now accessible system-wide as 'bd-to-avp'"
-
-echo "Installing Rosetta 2 (if required)..."
-if arch -x86_64 true 2>/dev/null; then
-    echo "Rosetta 2 support detected."
-else
-    echo "Rosetta 2 not detected, attempting installation."
-    /usr/sbin/softwareupdate --install-rosetta --agree-to-license
-fi
 
 check_mp4box_version() {
     local required_version="2.2.1"
@@ -121,7 +91,8 @@ check_mp4box_version() {
 }
 
 install_mp4box() {
-    local pkg_path="$VENV_PATH/lib/python3.12/site-packages/bd_to_avp/bin/gpac-2.2.1.pkg"
+    SCRIPT_DIR="$(dirname "$0")"
+    local pkg_path="$SCRIPT_DIR/installers/gpac-2.2.1.pkg"
 
     if check_mp4box_version; then
         echo "Skipping MP4Box installation."
@@ -138,8 +109,17 @@ install_mp4box() {
 
 install_mp4box
 
-$BREW_PATH/wineboot &> /dev/null;
+echo "Making BD_to_AVP executable accessible system-wide..."
+#TODO: add terminal version
 
-echo "BD_to_AVP environment setup complete. Refresh your terminal's environment to use new paths."
-echo "1. Refresh environment: source $HOME/.zshrc"
-echo "2. Execute BD_to_AVP: bd-to-avp"
+
+echo "Installing Rosetta 2 (if required)..."
+if arch -x86_64 true 2>/dev/null; then
+    echo "Rosetta 2 support detected."
+else
+    echo "Rosetta 2 not detected, attempting installation."
+    /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+fi
+
+
+$BREW_PATH/wineboot &> /dev/null;

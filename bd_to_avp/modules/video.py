@@ -3,10 +3,10 @@ from pathlib import Path
 
 import ffmpeg  # type: ignore
 
-from bd_to_avp.config import Stage, config
-from bd_to_avp.disc import DiscInfo
-from bd_to_avp.file import temporary_fifo
-from bd_to_avp.util import (
+from bd_to_avp.modules.config import Stage, config
+from bd_to_avp.modules.disc import DiscInfo
+from bd_to_avp.modules.file import temporary_fifo
+from bd_to_avp.modules.util import (
     cleanup_process,
     generate_ffmpeg_wrapper_command,
     run_command,

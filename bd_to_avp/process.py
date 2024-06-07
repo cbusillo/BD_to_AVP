@@ -1,16 +1,19 @@
 import subprocess
 
-from bd_to_avp.audio import create_transcoded_audio_file
-from bd_to_avp.config import config
-from bd_to_avp.container import create_muxed_file, create_mvc_audio_and_subtitle_files
-from bd_to_avp.disc import create_mkv_file, get_disc_and_mvc_video_info
-from bd_to_avp.file import (
+from bd_to_avp.modules.audio import create_transcoded_audio_file
+from bd_to_avp.modules.config import config
+from bd_to_avp.modules.container import (
+    create_muxed_file,
+    create_mvc_audio_and_subtitle_files,
+)
+from bd_to_avp.modules.disc import create_mkv_file, get_disc_and_mvc_video_info
+from bd_to_avp.modules.file import (
     file_exists_normalized,
     move_file_to_output_root_folder,
     prepare_output_folder_for_source,
     remove_folder_if_exists,
 )
-from bd_to_avp.video import (
+from bd_to_avp.modules.video import (
     create_left_right_files,
     create_mv_hevc_file,
     detect_crop_parameters,
@@ -89,6 +92,9 @@ def process_each() -> None:
             config.source_path.unlink(missing_ok=True)
 
 
-if __name__ == "__main__":
-    config.parse_args()
+def start_process() -> None:
     process()
+
+
+if __name__ == "__main__":
+    start_process()
