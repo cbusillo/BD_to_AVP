@@ -42,8 +42,9 @@ jobs:
           security default-keychain -s $KEYCHAIN_PATH
           security unlock-keychain -p runner $KEYCHAIN_PATH
           security import certificate.p12 -k $KEYCHAIN_PATH -P "${{ secrets.CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
+          security add-trusted-cert -d -r trustRoot -k $KEYCHAIN_PATH certificate.p12
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k runner $KEYCHAIN_PATH
-          security find-certificate -a -p $KEYCHAIN_PATH
+
         env:
           CERTIFICATE: ${{ secrets.CERTIFICATE }}
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
