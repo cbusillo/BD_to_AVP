@@ -2,6 +2,7 @@ import os
 import platform
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import requests
@@ -10,37 +11,85 @@ from bd_to_avp.modules.config import config
 from bd_to_avp.modules.util import run_command
 
 
+def prompt_for_password() -> Path:
+    script = f"""
+    with timeout of 3600 seconds
+        tell app "System Events"
+            activate
+            set pw to text returned of (display dialog "Enter your password: (This will take a while)" default answer "" with hidden answer)
+        end tell
+        return pw
+    end timeout
+    """
+    with tempfile.NamedTemporaryFile(suffix=".sh", delete=False) as pw_file:
+        pw_file.write('#!/bin/bash\necho "$HOMEBREW_PASSOWRD"\n'.encode())
+        pw_file_path = Path(pw_file.name)
+    pw_file_path.chmod(0o700)
+    password_correct = False
+    while not password_correct:
+        password = subprocess.check_output(
+            ["osascript", "-e", script], text=True
+        ).strip()
+
+        os.environ["HOMEBREW_PASSOWRD"] = password
+
+        os.environ["SUDO_ASKPASS"] = pw_file_path.as_posix()
+        check_sudo_password = subprocess.run(
+            ["/usr/bin/sudo", "-A", "ls"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            input=password,
+        )
+        password_correct = check_sudo_password.returncode == 0
+    return pw_file_path
+
+
 def install_deps(is_gui: bool) -> None:
     if not is_arm64():
         raise ValueError("This script is only supported on Apple Silicon Macs.")
     print("Installing dependencies...")
-    password: str = ""
+    pw_file_path = None
 
     if is_gui:
-        password = prompt_for_password()
+        pw_file_path = prompt_for_password()
+
+    if Path("~/.bd_to_avp_venv").exists():
+        print("Removing old install...")
+        shutil.rmtree("~/.bd_to_avp_venv", ignore_errors=True)
 
     if not Path("/opt/homebrew/bin/brew").exists():
-        install_brew(password)
+        install_brew(is_gui)
     else:
         update_brew(is_gui)
 
     for package in config.BREW_CASKS_TO_INSTALL:
-        uninstall_brew_package(package, is_gui)
+        manage_brew_package(package, is_gui, True, "uninstall")
+        manage_brew_package(package, is_gui, True)
 
-    for package in config.BREW_CASKS_TO_INSTALL:
-        install_brew_package(package, is_gui, cask=True)
     for package in config.BREW_PACKAGES_TO_INSTALL:
-        install_brew_package(package, is_gui)
+        manage_brew_package(package, is_gui)
 
-    if not config.MP4BOX_PATH.exists():
-        if not check_mp4box_version(config.MP4BOX_VERSION):
-            shutil.rmtree("/Applications/GPAC.app", ignore_errors=True)
-        install_mp4box(password)
+    check_mp4box(is_gui)
 
     wine_boot()
 
+    if pw_file_path:
+        pw_file_path.unlink()
 
-def check_install() -> bool:
+
+def check_mp4box(is_gui: bool) -> None:
+    if not config.MP4BOX_PATH.exists() or not check_mp4box_version(
+        config.MP4BOX_VERSION
+    ):
+        if config.MP4BOX_PATH.exists():
+            print("Removing old MP4Box...")
+            shutil.rmtree("/Applications/GPAC.app", ignore_errors=True)
+        print("Installing MP4Box...")
+        install_mp4box(is_gui)
+
+
+def check_install_version() -> bool:
     installed_version = config.load_version()
     print(
         f"Installed bd-to-avp version: {installed_version}\nbd-to-avp version: {config.code_version}"
@@ -49,24 +98,6 @@ def check_install() -> bool:
         return True
 
     return False
-
-
-def prompt_for_password() -> str:
-    script = """
-    tell app "System Events"
-        text returned of (display dialog "Please enter your password:" default answer "" with title "Password Installer" with hidden answer)
-    end tell
-    """
-    password = subprocess.check_output(
-        ["osascript", "-e", script], universal_newlines=True
-    ).strip()
-    if not password:
-        on_error_string(
-            "Password",
-            "Password is required for install.  If you have a blank password, please set one",
-            True,
-        )
-    return password
 
 
 def show_message(title: str, message: str) -> None:
@@ -107,8 +138,20 @@ def is_arm64() -> bool:
     return platform.machine() == "arm64"
 
 
-def install_brew_package(package: str, is_gui: bool, cask: bool = False) -> None:
-    brew_command = ["/opt/homebrew/bin/brew", "install", "--no-quarantine"]
+def manage_brew_package(
+    package: str, is_gui: bool, cask: bool = False, operation: str = "install"
+) -> None:
+    print(f"{operation.title()}ing {package}...")
+    brew_command = ["/opt/homebrew/bin/brew", operation]
+    if operation == "install":
+        brew_command.append("--no-quarantine")
+        app_dir_path = next(
+            Path("/Applications").glob(f"{package.replace('-', ' ')}.app"), None
+        )
+        if app_dir_path and app_dir_path.is_dir():
+            shutil.rmtree(app_dir_path, ignore_errors=True)
+            print(f"Removed existing application: {app_dir_path}")
+
     if cask:
         brew_command.append("--cask")
     brew_command.append(package)
@@ -120,24 +163,14 @@ def install_brew_package(package: str, is_gui: bool, cask: bool = False) -> None
         stderr=subprocess.PIPE,
     )
 
+    if operation == "uninstall" and process.returncode == 1:
+        print(f"{package} not installed.")
+        return
+
     if process.returncode != 0:
         on_error_process(package, process, is_gui)
 
-
-def uninstall_brew_package(package: str, is_gui: bool) -> None:
-    brew_command = ["/opt/homebrew/bin/brew", "remove", package]
-
-    process = subprocess.run(
-        brew_command,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-    if process.returncode != 0:
-        if "is not installed" in process.stderr:
-            return
-        on_error_process(package, process, is_gui)
+    print(f"{package} {operation}ed.")
 
 
 def update_brew(is_gui: bool) -> None:
@@ -165,17 +198,17 @@ def check_mp4box_version(version: str) -> bool:
     return version in processs.stdout
 
 
-def install_mp4box(password: str) -> None:
+def install_mp4box(is_gui: bool) -> None:
     print("Installing MP4Box...")
     sudo_env = os.environ.copy()
-    if password:
-        sudo_env["SUDO_ASKPASS"] = f"echo {password}"
 
     command = [
         "sudo",
         "installer",
         "-pkg",
         (config.SCRIPT_PATH / "installers" / "gpac-2.2.1.pkg").as_posix(),
+        "-target",
+        "/",
     ]
     process = subprocess.run(
         command,
@@ -186,7 +219,7 @@ def install_mp4box(password: str) -> None:
     )
 
     if process.returncode != 0:
-        on_error_process("MP4Box", process, bool(password))
+        on_error_process("MP4Box", process, is_gui)
     print("MP4Box installed.")
 
 
@@ -204,32 +237,34 @@ def wine_boot() -> None:
     print("Wine booted.")
 
 
-def install_brew(password: str) -> None:
+def install_brew(is_gui: bool) -> None:
     print("Installing Homebrew for arm64...")
-    sudo_env = os.environ.copy()
-    if password:
-        sudo_env["SUDO_ASKPASS"] = f"echo {password}"
 
     response = requests.get(
         "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
     )
     if response.status_code != 200:
         on_error_string(
-            "Homebrew", "Failed to download Homebrew install script.", bool(password)
+            "Homebrew", "Failed to download Homebrew install script.", is_gui
         )
     brew_install_script = response.text
-    brew_install_command = ["/bin/bash", "-c", brew_install_script]
+
+    with tempfile.NamedTemporaryFile(suffix=".sh", delete=False) as brew_install_file:
+        brew_install_file.write(brew_install_script.encode())
+        brew_install_file_path = Path(brew_install_file.name)
+
+    brew_install_command = ["/bin/bash", brew_install_file_path.as_posix()]
     process = subprocess.run(
         brew_install_command,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env=sudo_env,
     )
 
     if process.returncode != 0:
-        on_error_process("Homebrew", process, bool(password))
+        on_error_process("Homebrew", process, is_gui)
     print("Homebrew installed.")
+    brew_install_file_path.unlink()
 
 
 def setup_frim() -> None:

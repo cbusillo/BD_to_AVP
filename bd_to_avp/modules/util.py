@@ -177,6 +177,7 @@ class OutputHandler(io.TextIOBase):
     def write(self, text: str) -> int:
         if text:
             sys.__stdout__.write(text)
+
             if self.emit_signal is not None:
                 self.emit_signal(text.rstrip("\n"))
 

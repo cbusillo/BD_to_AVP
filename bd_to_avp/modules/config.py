@@ -5,7 +5,6 @@ from enum import Enum, auto
 from importlib.metadata import version
 from pathlib import Path
 
-
 CONFIG_FILE = Path.home() / ".bd_to_avp.ini"
 
 
@@ -73,7 +72,7 @@ class Config:
     ]
 
     MAKEMKVCON_PATH = Path("/Applications/MakeMKV.app/Contents/MacOS/makemkvcon")
-    SCRIPT_PATH = Path(__file__).parent
+    SCRIPT_PATH = Path(__file__).parent.parent
     SCRIPT_PATH_BIN = SCRIPT_PATH / "bin"
 
     HOMEBREW_PREFIX = Path("/opt/homebrew")
@@ -95,7 +94,7 @@ class Config:
     def __init__(self) -> None:
         self.source_str: str | None = None
         self.source_path: Path | None = None
-        self.source_folder: Path | None = None
+        self.source_folder_path: Path | None = None
         self.output_root_path = Path.cwd()
         self.overwrite = False
         self.transcode_audio = False
@@ -149,32 +148,20 @@ class Config:
 
         if not config_file.has_section("Paths"):
             config_file.add_section("Paths")
-        config_file.set(
-            "Paths",
-            "source_folder",
-            self.source_folder.as_posix() if self.source_folder else "",
-        )
-        config_file.set("Paths", "output_root_path", self.output_root_path.as_posix())
-
         if not config_file.has_section("Options"):
             config_file.add_section("Options")
-        config_file.set("Options", "overwrite", str(self.overwrite))
-        config_file.set("Options", "transcode_audio", str(self.transcode_audio))
-        config_file.set("Options", "audio_bitrate", str(self.audio_bitrate))
-        config_file.set("Options", "left_right_bitrate", str(self.left_right_bitrate))
-        config_file.set("Options", "mv_hevc_quality", str(self.mv_hevc_quality))
-        config_file.set("Options", "fov", str(self.fov))
-        config_file.set("Options", "frame_rate", self.frame_rate)
-        config_file.set("Options", "resolution", self.resolution)
-        config_file.set("Options", "keep_files", str(self.keep_files))
-        config_file.set("Options", "start_stage", str(self.start_stage.value))
-        config_file.set("Options", "remove_original", str(self.remove_original))
-        config_file.set("Options", "swap_eyes", str(self.swap_eyes))
-        config_file.set("Options", "skip_subtitles", str(self.skip_subtitles))
-        config_file.set("Options", "crop_black_bars", str(self.crop_black_bars))
-        config_file.set("Options", "output_commands", str(self.output_commands))
-        config_file.set("Options", "software_encoder", str(self.software_encoder))
-        config_file.set("Options", "fx_upscale", str(self.fx_upscale))
+
+        for key, value in self.__dict__.items():
+            if key in ["installed_version", "code_version"]:
+                continue
+            elif "_path" in key:
+                if not value:
+                    continue
+                config_file.set("Paths", key, value.as_posix())
+            else:
+                if not value:
+                    continue
+                config_file.set("Options", key, str(value))
 
         with open(CONFIG_FILE, "w") as configfile:
             config_file.write(configfile)
@@ -183,38 +170,24 @@ class Config:
         config_file = configparser.ConfigParser()
         config_file.read(CONFIG_FILE)
 
-        if "Paths" in config_file:
-            self.source_folder = (
-                Path(config_file.get("Paths", "source_folder"))
-                if config_file.get("Paths", "source_folder")
-                else None
-            )
-            self.output_root_path = Path(config_file.get("Paths", "output_root_path"))
+        if config_file.has_section("Paths"):
+            for key, value in config_file.items("Paths"):
+                if key in self.__dict__:
+                    setattr(self, key, Path(value))
 
-        if "Options" in config_file:
-            self.overwrite = config_file.getboolean("Options", "overwrite")
-            self.transcode_audio = config_file.getboolean("Options", "transcode_audio")
-            self.audio_bitrate = config_file.getint("Options", "audio_bitrate")
-            self.left_right_bitrate = config_file.getint(
-                "Options", "left_right_bitrate"
-            )
-            self.mv_hevc_quality = config_file.getint("Options", "mv_hevc_quality")
-            self.fov = config_file.getint("Options", "fov")
-            self.frame_rate = config_file.get("Options", "frame_rate")
-            self.resolution = config_file.get("Options", "resolution")
-            self.keep_files = config_file.getboolean("Options", "keep_files")
-            self.start_stage = Stage.get_stage(
-                config_file.getint("Options", "start_stage")
-            )
-            self.remove_original = config_file.getboolean("Options", "remove_original")
-            self.swap_eyes = config_file.getboolean("Options", "swap_eyes")
-            self.skip_subtitles = config_file.getboolean("Options", "skip_subtitles")
-            self.crop_black_bars = config_file.getboolean("Options", "crop_black_bars")
-            self.output_commands = config_file.getboolean("Options", "output_commands")
-            self.software_encoder = config_file.getboolean(
-                "Options", "software_encoder"
-            )
-            self.fx_upscale = config_file.getboolean("Options", "fx_upscale")
+        if config_file.has_section("Options"):
+            for key, value in config_file.items("Options"):
+                if key in self.__dict__:
+                    attribute_type = type(getattr(self, key))
+                    if attribute_type == bool:
+                        setattr(self, key, config_file.getboolean("Options", key))
+                    elif attribute_type == int:
+                        setattr(self, key, config_file.getint("Options", key))
+                    elif attribute_type == Stage:
+                        stage_value = config_file.get("Options", key).split(" - ")[0]
+                        setattr(self, key, Stage.get_stage(int(stage_value)))
+                    else:
+                        setattr(self, key, config_file.get("Options", key))
 
     def parse_args(self) -> None:
         parser = argparse.ArgumentParser(

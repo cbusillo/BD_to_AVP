@@ -21,8 +21,8 @@ from bd_to_avp.modules.video import (
 
 
 def process() -> None:
-    if config.source_folder:
-        for source in config.source_folder.rglob("*"):
+    if config.source_folder_path:
+        for source in config.source_folder_path.rglob("*"):
             if (
                 not source.is_file()
                 or source.suffix.lower()
@@ -38,6 +38,8 @@ def process() -> None:
                 process_each()
             except (ValueError, FileExistsError, subprocess.CalledProcessError):
                 continue
+
+        config.source_path = None
 
     else:
         process_each()

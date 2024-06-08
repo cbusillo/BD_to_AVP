@@ -9,8 +9,9 @@ from bd_to_avp.modules.config import config
 def main() -> None:
     is_gui = len(sys.argv) == 1
 
-    if not install.check_install():
+    if not install.check_install_version():
         install.install_deps(is_gui)
+        config.save_version()
 
     if is_gui:
         start_gui()

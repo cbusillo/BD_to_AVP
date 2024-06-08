@@ -55,11 +55,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("3D Blu-ray (and mts) to AVP")
         self.setGeometry(100, 100, 800, 600)
 
-        config.crop_black_bars = True
-        config.output_commands = True
-        config.fx_upscale = True
-        config.overwrite = True
-
         # Create the main layout
         main_layout = QVBoxLayout()
 
@@ -71,7 +66,7 @@ class MainWindow(QMainWindow):
 
         self.save_config_button = QPushButton("Save Config")
         # noinspection PyUnresolvedReferences
-        self.save_config_button.clicked.connect(config.save_config)
+        self.save_config_button.clicked.connect(self.save_config_to_file)
         save_load_layout.addWidget(self.save_config_button)
 
         main_layout.addLayout(save_load_layout)
@@ -239,7 +234,7 @@ class MainWindow(QMainWindow):
     def load_config_and_update_ui(self) -> None:
         config.load_config()
         self.source_folder_entry.setText(
-            config.source_folder.as_posix() if config.source_folder else ""
+            config.source_folder_path.as_posix() if config.source_folder_path else ""
         )
         self.source_file_entry.setText(
             config.source_path.as_posix() if config.source_path else ""
@@ -286,7 +281,17 @@ class MainWindow(QMainWindow):
             self.process_button.setText("Start Processing")
 
     def start_processing(self) -> None:
-        config.source_folder = (
+        self.save_config()
+
+        # Start the processing thread
+        self.processing_thread.start()
+
+    def save_config_to_file(self) -> None:
+        self.save_config()
+        config.save_config()
+
+    def save_config(self) -> None:
+        config.source_folder_path = (
             Path(self.source_folder_entry.text())
             if self.source_folder_entry.text()
             else None
@@ -312,12 +317,8 @@ class MainWindow(QMainWindow):
         config.remove_original = self.remove_original_checkbox.isChecked()
         config.overwrite = self.overwrite_checkbox.isChecked()
         config.transcode_audio = self.transcode_audio_checkbox.isChecked()
-
         selected_stage = int(self.start_stage_combobox.currentText().split(" - ")[0])
         config.start_stage = Stage.get_stage(selected_stage)
-
-        # Start the processing thread
-        self.processing_thread.start()
 
     def stop_processing(self) -> None:
         self.processing_thread.terminate()

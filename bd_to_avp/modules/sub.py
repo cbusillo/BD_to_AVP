@@ -5,6 +5,8 @@ import ffmpeg  # type: ignore
 from babelfish import Language  # type: ignore
 from pgsrip import pgsrip, Options, Sup  # type: ignore
 
+from bd_to_avp.modules.config import config
+
 
 def get_subtitle_tracks(input_path: Path) -> list[dict]:
     subtitle_format_extensions = {
@@ -40,7 +42,7 @@ def convert_sup_to_srt(sup_subtitle_path: Path) -> Path:
         languages={Language("eng")}, overwrite=True, one_per_lang=False
     )
     print(f"Converting {sup_subtitle_path} to SRT")
-    os.environ["TESSDATA_PREFIX"] = str(Path(__file__).parent / "bin")
+    os.environ["TESSDATA_PREFIX"] = str(config.SCRIPT_PATH / "bin")
     pgsrip.rip(sub_file, sub_options)
 
     return sup_subtitle_path.with_suffix(".srt")
