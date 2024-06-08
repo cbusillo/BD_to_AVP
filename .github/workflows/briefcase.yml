@@ -57,21 +57,22 @@ jobs:
           poetry run briefcase package --no-notarize -i "${{ secrets.DEV_ID }}"
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      - name: Extract version
+        id: extract_version
+        run: |
+          echo "::set-output name=version::$(grep -oP '(?<=version = ")[^"]*' pyproject.toml)"
       - name: Notarize application
         run: |
           xcrun notarytool submit "dist/Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.dmg" --keychain-profile "${{ secrets.KEYCHAIN_NAME }}" --wait
+      - name: Staple notarization ticket
+        run: |
+          xcrun stapler staple "dist/Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.dmg"
       - name: Upload log file
         uses: actions/upload-artifact@v3
         if: failure()
         with:
           name: notarization-log
           path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/
-
-      - name: Extract version
-        id: extract_version
-        run: |
-          echo "::set-output name=version::$(grep -oP '(?<=version = ")[^"]*' pyproject.toml)"
-
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
