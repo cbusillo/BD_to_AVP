@@ -11,7 +11,7 @@ def main() -> None:
 
     if not install.check_install_version():
         install.install_deps(is_gui)
-        config.save_version()
+        config.save_version_from_file()
 
     if is_gui:
         start_gui()

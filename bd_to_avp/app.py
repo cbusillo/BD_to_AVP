@@ -232,7 +232,7 @@ class MainWindow(QMainWindow):
         )
 
     def load_config_and_update_ui(self) -> None:
-        config.load_config()
+        config.load_config_from_file()
         self.source_folder_entry.setText(
             config.source_folder_path.as_posix() if config.source_folder_path else ""
         )
@@ -288,7 +288,7 @@ class MainWindow(QMainWindow):
 
     def save_config_to_file(self) -> None:
         self.save_config()
-        config.save_config()
+        config.save_config_to_file()
 
     def save_config(self) -> None:
         config.source_folder_path = (

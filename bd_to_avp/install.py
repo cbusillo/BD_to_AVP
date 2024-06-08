@@ -89,7 +89,7 @@ def check_mp4box(is_gui: bool) -> None:
 
 
 def check_install_version() -> bool:
-    installed_version = config.load_version()
+    installed_version = config.load_version_from_file()
     print(
         f"Installed bd-to-avp version: {installed_version}\nbd-to-avp version: {config.code_version}"
     )
