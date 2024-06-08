@@ -212,6 +212,7 @@ def install_mp4box(is_gui: bool) -> None:
 
     command = [
         "sudo",
+        "-A",
         "installer",
         "-pkg",
         mp4box_file_path.as_posix(),
