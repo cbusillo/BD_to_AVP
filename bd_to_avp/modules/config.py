@@ -1,5 +1,6 @@
 import argparse
 import configparser
+import tomllib
 
 from enum import Enum, auto
 from importlib.metadata import version
@@ -114,24 +115,30 @@ class Config:
         self.software_encoder = False
         self.fx_upscale = False
 
-        self.installed_version: str | None = None
-
     @property
     def code_version(self) -> str:
+        pyproject_path = Path("pyproject.toml")
+        if pyproject_path.exists():
+            with open(pyproject_path, "rb") as pyproject_file:
+                pyproject_data = tomllib.load(pyproject_file)
+
+            return pyproject_data["tool"]["poetry"]["version"]
+
         project_version = version(__package__.split(".")[0])
         return project_version
 
-    def load_version(self) -> str | None:
+    @staticmethod
+    def load_version_from_file() -> str | None:
         config_file = configparser.ConfigParser()
         config_file.read(CONFIG_FILE)
         if (
             "Application" in config_file
             and "installed_version" in config_file["Application"]
         ):
-            self.installed_version = config_file.get("Application", "installed_version")
-        return self.installed_version
+            return config_file.get("Application", "installed_version")
+        return None
 
-    def save_version(self) -> None:
+    def save_version_from_file(self) -> None:
         config_file = configparser.ConfigParser()
         config_file.read(CONFIG_FILE)
 
@@ -142,7 +149,7 @@ class Config:
         with open(CONFIG_FILE, "w") as configfile:
             config_file.write(configfile)
 
-    def save_config(self) -> None:
+    def save_config_to_file(self) -> None:
         config_file = configparser.ConfigParser()
         config_file.read(CONFIG_FILE)
 
@@ -152,9 +159,7 @@ class Config:
             config_file.add_section("Options")
 
         for key, value in self.__dict__.items():
-            if key in ["installed_version", "code_version"]:
-                continue
-            elif "_path" in key:
+            if "_path" in key:
                 if not value:
                     continue
                 config_file.set("Paths", key, value.as_posix())
@@ -166,7 +171,7 @@ class Config:
         with open(CONFIG_FILE, "w") as configfile:
             config_file.write(configfile)
 
-    def load_config(self) -> None:
+    def load_config_from_file(self) -> None:
         config_file = configparser.ConfigParser()
         config_file.read(CONFIG_FILE)
 
