@@ -60,7 +60,7 @@ jobs:
       - name: Extract version
         id: extract_version
         run: |
-          echo "::set-output name=version::$(grep -oP '(?<=version = ")[^"]*' pyproject.toml)"
+          echo "::set-output name=version::$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"
       - name: Notarize application
         run: |
           xcrun notarytool submit "dist/Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.dmg" --keychain-profile "${{ secrets.KEYCHAIN_NAME }}" --wait
