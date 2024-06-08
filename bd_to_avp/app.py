@@ -1,13 +1,17 @@
 import sys
 from pathlib import Path
 
-from PyQt6.QtGui import QTextCursor
+
+from PyQt6.QtGui import QIcon, QTextCursor
 from PyQt6.QtWidgets import (
     QApplication,
+    QDialog,
     QMainWindow,
     QLabel,
     QLineEdit,
     QPushButton,
+    QSplitter,
+    QStatusBar,
     QVBoxLayout,
     QHBoxLayout,
     QWidget,
@@ -17,14 +21,12 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QComboBox,
 )
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, Qt, pyqtSignal
 
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.disc import DiscInfo
 from bd_to_avp.process import process
 from bd_to_avp.modules.util import OutputHandler, Spinner
-
-DEFAULT_OUTPUT_ROOT_PATH = Path.home() / "Movies"
 
 
 class ProcessingSignals(QObject):
@@ -49,6 +51,48 @@ class ProcessingThread(QThread):
             self.signals.progress_updated.emit("Process Completed.")
 
 
+class CustomWarningDialog(QDialog):
+    def __init__(self, parent: QWidget | None = None, message: str = "") -> None:
+        super().__init__(parent)
+
+        self.setWindowTitle("Warning")
+        self.setFixedSize(400, 100)
+
+        # Setup layout
+        layout = QVBoxLayout()
+        content_layout = QHBoxLayout()
+
+        # Icon
+        icon_label = QLabel()
+        icon = QIcon.fromTheme("dialog-warning")
+        icon_label.setPixmap(icon.pixmap(64, 64))
+        content_layout.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignTop)
+
+        # Message
+        message_label = QLabel(message)
+        message_label.setWordWrap(True)
+        content_layout.addWidget(
+            message_label, 1, Qt.AlignmentFlag.AlignLeft
+        )  # Add message to layout
+
+        layout.addLayout(content_layout)
+
+        # OK Button
+        ok_button = QPushButton("OK")
+        # noinspection PyUnresolvedReferences
+        ok_button.clicked.connect(self.accept)
+        layout.addWidget(ok_button)
+
+        self.setLayout(layout)
+
+        # Center dialog on parent window
+        if parent is not None:
+            parent_center = parent.frameGeometry().center()
+            dialog_x = parent_center.x() - self.width() // 2
+            dialog_y = parent_center.y() - self.height() // 2
+            self.move(dialog_x, dialog_y)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -56,7 +100,9 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 800, 600)
 
         # Create the main layout
-        main_layout = QVBoxLayout()
+        main_widget = QWidget()
+        main_layout = QVBoxLayout(main_widget)
+        main_layout.setSpacing(10)
 
         save_load_layout = QHBoxLayout()
         self.load_config_button = QPushButton("Load Config")
@@ -72,26 +118,27 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(save_load_layout)
 
         # Source and output folder selection
-        source_layout = QHBoxLayout()
+        source_folder_layout = QHBoxLayout()
         self.source_folder_label = QLabel("Source Folder")
         self.source_folder_entry = QLineEdit()
         self.source_folder_button = QPushButton("Browse")
         # noinspection PyUnresolvedReferences
         self.source_folder_button.clicked.connect(self.browse_source_folder)
-        source_layout.addWidget(self.source_folder_label)
-        source_layout.addWidget(self.source_folder_entry)
-        source_layout.addWidget(self.source_folder_button)
+        source_folder_layout.addWidget(self.source_folder_label)
+        source_folder_layout.addWidget(self.source_folder_entry)
+        source_folder_layout.addWidget(self.source_folder_button)
+        main_layout.addLayout(source_folder_layout)
 
+        source_file_layout = QHBoxLayout()
         self.source_file_label = QLabel("Source File")
         self.source_file_entry = QLineEdit()
         self.source_file_button = QPushButton("Browse")
         # noinspection PyUnresolvedReferences
         self.source_file_button.clicked.connect(self.browse_source_file)
-        source_layout.addWidget(self.source_file_label)
-        source_layout.addWidget(self.source_file_entry)
-        source_layout.addWidget(self.source_file_button)
-
-        main_layout.addLayout(source_layout)
+        source_file_layout.addWidget(self.source_file_label)
+        source_file_layout.addWidget(self.source_file_entry)
+        source_file_layout.addWidget(self.source_file_button)
+        main_layout.addLayout(source_file_layout)
 
         output_layout = QHBoxLayout()
         self.output_folder_label = QLabel("Output Folder")
@@ -102,8 +149,6 @@ class MainWindow(QMainWindow):
         output_layout.addWidget(self.output_folder_label)
         output_layout.addWidget(self.output_folder_entry)
         output_layout.addWidget(self.output_folder_button)
-
-        self.output_folder_entry.setText(DEFAULT_OUTPUT_ROOT_PATH.as_posix())
 
         main_layout.addLayout(output_layout)
 
@@ -211,18 +256,31 @@ class MainWindow(QMainWindow):
         self.process_button.clicked.connect(self.toggle_processing)
         main_layout.addWidget(self.process_button)
 
+        self.processing_output_textedit = QTextEdit()
+        self.processing_output_textedit.setReadOnly(True)
+
+        # Create a QSplitter and add the main widget and processing output widget
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.addWidget(main_widget)
+        self.splitter.addWidget(self.processing_output_textedit)
+
+        # Set the initial sizes of the splitter sections
+        self.splitter.setSizes([400, 400])  # Adjust the sizes as needed
+
+        # Set the QSplitter as the central widget of the main window
+        self.setCentralWidget(self.splitter)
+
         # Processing status and output
         self.processing_status_label = QLabel("Processing Status")
         main_layout.addWidget(self.processing_status_label)
+        self.processing_status_label.hide()
 
-        self.processing_output_textedit = QTextEdit()
-        self.processing_output_textedit.setReadOnly(True)
-        main_layout.addWidget(self.processing_output_textedit)
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.hide()
 
-        # Set the main layout in a central widget
-        central_widget = QWidget()
-        central_widget.setLayout(main_layout)
-        self.setCentralWidget(central_widget)
+        # noinspection PyUnresolvedReferences
+        self.splitter.splitterMoved.connect(self.update_status_bar)
 
         # Create the processing thread
         self.processing_thread = ProcessingThread()
@@ -230,6 +288,24 @@ class MainWindow(QMainWindow):
         self.processing_thread.signals.progress_updated.connect(
             self.update_processing_output
         )
+
+    def update_status_bar(self) -> None:
+        central_widget = self.centralWidget()
+        if not central_widget:
+            return
+        # noinspection PyUnresolvedReferences
+        splitter_sizes = central_widget.sizes()  # type: ignore
+        if splitter_sizes[-1] == 0:
+            last_line = (
+                self.processing_output_textedit.toPlainText().strip().split("\n")[-1]
+            )
+            self.status_bar.showMessage(last_line)
+            self.processing_status_label.show()
+            self.status_bar.show()
+        else:
+            self.status_bar.clearMessage()
+            self.processing_status_label.hide()
+            self.status_bar.hide()
 
     def load_config_and_update_ui(self) -> None:
         config.load_config_from_file()
@@ -272,12 +348,24 @@ class MainWindow(QMainWindow):
         if output_folder:
             self.output_folder_entry.setText(output_folder)
 
+    def popup_warning_centered(self, message: str) -> None:
+        dialog = CustomWarningDialog(self, message)
+        dialog.exec()  # Show dialog as modal
+
     def toggle_processing(self) -> None:
         if self.process_button.text() == "Start Processing":
+            if (
+                not self.source_folder_entry.text()
+                and not self.source_file_entry.text()
+            ):
+                self.popup_warning_centered("Source Folder or Source File must be set.")
+                return
+            self.process_button.setEnabled(False)
             self.start_processing()
-            self.process_button.setText("Stop Processing")
+            # self.process_button.setText("Stop Processing")
         else:
             self.stop_processing()
+            self.process_button.setEnabled(True)
             self.process_button.setText("Start Processing")
 
     def start_processing(self) -> None:
@@ -325,6 +413,7 @@ class MainWindow(QMainWindow):
 
     def update_processing_output(self, message: str) -> None:
         cursor = self.processing_output_textedit.textCursor()
+        self.status_bar.showMessage(message.split("\n")[-1])
 
         if any(symbol in message for symbol in Spinner.symbols):
             cursor.movePosition(QTextCursor.MoveOperation.End)
