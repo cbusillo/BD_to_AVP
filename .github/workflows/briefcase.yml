@@ -67,7 +67,13 @@ jobs:
         id: extract_version
         run: |
           echo "::set-output name=version::$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"
+      - name: Validate App
+        run: |
+          xcrun altool --validate-app -f dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.dmg -t osx -u ${{ secrets.APPLE_ID }} -p ${{ secrets.KEYCHAIN_PASSWORD }} --output-format xml
 
+      - name: Upload App to TestFlight
+        run: |
+          xcrun altool --upload-app -f dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.dmg -t osx -u ${{ secrets.APPLE_ID }} -p ${{ secrets.KEYCHAIN_PASSWORD }} --output-format xml
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
