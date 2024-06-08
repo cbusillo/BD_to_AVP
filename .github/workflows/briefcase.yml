@@ -50,7 +50,7 @@ jobs:
       - name: Store Notarization Credentials
         run: |
           echo "${{ secrets.KEYCHAIN_PASSWORD }}" | xcrun altool --store-password-in-keychain-item "${{ secrets.KEYCHAIN_NAME }}" -u "${{ secrets.APPLE_ID }}" -p -
-          xcrun notarytool store-credentials "${{ secrets.KEYCHAIN_NAME }}" --apple-id "${{ secrets.APPLE_ID }}" --password "${{ secrets.KEYCHAIN_PASSWORD }}" --team-id "${{ secrets.DEV_ID }}"
+          xcrun notarytool store-credentials "${{ secrets.KEYCHAIN_NAME }}" --apple-id "${{ secrets.APPLE_ID }}" --password "${{ secrets.KEYCHAIN_PASSWORD }}" --team-id "${{ secrets.TEAM_ID }}"
       - name: Package application
         run: |
           poetry run briefcase create
