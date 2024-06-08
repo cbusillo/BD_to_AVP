@@ -59,6 +59,9 @@ def install_deps(is_gui: bool) -> None:
     else:
         update_brew(is_gui)
 
+    Path("/Applications/Makemkv.app").unlink(missing_ok=True)
+    Path("/Applications/Wine Stable.app").unlink(missing_ok=True)
+
     for package in config.BREW_CASKS_TO_INSTALL:
         manage_brew_package(package, is_gui, True, "uninstall")
         manage_brew_package(package, is_gui, True)
