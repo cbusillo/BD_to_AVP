@@ -15,6 +15,7 @@ pyqt6 = "^6.7.0"
 toga = "^0.4.4"
 requests = "^2.32.3"
 
+psutil = "^5.9.8"
 [tool.poetry.group.dev.dependencies]
 black = "^24.2.0"
 ruff = "^0.4.7"
