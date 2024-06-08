@@ -69,12 +69,39 @@ def install_deps(is_gui: bool) -> None:
     for package in config.BREW_PACKAGES_TO_INSTALL:
         manage_brew_package(package, is_gui)
 
+    if not check_rosetta():
+        install_rosetta(is_gui)
+
     check_mp4box(is_gui)
 
     wine_boot()
 
     if pw_file_path:
         pw_file_path.unlink()
+
+
+def check_rosetta() -> bool:
+    process = subprocess.run(
+        ["arch", "-x86_64", "echo", "hello"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return process.stdout.strip() == "hello"
+
+
+def install_rosetta(is_gui: bool) -> None:
+    print("Installing Rosetta...")
+    process = subprocess.run(
+        ["softwareupdate", "--install-rosetta", "--agree-to-license"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    if process.returncode != 0:
+        on_error_process("Rosetta", process, is_gui)
+    print("Rosetta installed.")
 
 
 def check_mp4box(is_gui: bool) -> None:
