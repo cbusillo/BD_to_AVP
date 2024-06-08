@@ -34,14 +34,16 @@ jobs:
           poetry install --no-interaction
       - name: Install certificate
         run: |
-          security delete-keychain build.keychain || true
+          KEYCHAIN_PATH=$(pwd)/build.keychain
+          rm -f $KEYCHAIN_PATH
+          security delete-keychain $KEYCHAIN_PATH || true
           echo "${{ secrets.CERTIFICATE }}" | base64 --decode > certificate.p12
-          security create-keychain -p runner build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p runner build.keychain
-          security import certificate.p12 -k build.keychain -P "${{ secrets.CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k runner build.keychain
-          security find-certificate -a -p build.keychain
+          security create-keychain -p runner $KEYCHAIN_PATH
+          security default-keychain -s $KEYCHAIN_PATH
+          security unlock-keychain -p runner $KEYCHAIN_PATH
+          security import certificate.p12 -k $KEYCHAIN_PATH -P "${{ secrets.CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k runner $KEYCHAIN_PATH
+          security find-certificate -a -p $KEYCHAIN_PATH
         env:
           CERTIFICATE: ${{ secrets.CERTIFICATE }}
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
