@@ -41,9 +41,8 @@ jobs:
           security create-keychain -p runner $KEYCHAIN_PATH
           security default-keychain -s $KEYCHAIN_PATH
           security unlock-keychain -p runner $KEYCHAIN_PATH
-          security import certificate.p12 -k $KEYCHAIN_PATH -P "${{ secrets.CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
+          security import certificate.p12 -k $KEYCHAIN_PATH -P "${{ secrets.CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign --options runtime
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k runner $KEYCHAIN_PATH
-
         env:
           CERTIFICATE: ${{ secrets.CERTIFICATE }}
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
@@ -55,9 +54,12 @@ jobs:
         run: |
           poetry run briefcase create
           poetry run briefcase build
-          poetry run briefcase package -i "${{ secrets.DEV_ID }}"
+          poetry run briefcase package --no-notarize -i "${{ secrets.DEV_ID }}"
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      - name: Notarize application
+        run: |
+          xcrun notarytool submit "dist/Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.dmg" --keychain-profile "${{ secrets.KEYCHAIN_NAME }}" --wait
       - name: Upload log file
         uses: actions/upload-artifact@v3
         if: failure()
