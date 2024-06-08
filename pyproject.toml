@@ -41,7 +41,7 @@ organization = "Shiny Computers"
 url = "https://github.com/cbusillo/BD_to_AVP"
 
 
-[tool.briefcase.app.bd_to_avp]
+[tool.briefcase.app.bd-to-avp]
 formal_name = "Blu-ray to AVP"
 description = "Convert 3D Blu-ray Discs (and mts) to MV-HEVC Apple Vision compatible files"
 sources = ["bd_to_avp"]
