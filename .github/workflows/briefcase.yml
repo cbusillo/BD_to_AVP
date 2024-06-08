@@ -36,14 +36,14 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k runner build.keychain
         env:
           CERTIFICATE: ${{ secrets.DEV_CERTIFICATE }}
-          CERTIFICATE_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
       - name: Package application
         run: |
           poetry run briefcase create
           poetry run briefcase build
           poetry run briefcase package -i "${{ secrets.DEV_ID }}"
         env:
-          KEYCHAIN_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
 
       - name: Extract version
         id: extract_version
