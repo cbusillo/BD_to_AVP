@@ -45,6 +45,16 @@ def prompt_for_password() -> Path:
     return pw_file_path
 
 
+def add_homebrew_to_path() -> None:
+    with open(Path.home() / ".zshrc", "a") as zshrc:
+        zshrc.write(f'export PATH="{config.HOMEBREW_PREFIX_BIN}:$PATH"\n')
+    os.system("source ~/.zshrc")
+
+
+def get_current_path():
+    return subprocess.check_output("echo $PATH", shell=True).decode().strip()
+
+
 def install_deps(is_gui: bool) -> None:
     if not is_arm64():
         raise ValueError("This script is only supported on Apple Silicon Macs.")
@@ -54,10 +64,13 @@ def install_deps(is_gui: bool) -> None:
     if is_gui:
         pw_file_path = prompt_for_password()
 
-    if not Path("/opt/homebrew/bin/brew").exists():
+    if not Path(config.HOMEBREW_PREFIX_BIN / "brew").exists():
         install_brew(is_gui)
     else:
         update_brew(is_gui)
+
+    if config.HOMEBREW_PREFIX_BIN.as_posix() not in get_current_path():
+        add_homebrew_to_path()
 
     shutil.rmtree("/Applications/MakeMKV.app", ignore_errors=True)
     shutil.rmtree("/Applications/Wine Stable.app", ignore_errors=True)
