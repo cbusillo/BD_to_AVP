@@ -26,7 +26,17 @@ jobs:
       - name: Install dependencies
         run: |
           poetry install --no-interaction
-
+      - name: Install certificate
+        run: |
+          echo "${{ secrets.CERTIFICATE }}" | base64 --decode > certificate.p12
+          security create-keychain -p runner build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p runner build.keychain
+          security import certificate.p12 -k build.keychain -P "${{ secrets.CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k runner build.keychain
+        env:
+          CERTIFICATE: ${{ secrets.CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
       - name: Package application
         run: |
           poetry run briefcase create
