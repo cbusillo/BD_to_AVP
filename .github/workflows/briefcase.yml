@@ -1,0 +1,63 @@
+name: Package with Briefcase and Create Release
+
+on:
+  push:
+    branches:
+      - release
+
+jobs:
+  package:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.12'
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.poetry/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: |
+          poetry install --no-interaction
+
+      - name: Package application
+        run: |
+          poetry run briefcase create
+          poetry run briefcase build
+          poetry run briefcase package -i "${{ secrets.DEV_ID }}"
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+
+      - name: Extract version
+        id: extract_version
+        run: |
+          echo "::set-output name=version::$(grep -oP '(?<=version = ")[^"]*' pyproject.toml)"
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
+
+      - name: Upload Release Asset
+        id: upload-release-asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.dmg
+          asset_name: Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.dmg
+          asset_content_type: application/x-diskcopy
