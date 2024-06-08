@@ -42,31 +42,10 @@ echo "Homebrew installed at $BREW_PATH."
 echo "Updating Homebrew..."
 "$BREW_PATH/brew" update
 
-check_app_or_install() {
-    local app_name="$1"
-    local cask_name="$2"
-    local app_path="/Applications/$app_name.app"
-
-    if [ -d "$app_path" ]; then
-        echo "$app_name is already installed at $app_path."
-    else
-        echo "$app_name not found in /Applications. Attempting to install via Homebrew Cask..."
-        "$BREW_PATH/brew" install --cask --no-quarantine "$cask_name" || handle_error "Failed to install $cask_name"
-    fi
-}
 
 echo "Installing dependencies..."
-"$BREW_PATH/brew" install python@3.12 ffmpeg mkvtoolnix tesseract finnvoor/tools/fx-upscale --no-quarantine 2>/dev/null || handle_error "Failed to install dependencies"
+"$BREW_PATH/brew" install python@3.12  2>/dev/null || handle_error "Failed to install dependencies"
 
-if [ -d "/Applications/MakeMKV.app" ]; then
-  "$BREW_PATH/brew" uninstall "makemkv"
-fi
-
-check_app_or_install "MakeMKV" "makemkv"
-check_app_or_install "Wine Stable" "wine-stable"
-if [ ! -L "$BREW_PATH/wine" ]; then
-    ln -s /Applications/Wine\ Stable.app/Contents/Resources/wine/bin/wine "$BREW_PATH/wine"
-fi
 
 echo "Creating a virtual environment for BD_to_AVP..."
 VENV_PATH="$HOME/.bd_to_avp_venv"
@@ -99,47 +78,4 @@ else
     /usr/sbin/softwareupdate --install-rosetta --agree-to-license
 fi
 
-check_mp4box_version() {
-    local required_version="2.2.1"
-    local info_plist="/Applications/GPAC.app/Contents/Info.plist"
-    local installed_version=""
 
-    if [ -f "$info_plist" ]; then
-        installed_version=$(grep -A1 "<key>CFBundleShortVersionString</key>" "$info_plist" | grep -o '2\.2\.1')
-
-        if [ "$installed_version" == "$required_version" ]; then
-            echo "MP4Box $required_version is already installed."
-            return 0
-        else
-            echo "MP4Box is installed, but the version is not $required_version."
-            return 1
-        fi
-    else
-        echo "MP4Box is not installed."
-        return 1
-    fi
-}
-
-install_mp4box() {
-    local pkg_path="$VENV_PATH/lib/python3.12/site-packages/bd_to_avp/installers/gpac-2.2.1.pkg"
-
-    if check_mp4box_version; then
-        echo "Skipping MP4Box installation."
-    else
-        if [ -d "/Applications/GPAC.app" ]; then
-            echo "Removing existing MP4Box installation..."
-            sudo rm -rf "/Applications/GPAC.app"
-        fi
-
-        echo "Installing MP4Box 2.2.1..."
-        sudo installer -pkg "$pkg_path" -target / || handle_error "Failed to install MP4Box"
-    fi
-}
-
-install_mp4box
-
-$BREW_PATH/wineboot &> /dev/null;
-
-echo "BD_to_AVP environment setup complete. Refresh your terminal's environment to use new paths."
-echo "1. Refresh environment: source $HOME/.zshrc"
-echo "2. Execute BD_to_AVP: bd-to-avp"
