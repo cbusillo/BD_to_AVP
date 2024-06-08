@@ -57,13 +57,12 @@ jobs:
           poetry run briefcase package -i "${{ secrets.DEV_ID }}"
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-      - name: Upload log file
-        uses: actions/upload-artifact@v3
-        if: failure()
-        with:
-          name: notarization-log
-          path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/
-
+#      - name: Upload log file
+#        uses: actions/upload-artifact@v3
+#        if: failure()
+#        with:
+#          name: notarization-log
+#          path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/
       - name: Extract version
         id: extract_version
         run: |
