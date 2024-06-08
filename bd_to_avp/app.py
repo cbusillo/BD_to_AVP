@@ -178,7 +178,7 @@ class MainWindow(QMainWindow):
         self.software_encoder_checkbox.setChecked(config.software_encoder)
         config_layout.addWidget(self.software_encoder_checkbox)
 
-        self.fx_upscale_checkbox = QCheckBox("AI FX Upscale (2x resolution")
+        self.fx_upscale_checkbox = QCheckBox("AI FX Upscale (2x resolution)")
         self.fx_upscale_checkbox.setChecked(config.fx_upscale)
         config_layout.addWidget(self.fx_upscale_checkbox)
 
