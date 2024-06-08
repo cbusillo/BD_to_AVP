@@ -49,7 +49,7 @@ jobs:
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
       - name: Store Notarization Credentials
         run: |
-          echo "${{ secrets.KEYCHAIN_PASSWORD }}" | xcrun altool --store-password-in-keychain-item "AC_PASSWORD" -p -
+          echo "${{ secrets.KEYCHAIN_PASSWORD }}" | xcrun altool --store-password-in-keychain-item "AC_PASSWORD" -u "${{ secrets.APPLE_ID }}" -p -
       - name: Package application
         run: |
           poetry run briefcase create
