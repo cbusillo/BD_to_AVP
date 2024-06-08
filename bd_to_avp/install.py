@@ -54,10 +54,6 @@ def install_deps(is_gui: bool) -> None:
     if is_gui:
         pw_file_path = prompt_for_password()
 
-    if Path("~/.bd_to_avp_venv").exists():
-        print("Removing old install...")
-        shutil.rmtree("~/.bd_to_avp_venv", ignore_errors=True)
-
     if not Path("/opt/homebrew/bin/brew").exists():
         install_brew(is_gui)
     else:
