@@ -7,7 +7,7 @@ on:
 
 jobs:
   package:
-    runs-on: macos-latest
+    runs-on: self-hosted
 
     steps:
       - name: Checkout code
