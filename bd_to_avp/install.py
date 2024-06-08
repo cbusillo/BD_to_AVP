@@ -201,11 +201,20 @@ def install_mp4box(is_gui: bool) -> None:
     print("Installing MP4Box...")
     sudo_env = os.environ.copy()
 
+    response = requests.get(
+        "https://download.tsi.telecom-paristech.fr/gpac/release/2.2.1/gpac-2.2.1-rev0-gb34e3851-release-2.2.pkg"
+    )
+    if response.status_code != 200:
+        on_error_string("MP4Box", "Failed to download MP4Box installer.", is_gui)
+    with tempfile.NamedTemporaryFile(suffix=".pkg", delete=False) as mp4box_file:
+        mp4box_file.write(response.content)
+    mp4box_file_path = Path(mp4box_file.name)
+
     command = [
         "sudo",
         "installer",
         "-pkg",
-        (config.SCRIPT_PATH / "installers" / "gpac-2.2.1.pkg").as_posix(),
+        mp4box_file_path.as_posix(),
         "-target",
         "/",
     ]

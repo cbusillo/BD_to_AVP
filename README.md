@@ -11,7 +11,7 @@ from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The tool also injects 360° metada
 To quickly install or update `BD_to_AVP`, run the following command in your terminal:
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/release/bd_to_avp/installers/installer.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/release/installer.sh)"
 ```
 
 ## Prerequisites
