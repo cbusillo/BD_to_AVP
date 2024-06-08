@@ -1,5 +1,6 @@
 import argparse
 import configparser
+import tomllib
 
 from enum import Enum, auto
 from importlib.metadata import version
@@ -114,10 +115,15 @@ class Config:
         self.software_encoder = False
         self.fx_upscale = False
 
-        self.installed_version: str | None = None
-
     @property
     def code_version(self) -> str:
+        pyproject_path = Path("pyproject.toml")
+        if pyproject_path.exists():
+            with open(pyproject_path, "rb") as pyproject_file:
+                pyproject_data = tomllib.load(pyproject_file)
+
+            return pyproject_data["tool"]["poetry"]["version"]
+
         project_version = version(__package__.split(".")[0])
         return project_version
 
