@@ -1,5 +1,5 @@
 #!/bin/zsh
-#/bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/release/installer.sh)"
+#/bin/zsh -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/release/bd_to_avp/installers/installer.sh)"
 
 handle_error() {
     echo "Error: $1"
@@ -121,7 +121,7 @@ check_mp4box_version() {
 }
 
 install_mp4box() {
-    local pkg_path="$VENV_PATH/lib/python3.12/site-packages/bd_to_avp/bin/gpac-2.2.1.pkg"
+    local pkg_path="$VENV_PATH/lib/python3.12/site-packages/bd_to_avp/installers/gpac-2.2.1.pkg"
 
     if check_mp4box_version; then
         echo "Skipping MP4Box installation."
