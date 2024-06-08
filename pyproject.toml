@@ -14,8 +14,8 @@ tesseract = "^0.1.3"
 pyqt6 = "^6.7.0"
 toga = "^0.4.4"
 requests = "^2.32.3"
-
 psutil = "^5.9.8"
+
 [tool.poetry.group.dev.dependencies]
 black = "^24.2.0"
 ruff = "^0.4.7"
@@ -23,6 +23,7 @@ ruff-lsp = "^0.0.53"
 mypy = "^1.9.0"
 briefcase = "^0.3.18"
 types-requests = "^2.32.0.20240602"
+types-psutil = "^5.9.5.20240516"
 
 [build-system]
 requires = ["poetry-core"]
