@@ -34,7 +34,6 @@ jobs:
           poetry install --no-interaction
       - name: Install certificate
         run: |
-          rm -f build.keychain
           security delete-keychain build.keychain || true
           echo "${{ secrets.CERTIFICATE }}" | base64 --decode > certificate.p12
           security create-keychain -p runner build.keychain
