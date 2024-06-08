@@ -35,7 +35,7 @@ jobs:
           security import certificate.p12 -k build.keychain -P "${{ secrets.CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k runner build.keychain
         env:
-          CERTIFICATE: ${{ secrets.DEV_CERTIFICATE }}
+          CERTIFICATE: ${{ secrets.CERTIFICATE }}
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
       - name: Package application
         run: |
