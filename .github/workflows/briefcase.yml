@@ -47,6 +47,9 @@ jobs:
         env:
           CERTIFICATE: ${{ secrets.CERTIFICATE }}
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+      - name: Store Notarization Credentials
+        run: |
+          echo "${{ secrets.KEYCHAIN_PASSWORD }}" | notarytool store-credentials MM5YXC7T6E
       - name: Package application
         run: |
           poetry run briefcase create
