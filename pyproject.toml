@@ -51,6 +51,7 @@ requires = [
     "tesseract",
     "setuptools",
     "requests",
+    "psutil",
 ]
 
 
