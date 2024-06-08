@@ -31,7 +31,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.briefcase]
 project_name = "Blu-ray to AVP"
-bundle = "com.shinycomputers.bd-to-avp"
+bundle = "com.shinycomputers"
 version = "0.2.14"
 architectures = ["arm64"]
 icon = "bd_to_avp/resources/app_icon"
