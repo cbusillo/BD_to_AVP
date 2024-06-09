@@ -11,10 +11,10 @@ pgsrip = "^0.1.9"
 setuptools = "^70.0.0"
 ffmpeg-python = "^0.2.0"
 tesseract = "^0.1.3"
-pyqt6 = "^6.7.0"
 toga = "^0.4.4"
 requests = "^2.32.3"
 psutil = "^5.9.8"
+pyside6 = "^6.7.1"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.2.0"
@@ -46,7 +46,7 @@ formal_name = "Blu-ray to AVP"
 description = "Convert 3D Blu-ray Discs (and mts) to MV-HEVC Apple Vision compatible files"
 sources = ["bd_to_avp"]
 requires = [
-    "PyQt6",
+    "pyside6",
     "ffmpeg-python",
     "pgsrip",
     "tesseract",

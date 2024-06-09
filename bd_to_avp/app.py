@@ -1,9 +1,8 @@
 import sys
 from pathlib import Path
 
-
-from PyQt6.QtGui import QFont, QIcon, QTextCursor
-from PyQt6.QtWidgets import (
+from PySide6.QtGui import QFont, QIcon, QTextCursor, QShortcut, QKeySequence
+from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QMainWindow,
@@ -21,7 +20,7 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QComboBox,
 )
-from PyQt6.QtCore import QObject, QThread, Qt, pyqtSignal
+from PySide6.QtCore import QObject, QThread, Qt, Signal
 
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.disc import DiscInfo
@@ -30,18 +29,17 @@ from bd_to_avp.modules.util import OutputHandler, Spinner
 
 
 class ProcessingSignals(QObject):
-    progress_updated = pyqtSignal(str)
+    progress_updated = Signal(str)
 
 
 class ProcessingThread(QThread):
-    error_occurred = pyqtSignal(str)
+    error_occurred = Signal(str)
 
     def __init__(
         self, main_window: "MainWindow", parent: QWidget | None = None
     ) -> None:
         super().__init__(parent)
         self.signals = ProcessingSignals()
-        # noinspection PyUnresolvedReferences
         self.output_handler = OutputHandler(self.signals.progress_updated.emit)
         self.main_window = main_window
 
@@ -51,11 +49,9 @@ class ProcessingThread(QThread):
         try:
             process()
         except (RuntimeError, ValueError) as error:
-            # noinspection PyUnresolvedReferences
             self.error_occurred.emit(str(error))
         finally:
             sys.stdout = sys.__stdout__
-            # noinspection PyUnresolvedReferences
             self.signals.progress_updated.emit("Process Completed.")
 
 
@@ -87,7 +83,6 @@ class CustomWarningDialog(QDialog):
 
         # OK Button
         ok_button = QPushButton("OK")
-        # noinspection PyUnresolvedReferences
         ok_button.clicked.connect(self.accept)
         layout.addWidget(ok_button)
 
@@ -127,7 +122,6 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(save_load_layout)
 
         self.read_from_disc_checkbox = QCheckBox("Read from Disc")
-        # noinspection PyUnresolvedReferences
         self.read_from_disc_checkbox.stateChanged.connect(self.toggle_read_from_disc)
         main_layout.addWidget(self.read_from_disc_checkbox)
 
@@ -136,7 +130,6 @@ class MainWindow(QMainWindow):
         self.source_folder_label = QLabel("Source Folder")
         self.source_folder_entry = QLineEdit()
         self.source_folder_button = QPushButton("Browse")
-        # noinspection PyUnresolvedReferences
         self.source_folder_button.clicked.connect(self.browse_source_folder)
         source_folder_layout.addWidget(self.source_folder_label)
         source_folder_layout.addWidget(self.source_folder_entry)
@@ -147,7 +140,6 @@ class MainWindow(QMainWindow):
         self.source_file_label = QLabel("Source File")
         self.source_file_entry = QLineEdit()
         self.source_file_button = QPushButton("Browse")
-        # noinspection PyUnresolvedReferences
         self.source_file_button.clicked.connect(self.browse_source_file)
         source_file_layout.addWidget(self.source_file_label)
         source_file_layout.addWidget(self.source_file_entry)
@@ -158,7 +150,6 @@ class MainWindow(QMainWindow):
         self.output_folder_label = QLabel("Output Folder")
         self.output_folder_entry = QLineEdit()
         self.output_folder_button = QPushButton("Browse")
-        # noinspection PyUnresolvedReferences
         self.output_folder_button.clicked.connect(self.browse_output_folder)
         output_layout.addWidget(self.output_folder_label)
         output_layout.addWidget(self.output_folder_entry)
@@ -302,16 +293,13 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
         self.status_bar.hide()
 
-        # noinspection PyUnresolvedReferences
         self.splitter.splitterMoved.connect(self.update_status_bar)
 
         # Create the processing thread
         self.processing_thread = ProcessingThread(main_window=self)
-        # noinspection PyUnresolvedReferences
         self.processing_thread.signals.progress_updated.connect(
             self.update_processing_output
         )
-        # noinspection PyUnresolvedReferences
         self.processing_thread.error_occurred.connect(self.handle_processing_error)
 
     def handle_processing_error(self, error: str) -> None:
@@ -331,11 +319,7 @@ class MainWindow(QMainWindow):
         self.source_file_button.setEnabled(not self.read_from_disc_checkbox.isChecked())
 
     def update_status_bar(self) -> None:
-        central_widget = self.centralWidget()
-        if not central_widget:
-            return
-        # noinspection PyUnresolvedReferences
-        splitter_sizes = central_widget.sizes()  # type: ignore
+        splitter_sizes = self.splitter.sizes()
         if splitter_sizes[-1] == 0:
             last_line = (
                 self.processing_output_textedit.toPlainText().strip().split("\n")[-1]
@@ -460,31 +444,33 @@ class MainWindow(QMainWindow):
         self.processing_thread.terminate()
 
     def update_processing_output(self, message: str) -> None:
-        cursor = self.processing_output_textedit.textCursor()
-        self.status_bar.showMessage(message.split("\n")[-1])
+        is_output_at_end = False
+        output_textedit = self.processing_output_textedit
+        output_textedit_scrollbar = output_textedit.verticalScrollBar()
+        if output_textedit_scrollbar:
+            if output_textedit_scrollbar.value() == output_textedit_scrollbar.maximum():
+                is_output_at_end = True
 
-        if any(symbol in message for symbol in Spinner.symbols):
+        last_line_of_textedit = output_textedit.toPlainText().strip().split("\n")[-1]
+        message_stripped = message.replace("".join(Spinner.symbols), "").strip()
+        last_line_stripped = last_line_of_textedit.replace(
+            "".join(Spinner.symbols), ""
+        ).strip()
+        if (
+            any(symbol in message for symbol in Spinner.symbols)
+            and any(symbol in last_line_of_textedit for symbol in Spinner.symbols)
+            and message_stripped == last_line_stripped
+        ):
+            current_cursor = output_textedit.textCursor()
+            cursor = QTextCursor(output_textedit.document())
             cursor.movePosition(QTextCursor.MoveOperation.End)
-            cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-            cursor.removeSelectedText()
-            cursor.insertText(message)
+            cursor.deletePreviousChar()
+            output_textedit.setTextCursor(current_cursor)
         else:
             self.processing_output_textedit.append(message.strip())
-
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        while cursor.movePosition(QTextCursor.MoveOperation.Down):
-            cursor.select(QTextCursor.SelectionType.LineUnderCursor)
-            if cursor.selectedText().strip() == "":
-                cursor.deleteChar()
-            if any(symbol in cursor.selectedText() for symbol in Spinner.symbols):
-                if cursor.movePosition(QTextCursor.MoveOperation.Down):
-                    cursor.movePosition(QTextCursor.MoveOperation.Up)
-                    cursor.select(QTextCursor.SelectionType.LineUnderCursor)
-                    cursor.removeSelectedText()
-                else:
-                    break
-
-        self.processing_output_textedit.setTextCursor(cursor)
+        if is_output_at_end and output_textedit_scrollbar:
+            output_textedit_scrollbar.setValue(output_textedit_scrollbar.maximum())
+        self.status_bar.showMessage(message.split("\n")[-1])
 
 
 def start_gui() -> None:
