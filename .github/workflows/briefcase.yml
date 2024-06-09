@@ -37,9 +37,9 @@ jobs:
           # Import both certificates
           echo "${{ secrets.CERTIFICATE }}" | base64 --decode > app_certificate.p12
           echo "${{ secrets.CERTIFICATE_INSTALLER }}" | base64 --decode > installer_certificate.p12
-          security import app_certificate.p12 -k $KEYCHAIN_PATH -P $CERTIFICATE_PASSWORD -A
-          security import installer_certificate.p12 -k $KEYCHAIN_PATH -P $CERTIFICATE_PASSWORD -A
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k $KEYCHAIN_PATH
+          security import app_certificate.p12 -k $KEYCHAIN_PATH -P $CERTIFICATE_PASSWORD -A -T "/usr/bin/codesign" -T "/usr/bin/productsign"
+          security import installer_certificate.p12 -k $KEYCHAIN_PATH -P $CERTIFICATE_PASSWORD -A -T "/usr/bin/codesign" -T "/usr/bin/productsign"
+          security set-key-partition-list -S apple-tool:,apple:,codesign:,productsign: -s -k $KEYCHAIN_PATH
       - name: Store Notarization Credentials
         run: |
           echo "${{ secrets.KEYCHAIN_PASSWORD }}" | xcrun altool --store-password-in-keychain-item "${{ secrets.KEYCHAIN_NAME }}" -u "${{ secrets.APPLE_ID }}" -p -
