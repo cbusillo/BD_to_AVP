@@ -51,6 +51,14 @@ def add_homebrew_to_path() -> None:
     os.system("source ~/.zshrc")
 
 
+def check_for_homebrew_in_path() -> bool:
+    zshrc = Path.home() / ".zshrc"
+    zshrc_contents = zshrc.read_text()
+    if config.HOMEBREW_PREFIX_BIN.as_posix() in zshrc_contents:
+        return True
+    return False
+
+
 def install_deps(is_gui: bool) -> None:
     if not is_arm64():
         raise ValueError("This script is only supported on Apple Silicon Macs.")
@@ -65,7 +73,7 @@ def install_deps(is_gui: bool) -> None:
     else:
         update_brew(is_gui)
 
-    if config.HOMEBREW_PREFIX_BIN.as_posix() not in os.environ["PATH"]:
+    if not check_for_homebrew_in_path():
         add_homebrew_to_path()
 
     shutil.rmtree("/Applications/MakeMKV.app", ignore_errors=True)
