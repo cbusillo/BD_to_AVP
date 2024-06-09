@@ -12,7 +12,13 @@ jobs:
       KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
-
+      RELEASE_MESSAGE: |
+        First release, will have issues.
+        ** After entering your password it will take a few minutes (maybe ten). It will appear to be doing nothing. If it fails, it should pop up with an error. Otherwise it should install all the dependences in the background and eventually pop up the GUI.
+        Reading directly from discs has not yet been added to the GUI, but works in the terminal version. If you run the binary with any arguments, it will work like the previous terminal app. "/Applications/Blu-ray to AVP.app/Contents/MacOS/Blu-ray to AVP"
+      EXCLUDED_MESSAGES: |
+        Bump version after merge into release
+        merge master into release
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
@@ -47,35 +53,35 @@ jobs:
       - name: Extract version
         id: extract_version
         run: |
-          echo "::set-output name=version::$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
+          echo "VERSION=$version" >> $GITHUB_ENV
       - name: Package application for GitHub
         run: |
           poetry run briefcase create
           poetry run briefcase build
           poetry run briefcase package -i "${{ secrets.DEV_ID }}"
-#      - name: Save logs on failure
-#        if: failure()
-#        uses: actions/upload-artifact@v2
-#        with:
-#          name: build-logs
-#          path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/*.log
-#      - name: Package application using productbuild
-#        run: |
-#          productbuild --component build/bd-to-avp/macos/app/Blu-ray\ to\ AVP.app /Applications dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.pkg --sign "${{ secrets.INSTALLER_ID }}"
-#      - name: Validate App
-#        run: |
-#          xcrun altool --validate-app -f dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.pkg -t osx -u ${{ secrets.APPLE_ID }} -p ${{ secrets.KEYCHAIN_PASSWORD }} --output-format xml
-#      - name: Upload App to TestFlight
-#        run: |
-#          xcrun altool --upload-app -f dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.pkg -t osx -u ${{ secrets.APPLE_ID }} -p ${{ secrets.KEYCHAIN_PASSWORD }} --output-format xml
+      - name: Get commit messages
+        id: get_commit_messages
+        run: |
+          MESSAGES=$(git log --pretty=format:"%s" | grep -v Merge)
+          echo "MESSAGES=$MESSAGES" >> $GITHUB_ENV
+      - name: Get commit messages
+        id: get_commit_messages
+        run: |
+          MESSAGES=$(git log --pretty=format:"%s" | grep -vE "$(echo "$EXCLUDED_MESSAGES" | tr '\n' '|')" | awk '!seen[$0]++')
+          echo "MESSAGES=$MESSAGES" >> $GITHUB_ENV
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{ steps.extract_version.outputs.version }}
-          release_name: Release v${{ steps.extract_version.outputs.version }}
+          tag_name: v${{ env.VERSION }}
+          release_name: Release v${{ env.VERSION }}
+          body: |
+            ${{ env.RELEASE_MESSAGE }}
+            
+            ${{ env.MESSAGES }}
           draft: false
           prerelease: true
       - name: Upload Release Asset DMG
@@ -85,16 +91,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: dist/Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.dmg
-          asset_name: Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.dmg
+          asset_path: dist/Blu-ray to AVP-${{ env.VERSION }}.dmg
+          asset_name: Blu-ray to AVP-${{ env.VERSION }}.dmg
           asset_content_type: application/octet-stream
-#      - name: Upload Release Asset pkg
-#        id: upload-release-asset-pkg
-#        uses: actions/upload-release-asset@v1
-#        env:
-#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-#        with:
-#          upload_url: ${{ steps.create_release.outputs.upload_url }}
-#          asset_path: dist/Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.pkg
-#          asset_name: Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.pkg
-#          asset_content_type: application/octet-stream
