@@ -57,6 +57,18 @@ def normalize_command_elements(command: list[Any]) -> list[str | Path | bytes]:
     ]
 
 
+def add_quotes_to_path_if_space(commands: list[str | Path | bytes]) -> list[str]:
+    commands_with_paths_as_strings = [
+        (
+            f'"{command}"'
+            if isinstance(command, Path) and " " in command.as_posix()
+            else str(command)
+        )
+        for command in commands
+    ]
+    return commands_with_paths_as_strings
+
+
 def run_command(
     commands: list[Any], command_name: str = "", env: dict[str, str] | None = None
 ) -> str:
@@ -65,11 +77,10 @@ def run_command(
         command_name = str(commands[0])
 
     if config.output_commands:
-        commands_to_print = [
-            str(command) if not isinstance(command, Path) else f'"{Path}"'
-            for command in commands
-        ]
-        print(f"Running command:\n{' '.join(command for command in commands_to_print)}")
+        commands_to_print = add_quotes_to_path_if_space(commands)
+        print(
+            f"Running command:\n{' '.join(str(command) for command in commands_to_print)}"
+        )
 
     env = env if env else os.environ.copy()
     output_lines = []
