@@ -65,7 +65,11 @@ def run_command(
         command_name = str(command_list[0])
 
     if config.output_commands:
-        print(f"Running command:\n{' '.join(str(command) for command in command_list)}")
+        commands_to_print = [
+            str(command) if not isinstance(command, Path) else f'"{Path}"'
+            for command in command_list
+        ]
+        print(f"Running command:\n{' '.join(command for command in commands_to_print)}")
 
     env = env if env else os.environ.copy()
     output_lines = []
