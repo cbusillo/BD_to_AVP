@@ -77,7 +77,7 @@ jobs:
           draft: false
           prerelease: true
       - name: Upload Release Asset DMG
-        id: upload-release-asset
+        id: upload-release-asset-dmg
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -87,7 +87,7 @@ jobs:
           asset_name: Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.dmg
           asset_content_type: application/octet-stream
       - name: Upload Release Asset pkg
-        id: upload-release-asset
+        id: upload-release-asset-pkg
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
