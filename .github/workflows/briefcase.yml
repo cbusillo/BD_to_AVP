@@ -59,9 +59,9 @@ jobs:
 #        with:
 #          name: build-logs
 #          path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/*.log
-      - name: Package application using productbuild
-        run: |
-          productbuild --component build/bd-to-avp/macos/app/Blu-ray\ to\ AVP.app /Applications dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.pkg --sign "${{ secrets.INSTALLER_ID }}"
+#      - name: Package application using productbuild
+#        run: |
+#          productbuild --component build/bd-to-avp/macos/app/Blu-ray\ to\ AVP.app /Applications dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.pkg --sign "${{ secrets.INSTALLER_ID }}"
 #      - name: Validate App
 #        run: |
 #          xcrun altool --validate-app -f dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.pkg -t osx -u ${{ secrets.APPLE_ID }} -p ${{ secrets.KEYCHAIN_PASSWORD }} --output-format xml
@@ -88,13 +88,13 @@ jobs:
           asset_path: dist/Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.dmg
           asset_name: Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.dmg
           asset_content_type: application/octet-stream
-      - name: Upload Release Asset pkg
-        id: upload-release-asset-pkg
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: dist/Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.pkg
-          asset_name: Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.pkg
-          asset_content_type: application/octet-stream
+#      - name: Upload Release Asset pkg
+#        id: upload-release-asset-pkg
+#        uses: actions/upload-release-asset@v1
+#        env:
+#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#        with:
+#          upload_url: ${{ steps.create_release.outputs.upload_url }}
+#          asset_path: dist/Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.pkg
+#          asset_name: Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.pkg
+#          asset_content_type: application/octet-stream
