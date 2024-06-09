@@ -28,7 +28,7 @@ atexit.register(kill_child_processes)
 
 
 def main() -> None:
-    if config.HOMEBREW_PREFIX_BIN not in os.environ["PATH"]:
+    if config.HOMEBREW_PREFIX_BIN.as_posix() not in os.environ["PATH"]:
         os.environ["PATH"] = f"{config.HOMEBREW_PREFIX_BIN}:{os.environ['PATH']}"
     is_gui = len(sys.argv) == 1
 
