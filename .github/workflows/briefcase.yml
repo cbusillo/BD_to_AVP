@@ -22,13 +22,6 @@ jobs:
         run: |
           curl -sSL https://install.python-poetry.org | python3 -
           echo "$HOME/.poetry/bin" >> $GITHUB_PATH
-      - name: Add Poetry to PATH
-        run: echo "/Users/test/.local/bin" >> $GITHUB_PATH
-
-      - name: Verify Poetry Installation
-        run: |
-          poetry --version
-
       - name: Install dependencies
         run: |
           poetry install --no-interaction
@@ -57,25 +50,16 @@ jobs:
           poetry run briefcase package -i "${{ secrets.DEV_ID }}"
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-#      - name: Upload log file
-#        uses: actions/upload-artifact@v3
-#        if: failure()
-#        with:
-#          name: notarization-log
-#          path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/
       - name: Extract version
         id: extract_version
         run: |
           echo "::set-output name=version::$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"
-      - name: Create IPA
-        run: |
-          zip -r "dist/Blu-ray to AVP-${{ steps.extract_version.outputs.version }}.ipa" "build/bd-to-avp/macos/app/Blu-ray to AVP.app"
       - name: Validate App
         run: |
-          xcrun altool --validate-app -f dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.ipa -t ios -u ${{ secrets.APPLE_ID }} -p ${{ secrets.KEYCHAIN_PASSWORD }} --output-format xml
+          xcrun altool --validate-app -f dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.dmg -t osx -u ${{ secrets.APPLE_ID }} -p ${{ secrets.KEYCHAIN_PASSWORD }} --output-format xml
       - name: Upload App to TestFlight
         run: |
-          xcrun altool --upload-app -f dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.ipa -t ios -u ${{ secrets.APPLE_ID }} -p ${{ secrets.KEYCHAIN_PASSWORD }} --output-format xml
+          xcrun altool --upload-app -f dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.dmg -t osx -u ${{ secrets.APPLE_ID }} -p ${{ secrets.KEYCHAIN_PASSWORD }} --output-format xml
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
