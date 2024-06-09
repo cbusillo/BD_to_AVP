@@ -140,40 +140,6 @@ def cleanup_process(process: subprocess.Popen) -> None:
         process.terminate()
 
 
-def generate_ffmpeg_wrapper_command(
-    input_fifo: Path,
-    output_path: Path,
-    color_depth: int,
-    resolution: str,
-    frame_rate: str,
-    bitrate: int,
-    crop_params: str,
-    software_encoder: bool,
-) -> list[Any]:
-    pix_fmt = "yuv420p10le" if color_depth == 10 else "yuv420p"
-    stream = ffmpeg.input(
-        str(input_fifo),
-        f="rawvideo",
-        pix_fmt=pix_fmt,
-        s=config.resolution or resolution,
-        r=config.frame_rate or frame_rate,
-    )
-    if crop_params:
-        stream = ffmpeg.filter(stream, "crop", *crop_params.split(":"))
-    stream = ffmpeg.output(
-        stream,
-        f"file:{output_path}",
-        vcodec="hevc_videotoolbox" if not software_encoder else "libx265",
-        video_bitrate=f"{bitrate}M",
-        bufsize=f"{bitrate * 2}M",
-        tag="hvc1",
-        vprofile="main10" if color_depth == 10 else "main",
-    )
-
-    args = ffmpeg.compile(stream, overwrite_output=True)
-    return args
-
-
 class OutputHandler(io.TextIOBase):
     def __init__(self, emit_signal: Callable[[str], None]) -> None:
         self.emit_signal = emit_signal

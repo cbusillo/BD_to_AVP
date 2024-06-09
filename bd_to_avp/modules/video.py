@@ -8,10 +8,44 @@ from bd_to_avp.modules.disc import DiscInfo
 from bd_to_avp.modules.file import temporary_fifo
 from bd_to_avp.modules.util import (
     cleanup_process,
-    generate_ffmpeg_wrapper_command,
     run_command,
     run_ffmpeg_async,
 )
+
+
+def generate_ffmpeg_wrapper_command(
+    input_fifo: Path,
+    output_path: Path,
+    disc_color_depth: int,
+    disc_resolution: str,
+    disc_frame_rate: str,
+    bitrate: int,
+    crop_params: str,
+    software_encoder: bool,
+) -> list[str | Path]:
+    pix_fmt = "yuv420p10le" if disc_color_depth == 10 else "yuv420p"
+    stream = ffmpeg.input(
+        str(input_fifo),
+        f="rawvideo",
+        pix_fmt=pix_fmt,
+        s=config.resolution or disc_resolution,
+        r=config.frame_rate or disc_frame_rate,
+    )
+    if crop_params:
+        stream = ffmpeg.filter(stream, "crop", *crop_params.split(":"))
+    stream = ffmpeg.output(
+        stream,
+        f"file:{output_path}",
+        vcodec="hevc_videotoolbox" if not software_encoder else "libx265",
+        video_bitrate=f"{bitrate}M",
+        bufsize=f"{bitrate * 2}M",
+        tag="hvc1",
+        vprofile="main10" if disc_color_depth == 10 else "main",
+        r=config.frame_rate or disc_frame_rate,
+    )
+
+    args = ffmpeg.compile(stream, overwrite_output=True)
+    return args
 
 
 def split_mvc_to_stereo(
