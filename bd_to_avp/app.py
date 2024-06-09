@@ -34,17 +34,25 @@ class ProcessingSignals(QObject):
 
 
 class ProcessingThread(QThread):
-    def __init__(self, parent=None) -> None:
+    error_occurred = pyqtSignal(str)
+
+    def __init__(
+        self, main_window: "MainWindow", parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self.signals = ProcessingSignals()
         # noinspection PyUnresolvedReferences
         self.output_handler = OutputHandler(self.signals.progress_updated.emit)
+        self.main_window = main_window
 
     def run(self) -> None:
         sys.stdout = self.output_handler  # type: ignore
 
         try:
             process()
+        except (RuntimeError, ValueError) as error:
+            # noinspection PyUnresolvedReferences
+            self.error_occurred.emit(str(error))
         finally:
             sys.stdout = sys.__stdout__
             # noinspection PyUnresolvedReferences
@@ -101,8 +109,9 @@ class MainWindow(QMainWindow):
 
         # Create the main layout
         main_widget = QWidget()
+        main_widget.setMinimumWidth(300)
         main_layout = QVBoxLayout(main_widget)
-        main_layout.setSpacing(10)
+        main_layout.setSpacing(5)
 
         save_load_layout = QHBoxLayout()
         self.load_config_button = QPushButton("Load Config")
@@ -116,6 +125,11 @@ class MainWindow(QMainWindow):
         save_load_layout.addWidget(self.save_config_button)
 
         main_layout.addLayout(save_load_layout)
+
+        self.read_from_disc_checkbox = QCheckBox("Read from Disc")
+        # noinspection PyUnresolvedReferences
+        self.read_from_disc_checkbox.stateChanged.connect(self.toggle_read_from_disc)
+        main_layout.addWidget(self.read_from_disc_checkbox)
 
         # Source and output folder selection
         source_folder_layout = QHBoxLayout()
@@ -155,37 +169,45 @@ class MainWindow(QMainWindow):
         # Configuration options
         config_layout = QVBoxLayout()
 
+        left_right_layout = QHBoxLayout()
         self.left_right_bitrate_label = QLabel("Left/Right Bitrate (Mbps)")
         self.left_right_bitrate_spinbox = QSpinBox()
         self.left_right_bitrate_spinbox.setRange(1, 100)
         self.left_right_bitrate_spinbox.setValue(config.left_right_bitrate)
         self.left_right_bitrate_spinbox.setMaximumWidth(75)
-        config_layout.addWidget(self.left_right_bitrate_label)
-        config_layout.addWidget(self.left_right_bitrate_spinbox)
+        left_right_layout.addWidget(self.left_right_bitrate_spinbox)
+        left_right_layout.addWidget(self.left_right_bitrate_label)
+        config_layout.addLayout(left_right_layout)
 
+        audio_bitrate_layout = QHBoxLayout()
         self.audio_bitrate_label = QLabel("Audio Bitrate (kbps)")
         self.audio_bitrate_spinbox = QSpinBox()
         self.audio_bitrate_spinbox.setRange(0, 1000)
         self.audio_bitrate_spinbox.setValue(config.audio_bitrate)
         self.audio_bitrate_spinbox.setMaximumWidth(75)
-        config_layout.addWidget(self.audio_bitrate_label)
-        config_layout.addWidget(self.audio_bitrate_spinbox)
+        audio_bitrate_layout.addWidget(self.audio_bitrate_spinbox)
+        audio_bitrate_layout.addWidget(self.audio_bitrate_label)
+        config_layout.addLayout(audio_bitrate_layout)
 
+        mv_hevc_quality_layout = QHBoxLayout()
         self.mv_hevc_quality_label = QLabel("MV-HEVC Quality (0-100)")
         self.mv_hevc_quality_spinbox = QSpinBox()
         self.mv_hevc_quality_spinbox.setRange(0, 100)
         self.mv_hevc_quality_spinbox.setValue(config.mv_hevc_quality)
         self.mv_hevc_quality_spinbox.setMaximumWidth(75)
-        config_layout.addWidget(self.mv_hevc_quality_label)
-        config_layout.addWidget(self.mv_hevc_quality_spinbox)
+        mv_hevc_quality_layout.addWidget(self.mv_hevc_quality_spinbox)
+        mv_hevc_quality_layout.addWidget(self.mv_hevc_quality_label)
+        config_layout.addLayout(mv_hevc_quality_layout)
 
+        fov_layout = QHBoxLayout()
         self.fov_label = QLabel("Field of View")
         self.fov_spinbox = QSpinBox()
         self.fov_spinbox.setRange(0, 360)
         self.fov_spinbox.setValue(config.fov)
         self.fov_spinbox.setMaximumWidth(75)
-        config_layout.addWidget(self.fov_label)
-        config_layout.addWidget(self.fov_spinbox)
+        fov_layout.addWidget(self.fov_spinbox)
+        fov_layout.addWidget(self.fov_label)
+        config_layout.addLayout(fov_layout)
 
         self.frame_rate_label = QLabel("Frame Rate (Leave blank to use source value)")
         self.frame_rate_entry = QLineEdit()
@@ -283,11 +305,29 @@ class MainWindow(QMainWindow):
         self.splitter.splitterMoved.connect(self.update_status_bar)
 
         # Create the processing thread
-        self.processing_thread = ProcessingThread()
+        self.processing_thread = ProcessingThread(main_window=self)
         # noinspection PyUnresolvedReferences
         self.processing_thread.signals.progress_updated.connect(
             self.update_processing_output
         )
+        # noinspection PyUnresolvedReferences
+        self.processing_thread.error_occurred.connect(self.handle_processing_error)
+
+    def handle_processing_error(self, error: str) -> None:
+        self.popup_warning_centered("Failure in processing.")
+        self.update_processing_output(error)
+        self.process_button.setEnabled(True)
+        self.process_button.setText("Start Processing")
+
+    def toggle_read_from_disc(self) -> None:
+        self.source_folder_entry.setEnabled(
+            not self.read_from_disc_checkbox.isChecked()
+        )
+        self.source_folder_button.setEnabled(
+            not self.read_from_disc_checkbox.isChecked()
+        )
+        self.source_file_entry.setEnabled(not self.read_from_disc_checkbox.isChecked())
+        self.source_file_button.setEnabled(not self.read_from_disc_checkbox.isChecked())
 
     def update_status_bar(self) -> None:
         central_widget = self.centralWidget()
@@ -354,11 +394,14 @@ class MainWindow(QMainWindow):
 
     def toggle_processing(self) -> None:
         if self.process_button.text() == "Start Processing":
-            if (
-                not self.source_folder_entry.text()
-                and not self.source_file_entry.text()
+            source_folder_set = bool(self.source_folder_entry.text())
+            source_file_set = bool(self.source_file_entry.text())
+            if (source_folder_set and source_file_set) or (
+                not source_folder_set and not source_file_set
             ):
-                self.popup_warning_centered("Source Folder or Source File must be set.")
+                self.popup_warning_centered(
+                    "Either Source Folder or Source File must be set, but not both."
+                )
                 return
             self.process_button.setEnabled(False)
             self.start_processing()
@@ -371,7 +414,6 @@ class MainWindow(QMainWindow):
     def start_processing(self) -> None:
         self.save_config()
 
-        # Start the processing thread
         self.processing_thread.start()
 
     def save_config_to_file(self) -> None:
@@ -379,16 +421,21 @@ class MainWindow(QMainWindow):
         config.save_config_to_file()
 
     def save_config(self) -> None:
-        config.source_folder_path = (
-            Path(self.source_folder_entry.text())
-            if self.source_folder_entry.text()
-            else None
-        )
-        config.source_path = (
-            Path(self.source_file_entry.text())
-            if self.source_file_entry.text()
-            else None
-        )
+        if self.read_from_disc_checkbox.isChecked():
+            config.source_str = "disc:0"
+            config.source_folder_path = None
+            config.source_path = None
+        else:
+            config.source_folder_path = (
+                Path(self.source_folder_entry.text())
+                if self.source_folder_entry.text()
+                else None
+            )
+            config.source_path = (
+                Path(self.source_file_entry.text())
+                if self.source_file_entry.text()
+                else None
+            )
         config.output_root_path = Path(self.output_folder_entry.text())
         config.left_right_bitrate = self.left_right_bitrate_spinbox.value()
         config.audio_bitrate = self.audio_bitrate_spinbox.value()
