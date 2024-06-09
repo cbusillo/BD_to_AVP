@@ -58,16 +58,16 @@ def normalize_command_elements(command: list[Any]) -> list[str | Path | bytes]:
 
 
 def run_command(
-    command_list: list[Any], command_name: str = "", env: dict[str, str] | None = None
+    commands: list[Any], command_name: str = "", env: dict[str, str] | None = None
 ) -> str:
-    command_list = normalize_command_elements(command_list)
+    commands = normalize_command_elements(commands)
     if not command_name:
-        command_name = str(command_list[0])
+        command_name = str(commands[0])
 
     if config.output_commands:
         commands_to_print = [
             str(command) if not isinstance(command, Path) else f'"{Path}"'
-            for command in command_list
+            for command in commands
         ]
         print(f"Running command:\n{' '.join(command for command in commands_to_print)}")
 
@@ -80,7 +80,7 @@ def run_command(
     try:
 
         process = subprocess.Popen(
-            command_list,
+            commands,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -97,7 +97,7 @@ def run_command(
             print("Error running command:", command_name)
             print("\n".join(output_lines))
             raise subprocess.CalledProcessError(
-                process.returncode, command_list, output="".join(output_lines)
+                process.returncode, commands, output="".join(output_lines)
             )
     except KeyboardInterrupt:
         print("\nCommand interrupted.")
