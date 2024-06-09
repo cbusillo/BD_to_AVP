@@ -57,7 +57,7 @@ jobs:
       - name: Package application using productbuild
         run: |
           # Assume you already have a build directory containing the app
-          productbuild --component build/bd-to-avp/macos/app/Blu-ray\ to\ AVP.app /Applications dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.pkg --sign "Developer ID Installer"
+          productbuild --component build/bd-to-avp/macos/app/Blu-ray\ to\ AVP.app /Applications dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.pkg --sign "${{ secrets.DEV_ID }}"
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       - name: Validate App
