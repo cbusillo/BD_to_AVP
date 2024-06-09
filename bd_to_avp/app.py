@@ -97,6 +97,9 @@ class CustomWarningDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
+    START_PROCESSING_TEXT = "Start Processing (⌘+P)"
+    STOP_PROCESSING_TEXT = "Stop Processing (⌘+P)"
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("3D Blu-ray (and mts) to AVP")
@@ -109,14 +112,14 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(5)
 
         save_load_layout = QHBoxLayout()
-        self.load_config_button = QPushButton("Load Config")
-        # noinspection PyUnresolvedReferences
+        self.load_config_button = QPushButton("Load Config (⌘+L)")
         self.load_config_button.clicked.connect(self.load_config_and_update_ui)
+        self.load_config_button.setShortcut("Ctrl+L")
         save_load_layout.addWidget(self.load_config_button)
 
-        self.save_config_button = QPushButton("Save Config")
-        # noinspection PyUnresolvedReferences
+        self.save_config_button = QPushButton("Save Config (⌘+S)")
         self.save_config_button.clicked.connect(self.save_config_to_file)
+        self.save_config_button.setShortcut("Ctrl+S")
         save_load_layout.addWidget(self.save_config_button)
 
         main_layout.addLayout(save_load_layout)
@@ -264,9 +267,9 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(config_layout)
 
         # Processing button
-        self.process_button = QPushButton("Start Processing")
-        # noinspection PyUnresolvedReferences
+        self.process_button = QPushButton(self.START_PROCESSING_TEXT)
         self.process_button.clicked.connect(self.toggle_processing)
+        self.process_button.setShortcut("Ctrl+P")
         main_layout.addWidget(self.process_button)
 
         self.processing_output_textedit = QTextEdit()
@@ -306,7 +309,7 @@ class MainWindow(QMainWindow):
         self.popup_warning_centered("Failure in processing.")
         self.update_processing_output(error)
         self.process_button.setEnabled(True)
-        self.process_button.setText("Start Processing")
+        self.process_button.setText(self.START_PROCESSING_TEXT)
 
     def toggle_read_from_disc(self) -> None:
         self.source_folder_entry.setEnabled(
@@ -378,7 +381,7 @@ class MainWindow(QMainWindow):
         dialog.exec()  # Show dialog as modal
 
     def toggle_processing(self) -> None:
-        if self.process_button.text() == "Start Processing":
+        if self.process_button.text() == self.START_PROCESSING_TEXT:
             source_folder_set = bool(self.source_folder_entry.text())
             source_file_set = bool(self.source_file_entry.text())
             if (source_folder_set and source_file_set) or (
@@ -390,11 +393,11 @@ class MainWindow(QMainWindow):
                 return
             self.process_button.setEnabled(False)
             self.start_processing()
-            # self.process_button.setText("Stop Processing")
+            # self.process_button.setText(self.STOP_PROCESSING_TEXT
         else:
             self.stop_processing()
             self.process_button.setEnabled(True)
-            self.process_button.setText("Start Processing")
+            self.process_button.setText(self.START_PROCESSING_TEXT)
 
     def start_processing(self) -> None:
         self.save_config()
