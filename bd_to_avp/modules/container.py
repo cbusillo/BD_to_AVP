@@ -65,7 +65,7 @@ def create_mvc_audio_and_subtitle_files(
     audio_output_path = output_folder / f"{disc_name}_audio_PCM.mov"
 
     subtitle_output_path = None
-    subtitle_tracks: list[dict[str, Any]] = []
+    subtitle_tracks: list[dict[str, int]] = []
 
     if (
         config.start_stage.value <= Stage.EXTRACT_MVC_AUDIO_AND_SUB.value
@@ -85,7 +85,7 @@ def create_mvc_audio_and_subtitle_files(
             video_output_path,
             audio_output_path,
             subtitle_output_path,
-            subtitle_tracks[0].get("index", 0) if subtitle_tracks else 0,
+            int(subtitle_tracks[0].get("index", 0)) if subtitle_tracks else 0,
         )
         if subtitle_output_path and subtitle_output_path.suffix.lower() == ".sup":
             subtitle_output_path = convert_sup_to_srt(subtitle_output_path)
