@@ -17,7 +17,6 @@ jobs:
         uses: actions/setup-python@v2
         with:
           python-version: '3.12'
-
       - name: Install Poetry
         run: |
           curl -sSL https://install.python-poetry.org | python3 -
@@ -25,6 +24,20 @@ jobs:
       - name: Install dependencies
         run: |
           poetry install --no-interaction
+      - name: Install installer certificate
+        run: |
+          KEYCHAIN_PATH=$(pwd)/build.keychain
+          rm -f $KEYCHAIN_PATH
+          security delete-keychain $KEYCHAIN_PATH || true
+          echo "${{ secrets.CERTIFICATE_INSTALLER }}" | base64 --decode > certificate.p12
+          security create-keychain -p runner $KEYCHAIN_PATH
+          security default-keychain -s $KEYCHAIN_PATH
+          security unlock-keychain -p runner $KEYCHAIN_PATH
+          security import certificate.p12 -k $KEYCHAIN_PATH -P "${{ secrets.CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k runner $KEYCHAIN_PATH
+        env:
+          CERTIFICATE: ${{ secrets.CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
       - name: Install app certificate
         run: |
           KEYCHAIN_PATH=$(pwd)/build.keychain
@@ -36,30 +49,6 @@ jobs:
           security unlock-keychain -p runner $KEYCHAIN_PATH
           security import certificate.p12 -k $KEYCHAIN_PATH -P "${{ secrets.CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k runner $KEYCHAIN_PATH
-      - name: Install instakller certificate
-        run: |
-          KEYCHAIN_PATH=$(pwd)/build.keychain
-          rm -f $KEYCHAIN_PATH
-          security delete-keychain $KEYCHAIN_PATH || true
-          echo "${{ secrets.CERTIFICATE_INSTALLER }}" | base64 --decode > certificate.p12
-          security create-keychain -p runner $KEYCHAIN_PATH
-          security default-keychain -s $KEYCHAIN_PATH
-          security unlock-keychain -p runner $KEYCHAIN_PATH
-          security import certificate.p12 -k $KEYCHAIN_PATH -P "${{ secrets.CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k runner $KEYCHAIN_PATH
-#
-#      - name: Install certificate for application
-#        run: |
-#          # Import the Developer ID Application Certificate
-#          echo "${{ secrets.CERTIFICATE }}" | base64 --decode > app_certificate.p12
-#          security import app_certificate.p12 -k $KEYCHAIN_PATH -P "${{ secrets.CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
-#
-#      - name: Install certificate for installer
-#        run: |
-#          # Import the Developer ID Installer Certificate
-#          echo "${{ secrets.CERTIFICATE_INSTALLER }}" | base64 --decode > installer_certificate.p12
-#          security import installer_certificate.p12 -k $KEYCHAIN_PATH -P "${{ secrets.CERTIFICATE_PASSWORD }}" -T /usr/bin/productbuild
-
         env:
           CERTIFICATE: ${{ secrets.CERTIFICATE }}
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
