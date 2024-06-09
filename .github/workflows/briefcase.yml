@@ -47,6 +47,13 @@ jobs:
         id: extract_version
         run: |
           echo "::set-output name=version::$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"
+      - name: Package application for GitHub
+        run: |
+          poetry run briefcase create
+          poetry run briefcase build
+          poetry run briefcase package -i "${{ secrets.DEV_ID }}"
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       - name: Package application using productbuild
         run: |
           # Assume you already have a build directory containing the app
@@ -59,13 +66,6 @@ jobs:
       - name: Upload App to TestFlight
         run: |
           xcrun altool --upload-app -f dist/Blu-ray\ to\ AVP-${{ steps.extract_version.outputs.version }}.pkg -t osx -u ${{ secrets.APPLE_ID }} -p ${{ secrets.KEYCHAIN_PASSWORD }} --output-format xml
-      - name: Package application for GitHub
-        run: |
-          poetry run briefcase create
-          poetry run briefcase build
-          poetry run briefcase package -i "${{ secrets.DEV_ID }}"
-        env:
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
