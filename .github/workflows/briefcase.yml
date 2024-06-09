@@ -35,8 +35,8 @@ jobs:
           security default-keychain -s $KEYCHAIN_PATH
           security unlock-keychain -p $KEYCHAIN_PASSWORD $KEYCHAIN_PATH
           # Import both certificates
-          echo "${{ secrets.APP_CERTIFICATE }}" | base64 --decode > app_certificate.p12
-          echo "${{ secrets.INSTALLER_CERTIFICATE }}" | base64 --decode > installer_certificate.p12
+          echo "${{ secrets.CERTIFICATE }}" | base64 --decode > app_certificate.p12
+          echo "${{ secrets.CERTIFICATE_INSTALLER }}" | base64 --decode > installer_certificate.p12
           security import app_certificate.p12 -k $KEYCHAIN_PATH -P $CERTIFICATE_PASSWORD -T /usr/bin/codesign
           security import installer_certificate.p12 -k $KEYCHAIN_PATH -P $CERTIFICATE_PASSWORD -T /usr/bin/productbuild
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k $KEYCHAIN_PATH
