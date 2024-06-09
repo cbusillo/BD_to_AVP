@@ -9,7 +9,6 @@ jobs:
   package:
     runs-on: macos-latest
     env:
-      KEYCHAIN_PATH: $(pwd)/build.keychain
       KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
@@ -31,8 +30,7 @@ jobs:
           poetry install --no-interaction
       - name: Install certificates
         run: |
-          rm -f $KEYCHAIN_PATH
-          security delete-keychain $KEYCHAIN_PATH || true
+          KEYCHAIN_PATH=$(pwd)/build.keychain
           security create-keychain -p $KEYCHAIN_PASSWORD $KEYCHAIN_PATH
           security default-keychain -s $KEYCHAIN_PATH
           security unlock-keychain -p $KEYCHAIN_PASSWORD $KEYCHAIN_PATH
