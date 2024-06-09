@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 
 
-from PyQt6.QtGui import QIcon, QTextCursor
+from PyQt6.QtGui import QFont, QIcon, QTextCursor
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -280,6 +280,7 @@ class MainWindow(QMainWindow):
 
         self.processing_output_textedit = QTextEdit()
         self.processing_output_textedit.setReadOnly(True)
+        self.processing_output_textedit.setFont(QFont("Helvetica", 10))
 
         # Create a QSplitter and add the main widget and processing output widget
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
