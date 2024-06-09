@@ -1,7 +1,6 @@
 from pathlib import Path
-from typing import Any
 
-import ffmpeg  # type: ignore
+import ffmpeg
 
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.sub import convert_sup_to_srt, get_subtitle_tracks

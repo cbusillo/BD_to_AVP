@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-import ffmpeg  # type: ignore
+import ffmpeg
 
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.file import find_largest_file_with_extensions, sanitize_filename

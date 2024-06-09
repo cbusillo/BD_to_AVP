@@ -1,9 +1,9 @@
 import os
 from pathlib import Path
 
-import ffmpeg  # type: ignore
-from babelfish import Language  # type: ignore
-from pgsrip import pgsrip, Options, Sup  # type: ignore
+import ffmpeg
+from babelfish import Language
+from pgsrip import pgsrip, Options, Sup
 
 from bd_to_avp.modules.config import config
 

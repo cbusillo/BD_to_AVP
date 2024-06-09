@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import ffmpeg  # type: ignore
+import ffmpeg
 
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.util import run_ffmpeg_print_errors

@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-import ffmpeg  # type: ignore
+import ffmpeg
 
 from bd_to_avp.modules.config import config
 
