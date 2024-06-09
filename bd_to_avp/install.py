@@ -238,7 +238,7 @@ def check_mp4box_version(version: str) -> bool:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    return version in processs.stdout
+    return version in processs.stderr
 
 
 def install_mp4box(is_gui: bool) -> None:
