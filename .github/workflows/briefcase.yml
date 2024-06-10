@@ -23,6 +23,15 @@ jobs:
         Bump version after merge into release
         merge master into release
     steps:
+      - name: Get commit messages
+        id: get_commit_messages
+        run: |
+          EXCLUDED_PATTERNS=$(echo "$EXCLUDED_MESSAGES" | tr '\n' '|' | sed 's/|$//')
+          MESSAGES=$(git log --pretty=format:"%s" | grep -vE "${EXCLUDED_PATTERNS}" | awk '!seen[$0]++')
+          echo "MESSAGES=${MESSAGES}" >> $GITHUB_ENV
+      - name: Debug print MESSAGES
+        run: |
+          echo "Commit messages: $MESSAGES"
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Set up Python
@@ -66,22 +75,12 @@ jobs:
               find "$dir" -type f -execdir codesign --force --verify --verbose --sign "${{ secrets.DEV_ID }}" {} \;
             done
           poetry run briefcase package -i "${{ secrets.DEV_ID }}"
-      - name: Get commit messages
-        id: get_commit_messages
-        run: |
-          EXCLUDED_PATTERNS=$(echo "$EXCLUDED_MESSAGES" | tr '\n' '|')
-          MESSAGES=$(git log --pretty=format:"%s" | grep -vE "${EXCLUDED_PATTERNS}" | awk '!seen[$0]++')
-          echo "MESSAGES=${MESSAGES}" >> $GITHUB_ENV
-      - name: Debug print MESSAGES
-        run: | 
-          echo "Commit messages: $MESSAGES"
       - name: Create Release
         id: create_release
-        uses: actions/github-script@v7
+        uses: actions/github-script@v5
         with:
           script: |
-            const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
-            const response = await octokit.rest.repos.createRelease({
+            const response = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag_name: `v${process.env.VERSION}`,
@@ -93,17 +92,16 @@ jobs:
             return response.data;
           result-encoding: string
       - name: Upload Release Asset DMG
-        uses: actions/github-script@v7
+        uses: actions/github-script@v5
         with:
           script: |
             const fs = require('fs');
-            const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
             const releaseId = ${{ steps.create_release.outputs.id }};
             const assetPath = 'dist/Blu-ray to AVP-${{ env.VERSION }}.dmg';
             const assetName = 'Blu-ray to AVP-${{ env.VERSION }}.dmg';
             const asset = fs.readFileSync(assetPath);
       
-            const response = await octokit.rest.repos.uploadReleaseAsset({
+            const response = await github.rest.repos.uploadReleaseAsset({
               owner: context.repo.owner,
               repo: context.repo.repo,
               release_id: releaseId,
