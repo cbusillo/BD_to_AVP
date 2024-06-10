@@ -20,12 +20,12 @@ def extract_mvc_audio_and_subtitle(
     video_stream = ffmpeg.output(stream["v:0"], f"file:{video_output_path}", c="copy", bsf="h264_mp4toannexb")
     audio_stream = ffmpeg.output(stream["a:0"], f"file:{audio_output_path}", c="pcm_s24le")
 
-    print("Running ffmpeg to extract video, audio, and subtitles from MKV")
+    output_message = "ffmpeg to extract video, audio, and subtitles from MKV"
     if subtitle_output_path:
         subtitle_stream = ffmpeg.output(stream[f"s:{subtitle_track}"], f"file:{subtitle_output_path}", c="copy")
-        run_ffmpeg_print_errors([video_stream, audio_stream, subtitle_stream], overwrite_output=True)
+        run_ffmpeg_print_errors([video_stream, audio_stream, subtitle_stream], output_message, overwrite_output=True)
     else:
-        run_ffmpeg_print_errors([video_stream, audio_stream], overwrite_output=True)
+        run_ffmpeg_print_errors([video_stream, audio_stream], output_message, overwrite_output=True)
 
 
 def create_muxed_file(

@@ -112,10 +112,13 @@ def run_command(commands: list[Any], command_name: str = "", env: dict[str, str]
     return "".join(output_lines)
 
 
-def run_ffmpeg_print_errors(stream_spec: Any, quiet: bool = True, **kwargs) -> None:
+def run_ffmpeg_print_errors(stream_spec: Any, message: str, quiet: bool = True, **kwargs) -> None:
     kwargs["quiet"] = quiet
     if config.output_commands:
         print(f"Running command:\n{ffmpeg.compile(stream_spec)}")
+    spinner = Spinner(message)
+    spinner_thread = threading.Thread(target=spinner.start)
+    spinner_thread.start()
     try:
         ffmpeg.run(stream_spec, **kwargs)
     except ffmpeg.Error as e:
@@ -123,6 +126,9 @@ def run_ffmpeg_print_errors(stream_spec: Any, quiet: bool = True, **kwargs) -> N
         print("STDOUT:", e.stdout.decode("utf-8") if e.stdout else "")
         print("STDERR:", e.stderr.decode("utf-8") if e.stderr else "")
         raise
+    finally:
+        spinner.stop()
+        spinner_thread.join()
 
 
 def run_ffmpeg_async(command_list: list[Any], log_path: Path) -> subprocess.Popen:

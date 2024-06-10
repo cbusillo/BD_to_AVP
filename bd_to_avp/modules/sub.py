@@ -6,6 +6,7 @@ from babelfish import Language
 from pgsrip import pgsrip, Options, Sup
 
 from bd_to_avp.modules.config import config
+from bd_to_avp.modules.util import Spinner
 
 
 def get_subtitle_tracks(input_path: Path) -> list[dict]:
@@ -37,8 +38,9 @@ def get_subtitle_tracks(input_path: Path) -> list[dict]:
 def convert_sup_to_srt(sup_subtitle_path: Path) -> Path:
     sub_file = Sup(str(sup_subtitle_path))
     sub_options = Options(languages={Language("eng")}, overwrite=True, one_per_lang=False)
-    print(f"Converting {sup_subtitle_path} to SRT")
+    spinner = Spinner(f"Converting {sup_subtitle_path} to SRT")
+    spinner.start()
     os.environ["TESSDATA_PREFIX"] = str(config.SCRIPT_PATH / "bin")
     pgsrip.rip(sub_file, sub_options)
-
+    spinner.stop()
     return sup_subtitle_path.with_suffix(".srt")

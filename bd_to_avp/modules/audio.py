@@ -14,7 +14,7 @@ def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int)
         acodec="aac_at",
         audio_bitrate=f"{bitrate}k",
     )
-    run_ffmpeg_print_errors(audio_transcoded, overwrite_output=True)
+    run_ffmpeg_print_errors(audio_transcoded, f"transcode audio to {bitrate}kbps", overwrite_output=True)
 
 
 def create_transcoded_audio_file(original_audio_path: Path, output_folder: Path) -> Path:
