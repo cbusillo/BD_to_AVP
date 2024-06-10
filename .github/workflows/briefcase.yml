@@ -74,7 +74,7 @@ jobs:
           echo "MESSAGES=${MESSAGES}" >> $GITHUB_ENV
       - name: Create Release
         id: create_release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           body: ${{ format('{0}\n\n{1}', env.RELEASE_MESSAGE, env.MESSAGES) }}
           draft: false
@@ -82,9 +82,7 @@ jobs:
           tag_name: v${{ env.VERSION }}
           name: Release v${{ env.VERSION }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Upload Release Asset DMG
-        uses: softprops/action-gh-release-upload@v1
-        with:
-          files: dist/Blu-ray to AVP-${{ env.VERSION }}.dmg
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          release-id: ${{ steps.create_release.outputs.id }}
+          files: |
+            dist/*.zip
+            dist/*.dmg
+            dist/*.pkg
