@@ -53,8 +53,8 @@ jobs:
       - name: Extract version
         id: extract_version
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | tr -d '"' | xargs)
-          echo "Extracted version: '${version}'" # Display the version to debug it
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n 1 | tr -d '"' | xargs)
+          echo "Extracted version: '${version}'" 
           echo "VERSION=${version}" >> $GITHUB_ENV
       - name: Package application for GitHub
         run: |
