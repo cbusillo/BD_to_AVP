@@ -78,4 +78,6 @@ else
     /usr/sbin/softwareupdate --install-rosetta --agree-to-license
 fi
 
-
+echo "BD_to_AVP environment setup complete. Refresh your terminal's environment to use new paths."
+echo "1. Refresh environment: source $HOME/.zshrc"
+echo "2. Execute BD_to_AVP: bd-to-avp"
