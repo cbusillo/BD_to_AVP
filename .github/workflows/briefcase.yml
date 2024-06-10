@@ -26,13 +26,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Get commit messages
-        id: get_commit_messages
         run: |
-          EXCLUDED_PATTERNS=$(echo "$EXCLUDED_MESSAGES" | head -c -1 | tr '\n' '|' | sed 's/|$//')
-          echo "Excluded patterns: $EXCLUDED_PATTERNS" 
+          EXCLUDED_PATTERNS=$(echo "$EXCLUDED_MESSAGES" | sed ':a;N;$!ba;s/\n/|/g' | sed 's/|$//')
+          echo "Excluded patterns: $EXCLUDED_PATTERNS"  # Debugging line to check the patterns
           MESSAGES=$(git log --pretty=format:"%s" | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
           echo "Messages: $MESSAGES" 
           echo "MESSAGES=${MESSAGES}" >> $GITHUB_ENV
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
