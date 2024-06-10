@@ -15,19 +15,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Fetch master branch
-        run: |
-          git fetch origin master:master
-          git fetch --tags
-          git checkout release
       - name: Get commit messages
         id: get_commit_messages
         run: |
-          MESSAGES=$(git log --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" release..master)
+          LAST_TAG=$(git describe --tags --abbrev=0)
+          echo "Last release tag: $LAST_TAG"
+          MESSAGES=$(git log --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" $LAST_TAG..HEAD)
           MESSAGES="${MESSAGES//$'\n'/'%0A'}"
           echo "MESSAGES=$MESSAGES" >> $GITHUB_OUTPUT
+          echo "Commit messages since last release:"
           echo "$MESSAGES"
       - name: Set up Python
         uses: actions/setup-python@v5
