@@ -4,6 +4,7 @@ from pathlib import Path
 from PySide6.QtGui import QFont, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QMainWindow,
     QLabel,
     QLineEdit,
@@ -21,11 +22,11 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QObject, QThread, Qt, Signal
 
-from bd_to_avp.gui.dialog import CustomWarningDialog
+from bd_to_avp.gui.dialog import CustomWarningDialog, MKVCreationErrorDialog
 from bd_to_avp.modules.config import config, Stage
-from bd_to_avp.modules.disc import DiscInfo
+from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
 from bd_to_avp.process import process
-from bd_to_avp.modules.util import OutputHandler, Spinner, kill_processes_by_name
+from bd_to_avp.modules.util import OutputHandler, Spinner, terminate_process
 
 
 class ProcessingSignals(QObject):
@@ -33,7 +34,8 @@ class ProcessingSignals(QObject):
 
 
 class ProcessingThread(QThread):
-    error_occurred = Signal(str)
+    error_occurred = Signal(Exception)
+    mkv_creation_error = Signal(MKVCreationError)
 
     def __init__(
         self, main_window: "MainWindow", parent: QWidget | None = None
@@ -48,11 +50,17 @@ class ProcessingThread(QThread):
 
         try:
             process()
+        except MKVCreationError as error:
+            self.mkv_creation_error.emit(error)
         except (RuntimeError, ValueError) as error:
-            self.error_occurred.emit(str(error))
+            self.error_occurred.emit(error)
         finally:
             sys.stdout = sys.__stdout__
             self.signals.progress_updated.emit("Process Completed.")
+
+    def terminate(self) -> None:
+        terminate_process()
+        super().terminate()
 
 
 class MainWindow(QMainWindow):
@@ -214,6 +222,10 @@ class MainWindow(QMainWindow):
         self.transcode_audio_checkbox.setChecked(config.transcode_audio)
         config_layout.addWidget(self.transcode_audio_checkbox)
 
+        self.continue_on_error = QCheckBox("Continue Processing On Error")
+        self.continue_on_error.setChecked(config.continue_on_error)
+        config_layout.addWidget(self.continue_on_error)
+
         self.start_stage_label = QLabel("Start Stage")
         self.start_stage_combobox = QComboBox()
         self.start_stage_combobox.addItems(Stage.list())
@@ -263,12 +275,26 @@ class MainWindow(QMainWindow):
             self.update_processing_output
         )
         self.processing_thread.error_occurred.connect(self.handle_processing_error)
+        self.processing_thread.mkv_creation_error.connect(
+            self.handle_mkv_creation_error
+        )
 
-    def handle_processing_error(self, error: str) -> None:
+    def handle_processing_error(self, error: Exception) -> None:
         self.popup_warning_centered("Failure in processing.")
-        self.update_processing_output(error)
-        self.process_button.setEnabled(True)
+        self.update_processing_output(str(error))
+        self.stop_processing()
         self.process_button.setText(self.START_PROCESSING_TEXT)
+
+    def handle_mkv_creation_error(self, error: MKVCreationError) -> None:
+        dialog = MKVCreationErrorDialog(self, str(error))
+        result = dialog.exec()
+        if result == QDialog.DialogCode.Accepted:
+            config.continue_on_error = True
+            config.start_stage = Stage.EXTRACT_MVC_AUDIO_AND_SUB
+            self.start_processing(is_continuing=True)
+            return
+
+        self.handle_processing_error(error)
 
     def toggle_read_from_disc(self) -> None:
         self.source_folder_entry.setEnabled(
@@ -319,6 +345,7 @@ class MainWindow(QMainWindow):
         self.overwrite_checkbox.setChecked(config.overwrite)
         self.transcode_audio_checkbox.setChecked(config.transcode_audio)
         self.start_stage_combobox.setCurrentText(config.start_stage.name)
+        self.continue_on_error.setChecked(config.continue_on_error)
 
     def browse_source_folder(self) -> None:
         source_folder = QFileDialog.getExistingDirectory(self, "Select Source Folder")
@@ -337,10 +364,11 @@ class MainWindow(QMainWindow):
 
     def popup_warning_centered(self, message: str) -> None:
         dialog = CustomWarningDialog(self, message)
-        dialog.exec()  # Show dialog as modal
+        dialog.exec()
 
     def toggle_processing(self) -> None:
         if self.process_button.text() == self.START_PROCESSING_TEXT:
+            self.processing_output_textedit.clear()
             source_folder_set = bool(self.source_folder_entry.text())
             source_file_set = bool(self.source_file_entry.text())
             if (source_folder_set and source_file_set) or (
@@ -357,9 +385,11 @@ class MainWindow(QMainWindow):
             self.process_button.setText(self.START_PROCESSING_TEXT)
 
         self.process_button.setShortcut("Ctrl+P")
+        # self.process_button.clicked.connect(self.toggle_processing)
 
-    def start_processing(self) -> None:
-        self.save_config()
+    def start_processing(self, is_continuing: bool = False) -> None:
+        if not is_continuing:
+            self.save_config()
 
         self.processing_thread.start()
 
@@ -401,10 +431,10 @@ class MainWindow(QMainWindow):
         config.transcode_audio = self.transcode_audio_checkbox.isChecked()
         selected_stage = int(self.start_stage_combobox.currentText().split(" - ")[0])
         config.start_stage = Stage.get_stage(selected_stage)
+        config.continue_on_error = self.continue_on_error.isChecked()
 
-    @staticmethod
-    def stop_processing() -> None:
-        kill_processes_by_name(config.PROCESS_NAMES_TO_KILL)
+    def stop_processing(self) -> None:
+        self.processing_thread.terminate()
 
     def update_processing_output(self, message: str) -> None:
         output_textedit = self.processing_output_textedit
@@ -413,18 +443,19 @@ class MainWindow(QMainWindow):
             output_textedit_scrollbar.value == output_textedit_scrollbar.maximum()
         )
 
-        last_line_of_textedit = output_textedit.toPlainText().split("\n", 1)[-1]
+        last_line_of_textedit = output_textedit.toPlainText().rsplit("\n", 1)[-1]
 
         spinner_dict = str.maketrans("", "", "".join(Spinner.symbols))
         message_stripped = message.translate(spinner_dict).strip()
         last_line_stripped = last_line_of_textedit.translate(spinner_dict).strip()
 
-        contains_spinner_in_message = any(
-            symbol in message for symbol in Spinner.symbols
-        )
         cursor = output_textedit.textCursor()
 
-        if contains_spinner_in_message:
+        if any(symbol in last_line_of_textedit for symbol in Spinner.symbols):
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            cursor.deletePreviousChar()
+
+        if any(symbol in message for symbol in Spinner.symbols):
             if message_stripped == last_line_stripped:
                 cursor.movePosition(QTextCursor.MoveOperation.End)
                 cursor.select(QTextCursor.SelectionType.LineUnderCursor)

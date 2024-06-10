@@ -9,6 +9,10 @@ from bd_to_avp.modules.file import find_largest_file_with_extensions, sanitize_f
 from bd_to_avp.modules.util import run_command
 
 
+class MKVCreationError(Exception):
+    pass
+
+
 @dataclass
 class DiscInfo:
     name: str = "Unknown"
@@ -102,7 +106,12 @@ def rip_disc_to_mkv(output_folder: Path, disc_info: DiscInfo) -> None:
         disc_info.main_title_number,
         output_folder,
     ]
-    run_command(command, "Rip disc to MKV file.")
+    mkv_output = run_command(command, "Rip disc to MKV file.")
+    if config.continue_on_error or all(
+        error not in mkv_output for error in config.MKV_ERROR_CODES
+    ):
+        return
+    raise MKVCreationError(f"Error occurred while ripping disc to MKV.\n\n{mkv_output}")
 
 
 def create_custom_makemkv_profile(custom_profile_path: Path) -> None:

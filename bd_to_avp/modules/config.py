@@ -130,6 +130,7 @@ class Config:
         self.output_commands = False
         self.software_encoder = False
         self.fx_upscale = False
+        self.continue_on_error = False
 
     @property
     def code_version(self) -> str:
@@ -325,6 +326,11 @@ class Config:
             "--fx-upscale",
             action="store_true",
             help="Use the FX Upscale plugin for AI 4K upscaling.",
+        )
+        parser.add_argument(
+            "--continue-on-error",
+            action="store_true",
+            help="Continue processing after an error occurs.",
         )
 
         args = parser.parse_args()

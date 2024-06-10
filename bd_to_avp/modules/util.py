@@ -15,6 +15,7 @@ from bd_to_avp.modules.config import config
 
 class Spinner:
     symbols = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+    stop_all_spinners = False
 
     def __init__(self, command_name: str = "command...", update_interval: float = 0.5):
         self.command_name = command_name
@@ -32,12 +33,13 @@ class Spinner:
 
     def start(self, update_func: Callable[[str], None] | None = None) -> None:
         self.stop_spinner_flag = False
+        Spinner.stop_all_spinners = False
         if update_func:
             update_func(f"Running {self.command_name}")
         else:
             print(f"Running {self.command_name}", end="", flush=True)
 
-        while not self.stop_spinner_flag:
+        while not self.stop_spinner_flag and not Spinner.stop_all_spinners:
             self._update_spinner()
             time.sleep(self.update_interval)
 
@@ -47,6 +49,10 @@ class Spinner:
             update_func(f"Finished {self.command_name}")
         else:
             print(f"\rFinished {self.command_name}")
+
+    @classmethod
+    def stop_all(cls) -> None:
+        cls.stop_all_spinners = True
 
 
 def normalize_command_elements(command: list[Any]) -> list[str | Path | bytes]:
@@ -151,12 +157,24 @@ def cleanup_process(process: subprocess.Popen) -> None:
         process.terminate()
 
 
+def terminate_process() -> None:
+    Spinner.stop_all()
+    kill_processes_by_name(config.PROCESS_NAMES_TO_KILL)
+
+
 def kill_processes_by_name(process_names: list[str]) -> None:
+    threads = []
     for process_name in process_names:
-        try:
-            subprocess.run(["pkill", "-f", process_name], check=True)
-        except subprocess.CalledProcessError:
-            pass
+        thread = threading.Thread(target=kill_process_by_name, args=(process_name,))
+        threads.append(thread)
+        thread.start()
+
+
+def kill_process_by_name(process_name: str) -> None:
+    try:
+        subprocess.run(["pkill", "-f", process_name], check=True)
+    except subprocess.CalledProcessError:
+        pass
 
 
 class OutputHandler(io.TextIOBase):
