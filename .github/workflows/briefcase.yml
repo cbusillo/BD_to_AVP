@@ -23,6 +23,8 @@ jobs:
         Bump version after merge into release
         merge master into release
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
       - name: Get commit messages
         id: get_commit_messages
         run: |
@@ -32,8 +34,6 @@ jobs:
       - name: Debug print MESSAGES
         run: |
           echo "Commit messages: $MESSAGES"
-      - name: Checkout code
-        uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
