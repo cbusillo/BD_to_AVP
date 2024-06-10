@@ -25,7 +25,8 @@ jobs:
         with:
           fetch-depth: 0
       - name: Fetch master branch
-        run: git fetch origin master:master
+        run: |
+          git fetch origin master:master
       - name: Get commit messages
         id: get_commit_messages
         run: |
