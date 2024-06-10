@@ -14,7 +14,7 @@ from bd_to_avp.modules.config import config
 
 
 class Spinner:
-    symbols = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+    symbols = ["🌑", "🌘", "🌗", "🌖", "🌕", "🌔", "🌓", "🌒"]
     stop_all_spinners = False
 
     def __init__(self, command_name: str = "command...", update_interval: float = 0.5):
