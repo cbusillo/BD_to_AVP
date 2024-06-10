@@ -407,33 +407,38 @@ class MainWindow(QMainWindow):
         kill_processes_by_name(config.PROCESS_NAMES_TO_KILL)
 
     def update_processing_output(self, message: str) -> None:
-        is_output_at_end = False
         output_textedit = self.processing_output_textedit
         output_textedit_scrollbar = output_textedit.verticalScrollBar()
-        if output_textedit_scrollbar:
-            if output_textedit_scrollbar.value() == output_textedit_scrollbar.maximum():
-                is_output_at_end = True
+        is_output_at_end = (
+            output_textedit_scrollbar.value == output_textedit_scrollbar.maximum()
+        )
 
-        last_line_of_textedit = output_textedit.toPlainText().strip().split("\n")[-1]
-        message_stripped = message.replace("".join(Spinner.symbols), "").strip()
-        last_line_stripped = last_line_of_textedit.replace(
-            "".join(Spinner.symbols), ""
-        ).strip()
-        if (
-            any(symbol in message for symbol in Spinner.symbols)
-            and any(symbol in last_line_of_textedit for symbol in Spinner.symbols)
-            and message_stripped == last_line_stripped
-        ):
-            current_cursor = output_textedit.textCursor()
-            cursor = QTextCursor(output_textedit.document())
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            cursor.deletePreviousChar()
-            output_textedit.setTextCursor(current_cursor)
+        last_line_of_textedit = output_textedit.toPlainText().split("\n", 1)[-1]
+
+        spinner_dict = str.maketrans("", "", "".join(Spinner.symbols))
+        message_stripped = message.translate(spinner_dict).strip()
+        last_line_stripped = last_line_of_textedit.translate(spinner_dict).strip()
+
+        contains_spinner_in_message = any(
+            symbol in message for symbol in Spinner.symbols
+        )
+        cursor = output_textedit.textCursor()
+
+        if contains_spinner_in_message:
+            if message_stripped == last_line_stripped:
+                cursor.movePosition(QTextCursor.MoveOperation.End)
+                cursor.select(QTextCursor.SelectionType.LineUnderCursor)
+                cursor.removeSelectedText()
+                cursor.deletePreviousChar()
+                output_textedit.append(message.strip())
+
         else:
-            self.processing_output_textedit.append(message.strip())
-        if is_output_at_end and output_textedit_scrollbar:
+            output_textedit.append(message.strip())
+
+        if is_output_at_end:
             output_textedit_scrollbar.setValue(output_textedit_scrollbar.maximum())
-        self.status_bar.showMessage(message.split("\n")[-1])
+
+        self.status_bar.showMessage(message.strip().rsplit("\n", 1)[-1])
 
 
 def start_gui() -> None:
