@@ -22,14 +22,14 @@ def prompt_for_password() -> Path:
     end timeout
     """
     with tempfile.NamedTemporaryFile(suffix=".sh", delete=False) as pw_file:
-        pw_file.write('#!/bin/bash\necho "$HOMEBREW_PASSOWRD"\n'.encode())
+        pw_file.write('#!/bin/bash\necho "$HOMEBREW_PASSWORD"\n'.encode())
         pw_file_path = Path(pw_file.name)
     pw_file_path.chmod(0o700)
     password_correct = False
     while not password_correct:
         password = subprocess.check_output(["osascript", "-e", script], text=True).strip()
 
-        os.environ["HOMEBREW_PASSOWRD"] = password
+        os.environ["HOMEBREW_PASSWORD"] = password
 
         os.environ["SUDO_ASKPASS"] = pw_file_path.as_posix()
         check_sudo_password = subprocess.run(
