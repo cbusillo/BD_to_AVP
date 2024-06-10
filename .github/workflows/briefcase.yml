@@ -12,6 +12,8 @@ jobs:
       KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       RELEASE_MESSAGE: |
         First release, will have issues.
         
@@ -75,25 +77,40 @@ jobs:
           echo "Commit messages: $MESSAGES"
       - name: Create Release
         id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: actions/github-script@v7
         with:
-          tag_name: v${{ env.VERSION }}
-          release_name: Release v${{ env.VERSION }}
-          body: |
-            ${{ env.RELEASE_MESSAGE }}
-            
-            ${{ env.MESSAGES }}
-          draft: false
-          prerelease: true
+          script: |
+            const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
+            const response = await octokit.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: `v${process.env.VERSION}`,
+              name: `Release v${process.env.VERSION}`,
+              body: `${process.env.RELEASE_MESSAGE}\n\n${process.env.MESSAGES}`,
+              draft: false,
+              prerelease: true
+            });
+            return response.data;
+          result-encoding: string
       - name: Upload Release Asset DMG
-        id: upload-release-asset-dmg
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: actions/github-script@v7
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: dist/Blu-ray to AVP-${{ env.VERSION }}.dmg
-          asset_name: Blu-ray to AVP-${{ env.VERSION }}.dmg
-          asset_content_type: application/octet-stream
+          script: |
+            const fs = require('fs');
+            const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
+            const releaseId = ${{ steps.create_release.outputs.id }};
+            const assetPath = 'dist/Blu-ray to AVP-${{ env.VERSION }}.dmg';
+            const assetName = 'Blu-ray to AVP-${{ env.VERSION }}.dmg';
+            const asset = fs.readFileSync(assetPath);
+      
+            const response = await octokit.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseId,
+              name: assetName,
+              data: asset,
+              headers: {
+                'content-type': 'application/octet-stream',
+                'content-length': asset.length
+              }
+            });
