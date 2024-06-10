@@ -4,10 +4,10 @@ from pathlib import Path
 from PySide6.QtGui import QFont, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
-    QDialog,
     QMainWindow,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QStatusBar,
@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QObject, QThread, Qt, Signal
 
-from bd_to_avp.gui.dialog import CustomWarningDialog, MKVCreationErrorDialog
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
 from bd_to_avp.process import process
@@ -283,9 +282,15 @@ class MainWindow(QMainWindow):
         self.process_button.setText(self.START_PROCESSING_TEXT)
 
     def handle_mkv_creation_error(self, error: MKVCreationError) -> None:
-        dialog = MKVCreationErrorDialog(self, str(error))
-        result = dialog.exec()
-        if result == QDialog.DialogCode.Accepted:
+
+        result = QMessageBox.critical(
+            self,
+            "MKV Creation Error",
+            "Do you want to continue?\n\n" + str(error),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Abort,
+        )
+
+        if result == QMessageBox.StandardButton.Yes:
             config.continue_on_error = True
             config.start_stage = Stage.EXTRACT_MVC_AUDIO_AND_SUB
             self.start_processing(is_continuing=True)
@@ -350,8 +355,7 @@ class MainWindow(QMainWindow):
             self.output_folder_entry.setText(output_folder)
 
     def popup_warning_centered(self, message: str) -> None:
-        dialog = CustomWarningDialog(self, message)
-        dialog.exec()
+        QMessageBox.warning(self, "Warning", message)
 
     def toggle_processing(self) -> None:
         if self.process_button.text() == self.START_PROCESSING_TEXT:
