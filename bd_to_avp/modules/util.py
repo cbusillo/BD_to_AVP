@@ -151,6 +151,14 @@ def cleanup_process(process: subprocess.Popen) -> None:
         process.terminate()
 
 
+def kill_processes_by_name(process_names: list[str]) -> None:
+    for process_name in process_names:
+        try:
+            subprocess.run(["pkill", "-f", process_name], check=True)
+        except subprocess.CalledProcessError:
+            pass
+
+
 class OutputHandler(io.TextIOBase):
     def __init__(self, emit_signal: Callable[[str], None]) -> None:
         self.emit_signal = emit_signal

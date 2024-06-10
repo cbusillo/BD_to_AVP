@@ -71,6 +71,22 @@ class Config:
         "tesseract",
         "finnvoor/tools/fx-upscale",
     ]
+    PROCESS_NAMES_TO_KILL = [
+        "ffmpeg",
+        "makemkvcon",
+        "wine",
+        "FRIMDecode64.exe",
+        "spatial",
+        "spatial-media-kit-tool",
+        "mkvextract",
+        "MP4Box",
+        "fx-upscale",
+    ]
+    MKV_ERROR_CODES = [
+        "corrupt or invalid",
+        "video frame timecode differs",
+        "secondary stream video frame timecode differs",
+    ]
 
     MAKEMKVCON_PATH = Path("/Applications/MakeMKV.app/Contents/MacOS/makemkvcon")
     SCRIPT_PATH = Path(__file__).parent.parent

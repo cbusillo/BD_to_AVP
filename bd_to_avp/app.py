@@ -25,7 +25,7 @@ from PySide6.QtCore import QObject, QThread, Qt, Signal
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.disc import DiscInfo
 from bd_to_avp.process import process
-from bd_to_avp.modules.util import OutputHandler, Spinner
+from bd_to_avp.modules.util import OutputHandler, Spinner, kill_processes_by_name
 
 
 class ProcessingSignals(QObject):
@@ -391,13 +391,13 @@ class MainWindow(QMainWindow):
                     "Either Source Folder or Source File must be set, but not both."
                 )
                 return
-            self.process_button.setEnabled(False)
             self.start_processing()
-            # self.process_button.setText(self.STOP_PROCESSING_TEXT
+            self.process_button.setText(self.STOP_PROCESSING_TEXT)
         else:
             self.stop_processing()
-            self.process_button.setEnabled(True)
             self.process_button.setText(self.START_PROCESSING_TEXT)
+
+        self.process_button.setShortcut("Ctrl+P")
 
     def start_processing(self) -> None:
         self.save_config()
@@ -443,8 +443,9 @@ class MainWindow(QMainWindow):
         selected_stage = int(self.start_stage_combobox.currentText().split(" - ")[0])
         config.start_stage = Stage.get_stage(selected_stage)
 
-    def stop_processing(self) -> None:
-        self.processing_thread.terminate()
+    @staticmethod
+    def stop_processing() -> None:
+        kill_processes_by_name(config.PROCESS_NAMES_TO_KILL)
 
     def update_processing_output(self, message: str) -> None:
         is_output_at_end = False
