@@ -59,6 +59,7 @@ jobs:
         run: |
           poetry run briefcase create
           poetry run briefcase build
+          codesign --force --verify --verbose --sign "${{ secrets.DEV_ID }}" "$(find . -name QtWebEngineCore)"
           poetry run briefcase package -i "${{ secrets.DEV_ID }}"
       - name: Get commit messages
         id: get_commit_messages
