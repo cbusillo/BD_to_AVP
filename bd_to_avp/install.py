@@ -74,15 +74,15 @@ def install_deps(is_gui: bool) -> None:
     if not check_for_homebrew_in_path():
         add_homebrew_to_path()
 
-    shutil.rmtree("/Applications/MakeMKV.app", ignore_errors=True)
-    shutil.rmtree("/Applications/Wine Stable.app", ignore_errors=True)
+    upgrade_brew(is_gui)
+
+    manage_brew_package("makemkv", is_gui, True, "uninstall")
 
     for package in config.BREW_CASKS_TO_INSTALL:
-        manage_brew_package(package, is_gui, True, "uninstall")
-        manage_brew_package(package, is_gui, True)
+        if not check_is_package_installed(package):
+            manage_brew_package(package, is_gui, True)
 
-    for package in config.BREW_PACKAGES_TO_INSTALL:
-        manage_brew_package(package, is_gui)
+    manage_brew_package(config.BREW_PACKAGES_TO_INSTALL, is_gui)
 
     if not check_rosetta():
         install_rosetta(is_gui)
@@ -171,19 +171,41 @@ def is_arm64() -> bool:
     return platform.machine() == "arm64"
 
 
-def manage_brew_package(package: str, is_gui: bool, cask: bool = False, operation: str = "install") -> None:
-    print(f"{operation.title()}ing {package}...")
+def check_is_package_installed(package: str) -> bool:
+    process = subprocess.run(
+        ["/opt/homebrew/bin/brew", "list", "--cask", "--formula", package],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    app_dir_path = next(Path("/Applications").glob(f"{package.replace('-', ' ')}.app"), None)
+    if package in process.stdout and app_dir_path and app_dir_path.exists():
+        return True
+
+    return False
+
+
+def manage_brew_package(
+    packages: str | list[str], is_gui: bool, cask: bool = False, operation: str = "install"
+) -> None:
+    if isinstance(packages, str):
+        packages = [packages]
+    packages_str = " ".join(packages)
+    print(f"{operation.title()}ing {packages_str}...")
+
     brew_command = ["/opt/homebrew/bin/brew", operation]
     if operation == "install":
         brew_command.append("--no-quarantine")
-        app_dir_path = next(Path("/Applications").glob(f"{package.replace('-', ' ')}.app"), None)
-        if app_dir_path and app_dir_path.is_dir():
-            shutil.rmtree(app_dir_path, ignore_errors=True)
-            print(f"Removed existing application: {app_dir_path}")
+
+        for package in packages:
+            app_dir_path = next(Path("/Applications").glob(f"{package.replace('-', ' ')}.app"), None)
+            if cask and app_dir_path and app_dir_path.is_dir():
+                shutil.rmtree(app_dir_path, ignore_errors=True)
+                print(f"Removed existing application: {app_dir_path}")
 
     if cask:
         brew_command.append("--cask")
-    brew_command.append(package)
+    brew_command += packages
 
     process = subprocess.run(
         brew_command,
@@ -193,13 +215,13 @@ def manage_brew_package(package: str, is_gui: bool, cask: bool = False, operatio
     )
 
     if operation == "uninstall" and process.returncode == 1:
-        print(f"{package} not installed.")
+        print(f"{packages_str} not installed.")
         return
 
     if process.returncode != 0:
-        on_error_process(package, process, is_gui)
+        on_error_process(packages_str, process, is_gui)
 
-    print(f"{package} {operation}ed.")
+    print(f"{packages_str} {operation}ed.")
 
 
 def update_brew(is_gui: bool) -> None:
@@ -215,6 +237,21 @@ def update_brew(is_gui: bool) -> None:
     if process.returncode != 0:
         on_error_process("Homebrew", process, is_gui)
     print("Homebrew updated.")
+
+
+def upgrade_brew(is_gui: bool) -> None:
+    print("Upgrading Homebrew...")
+    brew_command = ["/opt/homebrew/bin/brew", "upgrade"]
+    process = subprocess.run(
+        brew_command,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    if process.returncode != 0:
+        on_error_process("Homebrew", process, is_gui)
+    print("Homebrew upgraded.")
 
 
 def check_mp4box_version(version: str) -> bool:
