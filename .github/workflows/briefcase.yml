@@ -24,6 +24,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -67,10 +69,10 @@ jobs:
           poetry run briefcase package -i "${{ secrets.DEV_ID }}"
       - name: Get commit messages
         run: |
-          EXCLUDED_PATTERNS=$(echo "${{ env.EXCLUDED_MESSAGES }}" | sed ':a;N;$!ba;s/\n/|/g' | sed 's/|$//')
+          EXCLUDED_PATTERNS=$(echo "${{ env.EXCLUDED_MESSAGES }}" | tr '\n' '|' | sed 's/|$//')
           MESSAGES=$(git log --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" master ^release | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
-          FORMATTED_MESSAGES=$(echo "$MESSAGES" | jq -R -s '.' | jq -r 'join("\n")')
-          echo "messages=$(echo "$FORMATTED_MESSAGES" | jq -R -s '.')" >> $GITHUB_OUTPUT
+          FORMATTED_MESSAGES=$(echo "$MESSAGES" | jq -Rs '.')
+          echo "messages=$FORMATTED_MESSAGES" >> $GITHUB_OUTPUT
           echo "FORMATTED_MESSAGES"
       - name: Prepare Release Message
         id: prepare_release_message
