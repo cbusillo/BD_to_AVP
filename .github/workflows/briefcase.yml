@@ -12,12 +12,12 @@ jobs:
       KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
-
       RELEASE_MESSAGE: |
         First release, will have issues.
         
         ** After entering your password it will take a few minutes (maybe ten). It will appear to be doing nothing. If it fails, it should pop up with an error. Otherwise it should install all the dependences in the background and eventually pop up the GUI.
-        Reading directly from discs has not yet been added to the GUI, but works in the terminal version. If you run the binary with any arguments, it will work like the previous terminal app. "/Applications/Blu-ray to AVP.app/Contents/MacOS/Blu-ray to AVP"
+        
+        Reading directly from discs has not yet been added to the GUI, but works in the terminal version. If you run the binary with any arguments, it will work like the previous terminal app. '/Applications/Blu-ray to AVP.app/Contents/MacOS/Blu-ray to AVP'
       EXCLUDED_MESSAGES: |
         Bump version after merge into release
         merge master into release
@@ -67,12 +67,11 @@ jobs:
           poetry run briefcase package -i "${{ secrets.DEV_ID }}"
       - name: Get commit messages
         run: |
-          EXCLUDED_PATTERNS=$(echo "$EXCLUDED_MESSAGES" | sed ':a;N;$!ba;s/\n/|/g' | sed 's/|$//')
-          echo "Excluded patterns: $EXCLUDED_PATTERNS"  # Debugging line to check the patterns
+          EXCLUDED_PATTERNS=$(echo "${{ env.EXCLUDED_MESSAGES }}" | sed ':a;N;$!ba;s/\n/|/g' | sed 's/|$//')
           MESSAGES=$(git log --pretty=format:"%s" | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
-          echo "Messages: $MESSAGES" 
-          echo "MESSAGES=${MESSAGES}" >> $GITHUB_ENV
+          echo "MESSAGES=$MESSAGES" >> $GITHUB_ENV
       - name: Prepare Release Message
+        id: prepare_release_message
         run: |
           RELEASE_BODY="${{ env.RELEASE_MESSAGE }}\n\n${{ env.MESSAGES }}"
           echo "release_body=$(echo "$RELEASE_BODY" | jq -R -s .)" >> $GITHUB_OUTPUT
