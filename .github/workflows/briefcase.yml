@@ -70,10 +70,16 @@ jobs:
           EXCLUDED_PATTERNS=$(echo "${{ env.EXCLUDED_MESSAGES }}" | sed ':a;N;$!ba;s/\n/|/g' | sed 's/|$//')
           MESSAGES=$(git log --pretty=format:"%s" | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
           echo "MESSAGES=$MESSAGES" >> $GITHUB_ENV
+          echo "$MESSAGES"
       - name: Prepare Release Message
         id: prepare_release_message
         run: |
-          RELEASE_BODY="${{ env.RELEASE_MESSAGE }}\n\n${{ env.MESSAGES }}"
+          RELEASE_BODY=$(cat <<EOF
+          ${{ env.RELEASE_MESSAGE }}
+          
+          ${{ env.MESSAGES }}
+          EOF
+          )
           echo "release_body=$(echo "$RELEASE_BODY" | jq -R -s .)" >> $GITHUB_OUTPUT
       - name: Create Release
         id: create_release
@@ -84,8 +90,8 @@ jobs:
           prerelease: true
           tag_name: v${{ env.VERSION }}
           name: Release v${{ env.VERSION }}
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
           files: |
             dist/*.zip
             dist/*.dmg
             dist/*.pkg
+            
