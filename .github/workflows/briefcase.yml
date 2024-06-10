@@ -22,7 +22,6 @@ jobs:
         run: |
           git fetch --tags
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
-          echo "Last release tag or initial commit: $LAST_TAG"
           MESSAGES=$(git log --no-merges --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s\n" "$LAST_TAG"..HEAD | awk '!seen[$0]++')
           echo "MESSAGES<<EOF" >> "$GITHUB_OUTPUT"
           echo "$MESSAGES" >> "$GITHUB_OUTPUT"
