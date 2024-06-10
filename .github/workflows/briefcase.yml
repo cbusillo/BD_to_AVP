@@ -20,7 +20,6 @@ jobs:
       - name: Get commit messages
         id: get_commit_messages
         run: |
-          git fetch --unshallow
           git fetch --tags
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
           echo "Last release tag or initial commit: $LAST_TAG"
