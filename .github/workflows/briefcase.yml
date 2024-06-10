@@ -26,6 +26,31 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Package application for GitHub
+        run: |
+          poetry run briefcase create
+          poetry run briefcase build
+          find . -name QtWebEngineCore.framework -type d | while read dir; do
+            find "$dir" -type f -execdir codesign --force --verify --verbose --sign "${{ secrets.DEV_ID }}" {} \;
+          done
+          poetry run briefcase package -i "${{ secrets.DEV_ID }}"
+      - name: Get commit messages
+        run: |
+          EXCLUDED_PATTERNS=$(echo "${{ env.EXCLUDED_MESSAGES }}" | tr '\n' '|' | sed 's/|$//')
+          MESSAGES=$(git log --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" master ^release | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
+          FORMATTED_MESSAGES=$(echo "$MESSAGES" | jq -Rs '.')
+          echo "messages=$FORMATTED_MESSAGES" >> $GITHUB_OUTPUT
+          echo "FORMATTED_MESSAGES"
+      - name: Prepare Release Message
+        id: prepare_release_message
+        run: |
+          RELEASE_BODY=$(cat <<EOF
+          ${{ env.RELEASE_MESSAGE }}
+          
+          ${{ steps.get_commit_messages.outputs.messages }}
+          EOF
+          )
+          echo "release_body=$(echo "$RELEASE_BODY" | jq -R -s '.')" >> $GITHUB_OUTPUT
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -59,31 +84,6 @@ jobs:
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n 1 | tr -d '"' | xargs)
           echo "Extracted version: '${version}'" 
           echo "VERSION=${version}" >> $GITHUB_ENV
-      - name: Package application for GitHub
-        run: |
-          poetry run briefcase create
-          poetry run briefcase build
-          find . -name QtWebEngineCore.framework -type d | while read dir; do
-            find "$dir" -type f -execdir codesign --force --verify --verbose --sign "${{ secrets.DEV_ID }}" {} \;
-          done
-          poetry run briefcase package -i "${{ secrets.DEV_ID }}"
-      - name: Get commit messages
-        run: |
-          EXCLUDED_PATTERNS=$(echo "${{ env.EXCLUDED_MESSAGES }}" | tr '\n' '|' | sed 's/|$//')
-          MESSAGES=$(git log --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" master ^release | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
-          FORMATTED_MESSAGES=$(echo "$MESSAGES" | jq -Rs '.')
-          echo "messages=$FORMATTED_MESSAGES" >> $GITHUB_OUTPUT
-          echo "FORMATTED_MESSAGES"
-      - name: Prepare Release Message
-        id: prepare_release_message
-        run: |
-          RELEASE_BODY=$(cat <<EOF
-          ${{ env.RELEASE_MESSAGE }}
-          
-          ${{ steps.get_commit_messages.outputs.messages }}
-          EOF
-          )
-          echo "release_body=$(echo "$RELEASE_BODY" | jq -R -s '.')" >> $GITHUB_OUTPUT
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
