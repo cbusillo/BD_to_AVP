@@ -2,9 +2,10 @@
 
 ## Introduction
 
-This tool processes 3D video content from Blu-ray discs, ISO images, or MKV files, creating a final video file compatible with
-the Apple Vision Pro. It uses FFmpeg, MakeMKV, and Wine for video extraction, audio transcoding, and video stream merging to convert
-from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The tool also injects 360° metadata into the video file for spatial media playback.
+This tool processes 3D video content from Blu-ray discs, ISO images, or MKV files, creating a final video file
+compatible with the Apple Vision Pro. It uses FFmpeg, MakeMKV, and Wine for video extraction, audio transcoding, and
+video stream merging to convert from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The tool also injects 360° metadata into
+the video file for spatial media playback.
 
 ## Quick install (or update)
 
@@ -18,14 +19,14 @@ To quickly install or update `BD_to_AVP`, run the following command in your term
 
 Ensure the following are installed on your Mac *(If not using the Quick Install)*:
 
-- **Apple Silicon [Mac]**: A Mac with Apple Silicon, such as the M1, M1 Pro, or M1 Max (Maybe, installer currently requires Apple
-  Silicon. If anyone can confirm that spatial-media-kit-tool works on Intel Macs, I can remove this requirement)
+- **Apple Silicon [Mac]**: A Mac with Apple Silicon, such as the M1, M1 Pro, or M1 Max
 - **[macOS Sonoma]**: The latest version of macOS.
 - **[Rosetta 2]**: A compatibility layer allowing Intel-based applications to run on Apple Silicon Macs.
 - **[Python] 3.12**: The latest version of Python.
 - **[Homebrew]**: The missing package manager for macOS (or Linux).
 - **[FFmpeg]**: A complete, cross-platform solution to record, convert, and stream audio and video.
-- **[Wine]**: A free and open-source compatibility layer allowing Windows programs to run on Unix-like operating systems.
+- **[Wine]**: A free and open-source compatibility layer allowing Windows programs to run on Unix-like operating
+  systems.
 - **[MakeMKV]**: For converting disc video content into MKV files.
 - **[spatial-media-kit-tool]**: A tool for injecting 360° metadata into video files.
 - **[MP4Box]**: A multimedia packager available for Windows, Mac, and Linux.
@@ -33,10 +34,10 @@ Ensure the following are installed on your Mac *(If not using the Quick Install)
 
 ## Manual Installation (Out of date)
 
-To set up your macOS environment for video processing, including creating and handling 3D video content, follow these steps to
-install the necessary tools using Homebrew and manual installation. This includes the installation of Homebrew itself, FFmpeg for
-video encoding and decoding, Wine for running Windows applications, MakeMKV for ripping Blu-ray and DVD to MKV,
-spatial-media-kit-tool for handling spatial media, and MP4Box for multimedia packaging.
+To set up your macOS environment for video processing, including creating and handling 3D video content, follow these
+steps to install the necessary tools using Homebrew and manual installation. This includes the installation of Homebrew
+itself,FFmpeg for video encoding and decoding, Wine for running Windows applications, MakeMKV for ripping Blu-ray and
+DVD to MKV, spatial-media-kit-tool for handling spatial media, and MP4Box for multimedia packaging.
 
 ```bash
 # Install Rosetta 2
@@ -77,8 +78,8 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 ### Parameters
 
 - `--source`: Source for a single disc number, MKV file path, or ISO image path (required).
-- `--source-folder`: Source folder path. This option will recurively scan for image files or mkv files. Will take precedence over
-  --source if both are provided.
+- `--source-folder`: Source folder path. This option will recurively scan for image files or mkv files. Will take
+  precedence over --source if both are provided.
 - `--fx-upscale`: Upscale video to 4K resolution using fx-upscale (disabled by default).
 - `--remove-original`: Remove original file after processing.
 - `--overwrite`: Overwrite existing output file.
@@ -138,9 +139,11 @@ Contribute to the project by submitting pull requests or opening issues for bugs
 
 Big thanks to:
 
-- [sturmen][sturmen] on the Doom9 forums, for [an encoding guide][sturmen-guide] using `FRIM Decoder` as well as creating
+- [sturmen][sturmen] on the Doom9 forums, for [an encoding guide][sturmen-guide] using `FRIM Decoder` as well as
+  creating
   the [spatial-media-kit-tool]
-- [Vargol][vargol] on GitHub, for making the [JM reference software][jm-reference] [build properly on macOS][vargol-tools] as well as
+- [Vargol][vargol] on GitHub, for making
+  the [JM reference software][jm-reference] [build properly on macOS][vargol-tools] as well as
   an [example script][vargol-guide] that was a useful reference
 - [steverice][steverice] for [h264-tools][ldecod]
 
