@@ -19,7 +19,7 @@ jobs:
           fetch-depth: 0
       - name: Fetch master branch
         run: |
-          git fetch --all
+          git fetch origin master:master
           git fetch --tags
           git checkout release
       - name: Get commit messages
