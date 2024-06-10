@@ -17,7 +17,7 @@ jobs:
         
         ** After entering your password it will take a few minutes (maybe ten). It will appear to be doing nothing. If it fails, it should pop up with an error. Otherwise it should install all the dependences in the background and eventually pop up the GUI.
         
-        Reading directly from discs has not yet been added to the GUI, but works in the terminal version. If you run the binary with any arguments, it will work like the previous terminal app. '/Applications/Blu-ray to AVP.app/Contents/MacOS/Blu-ray to AVP'
+        If you run the binary with any arguments, it will work like the previous terminal app. '/Applications/Blu-ray to AVP.app/Contents/MacOS/Blu-ray to AVP'
       EXCLUDED_MESSAGES: |
         Bump version after merge into release
         merge master into release
