@@ -21,10 +21,11 @@ jobs:
         run: |
           git fetch --all
           git fetch --tags
+          git checkout release
       - name: Get commit messages
         id: get_commit_messages
         run: |
-          MESSAGES=$(git log --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" $(git merge-base --all HEAD release)..release)
+          MESSAGES=$(git log --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" $(git merge-base --all HEAD release)..HEAD)
           MESSAGES="${MESSAGES//$'\n'/'%0A'}"
           echo "MESSAGES=$MESSAGES" >> $GITHUB_OUTPUT
           echo "$MESSAGES"
