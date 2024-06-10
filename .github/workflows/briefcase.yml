@@ -32,6 +32,7 @@ jobs:
         run: |
           MESSAGES=$(git log --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" master ^release | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
           echo "MESSAGES=$MESSAGES" >> $GITHUB_ENV
+          echo "$MESSAGES"
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
