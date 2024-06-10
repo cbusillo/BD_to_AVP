@@ -72,6 +72,9 @@ jobs:
           MESSAGES=$(git log --pretty=format:"%s" | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
           echo "Messages: $MESSAGES" 
           echo "MESSAGES=${MESSAGES}" >> $GITHUB_ENV
+      - name: Prepare Release Message
+        run: |
+          echo "RELEASE_BODY=$(echo -e "${{ env.RELEASE_MESSAGE }}\n\n${{ env.MESSAGES }}")" >> $GITHUB_ENV
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
