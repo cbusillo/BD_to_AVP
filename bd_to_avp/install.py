@@ -54,6 +54,8 @@ def add_homebrew_to_path() -> None:
 
 def check_for_homebrew_in_path() -> bool:
     zshrc = Path.home() / ".zshrc"
+    if not zshrc.exists():
+        return False
     zshrc_contents = zshrc.read_text()
     if config.HOMEBREW_PREFIX_BIN.as_posix() in zshrc_contents:
         return True
