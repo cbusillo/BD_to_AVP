@@ -26,6 +26,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Fetch master branch
+        run: git fetch origin master:master
       - name: List all branches
         run: |
           git branch -a
@@ -39,10 +41,15 @@ jobs:
       - name: Prepare Release Message
         id: prepare_release_message
         run: |
-          RELEASE_BODY="${{ env.RELEASE_MESSAGE }}
+          RELEASE_BODY=$(cat <<EOF
+          First release, will have issues.
           
-          ${{ steps.get_commit_messages.outputs.messages }}"
-          echo "release_body=$(echo "$RELEASE_BODY" | jq -Rrs '.')"
+          ** After entering your password it will take a few minutes (maybe ten). It will appear to be doing nothing. If it fails, it should pop up with an error. Otherwise, it should install all the dependencies in the background and eventually pop up the GUI.
+          
+          If you run the binary with any arguments, it will work like the previous terminal app. '/Applications/Blu-ray to AVP.app/Contents/MacOS/Blu-ray to AVP'
+          EOF
+          )
+          echo "$RELEASE_BODY"
           echo "release_body=$(echo "$RELEASE_BODY" | jq -Rrs '.') >> $GITHUB_OUTPUT
       - name: Set up Python
         uses: actions/setup-python@v5
