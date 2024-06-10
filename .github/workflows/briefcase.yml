@@ -14,10 +14,8 @@ jobs:
       CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
       RELEASE_MESSAGE: |
         First release, will have issues.
-        
         ** After entering your password it will take a few minutes (maybe ten). It will appear to be doing nothing. If it fails, it should pop up with an error. Otherwise it should install all the dependences in the background and eventually pop up the GUI.
-        
-        If you run the binary with any arguments, it will work like the previous terminal app. '/Applications/Blu-ray to AVP.app/Contents/MacOS/Blu-ray to AVP'
+        Reading directly from discs has not yet been added to the GUI, but works in the terminal version. If you run the binary with any arguments, it will work like the previous terminal app. "/Applications/Blu-ray to AVP.app/Contents/MacOS/Blu-ray to AVP"
       EXCLUDED_MESSAGES: |
         Bump version after merge into release
         merge master into release
@@ -28,29 +26,12 @@ jobs:
           fetch-depth: 0
       - name: Fetch master branch
         run: git fetch origin master:master
-      - name: List all branches
-        run: |
-          git branch -a
       - name: Get commit messages
+        id: get_commit_messages
         run: |
-          EXCLUDED_PATTERNS=$(echo "${{ env.EXCLUDED_MESSAGES }}" | tr '\n' '|' | sed 's/|$//')
-          MESSAGES=$(git log --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" master ^release | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
-          FORMATTED_MESSAGES=$(echo "$MESSAGES" | jq -Rs '.')
-          echo "messages=$FORMATTED_MESSAGES" >> $GITHUB_OUTPUT
-          echo "FORMATTED_MESSAGES"
-      - name: Prepare Release Message
-        id: prepare_release_message
-        run: |
-          RELEASE_BODY=$(cat <<EOF
-          First release, will have issues.
-          
-          ** After entering your password it will take a few minutes (maybe ten). It will appear to be doing nothing. If it fails, it should pop up with an error. Otherwise, it should install all the dependencies in the background and eventually pop up the GUI.
-          
-          If you run the binary with any arguments, it will work like the previous terminal app. '/Applications/Blu-ray to AVP.app/Contents/MacOS/Blu-ray to AVP'
-          EOF
-          )
-          echo "$RELEASE_BODY"
-          echo "release_body=$(echo "$RELEASE_BODY" | jq -Rrs '.') >> $GITHUB_OUTPUT
+          MESSAGES=$(git log --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" master ^release | grep -vE "$(echo "$EXCLUDED_MESSAGES" | tr '\n' '|')" | awk '!seen[$0]++')
+          #          MESSAGES=$(git log --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" master ^release | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
+          echo "MESSAGES=$MESSAGES" >> $GITHUB_ENV
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -78,25 +59,28 @@ jobs:
         run: |
           echo "${{ secrets.KEYCHAIN_PASSWORD }}" | xcrun altool --store-password-in-keychain-item "${{ secrets.KEYCHAIN_NAME }}" -u "${{ secrets.APPLE_ID }}" -p -
           xcrun notarytool store-credentials "${{ secrets.KEYCHAIN_NAME }}" --apple-id "${{ secrets.APPLE_ID }}" --password "${{ secrets.KEYCHAIN_PASSWORD }}" --team-id "${{ secrets.TEAM_ID }}"
-      - name: Package application for GitHub
-        run: |
-          poetry run briefcase create
-          poetry run briefcase build
-          find . -name QtWebEngineCore.framework -type d | while read dir; do
-            find "$dir" -type f -execdir codesign --force --verify --verbose --sign "${{ secrets.DEV_ID }}" {} \;
-          done
-          poetry run briefcase package -i "${{ secrets.DEV_ID }}"
       - name: Extract version
         id: extract_version
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n 1 | tr -d '"' | xargs)
           echo "Extracted version: '${version}'" 
           echo "VERSION=${version}" >> $GITHUB_ENV
+      - name: Package application for GitHub
+        run: |
+          poetry run briefcase create
+          poetry run briefcase build
+            find . -name QtWebEngineCore.framework -type d | while read dir; do
+              find "$dir" -type f -execdir codesign --force --verify --verbose --sign "${{ secrets.DEV_ID }}" {} \;
+            done
+          poetry run briefcase package -i "${{ secrets.DEV_ID }}"
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
-          body: ${{ steps.prepare_release_message.outputs.release_body }}
+          body: |
+            ${{ env.RELEASE_MESSAGE }}
+            
+            ${{ env.MESSAGES }}
           draft: false
           prerelease: true
           tag_name: v${{ env.VERSION }}
