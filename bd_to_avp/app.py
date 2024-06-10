@@ -168,21 +168,25 @@ class MainWindow(QMainWindow):
         fov_layout.addWidget(self.fov_label)
         config_layout.addLayout(fov_layout)
 
+        frame_rate_layout = QHBoxLayout()
         self.frame_rate_label = QLabel("Frame Rate (Leave blank to use source value)")
         self.frame_rate_entry = QLineEdit()
         self.frame_rate_entry.setText(config.frame_rate)
         self.frame_rate_entry.setMaximumWidth(75)
         self.frame_rate_entry.setPlaceholderText(DiscInfo.frame_rate)
-        config_layout.addWidget(self.frame_rate_label)
-        config_layout.addWidget(self.frame_rate_entry)
+        frame_rate_layout.addWidget(self.frame_rate_label)
+        frame_rate_layout.addWidget(self.frame_rate_entry)
+        config_layout.addLayout(frame_rate_layout)
 
+        resolution_layout = QHBoxLayout()
         self.resolution_label = QLabel("Resolution (Leave blank to use source value)")
         self.resolution_entry = QLineEdit()
         self.resolution_entry.setText(config.resolution)
         self.resolution_entry.setPlaceholderText(DiscInfo.resolution)
         self.resolution_entry.setMaximumWidth(150)
-        config_layout.addWidget(self.resolution_label)
-        config_layout.addWidget(self.resolution_entry)
+        resolution_layout.addWidget(self.resolution_label)
+        resolution_layout.addWidget(self.resolution_entry)
+        config_layout.addLayout(resolution_layout)
 
         self.crop_black_bars_checkbox = QCheckBox("Crop Black Bars")
         self.crop_black_bars_checkbox.setChecked(config.crop_black_bars)
@@ -230,8 +234,6 @@ class MainWindow(QMainWindow):
         self.start_stage_combobox.setCurrentText(config.start_stage.name)
         config_layout.addWidget(self.start_stage_label)
         config_layout.addWidget(self.start_stage_combobox)
-
-        # Add more configuration options as needed
 
         main_layout.addLayout(config_layout)
 
