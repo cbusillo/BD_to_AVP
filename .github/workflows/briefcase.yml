@@ -26,14 +26,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Package application for GitHub
+      - name: List all branches
         run: |
-          poetry run briefcase create
-          poetry run briefcase build
-          find . -name QtWebEngineCore.framework -type d | while read dir; do
-            find "$dir" -type f -execdir codesign --force --verify --verbose --sign "${{ secrets.DEV_ID }}" {} \;
-          done
-          poetry run briefcase package -i "${{ secrets.DEV_ID }}"
+          git branch -a
       - name: Get commit messages
         run: |
           EXCLUDED_PATTERNS=$(echo "${{ env.EXCLUDED_MESSAGES }}" | tr '\n' '|' | sed 's/|$//')
@@ -44,13 +39,11 @@ jobs:
       - name: Prepare Release Message
         id: prepare_release_message
         run: |
-          RELEASE_BODY=$(cat <<EOF
-          ${{ env.RELEASE_MESSAGE }}
+          RELEASE_BODY="${{ env.RELEASE_MESSAGE }}
           
-          ${{ steps.get_commit_messages.outputs.messages }}
-          EOF
-          )
-          echo "release_body=$(echo "$RELEASE_BODY" | jq -R -s '.')" >> $GITHUB_OUTPUT
+          ${{ steps.get_commit_messages.outputs.messages }}"
+          echo "release_body=$(echo "$RELEASE_BODY" | jq -Rrs '.')"
+          echo "release_body=$(echo "$RELEASE_BODY" | jq -Rrs '.') >> $GITHUB_OUTPUT
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -78,6 +71,14 @@ jobs:
         run: |
           echo "${{ secrets.KEYCHAIN_PASSWORD }}" | xcrun altool --store-password-in-keychain-item "${{ secrets.KEYCHAIN_NAME }}" -u "${{ secrets.APPLE_ID }}" -p -
           xcrun notarytool store-credentials "${{ secrets.KEYCHAIN_NAME }}" --apple-id "${{ secrets.APPLE_ID }}" --password "${{ secrets.KEYCHAIN_PASSWORD }}" --team-id "${{ secrets.TEAM_ID }}"
+      - name: Package application for GitHub
+        run: |
+          poetry run briefcase create
+          poetry run briefcase build
+          find . -name QtWebEngineCore.framework -type d | while read dir; do
+            find "$dir" -type f -execdir codesign --force --verify --verbose --sign "${{ secrets.DEV_ID }}" {} \;
+          done
+          poetry run briefcase package -i "${{ secrets.DEV_ID }}"
       - name: Extract version
         id: extract_version
         run: |
