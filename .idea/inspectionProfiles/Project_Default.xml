@@ -33,7 +33,7 @@
         <value>
           <list size="2">
             <item index="0" class="java.lang.String" itemvalue="3.13" />
-            <item index="1" class="java.lang.String" itemvalue="3.10" />
+            <item index="1" class="java.lang.String" itemvalue="3.12" />
           </list>
         </value>
       </option>
@@ -45,11 +45,12 @@
     <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
       <option name="ignoredPackages">
         <value>
-          <list size="4">
+          <list size="5">
             <item index="0" class="java.lang.String" itemvalue="shippo" />
             <item index="1" class="java.lang.String" itemvalue="neopixel" />
             <item index="2" class="java.lang.String" itemvalue="board" />
             <item index="3" class="java.lang.String" itemvalue="shopify" />
+            <item index="4" class="java.lang.String" itemvalue="ffmpeg" />
           </list>
         </value>
       </option>

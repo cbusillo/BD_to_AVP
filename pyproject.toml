@@ -6,7 +6,7 @@ authors = ["Chris Busillo <info@shinycomputers.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python =  ">=3.12,<3.13"
+python = ">=3.12,<3.13"
 pgsrip = "^0.1.9"
 setuptools = "^70.0.0"
 ffmpeg-python = "^0.2.0"
