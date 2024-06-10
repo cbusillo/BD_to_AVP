@@ -27,9 +27,7 @@ def sanitize_filename(name: str) -> str:
     return "".join(c if c in allowed_chars else "" for c in name)
 
 
-def find_largest_file_with_extensions(
-    folder: Path, extensions: list[str]
-) -> Path | None:
+def find_largest_file_with_extensions(folder: Path, extensions: list[str]) -> Path | None:
     files: list[Path] = []
     for ext in extensions:
         files.extend(folder.glob(f"**/*{ext}"))
@@ -81,21 +79,14 @@ def move_file_to_output_root_folder(muxed_output_path: Path) -> None:
 def mounted_image(image_path: Path):
     mount_point = None
     existing_mounts_command = ["hdiutil", "info"]
-    existing_mounts_output = run_command(
-        existing_mounts_command, "Check mounted images"
-    )
+    existing_mounts_output = run_command(existing_mounts_command, "Check mounted images")
     try:
         for line in existing_mounts_output.split("\n"):
             if str(image_path) in line:
                 mount_line_index = existing_mounts_output.split("\n").index(line) + 1
-                while (
-                    "/dev/disk"
-                    not in existing_mounts_output.split("\n")[mount_line_index]
-                ):
+                while "/dev/disk" not in existing_mounts_output.split("\n")[mount_line_index]:
                     mount_line_index += 1
-                mount_point = existing_mounts_output.split("\n")[
-                    mount_line_index
-                ].split("\t")[-1]
+                mount_point = existing_mounts_output.split("\n")[mount_line_index].split("\t")[-1]
                 print(f"ISO is already mounted at {mount_point}")
                 break
 

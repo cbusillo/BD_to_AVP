@@ -27,9 +27,7 @@ def prompt_for_password() -> Path:
     pw_file_path.chmod(0o700)
     password_correct = False
     while not password_correct:
-        password = subprocess.check_output(
-            ["osascript", "-e", script], text=True
-        ).strip()
+        password = subprocess.check_output(["osascript", "-e", script], text=True).strip()
 
         os.environ["HOMEBREW_PASSOWRD"] = password
 
@@ -122,9 +120,7 @@ def install_rosetta(is_gui: bool) -> None:
 
 
 def check_mp4box(is_gui: bool) -> None:
-    if not config.MP4BOX_PATH.exists() or not check_mp4box_version(
-        config.MP4BOX_VERSION
-    ):
+    if not config.MP4BOX_PATH.exists() or not check_mp4box_version(config.MP4BOX_VERSION):
         if config.MP4BOX_PATH.exists():
             print("Removing old MP4Box...")
             shutil.rmtree("/Applications/GPAC.app", ignore_errors=True)
@@ -134,9 +130,7 @@ def check_mp4box(is_gui: bool) -> None:
 
 def check_install_version() -> bool:
     installed_version = config.load_version_from_file()
-    print(
-        f"Installed bd-to-avp version: {installed_version}\nCode bd-to-avp version: {config.code_version}"
-    )
+    print(f"Installed bd-to-avp version: {installed_version}\nCode bd-to-avp version: {config.code_version}")
     if installed_version == config.code_version:
         return True
 
@@ -152,12 +146,8 @@ def show_message(title: str, message: str) -> None:
     subprocess.call(["osascript", "-e", script])
 
 
-def on_error_process(
-    package: str, process: subprocess.CompletedProcess, is_gui: bool
-) -> None:
-    command = (
-        " ".join(process.args) if isinstance(process.args, list) else str(process.args)
-    )
+def on_error_process(package: str, process: subprocess.CompletedProcess, is_gui: bool) -> None:
+    command = " ".join(process.args) if isinstance(process.args, list) else str(process.args)
     if is_gui:
         show_message(
             f"Failed {package} processing",
@@ -181,16 +171,12 @@ def is_arm64() -> bool:
     return platform.machine() == "arm64"
 
 
-def manage_brew_package(
-    package: str, is_gui: bool, cask: bool = False, operation: str = "install"
-) -> None:
+def manage_brew_package(package: str, is_gui: bool, cask: bool = False, operation: str = "install") -> None:
     print(f"{operation.title()}ing {package}...")
     brew_command = ["/opt/homebrew/bin/brew", operation]
     if operation == "install":
         brew_command.append("--no-quarantine")
-        app_dir_path = next(
-            Path("/Applications").glob(f"{package.replace('-', ' ')}.app"), None
-        )
+        app_dir_path = next(Path("/Applications").glob(f"{package.replace('-', ' ')}.app"), None)
         if app_dir_path and app_dir_path.is_dir():
             shutil.rmtree(app_dir_path, ignore_errors=True)
             print(f"Removed existing application: {app_dir_path}")
@@ -293,13 +279,9 @@ def wine_boot() -> None:
 def install_brew(is_gui: bool) -> None:
     print("Installing Homebrew for arm64...")
 
-    response = requests.get(
-        "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
-    )
+    response = requests.get("https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh")
     if response.status_code != 200:
-        on_error_string(
-            "Homebrew", "Failed to download Homebrew install script.", is_gui
-        )
+        on_error_string("Homebrew", "Failed to download Homebrew install script.", is_gui)
     brew_install_script = response.text
 
     with tempfile.NamedTemporaryFile(suffix=".sh", delete=False) as brew_install_file:
@@ -338,7 +320,5 @@ def setup_frim() -> None:
 
     regedit_command = [config.WINE_PATH, "regedit", reg_file_path]
     regedit_env = {"WINEPREFIX": str(wine_prefix)}
-    run_command(
-        regedit_command, "Update the Windows registry for FRIM plugins.", regedit_env
-    )
+    run_command(regedit_command, "Update the Windows registry for FRIM plugins.", regedit_env)
     print("Updated the Windows registry for FRIM plugins.")

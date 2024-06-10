@@ -4,10 +4,7 @@ import ffmpeg
 
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.sub import convert_sup_to_srt, get_subtitle_tracks
-from bd_to_avp.modules.util import (
-    run_command,
-    run_ffmpeg_print_errors,
-)
+from bd_to_avp.modules.util import run_command, run_ffmpeg_print_errors
 
 
 def extract_mvc_audio_and_subtitle(
@@ -20,21 +17,13 @@ def extract_mvc_audio_and_subtitle(
 
     stream = ffmpeg.input(str(input_path))
 
-    video_stream = ffmpeg.output(
-        stream["v:0"], f"file:{video_output_path}", c="copy", bsf="h264_mp4toannexb"
-    )
-    audio_stream = ffmpeg.output(
-        stream["a:0"], f"file:{audio_output_path}", c="pcm_s24le"
-    )
+    video_stream = ffmpeg.output(stream["v:0"], f"file:{video_output_path}", c="copy", bsf="h264_mp4toannexb")
+    audio_stream = ffmpeg.output(stream["a:0"], f"file:{audio_output_path}", c="pcm_s24le")
 
     print("Running ffmpeg to extract video, audio, and subtitles from MKV")
     if subtitle_output_path:
-        subtitle_stream = ffmpeg.output(
-            stream[f"s:{subtitle_track}"], f"file:{subtitle_output_path}", c="copy"
-        )
-        run_ffmpeg_print_errors(
-            [video_stream, audio_stream, subtitle_stream], overwrite_output=True
-        )
+        subtitle_stream = ffmpeg.output(stream[f"s:{subtitle_track}"], f"file:{subtitle_output_path}", c="copy")
+        run_ffmpeg_print_errors([video_stream, audio_stream, subtitle_stream], overwrite_output=True)
     else:
         run_ffmpeg_print_errors([video_stream, audio_stream], overwrite_output=True)
 
@@ -67,18 +56,10 @@ def create_mvc_audio_and_subtitle_files(
     subtitle_output_path = None
     subtitle_tracks: list[dict[str, int]] = []
 
-    if (
-        config.start_stage.value <= Stage.EXTRACT_MVC_AUDIO_AND_SUB.value
-        and mkv_output_path
-    ):
-        if not config.skip_subtitles and (
-            subtitle_tracks := get_subtitle_tracks(mkv_output_path)
-        ):
+    if config.start_stage.value <= Stage.EXTRACT_MVC_AUDIO_AND_SUB.value and mkv_output_path:
+        if not config.skip_subtitles and (subtitle_tracks := get_subtitle_tracks(mkv_output_path)):
 
-            subtitle_output_path = (
-                output_folder
-                / f"{disc_name}_subtitles{subtitle_tracks[0]['extension']}"
-            )
+            subtitle_output_path = output_folder / f"{disc_name}_subtitles{subtitle_tracks[0]['extension']}"
 
         extract_mvc_audio_and_subtitle(
             mkv_output_path,
@@ -102,9 +83,7 @@ def create_mvc_audio_and_subtitle_files(
     return audio_output_path, video_output_path, subtitle_output_path
 
 
-def mux_video_audio_subs(
-    mv_hevc_path: Path, audio_path: Path, muxed_path: Path, sub_path: Path | None
-) -> None:
+def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path, sub_path: Path | None) -> None:
 
     command = [
         config.MP4BOX_PATH,

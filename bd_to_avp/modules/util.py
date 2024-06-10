@@ -25,9 +25,7 @@ class Spinner:
 
     def _update_spinner(self) -> None:
         if not self.stop_spinner_flag:
-            sys.stdout.write(
-                f"\rRunning {self.command_name} {self.symbols[self.current_symbol]}"
-            )
+            sys.stdout.write(f"\rRunning {self.command_name} {self.symbols[self.current_symbol]}")
             sys.stdout.flush()
             self.current_symbol = (self.current_symbol + 1) % len(self.symbols)
 
@@ -56,37 +54,25 @@ class Spinner:
 
 
 def normalize_command_elements(command: list[Any]) -> list[str | Path | bytes]:
-    return [
-        str(item) if not isinstance(item, (str, bytes, Path)) else item
-        for item in command
-        if item is not None
-    ]
+    return [str(item) if not isinstance(item, (str, bytes, Path)) else item for item in command if item is not None]
 
 
 def add_quotes_to_path_if_space(commands: list[str | Path | bytes]) -> list[str]:
     commands_with_paths_as_strings = [
-        (
-            f'"{command}"'
-            if isinstance(command, Path) and " " in command.as_posix()
-            else str(command)
-        )
+        (f'"{command}"' if isinstance(command, Path) and " " in command.as_posix() else str(command))
         for command in commands
     ]
     return commands_with_paths_as_strings
 
 
-def run_command(
-    commands: list[Any], command_name: str = "", env: dict[str, str] | None = None
-) -> str:
+def run_command(commands: list[Any], command_name: str = "", env: dict[str, str] | None = None) -> str:
     commands = normalize_command_elements(commands)
     if not command_name:
         command_name = str(commands[0])
 
     if config.output_commands:
         commands_to_print = add_quotes_to_path_if_space(commands)
-        print(
-            f"Running command:\n{' '.join(str(command) for command in commands_to_print)}"
-        )
+        print(f"Running command:\n{' '.join(str(command) for command in commands_to_print)}")
 
     env = env if env else os.environ.copy()
     output_lines = []
@@ -113,9 +99,7 @@ def run_command(
         if process.returncode != 0:
             print("Error running command:", command_name)
             print("\n".join(output_lines))
-            raise subprocess.CalledProcessError(
-                process.returncode, commands, output="".join(output_lines)
-            )
+            raise subprocess.CalledProcessError(process.returncode, commands, output="".join(output_lines))
     except KeyboardInterrupt:
         print("\nCommand interrupted.")
         if process:
@@ -146,9 +130,7 @@ def run_ffmpeg_async(command_list: list[Any], log_path: Path) -> subprocess.Pope
     if config.output_commands:
         print(f"Running command:\n{' '.join(str(command) for command in command_list)}")
     with open(log_path, "w") as log_file:
-        process = subprocess.Popen(
-            command_list, stdout=log_file, stderr=subprocess.STDOUT, text=True
-        )
+        process = subprocess.Popen(command_list, stdout=log_file, stderr=subprocess.STDOUT, text=True)
     return process
 
 

@@ -28,9 +28,7 @@ def get_subtitle_tracks(input_path: Path) -> list[dict]:
             codec_name = stream.get("codec_name", "")
             extension = subtitle_format_extensions.get(codec_name, "")
             if extension:
-                subtitle_tracks.append(
-                    {"index": index, "extension": extension, "codec_name": codec_name}
-                )
+                subtitle_tracks.append({"index": index, "extension": extension, "codec_name": codec_name})
     except ffmpeg.Error as e:
         print(f"Error getting subtitle tracks: {e}")
     return subtitle_tracks
@@ -38,9 +36,7 @@ def get_subtitle_tracks(input_path: Path) -> list[dict]:
 
 def convert_sup_to_srt(sup_subtitle_path: Path) -> Path:
     sub_file = Sup(str(sup_subtitle_path))
-    sub_options = Options(
-        languages={Language("eng")}, overwrite=True, one_per_lang=False
-    )
+    sub_options = Options(languages={Language("eng")}, overwrite=True, one_per_lang=False)
     print(f"Converting {sup_subtitle_path} to SRT")
     os.environ["TESSDATA_PREFIX"] = str(config.SCRIPT_PATH / "bin")
     pgsrip.rip(sub_file, sub_options)

@@ -6,11 +6,7 @@ import ffmpeg
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.disc import DiscInfo
 from bd_to_avp.modules.file import temporary_fifo
-from bd_to_avp.modules.util import (
-    cleanup_process,
-    run_command,
-    run_ffmpeg_async,
-)
+from bd_to_avp.modules.util import cleanup_process, run_command, run_ffmpeg_async
 
 
 def generate_ffmpeg_wrapper_command(
@@ -142,9 +138,7 @@ def combine_to_mv_hevc(
     # TODO: figure out why spatial media is throwing a false resolution does not match.
     output = run_command(command, "Combine stereo HEVC streams to MV-HEVC.")
     if "left and right input resolutions do not match. aborting!" in output:
-        raise RuntimeError(
-            "Left and right input resolutions do not match. Try without AI Upscaling."
-        )
+        raise RuntimeError("Left and right input resolutions do not match. Try without AI Upscaling.")
     elif "aborting!" in output:
         raise RuntimeError("Failed to combine stereo HEVC streams to MV-HEVC.")
 
@@ -216,21 +210,15 @@ def create_left_right_files(
         if config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
             upscale_file(left_eye_output_path)
             upscale_file(right_eye_output_path)
-        left_eye_output_path = left_eye_output_path.with_stem(
-            f"{left_eye_output_path.stem} Upscaled"
-        )
-        right_eye_output_path = right_eye_output_path.with_stem(
-            f"{right_eye_output_path.stem} Upscaled"
-        )
+        left_eye_output_path = left_eye_output_path.with_stem(f"{left_eye_output_path.stem} Upscaled")
+        right_eye_output_path = right_eye_output_path.with_stem(f"{right_eye_output_path.stem} Upscaled")
 
     return left_eye_output_path, right_eye_output_path
 
 
 def get_video_color_depth(input_path: Path) -> int | None:
     try:
-        probe = ffmpeg.probe(
-            str(input_path), select_streams="v:0", show_entries="stream=pix_fmt"
-        )
+        probe = ffmpeg.probe(str(input_path), select_streams="v:0", show_entries="stream=pix_fmt")
         streams = probe.get("streams", [])
         if streams:
             pix_fmt = streams[0].get("pix_fmt")
@@ -238,15 +226,11 @@ def get_video_color_depth(input_path: Path) -> int | None:
                 return 10
             return None
     except ffmpeg.Error:
-        print(
-            f"Error getting video color depth, using default of {DiscInfo().color_depth}"
-        )
+        print(f"Error getting video color depth, using default of {DiscInfo().color_depth}")
     return None
 
 
-def create_mv_hevc_file(
-    left_video_path: Path, right_video_path: Path, output_folder: Path, disc_name: str
-) -> Path:
+def create_mv_hevc_file(left_video_path: Path, right_video_path: Path, output_folder: Path, disc_name: str) -> Path:
     mv_hevc_path = output_folder / f"{disc_name}_MV-HEVC.mov"
     if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
         combine_to_mv_hevc(left_video_path, right_video_path, mv_hevc_path)

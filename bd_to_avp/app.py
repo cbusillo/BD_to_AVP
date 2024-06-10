@@ -37,9 +37,7 @@ class ProcessingThread(QThread):
     error_occurred = Signal(Exception)
     mkv_creation_error = Signal(MKVCreationError)
 
-    def __init__(
-        self, main_window: "MainWindow", parent: QWidget | None = None
-    ) -> None:
+    def __init__(self, main_window: "MainWindow", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.signals = ProcessingSignals()
         self.output_handler = OutputHandler(self.signals.progress_updated.emit)
@@ -271,13 +269,9 @@ class MainWindow(QMainWindow):
 
         # Create the processing thread
         self.processing_thread = ProcessingThread(main_window=self)
-        self.processing_thread.signals.progress_updated.connect(
-            self.update_processing_output
-        )
+        self.processing_thread.signals.progress_updated.connect(self.update_processing_output)
         self.processing_thread.error_occurred.connect(self.handle_processing_error)
-        self.processing_thread.mkv_creation_error.connect(
-            self.handle_mkv_creation_error
-        )
+        self.processing_thread.mkv_creation_error.connect(self.handle_mkv_creation_error)
 
     def handle_processing_error(self, error: Exception) -> None:
         self.popup_warning_centered("Failure in processing.")
@@ -297,21 +291,15 @@ class MainWindow(QMainWindow):
         self.handle_processing_error(error)
 
     def toggle_read_from_disc(self) -> None:
-        self.source_folder_entry.setEnabled(
-            not self.read_from_disc_checkbox.isChecked()
-        )
-        self.source_folder_button.setEnabled(
-            not self.read_from_disc_checkbox.isChecked()
-        )
+        self.source_folder_entry.setEnabled(not self.read_from_disc_checkbox.isChecked())
+        self.source_folder_button.setEnabled(not self.read_from_disc_checkbox.isChecked())
         self.source_file_entry.setEnabled(not self.read_from_disc_checkbox.isChecked())
         self.source_file_button.setEnabled(not self.read_from_disc_checkbox.isChecked())
 
     def update_status_bar(self) -> None:
         splitter_sizes = self.splitter.sizes()
         if splitter_sizes[-1] == 0:
-            last_line = (
-                self.processing_output_textedit.toPlainText().strip().split("\n")[-1]
-            )
+            last_line = self.processing_output_textedit.toPlainText().strip().split("\n")[-1]
             self.status_bar.showMessage(last_line)
             self.processing_status_label.show()
             self.status_bar.show()
@@ -322,12 +310,8 @@ class MainWindow(QMainWindow):
 
     def load_config_and_update_ui(self) -> None:
         config.load_config_from_file()
-        self.source_folder_entry.setText(
-            config.source_folder_path.as_posix() if config.source_folder_path else ""
-        )
-        self.source_file_entry.setText(
-            config.source_path.as_posix() if config.source_path else ""
-        )
+        self.source_folder_entry.setText(config.source_folder_path.as_posix() if config.source_folder_path else "")
+        self.source_file_entry.setText(config.source_path.as_posix() if config.source_path else "")
         self.output_folder_entry.setText(config.output_root_path.as_posix())
         self.left_right_bitrate_spinbox.setValue(config.left_right_bitrate)
         self.audio_bitrate_spinbox.setValue(config.audio_bitrate)
@@ -371,12 +355,8 @@ class MainWindow(QMainWindow):
             self.processing_output_textedit.clear()
             source_folder_set = bool(self.source_folder_entry.text())
             source_file_set = bool(self.source_file_entry.text())
-            if (source_folder_set and source_file_set) or (
-                not source_folder_set and not source_file_set
-            ):
-                self.popup_warning_centered(
-                    "Either Source Folder or Source File must be set, but not both."
-                )
+            if (source_folder_set and source_file_set) or (not source_folder_set and not source_file_set):
+                self.popup_warning_centered("Either Source Folder or Source File must be set, but not both.")
                 return
             self.start_processing()
             self.process_button.setText(self.STOP_PROCESSING_TEXT)
@@ -404,15 +384,9 @@ class MainWindow(QMainWindow):
             config.source_path = None
         else:
             config.source_folder_path = (
-                Path(self.source_folder_entry.text())
-                if self.source_folder_entry.text()
-                else None
+                Path(self.source_folder_entry.text()) if self.source_folder_entry.text() else None
             )
-            config.source_path = (
-                Path(self.source_file_entry.text())
-                if self.source_file_entry.text()
-                else None
-            )
+            config.source_path = Path(self.source_file_entry.text()) if self.source_file_entry.text() else None
         config.output_root_path = Path(self.output_folder_entry.text())
         config.left_right_bitrate = self.left_right_bitrate_spinbox.value()
         config.audio_bitrate = self.audio_bitrate_spinbox.value()
@@ -439,9 +413,7 @@ class MainWindow(QMainWindow):
     def update_processing_output(self, message: str) -> None:
         output_textedit = self.processing_output_textedit
         output_textedit_scrollbar = output_textedit.verticalScrollBar()
-        is_output_at_end = (
-            output_textedit_scrollbar.value == output_textedit_scrollbar.maximum()
-        )
+        is_output_at_end = output_textedit_scrollbar.value == output_textedit_scrollbar.maximum()
 
         last_line_of_textedit = output_textedit.toPlainText().rsplit("\n", 1)[-1]
 

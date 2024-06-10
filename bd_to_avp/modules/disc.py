@@ -63,9 +63,7 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
     if "/" in disc_info.frame_rate:
         disc_info.frame_rate = disc_info.frame_rate.split(" ")[0]
 
-    title_info_pattern = re.compile(
-        r'TINFO:(?P<index>\d+),\d+,\d+,"(?P<duration>\d+:\d+:\d+)"'
-    )
+    title_info_pattern = re.compile(r'TINFO:(?P<index>\d+),\d+,\d+,"(?P<duration>\d+:\d+:\d+)"')
     longest_duration = 0
     main_feature_index = 0
 
@@ -87,10 +85,7 @@ def rip_disc_to_mkv(output_folder: Path, disc_info: DiscInfo) -> None:
     custom_profile_path = output_folder / "custom_profile.mmcp.xml"
     create_custom_makemkv_profile(custom_profile_path)
 
-    if (
-        config.source_path
-        and config.source_path.suffix.lower() in config.IMAGE_EXTENSIONS
-    ):
+    if config.source_path and config.source_path.suffix.lower() in config.IMAGE_EXTENSIONS:
         source = f"iso:{config.source_path}"
     elif config.source_path:
         source = config.source_path.as_posix()
@@ -107,9 +102,7 @@ def rip_disc_to_mkv(output_folder: Path, disc_info: DiscInfo) -> None:
         output_folder,
     ]
     mkv_output = run_command(command, "Rip disc to MKV file.")
-    if config.continue_on_error or all(
-        error not in mkv_output for error in config.MKV_ERROR_CODES
-    ):
+    if config.continue_on_error or all(error not in mkv_output for error in config.MKV_ERROR_CODES):
         return
     raise MKVCreationError(f"Error occurred while ripping disc to MKV.\n\n{mkv_output}")
 

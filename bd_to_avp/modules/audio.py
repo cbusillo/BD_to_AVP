@@ -17,13 +17,8 @@ def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int)
     run_ffmpeg_print_errors(audio_transcoded, overwrite_output=True)
 
 
-def create_transcoded_audio_file(
-    original_audio_path: Path, output_folder: Path
-) -> Path:
-    if (
-        config.transcode_audio
-        and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value
-    ):
+def create_transcoded_audio_file(original_audio_path: Path, output_folder: Path) -> Path:
+    if config.transcode_audio and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
         trancoded_audio_path = output_folder / f"{output_folder.stem}_audio_AAC.mov"
         transcode_audio(original_audio_path, trancoded_audio_path, config.audio_bitrate)
         if not config.keep_files:
