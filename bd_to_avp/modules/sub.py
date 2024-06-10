@@ -1,4 +1,5 @@
 import os
+import threading
 from pathlib import Path
 
 import ffmpeg
@@ -38,9 +39,14 @@ def get_subtitle_tracks(input_path: Path) -> list[dict]:
 def convert_sup_to_srt(sup_subtitle_path: Path) -> Path:
     sub_file = Sup(str(sup_subtitle_path))
     sub_options = Options(languages={Language("eng")}, overwrite=True, one_per_lang=False)
-    spinner = Spinner(f"Converting {sup_subtitle_path} to SRT")
-    spinner.start()
+
+    spinner = Spinner(f"{sup_subtitle_path} to SRT Conversion")
+    spinner_thread = threading.Thread(target=spinner.start)
+    spinner_thread.start()
+
     os.environ["TESSDATA_PREFIX"] = str(config.SCRIPT_PATH / "bin")
     pgsrip.rip(sub_file, sub_options)
+
     spinner.stop()
+    spinner_thread.join()
     return sup_subtitle_path.with_suffix(".srt")

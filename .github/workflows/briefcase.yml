@@ -19,13 +19,15 @@ jobs:
           fetch-depth: 0
       - name: Fetch master branch
         run: |
-          git fetch origin master:master
+          git fetch --all
+          git fetch --tags
       - name: Get commit messages
         id: get_commit_messages
         run: |
-          MESSAGES=$(git log --no-merges --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" master..release)
+          MESSAGES=$(git log --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" $(git merge-base --all HEAD release)..release)
           MESSAGES="${MESSAGES//$'\n'/'%0A'}"
           echo "MESSAGES=$MESSAGES" >> $GITHUB_OUTPUT
+          echo "$MESSAGES"
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
