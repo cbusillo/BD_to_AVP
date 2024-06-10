@@ -74,12 +74,13 @@ jobs:
           echo "MESSAGES=${MESSAGES}" >> $GITHUB_ENV
       - name: Prepare Release Message
         run: |
-          printf "RELEASE_BODY=%b" "${{ env.RELEASE_MESSAGE }}\n\n${{ env.MESSAGES }}" >> $GITHUB_ENV
+          RELEASE_BODY="${{ env.RELEASE_MESSAGE }}\n\n${{ env.MESSAGES }}"
+          echo "release_body=$(echo "$RELEASE_BODY" | jq -R -s .)" >> $GITHUB_OUTPUT
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
-          body: ${{ env.RELEASE_BODY }}
+          body: ${{ steps.prepare_release_message.outputs.release_body }}
           draft: false
           prerelease: true
           tag_name: v${{ env.VERSION }}
