@@ -46,7 +46,7 @@ def prompt_for_password() -> Path:
 def add_homebrew_to_path() -> None:
     with open(Path.home() / ".zshrc", "a") as zshrc:
         zshrc.write(f'export PATH="{config.HOMEBREW_PREFIX_BIN}:$PATH"\n')
-    os.system("source ~/.zshrc")
+    os.environ["PATH"] = f"{config.HOMEBREW_PREFIX_BIN}:{os.environ.get("PATH", "")}"
 
 
 def check_for_homebrew_in_path() -> bool:
