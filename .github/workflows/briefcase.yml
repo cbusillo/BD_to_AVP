@@ -25,14 +25,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Get commit messages
-        run: |
-          EXCLUDED_PATTERNS=$(echo "$EXCLUDED_MESSAGES" | sed ':a;N;$!ba;s/\n/|/g' | sed 's/|$//')
-          echo "Excluded patterns: $EXCLUDED_PATTERNS"  # Debugging line to check the patterns
-          MESSAGES=$(git log --pretty=format:"%s" | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
-          echo "Messages: $MESSAGES" 
-          echo "MESSAGES=${MESSAGES}" >> $GITHUB_ENV
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -74,9 +66,16 @@ jobs:
               find "$dir" -type f -execdir codesign --force --verify --verbose --sign "${{ secrets.DEV_ID }}" {} \;
             done
           poetry run briefcase package -i "${{ secrets.DEV_ID }}"
+      - name: Get commit messages
+        run: |
+          EXCLUDED_PATTERNS=$(echo "$EXCLUDED_MESSAGES" | sed ':a;N;$!ba;s/\n/|/g' | sed 's/|$//')
+          echo "Excluded patterns: $EXCLUDED_PATTERNS"  # Debugging line to check the patterns
+          MESSAGES=$(git log --pretty=format:"%s" | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
+          echo "Messages: $MESSAGES" 
+          echo "MESSAGES=${MESSAGES}" >> $GITHUB_ENV
       - name: Create Release
         id: create_release
-        uses: actions/github-script@v5
+        uses: actions/github-script@v7
         with:
           script: |
             const response = await github.rest.repos.createRelease({
@@ -89,13 +88,12 @@ jobs:
               prerelease: true
             });
             return response.data;
-          result-encoding: string
       - name: Upload Release Asset DMG
-        uses: actions/github-script@v5
+        uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const releaseId = ${{ steps.create_release.outputs.id }};
+            const releaseId = "${{ steps.create_release.outputs.id }}";
             const assetPath = 'dist/Blu-ray to AVP-${{ env.VERSION }}.dmg';
             const assetName = 'Blu-ray to AVP-${{ env.VERSION }}.dmg';
             const asset = fs.readFileSync(assetPath);
