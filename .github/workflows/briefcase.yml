@@ -68,19 +68,20 @@ jobs:
       - name: Get commit messages
         run: |
           EXCLUDED_PATTERNS=$(echo "${{ env.EXCLUDED_MESSAGES }}" | sed ':a;N;$!ba;s/\n/|/g' | sed 's/|$//')
-          MESSAGES=$(git log --pretty=format:"%s" | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
-          echo "MESSAGES=$MESSAGES" >> $GITHUB_ENV
-          echo "$MESSAGES"
+          MESSAGES=$(git log --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" master ^release | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
+          FORMATTED_MESSAGES=$(echo "$MESSAGES" | jq -R -s '.' | jq -r 'join("\n")')
+          echo "messages=$(echo "$FORMATTED_MESSAGES" | jq -R -s '.')" >> $GITHUB_OUTPUT
+          echo "FORMATTED_MESSAGES"
       - name: Prepare Release Message
         id: prepare_release_message
         run: |
           RELEASE_BODY=$(cat <<EOF
           ${{ env.RELEASE_MESSAGE }}
           
-          ${{ env.MESSAGES }}
+          ${{ steps.get_commit_messages.outputs.messages }}
           EOF
           )
-          echo "release_body=$(echo "$RELEASE_BODY" | jq -R -s .)" >> $GITHUB_OUTPUT
+          echo "release_body=$(echo "$RELEASE_BODY" | jq -R -s '.')" >> $GITHUB_OUTPUT
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
