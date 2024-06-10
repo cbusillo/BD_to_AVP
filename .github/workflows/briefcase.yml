@@ -12,8 +12,10 @@ jobs:
       KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+
       RELEASE_MESSAGE: |
         First release, will have issues.
+        
         ** After entering your password it will take a few minutes (maybe ten). It will appear to be doing nothing. If it fails, it should pop up with an error. Otherwise it should install all the dependences in the background and eventually pop up the GUI.
         Reading directly from discs has not yet been added to the GUI, but works in the terminal version. If you run the binary with any arguments, it will work like the previous terminal app. "/Applications/Blu-ray to AVP.app/Contents/MacOS/Blu-ray to AVP"
       EXCLUDED_MESSAGES: |
@@ -21,10 +23,9 @@ jobs:
         merge master into release
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
-
+        uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Install Poetry
@@ -60,33 +61,28 @@ jobs:
         run: |
           poetry run briefcase create
           poetry run briefcase build
+          find . -name QtWebEngineCore.framework -type d | while read dir; do
+            find "$dir" -type f -execdir codesign --force --verify --verbose --sign "${{ secrets.DEV_ID }}" {} \;
+          done
           poetry run briefcase package -i "${{ secrets.DEV_ID }}"
       - name: Get commit messages
-        id: get_commit_messages
         run: |
-          MESSAGES=$(git log --pretty=format:"%s" | grep -vE "$(echo "$EXCLUDED_MESSAGES" | tr '\n' '|')" | awk '!seen[$0]++')
-          echo "MESSAGES=$MESSAGES" >> $GITHUB_ENV
+          EXCLUDED_PATTERNS=$(echo "$EXCLUDED_MESSAGES" | sed ':a;N;$!ba;s/\n/|/g' | sed 's/|$//')
+          echo "Excluded patterns: $EXCLUDED_PATTERNS"  # Debugging line to check the patterns
+          MESSAGES=$(git log --pretty=format:"%s" | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
+          echo "Messages: $MESSAGES" 
+          echo "MESSAGES=${MESSAGES}" >> $GITHUB_ENV
       - name: Create Release
         id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.VERSION }}
-          release_name: Release v${{ env.VERSION }}
-          body: |
-            ${{ env.RELEASE_MESSAGE }}
-            
-            ${{ env.MESSAGES }}
+          body: ${{ format('{0}\n\n{1}', env.RELEASE_MESSAGE, env.MESSAGES) }}
           draft: false
           prerelease: true
-      - name: Upload Release Asset DMG
-        id: upload-release-asset-dmg
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: dist/Blu-ray to AVP-${{ env.VERSION }}.dmg
-          asset_name: Blu-ray to AVP-${{ env.VERSION }}.dmg
-          asset_content_type: application/octet-stream
+          tag_name: v${{ env.VERSION }}
+          name: Release v${{ env.VERSION }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          files: |
+            dist/*.zip
+            dist/*.dmg
+            dist/*.pkg
