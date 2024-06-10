@@ -54,7 +54,7 @@ jobs:
         id: extract_version
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
-          echo "VERSION=$version" >> $GITHUB_ENV
+          echo "::set-env name=VERSION::$version"
       - name: Package application for GitHub
         run: |
           poetry run briefcase create
