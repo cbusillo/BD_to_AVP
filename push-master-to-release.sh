@@ -5,3 +5,4 @@ git push
 git checkout master
 git pull origin release
 git merge release -m "merge release into master"
+git push
