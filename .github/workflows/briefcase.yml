@@ -30,7 +30,6 @@ jobs:
       - name: Get commit messages
         id: get_commit_messages
         run: |
-#          MESSAGES=$(git log --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" master ^release | grep -vE "$(echo "$EXCLUDED_MESSAGES" | tr '\n' '|')" | awk '!seen[$0]++')
           MESSAGES=$(git log --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" master ^release | grep -vE "$EXCLUDED_PATTERNS" | awk '!seen[$0]++')
           echo "MESSAGES=$MESSAGES" >> $GITHUB_ENV
       - name: Set up Python
