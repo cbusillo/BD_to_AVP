@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bd_to_avp"
-version = "0.2.37"
+version = "0.2.38"
 description = "Script to convert 3D Blu-ray Discs to Apple Vision compatible files"
 authors = ["Chris Busillo <info@shinycomputers.com>"]
 readme = "README.md"
@@ -32,7 +32,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.briefcase]
 project_name = "Blu-ray to AVP"
 bundle = "com.shinycomputers"
-version = "0.2.37"
+version = "0.2.38"
 architectures = ["arm64"]
 icon = "bd_to_avp/resources/app_icon"
 author = "Chris Busillo"
