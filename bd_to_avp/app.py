@@ -55,6 +55,7 @@ class ProcessingThread(QThread):
         finally:
             sys.stdout = sys.__stdout__
             self.signals.progress_updated.emit("Process Completed.")
+            self.main_window.process_button.setText(self.main_window.START_PROCESSING_TEXT)
 
     def terminate(self) -> None:
         terminate_process()
