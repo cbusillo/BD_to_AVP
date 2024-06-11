@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QWidget,
-    QFileDialog,
     QCheckBox,
     QSpinBox,
     QTextEdit,
@@ -22,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QObject, QThread, Qt, Signal
 
+from bd_to_avp.gui.widgets import QFileFolderPicker
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
 from bd_to_avp.process import process
@@ -93,37 +93,14 @@ class MainWindow(QMainWindow):
         self.read_from_disc_checkbox.stateChanged.connect(self.toggle_read_from_disc)
         main_layout.addWidget(self.read_from_disc_checkbox)
 
-        # Source and output folder selection
-        source_folder_layout = QHBoxLayout()
-        self.source_folder_label = QLabel("Source Folder")
-        self.source_folder_entry = QLineEdit()
-        self.source_folder_button = QPushButton("Browse")
-        self.source_folder_button.clicked.connect(self.browse_source_folder)
-        source_folder_layout.addWidget(self.source_folder_label)
-        source_folder_layout.addWidget(self.source_folder_entry)
-        source_folder_layout.addWidget(self.source_folder_button)
-        main_layout.addLayout(source_folder_layout)
+        self.source_folder_widget = QFileFolderPicker("Source Folder")
+        main_layout.addWidget(self.source_folder_widget)
 
-        source_file_layout = QHBoxLayout()
-        self.source_file_label = QLabel("Source File")
-        self.source_file_entry = QLineEdit()
-        self.source_file_button = QPushButton("Browse")
-        self.source_file_button.clicked.connect(self.browse_source_file)
-        source_file_layout.addWidget(self.source_file_label)
-        source_file_layout.addWidget(self.source_file_entry)
-        source_file_layout.addWidget(self.source_file_button)
-        main_layout.addLayout(source_file_layout)
+        self.source_file_widget = QFileFolderPicker("Source File", for_files=True)
+        main_layout.addWidget(self.source_file_widget)
 
-        output_layout = QHBoxLayout()
-        self.output_folder_label = QLabel("Output Folder")
-        self.output_folder_entry = QLineEdit()
-        self.output_folder_button = QPushButton("Browse")
-        self.output_folder_button.clicked.connect(self.browse_output_folder)
-        output_layout.addWidget(self.output_folder_label)
-        output_layout.addWidget(self.output_folder_entry)
-        output_layout.addWidget(self.output_folder_button)
-
-        main_layout.addLayout(output_layout)
+        self.output_folder_widget = QFileFolderPicker("Output Folder")
+        main_layout.addWidget(self.output_folder_widget)
 
         # Configuration options
         config_layout = QVBoxLayout()
@@ -299,10 +276,8 @@ class MainWindow(QMainWindow):
         self.handle_processing_error(error)
 
     def toggle_read_from_disc(self) -> None:
-        self.source_folder_entry.setEnabled(not self.read_from_disc_checkbox.isChecked())
-        self.source_folder_button.setEnabled(not self.read_from_disc_checkbox.isChecked())
-        self.source_file_entry.setEnabled(not self.read_from_disc_checkbox.isChecked())
-        self.source_file_button.setEnabled(not self.read_from_disc_checkbox.isChecked())
+        self.source_folder_widget.setEnabled(not self.read_from_disc_checkbox.isChecked())
+        self.source_file_widget.setEnabled(not self.read_from_disc_checkbox.isChecked())
 
     def update_status_bar(self) -> None:
         splitter_sizes = self.splitter.sizes()
@@ -318,9 +293,9 @@ class MainWindow(QMainWindow):
 
     def load_config_and_update_ui(self) -> None:
         config.load_config_from_file()
-        self.source_folder_entry.setText(config.source_folder_path.as_posix() if config.source_folder_path else "")
-        self.source_file_entry.setText(config.source_path.as_posix() if config.source_path else "")
-        self.output_folder_entry.setText(config.output_root_path.as_posix())
+        self.source_folder_widget.set_text(config.source_folder_path.as_posix() if config.source_folder_path else "")
+        self.source_file_widget.set_text(config.source_path.as_posix() if config.source_path else "")
+        self.output_folder_widget.set_text(config.output_root_path.as_posix())
         self.left_right_bitrate_spinbox.setValue(config.left_right_bitrate)
         self.audio_bitrate_spinbox.setValue(config.audio_bitrate)
         self.mv_hevc_quality_spinbox.setValue(config.mv_hevc_quality)
@@ -339,29 +314,14 @@ class MainWindow(QMainWindow):
         self.start_stage_combobox.setCurrentText(config.start_stage.name)
         self.continue_on_error.setChecked(config.continue_on_error)
 
-    def browse_source_folder(self) -> None:
-        source_folder = QFileDialog.getExistingDirectory(self, "Select Source Folder")
-        if source_folder:
-            self.source_folder_entry.setText(source_folder)
-
-    def browse_source_file(self) -> None:
-        source_file, _ = QFileDialog.getOpenFileName(self, "Select Source File")
-        if source_file:
-            self.source_file_entry.setText(source_file)
-
-    def browse_output_folder(self) -> None:
-        output_folder = QFileDialog.getExistingDirectory(self, "Select Output Folder")
-        if output_folder:
-            self.output_folder_entry.setText(output_folder)
-
     def popup_warning_centered(self, message: str) -> None:
         QMessageBox.warning(self, "Warning", message)
 
     def toggle_processing(self) -> None:
         if self.process_button.text() == self.START_PROCESSING_TEXT:
             self.processing_output_textedit.clear()
-            source_folder_set = bool(self.source_folder_entry.text())
-            source_file_set = bool(self.source_file_entry.text())
+            source_folder_set = bool(self.source_folder_widget.text())
+            source_file_set = bool(self.source_file_widget.text())
             if (source_folder_set and source_file_set) or (not source_folder_set and not source_file_set):
                 self.popup_warning_centered("Either Source Folder or Source File must be set, but not both.")
                 return
@@ -391,10 +351,10 @@ class MainWindow(QMainWindow):
             config.source_path = None
         else:
             config.source_folder_path = (
-                Path(self.source_folder_entry.text()) if self.source_folder_entry.text() else None
+                Path(self.source_folder_widget.text()) if self.source_folder_widget.text() else None
             )
-            config.source_path = Path(self.source_file_entry.text()) if self.source_file_entry.text() else None
-        config.output_root_path = Path(self.output_folder_entry.text())
+            config.source_path = Path(self.source_file_widget.text()) if self.source_file_widget.text() else None
+        config.output_root_path = Path(self.output_folder_widget.text())
         config.left_right_bitrate = self.left_right_bitrate_spinbox.value()
         config.audio_bitrate = self.audio_bitrate_spinbox.value()
         config.mv_hevc_quality = self.mv_hevc_quality_spinbox.value()
