@@ -1,4 +1,6 @@
 #~/bin/bash
+git checkout master
+git pull origin master
 git checkout release
 git merge master -m "merge master into release"
 git push
