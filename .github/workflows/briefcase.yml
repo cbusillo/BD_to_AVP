@@ -23,10 +23,10 @@ jobs:
         run: |
           git fetch --tags
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
-          MESSAGES=$(git log --no-merges --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" "$LAST_TAG"..HEAD | awk '!seen[$0]++')
-          echo "MESSAGES<<EOF" >> $GITHUB_ENV
-          echo "$MESSAGES" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          MESSAGES=$(git log --no-merges --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" "$LAST_TAG"..HEAD | awk '!seen[$NF]++' | grep -v "Bump version")
+          echo "messages<<EOF" >> $GITHUB_OUTPUT
+          echo "messages" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
           echo "Commit messages since last release or initial commit:"
           echo "$MESSAGES"
       - name: Set up Python
@@ -86,12 +86,11 @@ jobs:
             Reading directly from discs has not yet been added to the GUI, but works in the terminal version. If you run the binary with any arguments, it will work like the previous terminal app. "/Applications/Blu-ray to AVP.app/Contents/MacOS/Blu-ray to AVP"
             
             Commits:
-            ${{ steps.get_commit_messages.outputs.MESSAGES }}
+            ${{ steps.get_commit_messages.outputs.messages }}
           draft: false
-          prerelease: false
-          tag_name: v${{ env.VERSION }}
-          name: Release v${{ env.VERSION }}
           prerelease: ${{ github.ref == 'refs/heads/prerelease' }}
+          tag_name: v${{ steps.extract_version.outputs.VERSION
+          name: Release v${{ steps.extract_version.outputs.VERSION }}
           files: |
             dist/*.zip
             dist/*.dmg
