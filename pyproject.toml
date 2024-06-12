@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bd_to_avp"
-version = "0.2.58"
+version = "0.2.59"
 description = "Script to convert 3D Blu-ray Discs (and mts) to Apple Vision Pro (MV-HEVC) files"
 authors = ["Chris Busillo <info@shinycomputers.com>"]
 readme = "README.md"
@@ -39,7 +39,7 @@ build-backend = "poetry.core.masonry.api"
 project_name = "3D Blu-ray to Vision pro"
 bundle = "com.shinycomputers"
 architectures = ["arm64"]
-version = "0.2.58"
+version = "0.2.59"
 icon = "bd_to_avp/resources/app_icon"
 organization = "Shiny Computers"
 
@@ -48,8 +48,8 @@ organization = "Shiny Computers"
 formal_name = "3D Blu-ray to Vision Pro"
 description = "Convert 3D Blu-ray Discs (and mts) to Apple Vision Pro (MV-HEVC) files"
 categories = ["Multimedia", "Conversion"]
+license.file = "LICENSE"
 copyright = "Shiny Computers 2024"
-license = "GPLv3"
 sources = ["bd_to_avp", "pyproject.toml", "README.md"]
 requires = [
     "pyside6",
