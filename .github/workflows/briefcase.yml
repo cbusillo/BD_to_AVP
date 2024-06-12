@@ -22,6 +22,11 @@ jobs:
         id: get_commit_messages
         run: |
           git fetch --tags
+          if [ "${{ github.ref }}" = "refs/heads/prerelease" ]; then
+            LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
+          else
+            LAST_TAG=$(git describe --tags --abbrev=0 --exclude '*-prerelease' 2>/dev/null || git rev-list --max-parents=0 HEAD)
+          fi
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
           MESSAGES=$(git log --no-merges --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" "$LAST_TAG"..HEAD | grep -v "Bump version")
           echo "messages<<EOF" >> $GITHUB_OUTPUT
