@@ -1,7 +1,8 @@
 import sys
+import tomllib
 from pathlib import Path
 
-from PySide6.QtGui import QFont, QTextCursor
+from PySide6.QtGui import QAction, QFont, QIcon, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QObject, QThread, Qt, Signal
 
 from bd_to_avp.gui.widgets import QFileFolderPicker
+from bd_to_avp.gui.dialogs import AboutDialog
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
 from bd_to_avp.process import process
@@ -67,7 +69,10 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("3D Blu-ray (and mts) to AVP")
+        app = QApplication.instance()
+        if not isinstance(app, QApplication):
+            raise RuntimeError("No QApplication instance found.")
+        self.setWindowTitle(app.applicationDisplayName())
         self.setGeometry(100, 100, 800, 600)
 
         # Create the main layout
@@ -410,12 +415,77 @@ class MainWindow(QMainWindow):
 
         self.status_bar.showMessage(message.strip().rsplit("\n", 1)[-1])
 
+    def create_menu_bar(self) -> None:
+        # menu_bar = QMenuBar(None)
+        menu_bar = self.menuBar()
+        self.setMenuBar(self.menuBar())
+
+        app_menu = menu_bar.addMenu(QApplication.applicationName())
+        about_action = QAction(f"About {QApplication.applicationName()}", self)
+        about_action.triggered.connect(self.show_about_dialog)
+        app_menu.addAction(about_action)
+
+        file_menu = menu_bar.addMenu("File")
+        file_menu.addAction(QAction("Open", self))
+
+        help_menu = menu_bar.addMenu("Help")
+        update_action = QAction("Update", self)
+        update_action.triggered.connect(self.show_about_dialog)
+        help_menu.addAction(update_action)
+
+        self.setMenuBar(menu_bar)
+
+    def show_about_dialog(self) -> None:
+        dialog = AboutDialog(self)
+        dialog.exec()
+
 
 def start_gui() -> None:
     app = QApplication(sys.argv)
+    load_app_info_from_pyproject(app)
+
     window = MainWindow()
     window.show()
+
+    window.create_menu_bar()
+    window.setMenuBar(window.menuBar())
+
     sys.exit(app.exec())
+
+
+def load_app_info_from_pyproject(app: QApplication) -> None:
+    pyproject_data = load_data_from_pyproject()
+    if not pyproject_data:
+        return
+
+    tool = pyproject_data.get("tool", {})
+    poetry = tool.get("poetry", {})
+    briefcase = tool.get("briefcase", {})
+
+    app.setApplicationName(poetry.get("name"))
+    app.setOrganizationName(briefcase.get("organization"))
+    app.setApplicationVersion(config.code_version)
+    app.setOrganizationDomain(briefcase.get("bundle"))
+    app.setApplicationDisplayName(briefcase.get("project_name"))
+
+    briefcase_icon_path = Path(briefcase.get("icon"))
+    icon_path = Path(*briefcase_icon_path.parts[1:]).with_suffix(".icns")
+    icon_absolute_path = Path(__file__).parent / icon_path
+    app.setWindowIcon(QIcon(icon_absolute_path.as_posix()))
+
+    app.setProperty("authors", poetry.get("authors", []))
+    app.setProperty("url", poetry.get("homepage"))
+
+
+def load_data_from_pyproject() -> dict[str, dict] | None:
+    project_root = Path(__file__).parent.parent
+    pyproject_path = project_root / "pyproject.toml"
+    if not pyproject_path.exists():
+        return None
+
+    with open(pyproject_path, "rb") as pyproject_file:
+        pyproject_data = tomllib.load(pyproject_file)
+        return pyproject_data
 
 
 if __name__ == "__main__":
