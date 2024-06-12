@@ -68,11 +68,11 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def create_group_box(title: str, box_contents: Callable[[QVBoxLayout], None]) -> QGroupBox:
-        groub_box = QGroupBox(title)
+        group_box = QGroupBox(title)
         groub_box_layout = QVBoxLayout()
         box_contents(groub_box_layout)
-        groub_box.setLayout(groub_box_layout)
-        return groub_box
+        group_box.setLayout(groub_box_layout)
+        return group_box
 
     def create_save_load_layout(self, main_layout: QVBoxLayout) -> None:
         save_load_layout = QHBoxLayout()
