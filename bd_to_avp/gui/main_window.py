@@ -149,6 +149,7 @@ class MainWindow(QMainWindow):
         self.overwrite_checkbox = self.create_checkbox("Overwrite", config.overwrite)
         self.transcode_audio_checkbox = self.create_checkbox("Transcode Audio", config.transcode_audio)
         self.continue_on_error = self.create_checkbox("Continue Processing On Error", config.continue_on_error)
+        self.skip_subtitles_checkbox = self.create_checkbox("Skip Subtitles", config.skip_subtitles)
 
         config_layout.addWidget(self.crop_black_bars_checkbox)
         config_layout.addWidget(self.swap_eyes_checkbox)
@@ -160,6 +161,7 @@ class MainWindow(QMainWindow):
         config_layout.addWidget(self.overwrite_checkbox)
         config_layout.addWidget(self.transcode_audio_checkbox)
         config_layout.addWidget(self.continue_on_error)
+        config_layout.addWidget(self.skip_subtitles_checkbox)
 
     def create_processing_options(self, config_layout: QVBoxLayout) -> None:
         self.start_stage_combobox = LabeledComboBox("Start Stage", Stage.list(), config.start_stage.name)
@@ -284,6 +286,7 @@ class MainWindow(QMainWindow):
         self.overwrite_checkbox.setChecked(config.overwrite)
         self.transcode_audio_checkbox.setChecked(config.transcode_audio)
         self.continue_on_error.setChecked(config.continue_on_error)
+        self.skip_subtitles_checkbox.setChecked(config.skip_subtitles)
         self.start_stage_combobox.set_current_text(config.start_stage.name)
         self.language_combobox.set_current_text(pycountry.languages.get(alpha_3=config.language_code).name)
 
@@ -342,6 +345,7 @@ class MainWindow(QMainWindow):
         config.transcode_audio = self.transcode_audio_checkbox.isChecked()
         selected_stage = int(self.start_stage_combobox.current_text().split(" - ")[0])
         config.continue_on_error = self.continue_on_error.isChecked()
+        config.skip_subtitles = self.skip_subtitles_checkbox.isChecked()
         config.start_stage = Stage.get_stage(selected_stage)
         config.language_code = pycountry.languages.get(name=self.language_combobox.current_text()).alpha_3
 
