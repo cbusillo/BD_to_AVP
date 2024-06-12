@@ -164,7 +164,7 @@ class MainWindow(QMainWindow):
     def create_processing_options(self, config_layout: QVBoxLayout) -> None:
         self.start_stage_combobox = LabeledComboBox("Start Stage", Stage.list(), config.start_stage.name)
         self.language_combobox = LabeledComboBox(
-            "Language", get_common_language_options(), pycountry.languages.get(alpha_3=config.language).name
+            "Language", get_common_language_options(), pycountry.languages.get(alpha_3=config.language_code).name
         )
 
         config_layout.setSpacing(0)
@@ -283,8 +283,9 @@ class MainWindow(QMainWindow):
         self.remove_original_checkbox.setChecked(config.remove_original)
         self.overwrite_checkbox.setChecked(config.overwrite)
         self.transcode_audio_checkbox.setChecked(config.transcode_audio)
-        self.start_stage_combobox.set_current_text(config.start_stage.name)
         self.continue_on_error.setChecked(config.continue_on_error)
+        self.start_stage_combobox.set_current_text(config.start_stage.name)
+        self.language_combobox.set_current_text(pycountry.languages.get(alpha_3=config.language_code).name)
 
     def toggle_processing(self) -> None:
         if self.process_button.text() == self.START_PROCESSING_TEXT:
@@ -340,8 +341,9 @@ class MainWindow(QMainWindow):
         config.overwrite = self.overwrite_checkbox.isChecked()
         config.transcode_audio = self.transcode_audio_checkbox.isChecked()
         selected_stage = int(self.start_stage_combobox.current_text().split(" - ")[0])
-        config.start_stage = Stage.get_stage(selected_stage)
         config.continue_on_error = self.continue_on_error.isChecked()
+        config.start_stage = Stage.get_stage(selected_stage)
+        config.language_code = pycountry.languages.get(name=self.language_combobox.current_text()).alpha_3
 
     def stop_processing(self) -> None:
         self.processing_thread.terminate()

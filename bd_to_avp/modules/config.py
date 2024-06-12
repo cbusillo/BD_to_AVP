@@ -131,7 +131,7 @@ class Config:
         self.software_encoder = False
         self.fx_upscale = False
         self.continue_on_error = False
-        self.language = "eng"
+        self.language_code = "eng"
 
     @property
     def code_version(self) -> str:
@@ -330,7 +330,7 @@ class Config:
             help="Continue processing after an error occurs.",
         )
         parser.add_argument(
-            "--language",
+            "--language-code",
             help="Language for subtitle extraction.  Defaults to 'eng'.  Use the ISO 639-2 (three character) code",
         )
 

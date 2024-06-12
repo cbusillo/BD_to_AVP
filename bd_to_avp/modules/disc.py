@@ -81,9 +81,9 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
     return disc_info
 
 
-def rip_disc_to_mkv(output_folder: Path, disc_info: DiscInfo) -> None:
+def rip_disc_to_mkv(output_folder: Path, disc_info: DiscInfo, language_code: str) -> None:
     custom_profile_path = output_folder / "custom_profile.mmcp.xml"
-    create_custom_makemkv_profile(custom_profile_path)
+    create_custom_makemkv_profile(custom_profile_path, language_code)
 
     if config.source_path and config.source_path.suffix.lower() in config.IMAGE_EXTENSIONS:
         source = f"iso:{config.source_path}"
@@ -107,14 +107,15 @@ def rip_disc_to_mkv(output_folder: Path, disc_info: DiscInfo) -> None:
     raise MKVCreationError(f"Error occurred while ripping disc to MKV.\n\n{mkv_output}")
 
 
-def create_custom_makemkv_profile(custom_profile_path: Path) -> None:
-    custom_profile_content = """<?xml version="1.0" encoding="UTF-8"?>
+def create_custom_makemkv_profile(custom_profile_path: Path, language_code: str) -> None:
+
+    custom_profile_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <profile>
     <name lang="mogz">:5086</name>
     <Profile name="CustomProfile" description="Custom profile to include MVC tracks">
         <trackSettings input="default">
             <output outputSettingsName="copy"
-                defaultSelection="+sel:all,+sel:mvcvideo">
+                defaultSelection="+sel:mvcvideo,+sel:{language_code},-sel:mvcvideo,-sel:{language_code},+sel:(first)">
             </output>
         </trackSettings>
     </Profile>
@@ -123,7 +124,7 @@ def create_custom_makemkv_profile(custom_profile_path: Path) -> None:
     print(f"Custom MakeMKV profile created at {custom_profile_path}")
 
 
-def create_mkv_file(output_folder: Path, disc_info: DiscInfo) -> Path:
+def create_mkv_file(output_folder: Path, disc_info: DiscInfo, language_code: str) -> Path:
     if config.source_path and config.source_path.suffix.lower() in [
         ".mkv",
         ".mts",
@@ -131,7 +132,7 @@ def create_mkv_file(output_folder: Path, disc_info: DiscInfo) -> Path:
         return config.source_path
 
     if config.start_stage.value <= Stage.CREATE_MKV.value:
-        rip_disc_to_mkv(output_folder, disc_info)
+        rip_disc_to_mkv(output_folder, disc_info, language_code)
 
     if mkv_file := find_largest_file_with_extensions(output_folder, [".mkv"]):
         return mkv_file
