@@ -199,3 +199,19 @@ def load_data_from_pyproject() -> dict[str, dict] | None:
     with open(pyproject_path, "rb") as pyproject_file:
         pyproject_data = tomllib.load(pyproject_file)
         return pyproject_data
+
+
+def get_common_language_options() -> list[str]:
+    common_languages = [
+        "English",
+        "Spanish",
+        "French",
+        "German",
+        "Chinese",
+        "Japanese",
+        "Portuguese",
+        "Russian",
+        "Italian",
+        "Korean",
+    ]
+    return common_languages

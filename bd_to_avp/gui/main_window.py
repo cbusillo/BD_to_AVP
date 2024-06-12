@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Callable
 
+import pycountry
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QFont, QTextCursor
 from PySide6.QtWidgets import (
@@ -162,9 +163,14 @@ class MainWindow(QMainWindow):
 
     def create_processing_options(self, config_layout: QVBoxLayout) -> None:
         self.start_stage_combobox = LabeledComboBox("Start Stage", Stage.list(), config.start_stage.name)
+        self.language_combobox = LabeledComboBox(
+            "Language", get_common_language_options(), pycountry.languages.get(alpha_3=config.language).name
+        )
+
         config_layout.setSpacing(0)
         config_layout.setContentsMargins(0, 0, 0, 0)
         config_layout.addWidget(self.start_stage_combobox)
+        config_layout.addWidget(self.language_combobox)
 
     def create_processing_button(self, main_layout: QVBoxLayout) -> None:
         self.process_button = QPushButton(self.START_PROCESSING_TEXT)

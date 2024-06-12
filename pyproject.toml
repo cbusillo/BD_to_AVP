@@ -20,6 +20,7 @@ requests = "^2.32.3"
 psutil = "^5.9.8"
 pyside6 = "^6.7.1"
 pygithub = "^2.3.0"
+pycountry = "^24.6.1"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.2.0"
@@ -58,6 +59,7 @@ requires = [
     "requests",
     "psutil",
     "pygithub",
+    "pycountry",
 ]
 
 
