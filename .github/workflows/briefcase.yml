@@ -69,6 +69,12 @@ jobs:
               find "$dir" -type f -execdir codesign --force --verify --verbose=4 --sign "${{ secrets.DEV_ID }}" {} \;
             done
           poetry run briefcase package -i "${{ secrets.DEV_ID }}"
+      - name: Upload log on failure
+        if: failure()
+        uses: actions/upload-artifact@v2
+        with:
+          name: briefcase-log
+          path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/briefcase.*.build.log
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
