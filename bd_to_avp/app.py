@@ -22,8 +22,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QObject, QThread, Qt, Signal
 
-from bd_to_avp.gui.widgets import QFileFolderPicker
 from bd_to_avp.gui.dialogs import AboutDialog
+from bd_to_avp.gui.widgets import FileFolderPicker
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
 from bd_to_avp.process import process
@@ -98,13 +98,13 @@ class MainWindow(QMainWindow):
         self.read_from_disc_checkbox.stateChanged.connect(self.toggle_read_from_disc)
         main_layout.addWidget(self.read_from_disc_checkbox)
 
-        self.source_folder_widget = QFileFolderPicker("Source Folder")
+        self.source_folder_widget = FileFolderPicker("Source Folder")
         main_layout.addWidget(self.source_folder_widget)
 
-        self.source_file_widget = QFileFolderPicker("Source File", for_files=True)
+        self.source_file_widget = FileFolderPicker("Source File", for_files=True)
         main_layout.addWidget(self.source_file_widget)
 
-        self.output_folder_widget = QFileFolderPicker("Output Folder")
+        self.output_folder_widget = FileFolderPicker("Output Folder")
         main_layout.addWidget(self.output_folder_widget)
 
         # Configuration options

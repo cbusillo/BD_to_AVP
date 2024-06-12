@@ -3,7 +3,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
 
 
-class QFileFolderPicker(QWidget):
+class FileFolderPicker(QWidget):
     def __init__(self, label: str, for_files: bool = False, parent=None) -> None:
         super().__init__(parent)
         self.dialog_title = f"Please select the {label}"
