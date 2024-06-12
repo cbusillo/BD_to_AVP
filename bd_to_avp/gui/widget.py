@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
+from PySide6.QtWidgets import QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
 
 
 class FileFolderPicker(QWidget):
@@ -39,3 +39,30 @@ class FileFolderPicker(QWidget):
 
     def set_text(self, text: str) -> None:
         self.line_edit.setText(text)
+
+
+class LabeledComboBox(QWidget):
+    def __init__(self, label: str, options: list[str], default_value: str | None = None, parent=None) -> None:
+        super().__init__()
+
+        self.combo_layout = QHBoxLayout(parent)
+        self.label = QLabel(label)
+        self.combobox = QComboBox()
+        self.combobox.addItems(options)
+        if default_value:
+            self.combobox.setCurrentText(default_value)
+
+        self.combo_layout.addWidget(self.label)
+        self.combo_layout.addWidget(self.combobox)
+
+    def current_text(self) -> str:
+        return self.combobox.currentText()
+
+    def current_index(self) -> int:
+        return self.combobox.currentIndex()
+
+    def set_current_index(self, index: int) -> None:
+        self.combobox.setCurrentIndex(index)
+
+    def set_current_text(self, text: str) -> None:
+        self.combobox.setCurrentText(text)

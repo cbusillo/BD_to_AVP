@@ -9,7 +9,7 @@ from bd_to_avp.modules.util import OutputHandler, terminate_process
 from bd_to_avp.process import process
 
 if TYPE_CHECKING:
-    from bd_to_avp.gui.main_window import MainWindow
+    from .main_window import MainWindow
 
 
 class ProcessingSignals(QObject):

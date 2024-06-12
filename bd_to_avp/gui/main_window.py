@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QSpinBox,
     QTextEdit,
-    QComboBox,
     QStatusBar,
     QWidget,
     QMessageBox,
@@ -21,30 +20,50 @@ from PySide6.QtWidgets import (
 
 from bd_to_avp.gui.dialog import AboutDialog
 from bd_to_avp.gui.processing import ProcessingThread
-from bd_to_avp.gui.widget import FileFolderPicker
+from bd_to_avp.gui.widget import FileFolderPicker, LabeledComboBox
 from bd_to_avp.modules.config import config, Stage
-from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
+from bd_to_avp.modules.disc import MKVCreationError
 from bd_to_avp.modules.util import Spinner
 
 
+# noinspection PyAttributeOutsideInit
+# type: ignore[attr-defined-outside-init]
 class MainWindow(QMainWindow):
     START_PROCESSING_TEXT = "Start Processing (⌘+P)"
     STOP_PROCESSING_TEXT = "Stop Processing (⌘+P)"
+    MAIN_WIDGET_MIN_WIDTH = 300
+    SPLITTER_INITIAL_SIZES = [400, 400]
+    SPLITTER_MINIMUM_SIZE = 300
+    WINDOW_GEOMETRY = (100, 100, 800, 600)
+    LAYOUT_SPACING = 5
 
     def __init__(self) -> None:
         super().__init__()
+        self.setup_window()
+        self.create_main_layout()
+        self.create_menu_bar()
+
+    def setup_window(self) -> None:
         app = QApplication.instance()
         if not isinstance(app, QApplication):
             raise RuntimeError("No QApplication instance found.")
         self.setWindowTitle(app.applicationDisplayName())
-        self.setGeometry(100, 100, 800, 600)
+        self.setGeometry(*self.WINDOW_GEOMETRY)
 
-        # Create the main layout
+    def create_main_layout(self) -> None:
         main_widget = QWidget()
-        main_widget.setMinimumWidth(300)
+        main_widget.setMinimumWidth(self.SPLITTER_MINIMUM_SIZE)
         main_layout = QVBoxLayout(main_widget)
-        main_layout.setSpacing(5)
+        main_layout.setSpacing(self.LAYOUT_SPACING)
 
+        self.create_save_load_layout(main_layout)
+        self.create_input_output_layout(main_layout)
+        self.create_config_layout(main_layout)
+        self.create_processing_button(main_layout)
+        self.create_processing_output(main_widget)
+        self.create_status_bar()
+
+    def create_save_load_layout(self, main_layout: QVBoxLayout) -> None:
         save_load_layout = QHBoxLayout()
         self.load_config_button = QPushButton("Load Config (⌘+L)")
         self.load_config_button.clicked.connect(self.load_config_and_update_ui)
@@ -58,6 +77,7 @@ class MainWindow(QMainWindow):
 
         main_layout.addLayout(save_load_layout)
 
+    def create_input_output_layout(self, main_layout: QVBoxLayout) -> None:
         self.read_from_disc_checkbox = QCheckBox("Read from Disc")
         self.read_from_disc_checkbox.stateChanged.connect(self.toggle_read_from_disc)
         main_layout.addWidget(self.read_from_disc_checkbox)
@@ -71,142 +91,74 @@ class MainWindow(QMainWindow):
         self.output_folder_widget = FileFolderPicker("Output Folder")
         main_layout.addWidget(self.output_folder_widget)
 
-        # Configuration options
-        config_layout = QVBoxLayout()
+    def create_config_layout(self, main_layout: QVBoxLayout) -> None:
+        config_options_layout = QVBoxLayout()
+        self.create_bitrate_quality_options(config_options_layout)
+        self.create_misc_options(config_options_layout)
+        main_layout.addLayout(config_options_layout)
 
-        left_right_layout = QHBoxLayout()
-        self.left_right_bitrate_label = QLabel("Left/Right Bitrate (Mbps)")
-        self.left_right_bitrate_spinbox = QSpinBox()
-        self.left_right_bitrate_spinbox.setRange(1, 100)
-        self.left_right_bitrate_spinbox.setValue(config.left_right_bitrate)
-        self.left_right_bitrate_spinbox.setMaximumWidth(75)
-        left_right_layout.addWidget(self.left_right_bitrate_spinbox)
-        left_right_layout.addWidget(self.left_right_bitrate_label)
-        config_layout.addLayout(left_right_layout)
+    def create_bitrate_quality_options(self, config_layout: QVBoxLayout) -> None:
+        self.left_right_bitrate_spinbox = self.create_spinbox(
+            "Left/Right Bitrate (Mbps)", 1, 100, config.left_right_bitrate
+        )
+        self.audio_bitrate_spinbox = self.create_spinbox("Audio Bitrate (kbps)", 0, 1000, config.audio_bitrate)
+        self.mv_hevc_quality_spinbox = self.create_spinbox("MV-HEVC Quality (0-100)", 0, 100, config.mv_hevc_quality)
+        self.fov_spinbox = self.create_spinbox("Field of View", 0, 360, config.fov)
 
-        audio_bitrate_layout = QHBoxLayout()
-        self.audio_bitrate_label = QLabel("Audio Bitrate (kbps)")
-        self.audio_bitrate_spinbox = QSpinBox()
-        self.audio_bitrate_spinbox.setRange(0, 1000)
-        self.audio_bitrate_spinbox.setValue(config.audio_bitrate)
-        self.audio_bitrate_spinbox.setMaximumWidth(75)
-        audio_bitrate_layout.addWidget(self.audio_bitrate_spinbox)
-        audio_bitrate_layout.addWidget(self.audio_bitrate_label)
-        config_layout.addLayout(audio_bitrate_layout)
+        config_layout.addWidget(self.left_right_bitrate_spinbox)
+        config_layout.addWidget(self.audio_bitrate_spinbox)
+        config_layout.addWidget(self.mv_hevc_quality_spinbox)
+        config_layout.addWidget(self.fov_spinbox)
 
-        mv_hevc_quality_layout = QHBoxLayout()
-        self.mv_hevc_quality_label = QLabel("MV-HEVC Quality (0-100)")
-        self.mv_hevc_quality_spinbox = QSpinBox()
-        self.mv_hevc_quality_spinbox.setRange(0, 100)
-        self.mv_hevc_quality_spinbox.setValue(config.mv_hevc_quality)
-        self.mv_hevc_quality_spinbox.setMaximumWidth(75)
-        mv_hevc_quality_layout.addWidget(self.mv_hevc_quality_spinbox)
-        mv_hevc_quality_layout.addWidget(self.mv_hevc_quality_label)
-        config_layout.addLayout(mv_hevc_quality_layout)
+    def create_misc_options(self, config_layout: QVBoxLayout) -> None:
+        self.frame_rate_entry = self.create_entry("Frame Rate (Leave blank to use source value)", config.frame_rate)
+        self.resolution_entry = self.create_entry("Resolution (Leave blank to use source value)", config.resolution)
+        self.crop_black_bars_checkbox = self.create_checkbox("Crop Black Bars", config.crop_black_bars)
+        self.swap_eyes_checkbox = self.create_checkbox("Swap Eyes", config.swap_eyes)
+        self.keep_files_checkbox = self.create_checkbox("Keep Temporary Files", config.keep_files)
+        self.output_commands_checkbox = self.create_checkbox("Output Commands", config.output_commands)
+        self.software_encoder_checkbox = self.create_checkbox("Use Software Encoder", config.software_encoder)
+        self.fx_upscale_checkbox = self.create_checkbox("AI FX Upscale (2x resolution)", config.fx_upscale)
+        self.remove_original_checkbox = self.create_checkbox("Remove Original", config.remove_original)
+        self.overwrite_checkbox = self.create_checkbox("Overwrite", config.overwrite)
+        self.transcode_audio_checkbox = self.create_checkbox("Transcode Audio", config.transcode_audio)
+        self.continue_on_error = self.create_checkbox("Continue Processing On Error", config.continue_on_error)
+        self.start_stage_combobox = LabeledComboBox("Start Stage", Stage.list(), config.start_stage.name)
 
-        fov_layout = QHBoxLayout()
-        self.fov_label = QLabel("Field of View")
-        self.fov_spinbox = QSpinBox()
-        self.fov_spinbox.setRange(0, 360)
-        self.fov_spinbox.setValue(config.fov)
-        self.fov_spinbox.setMaximumWidth(75)
-        fov_layout.addWidget(self.fov_spinbox)
-        fov_layout.addWidget(self.fov_label)
-        config_layout.addLayout(fov_layout)
-
-        frame_rate_layout = QHBoxLayout()
-        self.frame_rate_label = QLabel("Frame Rate (Leave blank to use source value)")
-        self.frame_rate_entry = QLineEdit()
-        self.frame_rate_entry.setText(config.frame_rate)
-        self.frame_rate_entry.setMaximumWidth(100)
-        self.frame_rate_entry.setPlaceholderText(DiscInfo.frame_rate)
-        frame_rate_layout.addWidget(self.frame_rate_entry)
-        frame_rate_layout.addWidget(self.frame_rate_label)
-        config_layout.addLayout(frame_rate_layout)
-
-        resolution_layout = QHBoxLayout()
-        self.resolution_label = QLabel("Resolution (Leave blank to use source value)")
-        self.resolution_entry = QLineEdit()
-        self.resolution_entry.setText(config.resolution)
-        self.resolution_entry.setPlaceholderText(DiscInfo.resolution)
-        self.resolution_entry.setMaximumWidth(100)
-        resolution_layout.addWidget(self.resolution_entry)
-        resolution_layout.addWidget(self.resolution_label)
-        config_layout.addLayout(resolution_layout)
-
-        self.crop_black_bars_checkbox = QCheckBox("Crop Black Bars")
-        self.crop_black_bars_checkbox.setChecked(config.crop_black_bars)
+        config_layout.addWidget(self.frame_rate_entry)
+        config_layout.addWidget(self.resolution_entry)
         config_layout.addWidget(self.crop_black_bars_checkbox)
-
-        self.swap_eyes_checkbox = QCheckBox("Swap Eyes")
-        self.swap_eyes_checkbox.setChecked(config.swap_eyes)
         config_layout.addWidget(self.swap_eyes_checkbox)
-
-        self.keep_files_checkbox = QCheckBox("Keep Temporary Files")
-        self.keep_files_checkbox.setChecked(config.keep_files)
         config_layout.addWidget(self.keep_files_checkbox)
-
-        self.output_commands_checkbox = QCheckBox("Output Commands")
-        self.output_commands_checkbox.setChecked(config.output_commands)
         config_layout.addWidget(self.output_commands_checkbox)
-
-        self.software_encoder_checkbox = QCheckBox("Use Software Encoder")
-        self.software_encoder_checkbox.setChecked(config.software_encoder)
         config_layout.addWidget(self.software_encoder_checkbox)
-
-        self.fx_upscale_checkbox = QCheckBox("AI FX Upscale (2x resolution)")
-        self.fx_upscale_checkbox.setChecked(config.fx_upscale)
         config_layout.addWidget(self.fx_upscale_checkbox)
-
-        self.remove_original_checkbox = QCheckBox("Remove Original")
-        self.remove_original_checkbox.setChecked(config.remove_original)
         config_layout.addWidget(self.remove_original_checkbox)
-
-        self.overwrite_checkbox = QCheckBox("Overwrite")
-        self.overwrite_checkbox.setChecked(config.overwrite)
         config_layout.addWidget(self.overwrite_checkbox)
-
-        self.transcode_audio_checkbox = QCheckBox("Transcode Audio")
-        self.transcode_audio_checkbox.setChecked(config.transcode_audio)
         config_layout.addWidget(self.transcode_audio_checkbox)
-
-        self.continue_on_error = QCheckBox("Continue Processing On Error")
-        self.continue_on_error.setChecked(config.continue_on_error)
         config_layout.addWidget(self.continue_on_error)
-
-        self.start_stage_label = QLabel("Start Stage")
-        self.start_stage_combobox = QComboBox()
-        self.start_stage_combobox.addItems(Stage.list())
-        self.start_stage_combobox.setCurrentText(config.start_stage.name)
-        config_layout.addWidget(self.start_stage_label)
         config_layout.addWidget(self.start_stage_combobox)
 
-        main_layout.addLayout(config_layout)
-
-        # Processing button
+    def create_processing_button(self, main_layout: QVBoxLayout) -> None:
         self.process_button = QPushButton(self.START_PROCESSING_TEXT)
         self.process_button.clicked.connect(self.toggle_processing)
         self.process_button.setShortcut("Ctrl+P")
         main_layout.addWidget(self.process_button)
 
+    def create_processing_output(self, main_widget: QWidget) -> None:
         self.processing_output_textedit = QTextEdit()
         self.processing_output_textedit.setReadOnly(True)
         self.processing_output_textedit.setFont(QFont("Helvetica", 10))
 
-        # Create a QSplitter and add the main widget and processing output widget
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.addWidget(main_widget)
         self.splitter.addWidget(self.processing_output_textedit)
+        self.splitter.setSizes(self.SPLITTER_INITIAL_SIZES)  # Adjust the sizes as needed
 
-        # Set the initial sizes of the splitter sections
-        self.splitter.setSizes([400, 400])  # Adjust the sizes as needed
-
-        # Set the QSplitter as the central widget of the main window
         self.setCentralWidget(self.splitter)
 
-        # Processing status and output
+    def create_status_bar(self) -> None:
         self.processing_status_label = QLabel("Processing Status")
-        main_layout.addWidget(self.processing_status_label)
         self.processing_status_label.hide()
 
         self.status_bar = QStatusBar()
@@ -215,11 +167,29 @@ class MainWindow(QMainWindow):
 
         self.splitter.splitterMoved.connect(self.update_status_bar)
 
-        # Create the processing thread
         self.processing_thread = ProcessingThread(main_window=self)
         self.processing_thread.signals.progress_updated.connect(self.update_processing_output)
         self.processing_thread.error_occurred.connect(self.handle_processing_error)
         self.processing_thread.mkv_creation_error.connect(self.handle_mkv_creation_error)
+
+    def create_menu_bar(self) -> None:
+        menu_bar = self.menuBar()
+        self.setMenuBar(self.menuBar())
+
+        app_menu = menu_bar.addMenu(QApplication.applicationName())
+        about_action = QAction(f"About {QApplication.applicationName()}", self)
+        about_action.triggered.connect(self.show_about_dialog)
+        app_menu.addAction(about_action)
+
+        file_menu = menu_bar.addMenu("File")
+        file_menu.addAction(QAction("Open", self))
+
+        help_menu = menu_bar.addMenu("Help")
+        update_action = QAction("Update", self)
+        update_action.triggered.connect(self.show_about_dialog)
+        help_menu.addAction(update_action)
+
+        self.setMenuBar(menu_bar)
 
     def handle_processing_error(self, error: Exception) -> None:
         QMessageBox.warning(self, "Warning", "Failure in processing.")
@@ -280,7 +250,7 @@ class MainWindow(QMainWindow):
         self.remove_original_checkbox.setChecked(config.remove_original)
         self.overwrite_checkbox.setChecked(config.overwrite)
         self.transcode_audio_checkbox.setChecked(config.transcode_audio)
-        self.start_stage_combobox.setCurrentText(config.start_stage.name)
+        self.start_stage_combobox.set_current_text(config.start_stage.name)
         self.continue_on_error.setChecked(config.continue_on_error)
 
     def toggle_processing(self) -> None:
@@ -336,7 +306,7 @@ class MainWindow(QMainWindow):
         config.remove_original = self.remove_original_checkbox.isChecked()
         config.overwrite = self.overwrite_checkbox.isChecked()
         config.transcode_audio = self.transcode_audio_checkbox.isChecked()
-        selected_stage = int(self.start_stage_combobox.currentText().split(" - ")[0])
+        selected_stage = int(self.start_stage_combobox.current_text().split(" - ")[0])
         config.start_stage = Stage.get_stage(selected_stage)
         config.continue_on_error = self.continue_on_error.isChecked()
 
@@ -376,26 +346,31 @@ class MainWindow(QMainWindow):
 
         self.status_bar.showMessage(message.strip().rsplit("\n", 1)[-1])
 
-    def create_menu_bar(self) -> None:
-        # menu_bar = QMenuBar(None)
-        menu_bar = self.menuBar()
-        self.setMenuBar(self.menuBar())
-
-        app_menu = menu_bar.addMenu(QApplication.applicationName())
-        about_action = QAction(f"About {QApplication.applicationName()}", self)
-        about_action.triggered.connect(self.show_about_dialog)
-        app_menu.addAction(about_action)
-
-        file_menu = menu_bar.addMenu("File")
-        file_menu.addAction(QAction("Open", self))
-
-        help_menu = menu_bar.addMenu("Help")
-        update_action = QAction("Update", self)
-        update_action.triggered.connect(self.show_about_dialog)
-        help_menu.addAction(update_action)
-
-        self.setMenuBar(menu_bar)
-
     def show_about_dialog(self) -> None:
         dialog = AboutDialog(self)
         dialog.exec()
+
+    @staticmethod
+    def create_spinbox(label: str, min_value: int, max_value: int, default_value: int | None = None) -> QSpinBox:
+        spinbox = QSpinBox()
+        spinbox.setRange(min_value, max_value)
+        if default_value:
+            spinbox.setValue(default_value)
+        spinbox.setMaximumWidth(75)
+        spinbox.setSuffix(" " + label)
+        return spinbox
+
+    @staticmethod
+    def create_entry(label: str, default_value: str | None = None) -> QLineEdit:
+        entry = QLineEdit()
+        if default_value:
+            entry.setText(default_value)
+        entry.setPlaceholderText(label)
+        entry.setMaxLength(100)
+        return entry
+
+    @staticmethod
+    def create_checkbox(label: str, default_value: bool = False) -> QCheckBox:
+        checkbox = QCheckBox(label)
+        checkbox.setChecked(default_value)
+        return checkbox
