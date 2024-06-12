@@ -23,7 +23,7 @@ jobs:
         run: |
           git fetch --tags
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
-          MESSAGES=$(git log --no-merges --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" "$LAST_TAG"..HEAD | awk '!seen[$NF]++' | grep -v "Bump version")
+          MESSAGES=$(git log --no-merges --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" "$LAST_TAG"..HEAD | grep -v "Bump version")
           echo "messages<<EOF" >> $GITHUB_OUTPUT
           echo "messages" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
