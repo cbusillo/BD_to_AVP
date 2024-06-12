@@ -23,9 +23,9 @@ jobs:
           git fetch --tags
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
           MESSAGES=$(git log --no-merges --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" "$LAST_TAG"..HEAD | awk '!seen[$0]++')
-          echo "MESSAGES<<EOF"
-          echo "$MESSAGES"
-          echo "EOF"
+          echo "MESSAGES<<EOF" >> $GITHUB_ENV
+          echo "$MESSAGES" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
           echo "Commit messages since last release or initial commit:"
           echo "$MESSAGES"
       - name: Set up Python
@@ -80,7 +80,7 @@ jobs:
             
             Commits:
             ${{ steps.get_commit_messages.outputs.MESSAGES }}
-          dfaft: false
+          draft: false
           prerelease: false
           tag_name: v${{ env.VERSION }}
           name: Release v${{ env.VERSION }}
