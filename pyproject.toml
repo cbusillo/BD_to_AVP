@@ -49,6 +49,7 @@ formal_name = "3D Blu-ray to Vision Pro"
 description = "Convert 3D Blu-ray Discs (and mts) to Apple Vision Pro (MV-HEVC) files"
 categories = ["Multimedia", "Conversion"]
 copyright = "Shiny Computers 2024"
+license = "GPLv3"
 sources = ["bd_to_avp", "pyproject.toml", "README.md"]
 requires = [
     "pyside6",
