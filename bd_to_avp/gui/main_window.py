@@ -302,21 +302,21 @@ class MainWindow(QMainWindow):
                 return
 
             self.start_processing()
-            self.process_button.setText(self.STOP_PROCESSING_TEXT)
+
         else:
             self.stop_processing()
-            self.process_button.setText(self.START_PROCESSING_TEXT)
 
         self.process_button.setShortcut("Ctrl+P")
         # self.process_button.clicked.connect(self.toggle_processing)
 
     def start_processing(self, is_continuing: bool = False) -> None:
         if not is_continuing:
+            start_time = format_timestamp(datetime.now())
+            self.processing_output_textedit.append(f"🟢 Processing started at {start_time} 🟢")
             self.save_config()
-        start_time = format_timestamp(datetime.now())
-        self.processing_output_textedit.append(f"🟢 Processing started at {start_time} 🟢")
-        self.process_start_time = datetime.now()
+            self.process_start_time = datetime.now()
         self.processing_thread.start()
+        self.process_button.setText(self.STOP_PROCESSING_TEXT)
 
     def finished_processing(self) -> None:
         time_elapsed = formatted_time_elapsed(self.process_start_time)
@@ -363,6 +363,7 @@ class MainWindow(QMainWindow):
         time_elapsed = formatted_time_elapsed(self.process_start_time)
         self.processing_output_textedit.append(f"🛑 Processing stopped after {time_elapsed} 🛑")
         self.processing_thread.terminate()
+        self.process_button.setText(self.START_PROCESSING_TEXT)
 
     def update_processing_output(self, message: str) -> None:
         output_textedit = self.processing_output_textedit
