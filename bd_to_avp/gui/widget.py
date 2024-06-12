@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtWidgets import QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
+from PySide6.QtWidgets import QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QWidget
 
 
 class FileFolderPicker(QWidget):
@@ -46,6 +46,7 @@ class LabeledComboBox(QWidget):
         super().__init__()
 
         self.combo_layout = QHBoxLayout(parent)
+        self.combo_layout.setContentsMargins(0, 0, 0, 0)
         self.label = QLabel(label)
         self.combobox = QComboBox()
         self.combobox.addItems(options)
@@ -54,6 +55,7 @@ class LabeledComboBox(QWidget):
 
         self.combo_layout.addWidget(self.label)
         self.combo_layout.addWidget(self.combobox)
+        self.setLayout(self.combo_layout)
 
     def current_text(self) -> str:
         return self.combobox.currentText()
@@ -66,3 +68,57 @@ class LabeledComboBox(QWidget):
 
     def set_current_text(self, text: str) -> None:
         self.combobox.setCurrentText(text)
+
+
+class LabeledLineEdit(QWidget):
+    def __init__(
+        self, label: str, default_value: str | None = None, placeholder_text: str | None = None, parent=None
+    ) -> None:
+        super().__init__()
+
+        self.line_layout = QHBoxLayout(parent)
+        self.line_layout.setContentsMargins(0, 0, 0, 0)
+        self.label = QLabel(label)
+        self.line_edit = QLineEdit()
+        self.line_edit.setMaximumWidth(100)
+        if placeholder_text:
+            self.line_edit.setPlaceholderText(placeholder_text)
+        if default_value:
+            self.line_edit.setText(default_value)
+
+        self.line_layout.addWidget(self.line_edit)
+        self.line_layout.addWidget(self.label)
+        self.setLayout(self.line_layout)
+
+    def text(self) -> str:
+        return self.line_edit.text()
+
+    def set_text(self, text: str) -> None:
+        self.line_edit.setText(text)
+
+
+class LabeledSpinBox(QWidget):
+    def __init__(
+        self, label: str, min_value: int = 0, max_value: int = 100, default_value: int | None = None, parent=None
+    ) -> None:
+        super().__init__()
+
+        self.spinbox_layout = QHBoxLayout(parent)
+        self.spinbox_layout.setContentsMargins(0, 0, 0, 0)
+        self.label = QLabel(label)
+        self.spinbox = QSpinBox()
+        self.spinbox.setRange(min_value, max_value)
+        self.spinbox.setMaximumWidth(75)
+
+        if default_value:
+            self.spinbox.setValue(default_value)
+
+        self.spinbox_layout.addWidget(self.spinbox)
+        self.spinbox_layout.addWidget(self.label)
+        self.setLayout(self.spinbox_layout)
+
+    def value(self) -> int:
+        return self.spinbox.value()
+
+    def set_value(self, value: int) -> None:
+        self.spinbox.setValue(value)

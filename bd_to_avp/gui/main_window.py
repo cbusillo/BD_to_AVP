@@ -1,17 +1,18 @@
 from pathlib import Path
+from typing import Callable
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QFont, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
+    QGroupBox,
     QMainWindow,
     QLabel,
-    QLineEdit,
     QPushButton,
     QSplitter,
     QVBoxLayout,
     QHBoxLayout,
     QCheckBox,
-    QSpinBox,
     QTextEdit,
     QStatusBar,
     QWidget,
@@ -20,10 +21,10 @@ from PySide6.QtWidgets import (
 
 from bd_to_avp.gui.dialog import AboutDialog
 from bd_to_avp.gui.processing import ProcessingThread
-from bd_to_avp.gui.widget import FileFolderPicker, LabeledComboBox
+from bd_to_avp.gui.widget import FileFolderPicker, LabeledComboBox, LabeledLineEdit, LabeledSpinBox
 from bd_to_avp.modules.config import config, Stage
-from bd_to_avp.modules.disc import MKVCreationError
-from bd_to_avp.modules.util import Spinner
+from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
+from bd_to_avp.modules.util import Spinner, get_common_language_options
 
 
 # noinspection PyAttributeOutsideInit
@@ -55,13 +56,23 @@ class MainWindow(QMainWindow):
         main_widget.setMinimumWidth(self.SPLITTER_MINIMUM_SIZE)
         main_layout = QVBoxLayout(main_widget)
         main_layout.setSpacing(self.LAYOUT_SPACING)
-
         self.create_save_load_layout(main_layout)
-        self.create_input_output_layout(main_layout)
+
+        source_output_group = self.create_group_box("Source and Output", self.create_input_output_layout)
+        main_layout.addWidget(source_output_group)
+
         self.create_config_layout(main_layout)
         self.create_processing_button(main_layout)
         self.create_processing_output(main_widget)
         self.create_status_bar()
+
+    @staticmethod
+    def create_group_box(title: str, box_contents: Callable[[QVBoxLayout], None]) -> QGroupBox:
+        groub_box = QGroupBox(title)
+        groub_box_layout = QVBoxLayout()
+        box_contents(groub_box_layout)
+        groub_box.setLayout(groub_box_layout)
+        return groub_box
 
     def create_save_load_layout(self, main_layout: QVBoxLayout) -> None:
         save_load_layout = QHBoxLayout()
@@ -78,41 +89,52 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(save_load_layout)
 
     def create_input_output_layout(self, main_layout: QVBoxLayout) -> None:
-        self.read_from_disc_checkbox = QCheckBox("Read from Disc")
-        self.read_from_disc_checkbox.stateChanged.connect(self.toggle_read_from_disc)
-        main_layout.addWidget(self.read_from_disc_checkbox)
-
+        self.read_from_disc_checkbox = self.create_checkbox("Read from Disc")
         self.source_folder_widget = FileFolderPicker("Source Folder")
-        main_layout.addWidget(self.source_folder_widget)
-
         self.source_file_widget = FileFolderPicker("Source File", for_files=True)
-        main_layout.addWidget(self.source_file_widget)
-
         self.output_folder_widget = FileFolderPicker("Output Folder")
+
+        main_layout.addWidget(self.read_from_disc_checkbox)
+        main_layout.addWidget(self.source_folder_widget)
+        main_layout.addWidget(self.source_file_widget)
         main_layout.addWidget(self.output_folder_widget)
 
     def create_config_layout(self, main_layout: QVBoxLayout) -> None:
         config_options_layout = QVBoxLayout()
-        self.create_bitrate_quality_options(config_options_layout)
-        self.create_misc_options(config_options_layout)
+        quality_group = self.create_group_box("Quality Options", self.create_quality_options)
+        misc_group = self.create_group_box("Misc Options", self.create_misc_options)
+        processing_group = self.create_group_box("Processing Options", self.create_processing_options)
+
+        config_options_layout.addWidget(quality_group)
+        config_options_layout.addWidget(misc_group)
+        config_options_layout.addWidget(processing_group)
         main_layout.addLayout(config_options_layout)
 
-    def create_bitrate_quality_options(self, config_layout: QVBoxLayout) -> None:
-        self.left_right_bitrate_spinbox = self.create_spinbox(
-            "Left/Right Bitrate (Mbps)", 1, 100, config.left_right_bitrate
+    def create_quality_options(self, config_layout: QVBoxLayout) -> None:
+        self.left_right_bitrate_spinbox = LabeledSpinBox(
+            "Left/Right Bitrate (Mbps)", default_value=config.left_right_bitrate
         )
-        self.audio_bitrate_spinbox = self.create_spinbox("Audio Bitrate (kbps)", 0, 1000, config.audio_bitrate)
-        self.mv_hevc_quality_spinbox = self.create_spinbox("MV-HEVC Quality (0-100)", 0, 100, config.mv_hevc_quality)
-        self.fov_spinbox = self.create_spinbox("Field of View", 0, 360, config.fov)
+        self.audio_bitrate_spinbox = LabeledSpinBox(
+            "Audio Bitrate (kbps)", max_value=1000, default_value=config.audio_bitrate
+        )
+        self.mv_hevc_quality_spinbox = LabeledSpinBox("MV-HEVC Quality (0-100)", default_value=config.mv_hevc_quality)
+        self.fov_spinbox = LabeledSpinBox("Field of View", max_value=360, default_value=config.fov)
+        self.frame_rate_entry = LabeledLineEdit(
+            "Frame Rate (Leave blank to use source value)", config.frame_rate, DiscInfo.frame_rate
+        )
+        self.resolution_entry = LabeledLineEdit(
+            "Resolution (Leave blank to use source value)", config.resolution, DiscInfo.resolution
+        )
 
         config_layout.addWidget(self.left_right_bitrate_spinbox)
         config_layout.addWidget(self.audio_bitrate_spinbox)
         config_layout.addWidget(self.mv_hevc_quality_spinbox)
         config_layout.addWidget(self.fov_spinbox)
+        config_layout.addWidget(self.frame_rate_entry)
+        config_layout.addWidget(self.resolution_entry)
 
     def create_misc_options(self, config_layout: QVBoxLayout) -> None:
-        self.frame_rate_entry = self.create_entry("Frame Rate (Leave blank to use source value)", config.frame_rate)
-        self.resolution_entry = self.create_entry("Resolution (Leave blank to use source value)", config.resolution)
+
         self.crop_black_bars_checkbox = self.create_checkbox("Crop Black Bars", config.crop_black_bars)
         self.swap_eyes_checkbox = self.create_checkbox("Swap Eyes", config.swap_eyes)
         self.keep_files_checkbox = self.create_checkbox("Keep Temporary Files", config.keep_files)
@@ -123,10 +145,7 @@ class MainWindow(QMainWindow):
         self.overwrite_checkbox = self.create_checkbox("Overwrite", config.overwrite)
         self.transcode_audio_checkbox = self.create_checkbox("Transcode Audio", config.transcode_audio)
         self.continue_on_error = self.create_checkbox("Continue Processing On Error", config.continue_on_error)
-        self.start_stage_combobox = LabeledComboBox("Start Stage", Stage.list(), config.start_stage.name)
 
-        config_layout.addWidget(self.frame_rate_entry)
-        config_layout.addWidget(self.resolution_entry)
         config_layout.addWidget(self.crop_black_bars_checkbox)
         config_layout.addWidget(self.swap_eyes_checkbox)
         config_layout.addWidget(self.keep_files_checkbox)
@@ -137,6 +156,9 @@ class MainWindow(QMainWindow):
         config_layout.addWidget(self.overwrite_checkbox)
         config_layout.addWidget(self.transcode_audio_checkbox)
         config_layout.addWidget(self.continue_on_error)
+
+    def create_processing_options(self, config_layout: QVBoxLayout) -> None:
+        self.start_stage_combobox = LabeledComboBox("Start Stage", Stage.list(), config.start_stage.name)
         config_layout.addWidget(self.start_stage_combobox)
 
     def create_processing_button(self, main_layout: QVBoxLayout) -> None:
@@ -235,12 +257,12 @@ class MainWindow(QMainWindow):
         self.source_folder_widget.set_text(config.source_folder_path.as_posix() if config.source_folder_path else "")
         self.source_file_widget.set_text(config.source_path.as_posix() if config.source_path else "")
         self.output_folder_widget.set_text(config.output_root_path.as_posix())
-        self.left_right_bitrate_spinbox.setValue(config.left_right_bitrate)
-        self.audio_bitrate_spinbox.setValue(config.audio_bitrate)
-        self.mv_hevc_quality_spinbox.setValue(config.mv_hevc_quality)
-        self.fov_spinbox.setValue(config.fov)
-        self.frame_rate_entry.setText(config.frame_rate)
-        self.resolution_entry.setText(config.resolution)
+        self.left_right_bitrate_spinbox.set_value(config.left_right_bitrate)
+        self.audio_bitrate_spinbox.set_value(config.audio_bitrate)
+        self.mv_hevc_quality_spinbox.set_value(config.mv_hevc_quality)
+        self.fov_spinbox.set_value(config.fov)
+        self.frame_rate_entry.set_text(config.frame_rate)
+        self.resolution_entry.set_text(config.resolution)
         self.crop_black_bars_checkbox.setChecked(config.crop_black_bars)
         self.swap_eyes_checkbox.setChecked(config.swap_eyes)
         self.keep_files_checkbox.setChecked(config.keep_files)
@@ -351,26 +373,7 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     @staticmethod
-    def create_spinbox(label: str, min_value: int, max_value: int, default_value: int | None = None) -> QSpinBox:
-        spinbox = QSpinBox()
-        spinbox.setRange(min_value, max_value)
-        if default_value:
-            spinbox.setValue(default_value)
-        spinbox.setMaximumWidth(75)
-        spinbox.setSuffix(" " + label)
-        return spinbox
-
-    @staticmethod
-    def create_entry(label: str, default_value: str | None = None) -> QLineEdit:
-        entry = QLineEdit()
-        if default_value:
-            entry.setText(default_value)
-        entry.setPlaceholderText(label)
-        entry.setMaxLength(100)
-        return entry
-
-    @staticmethod
     def create_checkbox(label: str, default_value: bool = False) -> QCheckBox:
-        checkbox = QCheckBox(label)
-        checkbox.setChecked(default_value)
-        return checkbox
+        check_box = QCheckBox(label)
+        check_box.setChecked(default_value)
+        return check_box
