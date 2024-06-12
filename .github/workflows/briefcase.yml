@@ -81,7 +81,7 @@ jobs:
             Commits:
             ${{ steps.get_commit_messages.outputs.MESSAGES }}
           dfaft: false
-          prerelease: true
+          prerelease: false
           tag_name: v${{ env.VERSION }}
           name: Release v${{ env.VERSION }}
           files: |
