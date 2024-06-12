@@ -71,7 +71,7 @@ class AboutDialog(QDialog):
             else:
                 authors_str += f"{name} "
 
-        authors_label = QLabel(f"Authors:<br />{authors_str}")
+        authors_label = QLabel(f"Author(s):<br />{authors_str}")
         authors_label.setTextFormat(Qt.TextFormat.RichText)
 
         authors_label.setOpenExternalLinks(True)
