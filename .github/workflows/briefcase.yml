@@ -65,13 +65,13 @@ jobs:
         run: |
           poetry run briefcase create
           poetry run briefcase build
-            find . -name QtWebEngineCore.framework -type d | while read dir; do
-              find "$dir" -type f -execdir codesign --force --verify --verbose=4 --sign "${{ secrets.DEV_ID }}" {} \;
-            done
+          #            find . -name QtWebEngineCore.framework -type d | while read dir; do
+          #              find "$dir" -type f -execdir codesign --force --verify --verbose=4 --sign "${{ secrets.DEV_ID }}" {} \;
+          #            done
           poetry run briefcase package -i "${{ secrets.DEV_ID }}"
       - name: Upload log on failure
         if: failure()
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: briefcase-log
           path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/briefcase.*.build.log
