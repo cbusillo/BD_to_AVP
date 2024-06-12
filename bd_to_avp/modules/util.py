@@ -4,6 +4,7 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -187,3 +188,14 @@ class OutputHandler(io.TextIOBase):
 
     def close(self) -> None:
         pass
+
+
+def load_data_from_pyproject() -> dict[str, dict] | None:
+    project_root = Path(__file__).parent.parent.parent
+    pyproject_path = project_root / "pyproject.toml"
+    if not pyproject_path.exists():
+        return None
+
+    with open(pyproject_path, "rb") as pyproject_file:
+        pyproject_data = tomllib.load(pyproject_file)
+        return pyproject_data
