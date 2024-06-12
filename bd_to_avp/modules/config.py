@@ -112,7 +112,7 @@ class Config:
         self.source_str: str | None = None
         self.source_path: Path | None = None
         self.source_folder_path: Path | None = None
-        self.output_root_path = Path.cwd()
+        self.output_root_path = Path.home() / "Movies"
         self.overwrite = False
         self.transcode_audio = False
         self.audio_bitrate = 384
