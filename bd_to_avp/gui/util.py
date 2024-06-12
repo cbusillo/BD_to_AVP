@@ -24,7 +24,7 @@ def load_app_info_from_pyproject(app: QApplication) -> None:
 
     briefcase_icon_path = Path(briefcase.get("icon"))
     icon_path = Path(*briefcase_icon_path.parts[1:]).with_suffix(".icns")
-    icon_absolute_path = Path(__file__).parent / icon_path
+    icon_absolute_path = Path(__file__).parent.parent / icon_path
     app.setWindowIcon(QIcon(icon_absolute_path.as_posix()))
 
     app.setProperty("authors", poetry.get("authors", []))
