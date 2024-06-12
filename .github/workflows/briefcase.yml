@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - release
+      - prerelease
 
 jobs:
   package:
@@ -60,7 +61,7 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n 1 | tr -d '"' | xargs)
           echo "Extracted version: '${version}'" 
-          echo "VERSION=${version}" >> $GITHUB_ENV
+          echo "version=${version}" >> $GITHUB_OUTPUT
       - name: Package application for GitHub
         run: |
           poetry run briefcase create
@@ -90,6 +91,7 @@ jobs:
           prerelease: false
           tag_name: v${{ env.VERSION }}
           name: Release v${{ env.VERSION }}
+          prerelease: ${{ github.ref == 'refs/heads/prerelease' }}
           files: |
             dist/*.zip
             dist/*.dmg
