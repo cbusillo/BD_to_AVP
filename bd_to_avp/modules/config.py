@@ -149,10 +149,7 @@ class Config:
     def load_version_from_file() -> str | None:
         config_file = configparser.ConfigParser()
         config_file.read(CONFIG_FILE)
-        if (
-            "Application" in config_file
-            and "installed_version" in config_file["Application"]
-        ):
+        if "Application" in config_file and "installed_version" in config_file["Application"]:
             return config_file.get("Application", "installed_version")
         return None
 
@@ -305,8 +302,7 @@ class Config:
             "--start-stage",
             type=Stage,
             action=StageEnumAction,
-            help="Stage at which to start the process. Options: "
-            + ", ".join([stage.name for stage in Stage]),
+            help="Stage at which to start the process. Options: " + ", ".join([stage.name for stage in Stage]),
         )
         parser.add_argument(
             "--output-commands",
@@ -345,14 +341,10 @@ class Config:
                 setattr(self, key, value)
 
         self.source_path = (
-            Path(args.source).expanduser()
-            if args.source and not args.source.startswith("disc:")
-            else None
+            Path(args.source).expanduser() if args.source and not args.source.startswith("disc:") else None
         )
         self.output_root_path = (
-            Path(args.output_root_folder).expanduser()
-            if args.output_root_folder
-            else self.output_root_path
+            Path(args.output_root_folder).expanduser() if args.output_root_folder else self.output_root_path
         )
         self.skip_subtitles = args.skip_freaking_subtitles_because_I_dont_care
 
