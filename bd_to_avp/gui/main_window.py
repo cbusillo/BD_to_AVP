@@ -94,6 +94,9 @@ class MainWindow(QMainWindow):
         self.source_file_widget = FileFolderPicker("Source File", for_files=True)
         self.output_folder_widget = FileFolderPicker("Output Folder")
 
+        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
         main_layout.addWidget(self.read_from_disc_checkbox)
         main_layout.addWidget(self.source_folder_widget)
         main_layout.addWidget(self.source_file_widget)
@@ -159,6 +162,8 @@ class MainWindow(QMainWindow):
 
     def create_processing_options(self, config_layout: QVBoxLayout) -> None:
         self.start_stage_combobox = LabeledComboBox("Start Stage", Stage.list(), config.start_stage.name)
+        config_layout.setSpacing(0)
+        config_layout.setContentsMargins(0, 0, 0, 0)
         config_layout.addWidget(self.start_stage_combobox)
 
     def create_processing_button(self, main_layout: QVBoxLayout) -> None:
