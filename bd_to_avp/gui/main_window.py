@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -25,7 +26,7 @@ from bd_to_avp.gui.processing import ProcessingThread
 from bd_to_avp.gui.widget import FileFolderPicker, LabeledComboBox, LabeledLineEdit, LabeledSpinBox
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
-from bd_to_avp.modules.util import Spinner, get_common_language_options
+from bd_to_avp.modules.util import Spinner, formatted_time_elapsed, format_timestamp, get_common_language_options
 
 
 # noinspection PyAttributeOutsideInit
@@ -43,7 +44,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setup_window()
         self.create_main_layout()
-        self.create_menu_bar()
+
+        self.processing_thread = ProcessingThread(main_window=self)
+        self.processing_thread.signals.progress_updated.connect(self.update_processing_output)
+        self.processing_thread.error_occurred.connect(self.handle_processing_error)
+        self.processing_thread.mkv_creation_error.connect(self.handle_mkv_creation_error)
+        self.processing_thread.process_completed.connect(self.finished_processing)
 
     def setup_window(self) -> None:
         app = QApplication.instance()
@@ -202,33 +208,29 @@ class MainWindow(QMainWindow):
 
         self.splitter.splitterMoved.connect(self.update_status_bar)
 
-        self.processing_thread = ProcessingThread(main_window=self)
-        self.processing_thread.signals.progress_updated.connect(self.update_processing_output)
-        self.processing_thread.error_occurred.connect(self.handle_processing_error)
-        self.processing_thread.mkv_creation_error.connect(self.handle_mkv_creation_error)
-
     def create_menu_bar(self) -> None:
         menu_bar = self.menuBar()
-        self.setMenuBar(self.menuBar())
 
         app_menu = menu_bar.addMenu(QApplication.applicationName())
-        about_action = QAction(f"About {QApplication.applicationName()}", self)
-        about_action.triggered.connect(self.show_about_dialog)
-        app_menu.addAction(about_action)
-
         file_menu = menu_bar.addMenu("File")
+        help_menu = menu_bar.addMenu("Help")
+
         file_menu.addAction(QAction("Open", self))
 
-        help_menu = menu_bar.addMenu("Help")
         update_action = QAction("Update", self)
         update_action.triggered.connect(self.show_about_dialog)
-        help_menu.addAction(update_action)
 
-        self.setMenuBar(menu_bar)
+        about_action = QAction(f"About {QApplication.applicationName()}", self)
+        about_action.triggered.connect(self.show_about_dialog)
+
+        app_menu.addAction(about_action)
+        help_menu.addAction(update_action)
+        # self.setMenuBar(menu_bar)
 
     def handle_processing_error(self, error: Exception) -> None:
         QMessageBox.warning(self, "Warning", "Failure in processing.")
-        self.update_processing_output(str(error))
+        time_elapsed = formatted_time_elapsed(self.process_start_time)
+        self.update_processing_output(str(error) + f"\n❌ Processing failed in {time_elapsed} ❌")
         self.stop_processing()
         self.process_button.setText(self.START_PROCESSING_TEXT)
 
@@ -298,6 +300,7 @@ class MainWindow(QMainWindow):
             if (source_folder_set and source_file_set) or (not source_folder_set and not source_file_set):
                 QMessageBox.warning(self, "Warning", "Either Source Folder or Source File must be set, but not both.")
                 return
+
             self.start_processing()
             self.process_button.setText(self.STOP_PROCESSING_TEXT)
         else:
@@ -310,8 +313,15 @@ class MainWindow(QMainWindow):
     def start_processing(self, is_continuing: bool = False) -> None:
         if not is_continuing:
             self.save_config()
-
+        start_time = format_timestamp(datetime.now())
+        self.processing_output_textedit.append(f"🟢 Processing started at {start_time} 🟢")
+        self.process_start_time = datetime.now()
         self.processing_thread.start()
+
+    def finished_processing(self) -> None:
+        time_elapsed = formatted_time_elapsed(self.process_start_time)
+        self.processing_output_textedit.append(f"✅ Processing completed in {time_elapsed} ✅")
+        self.process_button.setText(self.START_PROCESSING_TEXT)
 
     def save_config_to_file(self) -> None:
         self.save_config()
@@ -350,6 +360,8 @@ class MainWindow(QMainWindow):
         config.language_code = pycountry.languages.get(name=self.language_combobox.current_text()).alpha_3
 
     def stop_processing(self) -> None:
+        time_elapsed = formatted_time_elapsed(self.process_start_time)
+        self.processing_output_textedit.append(f"🛑 Processing stopped after {time_elapsed} 🛑")
         self.processing_thread.terminate()
 
     def update_processing_output(self, message: str) -> None:

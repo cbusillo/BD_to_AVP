@@ -19,6 +19,7 @@ class ProcessingSignals(QObject):
 class ProcessingThread(QThread):
     error_occurred = Signal(Exception)
     mkv_creation_error = Signal(MKVCreationError)
+    process_completed = Signal()
 
     def __init__(self, main_window: "MainWindow", parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -31,13 +32,13 @@ class ProcessingThread(QThread):
 
         try:
             process()
+            self.process_completed.emit()
         except MKVCreationError as error:
             self.mkv_creation_error.emit(error)
         except (RuntimeError, ValueError) as error:
             self.error_occurred.emit(error)
         finally:
             sys.stdout = sys.__stdout__
-            self.signals.progress_updated.emit("Process Completed.")
             self.main_window.process_button.setText(self.main_window.START_PROCESSING_TEXT)
 
     def terminate(self) -> None:

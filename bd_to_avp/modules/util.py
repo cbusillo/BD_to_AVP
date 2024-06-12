@@ -5,11 +5,13 @@ import sys
 import threading
 import time
 import tomllib
+from datetime import datetime, timedelta
 
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 import ffmpeg
+import humanize
 
 from bd_to_avp.modules.config import config
 
@@ -215,3 +217,16 @@ def get_common_language_options() -> list[str]:
         "Korean",
     ]
     return common_languages
+
+
+def format_timestamp(timestamp: datetime) -> str:
+    return timestamp.strftime("%I:%M:%S %p on %Y-%m-%d")
+
+
+def format_timedelta(seconds_elapsed: int) -> str:
+    time_difference = timedelta(seconds=seconds_elapsed)
+    return humanize.naturaldelta(time_difference)
+
+
+def formatted_time_elapsed(start_time: datetime) -> str:
+    return format_timedelta(int((datetime.now() - start_time).total_seconds()))
