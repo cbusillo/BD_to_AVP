@@ -94,7 +94,7 @@ jobs:
             ${{ steps.get_commit_messages.outputs.messages }}
           draft: false
           prerelease: ${{ github.ref == 'refs/heads/prerelease' }}
-          tag_name: v${{ steps.extract_version.outputs.VERSION
+          tag_name: v${{ steps.extract_version.outputs.VERSION }}
           name: Release v${{ steps.extract_version.outputs.VERSION }}
           files: |
             dist/*.zip
