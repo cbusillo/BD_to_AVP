@@ -1,5 +1,6 @@
 import atexit
 import os
+import signal
 import sys
 
 import psutil
@@ -37,6 +38,7 @@ def main() -> None:
         config.save_version_from_file()
 
     if is_gui:
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
         start_gui()
     else:
         config.parse_args()
