@@ -6,6 +6,7 @@ from PySide6.QtCore import QCoreApplication, Qt
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 from github import Github, GithubException, UnknownObjectException
 from github.GitRelease import GitRelease
+from packaging import version
 
 
 # noinspection PyAttributeOutsideInit
@@ -125,7 +126,7 @@ class AboutDialog(QDialog):
 
             latest_release_version = latest_release.tag_name.lstrip("v")
             latest_release_url = latest_release.html_url
-            if latest_release_version != self.app.applicationVersion():
+            if version.parse(latest_release_version) > version.parse(self.app.applicationVersion()):
                 self.update_label.setText(
                     f"New version available: <a href='{latest_release_url}'>v{latest_release_version}</a>"
                 )
