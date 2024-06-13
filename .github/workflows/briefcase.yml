@@ -22,6 +22,7 @@ jobs:
         id: get_commit_messages
         run: |
           git fetch --tags
+          echo "github.ref: ${{ github.ref }}
           if [ "${{ github.ref }}" = "refs/heads/prerelease" ]; then
             LAST_TAG=$(git ls-remote --tags --refs --sort="v:refname" | tail -n1 | sed 's/.*\///; s/\^{}//' 2>/dev/null || git rev-list --max-parents=0 HEAD)
           else
