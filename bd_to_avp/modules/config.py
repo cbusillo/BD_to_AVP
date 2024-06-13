@@ -179,7 +179,7 @@ class Config:
                     continue
                 config_file.set("Paths", key, value.as_posix())
             else:
-                if not value:
+                if value is None:
                     continue
                 config_file.set("Options", key, str(value))
 
