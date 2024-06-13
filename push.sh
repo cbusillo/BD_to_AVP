@@ -1,9 +1,9 @@
 #!/bin/bash
 
-if [ "$1" == "release" ]; then
+if [ "$1" == "r" ]; then
   SOURCE_BRANCH="prerelease"
   DESTINATION_BRANCH="release"
-elif [ "$1" == "prerelease" ]; then
+elif [ "$1" == "p" ]; then
   SOURCE_BRANCH="master"
   DESTINATION_BRANCH="prerelease"
 else
