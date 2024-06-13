@@ -11,7 +11,7 @@ from bd_to_avp.modules.config import config
 from bd_to_avp.modules.util import run_command
 
 
-def prompt_for_password() -> Path:
+def prompt_for_password() -> tuple[Path, dict[str, str]]:
     script = f"""
     with timeout of 3600 seconds
         tell app "System Events"
@@ -26,21 +26,24 @@ def prompt_for_password() -> Path:
         pw_file_path = Path(pw_file.name)
     pw_file_path.chmod(0o700)
     password_correct = False
+    sudo_env = {}
     while not password_correct:
         password = subprocess.check_output(["osascript", "-e", script], text=True).strip()
 
-        os.environ["HOMEBREW_PASSWORD"] = password
+        sudo_env = os.environ.copy()
+        sudo_env["HOMEBREW_PASSWORD"] = password
 
-        os.environ["SUDO_ASKPASS"] = pw_file_path.as_posix()
+        sudo_env["SUDO_ASKPASS"] = pw_file_path.as_posix()
         check_sudo_password = subprocess.run(
             ["/usr/bin/sudo", "-A", "ls"],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             input=password,
+            env=sudo_env,
         )
         password_correct = check_sudo_password.returncode == 0
-    return pw_file_path
+    return pw_file_path, sudo_env
 
 
 def add_homebrew_to_path() -> None:
@@ -67,32 +70,34 @@ def install_deps(is_gui: bool) -> None:
         raise ValueError("This script is only supported on Apple Silicon Macs.")
     print("Installing dependencies...")
     pw_file_path = None
+    sudo_env = os.environ.copy()
 
     if is_gui:
-        pw_file_path = prompt_for_password()
+        pw_file_path, sudo_env = prompt_for_password()
 
     if not Path(config.HOMEBREW_PREFIX_BIN / "brew").exists():
-        install_brew(is_gui)
+        install_brew(is_gui, sudo_env)
     else:
-        update_brew(is_gui)
+        update_brew(is_gui, sudo_env)
 
     if not check_for_homebrew_in_path():
         add_homebrew_to_path()
 
-    upgrade_brew(is_gui)
+    upgrade_brew(is_gui, sudo_env)
 
-    manage_brew_package("makemkv", is_gui, True, "uninstall")
+    manage_brew_package("makemkv", is_gui, sudo_env, True, "uninstall")
 
     for package in config.BREW_CASKS_TO_INSTALL:
         if not check_is_package_installed(package):
-            manage_brew_package(package, is_gui, True)
+            manage_brew_package(package, is_gui, sudo_env, True)
 
-    manage_brew_package(config.BREW_PACKAGES_TO_INSTALL, is_gui)
+    manage_brew_package(config.BREW_PACKAGES_TO_INSTALL, is_gui, sudo_env)
 
     if not check_rosetta():
         install_rosetta(is_gui)
 
-    check_mp4box(is_gui)
+    if should_install_mp4box():
+        install_mp4box(is_gui, sudo_env)
 
     wine_boot()
 
@@ -124,13 +129,14 @@ def install_rosetta(is_gui: bool) -> None:
     print("Rosetta installed.")
 
 
-def check_mp4box(is_gui: bool) -> None:
+def should_install_mp4box() -> bool:
     if not config.MP4BOX_PATH.exists() or not check_mp4box_version(config.MP4BOX_VERSION):
         if config.MP4BOX_PATH.exists():
             print("Removing old MP4Box...")
             shutil.rmtree("/Applications/GPAC.app", ignore_errors=True)
         print("Installing MP4Box...")
-        install_mp4box(is_gui)
+        return True
+    return False
 
 
 def check_install_version() -> bool:
@@ -191,7 +197,7 @@ def check_is_package_installed(package: str) -> bool:
 
 
 def manage_brew_package(
-    packages: str | list[str], is_gui: bool, cask: bool = False, operation: str = "install"
+    packages: str | list[str], is_gui: bool, sudo_env: dict[str, str], cask: bool = False, operation: str = "install"
 ) -> None:
     if isinstance(packages, str):
         packages = [packages]
@@ -217,6 +223,7 @@ def manage_brew_package(
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=sudo_env,
     )
 
     if operation == "uninstall" and process.returncode == 1:
@@ -229,7 +236,7 @@ def manage_brew_package(
     print(f"{packages_str} {operation}ed.")
 
 
-def update_brew(is_gui: bool) -> None:
+def update_brew(is_gui: bool, sudo_env: dict[str, str]) -> None:
     print("Updating Homebrew...")
     brew_command = ["/opt/homebrew/bin/brew", "update"]
     process = subprocess.run(
@@ -237,6 +244,7 @@ def update_brew(is_gui: bool) -> None:
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=sudo_env,
     )
 
     if process.returncode != 0:
@@ -244,7 +252,7 @@ def update_brew(is_gui: bool) -> None:
     print("Homebrew updated.")
 
 
-def upgrade_brew(is_gui: bool) -> None:
+def upgrade_brew(is_gui: bool, sudo_env: dict[str, str]) -> None:
     print("Upgrading Homebrew...")
     brew_command = ["/opt/homebrew/bin/brew", "upgrade"]
     process = subprocess.run(
@@ -252,6 +260,7 @@ def upgrade_brew(is_gui: bool) -> None:
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=sudo_env,
     )
 
     if process.returncode != 0:
@@ -269,9 +278,8 @@ def check_mp4box_version(version: str) -> bool:
     return version in processs.stderr
 
 
-def install_mp4box(is_gui: bool) -> None:
+def install_mp4box(is_gui: bool, sudo_env: dict[str, str]) -> None:
     print("Installing MP4Box...")
-    sudo_env = os.environ.copy()
 
     response = requests.get(
         "https://download.tsi.telecom-paristech.fr/gpac/release/2.2.1/gpac-2.2.1-rev0-gb34e3851-release-2.2.pkg"
@@ -318,7 +326,7 @@ def wine_boot() -> None:
     print("Wine booted.")
 
 
-def install_brew(is_gui: bool) -> None:
+def install_brew(is_gui: bool, sudo_env: dict[str, str]) -> None:
     print("Installing Homebrew for arm64...")
 
     response = requests.get("https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh")
@@ -336,6 +344,7 @@ def install_brew(is_gui: bool) -> None:
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=sudo_env,
     )
 
     if process.returncode != 0:

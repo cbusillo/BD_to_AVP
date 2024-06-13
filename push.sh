@@ -14,7 +14,7 @@ fi
 git checkout "$SOURCE_BRANCH"
 git pull origin "$SOURCE_BRANCH"
 git checkout "$DESTINATION_BRANCH"
-git merge "$SOURCE_BRANCH" -m "merge "$SOURCE_BRANCH" into "$DESTINATION_BRANCH""
+git merge "$SOURCE_BRANCH" -m "merge $SOURCE_BRANCH into $DESTINATION_BRANCH"
 git push
 git checkout "$SOURCE_BRANCH"
 git pull origin "$SOURCE_BRANCH"
