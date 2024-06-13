@@ -1,8 +1,5 @@
 # BD-to-AVP 3D Blu-ray Disc to Apple Vision Pro README
 
-[Screenshot of main screen](screenshots/main_screen.png)
-[Screenshot of about screen](screenshots/about_screen.png)
-
 ## Introduction
 
 This tool processes 3D video content from Blu-ray discs, ISO images, or MKV files, creating a final video file
@@ -10,6 +7,11 @@ compatible with the Apple Vision Pro. It uses FFmpeg, MakeMKV, and Wine for vide
 video stream merging to convert from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The tool also injects 360° metadata into
 the video file for spatial media playback. You have the option of AI upscaling the video to 4K resolution and AI OCR
 of subtitles.
+
+## Screenshots
+
+[![Screenshot of main screen](screenshots/main_medium.png)](screenshots/main.png)
+[![Screenshot of about screen](screenshots/about_medium.png)](screenshots/about.png)
 
 ## GUI install
 
