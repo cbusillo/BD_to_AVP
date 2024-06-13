@@ -1,13 +1,26 @@
 # BD-to-AVP 3D Blu-ray Disc to Apple Vision Pro README
 
+[Screenshot of main screen](screenshots/main_screen.png)
+[Screenshot of about screen](screenshots/about_screen.png)
+
 ## Introduction
 
 This tool processes 3D video content from Blu-ray discs, ISO images, or MKV files, creating a final video file
 compatible with the Apple Vision Pro. It uses FFmpeg, MakeMKV, and Wine for video extraction, audio transcoding, and
 video stream merging to convert from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The tool also injects 360° metadata into
-the video file for spatial media playback.
+the video file for spatial media playback. You have the option of AI upscaling the video to 4K resolution and AI OCR
+of subtitles.
 
-## Quick install (or update)
+## GUI install
+
+To install the GUI version of `Blu-ray to Vision Pro`, download the latest release from the [releases page]. Open the
+DMG file and drag the app to your Applications folder. On the first run of the app you will be prompted for your
+password to install the necessary dependencies. It will appear to be doing nothing for around ten minutes. After that it
+will open to the GUI or give you an error. If you receive an error, please open an issue, so I can help.
+
+```bash
+
+## Terminal install or update (See releases for GUI version)
 
 To quickly install or update `BD_to_AVP`, run the following command in your terminal:
 
@@ -17,7 +30,7 @@ To quickly install or update `BD_to_AVP`, run the following command in your term
 
 ## Prerequisites
 
-Ensure the following are installed on your Mac *(If not using the Quick Install)*:
+Ensure the following are installed on your Mac *(If not using the Quick Install or GUI)*:
 
 - **Apple Silicon [Mac]**: A Mac with Apple Silicon, such as the M1, M1 Pro, or M1 Max
 - **[macOS Sonoma]**: The latest version of macOS.
@@ -65,7 +78,18 @@ pip install bd_to_avp
 ln -s ~/.bd_to_avp_venv/bin/bd-to-avp /opt/homebrew/bin/bd-to-avp
 ```
 
-## Usage
+## GUI Usage
+
+If you have installed the terminal version and wish to use the GUI version, you can run the following command in your
+terminal:
+
+```bash
+bd-to-avp
+```
+
+As long as you provide no arguments, the GUI will open.
+
+## Terminal Usage
 
 Navigate to the tool's directory in your terminal and execute the command with the required and optional parameters:
 
@@ -188,3 +212,5 @@ Big thanks to:
 [Rosetta 2]: https://support.apple.com/en-us/HT211861
 
 [MKVToolNix]: https://mkvtoolnix.download/
+
+[releases page]: https://github.com/cbusillo/BD_to_AVP/releases
