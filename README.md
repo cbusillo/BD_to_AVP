@@ -20,8 +20,6 @@ DMG file and drag the app to your Applications folder. On the first run of the a
 password to install the necessary dependencies. It will appear to be doing nothing for around ten minutes. After that it
 will open to the GUI or give you an error. If you receive an error, please open an issue, so I can help.
 
-```bash
-
 ## Terminal install or update (See releases for GUI version)
 
 To quickly install or update `BD_to_AVP`, run the following command in your terminal:
