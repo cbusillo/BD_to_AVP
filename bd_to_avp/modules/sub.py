@@ -10,6 +10,10 @@ from bd_to_avp.modules.config import config
 from bd_to_avp.modules.util import Spinner
 
 
+class SRTCreationError(Exception):
+    pass
+
+
 def get_subtitle_tracks(input_path: Path) -> list[dict]:
     subtitle_format_extensions = {
         "hdmv_pgs_subtitle": ".sup",
@@ -49,4 +53,9 @@ def convert_sup_to_srt(sup_subtitle_path: Path) -> Path:
 
     spinner.stop()
     spinner_thread.join()
-    return sup_subtitle_path.with_suffix(".srt")
+    srt_subtitle_path = sup_subtitle_path.with_suffix(".srt")
+    if not srt_subtitle_path.exists() or srt_subtitle_path.stat().st_size == 0:
+        if config.continue_on_error:
+            return None
+        raise SRTCreationError(f"Failed to create SRT file from {sup_subtitle_path}")
+    return srt_subtitle_path

@@ -26,6 +26,7 @@ from bd_to_avp.gui.processing import ProcessingThread
 from bd_to_avp.gui.widget import FileFolderPicker, LabeledComboBox, LabeledLineEdit, LabeledSpinBox
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
+from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.modules.util import Spinner, formatted_time_elapsed, format_timestamp, get_common_language_options
 
 
@@ -49,6 +50,7 @@ class MainWindow(QMainWindow):
         self.processing_thread.signals.progress_updated.connect(self.update_processing_output)
         self.processing_thread.error_occurred.connect(self.handle_processing_error)
         self.processing_thread.mkv_creation_error.connect(self.handle_mkv_creation_error)
+        self.processing_thread.srt_creation_error.connect(self.handle_srt_creation_error)
         self.processing_thread.process_completed.connect(self.finished_processing)
 
     def setup_window(self) -> None:
@@ -251,6 +253,22 @@ class MainWindow(QMainWindow):
 
         self.handle_processing_error(error)
 
+    def handle_srt_creation_error(self, error: SRTCreationError) -> None:
+        result = QMessageBox.critical(
+            self,
+            "SRT Creation Error",
+            "Do you want to continue?\n\n" + str(error),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Abort,
+        )
+
+        if result == QMessageBox.StandardButton.Yes:
+            config.continue_on_error = True
+            config.start_stage = Stage.CREATE_LEFT_RIGHT_FILES
+            self.start_processing(is_continuing=True)
+            return
+
+        self.handle_processing_error(error)
+
     def toggle_read_from_disc(self) -> None:
         self.source_folder_widget.setEnabled(not self.read_from_disc_checkbox.isChecked())
         self.source_file_widget.setEnabled(not self.read_from_disc_checkbox.isChecked())
@@ -337,6 +355,7 @@ class MainWindow(QMainWindow):
                 Path(self.source_folder_widget.text()) if self.source_folder_widget.text() else None
             )
             config.source_path = Path(self.source_file_widget.text()) if self.source_file_widget.text() else None
+
         config.output_root_path = Path(self.output_folder_widget.text())
         config.left_right_bitrate = self.left_right_bitrate_spinbox.value()
         config.audio_bitrate = self.audio_bitrate_spinbox.value()
