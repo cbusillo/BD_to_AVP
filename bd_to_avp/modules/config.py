@@ -76,9 +76,7 @@ class Config:
         "makemkvcon",
         "wine",
         "FRIMDecode64.exe",
-        "spatial",
         "spatial-media-kit-tool",
-        "mkvextract",
         "MP4Box",
         "fx-upscale",
     ]
@@ -109,9 +107,7 @@ class Config:
     WINE_PATH = HOMEBREW_PREFIX_BIN / "wine"
     FRIM_PATH = SCRIPT_PATH_BIN / "FRIM_x64_version_1.31" / "x64"
     FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
-    SPATIAL_PATH = HOMEBREW_PREFIX_BIN / "spatial"
     SPATIAL_MEDIA_PATH = SCRIPT_PATH_BIN / "spatial-media-kit-tool"
-    MKVEXTRACT_PATH = HOMEBREW_PREFIX_BIN / "mkvextract"
     MP4BOX_VERSION = "2.2.1"
     MP4BOX_PATH = Path("/Applications/GPAC.app/Contents/MacOS/MP4Box")
     FX_UPSCALE_PATH = HOMEBREW_PREFIX_BIN / "fx-upscale"
