@@ -104,7 +104,18 @@ def rip_disc_to_mkv(output_folder: Path, disc_info: DiscInfo, language_code: str
     mkv_output = run_command(command, "Rip disc to MKV file.")
     if config.continue_on_error or all(error not in mkv_output for error in config.MKV_ERROR_CODES):
         return
-    raise MKVCreationError(f"Error occurred while ripping disc to MKV.\n\n{mkv_output}")
+    filtered_output = filter_lines_from_output(mkv_output, config.MKV_ERROR_FILTERS)
+
+    raise MKVCreationError(f"Error occurred while ripping disc to MKV.\n\n{filtered_output}")
+
+
+def filter_lines_from_output(output: str, filter_strings: list[str]) -> str:
+    output_lines = output.splitlines()
+    filtered_output = ""
+    for line in output_lines:
+        if not any(filter_string in line for filter_string in filter_strings):
+            filtered_output += line + "\n"
+    return filtered_output
 
 
 def create_custom_makemkv_profile(custom_profile_path: Path, language_code: str) -> None:
