@@ -71,6 +71,9 @@ jobs:
         run: |
           poetry run briefcase create
           poetry run briefcase build
+          find . -name QtWebEngineCore.framework -type d | while read dir; do
+            find "$dir" -type f -execdir codesign --force --verify --verbose --sign "${{ secrets.DEV_ID }}" {} \;
+          done
           poetry run briefcase package -i "${{ secrets.DEV_ID }}"
       - name: Upload log on failure
         if: failure()
