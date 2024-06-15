@@ -3,7 +3,7 @@ from pathlib import Path
 import ffmpeg
 
 from bd_to_avp.modules.config import Stage, config
-from bd_to_avp.modules.util import run_ffmpeg_print_errors
+from bd_to_avp.modules.command import run_ffmpeg_print_errors
 
 
 def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int):
