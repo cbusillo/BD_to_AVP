@@ -7,7 +7,7 @@ import humanize
 
 
 def sorted_files_by_creation(path: Path) -> list[Path]:
-    return sorted(Path(path).iterdir(), key=lambda f: f.stat().st_ctime)
+    return sorted(Path(path).iterdir(), key=lambda f: f.stat().st_ctime, reverse=True)
 
 
 def sorted_files_by_creation_filtered_on_suffix(path: Path, suffix: str) -> list[Path]:
@@ -15,14 +15,6 @@ def sorted_files_by_creation_filtered_on_suffix(path: Path, suffix: str) -> list
         suffix = f".{suffix}"
     sorted_files = sorted_files_by_creation(path)
     return [file for file in sorted_files if file.suffix == suffix]
-
-
-def add_quotes_to_path_if_space(commands: list[str | Path | bytes]) -> list[str]:
-    commands_with_paths_as_strings = [
-        (f'"{command}"' if isinstance(command, Path) and " " in command.as_posix() else str(command))
-        for command in commands
-    ]
-    return commands_with_paths_as_strings
 
 
 def get_pyproject_data() -> tuple[dict[str, str], dict[str, str]]:
