@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import ffmpeg
 from babelfish import Language
@@ -58,37 +59,66 @@ def create_mvc_audio_and_subtitle_files(
             audio_output_path,
         )
 
-    if not config.keep_files and mkv_output_path and config.source_path != mkv_output_path:
-        mkv_output_path.unlink(missing_ok=True)
+    # if not config.keep_files and mkv_output_path and config.source_path != mkv_output_path:
+    #     mkv_output_path.unlink(missing_ok=True)
 
     return audio_output_path, video_output_path
 
 
 def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path, output_folder: Path) -> None:
-
+    audio_streams = get_audio_stream_data(audio_path)
+    output_track_index = 1
     command = [
         config.MP4BOX_PATH,
         "-new",
-        "-lang",
-        "eng",
         "-add",
         mv_hevc_path,
-        "-add",
-        audio_path,
     ]
+    output_track_index += 1
+    for stream in audio_streams:
+        index = stream["index"] + 1
+        language_code_alpha3b = stream["tags"]["language"]
+        language_code_alpha3 = Language.fromalpha3b(language_code_alpha3b).alpha3
+        language_code_alpha2 = Language.fromalpha3b(language_code_alpha3b).alpha2
+        language_name = Language.fromietf(language_code_alpha3b).name
 
-    for sub_file in sorted_files_by_creation_filtered_on_suffix(output_folder, ".srt"):
-        language_code = sub_file.stem.split(".")[-1]
-        language_name = Language.fromalpha2(language_code).name
+        audio_track_options = f":lang={language_code_alpha2}:group=1:alternate_group=1"
 
-        subtitle_options = f"hdlr=sbtl:group=2:lang={language_code}:name={language_name} Subtitles:tx3g"
-        if ".forced" in sub_file.stem:
-            subtitle_options += ":forced_track=1:default_track=1"
+        if index > 1:
+            audio_track_options += ":disable"
 
         command += [
             "-add",
-            f"{sub_file}:{subtitle_options}",
+            f"{audio_path}#{index}{audio_track_options}",
+            "-udta",
+            f"{output_track_index}:type=name:str='{language_name} Audio'",
         ]
+        output_track_index += 1
+
+    for sub_file in sorted_files_by_creation_filtered_on_suffix(output_folder, ".srt"):
+        language_code_alpha2 = sub_file.stem.split(".")[-1]
+        language_code_alpha3 = Language.fromalpha2(language_code_alpha2).alpha3
+        language_name = Language.fromalpha2(language_code_alpha2).name
+
+        subtitle_options = f":hdlr=sbtl:lang={language_code_alpha3}:group=2:alternate_group=2"
+        if ".forced" in sub_file.stem:
+            subtitle_options += ":txtflags=0xC0000000"
+
+        command += [
+            "-add",
+            f"{sub_file}#1{subtitle_options}",
+            "-udta",
+            f"{output_track_index}:type=name:str='{language_name} Subtitles'",
+        ]
+        output_track_index += 1
 
     command += [muxed_path]
     run_command(command, "Mux video, audio, and subtitles.")
+
+
+def get_audio_stream_data(file_path: Path) -> list[dict[str, Any]]:
+    probe = ffmpeg.probe(str(file_path))
+    if not probe or "streams" not in probe:
+        return []
+    audio_streams = [stream for stream in probe["streams"] if stream["codec_type"] == "audio"]
+    return audio_streams
