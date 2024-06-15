@@ -3,65 +3,54 @@ import threading
 from pathlib import Path
 
 import ffmpeg
+import requests
 from babelfish import Language
-from pgsrip import pgsrip, Options, Sup
+from pgsrip import Mkv, Options, pgsrip
 
 from bd_to_avp.modules.config import config
-from bd_to_avp.modules.util import Spinner
+from bd_to_avp.modules.command import Spinner
 
 
 class SRTCreationError(Exception):
     pass
 
 
-def get_subtitle_tracks(input_path: Path) -> list[dict]:
-    subtitle_format_extensions = {
-        "hdmv_pgs_subtitle": ".sup",
-        "dvd_subtitle": ".sub",
-        "subrip": ".srt",
-    }
-    subtitle_tracks = []
-    try:
-        print(f"Getting subtitle tracks from {input_path}")
-        probe = ffmpeg.probe(str(input_path), select_streams="s")
-        subtitle_streams = probe.get("streams", [])
-        for index, stream in enumerate(subtitle_streams):
-            tags = stream.get("tags", {})
-            language = tags.get("language", "")
-            if language != "eng":
-                continue
+def extract_subtitle_to_srt(mkv_path: Path, output_path: Path) -> None:
     tessdata_path = config.app.config_path / "tessdata"
     subtitle_tracks = get_languages_in_mkv(mkv_path)
 
-            codec_name = stream.get("codec_name", "")
-            extension = subtitle_format_extensions.get(codec_name, "")
-            if extension:
-                subtitle_tracks.append({"index": index, "extension": extension, "codec_name": codec_name})
-    except ffmpeg.Error as e:
-        print(f"Error getting subtitle tracks: {e}")
-    return subtitle_tracks
+    if not subtitle_tracks:
+        raise SRTCreationError("No subtitle tracks found in MKV.")
 
+    forced_subtitle_tracks = [track for track in subtitle_tracks if track["forced"] == 1]
+    forced_track_language = forced_subtitle_tracks[0]["language"] if forced_subtitle_tracks else None
 
     needed_languages = [track["language"] for track in subtitle_tracks]
     if needed_languages:
         get_missing_tessdata_files(needed_languages, tessdata_path)
 
-    spinner = Spinner(f"{sup_subtitle_path} to SRT Conversion")
+    sub_options = Options(overwrite=True, one_per_lang=False, keep_temp_files=config.keep_files)
+
+    spinner = Spinner(f"Sup subtitles extraction and SRT conversion")
     spinner_thread = threading.Thread(target=spinner.start)
     spinner_thread.start()
 
-    os.environ["TESSDATA_PREFIX"] = str(config.SCRIPT_PATH / "bin")
-    pgsrip.rip(sub_file, sub_options)
+    mkv_file = Mkv(mkv_path.as_posix())
     os.environ["TESSDATA_PREFIX"] = tessdata_path.as_posix()
+
+    pgsrip.rip(mkv_file, sub_options)
+
+    if forced_track_language:
+        two_alpha_language_code = Language.fromietf(forced_track_language).alpha2
+        for srt_file in output_path.glob(f"*{two_alpha_language_code}.srt"):
+            srt_file.rename(f"{srt_file.name}.forced{srt_file.suffix}")
 
     spinner.stop()
     spinner_thread.join()
-    srt_subtitle_path = sup_subtitle_path.with_suffix(".srt")
-    if not srt_subtitle_path.exists() or srt_subtitle_path.stat().st_size == 0:
-        if config.continue_on_error:
-            return None
-        raise SRTCreationError(f"Failed to create SRT file from {sup_subtitle_path}")
-    return srt_subtitle_path
+
+    if not any(output_path.glob("*.srt")):
+        raise SRTCreationError("No SRT files created.")
+
 
 def get_missing_tessdata_files(languages: list[str], tessdata_path: Path) -> None:
     tessdata_path.mkdir(exist_ok=True)
