@@ -6,7 +6,7 @@ import ffmpeg
 
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.file import find_largest_file_with_extensions, sanitize_filename
-from bd_to_avp.modules.util import run_command
+from bd_to_avp.modules.command import run_command
 
 
 class MKVCreationError(Exception):
@@ -119,18 +119,11 @@ def filter_lines_from_output(output: str, filter_strings: list[str]) -> str:
 
 
 def create_custom_makemkv_profile(custom_profile_path: Path, language_code: str) -> None:
+    template_profile_path = Path(__file__).parent.parent / "resources" / "makemkv.xml"
+    if not template_profile_path.exists():
+        raise FileNotFoundError(f"Custom MakeMKV profile not found at {template_profile_path}")
+    custom_profile_content = template_profile_path.read_text().format(language_code=language_code)
 
-    custom_profile_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<profile>
-    <name lang="mogz">:5086</name>
-    <Profile name="CustomProfile" description="Custom profile to include MVC tracks">
-        <trackSettings input="default">
-            <output outputSettingsName="copy"
-                defaultSelection="+sel:mvcvideo,+sel:{language_code},-sel:mvcvideo,-sel:{language_code},+sel:(first)">
-            </output>
-        </trackSettings>
-    </Profile>
-</profile>"""
     custom_profile_path.write_text(custom_profile_content)
     print(f"Custom MakeMKV profile created at {custom_profile_path}")
 

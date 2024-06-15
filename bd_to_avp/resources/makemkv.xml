@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<profile>
+    <name lang="mogz">custom_profile</name>
+
+    <mkvSettings
+            ignoreForcedSubtitlesFlag="false"
+            useISO639Type2T="false"
+            setFirstAudioTrackAsDefault="true"
+            setFirstSubtitleTrackAsDefault="false"
+            setFirstForcedSubtitleTrackAsDefault="true"
+            insertFirstChapter00IfMissing="true"
+    />
+
+
+    <outputSettings name="copy" outputFormat="directCopy">
+        <description lang="eng">Copy track as is</description>
+    </outputSettings>
+
+    <trackSettings input="default">
+        <output outputSettingsName="copy"
+                defaultSelection="+sel:all,=100:all,-5:{language_code},-10:forced&amp;{language_code}">
+        </output>
+    </trackSettings>
+
+</profile>
