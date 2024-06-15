@@ -1,3 +1,5 @@
+import os
+import shutil
 import subprocess
 
 from bd_to_avp.modules.audio import create_transcoded_audio_file
@@ -37,6 +39,12 @@ def process_each() -> None:
     print(f"\nProcessing {config.source_path}")
     disc_info = get_disc_and_mvc_video_info()
     output_folder = prepare_output_folder_for_source(disc_info.name)
+
+    tmp_folder = output_folder / "tmp"
+    shutil.rmtree(tmp_folder, ignore_errors=True)
+
+    tmp_folder.mkdir(parents=True, exist_ok=True)
+    os.environ["TMPDIR"] = tmp_folder.as_posix()
 
     completed_path = config.output_root_path / f"{disc_info.name}{config.FINAL_FILE_TAG}.mov"
     if not config.overwrite and file_exists_normalized(completed_path):
