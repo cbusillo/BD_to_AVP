@@ -22,6 +22,7 @@ pyside6 = "^6.7.1"
 pygithub = "^2.3.0"
 humanize = "^4.9.0"
 packaging = "^24.1"
+babelfish = "^0.6.1"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.2.0"
@@ -63,6 +64,7 @@ requires = [
     "pygithub",
     "humanize",
     "packaging",
+    "babelfish",
 ]
 
 

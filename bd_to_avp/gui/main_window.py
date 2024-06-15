@@ -2,7 +2,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-import pycountry
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QFont, QTextCursor
 from PySide6.QtWidgets import (
@@ -20,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QMessageBox,
 )
+from babelfish import Language
 
 from bd_to_avp.gui.dialog import AboutDialog
 from bd_to_avp.gui.processing import ProcessingThread
@@ -27,7 +27,8 @@ from bd_to_avp.gui.widget import FileFolderPicker, LabeledComboBox, LabeledLineE
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
 from bd_to_avp.modules.sub import SRTCreationError
-from bd_to_avp.modules.util import Spinner, formatted_time_elapsed, format_timestamp, get_common_language_options
+from bd_to_avp.modules.util import formatted_time_elapsed, format_timestamp, get_common_language_options
+from bd_to_avp.modules.command import Spinner
 
 
 # noinspection PyAttributeOutsideInit
@@ -172,10 +173,8 @@ class MainWindow(QMainWindow):
         config_layout.addWidget(self.skip_subtitles_checkbox)
 
     def create_processing_options(self, config_layout: QVBoxLayout) -> None:
-        self.start_stage_combobox = LabeledComboBox("Start Stage", Stage.list(), config.start_stage.name)
-        self.language_combobox = LabeledComboBox(
-            "Language", get_common_language_options(), pycountry.languages.get(alpha_3=config.language_code).name
-        )
+        self.start_stage_combobox = LabeledComboBox("Start Stage", Stage.list())
+        self.language_combobox = LabeledComboBox("Language", get_common_language_options())
 
         config_layout.setSpacing(0)
         config_layout.setContentsMargins(0, 0, 0, 0)
@@ -307,8 +306,9 @@ class MainWindow(QMainWindow):
         self.transcode_audio_checkbox.setChecked(config.transcode_audio)
         self.continue_on_error.setChecked(config.continue_on_error)
         self.skip_subtitles_checkbox.setChecked(config.skip_subtitles)
-        self.start_stage_combobox.set_current_text(config.start_stage.name)
-        self.language_combobox.set_current_text(pycountry.languages.get(alpha_3=config.language_code).name)
+        self.start_stage_combobox.set_current_text(str(config.start_stage))
+        language_name = Language.fromalpha3b(config.language_code).name
+        self.language_combobox.set_current_text(language_name)
 
     def toggle_processing(self) -> None:
         if self.process_button.text() == self.START_PROCESSING_TEXT:
@@ -325,7 +325,6 @@ class MainWindow(QMainWindow):
             self.stop_processing()
 
         self.process_button.setShortcut("Ctrl+P")
-        # self.process_button.clicked.connect(self.toggle_processing)
 
     def start_processing(self, is_continuing: bool = False) -> None:
         if not is_continuing:
@@ -376,7 +375,8 @@ class MainWindow(QMainWindow):
         config.continue_on_error = self.continue_on_error.isChecked()
         config.skip_subtitles = self.skip_subtitles_checkbox.isChecked()
         config.start_stage = Stage.get_stage(selected_stage)
-        config.language_code = pycountry.languages.get(name=self.language_combobox.current_text()).alpha_3
+        config.language_code = Language.fromname(self.language_combobox.current_text()).alpha3b
+        pass
 
     def stop_processing(self) -> None:
         time_elapsed = formatted_time_elapsed(self.process_start_time)
