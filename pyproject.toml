@@ -29,7 +29,7 @@ black = "^24.2.0"
 ruff = "^0.4.7"
 ruff-lsp = "^0.0.53"
 mypy = "^1.9.0"
-briefcase = "^0.3.18"
+briefcase = "=0.3.18"
 types-requests = "^2.32.0.20240602"
 types-psutil = "^5.9.5.20240516"
 
