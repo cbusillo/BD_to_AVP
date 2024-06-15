@@ -3,13 +3,14 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
 import ffmpeg
 
 from bd_to_avp.modules.config import config
-from bd_to_avp.modules.util import add_quotes_to_path_if_space
+from bd_to_avp.modules.util import formatted_time_elapsed
 
 
 class Spinner:
@@ -21,6 +22,7 @@ class Spinner:
         self.stop_spinner_flag = False
         self.update_interval = update_interval
         self.current_symbol = 0
+        self.start_time = datetime.now()
 
     def _update_spinner(self) -> None:
         if not self.stop_spinner_flag:
@@ -42,14 +44,24 @@ class Spinner:
 
     def stop(self, update_func: Callable[[str], None] | None = None) -> None:
         self.stop_spinner_flag = True
+        time_elapsed_formatted = formatted_time_elapsed(self.start_time)
+        message = f"\rFinished {self.command_name} in {time_elapsed_formatted}"
         if update_func:
-            update_func(f"Finished {self.command_name}")
+            update_func(message)
         else:
-            print(f"\rFinished {self.command_name}")
+            print(f"\r{message}")
 
     @classmethod
     def stop_all(cls) -> None:
         cls.stop_all_spinners = True
+
+
+def add_quotes_to_path_if_space(commands: list[str | Path | bytes]) -> list[str]:
+    commands_with_paths_as_strings = [
+        (f'"{command}"' if isinstance(command, Path) and " " in command.as_posix() else str(command))
+        for command in commands
+    ]
+    return commands_with_paths_as_strings
 
 
 def normalize_command_elements(command: list[Any]) -> list[str | Path | bytes]:
@@ -106,7 +118,10 @@ def run_command(commands: list[Any], command_name: str = "", env: dict[str, str]
 def run_ffmpeg_print_errors(stream_spec: Any, message: str, quiet: bool = True, **kwargs) -> None:
     kwargs["quiet"] = quiet
     if config.output_commands:
-        print(f"Running command:\n{ffmpeg.compile(stream_spec)}")
+        output_commands_quoted = add_quotes_to_path_if_space(ffmpeg.compile(stream_spec))
+        output_commands_str = " ".join(output_commands_quoted)
+
+        print(f"Running command:\n{output_commands_str}")
     spinner = Spinner(message)
     spinner_thread = threading.Thread(target=spinner.start)
     spinner_thread.start()
