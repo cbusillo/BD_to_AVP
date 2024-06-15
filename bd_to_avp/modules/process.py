@@ -57,7 +57,7 @@ def process_each() -> None:
 
     mkv_output_path = create_mkv_file(output_folder, disc_info, config.language_code)
     crop_params = detect_crop_parameters(mkv_output_path)
-    audio_output_path, video_output_path, subtitle_output_path = create_mvc_audio_and_subtitle_files(
+    audio_output_path, video_output_path = create_mvc_audio_and_subtitle_files(
         disc_info.name, mkv_output_path, output_folder
     )
     left_output_path, right_output_path = create_left_right_files(
@@ -69,7 +69,6 @@ def process_each() -> None:
     muxed_output_path = create_muxed_file(
         audio_output_path,
         mv_hevc_path,
-        subtitle_output_path,
         output_folder,
         disc_info.name,
     )
