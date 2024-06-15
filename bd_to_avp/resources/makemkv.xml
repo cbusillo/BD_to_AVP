@@ -18,7 +18,7 @@
 
     <trackSettings input="default">
         <output outputSettingsName="copy"
-                defaultSelection="+sel:all,=100:all,-5:{language_code},-10:forced&amp;{language_code}">
+                defaultSelection="+sel:all,+sel:mvcvideo,+sel:{language_code},+sel:forced&amp;{language_code},=100:all,-5:{language_code},-10:forced&amp;{language_code}">
         </output>
     </trackSettings>
 

@@ -123,6 +123,8 @@ def create_custom_makemkv_profile(custom_profile_path: Path, language_code: str)
     if not template_profile_path.exists():
         raise FileNotFoundError(f"Custom MakeMKV profile not found at {template_profile_path}")
     custom_profile_content = template_profile_path.read_text().format(language_code=language_code)
+    if config.remove_extra_languages:
+        custom_profile_content = custom_profile_content.replace("+sel:all", "-sel:all")
 
     custom_profile_path.write_text(custom_profile_content)
     print(f"Custom MakeMKV profile created at {custom_profile_path}")

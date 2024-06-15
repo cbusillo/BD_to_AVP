@@ -190,6 +190,7 @@ class Config:
         self.fx_upscale = False
         self.continue_on_error = False
         self.language_code = "eng"
+        self.remove_extra_languages = False
 
     def save_config_to_file(self) -> None:
         config_parser = configparser.ConfigParser()
@@ -361,6 +362,11 @@ class Config:
         parser.add_argument(
             "--language-code",
             help="Language for subtitle extraction.  Defaults to 'eng'.  Use the ISO 639-2 (three character) code",
+        )
+        parser.add_argument(
+            "--remove-extra-languages",
+            action="store_true",
+            help="Remove all subtitle languages except the one specified by --language-code.",
         )
 
         args = parser.parse_args()

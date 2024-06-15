@@ -159,6 +159,9 @@ class MainWindow(QMainWindow):
         self.transcode_audio_checkbox = self.create_checkbox("Transcode Audio", config.transcode_audio)
         self.continue_on_error = self.create_checkbox("Continue Processing On Error", config.continue_on_error)
         self.skip_subtitles_checkbox = self.create_checkbox("Skip Subtitles", config.skip_subtitles)
+        self.remove_extra_languages_checkbox = self.create_checkbox(
+            "Remove Extra Languages", config.remove_extra_languages
+        )
 
         config_layout.addWidget(self.crop_black_bars_checkbox)
         config_layout.addWidget(self.swap_eyes_checkbox)
@@ -171,6 +174,7 @@ class MainWindow(QMainWindow):
         config_layout.addWidget(self.transcode_audio_checkbox)
         config_layout.addWidget(self.continue_on_error)
         config_layout.addWidget(self.skip_subtitles_checkbox)
+        config_layout.addWidget(self.remove_extra_languages_checkbox)
 
     def create_processing_options(self, config_layout: QVBoxLayout) -> None:
         self.start_stage_combobox = LabeledComboBox("Start Stage", Stage.list())
@@ -309,6 +313,7 @@ class MainWindow(QMainWindow):
         self.start_stage_combobox.set_current_text(str(config.start_stage))
         language_name = Language.fromalpha3b(config.language_code).name
         self.language_combobox.set_current_text(language_name)
+        self.remove_extra_languages_checkbox.setChecked(config.remove_extra_languages)
 
     def toggle_processing(self) -> None:
         if self.process_button.text() == self.START_PROCESSING_TEXT:
@@ -376,7 +381,7 @@ class MainWindow(QMainWindow):
         config.skip_subtitles = self.skip_subtitles_checkbox.isChecked()
         config.start_stage = Stage.get_stage(selected_stage)
         config.language_code = Language.fromname(self.language_combobox.current_text()).alpha3b
-        pass
+        config.remove_extra_languages = self.remove_extra_languages_checkbox.isChecked()
 
     def stop_processing(self) -> None:
         time_elapsed = formatted_time_elapsed(self.process_start_time)
