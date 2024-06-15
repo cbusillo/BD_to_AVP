@@ -6,7 +6,7 @@ import ffmpeg
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.disc import DiscInfo
 from bd_to_avp.modules.file import temporary_fifo
-from bd_to_avp.modules.util import cleanup_process, run_command, run_ffmpeg_async
+from bd_to_avp.modules.command import cleanup_process, run_command, run_ffmpeg_async
 
 
 def generate_ffmpeg_wrapper_command(
