@@ -30,6 +30,8 @@ def get_subtitle_tracks(input_path: Path) -> list[dict]:
             language = tags.get("language", "")
             if language != "eng":
                 continue
+    tessdata_path = config.app.config_path / "tessdata"
+    subtitle_tracks = get_languages_in_mkv(mkv_path)
 
             codec_name = stream.get("codec_name", "")
             extension = subtitle_format_extensions.get(codec_name, "")
@@ -40,9 +42,9 @@ def get_subtitle_tracks(input_path: Path) -> list[dict]:
     return subtitle_tracks
 
 
-def convert_sup_to_srt(sup_subtitle_path: Path) -> Path:
-    sub_file = Sup(str(sup_subtitle_path))
-    sub_options = Options(languages={Language("eng")}, overwrite=True, one_per_lang=False)
+    needed_languages = [track["language"] for track in subtitle_tracks]
+    if needed_languages:
+        get_missing_tessdata_files(needed_languages, tessdata_path)
 
     spinner = Spinner(f"{sup_subtitle_path} to SRT Conversion")
     spinner_thread = threading.Thread(target=spinner.start)
@@ -50,6 +52,7 @@ def convert_sup_to_srt(sup_subtitle_path: Path) -> Path:
 
     os.environ["TESSDATA_PREFIX"] = str(config.SCRIPT_PATH / "bin")
     pgsrip.rip(sub_file, sub_options)
+    os.environ["TESSDATA_PREFIX"] = tessdata_path.as_posix()
 
     spinner.stop()
     spinner_thread.join()
@@ -59,3 +62,35 @@ def convert_sup_to_srt(sup_subtitle_path: Path) -> Path:
             return None
         raise SRTCreationError(f"Failed to create SRT file from {sup_subtitle_path}")
     return srt_subtitle_path
+
+def get_missing_tessdata_files(languages: list[str], tessdata_path: Path) -> None:
+    tessdata_path.mkdir(exist_ok=True)
+    if "zho" in languages:
+        languages.remove("zho")
+        languages += ["chi_sim", "chi_tra", "chi_sim_vert", "chi_tra_vert"]
+
+    for language in languages:
+        if not (tessdata_path / f"{language}.traineddata").exists():
+            print(f"Downloading {language}.traineddata")
+            response = requests.get(f"https://github.com/tesseract-ocr/tessdata_best/raw/main/{language}.traineddata")
+            with open(tessdata_path / f"{language}.traineddata", "wb") as f:
+                f.write(response.content)
+
+
+def get_languages_in_mkv(mkv_path: Path) -> None | list[dict[str, str]]:
+    mkv_info = ffmpeg.probe(str(mkv_path))
+    streams = mkv_info["streams"]
+    subtitle_streams = [stream for stream in streams if stream["codec_type"] == "subtitle"]
+    if not subtitle_streams:
+        print("No subtitle streams found in MKV.")
+        return None
+    subtitle_info = []
+    for stream in subtitle_streams:
+        info = {
+            "index": stream["index"],
+            "language": stream["tags"].get("language", "und"),  # 'und' stands for undefined
+            "default": stream["disposition"].get("default", 0),
+            "forced": stream["disposition"].get("forced", 0),
+        }
+        subtitle_info.append(info)
+    return subtitle_info
