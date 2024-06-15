@@ -71,7 +71,6 @@ jobs:
         run: |
           poetry run briefcase create
           poetry run briefcase build
-          codesign --deep --force --options runtime --verbose --sign "${{ secrets.DEV_ID }}" "build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app"
           poetry run briefcase package -i "${{ secrets.DEV_ID }}"
       - name: Upload log on failure
         if: failure()
