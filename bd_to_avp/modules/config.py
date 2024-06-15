@@ -117,7 +117,6 @@ class Config:
     ]
     BREW_PACKAGES_TO_INSTALL = [
         "ffmpeg",
-        "mkvtoolnix",
         "tesseract",
         "finnvoor/tools/fx-upscale",
     ]
