@@ -116,7 +116,6 @@ class Config:
         "wine-stable",
     ]
     BREW_PACKAGES_TO_INSTALL = [
-        "python@3.12",
         "ffmpeg",
         "mkvtoolnix",
         "tesseract",
