@@ -1,12 +1,13 @@
 import argparse
 import configparser
+import sys
 import tomllib
 
 from enum import Enum, auto
 from importlib.metadata import version
 from pathlib import Path
 
-CONFIG_FILE = Path.home() / ".bd_to_avp.ini"
+from bd_to_avp.modules.util import get_pyproject_data
 
 
 class Stage(Enum):
@@ -60,6 +61,56 @@ class StageEnumAction(argparse.Action):
 
 
 class Config:
+    class App:
+        def __init__(self) -> None:
+            poetry, briefcase = get_pyproject_data()
+
+            try:
+                self.fullname = briefcase["project_name"]
+                self.shortname = poetry["name"]
+            except KeyError as error:
+                raise KeyError(f"Key not found in pyproject.toml: {error}")
+
+            self.config_path = Path.home() / "Library" / "Application Support" / self.shortname
+            self.config_file = (self.config_path / "config.ini").with_suffix(".ini")
+
+            if not self.config_path.exists():
+                self.config_path.mkdir(parents=True)
+            if not self.config_file.exists():
+                self.config_file.touch()
+
+            self.is_gui = len(sys.argv) == 1
+
+        @property
+        def code_version(self) -> str:
+            pyproject_path = Path("pyproject.toml")
+            if pyproject_path.exists():
+                with open(pyproject_path, "rb") as pyproject_file:
+                    pyproject_data = tomllib.load(pyproject_file)
+
+                return pyproject_data["tool"]["poetry"]["version"]
+
+            project_version = version(__package__.split(".")[0])
+            return project_version
+
+        def load_version_from_file(self) -> str | None:
+            config_file = configparser.ConfigParser()
+            config_file.read(self.config_file)
+            if "Application" in config_file and "installed_version" in config_file["Application"]:
+                return config_file.get("Application", "installed_version")
+            return None
+
+        def save_version_from_file(self) -> None:
+            config_parser = configparser.ConfigParser()
+            config_parser.read(self.config_file)
+
+            if not config_parser.has_section("Application"):
+                config_parser.add_section("Application")
+            config_parser.set("Application", "installed_version", self.code_version)
+
+            with open(self.config_file, "w") as config_file:
+                config_parser.write(config_file)
+
     BREW_CASKS_TO_INSTALL = [
         "makemkv",
         "wine-stable",
@@ -116,6 +167,8 @@ class Config:
     IMAGE_EXTENSIONS = [".iso", ".img", ".bin"]
 
     def __init__(self) -> None:
+        self.app = self.App()
+
         self.source_str: str | None = None
         self.source_path: Path | None = None
         self.source_folder_path: Path | None = None
@@ -140,81 +193,52 @@ class Config:
         self.continue_on_error = False
         self.language_code = "eng"
 
-    @property
-    def code_version(self) -> str:
-        pyproject_path = Path("pyproject.toml")
-        if pyproject_path.exists():
-            with open(pyproject_path, "rb") as pyproject_file:
-                pyproject_data = tomllib.load(pyproject_file)
-
-            return pyproject_data["tool"]["poetry"]["version"]
-
-        project_version = version(__package__.split(".")[0])
-        return project_version
-
-    @staticmethod
-    def load_version_from_file() -> str | None:
-        config_file = configparser.ConfigParser()
-        config_file.read(CONFIG_FILE)
-        if "Application" in config_file and "installed_version" in config_file["Application"]:
-            return config_file.get("Application", "installed_version")
-        return None
-
-    def save_version_from_file(self) -> None:
-        config_file = configparser.ConfigParser()
-        config_file.read(CONFIG_FILE)
-
-        if not config_file.has_section("Application"):
-            config_file.add_section("Application")
-        config_file.set("Application", "installed_version", self.code_version)
-
-        with open(CONFIG_FILE, "w") as configfile:
-            config_file.write(configfile)
-
     def save_config_to_file(self) -> None:
-        config_file = configparser.ConfigParser()
-        config_file.read(CONFIG_FILE)
+        config_parser = configparser.ConfigParser()
+        config_parser.read(self.app.config_file)
 
-        if not config_file.has_section("Paths"):
-            config_file.add_section("Paths")
-        if not config_file.has_section("Options"):
-            config_file.add_section("Options")
+        if not config_parser.has_section("Paths"):
+            config_parser.add_section("Paths")
+        if not config_parser.has_section("Options"):
+            config_parser.add_section("Options")
 
         for key, value in self.__dict__.items():
-            if "_path" in key:
+            if key == "app":
+                continue
+            elif "_path" in key:
                 if not value:
                     continue
-                config_file.set("Paths", key, value.as_posix())
+                config_parser.set("Paths", key, value.as_posix())
             else:
                 if value is None:
                     continue
-                config_file.set("Options", key, str(value))
+                config_parser.set("Options", key, str(value))
 
-        with open(CONFIG_FILE, "w") as configfile:
-            config_file.write(configfile)
+        with open(self.app.config_file, "w") as config_file:
+            config_parser.write(config_file)
 
     def load_config_from_file(self) -> None:
-        config_file = configparser.ConfigParser()
-        config_file.read(CONFIG_FILE)
+        config_parser = configparser.ConfigParser()
+        config_parser.read(self.app.config_file)
 
-        if config_file.has_section("Paths"):
-            for key, value in config_file.items("Paths"):
+        if config_parser.has_section("Paths"):
+            for key, value in config_parser.items("Paths"):
                 if key in self.__dict__:
                     setattr(self, key, Path(value))
 
-        if config_file.has_section("Options"):
-            for key, value in config_file.items("Options"):
+        if config_parser.has_section("Options"):
+            for key, value in config_parser.items("Options"):
                 if key in self.__dict__:
                     attribute_type = type(getattr(self, key))
                     if attribute_type == bool:
-                        setattr(self, key, config_file.getboolean("Options", key))
+                        setattr(self, key, config_parser.getboolean("Options", key))
                     elif attribute_type == int:
-                        setattr(self, key, config_file.getint("Options", key))
+                        setattr(self, key, config_parser.getint("Options", key))
                     elif attribute_type == Stage:
-                        stage_value = config_file.get("Options", key).split(" - ")[0]
+                        stage_value = config_parser.get("Options", key).split(" - ")[0]
                         setattr(self, key, Stage.get_stage(int(stage_value)))
                     else:
-                        setattr(self, key, config_file.get("Options", key))
+                        setattr(self, key, config_parser.get("Options", key))
 
     def parse_args(self) -> None:
         parser = argparse.ArgumentParser(
@@ -324,7 +348,7 @@ class Config:
         parser.add_argument(
             "--version",
             action="version",
-            version=f"BD-to_AVP Version {self.code_version}",
+            version=f"BD-to_AVP Version {self.app.code_version}",
         )
         parser.add_argument(
             "--fx-upscale",
