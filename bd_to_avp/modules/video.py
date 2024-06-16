@@ -12,20 +12,18 @@ from bd_to_avp.modules.command import cleanup_process, run_command, run_ffmpeg_a
 def generate_ffmpeg_wrapper_command(
     input_fifo: Path,
     output_path: Path,
-    disc_color_depth: int,
-    disc_resolution: str,
-    disc_frame_rate: str,
+    disc_info: DiscInfo,
     bitrate: int,
     crop_params: str,
     software_encoder: bool,
 ) -> list[str | Path]:
-    pix_fmt = "yuv420p10le" if disc_color_depth == 10 else "yuv420p"
+    pix_fmt = "yuv420p10le" if disc_info.color_depth == 10 else "yuv420p"
     stream = ffmpeg.input(
         str(input_fifo),
         f="rawvideo",
         pix_fmt=pix_fmt,
-        s=config.resolution or disc_resolution,
-        r=config.frame_rate or disc_frame_rate,
+        s=config.resolution or disc_info.resolution,
+        r=config.frame_rate or disc_info.frame_rate,
     )
     if crop_params:
         stream = ffmpeg.filter(stream, "crop", *crop_params.split(":"))
@@ -36,8 +34,8 @@ def generate_ffmpeg_wrapper_command(
         video_bitrate=f"{bitrate}M",
         bufsize=f"{bitrate * 2}M",
         tag="hvc1",
-        vprofile="main10" if disc_color_depth == 10 else "main",
-        r=config.frame_rate or disc_frame_rate,
+        vprofile="main10" if disc_info.color_depth == 10 else "main",
+        r=config.frame_rate or disc_info.frame_rate,
     )
 
     args = ffmpeg.compile(stream, overwrite_output=True)
@@ -61,9 +59,7 @@ def split_mvc_to_stereo(
         ffmpeg_left_command = generate_ffmpeg_wrapper_command(
             primary_fifo,
             left_output_path,
-            disc_info.color_depth,
-            disc_info.resolution,
-            disc_info.frame_rate,
+            disc_info,
             config.left_right_bitrate,
             crop_params,
             config.software_encoder,
@@ -71,9 +67,7 @@ def split_mvc_to_stereo(
         ffmpeg_right_command = generate_ffmpeg_wrapper_command(
             secondary_fifo,
             right_output_path,
-            disc_info.color_depth,
-            disc_info.resolution,
-            disc_info.frame_rate,
+            disc_info,
             config.left_right_bitrate,
             crop_params,
             config.software_encoder,
