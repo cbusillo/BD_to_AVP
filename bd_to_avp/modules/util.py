@@ -7,7 +7,7 @@ import humanize
 
 
 def sorted_files_by_creation(path: Path) -> list[Path]:
-    return sorted(Path(path).iterdir(), key=lambda f: f.stat().st_ctime, reverse=True)
+    return sorted(Path(path).iterdir(), key=lambda f: f.stat().st_ctime)
 
 
 def sorted_files_by_creation_filtered_on_suffix(path: Path, suffix: str) -> list[Path]:
