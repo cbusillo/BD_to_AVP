@@ -16,11 +16,15 @@ class SRTCreationError(Exception):
 
 
 def extract_subtitle_to_srt(mkv_path: Path, output_path: Path) -> None:
+    skip_or_continue = config.continue_on_error or config.skip_subtitles
     tessdata_path = config.app.config_path / "tessdata"
     subtitle_tracks = get_languages_in_mkv(mkv_path)
 
-    if not subtitle_tracks and not config.skip_subtitles:
+    if not subtitle_tracks and not skip_or_continue:
         raise SRTCreationError("No subtitle tracks found in MKV.")
+
+    if not subtitle_tracks:
+        return
 
     forced_subtitle_tracks = [track for track in subtitle_tracks if track["forced"] == 1]
     forced_track_language = forced_subtitle_tracks[0]["language"] if forced_subtitle_tracks else None
@@ -44,7 +48,7 @@ def extract_subtitle_to_srt(mkv_path: Path, output_path: Path) -> None:
         if srt_file.stat().st_size == 0:
             srt_file.unlink()
 
-    if not any(output_path.glob("*.srt")) and not config.skip_subtitles:
+    if not any(output_path.glob("*.srt")) and not skip_or_continue:
         raise SRTCreationError("No SRT files created.")
 
     if forced_track_language:
