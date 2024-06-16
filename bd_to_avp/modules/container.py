@@ -79,6 +79,7 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
         index = stream["index"] + 1
         language_code_alpha3b = stream["tags"].get("language", "und")
         language_name = Language.fromietf(language_code_alpha3b).name
+        channel_layout = stream["channel_layout"]
 
         audio_track_options = f":lang={language_code_alpha3b}:group=1:alternate_group=1"
 
@@ -89,7 +90,7 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
             "-add",
             f"{audio_path}#{index}{audio_track_options}",
             "-udta",
-            f"{output_track_index}:type=name:str='{language_name} Audio'",
+            f"{output_track_index}:type=name:str='{language_name} {channel_layout} Audio'",
         ]
         output_track_index += 1
 
