@@ -111,7 +111,7 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - `--output-root-folder`: Output folder path. Defaults to the current directory.
 - `--transcode-audio`: Enable audio transcoding to AAC (disabled by default).
 - `--audio-bitrate`: Audio bitrate for transcoding in kb/s do not include unit (default: "384").
-- `--left-right-bitrate`: Bitrate for left and right views in Mb/s do not include unit (default: "20").'
+- `--left-right-bitrate`: Bitrate for left and right views in Mb/s do not include unit (default: "20").
 - `--mv-hevc-quality`: Quality factor for MV-HEVC encoding (default: "75").
 - `--fov`: Horizontal field of view for MV-HEVC (default: "90").
 - `--frame-rate`: Video frame rate (auto-detected if not provided).
