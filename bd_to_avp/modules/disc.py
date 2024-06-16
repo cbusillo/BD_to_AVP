@@ -20,6 +20,7 @@ class DiscInfo:
     resolution: str = "1920x1080"
     color_depth: int = 8
     main_title_number: int = 0
+    is_interlaced: bool = False
 
 
 def get_disc_and_mvc_video_info() -> DiscInfo:
@@ -34,6 +35,8 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
         disc_info.resolution = f"{ffmpeg_probe_output.get('width', 1920)}x{ffmpeg_probe_output.get('height',1080)}"
         disc_info.frame_rate = ffmpeg_probe_output.get("avg_frame_rate")
         disc_info.color_depth = 10 if "10" in ffmpeg_probe_output.get("pix_fmt") else 8
+        if ffmpeg_probe_output.get("field_order") != "progressive":
+            disc_info.is_interlaced = True
         return disc_info
 
     command = [config.MAKEMKVCON_PATH, "--robot", "info", source]

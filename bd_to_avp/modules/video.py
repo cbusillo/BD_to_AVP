@@ -27,6 +27,10 @@ def generate_ffmpeg_wrapper_command(
     )
     if crop_params:
         stream = ffmpeg.filter(stream, "crop", *crop_params.split(":"))
+
+    if disc_info.is_interlaced:
+        stream = ffmpeg.filter(stream, "bwdif")
+
     stream = ffmpeg.output(
         stream,
         f"file:{output_path}",
