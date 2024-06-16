@@ -74,6 +74,7 @@ jobs:
           find . -name QtWebEngineCore.framework -type d | while read dir; do
             find "$dir" -type f -execdir codesign --force --verify --verbose --sign "${{ secrets.DEV_ID }}" {} \;
           done
+          find build/bd-to-avp/macos/app -name "*.dylib" -exec codesign --force --sign - {} \;
           poetry run briefcase package -i "${{ secrets.DEV_ID }}"
       - name: Upload log on failure
         if: failure()
