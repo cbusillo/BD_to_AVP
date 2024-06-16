@@ -14,6 +14,7 @@ def generate_ffmpeg_wrapper_command(
     output_path: Path,
     disc_color_depth: int,
     disc_resolution: str,
+    disc_frame_rate: str,
     bitrate: int,
     crop_params: str,
     software_encoder: bool,
@@ -24,7 +25,7 @@ def generate_ffmpeg_wrapper_command(
         f="rawvideo",
         pix_fmt=pix_fmt,
         s=config.resolution or disc_resolution,
-        **({"r": config.frame_rate} if config.frame_rate else {}),
+        r=config.frame_rate or disc_frame_rate,
     )
     if crop_params:
         stream = ffmpeg.filter(stream, "crop", *crop_params.split(":"))
@@ -36,7 +37,7 @@ def generate_ffmpeg_wrapper_command(
         bufsize=f"{bitrate * 2}M",
         tag="hvc1",
         vprofile="main10" if disc_color_depth == 10 else "main",
-        **({"r": config.frame_rate} if config.frame_rate else {}),
+        r=config.frame_rate or disc_frame_rate,
     )
 
     args = ffmpeg.compile(stream, overwrite_output=True)
@@ -62,6 +63,7 @@ def split_mvc_to_stereo(
             left_output_path,
             disc_info.color_depth,
             disc_info.resolution,
+            disc_info.frame_rate,
             config.left_right_bitrate,
             crop_params,
             config.software_encoder,
@@ -71,6 +73,7 @@ def split_mvc_to_stereo(
             right_output_path,
             disc_info.color_depth,
             disc_info.resolution,
+            disc_info.frame_rate,
             config.left_right_bitrate,
             crop_params,
             config.software_encoder,

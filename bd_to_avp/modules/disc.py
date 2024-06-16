@@ -31,8 +31,8 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
         disc_info = DiscInfo(name=filename)
 
         ffmpeg_probe_output = ffmpeg.probe(source)["streams"][0]
-        disc_info.resolution = f"{ffmpeg_probe_output.get('width', 1920)}x{ffmpeg_probe_output.get('height')}"
-        disc_info.frame_rate = ffmpeg_probe_output.get("r_frame_rate")
+        disc_info.resolution = f"{ffmpeg_probe_output.get('width', 1920)}x{ffmpeg_probe_output.get('height',1080)}"
+        disc_info.frame_rate = ffmpeg_probe_output.get("avg_frame_rate")
         disc_info.color_depth = 10 if "10" in ffmpeg_probe_output.get("pix_fmt") else 8
         return disc_info
 
