@@ -16,11 +16,15 @@ class SRTCreationError(Exception):
 
 
 def extract_subtitle_to_srt(mkv_path: Path, output_path: Path) -> None:
+    skip_or_continue = config.continue_on_error or config.skip_subtitles
     tessdata_path = config.app.config_path / "tessdata"
     subtitle_tracks = get_languages_in_mkv(mkv_path)
 
-    if not subtitle_tracks:
+    if not subtitle_tracks and not skip_or_continue:
         raise SRTCreationError("No subtitle tracks found in MKV.")
+
+    if not subtitle_tracks:
+        return
 
     forced_subtitle_tracks = [track for track in subtitle_tracks if track["forced"] == 1]
     forced_track_language = forced_subtitle_tracks[0]["language"] if forced_subtitle_tracks else None
@@ -40,16 +44,22 @@ def extract_subtitle_to_srt(mkv_path: Path, output_path: Path) -> None:
 
     pgsrip.rip(mkv_file, sub_options)
 
+    for srt_file in output_path.glob("*.srt"):
+        if srt_file.stat().st_size == 0:
+            srt_file.unlink()
+
+    if not any(output_path.glob("*.srt")) and not skip_or_continue:
+        raise SRTCreationError("No SRT files created.")
+
     if forced_track_language:
         two_alpha_language_code = Language.fromietf(forced_track_language).alpha2
-        for srt_file in output_path.glob(f"*{two_alpha_language_code}.srt"):
-            srt_file.rename(f"{srt_file.name}.forced{srt_file.suffix}")
+
+        forced_srt_file = next(output_path.glob(f"*{two_alpha_language_code}.srt"))
+        if forced_srt_file and forced_srt_file.exists():
+            forced_srt_file.rename(forced_srt_file.with_stem(forced_srt_file.stem + ".forced"))
 
     spinner.stop()
     spinner_thread.join()
-
-    if not any(output_path.glob("*.srt")):
-        raise SRTCreationError("No SRT files created.")
 
 
 def get_missing_tessdata_files(languages: list[str], tessdata_path: Path) -> None:

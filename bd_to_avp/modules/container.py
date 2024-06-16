@@ -71,18 +71,18 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
     command = [
         config.MP4BOX_PATH,
         "-new",
+        "-lang",
+        config.language_code,
         "-add",
         mv_hevc_path,
     ]
     output_track_index += 1
     for stream in audio_streams:
         index = stream["index"] + 1
-        language_code_alpha3b = stream["tags"]["language"]
-        language_code_alpha3 = Language.fromalpha3b(language_code_alpha3b).alpha3
-        language_code_alpha2 = Language.fromalpha3b(language_code_alpha3b).alpha2
+        language_code_alpha3b = stream["tags"].get("language", "und")
         language_name = Language.fromietf(language_code_alpha3b).name
 
-        audio_track_options = f":lang={language_code_alpha2}:group=1:alternate_group=1"
+        audio_track_options = f":lang={language_code_alpha3b}:group=1:alternate_group=1"
 
         if index > 1:
             audio_track_options += ":disable"
@@ -100,7 +100,7 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
         language_code_alpha3 = Language.fromalpha2(language_code_alpha2).alpha3
         language_name = Language.fromalpha2(language_code_alpha2).name
 
-        subtitle_options = f":hdlr=sbtl:lang={language_code_alpha3}:group=2:alternate_group=2"
+        subtitle_options = f":hdlr=sbtl:lang={language_code_alpha3}:group=2:name={language_name} Subtitles:tx3g"
         if ".forced" in sub_file.stem:
             subtitle_options += ":txtflags=0xC0000000"
 
