@@ -76,6 +76,9 @@ class MainWindow(QMainWindow):
         self.create_processing_output(main_widget)
         self.create_status_bar()
 
+        self.toggle_transcode()
+        self.toggle_read_from_disc()
+
     @staticmethod
     def create_group_box(title: str, box_contents: Callable[[QVBoxLayout], None]) -> QGroupBox:
         group_box = QGroupBox(title)
@@ -99,7 +102,9 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(save_load_layout)
 
     def create_input_output_layout(self, main_layout: QVBoxLayout) -> None:
-        self.read_from_disc_checkbox = self.create_checkbox("Read from Disc")
+        self.read_from_disc_checkbox = self.create_checkbox(
+            "Read from Disc", onchange_function=self.toggle_read_from_disc
+        )
         self.source_folder_widget = FileFolderPicker("Source Folder")
         self.source_file_widget = FileFolderPicker("Source File", for_files=True)
         self.output_folder_widget = FileFolderPicker("Output Folder")
@@ -156,7 +161,9 @@ class MainWindow(QMainWindow):
         self.fx_upscale_checkbox = self.create_checkbox("AI FX Upscale (2x resolution)", config.fx_upscale)
         self.remove_original_checkbox = self.create_checkbox("Remove Original", config.remove_original)
         self.overwrite_checkbox = self.create_checkbox("Overwrite", config.overwrite)
-        self.transcode_audio_checkbox = self.create_checkbox("Transcode Audio", config.transcode_audio)
+        self.transcode_audio_checkbox = self.create_checkbox(
+            "Transcode Audio", config.transcode_audio, self.toggle_transcode
+        )
         self.continue_on_error = self.create_checkbox("Continue Processing On Error", config.continue_on_error)
         self.skip_subtitles_checkbox = self.create_checkbox("Skip Subtitles", config.skip_subtitles)
         self.remove_extra_languages_checkbox = self.create_checkbox(
@@ -427,7 +434,14 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     @staticmethod
-    def create_checkbox(label: str, default_value: bool = False) -> QCheckBox:
+    def create_checkbox(
+        label: str, default_value: bool = False, onchange_function: Callable | None = None
+    ) -> QCheckBox:
         check_box = QCheckBox(label)
         check_box.setChecked(default_value)
+        if onchange_function:
+            check_box.stateChanged.connect(onchange_function)
         return check_box
+
+    def toggle_transcode(self) -> None:
+        self.audio_bitrate_spinbox.setEnabled(self.transcode_audio_checkbox.isChecked())
