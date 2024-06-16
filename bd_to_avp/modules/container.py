@@ -71,8 +71,6 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
     command = [
         config.MP4BOX_PATH,
         "-new",
-        "-lang",
-        config.language_code,
         "-add",
         mv_hevc_path,
     ]
