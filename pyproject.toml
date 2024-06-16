@@ -11,7 +11,7 @@ keywords = ["Blu-ray", "3D", "Apple Vision Pro", "MV-HEVC", "Conversion", "Visio
 include = ["README.md", "pyproject.toml"]
 
 [tool.poetry.dependencies]
-python = ">=3.12,<3.13"
+python = ">=3.12.4,<3.13"
 pgsrip = "^0.1.9"
 setuptools = "^70.0.0"
 ffmpeg-python = "^0.2.0"
