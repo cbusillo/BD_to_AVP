@@ -138,12 +138,12 @@ class Config:
         "which is less than minimum title length",
         "Debug logging",
         "AnyDVD",
-        "Do you want to continue anyway",
         "MakeMKV",
         "Do you want to continue anyway",
         "AACS directory not present",
         "Evaluation version",
         "Using direct disc access mode",
+        "Program reads data faster than it can write to disk",
     ]
 
     MAKEMKVCON_PATH = Path("/Applications/MakeMKV.app/Contents/MacOS/makemkvcon")
