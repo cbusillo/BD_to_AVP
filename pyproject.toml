@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bd_to_avp"
-version = "0.2.94"
+version = "0.2.96"
 description = "Script to convert 3D Blu-ray Discs (and mts) to Apple Vision Pro (MV-HEVC) files"
 authors = ["Chris Busillo <info@shinycomputers.com>"]
 readme = "README.md"
@@ -23,6 +23,7 @@ pygithub = "^2.3.0"
 humanize = "^4.9.0"
 packaging = "^24.1"
 babelfish = "^0.6.1"
+opencv-python = "=4.9.0.80"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.2.0"
@@ -41,7 +42,7 @@ build-backend = "poetry.core.masonry.api"
 project_name = "3D Blu-ray to Vision pro"
 bundle = "com.shinycomputers"
 architectures = ["arm64"]
-version = "0.2.94"
+version = "0.2.96"
 icon = "bd_to_avp/resources/app_icon"
 organization = "Shiny Computers"
 
@@ -65,6 +66,7 @@ requires = [
     "humanize",
     "packaging",
     "babelfish",
+    "opencv-python==4.9.0.80"
 ]
 
 
