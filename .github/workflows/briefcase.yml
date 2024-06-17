@@ -21,6 +21,7 @@ jobs:
       - name: Get commit messages
         id: get_commit_messages
         run: |
+          set -x 
           git fetch --tags
           echo "github.ref: ${{ github.ref }}"
           if [ "${{ github.ref }}" = "refs/heads/prerelease" ]; then
