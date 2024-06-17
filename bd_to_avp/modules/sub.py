@@ -21,7 +21,7 @@ def extract_subtitle_to_srt(mkv_path: Path, output_path: Path) -> None:
     subtitle_tracks = get_languages_in_mkv(mkv_path)
 
     if not subtitle_tracks and not skip_or_continue:
-        raise SRTCreationError("No subtitle tracks found in MKV.")
+        raise SRTCreationError("No subtitle tracks found in source.")
 
     if not subtitle_tracks:
         return

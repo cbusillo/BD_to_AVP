@@ -272,7 +272,7 @@ class MainWindow(QMainWindow):
         )
 
         if result == QMessageBox.StandardButton.Yes:
-            config.continue_on_error = True
+            config.skip_subtitles = True
             config.start_stage = Stage.CREATE_LEFT_RIGHT_FILES
             self.start_processing(is_continuing=True)
             return
