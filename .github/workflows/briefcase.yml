@@ -45,6 +45,7 @@ jobs:
           echo "$HOME/.poetry/bin" >> $GITHUB_PATH
       - name: Install dependencies
         run: |
+          pip install opencv-python
           poetry install --no-interaction
       - name: Install certificates
         run: |
