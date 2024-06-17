@@ -19,7 +19,8 @@ def extract_mvc_and_audio(
     stream = ffmpeg.input(str(input_path))
 
     video_stream = ffmpeg.output(stream["v:0"], f"file:{video_output_path}", c="copy", bsf="h264_mp4toannexb")
-    audio_stream = ffmpeg.output(stream["a"], f"file:{audio_output_path}", c="pcm_s24le")
+    audio_track = ":0" if config.remove_extra_languages else ""
+    audio_stream = ffmpeg.output(stream[f"a{audio_track}"], f"file:{audio_output_path}", c="pcm_s24le")
 
     output_message = "ffmpeg to extract video, audio, and subtitles from MKV"
     run_ffmpeg_print_errors([video_stream, audio_stream], output_message, overwrite_output=True)
