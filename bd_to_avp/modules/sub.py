@@ -49,7 +49,7 @@ def extract_subtitle_to_srt(mkv_path: Path, output_path: Path) -> None:
             srt_file.unlink()
 
     if not any(output_path.glob("*.srt")) and not skip_or_continue:
-        raise SRTCreationError("No SRT files created.")
+        raise SRTCreationError("No SRT subtitle files created.")
 
     if forced_track_language:
         two_alpha_language_code = Language.fromietf(forced_track_language).alpha2
