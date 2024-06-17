@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QWidget
 
 from bd_to_avp.modules.disc import MKVCreationError
 from .util import OutputHandler
-from ..modules.command import terminate_process
+from ..modules.command import terminate_process, Spinner
 from bd_to_avp.modules.process import start_process
 from ..modules.sub import SRTCreationError
 
@@ -43,6 +43,7 @@ class ProcessingThread(QThread):
         except (RuntimeError, ValueError) as error:
             self.error_occurred.emit(error)
         finally:
+            Spinner.stop_all()
             sys.stdout = sys.__stdout__
             self.main_window.process_button.setText(self.main_window.START_PROCESSING_TEXT)
 
