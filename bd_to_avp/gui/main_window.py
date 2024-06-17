@@ -349,7 +349,9 @@ class MainWindow(QMainWindow):
 
     def finished_processing(self) -> None:
         time_elapsed = formatted_time_elapsed(self.process_start_time)
-        self.processing_output_textedit.append(f"✅ Processing completed in {time_elapsed} ✅")
+        self.processing_output_textedit.append(
+            f"✅ Processing completed in {time_elapsed}.  You can now play from the Files app on the AVP ✅"
+        )
         self.process_button.setText(self.START_PROCESSING_TEXT)
 
     def save_config_to_file(self) -> None:
