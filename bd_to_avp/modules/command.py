@@ -15,7 +15,7 @@ from bd_to_avp.modules.util import formatted_time_elapsed
 
 class Spinner:
     symbols = ["🌑", "🌘", "🌗", "🌖", "🌕", "🌔", "🌓", "🌒"]
-    stop_all_spinners = False
+    _stop_all_spinners = False
 
     def __init__(self, command_name: str = "command...", update_interval: float = 0.5):
         self.command_name = command_name
@@ -32,13 +32,13 @@ class Spinner:
 
     def start(self, update_func: Callable[[str], None] | None = None) -> None:
         self.stop_spinner_flag = False
-        Spinner.stop_all_spinners = False
+        Spinner._stop_all_spinners = False
         if update_func:
             update_func(f"Running {self.command_name}")
         else:
             print(f"Running {self.command_name}", end="", flush=True)
 
-        while not self.stop_spinner_flag and not Spinner.stop_all_spinners:
+        while not self.stop_spinner_flag and not Spinner._stop_all_spinners:
             self._update_spinner()
             time.sleep(self.update_interval)
 
@@ -53,7 +53,7 @@ class Spinner:
 
     @classmethod
     def stop_all(cls) -> None:
-        cls.stop_all_spinners = True
+        cls._stop_all_spinners = True
 
 
 def add_quotes_to_path_if_space(commands: list[str | Path | bytes]) -> list[str]:
