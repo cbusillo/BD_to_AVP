@@ -214,7 +214,7 @@ def manage_brew_package(
     print(f"{operation.title()}ing {packages_str}...")
 
     brew_command = ["/opt/homebrew/bin/brew", operation, "--force"]
-    if operation == "install":
+    if operation in ["install", "reinstall"]:
         brew_command.append("--no-quarantine")
 
     if cask:
