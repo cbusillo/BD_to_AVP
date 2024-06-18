@@ -119,6 +119,7 @@ class Config:
         "ffmpeg",
         "tesseract",
         "finnvoor/tools/fx-upscale",
+        "mkvtoolnix",
     ]
     PROCESS_NAMES_TO_KILL = [
         "ffmpeg",
