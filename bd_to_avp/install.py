@@ -85,9 +85,11 @@ def install_deps() -> None:
 
     upgrade_brew(sudo_env)
 
+    manage_brew_package("makemkv", sudo_env, True, "uninstall")
+
     for package in config.BREW_CASKS_TO_INSTALL:
         if not check_is_package_installed(package):
-            manage_brew_package(package, sudo_env, True)
+            manage_brew_package(package, sudo_env, True, "reinstall")
 
     manage_brew_package(config.BREW_PACKAGES_TO_INSTALL, sudo_env)
 
@@ -188,10 +190,19 @@ def check_is_package_installed(package: str) -> bool:
         stderr=subprocess.PIPE,
     )
     app_dir_path = next(Path("/Applications").glob(f"{package.replace('-', ' ')}.app"), None)
-    if package in process.stdout and app_dir_path and app_dir_path.exists():
+    if package in process.stdout and app_dir_path and app_dir_path.exists() and not is_file_quarantined(app_dir_path):
         return True
 
     return False
+
+
+def is_file_quarantined(file_path: Path) -> bool:
+    try:
+        result = subprocess.run(["xattr", "-p", "com.apple.quarantine", file_path], capture_output=True, text=True)
+        return result.returncode == 0
+    except subprocess.CalledProcessError as e:
+        print(f"Error checking quarantine status: {e}")
+        return False
 
 
 def manage_brew_package(
@@ -202,7 +213,7 @@ def manage_brew_package(
     packages_str = " ".join(packages)
     print(f"{operation.title()}ing {packages_str}...")
 
-    brew_command = ["/opt/homebrew/bin/brew", operation]
+    brew_command = ["/opt/homebrew/bin/brew", operation, "--force"]
     if operation == "install":
         brew_command.append("--no-quarantine")
 
