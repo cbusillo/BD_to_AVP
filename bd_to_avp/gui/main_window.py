@@ -129,9 +129,6 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(config_options_layout)
 
     def create_quality_options(self, config_layout: QVBoxLayout) -> None:
-        self.left_right_bitrate_spinbox = LabeledSpinBox(
-            "Left/Right Bitrate (Mbps)", default_value=config.left_right_bitrate
-        )
         self.audio_bitrate_spinbox = LabeledSpinBox(
             "Audio Bitrate (kbps)", max_value=1000, default_value=config.audio_bitrate
         )
@@ -144,7 +141,6 @@ class MainWindow(QMainWindow):
             "Resolution (Leave blank to use source value)", config.resolution, DiscInfo.resolution
         )
 
-        config_layout.addWidget(self.left_right_bitrate_spinbox)
         config_layout.addWidget(self.audio_bitrate_spinbox)
         config_layout.addWidget(self.mv_hevc_quality_spinbox)
         config_layout.addWidget(self.fov_spinbox)
@@ -300,7 +296,6 @@ class MainWindow(QMainWindow):
         self.source_folder_widget.set_text(config.source_folder_path.as_posix() if config.source_folder_path else "")
         self.source_file_widget.set_text(config.source_path.as_posix() if config.source_path else "")
         self.output_folder_widget.set_text(config.output_root_path.as_posix())
-        self.left_right_bitrate_spinbox.set_value(config.left_right_bitrate)
         self.audio_bitrate_spinbox.set_value(config.audio_bitrate)
         self.mv_hevc_quality_spinbox.set_value(config.mv_hevc_quality)
         self.fov_spinbox.set_value(config.fov)
@@ -370,7 +365,6 @@ class MainWindow(QMainWindow):
             config.source_path = Path(self.source_file_widget.text()) if self.source_file_widget.text() else None
 
         config.output_root_path = Path(self.output_folder_widget.text())
-        config.left_right_bitrate = self.left_right_bitrate_spinbox.value()
         config.audio_bitrate = self.audio_bitrate_spinbox.value()
         config.mv_hevc_quality = self.mv_hevc_quality_spinbox.value()
         config.fov = self.fov_spinbox.value()
