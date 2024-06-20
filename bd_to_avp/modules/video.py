@@ -1,4 +1,5 @@
 import atexit
+import re
 from pathlib import Path
 
 import ffmpeg
@@ -141,6 +142,13 @@ def combine_to_mv_hevc(
         raise RuntimeError("Failed to combine stereo HEVC streams to MV-HEVC.")
 
 
+def parse_crop_params(crop_string: str) -> tuple[int, int, int, int] | None:
+    match = re.match(r"(\d+):(\d+):(\d+):(\d+)", crop_string)
+    if match:
+        return tuple(map(int, match.groups()))  # type: ignore
+    return None
+
+
 def detect_crop_parameters(
     video_path: Path,
     start_seconds: int = 600,
@@ -149,6 +157,7 @@ def detect_crop_parameters(
     print("Detecting crop parameters...")
     if not config.crop_black_bars:
         return ""
+
     stream = ffmpeg.input(str(video_path), ss=start_seconds)
     stream = ffmpeg.output(
         stream,
@@ -166,12 +175,29 @@ def detect_crop_parameters(
         print(e.stderr.decode("utf-8"))
         raise
 
-    crop_param_lines = []
+    crop_params: list[tuple[int, int, int, int]] = []
     for output_line in output:
         if "crop=" in output_line:
-            crop_param_lines.append(output_line.split("crop=")[1].split(" ")[0])
+            crop_param = output_line.split("crop=")[1].split(" ")[0]
+            parsed_params = parse_crop_params(crop_param)
+            if parsed_params:
+                crop_params.append(parsed_params)
 
-    return max(crop_param_lines, key=len, default="")
+    if not crop_params:
+        return ""
+
+    # Find the maximum dimensions
+    max_width = max(param[0] for param in crop_params)
+    max_height = max(param[1] for param in crop_params)
+
+    # Find the minimum x and y offsets
+    min_x = min(param[2] for param in crop_params)
+    min_y = min(param[3] for param in crop_params)
+
+    # Composite the largest frame
+    composite_crop = f"{max_width}:{max_height}:{min_x}:{min_y}"
+
+    return composite_crop
 
 
 def upscale_file(input_path: Path) -> None:
