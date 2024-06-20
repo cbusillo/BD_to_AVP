@@ -247,8 +247,10 @@ def get_video_color_depth(input_path: Path) -> int | None:
     return None
 
 
-def create_mv_hevc_file(left_video_path: Path, right_video_path: Path, output_folder: Path, disc_name: str) -> Path:
-    mv_hevc_path = output_folder / f"{disc_name}_MV-HEVC.mov"
+def create_mv_hevc_file(
+    left_video_path: Path, right_video_path: Path, output_folder: Path, disc_info: DiscInfo
+) -> Path:
+    mv_hevc_path = output_folder / f"{disc_info.name}_MV-HEVC.mov"
     if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
         combine_to_mv_hevc(left_video_path, right_video_path, mv_hevc_path)
 

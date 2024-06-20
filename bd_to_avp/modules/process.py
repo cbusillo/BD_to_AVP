@@ -68,7 +68,7 @@ def process_each() -> None:
     left_output_path, right_output_path = create_left_right_files(
         disc_info, output_folder, video_output_path, crop_params
     )
-    mv_hevc_path = create_mv_hevc_file(left_output_path, right_output_path, output_folder, disc_info.name)
+    mv_hevc_path = create_mv_hevc_file(left_output_path, right_output_path, output_folder, disc_info)
     mv_hevc_path = create_upscaled_file(mv_hevc_path)
 
     audio_output_path = create_transcoded_audio_file(audio_output_path, output_folder)
