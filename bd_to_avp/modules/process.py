@@ -12,7 +12,12 @@ from bd_to_avp.modules.file import (
     prepare_output_folder_for_source,
     remove_folder_if_exists,
 )
-from bd_to_avp.modules.video import create_left_right_files, create_mv_hevc_file, detect_crop_parameters
+from bd_to_avp.modules.video import (
+    create_left_right_files,
+    create_mv_hevc_file,
+    detect_crop_parameters,
+    create_upscaled_file,
+)
 
 
 def process() -> None:
@@ -64,8 +69,9 @@ def process_each() -> None:
         disc_info, output_folder, video_output_path, crop_params
     )
     mv_hevc_path = create_mv_hevc_file(left_output_path, right_output_path, output_folder, disc_info.name)
-    audio_output_path = create_transcoded_audio_file(audio_output_path, output_folder)
+    mv_hevc_path = create_upscaled_file(mv_hevc_path)
 
+    audio_output_path = create_transcoded_audio_file(audio_output_path, output_folder)
     muxed_output_path = create_muxed_file(
         audio_output_path,
         mv_hevc_path,

@@ -204,13 +204,6 @@ def create_left_right_files(
             crop_params,
         )
 
-    if config.fx_upscale:
-        if config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
-            upscale_file(left_eye_output_path)
-            upscale_file(right_eye_output_path)
-        left_eye_output_path = left_eye_output_path.with_stem(f"{left_eye_output_path.stem} Upscaled")
-        right_eye_output_path = right_eye_output_path.with_stem(f"{right_eye_output_path.stem} Upscaled")
-
     return left_eye_output_path, right_eye_output_path
 
 
@@ -237,3 +230,12 @@ def create_mv_hevc_file(left_video_path: Path, right_video_path: Path, output_fo
         left_video_path.unlink(missing_ok=True)
         right_video_path.unlink(missing_ok=True)
     return mv_hevc_path
+
+
+def create_upscaled_file(input_path: Path) -> Path:
+    if config.fx_upscale:
+        if config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
+            upscale_file(input_path)
+
+        return input_path.with_stem(f"{input_path.stem} Upscaled")
+    return input_path
