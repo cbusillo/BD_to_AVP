@@ -9,6 +9,7 @@ from pgsrip import Mkv, Options, pgsrip
 
 from bd_to_avp.modules.config import config
 from bd_to_avp.modules.command import Spinner
+from bd_to_avp.modules.file import check_for_file_with_extension
 
 
 class SRTCreationError(Exception):
@@ -49,7 +50,7 @@ def extract_subtitle_to_srt(mkv_path: Path, output_path: Path) -> None:
         if srt_file.stat().st_size == 0:
             srt_file.unlink()
 
-    if not any(output_path.glob("*.srt")) and not config.continue_on_error:
+    if not check_for_file_with_extension(output_path, "srt") and not config.continue_on_error:
         raise SRTCreationError("No SRT subtitle files created.")
 
     if forced_track_language:
