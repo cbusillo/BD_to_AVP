@@ -117,21 +117,24 @@ def combine_to_mv_hevc(
     left_video_path: Path,
     right_video_path: Path,
     output_path: Path,
+    color_depth: int,
 ) -> None:
     output_path.unlink(missing_ok=True)
     command = [
         config.SPATIAL_MEDIA_PATH,
         "merge",
-        "-l",
+        "--left-file",
         left_video_path,
-        "-r",
+        "--right-file",
         right_video_path,
-        "-q",
+        "--quality",
         config.mv_hevc_quality,
         "--left-is-primary",
         "--horizontal-field-of-view",
         config.fov,
-        "-o",
+        "--color-depth",
+        color_depth,
+        "--output-file",
         output_path,
     ]
     # TODO: figure out why spatial media is throwing a false resolution does not match.
@@ -252,7 +255,7 @@ def create_mv_hevc_file(
 ) -> Path:
     mv_hevc_path = output_folder / f"{disc_info.name}_MV-HEVC.mov"
     if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
-        combine_to_mv_hevc(left_video_path, right_video_path, mv_hevc_path)
+        combine_to_mv_hevc(left_video_path, right_video_path, mv_hevc_path, disc_info.color_depth)
 
     if not config.keep_files:
         left_video_path.unlink(missing_ok=True)
