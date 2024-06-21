@@ -51,6 +51,8 @@ def process_each() -> None:
     tmp_folder.mkdir(parents=True, exist_ok=True)
     os.environ["TMPDIR"] = tmp_folder.as_posix()
 
+    print(f"Using temporary folder: {os.environ['TMPDIR']}")
+
     completed_path = config.output_root_path / f"{disc_info.name}{config.FINAL_FILE_TAG}.mov"
     if not config.overwrite and file_exists_normalized(completed_path):
         if output_folder.exists():
