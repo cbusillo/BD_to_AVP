@@ -147,13 +147,13 @@ class Config:
         "Program reads data faster than it can write to disk",
     ]
 
-    MAKEMKVCON_PATH = Path("/Applications/MakeMKV.app/Contents/MacOS/makemkvcon")
     SCRIPT_PATH = Path(__file__).parent.parent
     SCRIPT_PATH_BIN = SCRIPT_PATH / "bin"
 
     HOMEBREW_PREFIX = Path("/opt/homebrew")
     HOMEBREW_PREFIX_BIN = HOMEBREW_PREFIX / "bin"
 
+    MAKEMKVCON_PATH = Path(HOMEBREW_PREFIX_BIN / "makemkvcon")
     WINE_PATH = HOMEBREW_PREFIX_BIN / "wine"
     FRIM_PATH = SCRIPT_PATH_BIN / "FRIM_x64_version_1.31" / "x64"
     FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
