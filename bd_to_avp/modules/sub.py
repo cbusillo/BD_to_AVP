@@ -41,6 +41,9 @@ def extract_subtitle_to_srt(mkv_path: Path, output_path: Path) -> None:
     spinner_thread = threading.Thread(target=spinner.start)
     spinner_thread.start()
 
+    for subtitle_path in output_path.glob("*.srt"):
+        subtitle_path.unlink()
+
     mkv_file = Mkv(mkv_path.as_posix())
     os.environ["TESSDATA_PREFIX"] = tessdata_path.as_posix()
 
