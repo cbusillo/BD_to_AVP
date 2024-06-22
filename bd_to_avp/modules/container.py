@@ -51,14 +51,14 @@ def create_mvc_audio_and_subtitle_files(
     audio_output_path = output_folder / f"{disc_name}_audio_PCM.mov"
 
     if config.start_stage.value <= Stage.EXTRACT_MVC_AUDIO_AND_SUB.value and mkv_output_path:
+        if not config.skip_subtitles:
+            extract_subtitle_to_srt(mkv_output_path, output_folder)
+
         extract_mvc_and_audio(
             mkv_output_path,
             video_output_path,
             audio_output_path,
         )
-
-        if not config.skip_subtitles:
-            extract_subtitle_to_srt(mkv_output_path, output_folder)
 
     # if not config.keep_files and mkv_output_path and config.source_path != mkv_output_path:
     #     mkv_output_path.unlink(missing_ok=True)
