@@ -75,20 +75,6 @@ def move_file_to_output_root_folder(muxed_output_path: Path) -> None:
         remove_folder_if_exists(muxed_output_path.parent)
 
 
-def check_for_file_with_extension(folder_path: Path, extension: str) -> bool:
-    if not extension.startswith("."):
-        extension = f".{extension}"
-    print(f"Checking for {extension} files in: {folder_path}")
-
-    for file_path in folder_path.iterdir():
-        if file_path.suffix.lower() == extension.lower():
-            print(f"Found {extension} file: {file_path.name}")
-            return True
-
-    print(f"No {extension} files found in {folder_path}")
-    return False
-
-
 @contextmanager
 def mounted_image(image_path: Path):
     mount_point = None
