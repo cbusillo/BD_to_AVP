@@ -2,6 +2,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -73,7 +74,11 @@ def install_deps() -> None:
     sudo_env = os.environ.copy()
 
     if config.app.is_gui:
-        pw_file_path, sudo_env = prompt_for_password()
+        try:
+            pw_file_path, sudo_env = prompt_for_password()
+        except subprocess.CalledProcessError as e:
+            on_error_string("Password prompt", "Failed to get password.")
+            sys.exit(1)
 
     if not Path(config.HOMEBREW_PREFIX_BIN / "brew").exists():
         install_brew(sudo_env)
