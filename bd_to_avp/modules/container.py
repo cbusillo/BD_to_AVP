@@ -74,9 +74,9 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
     output_track_index += 1
     for stream in audio_streams:
         index = stream["index"] + 1
-        language_code_alpha3b = stream["tags"].get("language", "und")
+        language_code_alpha3b = stream.get("tags", {}).get("language", "und")
         language_name = Language.fromietf(language_code_alpha3b).name
-        channel_layout = stream["channel_layout"]
+        channel_layout = stream.get("channel_layout", "unknown")
 
         audio_track_options = f":lang={language_code_alpha3b}:group=1:alternate_group=1"
 
