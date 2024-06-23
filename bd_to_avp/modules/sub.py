@@ -103,7 +103,7 @@ def get_languages_in_mkv(mkv_path: Path) -> None | list[dict[str, str]]:
     for stream in subtitle_streams:
         info = {
             "index": stream["index"],
-            "language": stream["tags"].get("language", "und"),  # 'und' stands for undefined
+            "language": stream.get("tags", {}).get("language", "und") or "und",
             "default": stream["disposition"].get("default", 0),
             "forced": stream["disposition"].get("forced", 0),
         }
