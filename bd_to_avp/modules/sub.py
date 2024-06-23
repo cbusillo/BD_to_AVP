@@ -7,12 +7,19 @@ import requests
 from babelfish import Language
 from pgsrip import Mkv, Options, pgsrip
 
-from bd_to_avp.modules.config import config
+from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.command import Spinner
 
 
 class SRTCreationError(Exception):
     pass
+
+
+def create_srt_from_mkv(mkv_path: Path, output_path: Path) -> None:
+    if config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
+        if config.skip_subtitles:
+            return None
+        extract_subtitle_to_srt(mkv_path, output_path)
 
 
 def extract_subtitle_to_srt(mkv_path: Path, output_path: Path) -> None:

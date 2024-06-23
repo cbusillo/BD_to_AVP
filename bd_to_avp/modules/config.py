@@ -12,7 +12,8 @@ from bd_to_avp.modules.util import get_pyproject_data
 
 class Stage(Enum):
     CREATE_MKV = auto()
-    EXTRACT_MVC_AUDIO_AND_SUB = auto()
+    EXTRACT_MVC_AND_AUDIO = auto()
+    EXTRACT_SUBTITLES = auto()
     CREATE_LEFT_RIGHT_FILES = auto()
     COMBINE_TO_MV_HEVC = auto()
     UPSCALE_VIDEO = auto()
@@ -26,7 +27,8 @@ class Stage(Enum):
     def human_readable(self) -> str:
         return {
             "CREATE_MKV": "Create MKV",
-            "EXTRACT_MVC_AUDIO_AND_SUB": "Extract MVC Audio and Sub",
+            "EXTRACT_MVC_AND_AUDIO": "Extract MVC and Audio",
+            "EXTRACT_SUBTITLES": "Extract Subtitles",
             "CREATE_LEFT_RIGHT_FILES": "Create Left Right Files",
             "UPSCALE_VIDEO": "Upscale Video",
             "COMBINE_TO_MV_HEVC": "Combine to MV HEVC",

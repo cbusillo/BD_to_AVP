@@ -253,7 +253,7 @@ class MainWindow(QMainWindow):
 
         if result == QMessageBox.StandardButton.Yes:
             config.continue_on_error = True
-            config.start_stage = Stage.EXTRACT_MVC_AUDIO_AND_SUB
+            config.start_stage = Stage.EXTRACT_MVC_AND_AUDIO
             self.start_processing(is_continuing=True)
             return
 

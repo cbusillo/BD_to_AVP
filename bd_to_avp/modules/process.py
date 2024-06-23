@@ -4,7 +4,7 @@ import subprocess
 
 from bd_to_avp.modules.audio import create_transcoded_audio_file
 from bd_to_avp.modules.config import config
-from bd_to_avp.modules.container import create_muxed_file, create_mvc_audio_and_subtitle_files
+from bd_to_avp.modules.container import create_muxed_file, create_mvc_and_audio
 from bd_to_avp.modules.disc import create_mkv_file, get_disc_and_mvc_video_info
 from bd_to_avp.modules.file import (
     file_exists_normalized,
@@ -12,6 +12,7 @@ from bd_to_avp.modules.file import (
     prepare_output_folder_for_source,
     remove_folder_if_exists,
 )
+from bd_to_avp.modules.sub import create_srt_from_mkv
 from bd_to_avp.modules.video import (
     create_left_right_files,
     create_mv_hevc_file,
@@ -64,9 +65,8 @@ def process_each() -> None:
 
     mkv_output_path = create_mkv_file(output_folder, disc_info, config.language_code)
     crop_params = detect_crop_parameters(mkv_output_path)
-    audio_output_path, video_output_path = create_mvc_audio_and_subtitle_files(
-        disc_info.name, mkv_output_path, output_folder
-    )
+    audio_output_path, video_output_path = create_mvc_and_audio(disc_info.name, mkv_output_path, output_folder)
+    create_srt_from_mkv(mkv_output_path, output_folder)
     left_output_path, right_output_path = create_left_right_files(
         disc_info, output_folder, video_output_path, crop_params
     )

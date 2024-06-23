@@ -5,7 +5,6 @@ import ffmpeg
 from babelfish import Language
 
 from bd_to_avp.modules.config import Stage, config
-from bd_to_avp.modules.sub import extract_subtitle_to_srt
 from bd_to_avp.modules.command import run_command, run_ffmpeg_print_errors
 from bd_to_avp.modules.util import sorted_files_by_creation_filtered_on_suffix
 
@@ -42,18 +41,15 @@ def create_muxed_file(
     return muxed_path
 
 
-def create_mvc_audio_and_subtitle_files(
+def create_mvc_and_audio(
     disc_name: str,
-    mkv_output_path: Path | None,
+    mkv_output_path: Path,
     output_folder: Path,
 ) -> tuple[Path, Path]:
     video_output_path = output_folder / f"{disc_name}_mvc.h264"
     audio_output_path = output_folder / f"{disc_name}_audio_PCM.mov"
 
-    if config.start_stage.value <= Stage.EXTRACT_MVC_AUDIO_AND_SUB.value and mkv_output_path:
-        if not config.skip_subtitles:
-            extract_subtitle_to_srt(mkv_output_path, output_folder)
-
+    if config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
         extract_mvc_and_audio(
             mkv_output_path,
             video_output_path,
@@ -113,7 +109,7 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
         output_track_index += 1
 
     command += [muxed_path]
-    run_command(command, "Mux video, audio, and subtitles.")
+    run_command(command, "mux video, audio, and subtitles.")
 
 
 def get_audio_stream_data(file_path: Path) -> list[dict[str, Any]]:
