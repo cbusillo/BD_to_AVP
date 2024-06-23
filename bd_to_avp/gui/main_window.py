@@ -52,6 +52,7 @@ class MainWindow(QMainWindow):
         self.processing_thread.error_occurred.connect(self.handle_processing_error)
         self.processing_thread.mkv_creation_error.connect(self.handle_mkv_creation_error)
         self.processing_thread.srt_creation_error.connect(self.handle_srt_creation_error)
+        self.processing_thread.file_exists_error.connect(self.handle_file_exists_error)
         self.processing_thread.process_completed.connect(self.finished_processing)
 
     def setup_window(self) -> None:
@@ -254,6 +255,21 @@ class MainWindow(QMainWindow):
         if result == QMessageBox.StandardButton.Yes:
             config.continue_on_error = True
             config.start_stage = Stage.EXTRACT_MVC_AND_AUDIO
+            self.start_processing(is_continuing=True)
+            return
+
+        self.handle_processing_error(error)
+
+    def handle_file_exists_error(self, error: FileExistsError) -> None:
+        result = QMessageBox.critical(
+            self,
+            "File Exists Error",
+            "Do you want to continue?\n\n" + str(error),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Abort,
+        )
+
+        if result == QMessageBox.StandardButton.Yes:
+            config.overwrite = True
             self.start_processing(is_continuing=True)
             return
 
