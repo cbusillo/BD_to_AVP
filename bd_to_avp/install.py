@@ -76,7 +76,7 @@ def install_deps() -> None:
     if config.app.is_gui:
         try:
             pw_file_path, sudo_env = prompt_for_password()
-        except subprocess.CalledProcessError as e:
+        except subprocess.CalledProcessError:
             on_error_string("Password prompt", "Failed to get password.")
             sys.exit(1)
 

@@ -137,10 +137,9 @@ def combine_to_mv_hevc(
         "--output-file",
         output_path,
     ]
-    # TODO: figure out why spatial media is throwing a false resolution does not match.
-    output = run_command(command, "Combine stereo HEVC streams to MV-HEVC.")
+    output = run_command(command, "combine stereo HEVC streams to MV-HEVC.")
     if "left and right input resolutions do not match. aborting!" in output:
-        raise RuntimeError("Left and right input resolutions do not match. Try without AI Upscaling.")
+        raise RuntimeError("Left and right input resolutions do not match.")
     elif "aborting!" in output:
         raise RuntimeError("Failed to combine stereo HEVC streams to MV-HEVC.")
 
