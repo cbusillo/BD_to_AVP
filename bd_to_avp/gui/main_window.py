@@ -237,7 +237,7 @@ class MainWindow(QMainWindow):
         # self.setMenuBar(menu_bar)
 
     def handle_processing_error(self, error: Exception) -> None:
-        QMessageBox.warning(self, "Warning", "Failure in processing.")
+        QMessageBox.warning(self, "Warning", "Failure in processing.\n\n" + str(error))
         time_elapsed = formatted_time_elapsed(self.process_start_time)
         self.update_processing_output(str(error) + f"\n❌ Processing failed in {time_elapsed} ❌")
         self.stop_processing()
