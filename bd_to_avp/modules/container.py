@@ -99,6 +99,7 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
         subtitle_options = f":hdlr=sbtl:lang={language_code_alpha3}:group=2:name={language_name} Subtitles:tx3g"
         if ".forced" in sub_file.stem:
             subtitle_options += ":txtflags=0xC0000000"
+            language_name += " Forced"
 
         command += [
             "-add",
