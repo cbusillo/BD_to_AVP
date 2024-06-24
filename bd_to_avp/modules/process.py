@@ -24,9 +24,8 @@ from bd_to_avp.modules.video import (
 def process() -> None:
     if config.source_folder_path:
         for source in config.source_folder_path.rglob("*"):
-            if not source.is_file() or source.suffix.lower() not in config.IMAGE_EXTENSIONS + [
-                ".mkv",
-                ".mts",
+            if not source.is_file() or source.suffix.lower() not in config.IMAGE_EXTENSIONS + config.MTS_EXTENSIONS + [
+                ".mkv"
             ]:
                 continue
             config.source_path = source

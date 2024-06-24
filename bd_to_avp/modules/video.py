@@ -57,7 +57,7 @@ def split_mvc_to_stereo(
     ffmpeg_left_log = left_output_path.with_suffix(".log")
     ffmpeg_right_log = right_output_path.with_suffix(".log")
     is_mts = None
-    if config.source_path and config.source_path.suffix.lower() == ".mts":
+    if config.source_path and config.source_path.suffix.lower() in config.MTS_EXTENSIONS:
         is_mts = video_input_path
         video_input_path = config.source_path
     with temporary_fifo("left_fifo", "right_fifo") as (primary_fifo, secondary_fifo):

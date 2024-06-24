@@ -27,7 +27,7 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
     source = config.source_path.as_posix() if config.source_path else config.source_str
     if not source:
         raise ValueError("No source path provided.")
-    if source.lower().endswith(".mts"):
+    if any(source.lower().endswith(ext) for ext in config.MTS_EXTENSIONS):
         filename = Path(source).stem
         disc_info = DiscInfo(name=filename)
 
@@ -134,10 +134,7 @@ def create_custom_makemkv_profile(custom_profile_path: Path, language_code: str)
 
 
 def create_mkv_file(output_folder: Path, disc_info: DiscInfo, language_code: str) -> Path:
-    if config.source_path and config.source_path.suffix.lower() in [
-        ".mkv",
-        ".mts",
-    ]:
+    if config.source_path and config.source_path.suffix.lower() in config.MTS_EXTENSIONS + [".mkv"]:
         return config.source_path
 
     if config.start_stage.value <= Stage.CREATE_MKV.value:

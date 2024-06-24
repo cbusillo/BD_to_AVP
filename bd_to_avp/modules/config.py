@@ -166,6 +166,7 @@ class Config:
 
     FINAL_FILE_TAG = "_AVP"
     IMAGE_EXTENSIONS = [".iso", ".img", ".bin"]
+    MTS_EXTENSIONS = [".mts", ".m2ts"]
 
     def __init__(self) -> None:
         self.app = self.App()
