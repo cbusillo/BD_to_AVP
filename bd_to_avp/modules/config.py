@@ -209,13 +209,15 @@ class Config:
             if key == "app":
                 continue
             elif "_path" in key:
-                if not value:
-                    continue
-                config_parser.set("Paths", key, value.as_posix())
+                if value:
+                    config_parser.set("Paths", key, value.as_posix())
+                else:
+                    config_parser.remove_option("Paths", key)
             else:
-                if value is None:
-                    continue
-                config_parser.set("Options", key, str(value))
+                if value:
+                    config_parser.set("Options", key, str(value))
+                else:
+                    config_parser.remove_option("Options", key)
 
         with open(self.app.config_file, "w") as config_file:
             config_parser.write(config_file)
