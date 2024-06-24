@@ -55,11 +55,6 @@ def process_each() -> None:
 
     completed_path = config.output_root_path / f"{disc_info.name}{config.FINAL_FILE_TAG}.mov"
     if not config.overwrite and file_exists_normalized(completed_path):
-        if output_folder.exists():
-            try:
-                remove_folder_if_exists(output_folder)
-            except OSError:
-                print(f"Failed to remove {output_folder}")
         raise FileExistsError(f"Output file already exists for {disc_info.name}. Use --overwrite to replace.")
 
     mkv_output_path = create_mkv_file(output_folder, disc_info, config.language_code)
