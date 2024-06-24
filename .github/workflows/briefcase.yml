@@ -87,9 +87,10 @@ jobs:
         id: set_release_name
         run: |
           echo "GITHUB_REF: ${{ github.ref }}"
-          BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/} | sed -r 's/(^|-)(\w)/\U\2/g')
-          echo "Release Name Set To: $BRANCH_NAME"
-          echo "release_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          RELEASE_NAME=$(echo "$branch_name" | sed -e 's/\b\(.\)/\u\1/g')
+          echo "Release Name Set To: $RELEASE_NAME"
+          echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -102,9 +103,9 @@ jobs:
             Commits:
             ${{ steps.get_commit_messages.outputs.messages }}
           draft: false
-          prerelease: ${{ github.ref == 'refs/heads/prerelease' }}
-          tag_name: v${{ steps.extract_version.outputs.VERSION }}
-          name: ${{ steps.set_release_name.outputs.release_name }} v${{ steps.extract_version.outputs.VERSION }}
+          prerelease: ${{ github.ref != 'refs/heads/release' }}
+          tag_name: v${{ steps.extract_version.outputs.version }}
+          name: ${{ steps.set_release_name.outputs.release_name }} v${{ steps.extract_version.outputs.version }}
           files: |
             dist/*.zip
             dist/*.dmg
