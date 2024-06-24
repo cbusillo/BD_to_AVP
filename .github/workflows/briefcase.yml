@@ -86,7 +86,9 @@ jobs:
       - name: Set release name
         id: set_release_name
         run: |
+          echo "GITHUB_REF: ${{ github.ref }}"
           BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/} | sed -r 's/(^|-)(\w)/\U\2/g')
+          echo "Release Name Set To: $BRANCH_NAME"
           echo "release_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
       - name: Create Release
         id: create_release
@@ -102,7 +104,7 @@ jobs:
           draft: false
           prerelease: ${{ github.ref == 'refs/heads/prerelease' }}
           tag_name: v${{ steps.extract_version.outputs.VERSION }}
-          name: ${{ steps.set_release_name.release_name }} v${{ steps.extract_version.outputs.VERSION }}
+          name: ${{ steps.set_release_name.outputs.release_name }} v${{ steps.extract_version.outputs.VERSION }}
           files: |
             dist/*.zip
             dist/*.dmg
