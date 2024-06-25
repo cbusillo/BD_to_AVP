@@ -43,7 +43,7 @@ class ProcessingThread(QThread):
             self.srt_creation_error.emit(error)
         except FileExistsError as error:
             self.file_exists_error.emit(error)
-        except (RuntimeError, ValueError) as error:
+        except (RuntimeError, ValueError, KeyError) as error:
             self.error_occurred.emit(error)
         finally:
             Spinner.stop_all()
