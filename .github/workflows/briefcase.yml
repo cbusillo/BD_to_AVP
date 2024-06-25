@@ -88,7 +88,7 @@ jobs:
         run: |
           echo "GITHUB_REF: ${{ github.ref }}"
           BRANCH_NAME="${GITHUB_REF#refs/heads/}"
-          RELEASE_NAME=$(echo "$branch_name" | sed -e 's/\b\(.\)/\u\1/g')
+          RELEASE_NAME=$(echo "$BRANCH_NAME" | sed -e 's/\b\(.\)/\u\1/g')
           echo "Release Name Set To: $RELEASE_NAME"
           echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
       - name: Create Release
