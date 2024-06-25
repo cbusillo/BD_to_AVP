@@ -338,9 +338,15 @@ class MainWindow(QMainWindow):
             self.processing_output_textedit.clear()
             source_folder_set = bool(self.source_folder_widget.text())
             source_file_set = bool(self.source_file_widget.text())
-            if (source_folder_set and source_file_set) or (not source_folder_set and not source_file_set):
-                QMessageBox.warning(self, "Warning", "Either Source Folder or Source File must be set, but not both.")
-                return
+            if self.read_from_disc_checkbox.isChecked():
+                self.source_folder_widget.set_text("")
+                self.source_file_widget.set_text("")
+            else:
+                if (source_folder_set and source_file_set) or (not source_folder_set and not source_file_set):
+                    QMessageBox.warning(
+                        self, "Warning", "Either Source Folder or Source File must be set, but not both."
+                    )
+                    return
 
             self.start_processing()
 
