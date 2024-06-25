@@ -72,7 +72,8 @@ def extract_subtitle_to_srt(mkv_path: Path, output_path: Path) -> None:
 
         forced_srt_file = next(output_path.glob(f"*{two_alpha_language_code}.srt"))
         if forced_srt_file and forced_srt_file.exists():
-            forced_srt_file.rename(forced_srt_file.with_stem(forced_srt_file.stem + ".forced"))
+            new_stem = forced_srt_file.stem.replace(f".{two_alpha_language_code}", f".forced.{two_alpha_language_code}")
+            forced_srt_file.rename(forced_srt_file.with_stem(new_stem))
 
     spinner.stop()
     spinner_thread.join()
