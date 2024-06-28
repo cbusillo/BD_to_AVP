@@ -195,6 +195,7 @@ class Config:
         self.continue_on_error = False
         self.language_code = "eng"
         self.remove_extra_languages = False
+        self.keep_awake = True
 
     def save_config_to_file(self) -> None:
         config_parser = configparser.ConfigParser()
@@ -373,6 +374,12 @@ class Config:
             "--remove-extra-languages",
             action="store_true",
             help="Remove all subtitle languages except the one specified by --language-code.",
+        )
+        parser.add_argument(
+            "--no-keep-awake",
+            dest="keep_awake",
+            action="store_false",
+            help="Prevent the computer from sleeping during processing.",
         )
 
         args = parser.parse_args()

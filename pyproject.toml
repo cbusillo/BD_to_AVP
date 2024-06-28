@@ -24,6 +24,7 @@ humanize = "^4.9.0"
 packaging = "^24.1"
 babelfish = "^0.6.1"
 opencv-python = "4.10.0.84"
+wakepy = "^0.9.1"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.2.0"
@@ -66,6 +67,7 @@ requires = [
     "humanize",
     "packaging",
     "babelfish",
+    "wakepy",
     "opencv-python==4.10.0.84"
 ]
 

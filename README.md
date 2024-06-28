@@ -125,6 +125,7 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - `--language`: Language code for audio and subtitle extraction (default: "eng")  Use the ISO 639-2 (three character)
   code.
 - `--remove-extra-languages`: Remove extra audio and subtitle languages (disabled by default).
+- `--no-keep-awake`: Prevent the system from sleeping during processing (disabled by default).
 - `--version`: Show the version number and exit.
 
 #### Stage Names
