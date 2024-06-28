@@ -146,10 +146,10 @@ class MainWindow(QMainWindow):
         self.mv_hevc_quality_spinbox = LabeledSpinBox("MV-HEVC Quality (0-100)", default_value=config.mv_hevc_quality)
         self.fov_spinbox = LabeledSpinBox("Field of View", max_value=360, default_value=config.fov)
         self.frame_rate_entry = LabeledLineEdit(
-            "Frame Rate (Leave blank to use source value)", config.frame_rate, DiscInfo.frame_rate
+            "Frame Rate (Blank uses source)", config.frame_rate, DiscInfo.frame_rate
         )
         self.resolution_entry = LabeledLineEdit(
-            "Resolution (Leave blank to use source value)", config.resolution, DiscInfo.resolution
+            "Resolution (Blank uses source)", config.resolution, DiscInfo.resolution
         )
 
         config_layout.addWidget(self.audio_bitrate_spinbox)
@@ -220,6 +220,8 @@ class MainWindow(QMainWindow):
         self.splitter.addWidget(main_widget)
         self.splitter.addWidget(self.processing_output_textedit)
         self.splitter.setSizes(self.SPLITTER_INITIAL_SIZES)  # Adjust the sizes as needed
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
 
         self.setCentralWidget(self.splitter)
 
