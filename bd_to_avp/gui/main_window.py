@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QWidget,
     QMessageBox,
+    QSizePolicy,
 )
 from babelfish import Language
 
@@ -73,9 +74,9 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(source_output_group)
 
         self.create_config_layout(main_layout)
-        self.create_processing_button(main_layout)
+
         self.create_processing_output(main_widget)
-        self.create_status_bar()
+        self.create_status_bar(main_layout)
 
         self.toggle_transcode()
         self.toggle_read_from_disc()
@@ -99,6 +100,7 @@ class MainWindow(QMainWindow):
         self.save_config_button.clicked.connect(self.save_config_to_file)
         self.save_config_button.setShortcut("Ctrl+S")
         save_load_layout.addWidget(self.save_config_button)
+        save_load_layout.addStretch(1)
 
         main_layout.addLayout(save_load_layout)
 
@@ -111,9 +113,10 @@ class MainWindow(QMainWindow):
         self.output_folder_widget = FileFolderPicker("Output Folder")
 
         main_layout.setSpacing(0)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-
         main_layout.addWidget(self.read_from_disc_checkbox)
+        spacer_label = QLabel("")
+        spacer_label.setFixedHeight(10)
+        main_layout.addWidget(spacer_label)
         main_layout.addWidget(self.source_folder_widget)
         main_layout.addWidget(self.source_file_widget)
         main_layout.addWidget(self.output_folder_widget)
@@ -124,8 +127,15 @@ class MainWindow(QMainWindow):
         misc_group = self.create_group_box("Misc Options", self.create_misc_options)
         processing_group = self.create_group_box("Processing Options", self.create_processing_options)
 
+        size_policy = QSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
+        quality_group.setSizePolicy(size_policy)
+        misc_group.setSizePolicy(size_policy)
+        processing_group.setSizePolicy(size_policy)
+
         config_options_layout.addWidget(quality_group)
         config_options_layout.addWidget(misc_group)
+
+        config_options_layout.addStretch(1)
         config_options_layout.addWidget(processing_group)
         main_layout.addLayout(config_options_layout)
 
@@ -186,10 +196,14 @@ class MainWindow(QMainWindow):
         self.language_combobox = LabeledComboBox("Language", get_common_language_options())
 
         config_layout.setSpacing(0)
-        config_layout.setContentsMargins(0, 0, 0, 0)
-        config_layout.addWidget(self.keep_awake_checkbox)
         config_layout.addWidget(self.start_stage_combobox)
         config_layout.addWidget(self.language_combobox)
+        spacer_label = QLabel("")
+        spacer_label.setFixedHeight(5)
+        config_layout.addWidget(spacer_label)
+        config_layout.addWidget(self.keep_awake_checkbox)
+        config_layout.addWidget(spacer_label)
+        self.create_processing_button(config_layout)
 
     def create_processing_button(self, main_layout: QVBoxLayout) -> None:
         self.process_button = QPushButton(self.START_PROCESSING_TEXT)
@@ -209,9 +223,10 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(self.splitter)
 
-    def create_status_bar(self) -> None:
-        self.processing_status_label = QLabel("Processing Status")
+    def create_status_bar(self, main_layout: QVBoxLayout) -> None:
+        self.processing_status_label = QLabel("Processing Status:")
         self.processing_status_label.hide()
+        main_layout.addWidget(self.processing_status_label)
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
