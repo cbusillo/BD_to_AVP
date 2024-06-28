@@ -181,11 +181,13 @@ class MainWindow(QMainWindow):
         config_layout.addWidget(self.remove_extra_languages_checkbox)
 
     def create_processing_options(self, config_layout: QVBoxLayout) -> None:
+        self.keep_awake_checkbox = self.create_checkbox("Keep Awake", config.keep_awake)
         self.start_stage_combobox = LabeledComboBox("Start Stage", Stage.list())
         self.language_combobox = LabeledComboBox("Language", get_common_language_options())
 
         config_layout.setSpacing(0)
         config_layout.setContentsMargins(0, 0, 0, 0)
+        config_layout.addWidget(self.keep_awake_checkbox)
         config_layout.addWidget(self.start_stage_combobox)
         config_layout.addWidget(self.language_combobox)
 
@@ -329,6 +331,7 @@ class MainWindow(QMainWindow):
         self.continue_on_error.setChecked(config.continue_on_error)
         self.skip_subtitles_checkbox.setChecked(config.skip_subtitles)
         self.start_stage_combobox.set_current_text(str(config.start_stage))
+        self.keep_awake_checkbox.setChecked(config.keep_awake)
         language_name = Language.fromalpha3b(config.language_code).name
         self.language_combobox.set_current_text(language_name)
         self.remove_extra_languages_checkbox.setChecked(config.remove_extra_languages)
@@ -405,6 +408,7 @@ class MainWindow(QMainWindow):
         config.continue_on_error = self.continue_on_error.isChecked()
         config.skip_subtitles = self.skip_subtitles_checkbox.isChecked()
         config.start_stage = Stage.get_stage(selected_stage)
+        config.keep_awake = self.keep_awake_checkbox.isChecked()
         config.language_code = Language.fromname(self.language_combobox.current_text()).alpha3b
         config.remove_extra_languages = self.remove_extra_languages_checkbox.isChecked()
 

@@ -2,6 +2,8 @@ import os
 import shutil
 import subprocess
 
+from wakepy.modes import keep
+
 from bd_to_avp.modules.audio import create_transcoded_audio_file
 from bd_to_avp.modules.config import config
 from bd_to_avp.modules.container import create_muxed_file, create_mvc_and_audio
@@ -84,7 +86,11 @@ def process_each() -> None:
 
 
 def start_process() -> None:
-    process()
+    if config.keep_awake:
+        with keep.running():
+            process()
+    else:
+        process()
 
 
 if __name__ == "__main__":
