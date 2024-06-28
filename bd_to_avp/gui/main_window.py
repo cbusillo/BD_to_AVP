@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -191,9 +192,10 @@ class MainWindow(QMainWindow):
         config_layout.addWidget(self.remove_extra_languages_checkbox)
 
     def create_processing_options(self, config_layout: QVBoxLayout) -> None:
-        self.keep_awake_checkbox = self.create_checkbox("Keep Awake", config.keep_awake)
         self.start_stage_combobox = LabeledComboBox("Start Stage", Stage.list())
         self.language_combobox = LabeledComboBox("Language", get_common_language_options())
+        self.keep_awake_checkbox = self.create_checkbox("Keep Awake", config.keep_awake)
+        self.play_sound_checkbox = self.create_checkbox("Play sound on completion", True)
 
         config_layout.setSpacing(0)
         config_layout.addWidget(self.start_stage_combobox)
@@ -202,6 +204,7 @@ class MainWindow(QMainWindow):
         spacer_label.setFixedHeight(5)
         config_layout.addWidget(spacer_label)
         config_layout.addWidget(self.keep_awake_checkbox)
+        config_layout.addWidget(self.play_sound_checkbox)
         config_layout.addWidget(spacer_label)
         self.create_processing_button(config_layout)
 
@@ -255,7 +258,14 @@ class MainWindow(QMainWindow):
         help_menu.addAction(update_action)
         # self.setMenuBar(menu_bar)
 
+    def notify_user_with_sound(self, sound_name: str) -> None:
+        if self.play_sound_checkbox.isChecked():
+            sound_path = Path("/System/Library/Sounds") / f"{sound_name}.aiff"
+            if sound_path.exists():
+                os.system(f"afplay /System/Library/Sounds/{sound_name}.aiff")
+
     def handle_processing_error(self, error: Exception) -> None:
+        self.notify_user_with_sound("Sosumi")
         QMessageBox.warning(self, "Warning", "Failure in processing.\n\n" + str(error))
         time_elapsed = formatted_time_elapsed(self.process_start_time)
         self.update_processing_output(str(error) + f"\n❌ Processing failed in {time_elapsed} ❌")
@@ -263,7 +273,7 @@ class MainWindow(QMainWindow):
         self.process_button.setText(self.START_PROCESSING_TEXT)
 
     def handle_mkv_creation_error(self, error: MKVCreationError) -> None:
-
+        self.notify_user_with_sound("Sosumi")
         result = QMessageBox.critical(
             self,
             "MKV Creation Error",
@@ -280,6 +290,7 @@ class MainWindow(QMainWindow):
         self.handle_processing_error(error)
 
     def handle_file_exists_error(self, error: FileExistsError) -> None:
+        self.notify_user_with_sound("Sosumi")
         result = QMessageBox.critical(
             self,
             "File Exists Error",
@@ -295,6 +306,7 @@ class MainWindow(QMainWindow):
         self.handle_processing_error(error)
 
     def handle_srt_creation_error(self, error: SRTCreationError) -> None:
+        self.notify_user_with_sound("Sosumi")
         result = QMessageBox.critical(
             self,
             "SRT Creation Error",
@@ -348,10 +360,10 @@ class MainWindow(QMainWindow):
         self.continue_on_error.setChecked(config.continue_on_error)
         self.skip_subtitles_checkbox.setChecked(config.skip_subtitles)
         self.start_stage_combobox.set_current_text(str(config.start_stage))
-        self.keep_awake_checkbox.setChecked(config.keep_awake)
         language_name = Language.fromalpha3b(config.language_code).name
         self.language_combobox.set_current_text(language_name)
         self.remove_extra_languages_checkbox.setChecked(config.remove_extra_languages)
+        self.keep_awake_checkbox.setChecked(config.keep_awake)
 
     def toggle_processing(self) -> None:
         if self.process_button.text() == self.START_PROCESSING_TEXT:
@@ -378,7 +390,9 @@ class MainWindow(QMainWindow):
     def start_processing(self, is_continuing: bool = False) -> None:
         if not is_continuing:
             start_time = format_timestamp(datetime.now())
-            self.processing_output_textedit.append(f"🟢 Processing started at {start_time} 🟢")
+            self.processing_output_textedit.append(
+                f"🟢 Processing started at {start_time} with version {config.app.code_version}. 🟢"
+            )
             self.save_config()
             self.process_start_time = datetime.now()
         self.processing_thread.start()
@@ -386,10 +400,11 @@ class MainWindow(QMainWindow):
 
     def finished_processing(self) -> None:
         time_elapsed = formatted_time_elapsed(self.process_start_time)
-        self.processing_output_textedit.append(
-            f"✅ Processing completed in {time_elapsed}.  You can now play from the Files app on the AVP ✅"
-        )
+        message = f"✅ Processing completed in {time_elapsed} with version {config.app.code_version}.  You can now play from the Files app on the AVP ✅"
+        self.processing_output_textedit.append(message)
         self.process_button.setText(self.START_PROCESSING_TEXT)
+        self.notify_user_with_sound("Glass")
+        QMessageBox.information(self, "Processing Complete", message)
 
     def save_config_to_file(self) -> None:
         self.save_config()
@@ -425,9 +440,9 @@ class MainWindow(QMainWindow):
         config.continue_on_error = self.continue_on_error.isChecked()
         config.skip_subtitles = self.skip_subtitles_checkbox.isChecked()
         config.start_stage = Stage.get_stage(selected_stage)
-        config.keep_awake = self.keep_awake_checkbox.isChecked()
         config.language_code = Language.fromname(self.language_combobox.current_text()).alpha3b
         config.remove_extra_languages = self.remove_extra_languages_checkbox.isChecked()
+        config.keep_awake = self.keep_awake_checkbox.isChecked()
 
     def stop_processing(self) -> None:
         time_elapsed = formatted_time_elapsed(self.process_start_time)
