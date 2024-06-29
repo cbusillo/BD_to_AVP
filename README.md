@@ -131,7 +131,8 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 #### Stage Names
 
 - CREATE_MKV
-- EXTRACT_MVC_AUDIO_AND_SUB
+- EXTRACT_MVC_AND_AUDIO
+- EXTRACT_SUBTITLES
 - CREATE_LEFT_RIGHT_FILES
 - UPSCALE_VIDEO
 - COMBINE_TO_MV_HEVC
