@@ -160,6 +160,20 @@ Process an MKV file:
 bd-to-avp --source /path/to/movie.mkv --output-root-folder /path/to/output --transcode-audio
 ```
 
+## Note on Blu-ray drives
+
+If your BD drive does not seem to be compatible with your M-series Mac, it's possible that the error is related to the
+region code, which BDs handle differently than DVDs.
+
+### Solution
+
+- Connect your BD drive to your Mac via USB. Using a dongle often yields better results than a direct connection.
+- Insert a DVD (not a Blu-ray) into the drive and open the DVD Player.
+- If prompted, select a region code for the DVD.
+- Eject the DVD and insert a Blu-ray disc. Your Mac should now recognize the Blu-ray discs.
+
+This method has been effective in resolving compatibility issues.
+
 ## Contribution
 
 Contribute to the project by submitting pull requests or opening issues for bugs and feature requests.
