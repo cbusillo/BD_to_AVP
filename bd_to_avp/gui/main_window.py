@@ -82,6 +82,7 @@ class MainWindow(QMainWindow):
 
         self.toggle_transcode()
         self.toggle_read_from_disc()
+        self.toggle_upscale()
 
     @staticmethod
     def create_group_box(title: str, box_contents: Callable[[QVBoxLayout], None]) -> QGroupBox:
@@ -134,15 +135,15 @@ class MainWindow(QMainWindow):
         misc_group.setSizePolicy(size_policy)
         processing_group.setSizePolicy(size_policy)
 
-        config_options_layout.addWidget(quality_group)
         config_options_layout.addWidget(misc_group)
+        config_options_layout.addWidget(quality_group)
 
         config_options_layout.addStretch(1)
         config_options_layout.addWidget(processing_group)
         main_layout.addLayout(config_options_layout)
 
     def create_quality_options(self, config_layout: QVBoxLayout) -> None:
-        quality_layout = QGridLayout()
+        self.quality_layout = QGridLayout()
 
         self.link_quality_checkbox = self.create_checkbox("Linked", True)
         self.mv_hevc_quality_spinbox = LabeledSpinBox("HEVC Quality (0-100)", default_value=config.mv_hevc_quality)
@@ -158,10 +159,10 @@ class MainWindow(QMainWindow):
             "Resolution (Blank uses source)", config.resolution, DiscInfo.resolution
         )
 
-        quality_layout.addWidget(self.mv_hevc_quality_spinbox, 0, 0)
-        quality_layout.addWidget(self.upscale_quality_spinbox, 1, 0)
-        quality_layout.addWidget(self.link_quality_checkbox, 0, 1, 2, 1)
-        config_layout.addLayout(quality_layout)
+        self.quality_layout.addWidget(self.mv_hevc_quality_spinbox, 0, 0)
+        self.quality_layout.addWidget(self.upscale_quality_spinbox, 1, 0)
+        self.quality_layout.addWidget(self.link_quality_checkbox, 0, 1, 2, 1)
+        config_layout.addLayout(self.quality_layout)
 
         config_layout.addWidget(self.fov_spinbox)
         config_layout.addWidget(self.frame_rate_entry)
@@ -179,7 +180,9 @@ class MainWindow(QMainWindow):
         self.keep_files_checkbox = self.create_checkbox("Keep Temporary Files", config.keep_files)
         self.output_commands_checkbox = self.create_checkbox("Output Commands", config.output_commands)
         self.software_encoder_checkbox = self.create_checkbox("Use Software Encoder", config.software_encoder)
-        self.fx_upscale_checkbox = self.create_checkbox("AI FX Upscale (2x resolution)", config.fx_upscale)
+        self.fx_upscale_checkbox = self.create_checkbox(
+            "AI FX Upscale (2x resolution)", config.fx_upscale, self.toggle_upscale
+        )
         self.remove_original_checkbox = self.create_checkbox("Remove Original", config.remove_original)
         self.overwrite_checkbox = self.create_checkbox("Overwrite", config.overwrite)
         self.transcode_audio_checkbox = self.create_checkbox(
@@ -338,6 +341,24 @@ class MainWindow(QMainWindow):
     def toggle_read_from_disc(self) -> None:
         self.source_folder_widget.setEnabled(not self.read_from_disc_checkbox.isChecked())
         self.source_file_widget.setEnabled(not self.read_from_disc_checkbox.isChecked())
+
+    def toggle_upscale(self) -> None:
+        upscale_checked = self.fx_upscale_checkbox.isChecked()
+        self.upscale_quality_spinbox.setVisible(upscale_checked)
+        self.link_quality_checkbox.setVisible(upscale_checked)
+
+        if not upscale_checked:
+            self.quality_layout.removeWidget(self.upscale_quality_spinbox)
+            self.quality_layout.removeWidget(self.link_quality_checkbox)
+
+            self.quality_layout.addWidget(self.mv_hevc_quality_spinbox, 0, 0, 2, 1)
+        else:
+            self.quality_layout.addWidget(self.upscale_quality_spinbox, 1, 0)
+            self.quality_layout.addWidget(self.link_quality_checkbox, 0, 1, 2, 1)
+
+            self.quality_layout.addWidget(self.mv_hevc_quality_spinbox, 0, 0)
+
+        self.quality_layout.update()
 
     def update_status_bar(self) -> None:
         splitter_sizes = self.splitter.sizes()
