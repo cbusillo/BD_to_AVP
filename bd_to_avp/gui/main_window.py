@@ -459,11 +459,13 @@ class MainWindow(QMainWindow):
             config.source_path = None
         else:
             config.source_folder_path = (
-                Path(self.source_folder_widget.text()) if self.source_folder_widget.text() else None
+                Path(self.source_folder_widget.text().strip()) if self.source_folder_widget.text() else None
             )
-            config.source_path = Path(self.source_file_widget.text()) if self.source_file_widget.text() else None
+            config.source_path = (
+                Path(self.source_file_widget.text().strip()) if self.source_file_widget.text() else None
+            )
 
-        config.output_root_path = Path(self.output_folder_widget.text())
+        config.output_root_path = Path(self.output_folder_widget.text().strip())
         config.audio_bitrate = self.audio_bitrate_spinbox.value()
         config.mv_hevc_quality = self.mv_hevc_quality_spinbox.value()
         config.fov = self.fov_spinbox.value()
