@@ -81,8 +81,8 @@ class MainWindow(QMainWindow):
         self.create_status_bar(main_layout)
 
         self.toggle_transcode()
-        self.toggle_read_from_disc()
         self.toggle_upscale()
+        self.toggle_read_from_disc()
 
     @staticmethod
     def create_group_box(title: str, box_contents: Callable[[QVBoxLayout], None]) -> QGroupBox:
@@ -540,4 +540,4 @@ class MainWindow(QMainWindow):
         return check_box
 
     def toggle_transcode(self) -> None:
-        self.audio_bitrate_spinbox.setEnabled(self.transcode_audio_checkbox.isChecked())
+        self.audio_bitrate_spinbox.setVisible(self.transcode_audio_checkbox.isChecked())
