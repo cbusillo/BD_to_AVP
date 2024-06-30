@@ -108,7 +108,7 @@ class LabeledSpinBox(QWidget):
         self.label = QLabel(label)
         self.spinbox = QSpinBox()
         self.spinbox.setRange(min_value, max_value)
-        self.spinbox.setMaximumWidth(75)
+        self.spinbox.setMaximumWidth(50)
 
         if default_value:
             self.spinbox.setValue(default_value)

@@ -179,6 +179,7 @@ class Config:
         self.audio_bitrate = 384
         self.left_right_bitrate = 20
         self.mv_hevc_quality = 75
+        self.upscale_quality = self.mv_hevc_quality
         self.fov = 90
         self.frame_rate = ""
         self.resolution = ""
@@ -305,6 +306,11 @@ class Config:
             "--mv-hevc-quality",
             type=int,
             help="Quality factor for MV-HEVC encoding with a scale of 0 to 100.",
+        )
+        parser.add_argument(
+            "--upscale-quality",
+            type=int,
+            help="Quality factor for AI upscaling with a scale of 0 to 100.",
         )
         parser.add_argument(
             "--fov",

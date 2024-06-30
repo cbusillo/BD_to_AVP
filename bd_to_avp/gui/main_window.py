@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QMessageBox,
     QSizePolicy,
+    QGridLayout,
 )
 from babelfish import Language
 
@@ -141,10 +142,14 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(config_options_layout)
 
     def create_quality_options(self, config_layout: QVBoxLayout) -> None:
+        quality_layout = QGridLayout()
+
+        self.link_quality_checkbox = self.create_checkbox("Linked", True)
+        self.mv_hevc_quality_spinbox = LabeledSpinBox("HEVC Quality (0-100)", default_value=config.mv_hevc_quality)
+        self.upscale_quality_spinbox = LabeledSpinBox("Upscale Quality (0-100)", default_value=config.upscale_quality)
         self.audio_bitrate_spinbox = LabeledSpinBox(
             "Audio Bitrate (kbps)", max_value=1000, default_value=config.audio_bitrate
         )
-        self.mv_hevc_quality_spinbox = LabeledSpinBox("MV-HEVC Quality (0-100)", default_value=config.mv_hevc_quality)
         self.fov_spinbox = LabeledSpinBox("Field of View", max_value=360, default_value=config.fov)
         self.frame_rate_entry = LabeledLineEdit(
             "Frame Rate (Blank uses source)", config.frame_rate, DiscInfo.frame_rate
@@ -153,11 +158,19 @@ class MainWindow(QMainWindow):
             "Resolution (Blank uses source)", config.resolution, DiscInfo.resolution
         )
 
-        config_layout.addWidget(self.audio_bitrate_spinbox)
-        config_layout.addWidget(self.mv_hevc_quality_spinbox)
+        quality_layout.addWidget(self.mv_hevc_quality_spinbox, 0, 0)
+        quality_layout.addWidget(self.upscale_quality_spinbox, 1, 0)
+        quality_layout.addWidget(self.link_quality_checkbox, 0, 1, 2, 1)
+        config_layout.addLayout(quality_layout)
+
         config_layout.addWidget(self.fov_spinbox)
         config_layout.addWidget(self.frame_rate_entry)
         config_layout.addWidget(self.resolution_entry)
+
+        config_layout.addWidget(self.audio_bitrate_spinbox)
+
+        self.mv_hevc_quality_spinbox.spinbox.valueChanged.connect(self.update_linked_quality)
+        self.upscale_quality_spinbox.spinbox.valueChanged.connect(self.update_linked_quality)
 
     def create_misc_options(self, config_layout: QVBoxLayout) -> None:
 
@@ -337,6 +350,14 @@ class MainWindow(QMainWindow):
             self.status_bar.clearMessage()
             self.processing_status_label.hide()
             self.status_bar.hide()
+
+    def update_linked_quality(self, value: int) -> None:
+        if self.link_quality_checkbox.isChecked():
+            sender = self.sender()
+            if sender == self.mv_hevc_quality_spinbox.spinbox:
+                self.upscale_quality_spinbox.set_value(value)
+            elif sender == self.upscale_quality_spinbox.spinbox:
+                self.mv_hevc_quality_spinbox.set_value(value)
 
     def load_config_and_update_ui(self) -> None:
         config.load_config_from_file()

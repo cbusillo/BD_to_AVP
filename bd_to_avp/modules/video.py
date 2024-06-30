@@ -205,8 +205,8 @@ def detect_crop_parameters(
 def upscale_file(input_path: Path) -> None:
     upscale_command = [
         config.FX_UPSCALE_PATH,
-        # "--bitrate_scaling_factor",
-        # config.mv_hevc_quality / 100,
+        "--bitrate-scaling-factor",
+        config.upscale_quality / 100,
         input_path,
     ]
     run_command(upscale_command, "Upscale video with FX Upscale plugin.")
