@@ -205,6 +205,8 @@ def detect_crop_parameters(
 def upscale_file(input_path: Path) -> None:
     upscale_command = [
         config.FX_UPSCALE_PATH,
+        # "--bitrate_scaling_factor",
+        # config.mv_hevc_quality / 100,
         input_path,
     ]
     run_command(upscale_command, "Upscale video with FX Upscale plugin.")
@@ -267,5 +269,9 @@ def create_upscaled_file(input_path: Path) -> Path:
         if config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
             upscale_file(input_path)
 
-        return input_path.with_stem(f"{input_path.stem} Upscaled")
+        upscaled_path = input_path.with_stem(f"{input_path.stem} Upscaled")
+        if not upscaled_path.exists():
+            raise RuntimeError("Upscaled file not found.")
+
+        return upscaled_path
     return input_path
