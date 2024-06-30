@@ -120,7 +120,6 @@ class Config:
     BREW_PACKAGES_TO_INSTALL = [
         "ffmpeg",
         "tesseract",
-        "finnvoor/tools/fx-upscale",
         "mkvtoolnix",
     ]
     PROCESS_NAMES_TO_KILL = [
@@ -162,7 +161,7 @@ class Config:
     SPATIAL_MEDIA_PATH = SCRIPT_PATH_BIN / "spatial-media-kit-tool"
     MP4BOX_VERSION = "2.2.1"
     MP4BOX_PATH = Path("/Applications/GPAC.app/Contents/MacOS/MP4Box")
-    FX_UPSCALE_PATH = HOMEBREW_PREFIX_BIN / "fx-upscale"
+    FX_UPSCALE_PATH = SCRIPT_PATH_BIN / "fx-upscale"
 
     FINAL_FILE_TAG = "_AVP"
     IMAGE_EXTENSIONS = [".iso", ".img", ".bin"]
