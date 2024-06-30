@@ -410,6 +410,9 @@ class MainWindow(QMainWindow):
     def toggle_processing(self) -> None:
         if self.process_button.text() == self.START_PROCESSING_TEXT:
             self.processing_output_textedit.clear()
+            self.source_folder_widget.set_text(self.source_folder_widget.text().strip())
+            self.source_file_widget.set_text(self.source_file_widget.text().strip())
+            self.output_folder_widget.set_text(self.output_folder_widget.text().strip())
             source_folder_set = bool(self.source_folder_widget.text())
             source_file_set = bool(self.source_file_widget.text())
             if self.read_from_disc_checkbox.isChecked():
@@ -459,13 +462,11 @@ class MainWindow(QMainWindow):
             config.source_path = None
         else:
             config.source_folder_path = (
-                Path(self.source_folder_widget.text().strip()) if self.source_folder_widget.text() else None
+                Path(self.source_folder_widget.text()) if self.source_folder_widget.text() else None
             )
-            config.source_path = (
-                Path(self.source_file_widget.text().strip()) if self.source_file_widget.text() else None
-            )
+            config.source_path = Path(self.source_file_widget.text()) if self.source_file_widget.text() else None
 
-        config.output_root_path = Path(self.output_folder_widget.text().strip())
+        config.output_root_path = Path(self.output_folder_widget.text())
         config.audio_bitrate = self.audio_bitrate_spinbox.value()
         config.mv_hevc_quality = self.mv_hevc_quality_spinbox.value()
         config.fov = self.fov_spinbox.value()
