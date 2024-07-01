@@ -54,7 +54,7 @@ def parse_makemkv_output(output: str) -> tuple[str, list[TitleInfo]]:
                 h, m, s = map(int, duration_match.group(1).split(":"))
                 titles[current_title].duration = h * 3600 + m * 60 + s
         elif line.startswith("SINFO:") and current_title is not None:
-            if any(term in line.lower() for term in ["mvc-3d", "mpeg4-mvc", "mvc video", "mvc high"]):
+            if any(term in line.lower() for term in ["mvc-3d", "mpeg4-mvc", "mvc video", "mvc high", "mpeg4 mvc"]):
                 titles[current_title].has_mvc = True
             resolution_match = re.search(r"SINFO:\d+,1,19,0,\"(\d+x\d+)\"", line)
             if resolution_match:
