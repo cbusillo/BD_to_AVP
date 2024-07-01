@@ -23,6 +23,49 @@ class DiscInfo:
     is_interlaced: bool = False
 
 
+@dataclass
+class TitleInfo:
+    index: int
+    duration: int = 0  # in seconds
+    has_mvc: bool = False
+    resolution: str = ""
+    frame_rate: str = ""
+
+
+def parse_makemkv_output(output: str) -> tuple[str, list[TitleInfo]]:
+    titles: dict[int, TitleInfo] = {}
+    current_title: int | None = None
+    disc_name: str = "Unknown"
+
+    for line in output.splitlines():
+        if line.startswith("CINFO:2,0,"):
+            disc_name_match = re.search(r"CINFO:2,0,\"(.*?)\"", line)
+            if disc_name_match:
+                disc_name = sanitize_filename(disc_name_match.group(1))
+        elif line.startswith("TINFO:"):
+            title_match = re.match(r"TINFO:(\d+),", line)
+            if title_match:
+                current_title = int(title_match.group(1))
+                if current_title not in titles:
+                    titles[current_title] = TitleInfo(index=current_title)
+
+            duration_match = re.search(r"TINFO:\d+,9,0,\"(\d+:\d+:\d+)\"", line)
+            if duration_match and current_title is not None:
+                h, m, s = map(int, duration_match.group(1).split(":"))
+                titles[current_title].duration = h * 3600 + m * 60 + s
+        elif line.startswith("SINFO:") and current_title is not None:
+            if any(term in line.lower() for term in ["mvc-3d", "mpeg4-mvc", "mvc video", "mvc high"]):
+                titles[current_title].has_mvc = True
+            resolution_match = re.search(r"SINFO:\d+,1,19,0,\"(\d+x\d+)\"", line)
+            if resolution_match:
+                titles[current_title].resolution = resolution_match.group(1)
+            frame_rate_match = re.search(r"SINFO:\d+,1,21,0,\"(.*?)\"", line)
+            if frame_rate_match:
+                titles[current_title].frame_rate = frame_rate_match.group(1)
+
+    return disc_name, list(titles.values())
+
+
 def get_disc_and_mvc_video_info() -> DiscInfo:
     source = config.source_path.as_posix() if config.source_path else config.source_str
     if not source:
@@ -42,44 +85,20 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
     command = [config.MAKEMKVCON_PATH, "--robot", "info", source]
     output = run_command(command, "Get disc and MVC video properties")
 
-    disc_info = DiscInfo()
+    disc_name, titles = parse_makemkv_output(output)
 
-    disc_name_match = re.search(r"CINFO:2,0,\"(.*?)\"", output)
-    if disc_name_match:
-        disc_info.name = sanitize_filename(disc_name_match.group(1))
+    disc_info = DiscInfo(name=disc_name)
 
-    mvc_video_matches = list(
-        re.finditer(
-            r"SINFO:\d+,1,19,0,\"(\d+x\d+)\".*?SINFO:\d+,1,21,0,\"(.*?)\"",
-            output,
-            re.DOTALL,
-        )
-    )
-
-    if not mvc_video_matches:
-        print("No MVC video found in disc info.")
+    mvc_titles = [title for title in titles if title.has_mvc]
+    if not mvc_titles:
         raise ValueError("No MVC video found in disc info.")
 
-    first_match = mvc_video_matches[0]
-    disc_info.resolution = first_match.group(1)
-    disc_info.frame_rate = first_match.group(2)
+    longest_mvc_title = max(mvc_titles, key=lambda x: x.duration)
+    disc_info.main_title_number = longest_mvc_title.index
+    disc_info.resolution = longest_mvc_title.resolution
+    disc_info.frame_rate = longest_mvc_title.frame_rate
     if "/" in disc_info.frame_rate:
         disc_info.frame_rate = disc_info.frame_rate.split(" ")[0]
-
-    title_info_pattern = re.compile(r'TINFO:(?P<index>\d+),\d+,\d+,"(?P<duration>\d+:\d+:\d+)"')
-    longest_duration = 0
-    main_feature_index = 0
-
-    for match in title_info_pattern.finditer(output):
-        title_index = int(match.group("index"))
-        h, m, s = map(int, match.group("duration").split(":"))
-        duration_seconds = h * 3600 + m * 60 + s
-
-        if duration_seconds > longest_duration:
-            longest_duration = duration_seconds
-            main_feature_index = title_index
-
-    disc_info.main_title_number = main_feature_index
 
     return disc_info
 
