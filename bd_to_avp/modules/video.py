@@ -220,8 +220,6 @@ def create_left_right_files(
 ) -> tuple[Path, Path]:
     left_eye_output_path = output_folder / f"{disc_info.name}_left_movie.mov"
     right_eye_output_path = output_folder / f"{disc_info.name}_right_movie.mov"
-    if color_depth := get_video_color_depth(mvc_video):
-        disc_info.color_depth = color_depth
     if config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
         split_mvc_to_stereo(
             mvc_video,
@@ -234,7 +232,7 @@ def create_left_right_files(
     return left_eye_output_path, right_eye_output_path
 
 
-def get_video_color_depth(input_path: Path) -> int | None:
+def get_video_color_depth(input_path: Path) -> int:
     try:
         probe = ffmpeg.probe(str(input_path), select_streams="v:0", show_entries="stream=pix_fmt")
         streams = probe.get("streams", [])
@@ -242,10 +240,10 @@ def get_video_color_depth(input_path: Path) -> int | None:
             pix_fmt = streams[0].get("pix_fmt")
             if "10le" in pix_fmt or "10be" in pix_fmt:
                 return 10
-            return None
+            return DiscInfo.color_depth
     except ffmpeg.Error:
-        print(f"Error getting video color depth, using default of {DiscInfo().color_depth}")
-    return None
+        print(f"Error getting video color depth, using default of {DiscInfo.color_depth}")
+    return DiscInfo.color_depth
 
 
 def create_mv_hevc_file(

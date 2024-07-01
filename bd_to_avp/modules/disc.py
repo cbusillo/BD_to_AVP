@@ -26,10 +26,10 @@ class DiscInfo:
 @dataclass
 class TitleInfo:
     index: int
-    duration: int = 0  # in seconds
+    duration: int = 0
     has_mvc: bool = False
-    resolution: str = ""
-    frame_rate: str = ""
+    resolution: str | None = None
+    frame_rate: str | None = None
 
 
 def parse_makemkv_output(output: str) -> tuple[str, list[TitleInfo]]:
@@ -75,9 +75,10 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
         disc_info = DiscInfo(name=filename)
 
         ffmpeg_probe_output = ffmpeg.probe(source)["streams"][0]
-        disc_info.resolution = f"{ffmpeg_probe_output.get('width', 1920)}x{ffmpeg_probe_output.get('height',1080)}"
-        disc_info.frame_rate = ffmpeg_probe_output.get("avg_frame_rate")
-        disc_info.color_depth = 10 if "10" in ffmpeg_probe_output.get("pix_fmt") else 8
+        if all(key in ffmpeg_probe_output for key in ["width", "height"]):
+            disc_info.resolution = f"{ffmpeg_probe_output.get('width')}x{ffmpeg_probe_output.get('height')}"
+        if "avg_frame_rate" in ffmpeg_probe_output:
+            disc_info.frame_rate = ffmpeg_probe_output.get("avg_frame_rate")
         if ffmpeg_probe_output.get("field_order") != "progressive":
             disc_info.is_interlaced = True
         return disc_info
@@ -95,8 +96,8 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
 
     longest_mvc_title = max(mvc_titles, key=lambda x: x.duration)
     disc_info.main_title_number = longest_mvc_title.index
-    disc_info.resolution = longest_mvc_title.resolution
-    disc_info.frame_rate = longest_mvc_title.frame_rate
+    disc_info.resolution = longest_mvc_title.resolution or disc_info.resolution
+    disc_info.frame_rate = longest_mvc_title.frame_rate or disc_info.frame_rate
     if "/" in disc_info.frame_rate:
         disc_info.frame_rate = disc_info.frame_rate.split(" ")[0]
 

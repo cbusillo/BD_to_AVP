@@ -20,6 +20,7 @@ from bd_to_avp.modules.video import (
     create_mv_hevc_file,
     detect_crop_parameters,
     create_upscaled_file,
+    get_video_color_depth,
 )
 
 
@@ -60,6 +61,7 @@ def process_each() -> None:
         raise FileExistsError(f"Output file already exists for {disc_info.name}. Use --overwrite to replace.")
 
     mkv_output_path = create_mkv_file(output_folder, disc_info, config.language_code)
+    disc_info.color_depth = get_video_color_depth(mkv_output_path)
     crop_params = detect_crop_parameters(mkv_output_path)
     audio_output_path, video_output_path = create_mvc_and_audio(disc_info.name, mkv_output_path, output_folder)
     create_srt_from_mkv(mkv_output_path, output_folder)
