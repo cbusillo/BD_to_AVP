@@ -35,7 +35,7 @@ class TitleInfo:
 def parse_makemkv_output(output: str) -> tuple[str, list[TitleInfo]]:
     titles: dict[int, TitleInfo] = {}
     current_title: int | None = None
-    disc_name: str = "Unknown"
+    disc_name: str = DiscInfo.name
 
     for line in output.splitlines():
         if line.startswith("CINFO:2,0,"):
