@@ -188,15 +188,12 @@ def detect_crop_parameters(
     if not crop_params:
         return ""
 
-    # Find the maximum dimensions
     max_width = max(param[0] for param in crop_params)
     max_height = max(param[1] for param in crop_params)
 
-    # Find the minimum x and y offsets
     min_x = min(param[2] for param in crop_params)
     min_y = min(param[3] for param in crop_params)
 
-    # Composite the largest frame
     composite_crop = f"{max_width}:{max_height}:{min_x}:{min_y}"
 
     return composite_crop
