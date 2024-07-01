@@ -48,35 +48,55 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
     if disc_name_match:
         disc_info.name = sanitize_filename(disc_name_match.group(1))
 
-    disc_info.main_title_number = get_first_mvc_title(output)
-
-    mvc_video_match = re.search(
-        rf"SINFO:{disc_info.main_title_number},1,19,0,\"(\d+x\d+)\".*?SINFO:{disc_info.main_title_number},1,21,0,\"(.*?)\"",
-        output,
-        re.DOTALL,
+    mvc_video_matches = list(
+        re.finditer(
+            r"SINFO:\d+,1,19,0,\"(\d+x\d+)\".*?SINFO:\d+,1,21,0,\"(.*?)\"",
+            output,
+            re.DOTALL,
+        )
     )
-    if mvc_video_match:
-        disc_info.resolution = mvc_video_match.group(1)
-        disc_info.frame_rate = mvc_video_match.group(2)
-        if "/" in disc_info.frame_rate:
-            disc_info.frame_rate = disc_info.frame_rate.split(" ")[0]
-    else:
-        print(f"Warning: Could not find resolution and frame rate for title {disc_info.main_title_number}")
+
+    if not mvc_video_matches:
+        print("No MVC video found in disc info.")
+        raise ValueError("No MVC video found in disc info.")
+
+    first_match = mvc_video_matches[0]
+    disc_info.resolution = first_match.group(1)
+    disc_info.frame_rate = first_match.group(2)
+    if "/" in disc_info.frame_rate:
+        disc_info.frame_rate = disc_info.frame_rate.split(" ")[0]
+
+    mvc_titles = get_mvc_title_numbers_and_durations(output)
+    main_feature_index = get_longest_mvc_title(mvc_titles)
+
+    disc_info.main_title_number = main_feature_index
 
     return disc_info
 
 
-def get_first_mvc_title(output: str) -> int:
-    current_title = None
+def get_mvc_title_numbers_and_durations(output: str) -> dict:
+    mvc_titles = {}
     for line in output.splitlines():
-        if line.startswith("TINFO:"):
-            title_match = re.search(r"TINFO:(\d+),", line)
-            if title_match:
-                current_title = int(title_match.group(1))
-        elif "MVC" in line and current_title is not None:
-            return current_title
+        if "Mpeg4-MVC-3D" in line:
+            title_number_match = re.search(r"TINFO:(\d+),", line)
+            duration_match = re.search(r"TINFO:\d+,9,0,\"(\d+:\d+:\d+)\"", output)
+            if title_number_match and duration_match:
+                title_number = int(title_number_match.group(1))
+                duration = duration_match.group(1)
+                mvc_titles[title_number] = duration
+    return mvc_titles
 
-    return 0
+
+def get_longest_mvc_title(mvc_titles: dict) -> int:
+    longest_duration = 0
+    longest_title = 0
+    for title, duration in mvc_titles.items():
+        h, m, s = map(int, duration.split(":"))
+        total_seconds = h * 3600 + m * 60 + s
+        if total_seconds > longest_duration:
+            longest_duration = total_seconds
+            longest_title = title
+    return longest_title
 
 
 def rip_disc_to_mkv(output_folder: Path, disc_info: DiscInfo, language_code: str) -> None:
