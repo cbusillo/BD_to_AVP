@@ -37,8 +37,6 @@ def process() -> None:
             except (ValueError, FileExistsError, subprocess.CalledProcessError):
                 continue
 
-        config.source_path = None
-
     else:
         process_each()
 
