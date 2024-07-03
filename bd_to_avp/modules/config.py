@@ -178,6 +178,7 @@ class Config:
         self.transcode_audio = False
         self.audio_bitrate = 384
         self.left_right_bitrate = 20
+        self.link_quality = True
         self.mv_hevc_quality = 75
         self.upscale_quality = self.mv_hevc_quality
         self.fov = 90
