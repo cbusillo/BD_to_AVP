@@ -30,7 +30,7 @@ def sanitize_filename(name: str) -> str:
 def find_largest_file_with_extensions(folder: Path, extensions: list[str]) -> Path | None:
     files: list[Path] = []
     for ext in extensions:
-        files.extend(folder.glob(f"**/*{ext}"))
+        files.extend(folder.glob(f"**/*{ext}", case_sensitive=False))
 
     if not files:
         print(f"\nNo files found in {folder} with extensions: {extensions}")
