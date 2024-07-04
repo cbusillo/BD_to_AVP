@@ -156,7 +156,10 @@ class AboutDialog(QDialog):
         return False
 
     def add_description_label(self, layout: QVBoxLayout) -> None:
-        description_label = QLabel(self.get_description_from_readme())
+        description_label = QLabel(self.get_section_from_readme("Introduction"))
+        description_label.setWordWrap(True)
+        description_label.setTextFormat(Qt.TextFormat.MarkdownText)
+        description_label.setMaximumWidth(800)
         layout.addWidget(description_label)
 
     def add_close_button(self, layout: QVBoxLayout) -> None:
@@ -169,14 +172,14 @@ class AboutDialog(QDialog):
         button_layout.addStretch(1)
         layout.addWidget(close_button)
 
-    def get_description_from_readme(self) -> str:
+    def get_section_from_readme(self, section: str) -> str:
         if not (readme_path := self.find_readme()):
             return "No README found."
 
         readme_lines = readme_path.read_text().splitlines()
 
         try:
-            start = readme_lines.index("## Introduction") + 1
+            start = readme_lines.index(f"## {section}") + 1
             end = start
             while end < len(readme_lines) and not readme_lines[end].startswith("## "):
                 end += 1
@@ -184,7 +187,9 @@ class AboutDialog(QDialog):
             start = 0
             end = len(readme_lines)
 
-        return "\n".join(readme_lines[start:end])
+        section_lines = ["  \n" if line == "" else line for line in readme_lines[start:end]]
+
+        return " ".join(section_lines)
 
     @staticmethod
     def find_readme() -> Path | None:
