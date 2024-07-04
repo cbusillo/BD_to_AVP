@@ -447,7 +447,7 @@ class MainWindow(QMainWindow):
 
     def finished_processing(self) -> None:
         time_elapsed = formatted_time_elapsed(self.process_start_time)
-        message = f"✅ Processing completed in {time_elapsed} with version {config.app.code_version}.  You can now play from the Files app on the AVP ✅"
+        message = f"✅ Processing completed in {time_elapsed} with version {config.app.code_version}.  You can now play from the Files or Screenlit app on the AVP ✅"
         self.processing_output_textedit.append(message)
         self.process_button.setText(self.START_PROCESSING_TEXT)
         self.notify_user_with_sound("Glass")
