@@ -322,20 +322,28 @@ class MainWindow(QMainWindow):
 
     def handle_srt_creation_error(self, error: SRTCreationError) -> None:
         self.notify_user_with_sound("Sosumi")
-        result = QMessageBox.critical(
-            self,
+        message_box = QMessageBox(
+            QMessageBox.Icon.Critical,
             "",
-            "SRT Creation Error\n\nDo you want to continue?\n\n" + str(error),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Abort,
+            "SRT Creation Error\n\nDo you want to skip all subsequent subtitles?\n\n" + str(error),
+            QMessageBox.StandardButton.Abort,
         )
+        skip_button = message_box.addButton("Skip All Subtitles", QMessageBox.ButtonRole.YesRole)
+        continue_button = message_box.addButton("Continue On Errors", QMessageBox.ButtonRole.NoRole)
 
-        if result == QMessageBox.StandardButton.Yes:
-            config.skip_subtitles = True
-            config.start_stage = Stage.CREATE_LEFT_RIGHT_FILES
-            self.start_processing(is_continuing=True)
+        result = message_box.exec()
+
+        if result == QMessageBox.StandardButton.Abort:
+            self.handle_processing_error(error)
             return
 
-        self.handle_processing_error(error)
+        if message_box.clickedButton() == skip_button:
+            config.skip_subtitles = True
+        elif message_box.clickedButton() == continue_button:
+            config.continue_on_error = True
+
+        config.start_stage = Stage.CREATE_LEFT_RIGHT_FILES
+        self.start_processing(is_continuing=True)
 
     def toggle_read_from_disc(self) -> None:
         self.source_folder_widget.setEnabled(not self.read_from_disc_checkbox.isChecked())
