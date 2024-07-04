@@ -282,7 +282,7 @@ class MainWindow(QMainWindow):
 
     def handle_processing_error(self, error: Exception) -> None:
         self.notify_user_with_sound("Sosumi")
-        QMessageBox.warning(self, "Warning", "Failure in processing.\n\n" + str(error))
+        QMessageBox.warning(self, "", "Failure in processing.\n\n" + str(error))
         time_elapsed = formatted_time_elapsed(self.process_start_time)
         self.update_processing_output(str(error) + f"\n❌ Processing failed in {time_elapsed} ❌")
         self.stop_processing()
@@ -292,8 +292,8 @@ class MainWindow(QMainWindow):
         self.notify_user_with_sound("Sosumi")
         result = QMessageBox.critical(
             self,
-            "MKV Creation Error",
-            "Do you want to continue?\n\n" + str(error),
+            "",
+            "MKV Creation Error\n\nDo you want to continue?\n\n" + str(error),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Abort,
         )
 
@@ -309,8 +309,8 @@ class MainWindow(QMainWindow):
         self.notify_user_with_sound("Sosumi")
         result = QMessageBox.critical(
             self,
-            "File Exists Error",
-            "Do you want to continue?\n\n" + str(error),
+            "",
+            "File Exists Error\n\nDo you want to continue?\n\n" + str(error),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Abort,
         )
 
@@ -325,8 +325,8 @@ class MainWindow(QMainWindow):
         self.notify_user_with_sound("Sosumi")
         result = QMessageBox.critical(
             self,
-            "SRT Creation Error",
-            "Do you want to continue?\n\n" + str(error),
+            "",
+            "SRT Creation Error\n\nDo you want to continue?\n\n" + str(error),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Abort,
         )
 
@@ -423,7 +423,7 @@ class MainWindow(QMainWindow):
             else:
                 if (source_folder_set and source_file_set) or (not source_folder_set and not source_file_set):
                     QMessageBox.warning(
-                        self, "Warning", "Either Source Folder or Source File must be set, but not both."
+                        self, "", "Warning\n\nEither Source Folder or Source File must be set, but not both."
                     )
                     return
 
@@ -451,7 +451,7 @@ class MainWindow(QMainWindow):
         self.processing_output_textedit.append(message)
         self.process_button.setText(self.START_PROCESSING_TEXT)
         self.notify_user_with_sound("Glass")
-        QMessageBox.information(self, "Processing Complete", message)
+        QMessageBox.information(self, "", message)
 
     def save_config_to_file(self) -> None:
         self.save_config()
