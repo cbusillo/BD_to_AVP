@@ -145,7 +145,7 @@ class MainWindow(QMainWindow):
     def create_quality_options(self, config_layout: QVBoxLayout) -> None:
         self.quality_layout = QGridLayout()
 
-        self.link_quality_checkbox = self.create_checkbox("Linked", True)
+        self.link_quality_checkbox = self.create_checkbox("Linked", config.link_quality)
         self.mv_hevc_quality_spinbox = LabeledSpinBox("HEVC Quality (0-100)", default_value=config.mv_hevc_quality)
         self.upscale_quality_spinbox = LabeledSpinBox("Upscale Quality (0-100)", default_value=config.upscale_quality)
         self.audio_bitrate_spinbox = LabeledSpinBox(
@@ -386,6 +386,7 @@ class MainWindow(QMainWindow):
         self.source_file_widget.set_text(config.source_path.as_posix() if config.source_path else "")
         self.output_folder_widget.set_text(config.output_root_path.as_posix())
         self.audio_bitrate_spinbox.set_value(config.audio_bitrate)
+        self.link_quality_checkbox.setChecked(config.link_quality)
         self.mv_hevc_quality_spinbox.set_value(config.mv_hevc_quality)
         self.upscale_quality_spinbox.set_value(config.upscale_quality)
         self.fov_spinbox.set_value(config.fov)
@@ -469,6 +470,7 @@ class MainWindow(QMainWindow):
 
         config.output_root_path = Path(self.output_folder_widget.text())
         config.audio_bitrate = self.audio_bitrate_spinbox.value()
+        config.link_quality = self.link_quality_checkbox.isChecked()
         config.mv_hevc_quality = self.mv_hevc_quality_spinbox.value()
         config.upscale_quality = self.upscale_quality_spinbox.value()
         config.fov = self.fov_spinbox.value()

@@ -55,17 +55,12 @@ def extract_subtitle_to_srt(mkv_path: Path, output_path: Path) -> None:
 
     pgsrip.rip(mkv_file, sub_options)
 
-    if mkv_path.parent != output_path:
-        glob_pattern = f"{mkv_path.stem}*.srt"
-        for srt_file in mkv_path.parent.glob(glob_pattern):
-            srt_file.rename(output_path / srt_file.name)
-
     for srt_file in output_path.glob("*.srt"):
         if srt_file.stat().st_size == 0:
             srt_file.unlink()
 
     if not any(output_path.glob("*.srt")) and not config.continue_on_error:
-        raise SRTCreationError("No SRT subtitle files created.")
+        raise SRTCreationError("No SRT subtitle files with data created.")
 
     if forced_track_language:
         two_alpha_language_code = Language.fromietf(forced_track_language).alpha2

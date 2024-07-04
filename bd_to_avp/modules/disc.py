@@ -1,4 +1,5 @@
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -83,7 +84,13 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
             disc_info.is_interlaced = True
         return disc_info
 
-    command = [config.MAKEMKVCON_PATH, "--robot", "info", source]
+    command = [
+        config.MAKEMKVCON_PATH,
+        "--robot",
+        "--noscan" if "disc:" not in source else None,
+        "info",
+        source,
+    ]
     output = run_command(command, "Get disc and MVC video properties")
 
     disc_name, titles = parse_makemkv_output(output)
@@ -119,6 +126,7 @@ def rip_disc_to_mkv(output_folder: Path, disc_info: DiscInfo, language_code: str
     command = [
         config.MAKEMKVCON_PATH,
         f"--profile={custom_profile_path}",
+        "--noscan" if "disc:" not in source else None,
         "mkv",
         source,
         disc_info.main_title_number,
@@ -155,7 +163,9 @@ def create_custom_makemkv_profile(custom_profile_path: Path, language_code: str)
 
 def create_mkv_file(output_folder: Path, disc_info: DiscInfo, language_code: str) -> Path:
     if config.source_path and config.source_path.suffix.lower() in config.MTS_EXTENSIONS + [".mkv"]:
-        return config.source_path
+        shutil.copy(config.source_path, output_folder)
+        if mkv_file := find_largest_file_with_extensions(output_folder, [".mkv"] + config.MTS_EXTENSIONS):
+            return mkv_file
 
     if config.start_stage.value <= Stage.CREATE_MKV.value:
         rip_disc_to_mkv(output_folder, disc_info, language_code)
