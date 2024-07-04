@@ -51,6 +51,8 @@ def process_each() -> None:
 
     tmp_folder.mkdir(parents=True, exist_ok=True)
     os.environ["TMPDIR"] = tmp_folder.as_posix()
+    if not tmp_folder.exists():
+        raise RuntimeError(f"Failed to create temporary folder: {tmp_folder}")
 
     print(f"Using temporary folder: {os.environ['TMPDIR']}")
 
