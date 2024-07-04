@@ -272,7 +272,6 @@ class MainWindow(QMainWindow):
 
         app_menu.addAction(about_action)
         help_menu.addAction(update_action)
-        # self.setMenuBar(menu_bar)
 
     def notify_user_with_sound(self, sound_name: str) -> None:
         if self.play_sound_checkbox.isChecked():
@@ -426,6 +425,7 @@ class MainWindow(QMainWindow):
                         self, "", "Warning\n\nEither Source Folder or Source File must be set, but not both."
                     )
                     return
+                self.process_button.setShortcut("Ctrl+P")
 
             self.start_processing()
 
