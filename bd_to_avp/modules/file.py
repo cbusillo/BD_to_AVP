@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 
 from contextlib import contextmanager
 from pathlib import Path
@@ -104,7 +105,7 @@ def mounted_image(image_path: Path):
 
         yield Path(mount_point)
 
-    except Exception as e:
+    except (subprocess.CalledProcessError, OSError, RuntimeError) as e:
         print(f"Error during ISO mount handling: {e}")
         raise
 
