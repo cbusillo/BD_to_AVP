@@ -83,6 +83,9 @@ def process_each() -> None:
     )
     move_file_to_output_root_folder(muxed_output_path)
 
+    if not config.keep_files:
+        remove_folder_if_exists(tmp_folder)
+
     if config.remove_original and config.source_path:
         if config.source_path.is_dir():
             remove_folder_if_exists(config.source_path)
