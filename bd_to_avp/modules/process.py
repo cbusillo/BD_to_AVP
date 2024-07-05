@@ -49,7 +49,7 @@ def process_each() -> None:
     disc_info = get_disc_and_mvc_video_info()
     output_folder = prepare_output_folder_for_source(disc_info.name)
 
-    tmp_folder = output_folder / "tmp"
+    tmp_folder = config.output_root_path / "temp_files"
     shutil.rmtree(tmp_folder, ignore_errors=True)
 
     tmp_folder.mkdir(parents=True, exist_ok=True)
