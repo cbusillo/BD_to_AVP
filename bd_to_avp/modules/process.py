@@ -50,7 +50,8 @@ def process_each() -> None:
     output_folder = prepare_output_folder_for_source(disc_info.name)
 
     tmp_folder = config.output_root_path / "temp_files"
-    shutil.rmtree(tmp_folder, ignore_errors=True)
+    if not config.keep_files:
+        shutil.rmtree(tmp_folder, ignore_errors=True)
 
     tmp_folder.mkdir(parents=True, exist_ok=True)
     os.environ["TMPDIR"] = tmp_folder.as_posix()
