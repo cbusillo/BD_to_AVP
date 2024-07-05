@@ -5,7 +5,7 @@ import subprocess
 from wakepy.modes import keep
 
 from bd_to_avp.modules.audio import create_transcoded_audio_file
-from bd_to_avp.modules.config import config
+from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.container import create_muxed_file, create_mvc_and_audio
 from bd_to_avp.modules.disc import create_mkv_file, get_disc_and_mvc_video_info
 from bd_to_avp.modules.file import (
@@ -24,7 +24,7 @@ from bd_to_avp.modules.video import (
 )
 
 
-def process() -> None:
+def process(gui_start_stage: Stage) -> None:
     if config.source_folder_path:
         for source in config.source_folder_path.rglob("*"):
             if not source.is_file() or source.suffix.lower() not in config.IMAGE_EXTENSIONS + config.MTS_EXTENSIONS + [
@@ -36,6 +36,9 @@ def process() -> None:
                 process_each()
             except (ValueError, FileExistsError, subprocess.CalledProcessError):
                 continue
+            finally:
+                config.source_path = None
+                config.start_stage = gui_start_stage
 
     else:
         process_each()
@@ -87,12 +90,12 @@ def process_each() -> None:
             config.source_path.unlink(missing_ok=True)
 
 
-def start_process() -> None:
+def start_process(gui_start_stage: Stage = config.start_stage) -> None:
     if config.keep_awake:
         with keep.running():
-            process()
+            process(gui_start_stage)
     else:
-        process()
+        process(gui_start_stage)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from bd_to_avp.modules.disc import MKVCreationError
 from .util import OutputHandler
 from ..modules.command import terminate_process, Spinner
 from bd_to_avp.modules.process import start_process
+from ..modules.config import Stage
 from ..modules.sub import SRTCreationError
 
 if TYPE_CHECKING:
@@ -35,7 +36,8 @@ class ProcessingThread(QThread):
         sys.stdout = self.output_handler  # type: ignore
 
         try:
-            start_process()
+            selected_stage = int(self.main_window.start_stage_combobox.current_text().split(" - ")[0])
+            start_process(Stage.get_stage(selected_stage))
             self.process_completed.emit()
         except MKVCreationError as error:
             self.mkv_creation_error.emit(error)
