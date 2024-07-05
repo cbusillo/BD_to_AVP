@@ -15,14 +15,16 @@ class SRTCreationError(Exception):
     pass
 
 
-def create_srt_from_mkv(mkv_path: Path, output_path: Path) -> None:
+def create_srt_from_mkv(mkv_path: Path) -> None:
     if config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
         if config.skip_subtitles:
             return None
-        extract_subtitle_to_srt(mkv_path, output_path)
+        extract_subtitle_to_srt(mkv_path)
 
 
-def extract_subtitle_to_srt(mkv_path: Path, output_path: Path) -> None:
+def extract_subtitle_to_srt(mkv_path: Path) -> None:
+    output_path = mkv_path.parent
+
     if config.skip_subtitles:
         return None
     tessdata_path = config.app.config_path / "tessdata"

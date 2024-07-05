@@ -64,7 +64,7 @@ def process_each() -> None:
     disc_info.color_depth = get_video_color_depth(mkv_output_path)
     crop_params = detect_crop_parameters(mkv_output_path)
     audio_output_path, video_output_path = create_mvc_and_audio(disc_info.name, mkv_output_path, output_folder)
-    create_srt_from_mkv(mkv_output_path, output_folder)
+    create_srt_from_mkv(mkv_output_path)
     left_output_path, right_output_path = create_left_right_files(
         disc_info, output_folder, video_output_path, crop_params
     )
