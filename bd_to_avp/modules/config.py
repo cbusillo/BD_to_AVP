@@ -218,6 +218,8 @@ class Config:
             else:
                 if value:
                     config_parser.set("Options", key, str(value))
+                elif value is False:
+                    config_parser.set("Options", key, "False")
                 else:
                     config_parser.remove_option("Options", key)
 
