@@ -158,6 +158,21 @@ class Config:
         "Russian",
         "Italian",
         "Korean",
+        "Hindi",
+        "Arabic",
+        "Turkish",
+        "Thai",
+        "Polish",
+        "Dutch",
+        "Swedish",
+        "Danish",
+        "Norwegian",
+        "Hebrew",
+        "Bengali",
+        "Tamil",
+        "Telugu",
+        "Cantonese",
+        "Indonesian",
     ]
 
     SCRIPT_PATH = Path(__file__).parent.parent
