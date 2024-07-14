@@ -30,7 +30,7 @@ from bd_to_avp.gui.widget import FileFolderPicker, LabeledComboBox, LabeledLineE
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
 from bd_to_avp.modules.sub import SRTCreationError
-from bd_to_avp.modules.util import formatted_time_elapsed, format_timestamp, get_common_language_options
+from bd_to_avp.modules.util import formatted_time_elapsed, format_timestamp
 from bd_to_avp.modules.command import Spinner
 
 
@@ -209,7 +209,7 @@ class MainWindow(QMainWindow):
 
     def create_processing_options(self, config_layout: QVBoxLayout) -> None:
         self.start_stage_combobox = LabeledComboBox("Start Stage", Stage.list())
-        self.language_combobox = LabeledComboBox("Language", get_common_language_options())
+        self.language_combobox = LabeledComboBox("Language", config.LANGUAGES)
         self.keep_awake_checkbox = self.create_checkbox("Keep Awake", config.keep_awake)
         self.play_sound_checkbox = self.create_checkbox("Play sound on completion", True)
 

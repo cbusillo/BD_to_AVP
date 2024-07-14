@@ -147,6 +147,18 @@ class Config:
         "Using direct disc access mode",
         "Program reads data faster than it can write to disk",
     ]
+    LANGUAGES = [
+        "English",
+        "Spanish",
+        "French",
+        "German",
+        "Chinese",
+        "Japanese",
+        "Portuguese",
+        "Russian",
+        "Italian",
+        "Korean",
+    ]
 
     SCRIPT_PATH = Path(__file__).parent.parent
     SCRIPT_PATH_BIN = SCRIPT_PATH / "bin"

@@ -40,22 +40,6 @@ def load_data_from_pyproject() -> dict[str, dict] | None:
         return pyproject_data
 
 
-def get_common_language_options() -> list[str]:
-    common_languages = [
-        "English",
-        "Spanish",
-        "French",
-        "German",
-        "Chinese",
-        "Japanese",
-        "Portuguese",
-        "Russian",
-        "Italian",
-        "Korean",
-    ]
-    return common_languages
-
-
 def format_timestamp(timestamp: datetime) -> str:
     return timestamp.strftime("%I:%M:%S %p on %Y-%m-%d")
 
