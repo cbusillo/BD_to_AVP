@@ -15,7 +15,6 @@ python = ">=3.12.4,<3.13"
 pgsrip = "^0.1.11"
 setuptools = "^70.3.0"
 ffmpeg-python = "^0.2.0"
-tesseract = "^0.1.3"
 requests = "^2.32.3"
 psutil = "^5.9.8"
 pyside6 = "^6.7.1"
@@ -59,7 +58,6 @@ requires = [
     "pyside6",
     "ffmpeg-python",
     "pgsrip",
-    "tesseract",
     "setuptools",
     "requests",
     "psutil",
