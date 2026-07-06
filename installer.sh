@@ -48,22 +48,20 @@ echo "Installing dependencies..."
 
 if ! command -v makemkvcon &>/dev/null; then
     echo "Installing MakeMKV..."
-    "$BREW_PATH/brew" install --cask --no-quarantine makemkv 2>/dev/null || true
+    "$BREW_PATH/brew" install --cask --no-quarantine makemkv 2>/dev/null || handle_error "Failed to install MakeMKV cask"
 fi
 
 if ! command -v makemkvcon &>/dev/null; then
-    echo "MakeMKV command-line tools were not found."
-    echo "Install MakeMKV from https://www.makemkv.com/ or repair your Homebrew MakeMKV cask before converting discs."
+    handle_error "MakeMKV command-line tools were not found after installation. Install MakeMKV from https://www.makemkv.com/ or repair your Homebrew MakeMKV cask before converting discs."
 fi
 
 if ! command -v wine &>/dev/null || ! command -v wineboot &>/dev/null; then
     echo "Installing Wine..."
-    "$BREW_PATH/brew" install --cask --no-quarantine wine-stable 2>/dev/null || true
+    "$BREW_PATH/brew" install --cask --no-quarantine wine-stable 2>/dev/null || handle_error "Failed to install Wine cask"
 fi
 
 if ! command -v wine &>/dev/null || ! command -v wineboot &>/dev/null; then
-    echo "Wine command-line tools were not found."
-    echo "Install or repair Wine before converting MVC 3D Blu-ray video. The Homebrew wine-stable cask is deprecated and may require manual replacement."
+    handle_error "Wine command-line tools were not found after installation. Install or repair Wine before converting MVC 3D Blu-ray video. The Homebrew wine-stable cask is deprecated and may require manual replacement."
 fi
 
 
@@ -75,7 +73,7 @@ echo "Activating the virtual environment..."
 source "$VENV_PATH/bin/activate"
 
 echo "Installing or updating BD_to_AVP from PyPI..."
-pip install --upgrade bd_to_avp || echo "Failed to install/update BD_to_AVP from PyPI"
+pip install --upgrade bd_to_avp || handle_error "Failed to install/update BD_to_AVP from PyPI"
 
 echo "Making BD_to_AVP executable accessible system-wide..."
 
