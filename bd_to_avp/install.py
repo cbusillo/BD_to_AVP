@@ -13,11 +13,11 @@ from bd_to_avp.modules.command import run_command
 
 
 def prompt_for_password() -> tuple[Path, dict[str, str]]:
-    script = f"""
+    script = """
     with timeout of 3600 seconds
         tell app "System Events"
             activate
-            set pw to text returned of (display dialog "Enter your password: (This will take a while)" default answer "" with hidden answer)
+            set pw to text returned of (display dialog "Enter your password:" default answer "" with hidden answer)
         end tell
         return pw
     end timeout
@@ -53,7 +53,7 @@ def add_homebrew_to_path() -> None:
         zshrc_path.touch()
     with open(zshrc_path, "a") as zshrc_file:
         zshrc_file.write(f'export PATH="{config.HOMEBREW_PREFIX_BIN}:$PATH"\n')
-    os.environ["PATH"] = f"{config.HOMEBREW_PREFIX_BIN}:{os.environ.get("PATH", "")}"
+    os.environ["PATH"] = f"{config.HOMEBREW_PREFIX_BIN}:{os.environ.get('PATH', '')}"
 
 
 def check_for_homebrew_in_path() -> bool:
@@ -326,7 +326,8 @@ def wine_boot() -> None:
     if not config.WINE_PATH.exists():
         on_error_string(
             "Wine",
-            "Wine not found in Homebrew.  If you have Wine Stable installed in Applications, please remove it and run the program again.",
+            "Wine not found in Homebrew. If you have Wine Stable installed in Applications, "
+            "please remove it and run the program again.",
         )
     process = subprocess.run(
         [(config.HOMEBREW_PREFIX_BIN / "wineboot").as_posix()],

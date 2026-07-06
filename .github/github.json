@@ -1,0 +1,100 @@
+{
+  "defaultBranch": "main",
+  "projectType": "python-desktop-app",
+  "pullRequests": {
+    "preferredMergeMethod": "merge",
+    "allowedMergeMethods": ["merge"]
+  },
+  "docs": {
+    "overview": "README.md",
+    "packageManifest": "pyproject.toml",
+    "lockfile": "uv.lock",
+    "installer": "installer.sh",
+    "releaseWorkflows": [
+      ".github/workflows/briefcase.yml",
+      ".github/workflows/publish-to-pypi.yml"
+    ]
+  },
+  "qualityGate": {
+    "setup": {
+      "default": "uv sync --all-groups --python 3.12"
+    },
+    "format": {
+      "check": "uv run ruff format --check .",
+      "fix": "uv run ruff format ."
+    },
+    "lint": {
+      "default": "uv run ruff check ."
+    },
+    "typecheck": {
+      "default": "uv run mypy bd_to_avp"
+    },
+    "test": {
+      "importSmoke": "uv run python -c 'import bd_to_avp; import bd_to_avp.__main__; import bd_to_avp.app'",
+      "cliSmoke": "uv run bd-to-avp --help"
+    },
+    "build": {
+      "pythonPackage": "uv build",
+      "briefcaseCreate": "uv run python scripts/briefcase_app.py create --no-input",
+      "briefcaseBuild": "uv run python scripts/briefcase_app.py build --no-input"
+    },
+    "inspection": {
+      "tool": "jetbrains",
+      "ide": "PyCharm",
+      "scopePreference": ["changed_files", "directory", "whole_project"]
+    },
+    "docsRequiredWhen": [
+      "behavior changes",
+      "dependency or installer changes",
+      "release workflow changes",
+      "Briefcase packaging changes",
+      "runtime toolchain changes",
+      "GitHub repository settings change"
+    ]
+  },
+  "importantWorkflows": [
+    "CI",
+    "Package with Briefcase and Create Release",
+    "Publish Python distribution to PyPI"
+  ],
+  "qaLabels": [],
+  "deployLabels": [],
+  "healthUrls": [],
+  "relatedRepos": [],
+  "githubSignals": {
+    "postMerge": {
+      "waitForActions": true,
+      "checkSecurityAndQuality": true
+    },
+    "capabilities": {
+      "dependencyGraph": "available",
+      "dependabotAlerts": "available",
+      "securityAdvisories": "available",
+      "codeScanning": "not_configured",
+      "secretScanning": "not_enabled"
+    },
+    "refreshWhen": [
+      "repo visibility changes",
+      "GitHub plan changes",
+      "security settings change",
+      "token permissions change",
+      "branch protection changes"
+    ]
+  },
+  "cleanup": {
+    "deleteMergedLocalBranches": true,
+    "removeMergedCleanWorktrees": true
+  },
+  "metadataFreshness": {
+    "updateWhen": [
+      "docs routing changes",
+      "validation gates change",
+      "primary commands change",
+      "important workflows change",
+      "repo relationship changes",
+      "cleanup policy changes",
+      "release workflow changes",
+      "runtime dependency changes"
+    ]
+  }
+}
