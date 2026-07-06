@@ -1,13 +1,21 @@
+---
 name: Package with Briefcase and Create Release
 
-on:
+"on":
+  workflow_dispatch:
   push:
     branches:
       - release
       - prerelease
 
+permissions:
+  contents: write
+
 jobs:
   package:
+    if: >-
+      github.ref == 'refs/heads/release' ||
+      github.ref == 'refs/heads/prerelease'
     runs-on: macos-latest
     env:
       KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -15,13 +23,13 @@ jobs:
       CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Get commit messages
         id: get_commit_messages
         run: |
-          set -x 
+          set -x
           git fetch --tags
           echo "github.ref: ${{ github.ref }}"
           if [ "${{ github.ref }}" = "refs/heads/prerelease" ]; then
@@ -30,34 +38,35 @@ jobs:
             LAST_TAG=$(curl --silent "https://api.github.com/repos/cbusillo/BD_to_AVP/releases/latest" | jq -r .tag_name)
           fi
           MESSAGES=$(git log --no-merges --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" "$LAST_TAG"..HEAD | grep -v "Bump version")
-          echo "messages<<EOF" >> $GITHUB_OUTPUT
-          echo "$MESSAGES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "messages<<EOF"
+            echo "$MESSAGES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
           echo "Commit messages since last release or initial commit:"
           echo "$MESSAGES"
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.12.4'
-      - name: Install Poetry
-        run: |
-          curl -sSL https://install.python-poetry.org | python3 -
-          echo "$HOME/.poetry/bin" >> $GITHUB_PATH
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
       - name: Install dependencies
-        run: |
-          poetry install --no-interaction
+        run: uv sync --all-groups --python 3.12
       - name: Install certificates
         run: |
-          KEYCHAIN_PATH=$(pwd)/build.keychain
-          security create-keychain -p $KEYCHAIN_PASSWORD $KEYCHAIN_PATH
-          security default-keychain -s $KEYCHAIN_PATH
-          security unlock-keychain -p $KEYCHAIN_PASSWORD $KEYCHAIN_PATH
+          KEYCHAIN_PATH="$(pwd)/build.keychain"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           # Import both certificates
           echo "${{ secrets.CERTIFICATE }}" | base64 --decode > app_certificate.p12
           echo "${{ secrets.CERTIFICATE_INSTALLER }}" | base64 --decode > installer_certificate.p12
-          security import app_certificate.p12 -k $KEYCHAIN_PATH -P $CERTIFICATE_PASSWORD -A -T "/usr/bin/codesign" -T "/usr/bin/productsign"
-          security import installer_certificate.p12 -k $KEYCHAIN_PATH -P $CERTIFICATE_PASSWORD -A -T "/usr/bin/codesign" -T "/usr/bin/productsign"
-          security set-key-partition-list -S apple-tool:,apple:,codesign:,productsign: -s -k $KEYCHAIN_PATH
+          security import app_certificate.p12 -k "$KEYCHAIN_PATH" -P "$CERTIFICATE_PASSWORD" -A -T "/usr/bin/codesign" -T "/usr/bin/productsign"
+          security import installer_certificate.p12 -k "$KEYCHAIN_PATH" -P "$CERTIFICATE_PASSWORD" -A -T "/usr/bin/codesign" -T "/usr/bin/productsign"
+          security set-key-partition-list -S apple-tool:,apple:,codesign:,productsign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
       - name: Store Notarization Credentials
         run: |
           echo "${{ secrets.KEYCHAIN_PASSWORD }}" | xcrun altool --store-password-in-keychain-item "${{ secrets.KEYCHAIN_NAME }}" -u "${{ secrets.APPLE_ID }}" -p -
@@ -65,18 +74,18 @@ jobs:
       - name: Extract version
         id: extract_version
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n 1 | tr -d '"' | xargs)
-          echo "Extracted version: '${version}'" 
-          echo "version=${version}" >> $GITHUB_OUTPUT
+          version=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          echo "Extracted version: '${version}'"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
       - name: Package application for GitHub
         run: |
-          poetry run briefcase create
-          poetry run briefcase build
-          find . -name QtWebEngineCore.framework -type d | while read dir; do
+          uv run python scripts/briefcase_app.py create
+          uv run python scripts/briefcase_app.py build
+          find . -name QtWebEngineCore.framework -type d | while read -r dir; do
             find "$dir" -type f -execdir codesign --force --verify --verbose --sign "${{ secrets.DEV_ID }}" {} \;
           done
           find build/bd-to-avp/macos/app -name "*.dylib" -exec codesign --force --sign - {} \;
-          poetry run briefcase package -i "${{ secrets.DEV_ID }}"
+          uv run python scripts/briefcase_app.py package -i "${{ secrets.DEV_ID }}"
       - name: Upload log on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -88,9 +97,9 @@ jobs:
         run: |
           echo "GITHUB_REF: ${{ github.ref }}"
           BRANCH_NAME="${GITHUB_REF#refs/heads/}"
-          RELEASE_NAME=$(echo "$BRANCH_NAME" | perl -pe 's/^(.)/\U$1/')
+          RELEASE_NAME="$(echo "$BRANCH_NAME" | perl -pe 's/^(.)/\U$1/')"
           echo "Release Name Set To: $RELEASE_NAME"
-          echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
+          echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2

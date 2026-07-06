@@ -11,12 +11,12 @@ from bd_to_avp.modules.util import get_pyproject_data
 
 
 def load_app_info_from_pyproject(app: QApplication) -> None:
-    poetry, briefcase = get_pyproject_data()
-    if not (poetry and briefcase):
-        raise FileNotFoundError("poetry and briefcase data not found in pyproject.toml")
+    project, briefcase = get_pyproject_data()
+    if not (project and briefcase):
+        raise FileNotFoundError("project and briefcase data not found in pyproject.toml")
 
     try:
-        app.setApplicationName(poetry["name"])
+        app.setApplicationName(project["name"])
         app.setOrganizationName(briefcase["organization"])
         app.setApplicationVersion(config.app.code_version)
         app.setOrganizationDomain(briefcase["bundle"])
@@ -27,10 +27,10 @@ def load_app_info_from_pyproject(app: QApplication) -> None:
         icon_absolute_path = Path(__file__).parent.parent / icon_path
         app.setWindowIcon(QIcon(icon_absolute_path.as_posix()))
 
-        app.setProperty("authors", poetry.get("authors", []))
-        app.setProperty("url", poetry.get("homepage"))
+        app.setProperty("authors", project.get("authors", []))
+        app.setProperty("url", project.get("urls", {}).get("Homepage"))
     except KeyError as error:
-        raise KeyError(f"Key not found in pyproject.toml: {error}")
+        raise KeyError(f"Key not found in pyproject.toml: {error}") from error
 
 
 class OutputHandler(io.TextIOBase):
@@ -39,7 +39,8 @@ class OutputHandler(io.TextIOBase):
 
     def write(self, text: str) -> int:
         if text:
-            sys.__stdout__.write(text)
+            if sys.__stdout__ is not None:
+                sys.__stdout__.write(text)
 
             if self.emit_signal is not None:
                 self.emit_signal(text.rstrip("\n"))

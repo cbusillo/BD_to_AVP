@@ -63,7 +63,7 @@ def remove_folder_if_exists(folder_path: Path) -> None:
 
 def prepare_output_folder_for_source(disc_name: str) -> Path:
     output_path = config.output_root_path / disc_name
-    if config.start_stage == list(Stage)[0]:
+    if config.start_stage == next(iter(Stage)):
         remove_folder_if_exists(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
     return output_path

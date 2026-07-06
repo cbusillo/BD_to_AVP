@@ -1,0 +1,56 @@
+---
+name: CI
+
+"on":
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: macos-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-groups --python 3.12
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run mypy bd_to_avp
+
+      - name: Import smoke
+        run: >-
+          uv run python -c
+          "import bd_to_avp; import bd_to_avp.__main__; import bd_to_avp.app"
+
+      - name: Build Python package
+        run: uv build
+
+      - name: Briefcase create smoke
+        run: uv run python scripts/briefcase_app.py create --no-input
+
+      - name: Briefcase build smoke
+        run: uv run python scripts/briefcase_app.py build --no-input

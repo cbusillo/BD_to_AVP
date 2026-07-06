@@ -45,7 +45,7 @@ def extract_subtitle_to_srt(mkv_path: Path) -> None:
 
     sub_options = Options(overwrite=True, one_per_lang=False, keep_temp_files=config.keep_files)
 
-    spinner = Spinner(f"Sup subtitles extraction and SRT conversion")
+    spinner = Spinner("Sup subtitles extraction and SRT conversion")
     spinner_thread = threading.Thread(target=spinner.start)
     spinner_thread.start()
 

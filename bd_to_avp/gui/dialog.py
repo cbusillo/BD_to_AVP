@@ -84,7 +84,6 @@ class AboutDialog(QDialog):
         layout.addWidget(authors_label)
 
     def add_readme_label(self, layout: QVBoxLayout) -> None:
-
         if not self.readme_url:
             return
 
@@ -163,7 +162,6 @@ class AboutDialog(QDialog):
         layout.addWidget(description_label)
 
     def add_close_button(self, layout: QVBoxLayout) -> None:
-
         button_layout = QHBoxLayout()
         button_layout.addStretch(1)
         close_button = QPushButton("Close", self)

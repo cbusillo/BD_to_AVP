@@ -14,7 +14,6 @@ def extract_mvc_and_audio(
     video_output_path: Path,
     audio_output_path: Path,
 ) -> None:
-
     stream = ffmpeg.input(str(input_path))
 
     video_stream = ffmpeg.output(stream["v:0"], f"file:{video_output_path}", c="copy", bsf="h264_mp4toannexb")
