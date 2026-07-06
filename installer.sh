@@ -44,7 +44,27 @@ echo "Updating Homebrew..."
 
 
 echo "Installing dependencies..."
-"$BREW_PATH/brew" install python@3.12  2>/dev/null || handle_error "Failed to install dependencies"
+"$BREW_PATH/brew" install ffmpeg gpac mkvtoolnix python@3.12 tesseract 2>/dev/null || handle_error "Failed to install dependencies"
+
+if ! command -v makemkvcon &>/dev/null; then
+    echo "Installing MakeMKV..."
+    "$BREW_PATH/brew" install --cask --no-quarantine makemkv 2>/dev/null || true
+fi
+
+if ! command -v makemkvcon &>/dev/null; then
+    echo "MakeMKV command-line tools were not found."
+    echo "Install MakeMKV from https://www.makemkv.com/ or repair your Homebrew MakeMKV cask before converting discs."
+fi
+
+if ! command -v wine &>/dev/null || ! command -v wineboot &>/dev/null; then
+    echo "Installing Wine..."
+    "$BREW_PATH/brew" install --cask --no-quarantine wine-stable 2>/dev/null || true
+fi
+
+if ! command -v wine &>/dev/null || ! command -v wineboot &>/dev/null; then
+    echo "Wine command-line tools were not found."
+    echo "Install or repair Wine before converting MVC 3D Blu-ray video. The Homebrew wine-stable cask is deprecated and may require manual replacement."
+fi
 
 
 echo "Creating a virtual environment for BD_to_AVP..."

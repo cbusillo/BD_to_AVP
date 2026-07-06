@@ -120,6 +120,7 @@ class Config:
     ]
     BREW_PACKAGES_TO_INSTALL: ClassVar[list[str]] = [
         "ffmpeg",
+        "gpac",
         "tesseract",
         "mkvtoolnix",
     ]
@@ -160,8 +161,7 @@ class Config:
     FRIM_PATH = SCRIPT_PATH_BIN / "FRIM_x64_version_1.31" / "x64"
     FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
     SPATIAL_MEDIA_PATH = SCRIPT_PATH_BIN / "spatial-media-kit-tool"
-    MP4BOX_VERSION = "2.2.1"
-    MP4BOX_PATH = Path("/Applications/GPAC.app/Contents/MacOS/MP4Box")
+    MP4BOX_PATH = HOMEBREW_PREFIX_BIN / "MP4Box"
     FX_UPSCALE_PATH = SCRIPT_PATH_BIN / "fx-upscale"
 
     FINAL_FILE_TAG = "_AVP"
