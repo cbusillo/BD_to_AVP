@@ -4,7 +4,7 @@ import sys
 import tomllib
 
 from enum import Enum, auto
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import ClassVar
 
@@ -66,13 +66,13 @@ class StageEnumAction(argparse.Action):
 class Config:
     class App:
         def __init__(self) -> None:
-            poetry, briefcase = get_pyproject_data()
-
             try:
-                self.fullname = briefcase["project_name"]
-                self.shortname = poetry["name"]
-            except KeyError as error:
-                raise KeyError(f"Key not found in pyproject.toml: {error}") from error
+                project, briefcase = get_pyproject_data()
+                self.fullname = briefcase.get("project_name", "3D Blu-ray to Vision pro")
+                self.shortname = project.get("name", "bd_to_avp")
+            except FileNotFoundError:
+                self.fullname = "3D Blu-ray to Vision pro"
+                self.shortname = "bd_to_avp"
 
             self.config_path = Path.home() / "Library" / "Application Support" / self.shortname
             self.config_file = (self.config_path / "config.ini").with_suffix(".ini")
@@ -93,8 +93,10 @@ class Config:
 
                 return pyproject_data["project"]["version"]
 
-            project_version = version(__package__.split(".")[0])
-            return project_version
+            try:
+                return version(self.shortname)
+            except PackageNotFoundError:
+                return "0.0.0"
 
         def load_version_from_file(self) -> str | None:
             config_file = configparser.ConfigParser()
