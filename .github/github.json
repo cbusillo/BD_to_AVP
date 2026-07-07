@@ -5,6 +5,30 @@
     "preferredMergeMethod": "merge",
     "allowedMergeMethods": ["merge"]
   },
+  "branchProtection": {
+    "main": {
+      "system": "classic",
+      "requiresPullRequest": true,
+      "requiredStatusChecks": ["validate"],
+      "requiredApprovals": 0,
+      "enforceAdmins": true,
+      "blocksForcePushes": true,
+      "blocksDeletion": true,
+      "requiresConversationResolution": true
+    },
+    "release": {
+      "system": "ruleset",
+      "rulesetName": "protect-release",
+      "target": "refs/heads/release",
+      "requiresPullRequest": true,
+      "allowedMergeMethods": ["merge"],
+      "requiredStatusChecks": ["validate"],
+      "requiredApprovals": 0,
+      "blocksForcePushes": true,
+      "blocksDeletion": true,
+      "requiresConversationResolution": true
+    }
+  },
   "docs": {
     "overview": "README.md",
     "packageManifest": "pyproject.toml",
