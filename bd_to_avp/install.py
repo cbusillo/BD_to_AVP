@@ -246,9 +246,6 @@ def manage_brew_package(
 
 def build_brew_command(packages: list[str], cask: bool = False, operation: str = "install") -> list[str]:
     brew_command = ["/opt/homebrew/bin/brew", operation, "--force"]
-    if operation == "install":
-        brew_command.append("--no-quarantine")
-
     if cask:
         brew_command.append("--cask")
 
