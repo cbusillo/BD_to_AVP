@@ -55,9 +55,6 @@ def create_mvc_and_audio(
             audio_output_path,
         )
 
-    # if not config.keep_files and mkv_output_path and config.source_path != mkv_output_path:
-    #     mkv_output_path.unlink(missing_ok=True)
-
     return audio_output_path, video_output_path
 
 
