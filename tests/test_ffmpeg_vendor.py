@@ -25,9 +25,10 @@ class VendorFfmpegTests(unittest.TestCase):
 
             output_path = vendor_ffmpeg_macos.extract_binary(
                 vendor_ffmpeg_macos.BinaryAsset(
-                    "ffmpeg",
-                    vendor_ffmpeg_macos.sha256(archive_path),
-                    FAKE_BINARY_SHA256,
+                    name="ffmpeg",
+                    url="https://example.invalid/ffmpeg.zip",
+                    zip_sha256=vendor_ffmpeg_macos.sha256(archive_path),
+                    binary_sha256=FAKE_BINARY_SHA256,
                 ),
                 archive_path,
                 output_dir,
@@ -48,7 +49,10 @@ class VendorFfmpegTests(unittest.TestCase):
                 archive.writestr("ffprobe", b"binary")
 
             asset = vendor_ffmpeg_macos.BinaryAsset(
-                "ffprobe", vendor_ffmpeg_macos.sha256(archive_path), FAKE_BINARY_SHA256
+                name="ffprobe",
+                url="https://example.invalid/ffprobe.zip",
+                zip_sha256=vendor_ffmpeg_macos.sha256(archive_path),
+                binary_sha256=FAKE_BINARY_SHA256,
             )
 
             with patch("scripts.vendor_ffmpeg_macos.download") as download:
@@ -58,6 +62,31 @@ class VendorFfmpegTests(unittest.TestCase):
             self.assertEqual(output_path, output_dir / "ffprobe")
             self.assertTrue(output_path.exists())
 
+    def test_load_manifest_builds_asset_urls(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "ffmpeg.toml"
+            manifest_path.write_text(
+                "\n".join(
+                    [
+                        'version = "8.1.2"',
+                        'base_url = "https://example.invalid/ffmpeg"',
+                        'license_mode = "GPLv3"',
+                        'build = "test build"',
+                        "",
+                        "[[assets]]",
+                        'name = "ffmpeg"',
+                        f'zip_sha256 = "{"0" * 64}"',
+                        f'binary_sha256 = "{"1" * 64}"',
+                    ]
+                )
+            )
+
+            manifest = vendor_ffmpeg_macos.load_manifest(manifest_path)
+
+        self.assertEqual(manifest.version, "8.1.2")
+        self.assertEqual(manifest.license_mode, "GPLv3")
+        self.assertEqual(manifest.assets[0].url, "https://example.invalid/ffmpeg/ffmpeg.zip")
+
     def test_archive_checksum_mismatch_raises(self) -> None:
         with tempfile.NamedTemporaryFile() as archive_file:
             archive_path = Path(archive_file.name)
@@ -65,6 +94,13 @@ class VendorFfmpegTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "Checksum mismatch"):
                 vendor_ffmpeg_macos.verify_archive(archive_path, "0" * 64)
+
+    def test_download_rejects_non_https_urls(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "ffmpeg.zip"
+
+            with self.assertRaisesRegex(ValueError, "HTTPS"):
+                vendor_ffmpeg_macos.download("http://example.invalid/ffmpeg.zip", destination)
 
     def test_binary_checksum_mismatch_raises(self) -> None:
         with tempfile.NamedTemporaryFile() as binary_file:
