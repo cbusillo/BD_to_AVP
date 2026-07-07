@@ -138,6 +138,20 @@ class DependencyVerificationTests(unittest.TestCase):
     def test_required_casks_only_include_makemkv(self) -> None:
         self.assertEqual(install.get_required_casks(), ["makemkv"])
 
+    def test_required_formulae_skip_ffmpeg_when_bundled_tools_exist(self) -> None:
+        with (
+            patch.object(install.config, "FFMPEG_PATH", Path(__file__)),
+            patch.object(install.config, "FFPROBE_PATH", Path(__file__)),
+        ):
+            self.assertNotIn("ffmpeg", install.get_required_formulae())
+
+    def test_required_formulae_include_ffmpeg_when_bundled_tools_are_missing(self) -> None:
+        with (
+            patch.object(install.config, "FFMPEG_PATH", Path("/missing/ffmpeg")),
+            patch.object(install.config, "FFPROBE_PATH", Path("/missing/ffprobe")),
+        ):
+            self.assertIn("ffmpeg", install.get_required_formulae())
+
     def test_native_mvc_helper_repairs_missing_execute_bit(self) -> None:
         with tempfile.NamedTemporaryFile() as helper_file:
             helper_path = Path(helper_file.name)

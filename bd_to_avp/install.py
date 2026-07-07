@@ -96,7 +96,9 @@ def install_deps() -> None:
         if not check_is_package_installed(package):
             manage_brew_package(package, sudo_env, True)
 
-    manage_brew_package(config.BREW_PACKAGES_TO_INSTALL, sudo_env)
+    required_formulae = get_required_formulae()
+    if required_formulae:
+        manage_brew_package(required_formulae, sudo_env)
 
     verify_dependency_binaries()
 
@@ -123,6 +125,12 @@ def verify_dependency_binaries() -> None:
 
 def get_required_casks() -> list[str]:
     return config.BREW_CASKS_TO_INSTALL
+
+
+def get_required_formulae() -> list[str]:
+    if config.FFMPEG_PATH.exists() and config.FFPROBE_PATH.exists():
+        return [package for package in config.BREW_PACKAGES_TO_INSTALL if package != "ffmpeg"]
+    return config.BREW_PACKAGES_TO_INSTALL
 
 
 def ensure_native_mvc_splitter_executable() -> bool:

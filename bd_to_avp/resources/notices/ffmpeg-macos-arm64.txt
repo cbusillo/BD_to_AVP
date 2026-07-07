@@ -1,0 +1,33 @@
+FFmpeg and FFprobe macOS arm64 binaries
+
+BD_to_AVP packages FFmpeg and FFprobe as separate command-line executables for
+video probing, extraction, filtering, and encoding.
+
+Vendored binary source:
+- Project: FFmpeg
+- Version: 8.1.2
+- Platform: macOS arm64 static executables
+- Download base: https://ffmpeg.martin-riedl.de/download/macos/arm64/1783011502_8.1.2
+- FFmpeg archive SHA256: ef1aa60006c7b77ce170c1608c08d8e4ba1c30c5746f2ac986ded932d0ac2c3c
+- FFprobe archive SHA256: c39787f4af7a3932502d2d48db6f6feaaa836b48a73ef78c32cc3285df61dfaf
+- FFmpeg executable SHA256: eaf91238e104dd0e262bc6510e25061855cc99a6955a721b0ac99660d58c473d
+- FFprobe executable SHA256: ed9dc5871914b466b96b402c9ec0ba68ce4f836e72faa464b1b4e279835bd4a6
+
+The vendored build is GPL-enabled. This is compatible with BD_to_AVP's
+GPL-3.0-or-later license, but downstream redistributors must preserve FFmpeg's
+applicable license obligations and corresponding-source access.
+
+Embedded build configuration reported by `ffmpeg -version` / `ffprobe -version`:
+
+--prefix=/Volumes/ffmpeg_arm64/out --pkg-config-flags=--static --extra-version='https://www.martin-riedl.de' --enable-gray --enable-libxml2 --enable-version3 --enable-gpl --enable-openssl --enable-libfreetype --enable-fontconfig --enable-libharfbuzz --enable-libsnappy --enable-libsrt --enable-libvmaf --enable-libass --enable-libklvanc --enable-libzimg --enable-libzvbi --enable-libaom --enable-libdav1d --enable-libopenh264 --enable-libopenjpeg --enable-librav1e --enable-libsvtav1 --enable-libvpx --enable-libvvenc --enable-libwebp --enable-libx264 --enable-libx265 --enable-libmp3lame --enable-libopus --enable-libvorbis --enable-libtheora
+
+FFmpeg source and license information:
+- Source: https://ffmpeg.org/download.html
+- Source tag: https://github.com/FFmpeg/FFmpeg/tree/n8.1.2
+- License overview: https://ffmpeg.org/legal.html
+- Upstream license file: https://github.com/FFmpeg/FFmpeg/blob/master/LICENSE.md
+- GNU GPL v3 text: https://www.gnu.org/licenses/gpl-3.0.txt
+
+The vendoring script is `scripts/vendor_ffmpeg_macos.py`. It downloads the
+pinned archives, verifies the SHA256 checksums above, extracts `ffmpeg` and
+`ffprobe` into `bd_to_avp/bin`, and sets executable bits for packaging.

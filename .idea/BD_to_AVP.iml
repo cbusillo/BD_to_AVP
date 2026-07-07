@@ -10,7 +10,7 @@
       <excludeFolder url="file://$MODULE_DIR$/logs" />
       <excludePattern pattern="*.lock" />
     </content>
-    <orderEntry type="inheritedJdk" />
+    <orderEntry type="jdk" jdkName="uv (BD_to_AVP)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>
