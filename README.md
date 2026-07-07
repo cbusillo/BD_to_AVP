@@ -48,7 +48,11 @@ Ensure the following are installed on your Mac *(If not using the Quick Install 
 - **[MP4Box]**: A multimedia packager available for Windows, Mac, and Linux.
 - **[MKVToolNix]**: A set of tools to create, alter, and inspect Matroska files.
 
-## Manual Installation (Out of date)
+Current release note: BD_to_AVP still uses MakeMKV for Blu-ray title extraction and Wine to run FRIMDecode64.exe for
+MVC 3D splitting. The project is investigating native replacements, but this release focuses on making the existing
+pipeline install and fail clearly.
+
+## Manual Installation
 
 To set up your macOS environment for video processing, including creating and handling 3D video content, follow these
 steps to install the necessary tools using Homebrew and manual installation. This includes the installation of Homebrew
@@ -62,12 +66,21 @@ DVD to MKV, spatial-media-kit-tool for handling spatial media, and MP4Box for mu
 # Install Homebrew
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# Install FFmpeg, MakeMKV, MP4Box, mkvtoolnix and Python 3.12
-brew install ffmpeg makemkv mp4box mkvtoolnix python@3.12 --no-quarantine 
+# Install Homebrew formula dependencies. MP4Box is provided by gpac.
+brew install ffmpeg gpac mkvtoolnix python@3.12 tesseract
 
-# Install Wine
-brew tap homebrew/cask-versions
-brew install --cask --no-quarantine wine-stable
+# Install MakeMKV. Homebrew may still provide a cask, but if Gatekeeper blocks it,
+# install the current macOS build from https://www.makemkv.com/ and make sure
+# makemkvcon is available in your PATH.
+brew install --cask makemkv
+xattr -dr com.apple.quarantine /Applications/MakeMKV.app 2>/dev/null || true
+
+# Install Wine. BD_to_AVP currently uses Wine to run FRIMDecode64.exe for MVC splitting.
+# The Homebrew wine-stable cask is deprecated, so manual Wine installation may be
+# required if this command stops working.
+brew install --cask wine-stable
+xattr -dr com.apple.quarantine "/Applications/Wine Stable.app" 2>/dev/null || true
+xattr -dr com.apple.quarantine /Applications/Wine.app 2>/dev/null || true
 
 # Ensure Python 3.12 is correctly installed then create a virtual environment
 python3.12 -m pip install --upgrade pip
