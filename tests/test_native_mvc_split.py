@@ -111,6 +111,39 @@ class NativeMvcSelectionTests(unittest.TestCase):
         self.assertEqual(result, (Path("left.mov"), Path("right.mov")))
         native_split.assert_called_once_with(Path("movie_mvc.h264"), Path("left.mov"), Path("right.mov"), disc_info, "")
 
+    def test_split_uses_frim_fallback_for_10_bit_sources(self) -> None:
+        disc_info = DiscInfo(name="Sample", color_depth=10)
+        process = Mock()
+        process.wait.return_value = 0
+
+        with tempfile.NamedTemporaryFile() as helper_file:
+            helper_path = Path(helper_file.name)
+            helper_path.chmod(0o755)
+
+            with (
+                patch.object(video.config, "EDGE264_TEST_PATH", helper_path),
+                patch.object(video.config, "source_path", Path("source.mkv")),
+                patch.object(video.config, "keep_files", True),
+                patch.object(video.config, "swap_eyes", False),
+                patch.object(video.config, "WINE_PATH", Path("wine")),
+                patch.object(video.config, "FRIMDECODE_PATH", Path("FRIMDecode64.exe")),
+                patch.object(video.config, "HOMEBREW_PREFIX_BIN", Path("/opt/homebrew/bin")),
+                patch.object(video.config, "left_right_bitrate", 12),
+                patch.object(video.config, "software_encoder", False),
+                patch.object(video.config, "frame_rate", ""),
+                patch.object(video.config, "resolution", ""),
+                patch("bd_to_avp.modules.video.split_mvc_to_stereo_native") as native_split,
+                patch("bd_to_avp.modules.video.ensure_legacy_frim_available"),
+                patch("bd_to_avp.modules.video.temporary_fifo", return_value=_FakeFifos()),
+                patch("bd_to_avp.modules.video.run_ffmpeg_async", return_value=process),
+                patch("bd_to_avp.modules.video.run_command") as run_command,
+                patch("bd_to_avp.modules.video.atexit.register"),
+            ):
+                video.split_mvc_to_stereo(Path("movie_mvc.h264"), Path("left.mov"), Path("right.mov"), disc_info, "")
+
+        native_split.assert_not_called()
+        self.assertEqual(run_command.call_args.args[1], "FRIM to split MVC to stereo.")
+
     def test_split_keeps_frim_fallback_for_mts_sources_when_native_helper_is_missing(self) -> None:
         disc_info = DiscInfo(name="Sample")
         process = Mock()

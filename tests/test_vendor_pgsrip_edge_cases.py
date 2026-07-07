@@ -7,6 +7,7 @@ from bd_to_avp.vendor.pgsrip.media import PgsSubtitleItem
 from bd_to_avp.vendor.pgsrip.mkv import Mkv, MkvTrack
 from bd_to_avp.vendor.pgsrip.options import Options
 from bd_to_avp.vendor.pgsrip.ripper import PgsToSrtRipper
+from bd_to_avp.vendor.pgsrip.utils import to_time
 
 
 class MkvTrackOrderingTests(unittest.TestCase):
@@ -40,6 +41,12 @@ class MkvTrackOrderingTests(unittest.TestCase):
 
 
 class PgsSubtitleItemTimestampTests(unittest.TestCase):
+    def test_zero_valued_timestamp_converts_to_subrip_zero(self) -> None:
+        timestamp = to_time(0)
+
+        self.assertIsNotNone(timestamp)
+        self.assertEqual(str(timestamp), "00:00:00,000")
+
     def test_zero_valued_next_start_is_available_for_end_repair(self) -> None:
         item = _subtitle_item(start=-5000, end=-5000)
         next_item = _subtitle_item(start=0, end=12000)
