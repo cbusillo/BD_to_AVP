@@ -69,19 +69,6 @@ if ! command -v makemkvcon &>/dev/null; then
     handle_error "MakeMKV command-line tools were not found after installation. Install MakeMKV from https://www.makemkv.com/ or repair your Homebrew MakeMKV cask before converting discs."
 fi
 
-if ! command -v wine &>/dev/null || ! command -v wineboot &>/dev/null; then
-    echo "Installing Wine..."
-    "$BREW_PATH/brew" install --cask wine-stable || handle_error "Failed to install Wine cask"
-fi
-
-clear_quarantine "/Applications/Wine Stable.app"
-clear_quarantine "/Applications/Wine.app"
-
-if ! command -v wine &>/dev/null || ! command -v wineboot &>/dev/null; then
-    handle_error "Wine command-line tools were not found after installation. Install or repair Wine before converting MVC 3D Blu-ray video. The Homebrew wine-stable cask is deprecated and may require manual replacement."
-fi
-
-
 echo "Creating a virtual environment for BD_to_AVP..."
 VENV_PATH="$HOME/.bd_to_avp_venv"
 python3.12 -m venv "$VENV_PATH" || handle_error "Failed to create a virtual environment"
@@ -104,14 +91,6 @@ fi
 
 ln -s "$EXECUTABLE_PATH" "$SYSTEM_WIDE_PATH" || handle_error "Failed to link BD_to_AVP executable system-wide"
 echo "BD_to_AVP is now accessible system-wide as 'bd-to-avp'"
-
-echo "Installing Rosetta 2 (if required)..."
-if arch -x86_64 true 2>/dev/null; then
-    echo "Rosetta 2 support detected."
-else
-    echo "Rosetta 2 not detected, attempting installation."
-    /usr/sbin/softwareupdate --install-rosetta --agree-to-license
-fi
 
 echo "BD_to_AVP environment setup complete. Refresh your terminal's environment to use new paths."
 echo "1. Refresh environment: source $HOME/.zshrc"

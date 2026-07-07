@@ -111,10 +111,8 @@ class NativeMvcSelectionTests(unittest.TestCase):
         self.assertEqual(result, (Path("left.mov"), Path("right.mov")))
         native_split.assert_called_once_with(Path("movie_mvc.h264"), Path("left.mov"), Path("right.mov"), disc_info, "")
 
-    def test_split_uses_frim_fallback_for_10_bit_sources(self) -> None:
+    def test_split_rejects_10_bit_sources(self) -> None:
         disc_info = DiscInfo(name="Sample", color_depth=10)
-        process = Mock()
-        process.wait.return_value = 0
 
         with tempfile.NamedTemporaryFile() as helper_file:
             helper_path = Path(helper_file.name)
@@ -124,55 +122,29 @@ class NativeMvcSelectionTests(unittest.TestCase):
                 patch.object(video.config, "EDGE264_TEST_PATH", helper_path),
                 patch.object(video.config, "source_path", Path("source.mkv")),
                 patch.object(video.config, "keep_files", True),
-                patch.object(video.config, "swap_eyes", False),
-                patch.object(video.config, "WINE_PATH", Path("wine")),
-                patch.object(video.config, "FRIMDECODE_PATH", Path("FRIMDecode64.exe")),
-                patch.object(video.config, "HOMEBREW_PREFIX_BIN", Path("/opt/homebrew/bin")),
-                patch.object(video.config, "left_right_bitrate", 12),
-                patch.object(video.config, "software_encoder", False),
-                patch.object(video.config, "frame_rate", ""),
-                patch.object(video.config, "resolution", ""),
                 patch("bd_to_avp.modules.video.split_mvc_to_stereo_native") as native_split,
-                patch("bd_to_avp.modules.video.ensure_legacy_frim_available"),
-                patch("bd_to_avp.modules.video.temporary_fifo", return_value=_FakeFifos()),
-                patch("bd_to_avp.modules.video.run_ffmpeg_async", return_value=process),
-                patch("bd_to_avp.modules.video.run_command") as run_command,
-                patch("bd_to_avp.modules.video.atexit.register"),
             ):
-                video.split_mvc_to_stereo(Path("movie_mvc.h264"), Path("left.mov"), Path("right.mov"), disc_info, "")
+                with self.assertRaisesRegex(RuntimeError, "8-bit Blu-ray 3D MVC sources only"):
+                    video.split_mvc_to_stereo(
+                        Path("movie_mvc.h264"), Path("left.mov"), Path("right.mov"), disc_info, ""
+                    )
 
         native_split.assert_not_called()
-        self.assertEqual(run_command.call_args.args[1], "FRIM to split MVC to stereo.")
 
-    def test_split_keeps_frim_fallback_for_mts_sources_when_native_helper_is_missing(self) -> None:
+    def test_split_rejects_sources_when_native_helper_is_missing(self) -> None:
         disc_info = DiscInfo(name="Sample")
-        process = Mock()
-        process.wait.return_value = 0
 
         with (
             patch.object(video.config, "EDGE264_TEST_PATH", Path("/missing/edge264_test")),
             patch.object(video.config, "source_path", Path("source.m2ts")),
             patch.object(video.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
             patch.object(video.config, "keep_files", True),
-            patch.object(video.config, "swap_eyes", False),
-            patch.object(video.config, "WINE_PATH", Path("wine")),
-            patch.object(video.config, "FRIMDECODE_PATH", Path("FRIMDecode64.exe")),
-            patch.object(video.config, "HOMEBREW_PREFIX_BIN", Path("/opt/homebrew/bin")),
-            patch.object(video.config, "left_right_bitrate", 12),
-            patch.object(video.config, "software_encoder", False),
-            patch.object(video.config, "frame_rate", ""),
-            patch.object(video.config, "resolution", ""),
             patch("bd_to_avp.modules.video.split_mvc_to_stereo_native") as native_split,
-            patch("bd_to_avp.modules.video.ensure_legacy_frim_available"),
-            patch("bd_to_avp.modules.video.temporary_fifo", return_value=_FakeFifos()),
-            patch("bd_to_avp.modules.video.run_ffmpeg_async", return_value=process),
-            patch("bd_to_avp.modules.video.run_command") as run_command,
-            patch("bd_to_avp.modules.video.atexit.register"),
         ):
-            video.split_mvc_to_stereo(Path("movie_mvc.h264"), Path("left.mov"), Path("right.mov"), disc_info, "")
+            with self.assertRaisesRegex(RuntimeError, "native MVC splitter is missing"):
+                video.split_mvc_to_stereo(Path("movie_mvc.h264"), Path("left.mov"), Path("right.mov"), disc_info, "")
 
         native_split.assert_not_called()
-        self.assertEqual(run_command.call_args.args[1], "FRIM to split MVC to stereo.")
 
     def test_has_native_mvc_splitter_repairs_missing_execute_bit(self) -> None:
         with tempfile.NamedTemporaryFile() as helper_file:
@@ -183,15 +155,6 @@ class NativeMvcSelectionTests(unittest.TestCase):
                 self.assertTrue(video.has_native_mvc_splitter())
 
             self.assertTrue(helper_path.stat().st_mode & 0o111)
-
-    def test_frim_path_raises_clear_error_when_legacy_tools_are_missing(self) -> None:
-        with (
-            patch.object(video.config, "WINE_PATH", Path("/missing/wine")),
-            patch.object(video.config, "FRIMDECODE_PATH", Path("/missing/FRIMDecode64.exe")),
-            patch.object(video.config, "HOMEBREW_PREFIX_BIN", Path("/missing")),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "legacy Wine/FRIM MVC splitter"):
-                video.ensure_legacy_frim_available()
 
     def test_native_split_raises_when_ffmpeg_fails(self) -> None:
         splitter = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=-15)
@@ -209,14 +172,6 @@ class NativeMvcSelectionTests(unittest.TestCase):
                 )
 
         splitter.terminate.assert_called_once()
-
-
-class _FakeFifos:
-    def __enter__(self) -> tuple[Path, Path]:
-        return Path("left_fifo"), Path("right_fifo")
-
-    def __exit__(self, *_args) -> None:
-        return None
 
 
 class _FakeProcess:

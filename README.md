@@ -38,12 +38,9 @@ Ensure the following are installed on your Mac *(If not using the Quick Install 
 
 - **Apple Silicon [Mac]**: A Mac with Apple Silicon, such as the M1, M1 Pro, or M1 Max
 - **[macOS Sonoma]**: The latest version of macOS.
-- **[Rosetta 2]**: A compatibility layer allowing Intel-based applications to run on Apple Silicon Macs.
 - **[Python] 3.12**: The latest version of Python.
 - **[Homebrew]**: The missing package manager for macOS (or Linux).
 - **[FFmpeg]**: A complete, cross-platform solution to record, convert, and stream audio and video.
-- **[Wine]**: A free and open-source compatibility layer allowing Windows programs to run on Unix-like operating
-  systems.
 - **[MakeMKV]**: For converting disc video content into MKV files.
 - **[spatial-media-kit-tool]**: A tool for injecting 360° metadata into video files.
 - **[MP4Box]**: A multimedia packager available for Windows, Mac, and Linux.
@@ -51,19 +48,16 @@ Ensure the following are installed on your Mac *(If not using the Quick Install 
 
 Current release note: BD_to_AVP still uses MakeMKV for Blu-ray title extraction. Extracted MVC `.h264` video, including
 MVC video extracted from direct `.mts`/`.m2ts` sources, now uses a bundled native Apple Silicon MVC splitter when
-available. The legacy Wine/FRIMDecode64.exe path is retained as a fallback when the native helper is unavailable.
+available. Native MVC splitting supports 8-bit Blu-ray 3D MVC sources only.
 
 ## Manual Installation
 
 To set up your macOS environment for video processing, including creating and handling 3D video content, follow these
 steps to install the necessary tools using Homebrew and manual installation. This includes the installation of Homebrew
-itself,FFmpeg for video encoding and decoding, Wine for running Windows applications, MakeMKV for ripping Blu-ray and
-DVD to MKV, spatial-media-kit-tool for handling spatial media, and MP4Box for multimedia packaging.
+itself, FFmpeg for video encoding and decoding, MakeMKV for ripping Blu-ray and DVD to MKV, spatial-media-kit-tool for
+handling spatial media, and MP4Box for multimedia packaging.
 
 ```bash
-# Install Rosetta 2
-/usr/sbin/softwareupdate --install-rosetta --agree-to-license
-
 # Install Homebrew
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
@@ -75,13 +69,6 @@ brew install ffmpeg gpac mkvtoolnix python@3.12 tesseract
 # makemkvcon is available in your PATH.
 brew install --cask makemkv
 xattr -dr com.apple.quarantine /Applications/MakeMKV.app 2>/dev/null || true
-
-# Install Wine. BD_to_AVP currently uses Wine to run FRIMDecode64.exe for MVC splitting.
-# The Homebrew wine-stable cask is deprecated, so manual Wine installation may be
-# required if this command stops working.
-brew install --cask wine-stable
-xattr -dr com.apple.quarantine "/Applications/Wine Stable.app" 2>/dev/null || true
-xattr -dr com.apple.quarantine /Applications/Wine.app 2>/dev/null || true
 
 # Ensure Python 3.12 is correctly installed then create a virtual environment
 python3.12 -m pip install --upgrade pip
@@ -258,8 +245,6 @@ Big thanks to:
 
 [edge264-mvc]: https://github.com/jens-duttke/edge264-mvc
 
-[Wine]: https://www.winehq.org/
-
 [Homebrew]: https://brew.sh/
 
 [Python]: https://www.python.org/
@@ -267,8 +252,6 @@ Big thanks to:
 [Mac]: https://www.apple.com/mac/
 
 [macOS Sonoma]:https://apps.apple.com/us/app/macos-sonoma/id6450717509?mt=12
-
-[Rosetta 2]: https://support.apple.com/en-us/HT211861
 
 [MKVToolNix]: https://mkvtoolnix.download/
 

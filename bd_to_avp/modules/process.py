@@ -33,7 +33,7 @@ def process(gui_start_stage: Stage) -> None:
             config.source_path = source
             try:
                 process_each()
-            except (ValueError, FileExistsError, subprocess.CalledProcessError):
+            except (RuntimeError, ValueError, FileExistsError, subprocess.CalledProcessError):
                 continue
             finally:
                 config.source_path = None

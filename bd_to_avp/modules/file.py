@@ -1,10 +1,8 @@
-import os
 import shutil
 import subprocess
 
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator
 
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.command import run_command
@@ -38,21 +36,6 @@ def find_largest_file_with_extensions(folder: Path, extensions: list[str]) -> Pa
         return None
 
     return max(files, key=lambda x: x.stat().st_size)
-
-
-@contextmanager
-def temporary_fifo(*names: str) -> Generator[list[Path], None, None]:
-    if not names:
-        raise ValueError("At least one FIFO name must be provided.")
-    fifos = [Path(f"/tmp/{name}") for name in names]
-    try:
-        for fifo in fifos:
-            fifo.unlink(missing_ok=True)
-            os.mkfifo(fifo)
-        yield fifos
-    finally:
-        for fifo in fifos:
-            fifo.unlink()
 
 
 def remove_folder_if_exists(folder_path: Path) -> None:
