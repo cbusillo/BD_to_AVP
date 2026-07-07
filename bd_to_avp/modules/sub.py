@@ -5,7 +5,7 @@ from pathlib import Path
 import ffmpeg
 import requests
 from babelfish import Language
-from pgsrip import Mkv, Options, pgsrip
+from bd_to_avp.vendor.pgsrip import Mkv, Options, pgsrip
 
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.command import Spinner
