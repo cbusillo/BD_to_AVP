@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Callable, ClassVar
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QFont, QTextCursor
@@ -40,7 +40,7 @@ class MainWindow(QMainWindow):
     START_PROCESSING_TEXT = "Start Processing (⌘+P)"
     STOP_PROCESSING_TEXT = "Stop Processing (⌘+P)"
     MAIN_WIDGET_MIN_WIDTH = 300
-    SPLITTER_INITIAL_SIZES = [400, 400]
+    SPLITTER_INITIAL_SIZES: ClassVar[list[int]] = [400, 400]
     SPLITTER_MINIMUM_SIZE = 300
     WINDOW_GEOMETRY = (100, 100, 800, 600)
     LAYOUT_SPACING = 5
@@ -174,7 +174,6 @@ class MainWindow(QMainWindow):
         self.upscale_quality_spinbox.spinbox.valueChanged.connect(self.update_linked_quality)
 
     def create_misc_options(self, config_layout: QVBoxLayout) -> None:
-
         self.crop_black_bars_checkbox = self.create_checkbox("Crop Black Bars", config.crop_black_bars)
         self.swap_eyes_checkbox = self.create_checkbox("Swap Eyes", config.swap_eyes)
         self.keep_files_checkbox = self.create_checkbox("Keep Temporary Files", config.keep_files)
@@ -455,7 +454,10 @@ class MainWindow(QMainWindow):
 
     def finished_processing(self) -> None:
         time_elapsed = formatted_time_elapsed(self.process_start_time)
-        message = f"✅ Processing completed in {time_elapsed} with version {config.app.code_version}.  You can now play from the Files or Screenlit app on the AVP ✅"
+        message = (
+            f"✅ Processing completed in {time_elapsed} with version {config.app.code_version}. "
+            "You can now play from the Files or Screenlit app on the AVP ✅"
+        )
         self.processing_output_textedit.append(message)
         self.process_button.setText(self.START_PROCESSING_TEXT)
         self.notify_user_with_sound("Glass")

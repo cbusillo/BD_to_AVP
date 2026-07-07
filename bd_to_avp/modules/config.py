@@ -1,11 +1,11 @@
 import argparse
 import configparser
 import sys
-import tomllib
 
 from enum import Enum, auto
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import ClassVar
 
 from bd_to_avp.modules.util import get_pyproject_data
 
@@ -65,13 +65,13 @@ class StageEnumAction(argparse.Action):
 class Config:
     class App:
         def __init__(self) -> None:
-            poetry, briefcase = get_pyproject_data()
-
             try:
-                self.fullname = briefcase["project_name"]
-                self.shortname = poetry["name"]
-            except KeyError as error:
-                raise KeyError(f"Key not found in pyproject.toml: {error}")
+                project, briefcase = get_pyproject_data()
+                self.fullname = briefcase.get("project_name", "3D Blu-ray to Vision pro")
+                self.shortname = project.get("name", "bd_to_avp")
+            except FileNotFoundError:
+                self.fullname = "3D Blu-ray to Vision pro"
+                self.shortname = "bd_to_avp"
 
             self.config_path = Path.home() / "Library" / "Application Support" / self.shortname
             self.config_file = (self.config_path / "config.ini").with_suffix(".ini")
@@ -85,15 +85,16 @@ class Config:
 
         @property
         def code_version(self) -> str:
-            pyproject_path = Path("pyproject.toml")
-            if pyproject_path.exists():
-                with open(pyproject_path, "rb") as pyproject_file:
-                    pyproject_data = tomllib.load(pyproject_file)
+            try:
+                project, _ = get_pyproject_data()
+                return project["version"]
+            except (FileNotFoundError, KeyError):
+                pass
 
-                return pyproject_data["tool"]["poetry"]["version"]
-
-            project_version = version(__package__.split(".")[0])
-            return project_version
+            try:
+                return version(self.shortname)
+            except PackageNotFoundError:
+                return "0.0.0"
 
         def load_version_from_file(self) -> str | None:
             config_file = configparser.ConfigParser()
@@ -113,16 +114,17 @@ class Config:
             with open(self.config_file, "w") as config_file:
                 config_parser.write(config_file)
 
-    BREW_CASKS_TO_INSTALL = [
+    BREW_CASKS_TO_INSTALL: ClassVar[list[str]] = [
         "makemkv",
         "wine-stable",
     ]
-    BREW_PACKAGES_TO_INSTALL = [
+    BREW_PACKAGES_TO_INSTALL: ClassVar[list[str]] = [
         "ffmpeg",
+        "gpac",
         "tesseract",
         "mkvtoolnix",
     ]
-    PROCESS_NAMES_TO_KILL = [
+    PROCESS_NAMES_TO_KILL: ClassVar[list[str]] = [
         "ffmpeg",
         "makemkvcon",
         "wine",
@@ -131,12 +133,12 @@ class Config:
         "MP4Box",
         "fx-upscale",
     ]
-    MKV_ERROR_CODES = [
+    MKV_ERROR_CODES: ClassVar[list[str]] = [
         "corrupt or invalid",
         "video frame timecode differs",
         "secondary stream video frame timecode differs",
     ]
-    MKV_ERROR_FILTERS = [
+    MKV_ERROR_FILTERS: ClassVar[list[str]] = [
         "which is less than minimum title length",
         "Debug logging",
         "AnyDVD",
@@ -159,13 +161,12 @@ class Config:
     FRIM_PATH = SCRIPT_PATH_BIN / "FRIM_x64_version_1.31" / "x64"
     FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
     SPATIAL_MEDIA_PATH = SCRIPT_PATH_BIN / "spatial-media-kit-tool"
-    MP4BOX_VERSION = "2.2.1"
-    MP4BOX_PATH = Path("/Applications/GPAC.app/Contents/MacOS/MP4Box")
+    MP4BOX_PATH = HOMEBREW_PREFIX_BIN / "MP4Box"
     FX_UPSCALE_PATH = SCRIPT_PATH_BIN / "fx-upscale"
 
     FINAL_FILE_TAG = "_AVP"
-    IMAGE_EXTENSIONS = [".iso", ".img", ".bin"]
-    MTS_EXTENSIONS = [".mts", ".m2ts"]
+    IMAGE_EXTENSIONS: ClassVar[list[str]] = [".iso", ".img", ".bin"]
+    MTS_EXTENSIONS: ClassVar[list[str]] = [".mts", ".m2ts"]
 
     def __init__(self) -> None:
         self.app = self.App()
@@ -236,14 +237,14 @@ class Config:
                     setattr(self, key, Path(value))
 
         if config_parser.has_section("Options"):
-            for key, value in config_parser.items("Options"):
+            for key, _value in config_parser.items("Options"):
                 if key in self.__dict__:
                     attribute_type = type(getattr(self, key))
-                    if attribute_type == bool:
+                    if attribute_type is bool:
                         setattr(self, key, config_parser.getboolean("Options", key))
-                    elif attribute_type == int:
+                    elif attribute_type is int:
                         setattr(self, key, config_parser.getint("Options", key))
-                    elif attribute_type == Stage:
+                    elif attribute_type is Stage:
                         stage_value = config_parser.get("Options", key).split(" - ")[0]
                         setattr(self, key, Stage.get_stage(int(stage_value)))
                     else:

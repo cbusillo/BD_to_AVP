@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QHBoxLayout, QLa
 from github import Github, GithubException, UnknownObjectException
 from github.GitRelease import GitRelease
 from packaging import version
+from packaging.version import InvalidVersion
 
 
 # noinspection PyAttributeOutsideInit
@@ -69,7 +70,7 @@ class AboutDialog(QDialog):
             return
         authors_str = ""
         for author in authors:
-            name, email = author.split("<")
+            name, _, email = author.partition("<")
             email = email.rstrip(">")
             if email:
                 authors_str += f"{name} <a href='mailto:{email}'>{email}</a> "
@@ -84,7 +85,6 @@ class AboutDialog(QDialog):
         layout.addWidget(authors_label)
 
     def add_readme_label(self, layout: QVBoxLayout) -> None:
-
         if not self.readme_url:
             return
 
@@ -126,14 +126,16 @@ class AboutDialog(QDialog):
 
             latest_release_version = latest_release.tag_name.lstrip("v")
             latest_release_url = latest_release.html_url
-            if version.parse(latest_release_version) > version.parse(self.app.applicationVersion()):
+            latest_version = version.parse(latest_release_version)
+            app_version = version.parse(self.app.applicationVersion())
+            if latest_version > app_version:
                 self.update_label.setText(
                     f"New version available: <a href='{latest_release_url}'>v{latest_release_version}</a>"
                 )
 
             else:
                 self.update_label.setText(f"You are using the latest <a href='{latest_release_url}'>version</a>.")
-        except GithubException:
+        except (GithubException, InvalidVersion):
             self.update_label.setText("Failed to check for updates.")
 
     def fetch_latest_release(self) -> GitRelease | None:
@@ -163,7 +165,6 @@ class AboutDialog(QDialog):
         layout.addWidget(description_label)
 
     def add_close_button(self, layout: QVBoxLayout) -> None:
-
         button_layout = QHBoxLayout()
         button_layout.addStretch(1)
         close_button = QPushButton("Close", self)
