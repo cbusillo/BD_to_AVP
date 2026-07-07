@@ -5,7 +5,7 @@ name: Package with Briefcase and Create Release
   workflow_dispatch:
     inputs:
       source_ref:
-        description: Branch, tag, or SHA to package
+        description: Branch or tag ref to package; tag older commits instead of using raw SHAs
         required: true
       release_name:
         description: GitHub release name prefix
@@ -131,19 +131,22 @@ jobs:
           set -euo pipefail
           VERSION="${{ steps.extract_version.outputs.version }}"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            PACKAGE_VERSION="${VERSION}${RELEASE_TAG_SUFFIX_INPUT}"
             RELEASE_NAME="$RELEASE_NAME_INPUT"
             PRERELEASE=true
             MAKE_LATEST=false
-            RELEASE_TAG="v${VERSION}${RELEASE_TAG_SUFFIX_INPUT}"
+            RELEASE_TAG="v${PACKAGE_VERSION}"
           else
+            PACKAGE_VERSION="$VERSION"
             BRANCH_NAME="${GITHUB_REF#refs/heads/}"
             RELEASE_NAME="$(echo "$BRANCH_NAME" | perl -pe 's/^(.)/\U$1/')"
             PRERELEASE=false
             MAKE_LATEST=true
-            RELEASE_TAG="v${VERSION}"
+            RELEASE_TAG="v${PACKAGE_VERSION}"
           fi
 
           {
+            echo "package_version=$PACKAGE_VERSION"
             echo "prerelease=$PRERELEASE"
             echo "make_latest=$MAKE_LATEST"
             echo "release_name=$RELEASE_NAME"
@@ -153,6 +156,25 @@ jobs:
             echo "$RELEASE_NOTES_INPUT"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+      - name: Apply prerelease package version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          PACKAGE_VERSION: ${{ steps.release_metadata.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          awk -v version="$PACKAGE_VERSION" '
+            /^\[/ { section=$0 }
+            section == "[project]" && /^version = / {
+              print "version = \"" version "\""
+              next
+            }
+            section == "[tool.briefcase]" && /^version = / {
+              print "version = \"" version "\""
+              next
+            }
+            { print }
+          ' pyproject.toml > pyproject.toml.tmp
+          mv pyproject.toml.tmp pyproject.toml
       - name: Package application for GitHub
         run: |
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$(pwd)/build.keychain"
@@ -187,7 +209,7 @@ jobs:
           make_latest: ${{ steps.release_metadata.outputs.make_latest }}
           tag_name: ${{ steps.release_metadata.outputs.release_tag }}
           target_commitish: ${{ steps.release_metadata.outputs.target_commitish }}
-          name: ${{ steps.release_metadata.outputs.release_name }} v${{ steps.extract_version.outputs.version }}
+          name: ${{ steps.release_metadata.outputs.release_name }} v${{ steps.release_metadata.outputs.package_version }}
           files: |
             dist/*.zip
             dist/*.dmg
