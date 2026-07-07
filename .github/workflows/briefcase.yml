@@ -84,7 +84,10 @@ jobs:
         run: |
           KEYCHAIN_PATH="$(pwd)/build.keychain"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          mapfile -t USER_KEYCHAINS < <(security list-keychains -d user | sed 's/[" ]//g')
+          security list-keychains -d user -s "$KEYCHAIN_PATH" "${USER_KEYCHAINS[@]}"
           security default-keychain -s "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           # Import both certificates
           echo "${{ secrets.CERTIFICATE }}" | base64 --decode > app_certificate.p12
@@ -135,6 +138,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       - name: Package application for GitHub
         run: |
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$(pwd)/build.keychain"
           uv run python scripts/briefcase_app.py create
           uv run python scripts/briefcase_app.py build
           find . -name QtWebEngineCore.framework -type d | while read -r dir; do
