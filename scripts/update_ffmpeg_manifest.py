@@ -29,6 +29,14 @@ class UpdatedManifest:
     assets: list[UpdatedAsset]
 
 
+def updated_asset_from_existing(asset: vendor_ffmpeg_macos.BinaryAsset) -> UpdatedAsset:
+    return UpdatedAsset(
+        name=asset.name,
+        zip_sha256=asset.zip_sha256,
+        binary_sha256=asset.binary_sha256,
+    )
+
+
 def build_candidate_manifest(
     *,
     version: str,
@@ -60,6 +68,29 @@ def build_candidate_manifest(
         license_mode=license_mode,
         build=build,
         assets=assets,
+    )
+
+
+def merge_manifest_assets(
+    old_manifest: vendor_ffmpeg_macos.VendorManifest,
+    new_manifest: UpdatedManifest,
+) -> UpdatedManifest:
+    if new_manifest.base_url != old_manifest.base_url and len(new_manifest.assets) < len(old_manifest.assets):
+        raise ValueError("Partial FFmpeg manifest updates must keep the existing base URL")
+
+    updated_assets = {asset.name: asset for asset in new_manifest.assets}
+    merged_assets = [
+        updated_assets.get(asset.name, updated_asset_from_existing(asset)) for asset in old_manifest.assets
+    ]
+    known_asset_names = {asset.name for asset in old_manifest.assets}
+    merged_assets.extend(asset for asset in new_manifest.assets if asset.name not in known_asset_names)
+
+    return UpdatedManifest(
+        version=new_manifest.version,
+        base_url=new_manifest.base_url,
+        license_mode=new_manifest.license_mode,
+        build=new_manifest.build,
+        assets=merged_assets,
     )
 
 
@@ -130,6 +161,7 @@ def main() -> None:
         build=args.build,
         asset_names=asset_names,
     )
+    new_manifest = merge_manifest_assets(old_manifest, new_manifest)
     write_manifest(args.manifest, new_manifest)
     print(f"Updated FFmpeg manifest: {old_manifest.version} -> {new_manifest.version}")
     print(f"Old base URL: {old_manifest.base_url}")

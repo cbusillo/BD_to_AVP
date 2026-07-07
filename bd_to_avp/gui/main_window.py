@@ -57,6 +57,7 @@ class MainWindow(QMainWindow):
         self.processing_thread.srt_creation_error.connect(self.handle_srt_creation_error)
         self.processing_thread.file_exists_error.connect(self.handle_file_exists_error)
         self.processing_thread.process_completed.connect(self.finished_processing)
+        self.processing_thread.process_failed.connect(self.reset_processing_button)
 
     def setup_window(self) -> None:
         app = QApplication.instance()
@@ -463,6 +464,9 @@ class MainWindow(QMainWindow):
         self.process_button.setText(self.START_PROCESSING_TEXT)
         self.notify_user_with_sound("Glass")
         QMessageBox.information(self, "", message)
+
+    def reset_processing_button(self) -> None:
+        self.process_button.setText(self.START_PROCESSING_TEXT)
 
     def save_config_to_file(self) -> None:
         self.save_config()

@@ -21,6 +21,7 @@ class ProcessingThread(QThread):
     srt_creation_error = Signal(SRTCreationError)
     file_exists_error = Signal(FileExistsError)
     process_completed = Signal()
+    process_failed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -30,21 +31,29 @@ class ProcessingThread(QThread):
 
     def run(self) -> None:
         sys.stdout = self.output_handler  # type: ignore
+        signal_emitted = False
 
         try:
             start_process(self.start_stage)
             self.process_completed.emit()
+            signal_emitted = True
         except MKVCreationError as error:
             self.mkv_creation_error.emit(error)
+            signal_emitted = True
         except SRTCreationError as error:
             self.srt_creation_error.emit(error)
+            signal_emitted = True
         except FileExistsError as error:
             self.file_exists_error.emit(error)
+            signal_emitted = True
         except (RuntimeError, ValueError, KeyError) as error:
             self.error_occurred.emit(error)
+            signal_emitted = True
         finally:
             Spinner.stop_all()
             sys.stdout = sys.__stdout__
+            if not signal_emitted:
+                self.process_failed.emit()
 
     def terminate(self) -> None:
         terminate_process()
