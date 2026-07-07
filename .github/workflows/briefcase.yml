@@ -14,6 +14,10 @@ name: Package with Briefcase and Create Release
       release_notes:
         description: Optional release notes shown before the commit list
         required: false
+      release_tag_suffix:
+        description: Suffix appended to the version tag, for example tester.1
+        required: true
+        default: tester.1
   push:
     branches:
       - release
@@ -103,23 +107,28 @@ jobs:
         env:
           RELEASE_NAME_INPUT: ${{ inputs.release_name }}
           RELEASE_NOTES_INPUT: ${{ inputs.release_notes }}
+          RELEASE_TAG_SUFFIX_INPUT: ${{ inputs.release_tag_suffix }}
         run: |
           set -euo pipefail
+          VERSION="${{ steps.extract_version.outputs.version }}"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             RELEASE_NAME="$RELEASE_NAME_INPUT"
             PRERELEASE=true
             MAKE_LATEST=false
+            RELEASE_TAG="v${VERSION}-${RELEASE_TAG_SUFFIX_INPUT}"
           else
             BRANCH_NAME="${GITHUB_REF#refs/heads/}"
             RELEASE_NAME="$(echo "$BRANCH_NAME" | perl -pe 's/^(.)/\U$1/')"
             PRERELEASE=false
             MAKE_LATEST=true
+            RELEASE_TAG="v${VERSION}"
           fi
 
           {
             echo "prerelease=$PRERELEASE"
             echo "make_latest=$MAKE_LATEST"
             echo "release_name=$RELEASE_NAME"
+            echo "release_tag=$RELEASE_TAG"
             echo "target_commitish=$(git rev-parse HEAD)"
             echo "release_notes<<EOF"
             echo "$RELEASE_NOTES_INPUT"
@@ -156,7 +165,7 @@ jobs:
           draft: false
           prerelease: ${{ steps.release_metadata.outputs.prerelease }}
           make_latest: ${{ steps.release_metadata.outputs.make_latest }}
-          tag_name: v${{ steps.extract_version.outputs.version }}
+          tag_name: ${{ steps.release_metadata.outputs.release_tag }}
           target_commitish: ${{ steps.release_metadata.outputs.target_commitish }}
           name: ${{ steps.release_metadata.outputs.release_name }} v${{ steps.extract_version.outputs.version }}
           files: |

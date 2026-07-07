@@ -69,7 +69,7 @@ class AboutDialog(QDialog):
             return
         authors_str = ""
         for author in authors:
-            name, email = author.split("<")
+            name, _, email = author.partition("<")
             email = email.rstrip(">")
             if email:
                 authors_str += f"{name} <a href='mailto:{email}'>{email}</a> "

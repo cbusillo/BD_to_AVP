@@ -48,7 +48,7 @@ echo "Installing dependencies..."
 
 if ! command -v makemkvcon &>/dev/null; then
     echo "Installing MakeMKV..."
-    "$BREW_PATH/brew" install --cask --no-quarantine makemkv 2>/dev/null || handle_error "Failed to install MakeMKV cask"
+    "$BREW_PATH/brew" install --cask --no-quarantine makemkv || handle_error "Failed to install MakeMKV cask"
 fi
 
 if ! command -v makemkvcon &>/dev/null; then
@@ -57,7 +57,7 @@ fi
 
 if ! command -v wine &>/dev/null || ! command -v wineboot &>/dev/null; then
     echo "Installing Wine..."
-    "$BREW_PATH/brew" install --cask --no-quarantine wine-stable 2>/dev/null || handle_error "Failed to install Wine cask"
+    "$BREW_PATH/brew" install --cask --no-quarantine wine-stable || handle_error "Failed to install Wine cask"
 fi
 
 if ! command -v wine &>/dev/null || ! command -v wineboot &>/dev/null; then
