@@ -67,6 +67,7 @@ class LanguageParamType(click.ParamType):
             return Language.fromietf(value)
         except (BabelfishError, ValueError):
             self.fail(f"{click.style(f'{value}', bold=True)} is not a valid language")
+            return None
 
 
 class AgeParamType(click.ParamType):
