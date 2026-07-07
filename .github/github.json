@@ -54,7 +54,7 @@
       "default": "uv run mypy bd_to_avp"
     },
     "test": {
-      "unitSmoke": "uv run python -m unittest discover -s tests",
+      "unitSmoke": "uv run python -m unittest discover -s tests -t .",
       "importSmoke": "uv run python -c 'import bd_to_avp; import bd_to_avp.__main__; import bd_to_avp.app'",
       "cliSmoke": "uv run bd-to-avp --help"
     },

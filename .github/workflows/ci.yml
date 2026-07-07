@@ -41,7 +41,7 @@ jobs:
         run: uv run mypy bd_to_avp
 
       - name: Unit smoke tests
-        run: uv run python -m unittest discover -s tests
+        run: uv run python -m unittest discover -s tests -t .
 
       - name: Import smoke
         run: >-

@@ -95,6 +95,24 @@ class CaskDetectionTests(unittest.TestCase):
         ):
             self.assertTrue(install.check_is_package_installed("makemkv"))
 
+    def test_installed_cask_with_any_quarantined_app_bundle_needs_repair(self) -> None:
+        brew_process = subprocess.CompletedProcess(
+            ["/opt/homebrew/bin/brew", "list", "--cask", "--formula", "wine-stable"],
+            0,
+            stdout="wine-stable\n",
+            stderr="",
+        )
+        app_paths = [Mock(spec=Path), Mock(spec=Path)]
+        for app_path in app_paths:
+            app_path.exists.return_value = True
+
+        with (
+            patch("bd_to_avp.install.subprocess.run", return_value=brew_process),
+            patch("bd_to_avp.install.get_cask_app_paths", return_value=app_paths),
+            patch("bd_to_avp.install.is_file_quarantined", side_effect=[False, True]),
+        ):
+            self.assertFalse(install.check_is_package_installed("wine-stable"))
+
 
 class DependencyVerificationTests(unittest.TestCase):
     def test_missing_dependency_binaries_raise_clear_error(self) -> None:
