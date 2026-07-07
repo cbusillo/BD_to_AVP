@@ -90,7 +90,7 @@ def install_deps() -> None:
 
     for package in config.BREW_CASKS_TO_INSTALL:
         if not check_is_package_installed(package):
-            manage_brew_package(package, sudo_env, True, "reinstall")
+            manage_brew_package(package, sudo_env, True)
 
     manage_brew_package(config.BREW_PACKAGES_TO_INSTALL, sudo_env)
 
@@ -224,14 +224,7 @@ def manage_brew_package(
     packages_str = " ".join(packages)
     print(f"{operation.title()}ing {packages_str}...")
 
-    brew_command = ["/opt/homebrew/bin/brew", operation, "--force"]
-    if operation in ["install", "reinstall"]:
-        brew_command.append("--no-quarantine")
-
-    if cask:
-        brew_command.append("--cask")
-
-    brew_command += packages
+    brew_command = build_brew_command(packages, cask, operation)
 
     process = subprocess.run(
         brew_command,
@@ -249,6 +242,17 @@ def manage_brew_package(
         on_error_process(packages_str, process)
 
     print(f"{packages_str} {operation}ed.")
+
+
+def build_brew_command(packages: list[str], cask: bool = False, operation: str = "install") -> list[str]:
+    brew_command = ["/opt/homebrew/bin/brew", operation, "--force"]
+    if operation == "install":
+        brew_command.append("--no-quarantine")
+
+    if cask:
+        brew_command.append("--cask")
+
+    return brew_command + packages
 
 
 def update_brew(sudo_env: dict[str, str]) -> None:
