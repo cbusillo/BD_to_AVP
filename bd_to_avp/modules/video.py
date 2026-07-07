@@ -223,12 +223,7 @@ def split_mvc_to_stereo(
 ):
     ffmpeg_left_log = left_output_path.with_suffix(".log")
     ffmpeg_right_log = right_output_path.with_suffix(".log")
-    is_mts = None
-    if config.source_path and config.source_path.suffix.lower() in config.MTS_EXTENSIONS:
-        is_mts = video_input_path
-        video_input_path = config.source_path
-
-    if not is_mts and has_native_mvc_splitter():
+    if has_native_mvc_splitter():
         result = split_mvc_to_stereo_native(
             video_input_path,
             left_output_path,
@@ -241,6 +236,11 @@ def split_mvc_to_stereo(
             left_output_path.with_suffix(".native_mvc.log").unlink(missing_ok=True)
             video_input_path.unlink(missing_ok=True)
         return result
+
+    is_mts = None
+    if config.source_path and config.source_path.suffix.lower() in config.MTS_EXTENSIONS:
+        is_mts = video_input_path
+        video_input_path = config.source_path
 
     ensure_legacy_frim_available()
 

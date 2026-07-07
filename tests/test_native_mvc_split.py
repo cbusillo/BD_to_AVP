@@ -87,13 +87,37 @@ class NativeMvcSelectionTests(unittest.TestCase):
         self.assertEqual(result, (Path("left.mov"), Path("right.mov")))
         native_split.assert_called_once()
 
-    def test_split_keeps_frim_path_for_mts_sources(self) -> None:
+    def test_split_uses_native_helper_for_mts_sources_when_present(self) -> None:
+        disc_info = DiscInfo(name="Sample")
+
+        with tempfile.NamedTemporaryFile() as helper_file:
+            helper_path = Path(helper_file.name)
+            helper_path.chmod(0o755)
+
+            with (
+                patch.object(video.config, "EDGE264_TEST_PATH", helper_path),
+                patch.object(video.config, "source_path", Path("source.m2ts")),
+                patch.object(video.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
+                patch.object(video.config, "keep_files", True),
+                patch(
+                    "bd_to_avp.modules.video.split_mvc_to_stereo_native",
+                    return_value=(Path("left.mov"), Path("right.mov")),
+                ) as native_split,
+            ):
+                result = video.split_mvc_to_stereo(
+                    Path("movie_mvc.h264"), Path("left.mov"), Path("right.mov"), disc_info, ""
+                )
+
+        self.assertEqual(result, (Path("left.mov"), Path("right.mov")))
+        native_split.assert_called_once_with(Path("movie_mvc.h264"), Path("left.mov"), Path("right.mov"), disc_info, "")
+
+    def test_split_keeps_frim_fallback_for_mts_sources_when_native_helper_is_missing(self) -> None:
         disc_info = DiscInfo(name="Sample")
         process = Mock()
         process.wait.return_value = 0
 
         with (
-            patch.object(video.config, "EDGE264_TEST_PATH", Mock(exists=Mock(return_value=True))),
+            patch.object(video.config, "EDGE264_TEST_PATH", Path("/missing/edge264_test")),
             patch.object(video.config, "source_path", Path("source.m2ts")),
             patch.object(video.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
             patch.object(video.config, "keep_files", True),
