@@ -125,7 +125,7 @@ class PgsToSrtRipper:
         self.omp_thread_limit = options.max_workers
         self.oem = options.tesseract_oem or TesseractEngineMode.NEURAL
         self.psm = options.tesseract_psm or TesseractPageSegmentationMode.SINGLE_UNIFORM_BLOCK_OF_TEXT
-        max_height = max([item.height for item in self.pgs.items]) // 2
+        max_height = max([item.height for item in self.pgs.items], default=0) // 2
         self.gap = (max_height // 2 + 30, max_height // 2 + 100)
         self.keep_temp_files = options.keep_temp_files
 

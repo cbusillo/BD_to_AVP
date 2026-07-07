@@ -19,7 +19,7 @@ class MkvPgs(Pgs):
 
     @classmethod
     def read_data(cls, media_path: MediaPath, track_id: int, temp_folder: str):
-        lang_ext = f'.{str(media_path.language)}' if media_path.language else ''
+        lang_ext = f'.{media_path.language!s}' if media_path.language else ''
         sup_file = os.path.join(temp_folder, f'{track_id}{lang_ext}.sup')
         cmd = ['mkvextract', str(media_path), 'tracks', f'{track_id}:{sup_file}']
         check_output(cmd)
@@ -66,10 +66,10 @@ class MkvTrack:
 
     @property
     def forced(self):
-        return self.properties.get('forced_track')
+        return bool(self.properties.get('forced_track', False))
 
     def __repr__(self):
-        return f'<{self.__class__.__name__} [{str(self)}]>'
+        return f'<{self.__class__.__name__} [{self!s}]>'
 
     def __str__(self):
         return f'{self.id}:{self.type}:{self.codec}:{self.language}:{self.enabled}:{self.forced}'
@@ -86,8 +86,7 @@ class Mkv(Media):
     def get_pgs_medias(self, options: Options):
         tracks = [t for t in self.tracks
                   if t.type == 'subtitles' and t.codec == 'HDMV PGS' and t.enabled]
-        tracks.sort(key=lambda x: x.forced)
-        tracks.sort(key=lambda x: x.id)
+        tracks.sort(key=lambda x: (x.forced, x.id))
         selected_languages: typing.Dict[Language, int] = {}
         for t in tracks:
             language = t.language

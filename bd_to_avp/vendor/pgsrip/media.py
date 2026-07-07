@@ -111,8 +111,8 @@ class PgsSubtitleItem:
         if self.start is None:
             logger.warning('Corrupted %r: No Start timestamp', self)
             valid = False
-        elif not self.end or self.end <= self.start:
-            if next_item and next_item.start and self.start + 10000 >= next_item.start:
+        elif self.end is None or self.end <= self.start:
+            if next_item and next_item.start is not None and self.start + 10000 >= next_item.start:
                 self.end = max(self.start + 1, next_item.start - 1)
                 logger.info('Fix applied for %r: Subtitle end timestamp was fixed', self)
             else:
@@ -130,7 +130,8 @@ class PgsSubtitleItem:
         return f'<{self.__class__.__name__} [{self}]>'
 
     def __str__(self):
-        return f'{self.media_path} [{self.start} --> {self.end or ""}]'
+        end = "" if self.end is None else self.end
+        return f'{self.media_path} [{self.start} --> {end}]'
 
 
 class Pgs:
