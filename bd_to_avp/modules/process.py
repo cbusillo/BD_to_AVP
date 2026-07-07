@@ -3,7 +3,7 @@ import subprocess
 
 from wakepy.modes import keep
 
-from bd_to_avp import install
+from bd_to_avp import preflight
 from bd_to_avp.modules.audio import create_transcoded_audio_file
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.container import create_muxed_file, create_mvc_and_audio
@@ -34,7 +34,7 @@ def process(gui_start_stage: Stage) -> None:
             config.source_path = source
             try:
                 process_each()
-            except install.DependencyPreflightError:
+            except preflight.DependencyPreflightError:
                 raise
             except (RuntimeError, ValueError, FileExistsError, subprocess.CalledProcessError):
                 continue
@@ -48,7 +48,7 @@ def process(gui_start_stage: Stage) -> None:
 
 def process_each() -> None:
     print(f"\nProcessing {config.source_path}")
-    install.verify_runtime_ready()
+    preflight.verify_runtime_ready()
     disc_info = get_disc_and_mvc_video_info()
     output_folder = prepare_output_folder_for_source(disc_info.name)
 

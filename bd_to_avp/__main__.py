@@ -5,7 +5,6 @@ import psutil
 
 from bd_to_avp.app import start_gui
 from bd_to_avp.modules.process import start_process
-from bd_to_avp import install
 from bd_to_avp.modules.config import config
 
 
@@ -31,9 +30,6 @@ def main() -> None:
 
     if not config.app.is_gui:
         config.parse_args()
-
-    if not install.check_install_version():
-        config.app.save_version_from_file()
 
     if config.app.is_gui:
         signal.signal(signal.SIGINT, signal.SIG_DFL)

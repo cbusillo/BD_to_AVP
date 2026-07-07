@@ -144,24 +144,6 @@ class Config:
             except PackageNotFoundError:
                 return "0.0.0"
 
-        def load_version_from_file(self) -> str | None:
-            config_file = configparser.ConfigParser()
-            config_file.read(self.config_file)
-            if "Application" in config_file and "installed_version" in config_file["Application"]:
-                return config_file.get("Application", "installed_version")
-            return None
-
-        def save_version_from_file(self) -> None:
-            config_parser = configparser.ConfigParser()
-            config_parser.read(self.config_file)
-
-            if not config_parser.has_section("Application"):
-                config_parser.add_section("Application")
-            config_parser.set("Application", "installed_version", self.code_version)
-
-            with open(self.config_file, "w") as config_file:
-                config_parser.write(config_file)
-
     PROCESS_NAMES_TO_KILL: ClassVar[list[str]] = [
         "ffmpeg",
         "makemkvcon",
@@ -188,9 +170,6 @@ class Config:
 
     SCRIPT_PATH = SCRIPT_PATH
     SCRIPT_PATH_BIN = SCRIPT_PATH_BIN
-
-    HOMEBREW_PREFIX = HOMEBREW_PREFIX
-    HOMEBREW_PREFIX_BIN = HOMEBREW_PREFIX_BIN
 
     FFMPEG_PATH = resolve_tool_path("ffmpeg")
     FFPROBE_PATH = resolve_tool_path("ffprobe")

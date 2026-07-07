@@ -53,12 +53,10 @@ Runtime tool lookup prefers explicit `BD_TO_AVP_<TOOL>_PATH` environment overrid
 tools already available in `PATH`, and finally the legacy `/opt/homebrew/bin` location. The GUI app uses bundled tools
 where available; the terminal/PyPI version still expects power users to install command-line tools themselves.
 
-## Manual Installation
+## Manual terminal/PyPI dependency setup
 
-To set up your macOS environment for video processing, including creating and handling 3D video content, follow these
-steps to install the necessary tools using Homebrew and manual installation. This includes the installation of Homebrew
-itself, FFmpeg for video encoding and decoding, MakeMKV for ripping Blu-ray and DVD to MKV, spatial-media-kit-tool for
-handling spatial media, and MP4Box for multimedia packaging.
+These steps are for terminal/PyPI users who manage their own command-line tools. GUI users should use the release DMG
+and install MakeMKV from the [MakeMKV] website.
 
 ```bash
 # Install Homebrew
@@ -67,11 +65,8 @@ handling spatial media, and MP4Box for multimedia packaging.
 # Install Homebrew formula dependencies. MP4Box is provided by gpac.
 brew install ffmpeg gpac mkvtoolnix python@3.12 tesseract
 
-# Install MakeMKV. Homebrew may still provide a cask, but if Gatekeeper blocks it,
-# install the current macOS build from https://www.makemkv.com/ and make sure
-# makemkvcon is available in your PATH.
-brew install --cask makemkv
-xattr -dr com.apple.quarantine /Applications/MakeMKV.app 2>/dev/null || true
+# Install the current macOS MakeMKV build from https://www.makemkv.com/.
+# The app bundle is detected automatically from /Applications/MakeMKV.app.
 
 # Ensure Python 3.12 is correctly installed then create a virtual environment
 python3.12 -m pip install --upgrade pip
@@ -81,8 +76,8 @@ python3.12 -m venv ~/.bd_to_avp_venv
 source ~/.bd_to_avp_venv/bin/activate
 pip install bd_to_avp
 
-# Create a symbolic link to the bd-to-avp command
-ln -s ~/.bd_to_avp_venv/bin/bd-to-avp /opt/homebrew/bin/bd-to-avp
+# Run the command from the virtual environment
+bd-to-avp --help
 ```
 
 ## GUI Usage

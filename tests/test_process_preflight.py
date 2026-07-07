@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from bd_to_avp import install
+from bd_to_avp import preflight
 from bd_to_avp.modules import process
 from bd_to_avp.modules.config import Stage
 
@@ -16,8 +16,8 @@ class ProcessPreflightTests(unittest.TestCase):
 
             with (
                 patch.object(process.config, "source_folder_path", source_folder),
-                patch.object(process, "process_each", side_effect=install.DependencyPreflightError("missing tool")),
-                self.assertRaisesRegex(install.DependencyPreflightError, "missing tool"),
+                patch.object(process, "process_each", side_effect=preflight.DependencyPreflightError("missing tool")),
+                self.assertRaisesRegex(preflight.DependencyPreflightError, "missing tool"),
             ):
                 process.process(Stage.CREATE_MKV)
 
