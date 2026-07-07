@@ -163,5 +163,6 @@ def kill_processes_by_name(process_names: list[str]) -> None:
 def kill_process_by_name(process_name: str) -> None:
     try:
         subprocess.run(["pkill", "-f", process_name], check=True)
-    except subprocess.CalledProcessError:
-        pass
+    except subprocess.CalledProcessError as error:
+        if error.returncode != 1:
+            raise

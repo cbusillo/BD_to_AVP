@@ -50,7 +50,7 @@ class MainWindow(QMainWindow):
         self.setup_window()
         self.create_main_layout()
 
-        self.processing_thread = ProcessingThread(main_window=self)
+        self.processing_thread = ProcessingThread(parent=self)
         self.processing_thread.signals.progress_updated.connect(self.update_processing_output)
         self.processing_thread.error_occurred.connect(self.handle_processing_error)
         self.processing_thread.mkv_creation_error.connect(self.handle_mkv_creation_error)
@@ -449,6 +449,7 @@ class MainWindow(QMainWindow):
             )
             self.save_config()
             self.process_start_time = datetime.now()
+        self.processing_thread.start_stage = config.start_stage
         self.processing_thread.start()
         self.process_button.setText(self.STOP_PROCESSING_TEXT)
 
