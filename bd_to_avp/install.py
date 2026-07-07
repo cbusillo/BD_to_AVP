@@ -210,10 +210,10 @@ def check_is_package_installed(package: str) -> bool:
         return False
 
     app_paths = [app_path for app_path in get_cask_app_paths(package) if app_path.exists()]
-    if app_paths and all(not is_file_quarantined(app_path) for app_path in app_paths):
-        return True
+    if not app_paths:
+        return False
 
-    return not app_paths
+    return any(not is_file_quarantined(app_path) for app_path in app_paths)
 
 
 def get_cask_app_paths(package: str) -> list[Path]:
