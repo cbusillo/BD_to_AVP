@@ -136,15 +136,6 @@ def run_ffmpeg_print_errors(stream_spec: Any, message: str, quiet: bool = True, 
         spinner_thread.join()
 
 
-def run_ffmpeg_async(command_list: list[Any], log_path: Path) -> subprocess.Popen:
-    command_list = normalize_command_elements(command_list)
-    if config.output_commands:
-        print(f"Running command:\n{' '.join(str(command) for command in command_list)}")
-    with open(log_path, "w") as log_file:
-        process = subprocess.Popen(command_list, stdout=log_file, stderr=subprocess.STDOUT, text=True)
-    return process
-
-
 def cleanup_process(process: subprocess.Popen) -> None:
     if process.poll() is None:
         process.terminate()

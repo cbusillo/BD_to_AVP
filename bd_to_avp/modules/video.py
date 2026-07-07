@@ -1,4 +1,3 @@
-import atexit
 import os
 import re
 import stat
@@ -10,45 +9,7 @@ import ffmpeg
 
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.disc import DiscInfo
-from bd_to_avp.modules.file import temporary_fifo
-from bd_to_avp.modules.command import cleanup_process, run_command, run_ffmpeg_async
-
-
-def generate_ffmpeg_wrapper_command(
-    input_fifo: Path,
-    output_path: Path,
-    disc_info: DiscInfo,
-    bitrate: int,
-    crop_params: str,
-    software_encoder: bool,
-) -> list[str | Path]:
-    pix_fmt = "yuv420p10le" if disc_info.color_depth == 10 else "yuv420p"
-    stream = ffmpeg.input(
-        str(input_fifo),
-        f="rawvideo",
-        pix_fmt=pix_fmt,
-        s=config.resolution or disc_info.resolution,
-        r=config.frame_rate or disc_info.frame_rate,
-    )
-    if crop_params:
-        stream = ffmpeg.filter(stream, "crop", *crop_params.split(":"))
-
-    if disc_info.is_interlaced:
-        stream = ffmpeg.filter(stream, "bwdif")
-
-    stream = ffmpeg.output(
-        stream,
-        f"file:{output_path}",
-        vcodec="hevc_videotoolbox" if not software_encoder else "libx265",
-        video_bitrate=f"{bitrate}M",
-        bufsize=f"{bitrate * 2}M",
-        tag="hvc1",
-        vprofile="main10" if disc_info.color_depth == 10 else "main",
-        r=config.frame_rate or disc_info.frame_rate,
-    )
-
-    args = ffmpeg.compile(stream, overwrite_output=True)
-    return args
+from bd_to_avp.modules.command import cleanup_process, run_command
 
 
 def has_native_mvc_splitter() -> bool:
@@ -69,17 +30,17 @@ def can_use_native_mvc_splitter(disc_info: DiscInfo) -> bool:
     return disc_info.color_depth == 8 and has_native_mvc_splitter()
 
 
-def ensure_legacy_frim_available() -> None:
-    wineboot_path = config.HOMEBREW_PREFIX_BIN / "wineboot"
-    missing_paths = [path for path in [config.WINE_PATH, wineboot_path, config.FRIMDECODE_PATH] if not path.exists()]
-    if missing_paths:
-        missing_list = "\n".join(f"- {path}" for path in missing_paths)
-        raise RuntimeError(
-            "This source still requires the legacy Wine/FRIM MVC splitter, but required tools are missing:\n"
-            f"{missing_list}\n\n"
-            "Use an MKV/disc/ISO source for the native splitter path, or install Wine/Rosetta manually for legacy "
-            ".mts/.m2ts processing."
+def explain_native_mvc_unavailable(disc_info: DiscInfo) -> str:
+    if disc_info.color_depth != 8:
+        return (
+            "Native MVC splitting supports 8-bit Blu-ray 3D MVC sources only. "
+            f"This source reports {disc_info.color_depth}-bit video and cannot be processed without the removed "
+            "legacy FRIM/Wine path."
         )
+    return (
+        "The bundled native MVC splitter is missing or is not executable. "
+        f"Expected helper at {config.EDGE264_TEST_PATH}. Reinstall BD_to_AVP or repair the app bundle."
+    )
 
 
 def generate_native_mvc_splitter_command(video_input_path: Path) -> list[str | Path]:
@@ -225,8 +186,6 @@ def split_mvc_to_stereo(
     disc_info: DiscInfo,
     crop_params: str,
 ):
-    ffmpeg_left_log = left_output_path.with_suffix(".log")
-    ffmpeg_right_log = right_output_path.with_suffix(".log")
     if can_use_native_mvc_splitter(disc_info):
         result = split_mvc_to_stereo_native(
             video_input_path,
@@ -241,64 +200,7 @@ def split_mvc_to_stereo(
             video_input_path.unlink(missing_ok=True)
         return result
 
-    is_mts = None
-    if config.source_path and config.source_path.suffix.lower() in config.MTS_EXTENSIONS:
-        is_mts = video_input_path
-        video_input_path = config.source_path
-
-    ensure_legacy_frim_available()
-
-    with temporary_fifo("left_fifo", "right_fifo") as (primary_fifo, secondary_fifo):
-        ffmpeg_left_command = generate_ffmpeg_wrapper_command(
-            primary_fifo,
-            left_output_path,
-            disc_info,
-            config.left_right_bitrate,
-            crop_params,
-            config.software_encoder,
-        )
-        ffmpeg_right_command = generate_ffmpeg_wrapper_command(
-            secondary_fifo,
-            right_output_path,
-            disc_info,
-            config.left_right_bitrate,
-            crop_params,
-            config.software_encoder,
-        )
-
-        left_process = run_ffmpeg_async(ffmpeg_left_command, ffmpeg_left_log)
-        right_process = run_ffmpeg_async(ffmpeg_right_command, ffmpeg_right_log)
-
-        frim_command = [
-            config.WINE_PATH,
-            config.FRIMDECODE_PATH,
-            "-ts" if is_mts else None,
-            "-i:mvc",
-            video_input_path,
-            video_input_path if is_mts else None,
-            "-o",
-        ]
-        if config.swap_eyes:
-            frim_command += [secondary_fifo, primary_fifo]
-        else:
-            frim_command += [primary_fifo, secondary_fifo]
-
-        atexit.register(cleanup_process, left_process)
-        atexit.register(cleanup_process, right_process)
-
-        run_command(frim_command, "FRIM to split MVC to stereo.")
-        left_process.wait()
-        right_process.wait()
-
-    if not config.keep_files:
-        left_output_path.with_suffix(".log").unlink(missing_ok=True)
-        right_output_path.with_suffix(".log").unlink(missing_ok=True)
-        if is_mts:
-            is_mts.unlink(missing_ok=True)
-        else:
-            video_input_path.unlink(missing_ok=True)
-
-    return left_output_path, right_output_path
+    raise RuntimeError(explain_native_mvc_unavailable(disc_info))
 
 
 def combine_to_mv_hevc(

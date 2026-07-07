@@ -1,6 +1,5 @@
 import os
 import platform
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -10,12 +9,10 @@ from pathlib import Path
 import requests
 
 from bd_to_avp.modules.config import config
-from bd_to_avp.modules.command import run_command
 
 
 CASK_APP_PATHS = {
     "makemkv": [Path("/Applications/MakeMKV.app")],
-    "wine-stable": [Path("/Applications/Wine Stable.app"), Path("/Applications/Wine.app")],
 }
 
 
@@ -95,8 +92,6 @@ def install_deps() -> None:
     if not check_for_homebrew_in_path():
         add_homebrew_to_path()
 
-    ensure_native_mvc_splitter_executable()
-
     for package in get_required_casks():
         if not check_is_package_installed(package):
             manage_brew_package(package, sudo_env, True)
@@ -105,47 +100,14 @@ def install_deps() -> None:
 
     verify_dependency_binaries()
 
-    if installs_legacy_frim_stack() and not check_rosetta():
-        install_rosetta()
-
-    if installs_legacy_frim_stack():
-        wine_boot()
-
     if pw_file_path:
         pw_file_path.unlink()
 
 
-def check_rosetta() -> bool:
-    process = subprocess.run(
-        ["arch", "-x86_64", "echo", "hello"],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    return process.stdout.strip() == "hello"
-
-
-def install_rosetta() -> None:
-    print("Installing Rosetta...")
-    process = subprocess.run(
-        ["softwareupdate", "--install-rosetta", "--agree-to-license"],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-    if process.returncode != 0:
-        on_error_process("Rosetta", process)
-    print("Rosetta installed.")
-
-
 def verify_dependency_binaries() -> None:
     missing_binaries = [path for path in [config.MAKEMKVCON_PATH, config.MP4BOX_PATH] if not path.exists()]
-    if installs_legacy_frim_stack():
-        missing_binaries.append(config.WINE_PATH)
-        wineboot_path = config.HOMEBREW_PREFIX_BIN / "wineboot"
-        if not wineboot_path.exists():
-            missing_binaries.append(wineboot_path)
+    if not ensure_native_mvc_splitter_executable():
+        missing_binaries.append(config.EDGE264_TEST_PATH)
 
     if not missing_binaries:
         return
@@ -155,17 +117,12 @@ def verify_dependency_binaries() -> None:
         "Dependencies",
         "Required command-line tools are missing after dependency installation:\n"
         f"{missing_list}\n\n"
-        "Install or repair MakeMKV and any required legacy Wine tools, then run this app again. "
-        "MP4Box is provided by the Homebrew gpac formula.",
+        "Install or repair MakeMKV, then run this app again. MP4Box is provided by the Homebrew gpac formula.",
     )
 
 
 def get_required_casks() -> list[str]:
     return config.BREW_CASKS_TO_INSTALL
-
-
-def installs_legacy_frim_stack() -> bool:
-    return "wine-stable" in config.BREW_CASKS_TO_INSTALL
 
 
 def ensure_native_mvc_splitter_executable() -> bool:
@@ -340,27 +297,6 @@ def update_brew(sudo_env: dict[str, str]) -> None:
     print("Homebrew updated.")
 
 
-def wine_boot() -> None:
-    print("Booting Wine...")
-    wineboot_path = config.HOMEBREW_PREFIX_BIN / "wineboot"
-    if not config.WINE_PATH.exists() or not wineboot_path.exists():
-        on_error_string(
-            "Wine",
-            "Wine command-line tools were not found. Install or repair Wine, then run the program again. "
-            "The Homebrew wine-stable cask is deprecated, so manual Wine installation may be required.",
-        )
-    process = subprocess.run(
-        [wineboot_path.as_posix()],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-    if process.returncode != 0:
-        on_error_process("Wine", process)
-    print("Wine booted.")
-
-
 def install_brew(sudo_env: dict[str, str]) -> None:
     print("Installing Homebrew for arm64...")
 
@@ -386,25 +322,3 @@ def install_brew(sudo_env: dict[str, str]) -> None:
         on_error_process("Homebrew", process)
     print("Homebrew installed.")
     brew_install_file_path.unlink()
-
-
-def setup_frim() -> None:
-    wine_prefix = Path(os.environ.get("WINEPREFIX", "~/.wine")).expanduser()
-    frim_destination_path = wine_prefix / "drive_c/UTL/FRIM"
-
-    if frim_destination_path.exists():
-        print(f"{frim_destination_path} already exists. Skipping install.")
-        return
-
-    shutil.copytree(config.FRIM_PATH, frim_destination_path)
-    print(f"Copied FRIM directory to {frim_destination_path}")
-
-    reg_file_path = config.FRIM_PATH / "plugins64.reg"
-    if not reg_file_path.exists():
-        print(f"Registry file {reg_file_path} not found. Skipping registry update.")
-        return
-
-    regedit_command = [config.WINE_PATH, "regedit", reg_file_path]
-    regedit_env = {"WINEPREFIX": str(wine_prefix)}
-    run_command(regedit_command, "Update the Windows registry for FRIM plugins.", regedit_env)
-    print("Updated the Windows registry for FRIM plugins.")

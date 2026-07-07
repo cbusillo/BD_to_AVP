@@ -15,9 +15,9 @@ class BrewCommandTests(unittest.TestCase):
         self.assertNotIn("--no-quarantine", command)
 
     def test_cask_reinstall_command_does_not_use_no_quarantine(self) -> None:
-        command = install.build_brew_command(["wine-stable"], cask=True, operation="reinstall")
+        command = install.build_brew_command(["makemkv"], cask=True, operation="reinstall")
 
-        self.assertEqual(command, ["/opt/homebrew/bin/brew", "reinstall", "--force", "--cask", "wine-stable"])
+        self.assertEqual(command, ["/opt/homebrew/bin/brew", "reinstall", "--force", "--cask", "makemkv"])
         self.assertNotIn("--no-quarantine", command)
 
     def test_formula_install_command_is_not_a_cask_command(self) -> None:
@@ -96,23 +96,22 @@ class CaskDetectionTests(unittest.TestCase):
         ):
             self.assertTrue(install.check_is_package_installed("makemkv"))
 
-    def test_installed_cask_with_any_quarantined_app_bundle_needs_repair(self) -> None:
+    def test_installed_cask_with_quarantined_app_bundle_needs_repair(self) -> None:
         brew_process = subprocess.CompletedProcess(
-            ["/opt/homebrew/bin/brew", "list", "--cask", "--formula", "wine-stable"],
+            ["/opt/homebrew/bin/brew", "list", "--cask", "--formula", "makemkv"],
             0,
-            stdout="wine-stable\n",
+            stdout="makemkv\n",
             stderr="",
         )
-        app_paths = [Mock(spec=Path), Mock(spec=Path)]
-        for app_path in app_paths:
-            app_path.exists.return_value = True
+        app_path = Mock(spec=Path)
+        app_path.exists.return_value = True
 
         with (
             patch("bd_to_avp.install.subprocess.run", return_value=brew_process),
-            patch("bd_to_avp.install.get_cask_app_paths", return_value=app_paths),
-            patch("bd_to_avp.install.is_file_quarantined", side_effect=[False, True]),
+            patch("bd_to_avp.install.get_cask_app_paths", return_value=[app_path]),
+            patch("bd_to_avp.install.is_file_quarantined", return_value=True),
         ):
-            self.assertFalse(install.check_is_package_installed("wine-stable"))
+            self.assertFalse(install.check_is_package_installed("makemkv"))
 
 
 class DependencyVerificationTests(unittest.TestCase):
@@ -123,20 +122,21 @@ class DependencyVerificationTests(unittest.TestCase):
             patch.object(install.config, "HOMEBREW_PREFIX_BIN", fake_homebrew_bin),
             patch.object(install.config, "MAKEMKVCON_PATH", Path("/missing/makemkvcon")),
             patch.object(install.config, "MP4BOX_PATH", Path("/missing/MP4Box")),
-            patch.object(install.config, "WINE_PATH", Path("/missing/wine")),
             self.assertRaisesRegex(ValueError, "Required command-line tools are missing"),
         ):
             install.verify_dependency_binaries()
 
-    def test_declared_frim_fallback_keeps_wine_cask_requirement(self) -> None:
-        with patch.object(install.config, "BREW_CASKS_TO_INSTALL", ["makemkv", "wine-stable"]):
-            self.assertTrue(install.installs_legacy_frim_stack())
-            self.assertEqual(install.get_required_casks(), ["makemkv", "wine-stable"])
+    def test_missing_native_mvc_helper_raises_clear_error(self) -> None:
+        with (
+            patch.object(install.config, "MAKEMKVCON_PATH", Path(__file__)),
+            patch.object(install.config, "MP4BOX_PATH", Path(__file__)),
+            patch.object(install.config, "EDGE264_TEST_PATH", Path("/missing/edge264_test")),
+            self.assertRaisesRegex(ValueError, "edge264_test"),
+        ):
+            install.verify_dependency_binaries()
 
-    def test_removed_frim_fallback_avoids_wine_cask_requirement(self) -> None:
-        with patch.object(install.config, "BREW_CASKS_TO_INSTALL", ["makemkv"]):
-            self.assertFalse(install.installs_legacy_frim_stack())
-            self.assertEqual(install.get_required_casks(), ["makemkv"])
+    def test_required_casks_only_include_makemkv(self) -> None:
+        self.assertEqual(install.get_required_casks(), ["makemkv"])
 
     def test_native_mvc_helper_repairs_missing_execute_bit(self) -> None:
         with tempfile.NamedTemporaryFile() as helper_file:

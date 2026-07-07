@@ -116,7 +116,6 @@ class Config:
 
     BREW_CASKS_TO_INSTALL: ClassVar[list[str]] = [
         "makemkv",
-        "wine-stable",
     ]
     BREW_PACKAGES_TO_INSTALL: ClassVar[list[str]] = [
         "ffmpeg",
@@ -127,8 +126,6 @@ class Config:
     PROCESS_NAMES_TO_KILL: ClassVar[list[str]] = [
         "ffmpeg",
         "makemkvcon",
-        "wine",
-        "FRIMDecode64.exe",
         "spatial-media-kit-tool",
         "MP4Box",
         "fx-upscale",
@@ -157,9 +154,6 @@ class Config:
     HOMEBREW_PREFIX_BIN = HOMEBREW_PREFIX / "bin"
 
     MAKEMKVCON_PATH = Path(HOMEBREW_PREFIX_BIN / "makemkvcon")
-    WINE_PATH = HOMEBREW_PREFIX_BIN / "wine"
-    FRIM_PATH = SCRIPT_PATH_BIN / "FRIM_x64_version_1.31" / "x64"
-    FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
     EDGE264_TEST_PATH = SCRIPT_PATH_BIN / "edge264_test"
     SPATIAL_MEDIA_PATH = SCRIPT_PATH_BIN / "spatial-media-kit-tool"
     MP4BOX_PATH = HOMEBREW_PREFIX_BIN / "MP4Box"
