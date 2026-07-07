@@ -113,7 +113,7 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
 
 
 def get_audio_stream_data(file_path: Path) -> list[dict[str, Any]]:
-    probe = ffmpeg.probe(str(file_path))
+    probe = ffmpeg.probe(str(file_path), cmd=config.FFPROBE_PATH.as_posix())
     if not probe or "streams" not in probe:
         return []
     audio_streams = [stream for stream in probe["streams"] if stream["codec_type"] == "audio"]

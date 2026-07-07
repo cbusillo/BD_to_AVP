@@ -11,6 +11,7 @@ from trakit.api import trakit
 from bd_to_avp.vendor.pgsrip.media import Media, Pgs
 from bd_to_avp.vendor.pgsrip.media_path import MediaPath
 from bd_to_avp.vendor.pgsrip.options import Options
+from bd_to_avp.modules.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ class MkvPgs(Pgs):
     def read_data(cls, media_path: MediaPath, track_id: int, temp_folder: str):
         lang_ext = f'.{media_path.language!s}' if media_path.language else ''
         sup_file = os.path.join(temp_folder, f'{track_id}{lang_ext}.sup')
-        cmd = ['mkvextract', str(media_path), 'tracks', f'{track_id}:{sup_file}']
+        cmd = [config.MKVEXTRACT_PATH, str(media_path), 'tracks', f'{track_id}:{sup_file}']
         check_output(cmd)
         with open(sup_file, mode='rb') as f:
             return f.read()
@@ -78,7 +79,7 @@ class MkvTrack:
 class Mkv(Media):
 
     def __init__(self, path: str):
-        metadata = json.loads(check_output(['mkvmerge', '-i', '-F', 'json', path]))
+        metadata = json.loads(check_output([config.MKVMERGE_PATH, '-i', '-F', 'json', path]))
         tracks = [MkvTrack(t) for t in metadata.get('tracks', [])]
         super().__init__(MediaPath(path), languages={t.language for t in tracks})
         self.tracks = tracks
