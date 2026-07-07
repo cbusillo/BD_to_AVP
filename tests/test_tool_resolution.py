@@ -30,6 +30,21 @@ class ToolResolutionTests(unittest.TestCase):
             ):
                 self.assertEqual(resolve_tool_path("MP4Box", script_bin_path=bin_path), bundled_tool)
 
+    def test_app_local_ffmpeg_wins_over_homebrew_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bin_path = Path(temp_dir)
+            bundled_ffmpeg = bin_path / "ffmpeg"
+            bundled_ffprobe = bin_path / "ffprobe"
+            bundled_ffmpeg.touch()
+            bundled_ffprobe.touch()
+
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch("bd_to_avp.modules.config.shutil.which", side_effect=lambda tool: f"/opt/homebrew/bin/{tool}"),
+            ):
+                self.assertEqual(resolve_tool_path("ffmpeg", script_bin_path=bin_path), bundled_ffmpeg)
+                self.assertEqual(resolve_tool_path("ffprobe", script_bin_path=bin_path), bundled_ffprobe)
+
     def test_path_wins_over_homebrew_fallback(self) -> None:
         with (
             patch.dict(os.environ, {}, clear=True),
