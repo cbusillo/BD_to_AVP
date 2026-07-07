@@ -345,15 +345,21 @@ class ObjectDefinitionSegment(BaseSegment):
         if self.sequence_type != ObjectSequenceType.LAST:
             return from_hex(self.data[4:7])
 
+        return None
+
     @property
     def width(self):
         if self.sequence_type != ObjectSequenceType.LAST:
             return from_hex(self.data[7:9])
 
+        return None
+
     @property
     def height(self):
         if self.sequence_type != ObjectSequenceType.LAST:
             return from_hex(self.data[9:11])
+
+        return None
 
     @property
     def img_data(self):

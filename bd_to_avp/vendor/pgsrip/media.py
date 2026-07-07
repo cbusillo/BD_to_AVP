@@ -73,6 +73,8 @@ class PgsSubtitleItem:
 
             return PgsImage(img_data, palettes)
 
+        return None
+
     @property
     def language(self):
         return self.media_path.language
@@ -190,7 +192,7 @@ class Pgs:
             f.write(f'{new_line.join([str(ds) for ds in display_sets])}')
         with open(os.path.join(self.temp_folder, 'display-sets.json'), mode='w', encoding='utf8') as f:
             json.dump([ds.to_json() for ds in display_sets], f,
-                      indent=2, ensure_ascii=False, default=lambda x: str(x))
+                      indent=2, ensure_ascii=False, default=str)
 
     def __repr__(self):
         return f'<{self.__class__.__name__} [{self}]>'

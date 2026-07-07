@@ -30,9 +30,12 @@ class DebugProgressBar(typing.Generic[T]):
 
     def __iter__(self):
         if not self.debug:
-            return self.progressbar.__iter__()
+            with self.progressbar as progressbar:
+                yield from progressbar
+            return None
 
         yield from self.iterable
+        return None
 
     def __enter__(self):
         if not self.debug:
@@ -47,9 +50,13 @@ class DebugProgressBar(typing.Generic[T]):
         if not self.debug:
             return self.progressbar.__exit__(exc_type, exc, traceback)
 
+        return None
+
     def update(self, n_steps: int, current_item: typing.Optional[T] = None) -> None:
         if not self.debug:
             return self.progressbar.update(n_steps, current_item)
+
+        return None
 
 
 class LanguageParamType(click.ParamType):
