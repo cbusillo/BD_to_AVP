@@ -1,7 +1,6 @@
 import argparse
 import configparser
 import sys
-import tomllib
 
 from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError, version
@@ -86,12 +85,11 @@ class Config:
 
         @property
         def code_version(self) -> str:
-            pyproject_path = Path("pyproject.toml")
-            if pyproject_path.exists():
-                with open(pyproject_path, "rb") as pyproject_file:
-                    pyproject_data = tomllib.load(pyproject_file)
-
-                return pyproject_data["project"]["version"]
+            try:
+                project, _ = get_pyproject_data()
+                return project["version"]
+            except (FileNotFoundError, KeyError):
+                pass
 
             try:
                 return version(self.shortname)

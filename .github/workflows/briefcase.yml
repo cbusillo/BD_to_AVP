@@ -3,10 +3,20 @@ name: Package with Briefcase and Create Release
 
 "on":
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch, tag, or SHA to package
+        required: true
+      release_name:
+        description: GitHub release name prefix
+        required: true
+        default: Prerelease
+      release_notes:
+        description: Optional release notes shown before the commit list
+        required: false
   push:
     branches:
       - release
-      - prerelease
 
 permissions:
   contents: write
@@ -15,7 +25,7 @@ jobs:
   package:
     if: >-
       github.ref == 'refs/heads/release' ||
-      github.ref == 'refs/heads/prerelease'
+      github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     env:
       KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -26,18 +36,29 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: >-
+            ${{ github.event_name == 'workflow_dispatch' &&
+            inputs.source_ref || github.ref }}
       - name: Get commit messages
         id: get_commit_messages
         run: |
-          set -x
+          set -euo pipefail
           git fetch --tags
           echo "github.ref: ${{ github.ref }}"
-          if [ "${{ github.ref }}" = "refs/heads/prerelease" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             LAST_TAG=$(git tag --sort=-v:refname | head -n 1)
           else
             LAST_TAG=$(curl --silent "https://api.github.com/repos/cbusillo/BD_to_AVP/releases/latest" | jq -r .tag_name)
           fi
-          MESSAGES=$(git log --no-merges --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" "$LAST_TAG"..HEAD | grep -v "Bump version")
+          if [ -n "$LAST_TAG" ] && git rev-parse --verify --quiet "$LAST_TAG" >/dev/null; then
+            LOG_RANGE="$LAST_TAG..HEAD"
+          else
+            LOG_RANGE="HEAD"
+          fi
+          MESSAGES=$(git log --no-merges --pretty=format:"- [%h](https://github.com/${{ github.repository }}/commit/%H) %s" "$LOG_RANGE" | grep -v "Bump version" || true)
+          if [ -z "$MESSAGES" ]; then
+            MESSAGES="- No user-facing commits found in this release range."
+          fi
           {
             echo "messages<<EOF"
             echo "$MESSAGES"
@@ -77,6 +98,33 @@ jobs:
           version=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
           echo "Extracted version: '${version}'"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - name: Set release metadata
+        id: release_metadata
+        env:
+          RELEASE_NAME_INPUT: ${{ inputs.release_name }}
+          RELEASE_NOTES_INPUT: ${{ inputs.release_notes }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RELEASE_NAME="$RELEASE_NAME_INPUT"
+            PRERELEASE=true
+            MAKE_LATEST=false
+          else
+            BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+            RELEASE_NAME="$(echo "$BRANCH_NAME" | perl -pe 's/^(.)/\U$1/')"
+            PRERELEASE=false
+            MAKE_LATEST=true
+          fi
+
+          {
+            echo "prerelease=$PRERELEASE"
+            echo "make_latest=$MAKE_LATEST"
+            echo "release_name=$RELEASE_NAME"
+            echo "target_commitish=$(git rev-parse HEAD)"
+            echo "release_notes<<EOF"
+            echo "$RELEASE_NOTES_INPUT"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - name: Package application for GitHub
         run: |
           uv run python scripts/briefcase_app.py create
@@ -92,19 +140,13 @@ jobs:
         with:
           name: briefcase-log
           path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/briefcase.*.build.log
-      - name: Set release name
-        id: set_release_name
-        run: |
-          echo "GITHUB_REF: ${{ github.ref }}"
-          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
-          RELEASE_NAME="$(echo "$BRANCH_NAME" | perl -pe 's/^(.)/\U$1/')"
-          echo "Release Name Set To: $RELEASE_NAME"
-          echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
           body: |
+            ${{ steps.release_metadata.outputs.release_notes }}
+
             Commits:
             ${{ steps.get_commit_messages.outputs.messages }}
             
@@ -112,9 +154,11 @@ jobs:
             
             You can use the terminal version with "/Applications/Blu-ray to AVP.app/Contents/MacOS/Blu-ray to AVP". If you run the binary with any arguments, it will work like the previous terminal app.  No arguments will open the GUI.
           draft: false
-          prerelease: ${{ github.ref != 'refs/heads/release' }}
+          prerelease: ${{ steps.release_metadata.outputs.prerelease }}
+          make_latest: ${{ steps.release_metadata.outputs.make_latest }}
           tag_name: v${{ steps.extract_version.outputs.version }}
-          name: ${{ steps.set_release_name.outputs.release_name }} v${{ steps.extract_version.outputs.version }}
+          target_commitish: ${{ steps.release_metadata.outputs.target_commitish }}
+          name: ${{ steps.release_metadata.outputs.release_name }} v${{ steps.extract_version.outputs.version }}
           files: |
             dist/*.zip
             dist/*.dmg
