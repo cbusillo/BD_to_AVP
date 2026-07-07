@@ -105,10 +105,10 @@ def install_deps() -> None:
 
     verify_dependency_binaries()
 
-    if needs_legacy_frim_stack() and not check_rosetta():
+    if installs_legacy_frim_stack() and not check_rosetta():
         install_rosetta()
 
-    if needs_legacy_frim_stack():
+    if installs_legacy_frim_stack():
         wine_boot()
 
     if pw_file_path:
@@ -141,7 +141,7 @@ def install_rosetta() -> None:
 
 def verify_dependency_binaries() -> None:
     missing_binaries = [path for path in [config.MAKEMKVCON_PATH, config.MP4BOX_PATH] if not path.exists()]
-    if needs_legacy_frim_stack():
+    if installs_legacy_frim_stack():
         missing_binaries.append(config.WINE_PATH)
         wineboot_path = config.HOMEBREW_PREFIX_BIN / "wineboot"
         if not wineboot_path.exists():
@@ -161,13 +161,11 @@ def verify_dependency_binaries() -> None:
 
 
 def get_required_casks() -> list[str]:
-    if needs_legacy_frim_stack():
-        return config.BREW_CASKS_TO_INSTALL
-    return [package for package in config.BREW_CASKS_TO_INSTALL if package != "wine-stable"]
+    return config.BREW_CASKS_TO_INSTALL
 
 
-def needs_legacy_frim_stack() -> bool:
-    return not is_native_mvc_splitter_ready()
+def installs_legacy_frim_stack() -> bool:
+    return "wine-stable" in config.BREW_CASKS_TO_INSTALL
 
 
 def ensure_native_mvc_splitter_executable() -> bool:
