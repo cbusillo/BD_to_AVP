@@ -4,7 +4,7 @@ from pysrt import SubRipTime
 
 
 def from_hex(b: bytes):
-    return int(b.hex(), base=16)
+    return int(b.hex(), base=16) if len(b) > 0 else None
 
 
 def safe_get(b: bytes, i: int, default_value=0):

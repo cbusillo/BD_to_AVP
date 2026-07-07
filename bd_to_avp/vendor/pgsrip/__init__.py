@@ -1,7 +1,11 @@
-"""Vendored pgsrip runtime used for PGS subtitle OCR."""
+"""Vendored pgsrip runtime used for PGS subtitle OCR.
+
+This is a BD_to_AVP-maintained local fork based on pgsrip 0.1.11 with selected
+upstream 0.1.12 runtime fixes and app-specific tool resolution changes.
+"""
 
 __title__ = "pgsrip"
-__version__ = "0.1.11"
+__version__ = "0.1.12+bd_to_avp"
 __short_version__ = "0.1"
 __author__ = "Rato"
 __license__ = "MIT"
