@@ -88,7 +88,7 @@ AGE = AgeParamType()
 @click.option('-A', '--srt-age', type=AGE, help='Filter videos which srt subtitles are newer than AGE, e.g. 12h, 1w2d.')
 @click.option('-f', '--force', is_flag=True, default=False,
               help='re-rip and overwrite existing srt subtitles, even if they already exist')
-@click.option('-a', '--all', is_flag=True, default=False,
+@click.option('--all', is_flag=True, default=False,
               help='rip all tracks for a given language, even another track for that language was already ripped')
 @click.option('-w', '--max-workers', type=click.IntRange(1, 50), default=None, help='Maximum number of threads to use.')
 @click.option('--keep-temp-files', is_flag=True, help='Do not delete temporary files created, '
