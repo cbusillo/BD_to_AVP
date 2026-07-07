@@ -43,17 +43,31 @@ jobs:
           ref: >-
             ${{ github.event_name == 'workflow_dispatch' &&
             inputs.source_ref || github.ref }}
+      - name: Validate release ref
+        id: release_ref
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [[ "$SOURCE_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Manual releases must use a branch or tag ref, not a raw SHA. Tag the commit first or package a branch." >&2
+            exit 1
+          fi
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          else
+            PREVIOUS_TAG=$(curl --silent "https://api.github.com/repos/cbusillo/BD_to_AVP/releases/latest" | jq -r .tag_name)
+          fi
+
+          echo "previous_tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
       - name: Get commit messages
         id: get_commit_messages
         run: |
           set -euo pipefail
           git fetch --tags
           echo "github.ref: ${{ github.ref }}"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            LAST_TAG=$(git tag --sort=-v:refname | head -n 1)
-          else
-            LAST_TAG=$(curl --silent "https://api.github.com/repos/cbusillo/BD_to_AVP/releases/latest" | jq -r .tag_name)
-          fi
+          LAST_TAG="${{ steps.release_ref.outputs.previous_tag }}"
           if [ -n "$LAST_TAG" ] && git rev-parse --verify --quiet "$LAST_TAG" >/dev/null; then
             LOG_RANGE="$LAST_TAG..HEAD"
           else
