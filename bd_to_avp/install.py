@@ -12,6 +12,12 @@ from bd_to_avp.modules.config import config
 from bd_to_avp.modules.command import run_command
 
 
+CASK_APP_PATHS = {
+    "makemkv": [Path("/Applications/MakeMKV.app")],
+    "wine-stable": [Path("/Applications/Wine Stable.app"), Path("/Applications/Wine.app")],
+}
+
+
 def prompt_for_password() -> tuple[Path, dict[str, str]]:
     script = """
     with timeout of 3600 seconds
@@ -200,11 +206,18 @@ def check_is_package_installed(package: str) -> bool:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    app_dir_path = next(Path("/Applications").glob(f"{package.replace('-', ' ')}.app"), None)
-    if package in process.stdout and app_dir_path and app_dir_path.exists() and not is_file_quarantined(app_dir_path):
+    if package not in process.stdout:
+        return False
+
+    app_paths = [app_path for app_path in get_cask_app_paths(package) if app_path.exists()]
+    if app_paths and all(not is_file_quarantined(app_path) for app_path in app_paths):
         return True
 
-    return False
+    return not app_paths
+
+
+def get_cask_app_paths(package: str) -> list[Path]:
+    return CASK_APP_PATHS.get(package, [Path("/Applications") / f"{package.replace('-', ' ')}.app"])
 
 
 def is_file_quarantined(file_path: Path) -> bool:
@@ -214,6 +227,32 @@ def is_file_quarantined(file_path: Path) -> bool:
     except subprocess.CalledProcessError as e:
         print(f"Error checking quarantine status: {e}")
         return False
+
+
+def clear_cask_quarantine(packages: list[str], sudo_env: dict[str, str]) -> None:
+    for package in packages:
+        for app_path in get_cask_app_paths(package):
+            if not app_path.exists() or not is_file_quarantined(app_path):
+                continue
+
+            process = subprocess.run(
+                ["xattr", "-dr", "com.apple.quarantine", app_path.as_posix()],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=sudo_env,
+            )
+            if process.returncode != 0:
+                process = subprocess.run(
+                    ["/usr/bin/sudo", "-A", "xattr", "-dr", "com.apple.quarantine", app_path.as_posix()],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=sudo_env,
+                )
+
+            if process.returncode != 0:
+                on_error_process(f"{package} quarantine cleanup", process)
 
 
 def manage_brew_package(
@@ -240,6 +279,9 @@ def manage_brew_package(
 
     if process.returncode != 0:
         on_error_process(packages_str, process)
+
+    if cask and operation == "install":
+        clear_cask_quarantine(packages, sudo_env)
 
     print(f"{packages_str} {operation}ed.")
 

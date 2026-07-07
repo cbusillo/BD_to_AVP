@@ -6,6 +6,18 @@ handle_error() {
     exit 1
 }
 
+clear_quarantine() {
+    app_path="$1"
+    if [ ! -e "$app_path" ]; then
+        return 0
+    fi
+
+    if xattr -p com.apple.quarantine "$app_path" >/dev/null 2>&1; then
+        echo "Clearing Gatekeeper quarantine from $app_path..."
+        xattr -dr com.apple.quarantine "$app_path" 2>/dev/null || sudo xattr -dr com.apple.quarantine "$app_path" || handle_error "Failed to clear quarantine from $app_path"
+    fi
+}
+
 echo "Checking macOS version and architecture..."
 ARCH=$(uname -m)
 MACOS_VERSION=$(sw_vers -productVersion)
@@ -51,6 +63,8 @@ if ! command -v makemkvcon &>/dev/null; then
     "$BREW_PATH/brew" install --cask makemkv || handle_error "Failed to install MakeMKV cask"
 fi
 
+clear_quarantine "/Applications/MakeMKV.app"
+
 if ! command -v makemkvcon &>/dev/null; then
     handle_error "MakeMKV command-line tools were not found after installation. Install MakeMKV from https://www.makemkv.com/ or repair your Homebrew MakeMKV cask before converting discs."
 fi
@@ -59,6 +73,9 @@ if ! command -v wine &>/dev/null || ! command -v wineboot &>/dev/null; then
     echo "Installing Wine..."
     "$BREW_PATH/brew" install --cask wine-stable || handle_error "Failed to install Wine cask"
 fi
+
+clear_quarantine "/Applications/Wine Stable.app"
+clear_quarantine "/Applications/Wine.app"
 
 if ! command -v wine &>/dev/null || ! command -v wineboot &>/dev/null; then
     handle_error "Wine command-line tools were not found after installation. Install or repair Wine before converting MVC 3D Blu-ray video. The Homebrew wine-stable cask is deprecated and may require manual replacement."
