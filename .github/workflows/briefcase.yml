@@ -89,6 +89,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Set up uv
+        # Trusted toolchain publisher for uv; see CodeQL alert triage from 2026-07-07.
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
@@ -195,7 +196,7 @@ jobs:
           path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/briefcase.*.build.log
       - name: Create Release
         id: create_release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
           body: |
             ${{ steps.release_metadata.outputs.release_notes }}
