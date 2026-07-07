@@ -33,7 +33,6 @@
     "overview": "README.md",
     "packageManifest": "pyproject.toml",
     "lockfile": "uv.lock",
-    "installer": "installer.sh",
     "releaseWorkflows": [
       ".github/workflows/briefcase.yml",
       ".github/workflows/publish-to-pypi.yml"

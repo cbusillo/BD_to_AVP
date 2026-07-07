@@ -8,7 +8,7 @@ import sys
 from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Iterable
 
 from bd_to_avp.modules.util import get_pyproject_data
 
@@ -17,6 +17,7 @@ SCRIPT_PATH = Path(__file__).parent.parent
 SCRIPT_PATH_BIN = SCRIPT_PATH / "bin"
 HOMEBREW_PREFIX = Path("/opt/homebrew")
 HOMEBREW_PREFIX_BIN = HOMEBREW_PREFIX / "bin"
+MAKEMKV_APP_BUNDLE_BIN = Path("/Applications/MakeMKV.app/Contents/MacOS")
 
 
 def tool_env_var(tool_name: str) -> str:
@@ -29,6 +30,7 @@ def resolve_tool_path(
     *,
     env_var: str | None = None,
     bundled_name: str | None = None,
+    extra_paths: Iterable[Path] = (),
     script_bin_path: Path = SCRIPT_PATH_BIN,
     homebrew_bin_path: Path = HOMEBREW_PREFIX_BIN,
 ) -> Path:
@@ -44,7 +46,16 @@ def resolve_tool_path(
     if path_tool:
         return Path(path_tool)
 
+    for extra_path in extra_paths:
+        if extra_path.exists():
+            return extra_path
+
     return homebrew_bin_path / tool_name
+
+
+def resolve_makemkvcon_path() -> Path:
+    app_bundle_tool = MAKEMKV_APP_BUNDLE_BIN / "makemkvcon"
+    return resolve_tool_path("makemkvcon", extra_paths=[app_bundle_tool])
 
 
 class Stage(Enum):
@@ -151,15 +162,6 @@ class Config:
             with open(self.config_file, "w") as config_file:
                 config_parser.write(config_file)
 
-    BREW_CASKS_TO_INSTALL: ClassVar[list[str]] = [
-        "makemkv",
-    ]
-    BREW_PACKAGES_TO_INSTALL: ClassVar[list[str]] = [
-        "ffmpeg",
-        "gpac",
-        "tesseract",
-        "mkvtoolnix",
-    ]
     PROCESS_NAMES_TO_KILL: ClassVar[list[str]] = [
         "ffmpeg",
         "makemkvcon",
@@ -192,7 +194,7 @@ class Config:
 
     FFMPEG_PATH = resolve_tool_path("ffmpeg")
     FFPROBE_PATH = resolve_tool_path("ffprobe")
-    MAKEMKVCON_PATH = resolve_tool_path("makemkvcon")
+    MAKEMKVCON_PATH = resolve_makemkvcon_path()
     MKVEXTRACT_PATH = resolve_tool_path("mkvextract")
     MKVMERGE_PATH = resolve_tool_path("mkvmerge")
     MP4BOX_PATH = resolve_tool_path("MP4Box")

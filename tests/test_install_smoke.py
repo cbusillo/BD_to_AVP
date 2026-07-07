@@ -1,156 +1,130 @@
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from bd_to_avp import install
+from bd_to_avp.modules.config import Stage
 
 
-class BrewCommandTests(unittest.TestCase):
-    def test_cask_install_command_does_not_use_no_quarantine(self) -> None:
-        command = install.build_brew_command(["makemkv"], cask=True)
-
-        self.assertEqual(command, ["/opt/homebrew/bin/brew", "install", "--force", "--cask", "makemkv"])
-        self.assertNotIn("--no-quarantine", command)
-
-    def test_cask_reinstall_command_does_not_use_no_quarantine(self) -> None:
-        command = install.build_brew_command(["makemkv"], cask=True, operation="reinstall")
-
-        self.assertEqual(command, ["/opt/homebrew/bin/brew", "reinstall", "--force", "--cask", "makemkv"])
-        self.assertNotIn("--no-quarantine", command)
-
-    def test_formula_install_command_is_not_a_cask_command(self) -> None:
-        command = install.build_brew_command(["ffmpeg", "gpac"])
-
-        self.assertEqual(command, ["/opt/homebrew/bin/brew", "install", "--force", "ffmpeg", "gpac"])
-        self.assertNotIn("--cask", command)
-
-
-class BrewPackageManagementTests(unittest.TestCase):
-    def test_failed_required_cask_install_raises_before_quarantine_cleanup(self) -> None:
-        failed_process = subprocess.CompletedProcess(
-            ["/opt/homebrew/bin/brew", "install", "--force", "--cask", "makemkv"],
-            1,
-            stdout="",
-            stderr="invalid option",
-        )
-
-        with (
-            patch("bd_to_avp.install.subprocess.run", return_value=failed_process),
-            patch("bd_to_avp.install.clear_cask_quarantine") as clear_cask_quarantine,
-            patch("builtins.print"),
-        ):
-            with self.assertRaises(subprocess.CalledProcessError):
-                install.manage_brew_package("makemkv", {}, cask=True)
-
-        clear_cask_quarantine.assert_not_called()
-
-    def test_successful_cask_install_clears_quarantine(self) -> None:
-        succeeded_process = subprocess.CompletedProcess(
-            ["/opt/homebrew/bin/brew", "install", "--force", "--cask", "makemkv"],
-            0,
-            stdout="installed",
-            stderr="",
-        )
-
-        with (
-            patch("bd_to_avp.install.subprocess.run", return_value=succeeded_process),
-            patch("bd_to_avp.install.clear_cask_quarantine") as clear_cask_quarantine,
-            patch("builtins.print"),
-        ):
-            install.manage_brew_package("makemkv", {"SUDO_ASKPASS": "/tmp/askpass"}, cask=True)
-
-        clear_cask_quarantine.assert_called_once_with(["makemkv"], {"SUDO_ASKPASS": "/tmp/askpass"})
-
-
-class CaskDetectionTests(unittest.TestCase):
-    def test_installed_cask_without_expected_app_bundle_needs_repair(self) -> None:
-        brew_process = subprocess.CompletedProcess(
-            ["/opt/homebrew/bin/brew", "list", "--cask", "--formula", "makemkv"],
-            0,
-            stdout="makemkv\n",
-            stderr="",
-        )
-
-        with (
-            patch("bd_to_avp.install.subprocess.run", return_value=brew_process),
-            patch("bd_to_avp.install.get_cask_app_paths", return_value=[Path("/missing/MakeMKV.app")]),
-        ):
-            self.assertFalse(install.check_is_package_installed("makemkv"))
-
-    def test_installed_cask_with_unquarantined_app_bundle_is_ready(self) -> None:
-        brew_process = subprocess.CompletedProcess(
-            ["/opt/homebrew/bin/brew", "list", "--cask", "--formula", "makemkv"],
-            0,
-            stdout="makemkv\n",
-            stderr="",
-        )
-        app_path = Mock(spec=Path)
-        app_path.exists.return_value = True
-
-        with (
-            patch("bd_to_avp.install.subprocess.run", return_value=brew_process),
-            patch("bd_to_avp.install.get_cask_app_paths", return_value=[app_path]),
-            patch("bd_to_avp.install.is_file_quarantined", return_value=False),
-        ):
-            self.assertTrue(install.check_is_package_installed("makemkv"))
-
-    def test_installed_cask_with_quarantined_app_bundle_needs_repair(self) -> None:
-        brew_process = subprocess.CompletedProcess(
-            ["/opt/homebrew/bin/brew", "list", "--cask", "--formula", "makemkv"],
-            0,
-            stdout="makemkv\n",
-            stderr="",
-        )
-        app_path = Mock(spec=Path)
-        app_path.exists.return_value = True
-
-        with (
-            patch("bd_to_avp.install.subprocess.run", return_value=brew_process),
-            patch("bd_to_avp.install.get_cask_app_paths", return_value=[app_path]),
-            patch("bd_to_avp.install.is_file_quarantined", return_value=True),
-        ):
-            self.assertFalse(install.check_is_package_installed("makemkv"))
-
-
-class DependencyVerificationTests(unittest.TestCase):
+class DependencyPreflightTests(unittest.TestCase):
     def test_missing_required_dependency_binaries_raise_clear_error(self) -> None:
-        fake_homebrew_bin = Path("/missing")
-
-        with (
-            patch.object(install.config, "HOMEBREW_PREFIX_BIN", fake_homebrew_bin),
-            patch.object(install.config, "MAKEMKVCON_PATH", Path("/missing/makemkvcon")),
-            patch.object(install.config, "MP4BOX_PATH", Path("/missing/MP4Box")),
-            self.assertRaisesRegex(ValueError, "Required command-line tools are missing"),
-        ):
-            install.verify_dependency_binaries()
-
-    def test_missing_native_mvc_helper_raises_clear_error(self) -> None:
-        with (
-            patch.object(install.config, "MAKEMKVCON_PATH", Path(__file__)),
-            patch.object(install.config, "MP4BOX_PATH", Path(__file__)),
-            patch.object(install.config, "EDGE264_TEST_PATH", Path("/missing/edge264_test")),
-            self.assertRaisesRegex(ValueError, "edge264_test"),
-        ):
-            install.verify_dependency_binaries()
-
-    def test_required_casks_only_include_makemkv(self) -> None:
-        self.assertEqual(install.get_required_casks(), ["makemkv"])
-
-    def test_required_formulae_skip_ffmpeg_when_bundled_tools_exist(self) -> None:
         with (
             patch.object(install.config, "FFMPEG_PATH", Path(__file__)),
             patch.object(install.config, "FFPROBE_PATH", Path(__file__)),
+            patch.object(install.config, "MAKEMKVCON_PATH", Path("/missing/makemkvcon")),
+            patch.object(install.config, "MKVEXTRACT_PATH", Path(__file__)),
+            patch.object(install.config, "MKVMERGE_PATH", Path(__file__)),
+            patch.object(install.config, "MP4BOX_PATH", Path("/missing/MP4Box")),
+            patch.object(install.config, "TESSERACT_PATH", Path(__file__)),
+            patch.object(install.config, "EDGE264_TEST_PATH", Path(__file__)),
+            self.assertRaisesRegex(install.DependencyPreflightError, "MakeMKV"),
         ):
-            self.assertNotIn("ffmpeg", install.get_required_formulae())
+            install.verify_runtime_ready()
 
-    def test_required_formulae_include_ffmpeg_when_bundled_tools_are_missing(self) -> None:
+    def test_missing_native_mvc_helper_raises_clear_error(self) -> None:
         with (
-            patch.object(install.config, "FFMPEG_PATH", Path("/missing/ffmpeg")),
-            patch.object(install.config, "FFPROBE_PATH", Path("/missing/ffprobe")),
+            patch.object(install.config, "FFMPEG_PATH", Path(__file__)),
+            patch.object(install.config, "FFPROBE_PATH", Path(__file__)),
+            patch.object(install.config, "MAKEMKVCON_PATH", Path(__file__)),
+            patch.object(install.config, "MKVEXTRACT_PATH", Path(__file__)),
+            patch.object(install.config, "MKVMERGE_PATH", Path(__file__)),
+            patch.object(install.config, "MP4BOX_PATH", Path(__file__)),
+            patch.object(install.config, "TESSERACT_PATH", Path(__file__)),
+            patch.object(install.config, "EDGE264_TEST_PATH", Path("/missing/edge264_test")),
+            self.assertRaisesRegex(install.DependencyPreflightError, "edge264_test"),
         ):
-            self.assertIn("ffmpeg", install.get_required_formulae())
+            install.verify_runtime_ready()
+
+    def test_missing_native_mvc_helper_is_listed_once(self) -> None:
+        with patch.object(install.config, "EDGE264_TEST_PATH", Path("/missing/edge264_test")):
+            missing_binaries = install.get_missing_dependency_binaries_for_current_job()
+
+        self.assertEqual(missing_binaries.count(Path("/missing/edge264_test")), 1)
+
+    def test_gui_missing_makemkv_message_is_plain(self) -> None:
+        with (
+            patch.object(install.config.app, "is_gui", True),
+            patch.object(install.config, "MAKEMKVCON_PATH", Path("/missing/makemkvcon")),
+        ):
+            message = install.build_missing_dependency_message([Path("/missing/makemkvcon")])
+
+        self.assertIn("MakeMKV", message)
+        self.assertIn("Install MakeMKV for macOS", message)
+        self.assertNotIn("/missing", message)
+
+    def test_gui_missing_bundled_tool_message_recommends_reinstall(self) -> None:
+        with (
+            patch.object(install.config.app, "is_gui", True),
+            patch.object(install.config, "MP4BOX_PATH", Path("/missing/MP4Box")),
+        ):
+            message = install.build_missing_dependency_message([Path("/missing/MP4Box")])
+
+        self.assertIn("MP4Box", message)
+        self.assertIn("Reinstall the app", message)
+        self.assertNotIn("/missing", message)
+
+    def test_runtime_ready_does_not_import_subprocess(self) -> None:
+        with (
+            patch.object(install.config, "FFMPEG_PATH", Path(__file__)),
+            patch.object(install.config, "FFPROBE_PATH", Path(__file__)),
+            patch.object(install.config, "MAKEMKVCON_PATH", Path(__file__)),
+            patch.object(install.config, "MKVEXTRACT_PATH", Path(__file__)),
+            patch.object(install.config, "MKVMERGE_PATH", Path(__file__)),
+            patch.object(install.config, "MP4BOX_PATH", Path(__file__)),
+            patch.object(install.config, "TESSERACT_PATH", Path(__file__)),
+            patch.object(install.config, "EDGE264_TEST_PATH", Path(__file__)),
+        ):
+            install.verify_runtime_ready()
+
+        self.assertFalse(hasattr(install, "subprocess"))
+
+    def test_mts_sources_do_not_require_makemkv(self) -> None:
+        with (
+            patch.object(install.config, "source_path", Path("movie.m2ts")),
+            patch.object(install.config, "start_stage", Stage.CREATE_MKV),
+        ):
+            required_paths = install.get_required_dependency_binaries_for_current_job()
+
+        self.assertNotIn(install.config.MAKEMKVCON_PATH, required_paths)
+
+    def test_disc_sources_require_makemkv(self) -> None:
+        with (
+            patch.object(install.config, "source_path", None),
+            patch.object(install.config, "source_str", "disc:0"),
+            patch.object(install.config, "start_stage", Stage.CREATE_MKV),
+        ):
+            required_paths = install.get_required_dependency_binaries_for_current_job()
+
+        self.assertIn(install.config.MAKEMKVCON_PATH, required_paths)
+
+    def test_skip_subtitles_does_not_require_subtitle_tools(self) -> None:
+        with (
+            patch.object(install.config, "skip_subtitles", True),
+            patch.object(install.config, "start_stage", Stage.EXTRACT_SUBTITLES),
+        ):
+            required_paths = install.get_required_dependency_binaries_for_current_job()
+
+        self.assertNotIn(install.config.MKVEXTRACT_PATH, required_paths)
+        self.assertNotIn(install.config.MKVMERGE_PATH, required_paths)
+        self.assertNotIn(install.config.TESSERACT_PATH, required_paths)
+
+    def test_fx_upscale_tool_is_required_only_when_enabled(self) -> None:
+        with (
+            patch.object(install.config, "fx_upscale", False),
+            patch.object(install.config, "start_stage", Stage.UPSCALE_VIDEO),
+        ):
+            required_paths = install.get_required_dependency_binaries_for_current_job()
+
+        self.assertNotIn(install.config.FX_UPSCALE_PATH, required_paths)
+
+        with (
+            patch.object(install.config, "fx_upscale", True),
+            patch.object(install.config, "start_stage", Stage.UPSCALE_VIDEO),
+        ):
+            required_paths = install.get_required_dependency_binaries_for_current_job()
+
+        self.assertIn(install.config.FX_UPSCALE_PATH, required_paths)
 
     def test_native_mvc_helper_repairs_missing_execute_bit(self) -> None:
         with tempfile.NamedTemporaryFile() as helper_file:
@@ -161,6 +135,17 @@ class DependencyVerificationTests(unittest.TestCase):
                 self.assertTrue(install.ensure_native_mvc_splitter_executable())
 
             self.assertTrue(helper_path.stat().st_mode & 0o111)
+
+
+class InstallVersionTests(unittest.TestCase):
+    def test_check_install_version_matches_saved_version(self) -> None:
+        with (
+            patch.object(install.config.app, "load_version_from_file", return_value="1.2.3"),
+            patch.object(
+                type(install.config.app), "code_version", new_callable=lambda: property(lambda _self: "1.2.3")
+            ),
+        ):
+            self.assertTrue(install.check_install_version())
 
 
 if __name__ == "__main__":

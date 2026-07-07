@@ -20,21 +20,20 @@ The videos will play directly in the Files or
 ## GUI install
 
 To install the GUI version of `Blu-ray to Vision Pro`, download the latest release from the [releases page]. Open the
-DMG file and drag the app to your Applications folder. On the first run of the app you will be prompted for your
-password to install the necessary dependencies. It will appear to be doing nothing for around ten minutes. After that it
-will open to the GUI or give you an error. If you receive an error, please open an issue, so I can help.
+DMG file and drag the app to your Applications folder.
 
-## Terminal install or update (See releases for GUI version)
+The GUI app does not install Homebrew or modify your shell setup. Runtime tools are bundled into the app where possible.
+MakeMKV remains an external requirement for reading Blu-ray discs; install the current macOS version from the
+[MakeMKV] website before converting discs.
 
-To quickly install or update `BD_to_AVP`, run the following command in your terminal:
+## Terminal install or update (power users)
 
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/release/installer.sh)"
-```
+The terminal/PyPI version is for power users who manage their own command-line dependencies. Install the tools listed
+below, create a Python environment, then install `BD_to_AVP` with `pip`.
 
 ## Prerequisites
 
-Ensure the following are installed on your Mac *(If not using the Quick Install or GUI)*:
+Ensure the following are installed on your Mac *(if using the terminal/PyPI version)*:
 
 - **Apple Silicon [Mac]**: A Mac with Apple Silicon, such as the M1, M1 Pro, or M1 Max
 - **[macOS Sonoma]**: The latest version of macOS.
@@ -51,8 +50,8 @@ MVC video extracted from direct `.mts`/`.m2ts` sources, now uses a bundled nativ
 available. Native MVC splitting supports 8-bit Blu-ray 3D MVC sources only.
 
 Runtime tool lookup prefers explicit `BD_TO_AVP_<TOOL>_PATH` environment overrides, bundled tools in `bd_to_avp/bin`,
-tools already available in `PATH`, and finally the legacy `/opt/homebrew/bin` location. This allows packaged builds to
-move away from Homebrew-managed runtime tools incrementally while keeping existing manual installs working.
+tools already available in `PATH`, and finally the legacy `/opt/homebrew/bin` location. The GUI app uses bundled tools
+where available; the terminal/PyPI version still expects power users to install command-line tools themselves.
 
 ## Manual Installation
 

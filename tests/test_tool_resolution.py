@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from bd_to_avp.modules.config import config, resolve_tool_path, tool_env_var
+from bd_to_avp.modules.config import config, resolve_makemkvcon_path, resolve_tool_path, tool_env_var
 from bd_to_avp.vendor.pgsrip import mkv
 
 
@@ -55,6 +55,19 @@ class ToolResolutionTests(unittest.TestCase):
     def test_homebrew_path_is_last_resort(self) -> None:
         with patch.dict(os.environ, {}, clear=True), patch("bd_to_avp.modules.config.shutil.which", return_value=None):
             self.assertEqual(resolve_tool_path("tesseract"), Path("/opt/homebrew/bin/tesseract"))
+
+    def test_makemkv_app_bundle_is_used_before_homebrew_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_bundle_bin = Path(temp_dir)
+            makemkvcon = app_bundle_bin / "makemkvcon"
+            makemkvcon.touch()
+
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch("bd_to_avp.modules.config.MAKEMKV_APP_BUNDLE_BIN", app_bundle_bin),
+                patch("bd_to_avp.modules.config.shutil.which", return_value=None),
+            ):
+                self.assertEqual(resolve_makemkvcon_path(), makemkvcon)
 
     def test_configure_tool_environment_orders_configured_paths_before_bundled_bin(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
