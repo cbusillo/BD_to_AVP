@@ -5,7 +5,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 import ffmpeg
 
@@ -14,7 +14,7 @@ from bd_to_avp.modules.util import formatted_time_elapsed
 
 
 class Spinner:
-    symbols = ["🌑", "🌘", "🌗", "🌖", "🌕", "🌔", "🌓", "🌒"]
+    symbols: ClassVar[list[str]] = ["🌑", "🌘", "🌗", "🌖", "🌕", "🌔", "🌓", "🌒"]
     _stop_all_spinners = False
 
     def __init__(self, command_name: str = "command...", update_interval: float = 0.5):
@@ -84,7 +84,6 @@ def run_command(commands: list[Any], command_name: str = "", env: dict[str, str]
     spinner_thread.start()
     process = None
     try:
-
         process = subprocess.Popen(
             commands,
             stdout=subprocess.PIPE,

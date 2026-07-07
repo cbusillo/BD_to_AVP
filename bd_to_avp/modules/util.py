@@ -17,19 +17,19 @@ def sorted_files_by_creation_filtered_on_suffix(path: Path, suffix: str) -> list
     return [file for file in sorted_files if file.suffix == suffix]
 
 
-def get_pyproject_data() -> tuple[dict[str, str], dict[str, str]]:
+def get_pyproject_data() -> tuple[dict, dict]:
     pyproject_data = load_data_from_pyproject()
     if not pyproject_data:
         raise FileNotFoundError("pyproject.toml not found")
 
+    project = pyproject_data.get("project", {})
     tool = pyproject_data.get("tool", {})
-    poetry = tool.get("poetry", {})
     briefcase = tool.get("briefcase", {})
 
-    return poetry, briefcase
+    return project, briefcase
 
 
-def load_data_from_pyproject() -> dict[str, dict] | None:
+def load_data_from_pyproject() -> dict | None:
     project_root = Path(__file__).parent.parent.parent
     pyproject_path = project_root / "pyproject.toml"
     if not pyproject_path.exists():

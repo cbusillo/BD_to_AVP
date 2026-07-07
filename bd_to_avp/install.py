@@ -12,12 +12,18 @@ from bd_to_avp.modules.config import config
 from bd_to_avp.modules.command import run_command
 
 
+CASK_APP_PATHS = {
+    "makemkv": [Path("/Applications/MakeMKV.app")],
+    "wine-stable": [Path("/Applications/Wine Stable.app"), Path("/Applications/Wine.app")],
+}
+
+
 def prompt_for_password() -> tuple[Path, dict[str, str]]:
-    script = f"""
+    script = """
     with timeout of 3600 seconds
         tell app "System Events"
             activate
-            set pw to text returned of (display dialog "Enter your password: (This will take a while)" default answer "" with hidden answer)
+            set pw to text returned of (display dialog "Enter your password:" default answer "" with hidden answer)
         end tell
         return pw
     end timeout
@@ -53,7 +59,7 @@ def add_homebrew_to_path() -> None:
         zshrc_path.touch()
     with open(zshrc_path, "a") as zshrc_file:
         zshrc_file.write(f'export PATH="{config.HOMEBREW_PREFIX_BIN}:$PATH"\n')
-    os.environ["PATH"] = f"{config.HOMEBREW_PREFIX_BIN}:{os.environ.get("PATH", "")}"
+    os.environ["PATH"] = f"{config.HOMEBREW_PREFIX_BIN}:{os.environ.get('PATH', '')}"
 
 
 def check_for_homebrew_in_path() -> bool:
@@ -88,21 +94,16 @@ def install_deps() -> None:
     if not check_for_homebrew_in_path():
         add_homebrew_to_path()
 
-    upgrade_brew(sudo_env)
-
-    manage_brew_package("makemkv", sudo_env, True, "uninstall")
-
     for package in config.BREW_CASKS_TO_INSTALL:
         if not check_is_package_installed(package):
-            manage_brew_package(package, sudo_env, True, "reinstall")
+            manage_brew_package(package, sudo_env, True)
 
     manage_brew_package(config.BREW_PACKAGES_TO_INSTALL, sudo_env)
 
+    verify_dependency_binaries()
+
     if not check_rosetta():
         install_rosetta()
-
-    if should_install_mp4box():
-        install_mp4box(sudo_env)
 
     wine_boot()
 
@@ -134,14 +135,25 @@ def install_rosetta() -> None:
     print("Rosetta installed.")
 
 
-def should_install_mp4box() -> bool:
-    if not config.MP4BOX_PATH.exists() or not check_mp4box_version(config.MP4BOX_VERSION):
-        if config.MP4BOX_PATH.exists():
-            print("Removing old MP4Box...")
-            shutil.rmtree("/Applications/GPAC.app", ignore_errors=True)
-        print("Installing MP4Box...")
-        return True
-    return False
+def verify_dependency_binaries() -> None:
+    missing_binaries = [
+        path for path in [config.MAKEMKVCON_PATH, config.MP4BOX_PATH, config.WINE_PATH] if not path.exists()
+    ]
+    wineboot_path = config.HOMEBREW_PREFIX_BIN / "wineboot"
+    if not wineboot_path.exists():
+        missing_binaries.append(wineboot_path)
+
+    if not missing_binaries:
+        return
+
+    missing_list = "\n".join(f"- {path}" for path in missing_binaries)
+    on_error_string(
+        "Dependencies",
+        "Required command-line tools are missing after dependency installation:\n"
+        f"{missing_list}\n\n"
+        "Install or repair MakeMKV and Wine, then run this app again. "
+        "MP4Box is provided by the Homebrew gpac formula.",
+    )
 
 
 def check_install_version() -> bool:
@@ -194,11 +206,18 @@ def check_is_package_installed(package: str) -> bool:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    app_dir_path = next(Path("/Applications").glob(f"{package.replace('-', ' ')}.app"), None)
-    if package in process.stdout and app_dir_path and app_dir_path.exists() and not is_file_quarantined(app_dir_path):
+    if package not in process.stdout:
+        return False
+
+    app_paths = [app_path for app_path in get_cask_app_paths(package) if app_path.exists()]
+    if app_paths and all(not is_file_quarantined(app_path) for app_path in app_paths):
         return True
 
-    return False
+    return not app_paths
+
+
+def get_cask_app_paths(package: str) -> list[Path]:
+    return CASK_APP_PATHS.get(package, [Path("/Applications") / f"{package.replace('-', ' ')}.app"])
 
 
 def is_file_quarantined(file_path: Path) -> bool:
@@ -210,6 +229,32 @@ def is_file_quarantined(file_path: Path) -> bool:
         return False
 
 
+def clear_cask_quarantine(packages: list[str], sudo_env: dict[str, str]) -> None:
+    for package in packages:
+        for app_path in get_cask_app_paths(package):
+            if not app_path.exists() or not is_file_quarantined(app_path):
+                continue
+
+            process = subprocess.run(
+                ["xattr", "-dr", "com.apple.quarantine", app_path.as_posix()],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=sudo_env,
+            )
+            if process.returncode != 0:
+                process = subprocess.run(
+                    ["/usr/bin/sudo", "-A", "xattr", "-dr", "com.apple.quarantine", app_path.as_posix()],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=sudo_env,
+                )
+
+            if process.returncode != 0:
+                on_error_process(f"{package} quarantine cleanup", process)
+
+
 def manage_brew_package(
     packages: str | list[str], sudo_env: dict[str, str], cask: bool = False, operation: str = "install"
 ) -> None:
@@ -218,14 +263,7 @@ def manage_brew_package(
     packages_str = " ".join(packages)
     print(f"{operation.title()}ing {packages_str}...")
 
-    brew_command = ["/opt/homebrew/bin/brew", operation, "--force"]
-    if operation in ["install", "reinstall"]:
-        brew_command.append("--no-quarantine")
-
-    if cask:
-        brew_command.append("--cask")
-
-    brew_command += packages
+    brew_command = build_brew_command(packages, cask, operation)
 
     process = subprocess.run(
         brew_command,
@@ -242,7 +280,18 @@ def manage_brew_package(
     if process.returncode != 0:
         on_error_process(packages_str, process)
 
+    if cask and operation == "install":
+        clear_cask_quarantine(packages, sudo_env)
+
     print(f"{packages_str} {operation}ed.")
+
+
+def build_brew_command(packages: list[str], cask: bool = False, operation: str = "install") -> list[str]:
+    brew_command = ["/opt/homebrew/bin/brew", operation, "--force"]
+    if cask:
+        brew_command.append("--cask")
+
+    return brew_command + packages
 
 
 def update_brew(sudo_env: dict[str, str]) -> None:
@@ -261,75 +310,17 @@ def update_brew(sudo_env: dict[str, str]) -> None:
     print("Homebrew updated.")
 
 
-def upgrade_brew(sudo_env: dict[str, str]) -> None:
-    print("Upgrading Homebrew...")
-    brew_command = ["/opt/homebrew/bin/brew", "upgrade"]
-    process = subprocess.run(
-        brew_command,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=sudo_env,
-    )
-
-    if process.returncode != 0:
-        on_error_process("Homebrew", process)
-    print("Homebrew upgraded.")
-
-
-def check_mp4box_version(version: str) -> bool:
-    processs = subprocess.run(
-        [config.MP4BOX_PATH, "-version"],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    return version in processs.stderr
-
-
-def install_mp4box(sudo_env: dict[str, str]) -> None:
-    print("Installing MP4Box...")
-
-    response = requests.get(
-        "https://download.tsi.telecom-paristech.fr/gpac/release/2.2.1/gpac-2.2.1-rev0-gb34e3851-release-2.2.pkg"
-    )
-    if response.status_code != 200:
-        on_error_string("MP4Box", "Failed to download MP4Box installer.")
-    with tempfile.NamedTemporaryFile(suffix=".pkg", delete=False) as mp4box_file:
-        mp4box_file.write(response.content)
-    mp4box_file_path = Path(mp4box_file.name)
-
-    command = [
-        "sudo",
-        "-A",
-        "installer",
-        "-pkg",
-        mp4box_file_path.as_posix(),
-        "-target",
-        "/",
-    ]
-    process = subprocess.run(
-        command,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=sudo_env,
-    )
-
-    if process.returncode != 0:
-        on_error_process("MP4Box", process)
-    print("MP4Box installed.")
-
-
 def wine_boot() -> None:
     print("Booting Wine...")
-    if not config.WINE_PATH.exists():
+    wineboot_path = config.HOMEBREW_PREFIX_BIN / "wineboot"
+    if not config.WINE_PATH.exists() or not wineboot_path.exists():
         on_error_string(
             "Wine",
-            "Wine not found in Homebrew.  If you have Wine Stable installed in Applications, please remove it and run the program again.",
+            "Wine command-line tools were not found. Install or repair Wine, then run the program again. "
+            "The Homebrew wine-stable cask is deprecated, so manual Wine installation may be required.",
         )
     process = subprocess.run(
-        [(config.HOMEBREW_PREFIX_BIN / "wineboot").as_posix()],
+        [wineboot_path.as_posix()],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

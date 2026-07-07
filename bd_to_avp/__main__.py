@@ -31,6 +31,9 @@ def main() -> None:
     if config.HOMEBREW_PREFIX_BIN.as_posix() not in os.environ["PATH"]:
         os.environ["PATH"] = f"{config.HOMEBREW_PREFIX_BIN}:{os.environ['PATH']}"
 
+    if not config.app.is_gui:
+        config.parse_args()
+
     if not install.check_install_version():
         install.install_deps()
         config.app.save_version_from_file()
@@ -39,7 +42,6 @@ def main() -> None:
         signal.signal(signal.SIGINT, signal.SIG_DFL)
         start_gui()
     else:
-        config.parse_args()
         start_process()
 
 
