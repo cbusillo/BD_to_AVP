@@ -72,12 +72,12 @@ brew install ffmpeg gpac mkvtoolnix python@3.12 tesseract
 # Install MakeMKV. Homebrew may still provide a cask, but if Gatekeeper blocks it,
 # install the current macOS build from https://www.makemkv.com/ and make sure
 # makemkvcon is available in your PATH.
-brew install --cask --no-quarantine makemkv
+brew install --cask makemkv
 
 # Install Wine. BD_to_AVP currently uses Wine to run FRIMDecode64.exe for MVC splitting.
 # The Homebrew wine-stable cask is deprecated, so manual Wine installation may be
 # required if this command stops working.
-brew install --cask --no-quarantine wine-stable
+brew install --cask wine-stable
 
 # Ensure Python 3.12 is correctly installed then create a virtual environment
 python3.12 -m pip install --upgrade pip
