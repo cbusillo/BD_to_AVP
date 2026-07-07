@@ -33,7 +33,6 @@ def main() -> None:
         config.parse_args()
 
     if not install.check_install_version():
-        install.install_deps()
         config.app.save_version_from_file()
 
     if config.app.is_gui:
