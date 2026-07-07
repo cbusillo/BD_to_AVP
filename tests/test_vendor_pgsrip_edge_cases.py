@@ -6,8 +6,9 @@ from bd_to_avp.vendor.pgsrip.media_path import MediaPath
 from bd_to_avp.vendor.pgsrip.media import PgsSubtitleItem
 from bd_to_avp.vendor.pgsrip.mkv import Mkv, MkvTrack
 from bd_to_avp.vendor.pgsrip.options import Options
+from bd_to_avp.vendor.pgsrip.pgs import WindowDefinitionSegment
 from bd_to_avp.vendor.pgsrip.ripper import PgsToSrtRipper
-from bd_to_avp.vendor.pgsrip.utils import to_time
+from bd_to_avp.vendor.pgsrip.utils import from_hex, to_time
 
 
 class MkvTrackOrderingTests(unittest.TestCase):
@@ -56,6 +57,23 @@ class PgsSubtitleItemTimestampTests(unittest.TestCase):
         self.assertEqual(item.end, -1)
 
 
+class PgsSubtitleItemWindowTests(unittest.TestCase):
+    def test_offsets_ignore_display_sets_without_windows(self) -> None:
+        item = PgsSubtitleItem(0, MediaPath("fake.sup"), [_display_set(0, None, None), _display_set(1, 12, 34)])
+
+        self.assertEqual(item.x_offset, 12)
+        self.assertEqual(item.y_offset, 34)
+
+    def test_window_definition_segment_allows_zero_windows(self) -> None:
+        segment = WindowDefinitionSegment(_pgs_segment_bytes(b"\x00"))
+
+        self.assertEqual(segment.num_windows, 0)
+        self.assertIsNone(segment.window_id)
+
+    def test_empty_hex_converts_to_none(self) -> None:
+        self.assertIsNone(from_hex(b""))
+
+
 class PgsRipperEmptyTrackTests(unittest.TestCase):
     def test_empty_subtitle_items_do_not_crash_ripper_initialization(self) -> None:
         pgs = Mock()
@@ -92,6 +110,21 @@ def _subtitle_item(start: int, end: int) -> PgsSubtitleItem:
     item.x_offset = 0
     item.y_offset = 0
     return item
+
+
+def _display_set(num_windows: int, x_offset: int | None, y_offset: int | None) -> Mock:
+    display_set = Mock()
+    display_set.pcs.presentation_timestamp = 0
+    display_set.wds.num_windows = num_windows
+    display_set.wds.x_offset = x_offset
+    display_set.wds.y_offset = y_offset
+    display_set.pcs.is_start.return_value = False
+    return display_set
+
+
+def _pgs_segment_bytes(data: bytes) -> bytes:
+    size = len(data).to_bytes(2, byteorder="big")
+    return b"PG" + b"\x00" * 8 + b"\x17" + size + data
 
 
 if __name__ == "__main__":

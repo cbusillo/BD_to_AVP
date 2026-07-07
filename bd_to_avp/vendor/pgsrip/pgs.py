@@ -271,7 +271,7 @@ class WindowDefinitionSegment(BaseSegment):
 
     @property
     def window_id(self):
-        return self.data[1]
+        return safe_get(self.data, 1, None)
 
     @property
     def x_offset(self):
