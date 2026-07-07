@@ -49,7 +49,7 @@ jobs:
           SOURCE_REF: ${{ inputs.source_ref }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [[ "$SOURCE_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [[ "$SOURCE_REF" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
             echo "Manual releases must use a branch or tag ref, not a raw SHA. Tag the commit first or package a branch." >&2
             exit 1
           fi
