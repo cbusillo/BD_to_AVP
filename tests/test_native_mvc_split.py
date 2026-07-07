@@ -28,6 +28,7 @@ class NativeMvcCommandTests(unittest.TestCase):
         ):
             command = video.generate_native_mvc_ffmpeg_command(Path("left.mov"), Path("right.mov"), self.disc_info, "")
 
+        self.assertEqual(Path(command[0]).name, Path(video.config.FFMPEG_PATH).name)
         self.assertIn("-f", command)
         self.assertIn("yuv4mpegpipe", command)
         self.assertIn("-filter_complex", command)
@@ -48,6 +49,7 @@ class NativeMvcCommandTests(unittest.TestCase):
         ):
             command = video.generate_native_mvc_ffmpeg_command(Path("left.mov"), Path("right.mov"), self.disc_info, "")
 
+        self.assertEqual(Path(command[0]).name, Path(video.config.FFMPEG_PATH).name)
         filter_graph = command[command.index("-filter_complex") + 1]
         map_labels = [command[index + 1] for index, value in enumerate(command) if value == "-map"]
         left_label, right_label = map_labels

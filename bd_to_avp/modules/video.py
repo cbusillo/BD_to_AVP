@@ -110,7 +110,11 @@ def generate_native_mvc_ffmpeg_command(
 
     left_output = ffmpeg.output(left_stream, f"file:{left_output_path}", **output_kwargs)
     right_output = ffmpeg.output(right_stream, f"file:{right_output_path}", **output_kwargs)
-    command = ffmpeg.compile(ffmpeg.merge_outputs(left_output, right_output), overwrite_output=True)
+    command = ffmpeg.compile(
+        ffmpeg.merge_outputs(left_output, right_output),
+        cmd=config.FFMPEG_PATH.as_posix(),
+        overwrite_output=True,
+    )
 
     return [arg if arg != "pipe:0" else "-" for arg in command]
 
@@ -260,7 +264,12 @@ def detect_crop_parameters(
     )
 
     try:
-        _, stdout = ffmpeg.run(stream, capture_stdout=True, capture_stderr=True)
+        _, stdout = ffmpeg.run(
+            stream,
+            cmd=config.FFMPEG_PATH.as_posix(),
+            capture_stdout=True,
+            capture_stderr=True,
+        )
         output = stdout.decode("utf-8").split("\n")
     except ffmpeg.Error as e:
         print("FFmpeg Error:")
@@ -324,7 +333,12 @@ def create_left_right_files(
 
 def get_video_color_depth(input_path: Path) -> int:
     try:
-        probe = ffmpeg.probe(str(input_path), select_streams="v:0", show_entries="stream=pix_fmt")
+        probe = ffmpeg.probe(
+            str(input_path),
+            cmd=config.FFPROBE_PATH.as_posix(),
+            select_streams="v:0",
+            show_entries="stream=pix_fmt",
+        )
         streams = probe.get("streams", [])
         if streams:
             pix_fmt = streams[0].get("pix_fmt")

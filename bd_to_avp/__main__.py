@@ -1,5 +1,4 @@
 import atexit
-import os
 import signal
 
 import psutil
@@ -28,8 +27,7 @@ atexit.register(kill_child_processes)
 
 
 def main() -> None:
-    if config.HOMEBREW_PREFIX_BIN.as_posix() not in os.environ["PATH"]:
-        os.environ["PATH"] = f"{config.HOMEBREW_PREFIX_BIN}:{os.environ['PATH']}"
+    config.configure_tool_environment()
 
     if not config.app.is_gui:
         config.parse_args()

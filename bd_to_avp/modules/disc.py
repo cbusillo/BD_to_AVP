@@ -75,7 +75,7 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
         filename = Path(source).stem
         disc_info = DiscInfo(name=filename)
 
-        ffmpeg_probe_output = ffmpeg.probe(source)["streams"][0]
+        ffmpeg_probe_output = ffmpeg.probe(source, cmd=config.FFPROBE_PATH.as_posix())["streams"][0]
         if all(key in ffmpeg_probe_output for key in ["width", "height"]):
             disc_info.resolution = f"{ffmpeg_probe_output.get('width')}x{ffmpeg_probe_output.get('height')}"
         if "avg_frame_rate" in ffmpeg_probe_output:

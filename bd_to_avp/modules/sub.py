@@ -91,7 +91,7 @@ def get_missing_tessdata_files(languages: list[str], tessdata_path: Path) -> Non
 
 
 def get_languages_in_mkv(mkv_path: Path) -> None | list[dict[str, str]]:
-    mkv_info = ffmpeg.probe(str(mkv_path))
+    mkv_info = ffmpeg.probe(str(mkv_path), cmd=config.FFPROBE_PATH.as_posix())
     streams = mkv_info["streams"]
     subtitle_streams = [stream for stream in streams if stream["codec_type"] == "subtitle"]
     if not subtitle_streams:

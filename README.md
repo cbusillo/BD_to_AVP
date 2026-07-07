@@ -50,6 +50,10 @@ Current release note: BD_to_AVP still uses MakeMKV for Blu-ray title extraction.
 MVC video extracted from direct `.mts`/`.m2ts` sources, now uses a bundled native Apple Silicon MVC splitter when
 available. Native MVC splitting supports 8-bit Blu-ray 3D MVC sources only.
 
+Runtime tool lookup prefers explicit `BD_TO_AVP_<TOOL>_PATH` environment overrides, bundled tools in `bd_to_avp/bin`,
+tools already available in `PATH`, and finally the legacy `/opt/homebrew/bin` location. This allows packaged builds to
+move away from Homebrew-managed runtime tools incrementally while keeping existing manual installs working.
+
 ## Manual Installation
 
 To set up your macOS environment for video processing, including creating and handling 3D video content, follow these
