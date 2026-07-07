@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import stat
 from pathlib import Path
 
 import requests
@@ -94,7 +95,9 @@ def install_deps() -> None:
     if not check_for_homebrew_in_path():
         add_homebrew_to_path()
 
-    for package in config.BREW_CASKS_TO_INSTALL:
+    ensure_native_mvc_splitter_executable()
+
+    for package in get_required_casks():
         if not check_is_package_installed(package):
             manage_brew_package(package, sudo_env, True)
 
@@ -102,10 +105,11 @@ def install_deps() -> None:
 
     verify_dependency_binaries()
 
-    if not check_rosetta():
+    if needs_legacy_frim_stack() and not check_rosetta():
         install_rosetta()
 
-    wine_boot()
+    if needs_legacy_frim_stack():
+        wine_boot()
 
     if pw_file_path:
         pw_file_path.unlink()
@@ -136,12 +140,12 @@ def install_rosetta() -> None:
 
 
 def verify_dependency_binaries() -> None:
-    missing_binaries = [
-        path for path in [config.MAKEMKVCON_PATH, config.MP4BOX_PATH, config.WINE_PATH] if not path.exists()
-    ]
-    wineboot_path = config.HOMEBREW_PREFIX_BIN / "wineboot"
-    if not wineboot_path.exists():
-        missing_binaries.append(wineboot_path)
+    missing_binaries = [path for path in [config.MAKEMKVCON_PATH, config.MP4BOX_PATH] if not path.exists()]
+    if needs_legacy_frim_stack():
+        missing_binaries.append(config.WINE_PATH)
+        wineboot_path = config.HOMEBREW_PREFIX_BIN / "wineboot"
+        if not wineboot_path.exists():
+            missing_binaries.append(wineboot_path)
 
     if not missing_binaries:
         return
@@ -151,9 +155,39 @@ def verify_dependency_binaries() -> None:
         "Dependencies",
         "Required command-line tools are missing after dependency installation:\n"
         f"{missing_list}\n\n"
-        "Install or repair MakeMKV and Wine, then run this app again. "
+        "Install or repair MakeMKV and any required legacy Wine tools, then run this app again. "
         "MP4Box is provided by the Homebrew gpac formula.",
     )
+
+
+def get_required_casks() -> list[str]:
+    if needs_legacy_frim_stack():
+        return config.BREW_CASKS_TO_INSTALL
+    return [package for package in config.BREW_CASKS_TO_INSTALL if package != "wine-stable"]
+
+
+def needs_legacy_frim_stack() -> bool:
+    return not is_native_mvc_splitter_ready() or bool(
+        config.source_path and config.source_path.suffix.lower() in config.MTS_EXTENSIONS
+    )
+
+
+def ensure_native_mvc_splitter_executable() -> bool:
+    if not config.EDGE264_TEST_PATH.is_file():
+        return False
+    if os.access(config.EDGE264_TEST_PATH, os.X_OK):
+        return True
+
+    try:
+        current_mode = config.EDGE264_TEST_PATH.stat().st_mode
+        config.EDGE264_TEST_PATH.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except OSError:
+        return False
+    return os.access(config.EDGE264_TEST_PATH, os.X_OK)
+
+
+def is_native_mvc_splitter_ready() -> bool:
+    return ensure_native_mvc_splitter_executable()
 
 
 def check_install_version() -> bool:

@@ -1,5 +1,9 @@
 import atexit
+import os
 import re
+import stat
+import subprocess
+import tempfile
 from pathlib import Path
 
 import ffmpeg
@@ -47,6 +51,169 @@ def generate_ffmpeg_wrapper_command(
     return args
 
 
+def has_native_mvc_splitter() -> bool:
+    if not config.EDGE264_TEST_PATH.is_file():
+        return False
+    if os.access(config.EDGE264_TEST_PATH, os.X_OK):
+        return True
+
+    try:
+        current_mode = config.EDGE264_TEST_PATH.stat().st_mode
+        config.EDGE264_TEST_PATH.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except OSError:
+        return False
+    return os.access(config.EDGE264_TEST_PATH, os.X_OK)
+
+
+def ensure_legacy_frim_available() -> None:
+    wineboot_path = config.HOMEBREW_PREFIX_BIN / "wineboot"
+    missing_paths = [path for path in [config.WINE_PATH, wineboot_path, config.FRIMDECODE_PATH] if not path.exists()]
+    if missing_paths:
+        missing_list = "\n".join(f"- {path}" for path in missing_paths)
+        raise RuntimeError(
+            "This source still requires the legacy Wine/FRIM MVC splitter, but required tools are missing:\n"
+            f"{missing_list}\n\n"
+            "Use an MKV/disc/ISO source for the native splitter path, or install Wine/Rosetta manually for legacy "
+            ".mts/.m2ts processing."
+        )
+
+
+def generate_native_mvc_splitter_command(video_input_path: Path) -> list[str | Path]:
+    return [
+        config.EDGE264_TEST_PATH,
+        video_input_path,
+        "-Omk",
+    ]
+
+
+def prepare_native_mvc_input(video_input_path: Path) -> Path:
+    if video_input_path.suffix == ".264":
+        return video_input_path
+
+    file_descriptor, temp_name = tempfile.mkstemp(prefix=f"{video_input_path.stem}_", suffix=".264")
+    os.close(file_descriptor)
+    temp_path = Path(temp_name)
+    temp_path.unlink()
+    try:
+        temp_path.hardlink_to(video_input_path)
+    except OSError:
+        temp_path.symlink_to(video_input_path)
+    return temp_path
+
+
+def generate_native_mvc_ffmpeg_command(
+    left_output_path: Path,
+    right_output_path: Path,
+    disc_info: DiscInfo,
+    crop_params: str,
+) -> list[str]:
+    if disc_info.color_depth != 8:
+        raise ValueError("Native MVC splitting currently supports 8-bit 4:2:0 Blu-ray MVC sources only.")
+
+    source_width, source_height = parse_resolution(config.resolution or disc_info.resolution)
+
+    stream = ffmpeg.input(
+        "pipe:0",
+        f="yuv4mpegpipe",
+        r=config.frame_rate or disc_info.frame_rate,
+    )
+    split_streams = ffmpeg.filter_multi_output(stream, "split", 2)
+    left_stream = split_streams[0]
+    right_stream = split_streams[1]
+    left_stream = ffmpeg.filter(left_stream, "crop", source_width, source_height, 0, 0)
+    right_stream = ffmpeg.filter(right_stream, "crop", source_width, source_height, source_width, 0)
+
+    if crop_params:
+        left_stream = ffmpeg.filter(left_stream, "crop", *crop_params.split(":"))
+        right_stream = ffmpeg.filter(right_stream, "crop", *crop_params.split(":"))
+
+    if disc_info.is_interlaced:
+        left_stream = ffmpeg.filter(left_stream, "bwdif")
+        right_stream = ffmpeg.filter(right_stream, "bwdif")
+
+    if config.swap_eyes:
+        left_stream, right_stream = right_stream, left_stream
+
+    output_kwargs = {
+        "vcodec": "hevc_videotoolbox" if not config.software_encoder else "libx265",
+        "video_bitrate": f"{config.left_right_bitrate}M",
+        "bufsize": f"{config.left_right_bitrate * 2}M",
+        "tag": "hvc1",
+        "vprofile": "main",
+        "r": config.frame_rate or disc_info.frame_rate,
+    }
+
+    left_output = ffmpeg.output(left_stream, f"file:{left_output_path}", **output_kwargs)
+    right_output = ffmpeg.output(right_stream, f"file:{right_output_path}", **output_kwargs)
+    command = ffmpeg.compile(ffmpeg.merge_outputs(left_output, right_output), overwrite_output=True)
+
+    return [arg if arg != "pipe:0" else "-" for arg in command]
+
+
+def parse_resolution(resolution: str) -> tuple[int, int]:
+    width, height = resolution.lower().split("x", 1)
+    return int(width), int(height)
+
+
+def split_mvc_to_stereo_native(
+    video_input_path: Path,
+    left_output_path: Path,
+    right_output_path: Path,
+    disc_info: DiscInfo,
+    crop_params: str,
+) -> tuple[Path, Path]:
+    ffmpeg_command = generate_native_mvc_ffmpeg_command(left_output_path, right_output_path, disc_info, crop_params)
+    native_input_path = prepare_native_mvc_input(video_input_path)
+    splitter_command = generate_native_mvc_splitter_command(native_input_path)
+
+    if config.output_commands:
+        splitter_command_text = " ".join(str(command) for command in splitter_command)
+        ffmpeg_command_text = " ".join(ffmpeg_command)
+        print(f"Running command:\n{splitter_command_text} | {ffmpeg_command_text}")
+
+    ffmpeg_log_path = left_output_path.with_suffix(".native_ffmpeg.log")
+    splitter_log_path = left_output_path.with_suffix(".native_mvc.log")
+
+    splitter_process = None
+    ffmpeg_process = None
+    try:
+        with open(ffmpeg_log_path, "w") as ffmpeg_log, open(splitter_log_path, "wb") as splitter_log:
+            splitter_process = subprocess.Popen(splitter_command, stdout=subprocess.PIPE, stderr=splitter_log)
+            ffmpeg_process = subprocess.Popen(
+                ffmpeg_command,
+                stdin=splitter_process.stdout,
+                stdout=ffmpeg_log,
+                stderr=subprocess.STDOUT,
+                text=False,
+            )
+
+            if splitter_process.stdout:
+                splitter_process.stdout.close()
+
+            ffmpeg_process.wait()
+            if ffmpeg_process.returncode != 0:
+                cleanup_process(splitter_process)
+            splitter_process.wait()
+
+        if ffmpeg_process.returncode != 0:
+            raise subprocess.CalledProcessError(ffmpeg_process.returncode, ffmpeg_command)
+        if splitter_process.returncode != 0:
+            raise subprocess.CalledProcessError(
+                splitter_process.returncode,
+                splitter_command,
+                output=splitter_log_path.read_text(errors="replace"),
+            )
+    finally:
+        if splitter_process:
+            cleanup_process(splitter_process)
+        if ffmpeg_process:
+            cleanup_process(ffmpeg_process)
+        if native_input_path != video_input_path:
+            native_input_path.unlink(missing_ok=True)
+
+    return left_output_path, right_output_path
+
+
 def split_mvc_to_stereo(
     video_input_path: Path,
     left_output_path: Path,
@@ -60,6 +227,23 @@ def split_mvc_to_stereo(
     if config.source_path and config.source_path.suffix.lower() in config.MTS_EXTENSIONS:
         is_mts = video_input_path
         video_input_path = config.source_path
+
+    if not is_mts and has_native_mvc_splitter():
+        result = split_mvc_to_stereo_native(
+            video_input_path,
+            left_output_path,
+            right_output_path,
+            disc_info,
+            crop_params,
+        )
+        if not config.keep_files:
+            left_output_path.with_suffix(".native_ffmpeg.log").unlink(missing_ok=True)
+            left_output_path.with_suffix(".native_mvc.log").unlink(missing_ok=True)
+            video_input_path.unlink(missing_ok=True)
+        return result
+
+    ensure_legacy_frim_available()
+
     with temporary_fifo("left_fifo", "right_fifo") as (primary_fifo, secondary_fifo):
         ffmpeg_left_command = generate_ffmpeg_wrapper_command(
             primary_fifo,

@@ -3,8 +3,9 @@
 ## Introduction
 
 This tool processes 3D video content from Blu-ray discs, ISO images, MKV files, or mts files, creating a final video
-file compatible with the Apple Vision Pro. It uses FFmpeg, MakeMKV, and Wine for video extraction, audio transcoding,
-and video stream merging to convert from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The tool also injects 360° metadata
+file compatible with the Apple Vision Pro. It uses FFmpeg, MakeMKV, and a bundled native MVC decoder helper for video
+extraction, audio transcoding, and video stream merging to convert from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The
+tool also injects 360° metadata
 into the video file for spatial media playback. You have the option of AI upscaling the video to 4K resolution and AI
 OCR of subtitles.
 
@@ -48,9 +49,9 @@ Ensure the following are installed on your Mac *(If not using the Quick Install 
 - **[MP4Box]**: A multimedia packager available for Windows, Mac, and Linux.
 - **[MKVToolNix]**: A set of tools to create, alter, and inspect Matroska files.
 
-Current release note: BD_to_AVP still uses MakeMKV for Blu-ray title extraction and Wine to run FRIMDecode64.exe for
-MVC 3D splitting. The project is investigating native replacements, but this release focuses on making the existing
-pipeline install and fail clearly.
+Current release note: BD_to_AVP still uses MakeMKV for Blu-ray title extraction. Extracted MVC `.h264` video now uses a
+bundled native Apple Silicon MVC splitter when available, with the legacy Wine/FRIMDecode64.exe path retained for
+compatibility cases such as direct `.mts`/`.m2ts` sources.
 
 ## Manual Installation
 
@@ -226,6 +227,8 @@ Big thanks to:
   the [JM reference software][jm-reference] [build properly on macOS][vargol-tools] as well as
   an [example script][vargol-guide] that was a useful reference
 - [steverice][steverice] for [h264-tools][ldecod]
+- Thibault Raffaillac, Celticom/TVLabs, and Jens Duttke for [edge264-mvc][edge264-mvc], used by the bundled native MVC
+  splitter. The BSD license notice is included in `bd_to_avp/resources/notices/edge264-mvc-LICENSE_BSD.txt`.
 
 [MakeMKV]: https://www.makemkv.com/
 
@@ -252,6 +255,8 @@ Big thanks to:
 [steverice]: https://github.com/steverice
 
 [h264-tools]: https://github.com/steverice/h264-tools
+
+[edge264-mvc]: https://github.com/jens-duttke/edge264-mvc
 
 [Wine]: https://www.winehq.org/
 
