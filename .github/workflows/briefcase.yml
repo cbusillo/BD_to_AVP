@@ -37,7 +37,7 @@ jobs:
       CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: >-
@@ -187,13 +187,13 @@ jobs:
           uv run python scripts/briefcase_app.py package -i "${{ secrets.DEV_ID }}"
       - name: Upload log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: briefcase-log
           path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/briefcase.*.build.log
       - name: Create Release
         id: create_release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           body: |
             ${{ steps.release_metadata.outputs.release_notes }}
