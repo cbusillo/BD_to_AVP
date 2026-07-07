@@ -141,7 +141,7 @@ class DependencyVerificationTests(unittest.TestCase):
                 self.assertFalse(install.needs_legacy_frim_stack())
                 self.assertEqual(install.get_required_casks(), ["makemkv"])
 
-    def test_mts_sources_still_require_legacy_wine_stack(self) -> None:
+    def test_mts_sources_do_not_require_legacy_wine_stack_when_native_helper_is_ready(self) -> None:
         with tempfile.NamedTemporaryFile() as helper_file:
             helper_path = Path(helper_file.name)
             helper_path.chmod(0o755)
@@ -151,8 +151,13 @@ class DependencyVerificationTests(unittest.TestCase):
                 patch.object(install.config, "source_path", Path("/movie/source.m2ts")),
                 patch.object(install.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
             ):
-                self.assertTrue(install.needs_legacy_frim_stack())
-                self.assertEqual(install.get_required_casks(), ["makemkv", "wine-stable"])
+                self.assertFalse(install.needs_legacy_frim_stack())
+                self.assertEqual(install.get_required_casks(), ["makemkv"])
+
+    def test_missing_native_mvc_helper_requires_legacy_wine_stack(self) -> None:
+        with patch.object(install.config, "EDGE264_TEST_PATH", Path("/missing/edge264_test")):
+            self.assertTrue(install.needs_legacy_frim_stack())
+            self.assertEqual(install.get_required_casks(), ["makemkv", "wine-stable"])
 
     def test_native_mvc_helper_repairs_missing_execute_bit(self) -> None:
         with tempfile.NamedTemporaryFile() as helper_file:

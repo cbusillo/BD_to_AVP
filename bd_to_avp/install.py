@@ -167,9 +167,7 @@ def get_required_casks() -> list[str]:
 
 
 def needs_legacy_frim_stack() -> bool:
-    return not is_native_mvc_splitter_ready() or bool(
-        config.source_path and config.source_path.suffix.lower() in config.MTS_EXTENSIONS
-    )
+    return not is_native_mvc_splitter_ready()
 
 
 def ensure_native_mvc_splitter_executable() -> bool:

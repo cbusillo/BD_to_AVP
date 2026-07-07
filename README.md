@@ -49,9 +49,9 @@ Ensure the following are installed on your Mac *(If not using the Quick Install 
 - **[MP4Box]**: A multimedia packager available for Windows, Mac, and Linux.
 - **[MKVToolNix]**: A set of tools to create, alter, and inspect Matroska files.
 
-Current release note: BD_to_AVP still uses MakeMKV for Blu-ray title extraction. Extracted MVC `.h264` video now uses a
-bundled native Apple Silicon MVC splitter when available, with the legacy Wine/FRIMDecode64.exe path retained for
-compatibility cases such as direct `.mts`/`.m2ts` sources.
+Current release note: BD_to_AVP still uses MakeMKV for Blu-ray title extraction. Extracted MVC `.h264` video, including
+MVC video extracted from direct `.mts`/`.m2ts` sources, now uses a bundled native Apple Silicon MVC splitter when
+available. The legacy Wine/FRIMDecode64.exe path is retained as a fallback when the native helper is unavailable.
 
 ## Manual Installation
 
