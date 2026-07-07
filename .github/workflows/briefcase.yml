@@ -15,9 +15,9 @@ name: Package with Briefcase and Create Release
         description: Optional release notes shown before the commit list
         required: false
       release_tag_suffix:
-        description: Suffix appended to the version tag, for example tester.1
+        description: PEP 440 prerelease suffix appended to the version, for example rc1
         required: true
-        default: tester.1
+        default: rc1
   push:
     branches:
       - release
@@ -115,7 +115,7 @@ jobs:
             RELEASE_NAME="$RELEASE_NAME_INPUT"
             PRERELEASE=true
             MAKE_LATEST=false
-            RELEASE_TAG="v${VERSION}-${RELEASE_TAG_SUFFIX_INPUT}"
+            RELEASE_TAG="v${VERSION}${RELEASE_TAG_SUFFIX_INPUT}"
           else
             BRANCH_NAME="${GITHUB_REF#refs/heads/}"
             RELEASE_NAME="$(echo "$BRANCH_NAME" | perl -pe 's/^(.)/\U$1/')"
