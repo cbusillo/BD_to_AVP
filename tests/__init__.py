@@ -1,1 +1,1 @@
-"""Installer smoke tests."""
+"""BD-to-AVP unit tests."""

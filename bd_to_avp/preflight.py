@@ -9,12 +9,6 @@ class DependencyPreflightError(RuntimeError):
     pass
 
 
-def check_install_version() -> bool:
-    installed_version = config.app.load_version_from_file()
-    print(f"Installed bd-to-avp version: {installed_version}\nCode bd-to-avp version: {config.app.code_version}")
-    return installed_version == config.app.code_version
-
-
 def verify_runtime_ready() -> None:
     missing_binaries = get_missing_dependency_binaries_for_current_job()
     if not missing_binaries:
