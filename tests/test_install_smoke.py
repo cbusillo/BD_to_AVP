@@ -1,4 +1,5 @@
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -115,7 +116,7 @@ class CaskDetectionTests(unittest.TestCase):
 
 
 class DependencyVerificationTests(unittest.TestCase):
-    def test_missing_dependency_binaries_raise_clear_error(self) -> None:
+    def test_missing_required_dependency_binaries_raise_clear_error(self) -> None:
         fake_homebrew_bin = Path("/missing")
 
         with (
@@ -126,6 +127,42 @@ class DependencyVerificationTests(unittest.TestCase):
             self.assertRaisesRegex(ValueError, "Required command-line tools are missing"),
         ):
             install.verify_dependency_binaries()
+
+    def test_native_mvc_helper_avoids_wine_cask_requirement(self) -> None:
+        with tempfile.NamedTemporaryFile() as helper_file:
+            helper_path = Path(helper_file.name)
+            helper_path.chmod(0o755)
+
+            with (
+                patch.object(install.config, "EDGE264_TEST_PATH", helper_path),
+                patch.object(install.config, "source_path", Path("/movie/source.mkv")),
+                patch.object(install.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
+            ):
+                self.assertFalse(install.needs_legacy_frim_stack())
+                self.assertEqual(install.get_required_casks(), ["makemkv"])
+
+    def test_mts_sources_still_require_legacy_wine_stack(self) -> None:
+        with tempfile.NamedTemporaryFile() as helper_file:
+            helper_path = Path(helper_file.name)
+            helper_path.chmod(0o755)
+
+            with (
+                patch.object(install.config, "EDGE264_TEST_PATH", helper_path),
+                patch.object(install.config, "source_path", Path("/movie/source.m2ts")),
+                patch.object(install.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
+            ):
+                self.assertTrue(install.needs_legacy_frim_stack())
+                self.assertEqual(install.get_required_casks(), ["makemkv", "wine-stable"])
+
+    def test_native_mvc_helper_repairs_missing_execute_bit(self) -> None:
+        with tempfile.NamedTemporaryFile() as helper_file:
+            helper_path = Path(helper_file.name)
+            helper_path.chmod(0o644)
+
+            with patch.object(install.config, "EDGE264_TEST_PATH", helper_path):
+                self.assertTrue(install.ensure_native_mvc_splitter_executable())
+
+            self.assertTrue(helper_path.stat().st_mode & 0o111)
 
 
 if __name__ == "__main__":
