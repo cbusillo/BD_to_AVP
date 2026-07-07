@@ -30,8 +30,8 @@ class PgsSubtitleItem:
         self.start = min([ds.pcs.presentation_timestamp for ds in display_sets] or [None])
         self.end = max([ds.pcs.presentation_timestamp for ds in display_sets] or [None])
         self.image = PgsSubtitleItem.generate_image(display_sets)
-        self.x_offset = min([ds.wds.x_offset for ds in display_sets] or [None])
-        self.y_offset = min([ds.wds.y_offset for ds in display_sets] or [None])
+        self.x_offset = min([ds.wds.x_offset for ds in display_sets if ds.wds.num_windows > 0] or [None])
+        self.y_offset = min([ds.wds.y_offset for ds in display_sets if ds.wds.num_windows > 0] or [None])
         self.text: typing.Optional[str] = None
         self.place: typing.Optional[typing.Tuple[int, int, int, int]] = None
 
