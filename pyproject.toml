@@ -19,14 +19,14 @@ dependencies = [
     "ffmpeg-python>=0.2.0,<0.3",
     "humanize>=4.9.0,<5",
     "opencv-python==4.10.0.84",
-    "packaging>=24.1,<25",
+    "packaging>=24.1,<27",
     "pgsrip==0.1.11",
-    "psutil>=5.9.8,<6",
+    "psutil>=5.9.8,<8",
     "pygithub>=2.3.0,<3",
     "pyside6>=6.7.1,<7",
     "requests>=2.32.3,<3",
     "setuptools>=70.3.0,<71",
-    "wakepy>=0.9.1,<0.10",
+    "wakepy>=0.9.1,<1.1",
 ]
 
 [project.urls]
@@ -84,14 +84,14 @@ requires = [
     "ffmpeg-python>=0.2.0,<0.3",
     "humanize>=4.9.0,<5",
     "opencv-python==4.10.0.84",
-    "packaging>=24.1,<25",
+    "packaging>=24.1,<27",
     "pgsrip==0.1.11",
-    "psutil>=5.9.8,<6",
+    "psutil>=5.9.8,<8",
     "pygithub>=2.3.0,<3",
     "pyside6>=6.7.1,<7",
     "requests>=2.32.3,<3",
     "setuptools>=70.3.0,<71",
-    "wakepy>=0.9.1,<0.10",
+    "wakepy>=0.9.1,<1.1",
 ]
 
 [tool.briefcase.app.bd-to-avp.macOS]
