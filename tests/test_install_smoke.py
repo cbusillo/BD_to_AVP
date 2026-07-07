@@ -141,7 +141,7 @@ class DependencyVerificationTests(unittest.TestCase):
                 self.assertFalse(install.needs_legacy_frim_stack())
                 self.assertEqual(install.get_required_casks(), ["makemkv"])
 
-    def test_mts_sources_do_not_require_legacy_wine_stack_when_native_helper_is_ready(self) -> None:
+    def test_mts_sources_do_not_need_runtime_legacy_stack_when_native_helper_is_ready(self) -> None:
         with tempfile.NamedTemporaryFile() as helper_file:
             helper_path = Path(helper_file.name)
             helper_path.chmod(0o755)

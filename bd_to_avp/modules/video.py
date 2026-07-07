@@ -65,6 +65,10 @@ def has_native_mvc_splitter() -> bool:
     return os.access(config.EDGE264_TEST_PATH, os.X_OK)
 
 
+def can_use_native_mvc_splitter(disc_info: DiscInfo) -> bool:
+    return disc_info.color_depth == 8 and has_native_mvc_splitter()
+
+
 def ensure_legacy_frim_available() -> None:
     wineboot_path = config.HOMEBREW_PREFIX_BIN / "wineboot"
     missing_paths = [path for path in [config.WINE_PATH, wineboot_path, config.FRIMDECODE_PATH] if not path.exists()]
@@ -223,7 +227,7 @@ def split_mvc_to_stereo(
 ):
     ffmpeg_left_log = left_output_path.with_suffix(".log")
     ffmpeg_right_log = right_output_path.with_suffix(".log")
-    if has_native_mvc_splitter():
+    if can_use_native_mvc_splitter(disc_info):
         result = split_mvc_to_stereo_native(
             video_input_path,
             left_output_path,
