@@ -1,0 +1,14 @@
+version = "8.1.2"
+base_url = "https://ffmpeg.martin-riedl.de/download/macos/arm64/1783011502_8.1.2"
+license_mode = "GPLv3"
+build = "static macOS arm64 build from ffmpeg.martin-riedl.de"
+
+[[assets]]
+name = "ffmpeg"
+zip_sha256 = "ef1aa60006c7b77ce170c1608c08d8e4ba1c30c5746f2ac986ded932d0ac2c3c"
+binary_sha256 = "eaf91238e104dd0e262bc6510e25061855cc99a6955a721b0ac99660d58c473d"
+
+[[assets]]
+name = "ffprobe"
+zip_sha256 = "c39787f4af7a3932502d2d48db6f6feaaa836b48a73ef78c32cc3285df61dfaf"
+binary_sha256 = "ed9dc5871914b466b96b402c9ec0ba68ce4f836e72faa464b1b4e279835bd4a6"

@@ -1,0 +1,66 @@
+name: Update FFmpeg Vendor Pins
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: FFmpeg version represented by the candidate build, for example 8.1.3
+        required: true
+      base_url:
+        description: Base URL containing ffmpeg.zip and ffprobe.zip
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-ffmpeg-vendor:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Refresh FFmpeg manifest
+        env:
+          FFMPEG_VERSION: ${{ inputs.version }}
+          FFMPEG_BASE_URL: ${{ inputs.base_url }}
+        run: |
+          uv run python -m scripts.update_ffmpeg_manifest \
+            --version "$FFMPEG_VERSION" \
+            --base-url "$FFMPEG_BASE_URL"
+
+      - name: Vendor and verify FFmpeg tools
+        run: |
+          uv run python scripts/vendor_ffmpeg_macos.py --refresh
+          ffmpeg_path="bd_to_avp/bin/ffmpeg"
+          ffprobe_path="bd_to_avp/bin/ffprobe"
+          "$ffmpeg_path" -hide_banner -version
+          "$ffprobe_path" -hide_banner -version
+          if otool -L "$ffmpeg_path" "$ffprobe_path" | grep -q /opt/homebrew; then
+            echo "Vendored FFmpeg tools must not link to /opt/homebrew"
+            exit 1
+          fi
+
+      - name: Create update pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
+        with:
+          branch: automation/update-ffmpeg-vendor
+          delete-branch: true
+          title: Update app-local FFmpeg vendor pins to ${{ inputs.version }}
+          commit-message: Update app-local FFmpeg vendor pins to ${{ inputs.version }}
+          body: |
+            Updates the app-local macOS arm64 FFmpeg vendor manifest.
+
+            Version: `${{ inputs.version }}`
+            Base URL: `${{ inputs.base_url }}`
+
+            The workflow downloaded `ffmpeg.zip` and `ffprobe.zip`, regenerated archive and extracted-binary SHA256 values, verified both tools execute, and checked they do not link to `/opt/homebrew`.
