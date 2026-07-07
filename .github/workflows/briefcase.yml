@@ -5,7 +5,7 @@ name: Package with Briefcase and Create Release
   workflow_dispatch:
     inputs:
       source_ref:
-        description: Branch, tag, or SHA to package
+        description: Branch or tag ref to package; tag older commits instead of using raw SHAs
         required: true
       release_name:
         description: GitHub release name prefix
@@ -37,23 +37,37 @@ jobs:
       CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: >-
             ${{ github.event_name == 'workflow_dispatch' &&
             inputs.source_ref || github.ref }}
+      - name: Validate release ref
+        id: release_ref
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [[ "$SOURCE_REF" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+            echo "Manual releases must use a branch or tag ref, not a raw SHA. Tag the commit first or package a branch." >&2
+            exit 1
+          fi
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          else
+            PREVIOUS_TAG=$(curl --silent "https://api.github.com/repos/cbusillo/BD_to_AVP/releases/latest" | jq -r .tag_name)
+          fi
+
+          echo "previous_tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
       - name: Get commit messages
         id: get_commit_messages
         run: |
           set -euo pipefail
           git fetch --tags
           echo "github.ref: ${{ github.ref }}"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            LAST_TAG=$(git tag --sort=-v:refname | head -n 1)
-          else
-            LAST_TAG=$(curl --silent "https://api.github.com/repos/cbusillo/BD_to_AVP/releases/latest" | jq -r .tag_name)
-          fi
+          LAST_TAG="${{ steps.release_ref.outputs.previous_tag }}"
           if [ -n "$LAST_TAG" ] && git rev-parse --verify --quiet "$LAST_TAG" >/dev/null; then
             LOG_RANGE="$LAST_TAG..HEAD"
           else
@@ -84,7 +98,13 @@ jobs:
         run: |
           KEYCHAIN_PATH="$(pwd)/build.keychain"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          USER_KEYCHAINS=()
+          while IFS= read -r keychain; do
+            USER_KEYCHAINS+=("$keychain")
+          done < <(security list-keychains -d user | sed 's/[" ]//g')
+          security list-keychains -d user -s "$KEYCHAIN_PATH" "${USER_KEYCHAINS[@]}"
           security default-keychain -s "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           # Import both certificates
           echo "${{ secrets.CERTIFICATE }}" | base64 --decode > app_certificate.p12
@@ -94,7 +114,6 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign:,productsign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
       - name: Store Notarization Credentials
         run: |
-          echo "${{ secrets.KEYCHAIN_PASSWORD }}" | xcrun altool --store-password-in-keychain-item "${{ secrets.KEYCHAIN_NAME }}" -u "${{ secrets.APPLE_ID }}" -p -
           xcrun notarytool store-credentials "${{ secrets.KEYCHAIN_NAME }}" --apple-id "${{ secrets.APPLE_ID }}" --password "${{ secrets.KEYCHAIN_PASSWORD }}" --team-id "${{ secrets.TEAM_ID }}"
       - name: Extract version
         id: extract_version
@@ -112,19 +131,22 @@ jobs:
           set -euo pipefail
           VERSION="${{ steps.extract_version.outputs.version }}"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            PACKAGE_VERSION="${VERSION}${RELEASE_TAG_SUFFIX_INPUT}"
             RELEASE_NAME="$RELEASE_NAME_INPUT"
             PRERELEASE=true
             MAKE_LATEST=false
-            RELEASE_TAG="v${VERSION}${RELEASE_TAG_SUFFIX_INPUT}"
+            RELEASE_TAG="v${PACKAGE_VERSION}"
           else
+            PACKAGE_VERSION="$VERSION"
             BRANCH_NAME="${GITHUB_REF#refs/heads/}"
             RELEASE_NAME="$(echo "$BRANCH_NAME" | perl -pe 's/^(.)/\U$1/')"
             PRERELEASE=false
             MAKE_LATEST=true
-            RELEASE_TAG="v${VERSION}"
+            RELEASE_TAG="v${PACKAGE_VERSION}"
           fi
 
           {
+            echo "package_version=$PACKAGE_VERSION"
             echo "prerelease=$PRERELEASE"
             echo "make_latest=$MAKE_LATEST"
             echo "release_name=$RELEASE_NAME"
@@ -134,8 +156,28 @@ jobs:
             echo "$RELEASE_NOTES_INPUT"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+      - name: Apply prerelease package version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          PACKAGE_VERSION: ${{ steps.release_metadata.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          awk -v version="$PACKAGE_VERSION" '
+            /^\[/ { section=$0 }
+            section == "[project]" && /^version = / {
+              print "version = \"" version "\""
+              next
+            }
+            section == "[tool.briefcase]" && /^version = / {
+              print "version = \"" version "\""
+              next
+            }
+            { print }
+          ' pyproject.toml > pyproject.toml.tmp
+          mv pyproject.toml.tmp pyproject.toml
       - name: Package application for GitHub
         run: |
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$(pwd)/build.keychain"
           uv run python scripts/briefcase_app.py create
           uv run python scripts/briefcase_app.py build
           find . -name QtWebEngineCore.framework -type d | while read -r dir; do
@@ -145,13 +187,13 @@ jobs:
           uv run python scripts/briefcase_app.py package -i "${{ secrets.DEV_ID }}"
       - name: Upload log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: briefcase-log
           path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/briefcase.*.build.log
       - name: Create Release
         id: create_release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           body: |
             ${{ steps.release_metadata.outputs.release_notes }}
@@ -167,7 +209,7 @@ jobs:
           make_latest: ${{ steps.release_metadata.outputs.make_latest }}
           tag_name: ${{ steps.release_metadata.outputs.release_tag }}
           target_commitish: ${{ steps.release_metadata.outputs.target_commitish }}
-          name: ${{ steps.release_metadata.outputs.release_name }} v${{ steps.extract_version.outputs.version }}
+          name: ${{ steps.release_metadata.outputs.release_name }} v${{ steps.release_metadata.outputs.package_version }}
           files: |
             dist/*.zip
             dist/*.dmg
