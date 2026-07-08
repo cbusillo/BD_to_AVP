@@ -46,7 +46,7 @@ class ProcessingThread(QThread):
         except FileExistsError as error:
             self.file_exists_error.emit(error)
             signal_emitted = True
-        except (RuntimeError, ValueError, KeyError) as error:
+        except Exception as error:
             self.error_occurred.emit(error)
             signal_emitted = True
         finally:
