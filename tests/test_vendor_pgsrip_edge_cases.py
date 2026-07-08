@@ -33,9 +33,15 @@ class MkvTrackOrderingTests(unittest.TestCase):
         mkv.tracks = [forced_track, track_without_forced]
         mkv.media_path = Mock()
 
-        with patch("bd_to_avp.vendor.pgsrip.mkv.MkvPgs") as mkv_pgs:
+        with (
+            patch(
+                "bd_to_avp.vendor.pgsrip.mkv.MkvPgs.expected_srt_path",
+                return_value=Mock(exists=Mock(return_value=False)),
+            ),
+            patch("bd_to_avp.vendor.pgsrip.mkv.MkvPgs") as mkv_pgs,
+        ):
             mkv_pgs.return_value.matches.return_value = True
-            list(mkv.get_pgs_medias(Options(one_per_lang=False)))
+            list(mkv.get_pgs_medias(Options(one_per_lang=False, overwrite=True)))
 
         selected_track_ids = [call.args[1] for call in mkv_pgs.call_args_list]
         self.assertEqual(selected_track_ids, [2, 1])
