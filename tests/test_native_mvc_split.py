@@ -18,6 +18,12 @@ class NativeMvcCommandTests(unittest.TestCase):
 
         self.assertEqual(command, [Path("/tools/edge264_test"), Path("movie_mvc.h264"), "-Omk"])
 
+    def test_native_splitter_command_can_force_single_threaded_decoding(self) -> None:
+        with patch.object(video.config, "EDGE264_TEST_PATH", Path("/tools/edge264_test")):
+            command = video.generate_native_mvc_splitter_command(Path("movie_mvc.h264"), single_threaded=True)
+
+        self.assertEqual(command, [Path("/tools/edge264_test"), Path("movie_mvc.h264"), "-Osk"])
+
     def test_native_ffmpeg_command_splits_side_by_side_stream(self) -> None:
         with (
             patch.object(video.config, "left_right_bitrate", 12),
@@ -159,7 +165,7 @@ class NativeMvcSelectionTests(unittest.TestCase):
             self.assertTrue(helper_path.stat().st_mode & 0o111)
 
     def test_native_split_raises_when_ffmpeg_fails(self) -> None:
-        splitter = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=-15)
+        splitter = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=-15, poll_results=[None])
         ffmpeg_process = _FakeProcess(returncode=1, stdout=None, stderr=None)
 
         with (
@@ -175,11 +181,71 @@ class NativeMvcSelectionTests(unittest.TestCase):
 
         splitter.terminate.assert_called_once()
 
+    def test_native_split_retries_single_threaded_when_splitter_sigaborts(self) -> None:
+        splitter_crash = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=-6, poll_results=[-6])
+        ffmpeg_broken_pipe = _FakeProcess(returncode=1, stdout=None, stderr=None)
+        splitter_retry = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=0, poll_results=[0])
+        ffmpeg_retry = _FakeProcess(returncode=0, stdout=None, stderr=None)
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.video.generate_native_mvc_splitter_command", side_effect=[
+                ["edge264_test", "-Omk"],
+                ["edge264_test", "-Osk"],
+            ]) as splitter_command,
+            patch("bd_to_avp.modules.video.generate_native_mvc_ffmpeg_command", return_value=["ffmpeg"]),
+            patch(
+                "bd_to_avp.modules.video.subprocess.Popen",
+                side_effect=[splitter_crash, ffmpeg_broken_pipe, splitter_retry, ffmpeg_retry],
+            ),
+        ):
+            result = video.split_mvc_to_stereo_native(
+                Path("movie_mvc.h264"), Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov", DiscInfo(), ""
+            )
+
+        self.assertEqual(result, (Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov"))
+        self.assertEqual(
+            [command_call.kwargs for command_call in splitter_command.call_args_list],
+            [{"single_threaded": False}, {"single_threaded": True}],
+        )
+
+    def test_native_split_raises_clear_error_when_single_thread_retry_sigaborts(self) -> None:
+        splitter_crash = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=-6, poll_results=[-6])
+        ffmpeg_broken_pipe = _FakeProcess(returncode=1, stdout=None, stderr=None)
+        splitter_retry_crash = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=-6, poll_results=[-6])
+        ffmpeg_retry_broken_pipe = _FakeProcess(returncode=1, stdout=None, stderr=None)
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(video.config, "EDGE264_TEST_PATH", Path("edge264_test")),
+            patch("bd_to_avp.modules.video.generate_native_mvc_splitter_command", side_effect=[
+                ["edge264_test", "-Omk"],
+                ["edge264_test", "-Osk"],
+            ]),
+            patch("bd_to_avp.modules.video.generate_native_mvc_ffmpeg_command", return_value=["ffmpeg"]),
+            patch(
+                "bd_to_avp.modules.video.subprocess.Popen",
+                side_effect=[splitter_crash, ffmpeg_broken_pipe, splitter_retry_crash, ffmpeg_retry_broken_pipe],
+            ),
+        ):
+            with self.assertRaisesRegex(video.NativeMvcSplitError, "SIGABRT"):
+                video.split_mvc_to_stereo_native(
+                    Path("movie_mvc.h264"), Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov", DiscInfo(), ""
+                )
+
 
 class _FakeProcess:
-    def __init__(self, returncode: int | None, stdout, stderr=None, returncode_after_wait: int | None = None) -> None:
+    def __init__(
+        self,
+        returncode: int | None,
+        stdout,
+        stderr=None,
+        returncode_after_wait: int | None = None,
+        poll_results: list[int | None] | None = None,
+    ) -> None:
         self.returncode = returncode
         self.returncode_after_wait = returncode_after_wait if returncode_after_wait is not None else returncode
+        self.poll_results = poll_results or []
         self.stdout = stdout
         self.stderr = stderr
         self.terminate = Mock()
@@ -191,6 +257,8 @@ class _FakeProcess:
         return self.returncode
 
     def poll(self) -> int | None:
+        if self.poll_results:
+            return self.poll_results.pop(0)
         return self.returncode
 
 

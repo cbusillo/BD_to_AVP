@@ -1,5 +1,6 @@
 import os
 import re
+import signal
 import stat
 import subprocess
 import tempfile
@@ -43,11 +44,16 @@ def explain_native_mvc_unavailable(disc_info: DiscInfo) -> str:
     )
 
 
-def generate_native_mvc_splitter_command(video_input_path: Path) -> list[str | Path]:
+class NativeMvcSplitError(RuntimeError):
+    pass
+
+
+def generate_native_mvc_splitter_command(video_input_path: Path, *, single_threaded: bool = False) -> list[str | Path]:
+    options = "-Osk" if single_threaded else "-Omk"
     return [
         config.EDGE264_TEST_PATH,
         video_input_path,
-        "-Omk",
+        options,
     ]
 
 
@@ -133,20 +139,64 @@ def split_mvc_to_stereo_native(
 ) -> tuple[Path, Path]:
     ffmpeg_command = generate_native_mvc_ffmpeg_command(left_output_path, right_output_path, disc_info, crop_params)
     native_input_path = prepare_native_mvc_input(video_input_path)
-    splitter_command = generate_native_mvc_splitter_command(native_input_path)
+    splitter_log_path = left_output_path.with_suffix(".native_mvc.log")
+    ffmpeg_log_path = left_output_path.with_suffix(".native_ffmpeg.log")
+    try:
+        try:
+            run_native_mvc_split_attempt(
+                native_input_path,
+                ffmpeg_command,
+                ffmpeg_log_path,
+                splitter_log_path,
+                single_threaded=False,
+            )
+        except subprocess.CalledProcessError as error:
+            if not native_splitter_died_by_signal(error):
+                raise
+
+            print("Native MVC splitter crashed; retrying once in single-threaded mode.")
+            left_output_path.unlink(missing_ok=True)
+            right_output_path.unlink(missing_ok=True)
+            run_native_mvc_split_attempt(
+                native_input_path,
+                ffmpeg_command,
+                ffmpeg_log_path,
+                splitter_log_path,
+                single_threaded=True,
+            )
+    except subprocess.CalledProcessError as error:
+        if error.cmd and Path(error.cmd[0]).name == config.EDGE264_TEST_PATH.name:
+            raise NativeMvcSplitError(build_native_splitter_failure_message(error, splitter_log_path)) from error
+        raise
+    finally:
+        if native_input_path != video_input_path:
+            native_input_path.unlink(missing_ok=True)
+
+    return left_output_path, right_output_path
+
+
+def run_native_mvc_split_attempt(
+    native_input_path: Path,
+    ffmpeg_command: list[str],
+    ffmpeg_log_path: Path,
+    splitter_log_path: Path,
+    *,
+    single_threaded: bool,
+) -> None:
+    splitter_command = generate_native_mvc_splitter_command(native_input_path, single_threaded=single_threaded)
 
     if config.output_commands:
         splitter_command_text = " ".join(str(command) for command in splitter_command)
         ffmpeg_command_text = " ".join(ffmpeg_command)
         print(f"Running command:\n{splitter_command_text} | {ffmpeg_command_text}")
 
-    ffmpeg_log_path = left_output_path.with_suffix(".native_ffmpeg.log")
-    splitter_log_path = left_output_path.with_suffix(".native_mvc.log")
-
     splitter_process = None
     ffmpeg_process = None
     try:
-        with open(ffmpeg_log_path, "w") as ffmpeg_log, open(splitter_log_path, "wb") as splitter_log:
+        with open(ffmpeg_log_path, "a") as ffmpeg_log, open(splitter_log_path, "ab") as splitter_log:
+            attempt_name = "single-threaded" if single_threaded else "multi-threaded"
+            ffmpeg_log.write(f"\n--- Native MVC split attempt: {attempt_name} ---\n")
+            splitter_log.write(f"\n--- Native MVC split attempt: {attempt_name} ---\n".encode())
             splitter_process = subprocess.Popen(splitter_command, stdout=subprocess.PIPE, stderr=splitter_log)
             ffmpeg_process = subprocess.Popen(
                 ffmpeg_command,
@@ -160,27 +210,43 @@ def split_mvc_to_stereo_native(
                 splitter_process.stdout.close()
 
             ffmpeg_process.wait()
-            if ffmpeg_process.returncode != 0:
+            splitter_failed_before_cleanup = splitter_process.poll() is not None
+            if ffmpeg_process.returncode != 0 and not splitter_failed_before_cleanup:
                 cleanup_process(splitter_process)
             splitter_process.wait()
 
-        if ffmpeg_process.returncode != 0:
-            raise subprocess.CalledProcessError(ffmpeg_process.returncode, ffmpeg_command)
-        if splitter_process.returncode != 0:
+        if splitter_process.returncode != 0 and (ffmpeg_process.returncode == 0 or splitter_failed_before_cleanup):
             raise subprocess.CalledProcessError(
                 splitter_process.returncode,
                 splitter_command,
                 output=splitter_log_path.read_text(errors="replace"),
             )
+        if ffmpeg_process.returncode != 0:
+            raise subprocess.CalledProcessError(ffmpeg_process.returncode, ffmpeg_command)
     finally:
         if splitter_process:
             cleanup_process(splitter_process)
         if ffmpeg_process:
             cleanup_process(ffmpeg_process)
-        if native_input_path != video_input_path:
-            native_input_path.unlink(missing_ok=True)
 
-    return left_output_path, right_output_path
+
+def native_splitter_died_by_signal(error: subprocess.CalledProcessError) -> bool:
+    return error.returncode < 0 and bool(error.cmd) and Path(error.cmd[0]).name == config.EDGE264_TEST_PATH.name
+
+
+def build_native_splitter_failure_message(error: subprocess.CalledProcessError, splitter_log_path: Path) -> str:
+    signal_name = f"signal {-error.returncode}" if error.returncode < 0 else f"exit code {error.returncode}"
+    if error.returncode < 0:
+        try:
+            signal_name = signal.Signals(-error.returncode).name
+        except ValueError:
+            pass
+    return (
+        "The native MVC splitter crashed while decoding this MVC video stream "
+        f"({signal_name}). This usually means the bundled native decoder hit a Blu-ray MVC bitstream it does not "
+        "currently support. The source may need a splitter update or a future fallback path. "
+        f"Details were written to {splitter_log_path}."
+    )
 
 
 def split_mvc_to_stereo(
