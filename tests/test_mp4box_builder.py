@@ -12,7 +12,7 @@ class MP4BoxBuilderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             manifest_path = Path(temp_dir) / "mp4box.toml"
             manifest_path.write_text(
-                '\n'.join(
+                "\n".join(
                     [
                         'version = "26.02.0"',
                         'repo_url = "https://example.invalid/gpac.git"',
@@ -22,8 +22,8 @@ class MP4BoxBuilderTests(unittest.TestCase):
                         f'binary_sha256 = "{"1" * 64}"',
                         'build = "static test build"',
                         'configure_flags = ["--static-bin", "--use-ffmpeg=no"]',
-                        '',
-                        '[validation]',
+                        "",
+                        "[validation]",
                         'required_file_substring = "Mach-O 64-bit executable arm64"',
                         'required_version_substring = "MP4Box - GPAC version"',
                         'forbidden_link_prefixes = ["/opt/homebrew", "/usr/local"]',
@@ -67,9 +67,7 @@ class MP4BoxBuilderTests(unittest.TestCase):
 
         with patch.object(build_mp4box_macos, "run", side_effect=fake_run):
             with self.assertRaisesRegex(build_mp4box_macos.BuildFailure, "/opt/homebrew"):
-                build_mp4box_macos.verify_macos_binary(
-                    Path("MP4Box"), build_mp4box_macos.load_manifest().validation
-                )
+                build_mp4box_macos.verify_macos_binary(Path("MP4Box"), build_mp4box_macos.load_manifest().validation)
 
     def test_verify_macos_binary_accepts_system_only_linkage(self) -> None:
         def fake_run(command: list[str | Path], **kwargs) -> str:
@@ -92,9 +90,7 @@ class MP4BoxBuilderTests(unittest.TestCase):
 
         with patch.object(build_mp4box_macos, "run", side_effect=fake_run):
             with self.assertRaisesRegex(build_mp4box_macos.BuildFailure, "unexpected"):
-                build_mp4box_macos.verify_macos_binary(
-                    Path("MP4Box"), build_mp4box_macos.load_manifest().validation
-                )
+                build_mp4box_macos.verify_macos_binary(Path("MP4Box"), build_mp4box_macos.load_manifest().validation)
 
     def test_build_mp4box_skips_distclean_without_makefile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -109,9 +105,7 @@ class MP4BoxBuilderTests(unittest.TestCase):
                 return ""
 
             with patch.object(build_mp4box_macos, "run", side_effect=fake_run):
-                build_mp4box_macos.build_mp4box(
-                    source_dir, source_dir / "install", build_mp4box_macos.load_manifest()
-                )
+                build_mp4box_macos.build_mp4box(source_dir, source_dir / "install", build_mp4box_macos.load_manifest())
 
         self.assertNotIn(["make", "distclean"], commands)
         self.assertIn(["make", f"-j{build_mp4box_macos.os.cpu_count() or 1}", "lib"], commands)

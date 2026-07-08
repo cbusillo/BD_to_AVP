@@ -149,9 +149,11 @@ class BriefcaseVendorHookTests(unittest.TestCase):
                 self.assertTrue((app_bin / tool_name).stat().st_mode & 0o111)
 
     def test_briefcase_sync_runs_after_package(self) -> None:
-        with patch.object(briefcase_app, "run") as run, patch.object(
-            briefcase_app, "build_wheelhouse"
-        ) as build_wheelhouse, patch.object(briefcase_app, "sync_vendored_tools_to_existing_app") as sync_tools:
+        with (
+            patch.object(briefcase_app, "run") as run,
+            patch.object(briefcase_app, "build_wheelhouse") as build_wheelhouse,
+            patch.object(briefcase_app, "sync_vendored_tools_to_existing_app") as sync_tools,
+        ):
             briefcase_app.main_with_args(["package", "--no-input"])
 
         build_wheelhouse.assert_called_once()
