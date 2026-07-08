@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WHEELHOUSE = REPO_ROOT / ".briefcase-wheelhouse"
 WHEELHOUSE_REQUIREMENTS = ["pysrt==1.1.2"]
 VENDOR_FFMPEG_COMMANDS = {"create", "build", "run"}
-SYNC_TOOL_COMMANDS = {"create", "build", "run", "package"}
+SYNC_TOOL_COMMANDS = {"create", "build", "run"}
 APP_RESOURCE_BIN = (
     REPO_ROOT
     / "build"

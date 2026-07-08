@@ -120,7 +120,7 @@ class BriefcaseVendorHookTests(unittest.TestCase):
     def test_sync_vendored_tools_for_package_commands(self) -> None:
         self.assertTrue(briefcase_app.should_sync_vendored_tools(["create", "--no-input"]))
         self.assertTrue(briefcase_app.should_sync_vendored_tools(["build"]))
-        self.assertTrue(briefcase_app.should_sync_vendored_tools(["package", "-i", "Developer ID"]))
+        self.assertFalse(briefcase_app.should_sync_vendored_tools(["package", "-i", "Developer ID"]))
         self.assertFalse(briefcase_app.should_sync_vendored_tools(["--help"]))
 
     def test_do_not_vendor_ffmpeg_for_non_app_commands(self) -> None:
@@ -148,7 +148,7 @@ class BriefcaseVendorHookTests(unittest.TestCase):
                 self.assertEqual((app_bin / tool_name).read_text(), tool_name)
                 self.assertTrue((app_bin / tool_name).stat().st_mode & 0o111)
 
-    def test_briefcase_sync_runs_after_package(self) -> None:
+    def test_briefcase_package_does_not_resync_signed_tools(self) -> None:
         with (
             patch.object(briefcase_app, "run") as run,
             patch.object(briefcase_app, "build_wheelhouse") as build_wheelhouse,
@@ -158,7 +158,7 @@ class BriefcaseVendorHookTests(unittest.TestCase):
 
         build_wheelhouse.assert_called_once()
         run.assert_called_once()
-        self.assertEqual(sync_tools.call_count, 2)
+        sync_tools.assert_not_called()
 
 
 if __name__ == "__main__":
