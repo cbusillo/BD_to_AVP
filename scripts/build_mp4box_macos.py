@@ -126,7 +126,10 @@ def clone_or_update_source(source_dir: Path, manifest: BuildManifest, *, refresh
         run(["git", "clone", "--depth", "1", "--branch", manifest.tag, manifest.repo_url, source_dir])
         return
 
-    run(["git", "fetch", "--depth", "1", "origin", "tag", manifest.tag], cwd=source_dir)
+    try:
+        run(["git", "rev-parse", "--verify", f"{manifest.tag}^{{commit}}"], cwd=source_dir)
+    except subprocess.CalledProcessError:
+        run(["git", "fetch", "--depth", "1", "origin", "tag", manifest.tag], cwd=source_dir)
     run(["git", "checkout", manifest.tag], cwd=source_dir)
 
 

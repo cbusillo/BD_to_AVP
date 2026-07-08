@@ -1,3 +1,4 @@
+import subprocess
 import tempfile
 import unittest
 
@@ -91,6 +92,43 @@ class MP4BoxBuilderTests(unittest.TestCase):
         with patch.object(build_mp4box_macos, "run", side_effect=fake_run):
             with self.assertRaisesRegex(build_mp4box_macos.BuildFailure, "unexpected"):
                 build_mp4box_macos.verify_macos_binary(Path("MP4Box"), build_mp4box_macos.load_manifest().validation)
+
+    def test_clone_or_update_source_uses_cached_tag_without_fetch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_dir = Path(temp_dir) / "gpac-src"
+            source_dir.mkdir()
+            commands: list[list[str | Path]] = []
+
+            def fake_run(command: list[str | Path], **kwargs) -> str:
+                commands.append(command)
+                return "cached-commit"
+
+            manifest = build_mp4box_macos.load_manifest()
+            with patch.object(build_mp4box_macos, "run", side_effect=fake_run):
+                build_mp4box_macos.clone_or_update_source(source_dir, manifest, refresh=False)
+
+        self.assertIn(["git", "rev-parse", "--verify", f"{manifest.tag}^{{commit}}"], commands)
+        self.assertIn(["git", "checkout", manifest.tag], commands)
+        self.assertNotIn(["git", "fetch", "--depth", "1", "origin", "tag", manifest.tag], commands)
+
+    def test_clone_or_update_source_fetches_missing_cached_tag(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_dir = Path(temp_dir) / "gpac-src"
+            source_dir.mkdir()
+            commands: list[list[str | Path]] = []
+
+            def fake_run(command: list[str | Path], **kwargs) -> str:
+                commands.append(command)
+                if command[:3] == ["git", "rev-parse", "--verify"]:
+                    raise subprocess.CalledProcessError(returncode=128, cmd=command)
+                return ""
+
+            manifest = build_mp4box_macos.load_manifest()
+            with patch.object(build_mp4box_macos, "run", side_effect=fake_run):
+                build_mp4box_macos.clone_or_update_source(source_dir, manifest, refresh=False)
+
+        self.assertIn(["git", "fetch", "--depth", "1", "origin", "tag", manifest.tag], commands)
+        self.assertIn(["git", "checkout", manifest.tag], commands)
 
     def test_build_mp4box_skips_distclean_without_makefile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
