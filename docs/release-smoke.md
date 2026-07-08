@@ -29,7 +29,8 @@ Record:
 On the clean machine:
 
 ```bash
-test ! -e /opt/homebrew || echo "Homebrew is present; use a cleaner VM for the required smoke"
+test ! -e /opt/homebrew || echo "Apple Silicon Homebrew is present; use a cleaner VM for the required smoke"
+test ! -e /usr/local/Homebrew || echo "Intel Homebrew is present; use a cleaner VM for the required smoke"
 spctl --assess --type open --verbose=4 ~/Downloads/*.dmg
 ```
 
@@ -56,7 +57,7 @@ Expected result:
 - Gatekeeper assessment passes.
 - App bundle layout is valid.
 - Bundled tools run from the app bundle.
-- If Xcode Command Line Tools are available, bundled tools do not link to `/opt/homebrew`. If developer tools are not installed, the scripts say the linkage check was skipped.
+- If Xcode Command Line Tools are available, bundled tools do not link to `/opt/homebrew` or `/usr/local`. If developer tools are not installed, the scripts say the linkage check was skipped.
 - The packaged CLI `--version` matches `Info.plist`.
 - The packaged CLI `--help` runs with a sanitized `PATH`.
 - If MakeMKV is absent, the script records that the first-run path should ask the user to install MakeMKV.
