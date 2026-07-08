@@ -48,6 +48,9 @@ class NativeMvcSplitError(RuntimeError):
     pass
 
 
+NATIVE_MVC_PROBE_TIMEOUT_SECONDS = 30
+
+
 def generate_native_mvc_splitter_command(video_input_path: Path, *, single_threaded: bool = False) -> list[str | Path]:
     options = "-Osk" if single_threaded else "-Omk"
     return [
@@ -55,6 +58,13 @@ def generate_native_mvc_splitter_command(video_input_path: Path, *, single_threa
         video_input_path,
         options,
     ]
+
+
+def should_probe_native_multithread_splitter() -> bool:
+    source_path = config.source_path
+    if not source_path:
+        return False
+    return source_path.suffix.lower() in config.IMAGE_EXTENSIONS
 
 
 def prepare_native_mvc_input(video_input_path: Path) -> Path:
@@ -142,14 +152,31 @@ def split_mvc_to_stereo_native(
     splitter_log_path = left_output_path.with_suffix(".native_mvc.log")
     ffmpeg_log_path = left_output_path.with_suffix(".native_ffmpeg.log")
     try:
-        try:
-            run_native_mvc_split_attempt(
+        skip_multithreaded_attempt = False
+        if should_probe_native_multithread_splitter():
+            skip_multithreaded_attempt = native_multithread_splitter_probe_crashed(
                 native_input_path,
-                ffmpeg_command,
-                ffmpeg_log_path,
                 splitter_log_path,
-                single_threaded=False,
             )
+
+        try:
+            if skip_multithreaded_attempt:
+                print("Native MVC splitter probe crashed; using slower single-threaded mode.")
+                run_native_mvc_split_attempt(
+                    native_input_path,
+                    ffmpeg_command,
+                    ffmpeg_log_path,
+                    splitter_log_path,
+                    single_threaded=True,
+                )
+            else:
+                run_native_mvc_split_attempt(
+                    native_input_path,
+                    ffmpeg_command,
+                    ffmpeg_log_path,
+                    splitter_log_path,
+                    single_threaded=False,
+                )
         except subprocess.CalledProcessError as error:
             if not native_splitter_died_by_signal(error):
                 raise
@@ -173,6 +200,39 @@ def split_mvc_to_stereo_native(
             native_input_path.unlink(missing_ok=True)
 
     return left_output_path, right_output_path
+
+
+def native_multithread_splitter_probe_crashed(native_input_path: Path, splitter_log_path: Path) -> bool:
+    splitter_command = generate_native_mvc_splitter_command(native_input_path, single_threaded=False)
+    splitter_process = None
+    with open(splitter_log_path, "ab") as splitter_log:
+        splitter_log.write(b"\n--- Native MVC split probe: multi-threaded ---\n")
+        try:
+            splitter_process = subprocess.Popen(
+                splitter_command,
+                stdout=subprocess.DEVNULL,
+                stderr=splitter_log,
+            )
+            splitter_process.wait(timeout=NATIVE_MVC_PROBE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            if splitter_process:
+                cleanup_process(splitter_process)
+                try:
+                    splitter_process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    # The probe already survived long enough; leave full cleanup to the process group handler.
+                    pass
+            return False
+
+    if splitter_process.returncode == 0:
+        return False
+    if splitter_process.returncode < 0:
+        return True
+    raise subprocess.CalledProcessError(
+        splitter_process.returncode,
+        splitter_command,
+        output=splitter_log_path.read_text(errors="replace"),
+    )
 
 
 def run_native_mvc_split_attempt(
