@@ -1,0 +1,48 @@
+version = "26.02.0"
+repo_url = "https://github.com/gpac/gpac.git"
+tag = "v26.02.0"
+license_mode = "LGPL-2.1-or-later"
+binary = "MP4Box"
+binary_sha256 = "eb63ed3f3c73eadc61f9158961114a614c208cd5929f1abb7d13da3a679cfedf"
+build = "static arm64 macOS MP4Box built from GPAC source with Homebrew hidden and external libraries disabled"
+
+configure_flags = [
+    "--static-bin",
+    "--disable-rmtws",
+    "--disable-network",
+    "--disable-ssl",
+    "--disable-x11",
+    "--disable-sdl",
+    "--use-zlib=system",
+    "--use-opensvc=no",
+    "--use-openhevc=no",
+    "--use-platinum=no",
+    "--use-freetype=no",
+    "--use-ssl=no",
+    "--use-jpeg=no",
+    "--use-openjpeg=no",
+    "--use-png=no",
+    "--use-mad=no",
+    "--use-a52=no",
+    "--use-xvid=no",
+    "--use-faad=no",
+    "--use-ffmpeg=no",
+    "--use-freenect=no",
+    "--use-vorbis=no",
+    "--use-theora=no",
+    "--use-nghttp2=no",
+    "--use-ngtcp2=no",
+    "--use-nghttp3=no",
+    "--use-lzma=no",
+    "--use-curl=no",
+]
+
+[validation]
+required_file_substring = "Mach-O 64-bit executable arm64"
+required_version_substring = "MP4Box - GPAC version"
+forbidden_link_prefixes = ["/opt/homebrew", "/usr/local"]
+expected_system_links = ["/usr/lib/libz.1.dylib", "/usr/lib/libSystem.B.dylib"]
+
+[update]
+source = "https://github.com/gpac/gpac/releases"
+process = "When updating, change this manifest tag/version, run scripts/build_mp4box_macos.py, commit the generated bd_to_avp/bin/MP4Box binary, and include linkage plus Apple media gate proof in the PR."

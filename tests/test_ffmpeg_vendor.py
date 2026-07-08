@@ -117,6 +117,12 @@ class BriefcaseVendorHookTests(unittest.TestCase):
         self.assertTrue(briefcase_app.should_vendor_ffmpeg(["build"]))
         self.assertFalse(briefcase_app.should_vendor_ffmpeg(["package", "-i", "Developer ID"]))
 
+    def test_sync_vendored_tools_for_package_commands(self) -> None:
+        self.assertTrue(briefcase_app.should_sync_vendored_tools(["create", "--no-input"]))
+        self.assertTrue(briefcase_app.should_sync_vendored_tools(["build"]))
+        self.assertTrue(briefcase_app.should_sync_vendored_tools(["package", "-i", "Developer ID"]))
+        self.assertFalse(briefcase_app.should_sync_vendored_tools(["--help"]))
+
     def test_do_not_vendor_ffmpeg_for_non_app_commands(self) -> None:
         self.assertFalse(briefcase_app.should_vendor_ffmpeg(["--help"]))
 
@@ -128,8 +134,9 @@ class BriefcaseVendorHookTests(unittest.TestCase):
             app_bin = temp_path / "app" / "bd_to_avp" / "bin"
             source_bin.mkdir(parents=True)
             app_bin.mkdir(parents=True)
-            (source_bin / "ffmpeg").write_text("ffmpeg")
-            (source_bin / "ffprobe").write_text("ffprobe")
+            for tool_name in briefcase_app.VENDORED_TOOLS:
+                (source_bin / tool_name).write_text(tool_name)
+                (source_bin / tool_name).chmod(0o644)
 
             with (
                 patch.object(briefcase_app, "REPO_ROOT", repo_root),
@@ -137,8 +144,19 @@ class BriefcaseVendorHookTests(unittest.TestCase):
             ):
                 briefcase_app.sync_vendored_tools_to_existing_app()
 
-            self.assertEqual((app_bin / "ffmpeg").read_text(), "ffmpeg")
-            self.assertEqual((app_bin / "ffprobe").read_text(), "ffprobe")
+            for tool_name in briefcase_app.VENDORED_TOOLS:
+                self.assertEqual((app_bin / tool_name).read_text(), tool_name)
+                self.assertTrue((app_bin / tool_name).stat().st_mode & 0o111)
+
+    def test_briefcase_sync_runs_after_package(self) -> None:
+        with patch.object(briefcase_app, "run") as run, patch.object(
+            briefcase_app, "build_wheelhouse"
+        ) as build_wheelhouse, patch.object(briefcase_app, "sync_vendored_tools_to_existing_app") as sync_tools:
+            briefcase_app.main_with_args(["package", "--no-input"])
+
+        build_wheelhouse.assert_called_once()
+        run.assert_called_once()
+        self.assertEqual(sync_tools.call_count, 2)
 
 
 if __name__ == "__main__":

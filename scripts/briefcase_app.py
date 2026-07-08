@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WHEELHOUSE = REPO_ROOT / ".briefcase-wheelhouse"
 WHEELHOUSE_REQUIREMENTS = ["pysrt==1.1.2"]
 VENDOR_FFMPEG_COMMANDS = {"create", "build", "run"}
+SYNC_TOOL_COMMANDS = {"create", "build", "run", "package"}
 APP_RESOURCE_BIN = (
     REPO_ROOT
     / "build"
@@ -24,7 +25,7 @@ APP_RESOURCE_BIN = (
     / "bd_to_avp"
     / "bin"
 )
-VENDORED_TOOLS = ["ffmpeg", "ffprobe"]
+VENDORED_TOOLS = ["ffmpeg", "ffprobe", "MP4Box"]
 
 
 def run(command: list[str]) -> None:
@@ -68,13 +69,20 @@ def sync_vendored_tools_to_existing_app() -> None:
     for tool_name in VENDORED_TOOLS:
         source_path = REPO_ROOT / "bd_to_avp" / "bin" / tool_name
         if source_path.exists():
-            shutil.copy2(source_path, APP_RESOURCE_BIN / tool_name)
+            output_path = APP_RESOURCE_BIN / tool_name
+            shutil.copy2(source_path, output_path)
+            output_path.chmod(output_path.stat().st_mode | 0o111)
 
 
-def main() -> None:
+def should_sync_vendored_tools(briefcase_args: list[str]) -> bool:
+    commands = {arg for arg in briefcase_args if not arg.startswith("-")}
+    return bool(commands & SYNC_TOOL_COMMANDS)
+
+
+def main_with_args(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run Briefcase with repo-local packaging fixes.")
     parser.add_argument("briefcase_args", nargs=argparse.REMAINDER)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not args.briefcase_args:
         parser.error("provide a Briefcase command, for example: create --no-input")
@@ -82,6 +90,8 @@ def main() -> None:
     build_wheelhouse()
     if should_vendor_ffmpeg(args.briefcase_args):
         vendor_ffmpeg()
+    elif should_sync_vendored_tools(args.briefcase_args):
+        sync_vendored_tools_to_existing_app()
     run(
         [
             sys.executable,
@@ -92,6 +102,12 @@ def main() -> None:
             briefcase_config_override(),
         ]
     )
+    if should_sync_vendored_tools(args.briefcase_args):
+        sync_vendored_tools_to_existing_app()
+
+
+def main() -> None:
+    main_with_args()
 
 
 if __name__ == "__main__":

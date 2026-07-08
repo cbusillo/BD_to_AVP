@@ -1,0 +1,35 @@
+MP4Box macOS arm64 binary
+
+BD_to_AVP packages MP4Box as a separate command-line executable for final
+QuickTime-compatible MV-HEVC, audio, and tx3g subtitle muxing.
+
+Vendored binary source:
+- Project: GPAC / MP4Box
+- Version: 26.02.0
+- Source tag: https://github.com/gpac/gpac/tree/v26.02.0
+- Platform: macOS arm64 static executable
+- Executable SHA256: eb63ed3f3c73eadc61f9158961114a614c208cd5929f1abb7d13da3a679cfedf
+
+The vendored build is a static MP4Box executable built from GPAC source with
+Homebrew hidden from the build environment and external codec, image, network,
+and SSL libraries disabled. The resulting executable links only to macOS system
+libraries (`/usr/lib/libz.1.dylib` and `/usr/lib/libSystem.B.dylib`).
+
+MP4Box / GPAC is distributed under LGPL-2.1-or-later. BD_to_AVP invokes MP4Box
+as a separate command-line executable. Downstream redistributors must preserve
+GPAC's applicable license obligations and corresponding-source access.
+
+Embedded build configuration reported by `MP4Box -version`:
+
+--static-bin --disable-rmtws --disable-network --disable-ssl --disable-x11 --disable-sdl --use-zlib=system --use-opensvc=no --use-openhevc=no --use-platinum=no --use-freetype=no --use-ssl=no --use-jpeg=no --use-openjpeg=no --use-png=no --use-mad=no --use-a52=no --use-xvid=no --use-faad=no --use-ffmpeg=no --use-freenect=no --use-vorbis=no --use-theora=no --use-nghttp2=no --use-ngtcp2=no --use-nghttp3=no --use-lzma=no --use-curl=no
+
+GPAC source and license information:
+- Source: https://github.com/gpac/gpac
+- Releases: https://github.com/gpac/gpac/releases
+- Upstream license file: https://github.com/gpac/gpac/blob/master/COPYING
+- GNU LGPL v2.1 text: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt
+
+The build script is `scripts/build_mp4box_macos.py`. It reads
+`vendor/mp4box-macos-arm64.toml`, checks out the pinned GPAC tag, builds MP4Box,
+verifies arm64/system-only linkage, and installs the executable into
+`bd_to_avp/bin`.
