@@ -33,8 +33,8 @@ pass "app bundle layout"
 spctl --assess --type execute --verbose=4 "$APP_PATH" >/dev/null 2>&1 || fail "Gatekeeper assessment failed"
 pass "Gatekeeper assessment"
 
-if [ -e /opt/homebrew ]; then
-  printf 'note - /opt/homebrew exists on this machine; smoke uses sanitized PATH\n'
+if [ -e /opt/homebrew ] || [ -e /usr/local/Homebrew ]; then
+  printf 'note - Homebrew exists on this machine; smoke uses sanitized PATH\n'
 else
   pass "Homebrew absent"
 fi
@@ -55,8 +55,12 @@ for tool in ffmpeg ffprobe edge264_test mkvextract mkvmerge MP4Box spatial-media
     MP4Box) "$TOOL_PATH" -version >/dev/null 2>&1 || fail "$tool did not run" ;;
     *) "$TOOL_PATH" --help >/dev/null 2>&1 || fail "$tool did not run" ;;
   esac
-  if [ "$CHECK_LINKS" = true ] && otool -L "$TOOL_PATH" | grep -q '/opt/homebrew'; then
-    fail "$tool links to /opt/homebrew"
+  if [ "$CHECK_LINKS" = true ]; then
+    LINKED_LIBRARIES="$(otool -L "$TOOL_PATH")"
+    case "$LINKED_LIBRARIES" in
+      *"/opt/homebrew"*) fail "$tool links to /opt/homebrew" ;;
+      *"/usr/local"*) fail "$tool links to /usr/local" ;;
+    esac
   fi
 done
 pass "bundled tools"

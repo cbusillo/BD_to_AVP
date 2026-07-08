@@ -156,8 +156,9 @@ def verify_bundled_tool(
         linked_libraries = run(["otool", "-L", tool_path], env=clean_env).stdout
     except (FileNotFoundError, subprocess.CalledProcessError) as error:
         raise SmokeFailure(f"Could not inspect linked libraries for {tool_path}: {error}") from error
-    if "/opt/homebrew" in linked_libraries:
-        raise SmokeFailure(f"Bundled {tool_path.name} links to /opt/homebrew:\n{linked_libraries}")
+    for forbidden_path in ["/opt/homebrew", "/usr/local"]:
+        if forbidden_path in linked_libraries:
+            raise SmokeFailure(f"Bundled {tool_path.name} links to {forbidden_path}:\n{linked_libraries}")
 
 
 def verify_bundled_tools(bundle: AppBundle, clean_env: dict[str, str]) -> None:

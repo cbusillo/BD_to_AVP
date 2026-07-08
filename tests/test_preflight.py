@@ -24,6 +24,7 @@ class DependencyPreflightTests(unittest.TestCase):
 
     def test_missing_native_mvc_helper_raises_clear_error(self) -> None:
         with (
+            patch.object(preflight.config.app, "is_gui", False),
             patch.object(preflight.config, "FFMPEG_PATH", Path(__file__)),
             patch.object(preflight.config, "FFPROBE_PATH", Path(__file__)),
             patch.object(preflight.config, "MAKEMKVCON_PATH", Path(__file__)),
@@ -66,6 +67,7 @@ class DependencyPreflightTests(unittest.TestCase):
 
     def test_runtime_ready_does_not_import_subprocess(self) -> None:
         with (
+            patch.object(preflight.config.app, "is_gui", False),
             patch.object(preflight.config, "FFMPEG_PATH", Path(__file__)),
             patch.object(preflight.config, "FFPROBE_PATH", Path(__file__)),
             patch.object(preflight.config, "MAKEMKVCON_PATH", Path(__file__)),
@@ -108,6 +110,16 @@ class DependencyPreflightTests(unittest.TestCase):
         self.assertNotIn(preflight.config.MKVEXTRACT_PATH, required_paths)
         self.assertNotIn(preflight.config.MKVMERGE_PATH, required_paths)
         self.assertNotIn(preflight.config.TESSERACT_PATH, required_paths)
+
+    def test_final_mux_always_requires_mp4box_even_before_srt_files_exist(self) -> None:
+        with (
+            patch.object(preflight.config, "skip_subtitles", False),
+            patch.object(preflight.config, "source_path", Path("/movie/source.mkv")),
+            patch.object(preflight.config, "start_stage", Stage.CREATE_FINAL_FILE),
+        ):
+            required_paths = preflight.get_required_dependency_binaries_for_current_job()
+
+        self.assertIn(preflight.config.MP4BOX_PATH, required_paths)
 
     def test_fx_upscale_tool_is_required_only_when_enabled(self) -> None:
         with (

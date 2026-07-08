@@ -74,6 +74,30 @@ class ReleaseSmokeTests(unittest.TestCase):
                         check_links=True,
                     )
 
+    def test_bundled_tool_linkage_check_detects_usr_local_library(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = make_fake_app(Path(temp_dir), version="1.2.3")
+            bundle = smoke_release_app.read_bundle(app_path)
+            clean_env = smoke_release_app.build_clean_env()
+
+            def fake_run(command: list[str | Path], *, env: dict[str, str] | None = None):
+                if command[:2] == ["otool", "-L"]:
+                    return smoke_release_app.subprocess.CompletedProcess(
+                        args=command,
+                        returncode=0,
+                        stdout="/usr/local/lib/libexample.dylib\n",
+                    )
+                return smoke_release_app.subprocess.CompletedProcess(args=command, returncode=0, stdout="")
+
+            with patch.object(smoke_release_app, "run", side_effect=fake_run):
+                with self.assertRaisesRegex(smoke_release_app.SmokeFailure, "/usr/local"):
+                    smoke_release_app.verify_bundled_tool(
+                        bundle.bin_dir / "MP4Box",
+                        ["-version"],
+                        clean_env=clean_env,
+                        check_links=True,
+                    )
+
     def test_bundled_tool_linkage_check_can_be_skipped_without_false_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             app_path = make_fake_app(Path(temp_dir), version="1.2.3")

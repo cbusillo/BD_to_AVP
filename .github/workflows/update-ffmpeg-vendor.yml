@@ -45,8 +45,8 @@ jobs:
           ffprobe_path="bd_to_avp/bin/ffprobe"
           "$ffmpeg_path" -hide_banner -version
           "$ffprobe_path" -hide_banner -version
-          if otool -L "$ffmpeg_path" "$ffprobe_path" | grep -q /opt/homebrew; then
-            echo "Vendored FFmpeg tools must not link to /opt/homebrew"
+          if otool -L "$ffmpeg_path" "$ffprobe_path" | grep -Eq '/opt/homebrew|/usr/local'; then
+            echo "Vendored FFmpeg tools must not link to Homebrew libraries"
             exit 1
           fi
 
@@ -63,4 +63,4 @@ jobs:
             Version: `${{ inputs.version }}`
             Base URL: `${{ inputs.base_url }}`
 
-            The workflow downloaded `ffmpeg.zip` and `ffprobe.zip`, regenerated archive and extracted-binary SHA256 values, verified both tools execute, and checked they do not link to `/opt/homebrew`.
+            The workflow downloaded `ffmpeg.zip` and `ffprobe.zip`, regenerated archive and extracted-binary SHA256 values, verified both tools execute, and checked they do not link to Homebrew libraries.
