@@ -65,7 +65,9 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
         config.MP4BOX_PATH,
         "-new",
         "-add",
-        mv_hevc_path,
+        # QuickTime and AVP seeking depend on a useful sync sample table. MP4Box can
+        # collapse imported MV-HEVC tracks to one sync sample unless this is forced.
+        f"{mv_hevc_path}:forcesync",
     ]
     output_track_index += 1
     for stream in audio_streams:
