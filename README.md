@@ -3,8 +3,9 @@
 ## Introduction
 
 This tool processes 3D video content from Blu-ray discs, ISO images, MKV files, or mts files, creating a final video
-file compatible with the Apple Vision Pro. It uses FFmpeg, MakeMKV, and Wine for video extraction, audio transcoding,
-and video stream merging to convert from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The tool also injects 360° metadata
+file compatible with the Apple Vision Pro. It uses FFmpeg, MakeMKV, and a bundled native MVC decoder helper for video
+extraction, audio transcoding, and video stream merging to convert from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The
+tool also injects 360° metadata
 into the video file for spatial media playback. You have the option of AI upscaling the video to 4K resolution and AI
 OCR of subtitles.
 
@@ -19,68 +20,53 @@ The videos will play directly in the Files or
 ## GUI install
 
 To install the GUI version of `Blu-ray to Vision Pro`, download the latest release from the [releases page]. Open the
-DMG file and drag the app to your Applications folder. On the first run of the app you will be prompted for your
-password to install the necessary dependencies. It will appear to be doing nothing for around ten minutes. After that it
-will open to the GUI or give you an error. If you receive an error, please open an issue, so I can help.
+DMG file and drag the app to your Applications folder.
 
-## Terminal install or update (See releases for GUI version)
+The GUI app does not install Homebrew or modify your shell setup. Runtime tools are bundled into the app where possible.
+MakeMKV remains an external requirement for reading Blu-ray discs; install the current macOS version from the
+[MakeMKV] website before converting discs.
 
-To quickly install or update `BD_to_AVP`, run the following command in your terminal:
+## Terminal install or update (power users)
 
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/cbusillo/BD_to_AVP/release/installer.sh)"
-```
+The terminal/PyPI version is for power users who manage their own command-line dependencies. Install the tools listed
+below, create a Python environment, then install `BD_to_AVP` with `pip`.
 
 ## Prerequisites
 
-Ensure the following are installed on your Mac *(If not using the Quick Install or GUI)*:
+Ensure the following are installed on your Mac *(if using the terminal/PyPI version)*:
 
 - **Apple Silicon [Mac]**: A Mac with Apple Silicon, such as the M1, M1 Pro, or M1 Max
 - **[macOS Sonoma]**: The latest version of macOS.
-- **[Rosetta 2]**: A compatibility layer allowing Intel-based applications to run on Apple Silicon Macs.
 - **[Python] 3.12**: The latest version of Python.
 - **[Homebrew]**: The missing package manager for macOS (or Linux).
 - **[FFmpeg]**: A complete, cross-platform solution to record, convert, and stream audio and video.
-- **[Wine]**: A free and open-source compatibility layer allowing Windows programs to run on Unix-like operating
-  systems.
 - **[MakeMKV]**: For converting disc video content into MKV files.
 - **[spatial-media-kit-tool]**: A tool for injecting 360° metadata into video files.
 - **[MP4Box]**: A multimedia packager available for Windows, Mac, and Linux.
 - **[MKVToolNix]**: A set of tools to create, alter, and inspect Matroska files.
 
-Current release note: BD_to_AVP still uses MakeMKV for Blu-ray title extraction and Wine to run FRIMDecode64.exe for
-MVC 3D splitting. The project is investigating native replacements, but this release focuses on making the existing
-pipeline install and fail clearly.
+Current release note: BD_to_AVP still uses MakeMKV for Blu-ray title extraction. Extracted MVC `.h264` video, including
+MVC video extracted from direct `.mts`/`.m2ts` sources, now uses a bundled native Apple Silicon MVC splitter when
+available. Native MVC splitting supports 8-bit Blu-ray 3D MVC sources only.
 
-## Manual Installation
+Runtime tool lookup prefers explicit `BD_TO_AVP_<TOOL>_PATH` environment overrides, bundled tools in `bd_to_avp/bin`,
+tools already available in `PATH`, and finally the legacy `/opt/homebrew/bin` location. The GUI app uses bundled tools
+where available; the terminal/PyPI version still expects power users to install command-line tools themselves.
 
-To set up your macOS environment for video processing, including creating and handling 3D video content, follow these
-steps to install the necessary tools using Homebrew and manual installation. This includes the installation of Homebrew
-itself,FFmpeg for video encoding and decoding, Wine for running Windows applications, MakeMKV for ripping Blu-ray and
-DVD to MKV, spatial-media-kit-tool for handling spatial media, and MP4Box for multimedia packaging.
+## Manual terminal/PyPI dependency setup
+
+These steps are for terminal/PyPI users who manage their own command-line tools. GUI users should use the release DMG
+and install MakeMKV from the [MakeMKV] website.
 
 ```bash
-# Install Rosetta 2
-/usr/sbin/softwareupdate --install-rosetta --agree-to-license
-
 # Install Homebrew
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
 # Install Homebrew formula dependencies. MP4Box is provided by gpac.
 brew install ffmpeg gpac mkvtoolnix python@3.12 tesseract
 
-# Install MakeMKV. Homebrew may still provide a cask, but if Gatekeeper blocks it,
-# install the current macOS build from https://www.makemkv.com/ and make sure
-# makemkvcon is available in your PATH.
-brew install --cask makemkv
-xattr -dr com.apple.quarantine /Applications/MakeMKV.app 2>/dev/null || true
-
-# Install Wine. BD_to_AVP currently uses Wine to run FRIMDecode64.exe for MVC splitting.
-# The Homebrew wine-stable cask is deprecated, so manual Wine installation may be
-# required if this command stops working.
-brew install --cask wine-stable
-xattr -dr com.apple.quarantine "/Applications/Wine Stable.app" 2>/dev/null || true
-xattr -dr com.apple.quarantine /Applications/Wine.app 2>/dev/null || true
+# Install the current macOS MakeMKV build from https://www.makemkv.com/.
+# The app bundle is detected automatically from /Applications/MakeMKV.app.
 
 # Ensure Python 3.12 is correctly installed then create a virtual environment
 python3.12 -m pip install --upgrade pip
@@ -90,8 +76,8 @@ python3.12 -m venv ~/.bd_to_avp_venv
 source ~/.bd_to_avp_venv/bin/activate
 pip install bd_to_avp
 
-# Create a symbolic link to the bd-to-avp command
-ln -s ~/.bd_to_avp_venv/bin/bd-to-avp /opt/homebrew/bin/bd-to-avp
+# Run the command from the virtual environment
+bd-to-avp --help
 ```
 
 ## GUI Usage
@@ -226,6 +212,8 @@ Big thanks to:
   the [JM reference software][jm-reference] [build properly on macOS][vargol-tools] as well as
   an [example script][vargol-guide] that was a useful reference
 - [steverice][steverice] for [h264-tools][ldecod]
+- Thibault Raffaillac, Celticom/TVLabs, and Jens Duttke for [edge264-mvc][edge264-mvc], used by the bundled native MVC
+  splitter. The BSD license notice is included in `bd_to_avp/resources/notices/edge264-mvc-LICENSE_BSD.txt`.
 
 [MakeMKV]: https://www.makemkv.com/
 
@@ -253,7 +241,7 @@ Big thanks to:
 
 [h264-tools]: https://github.com/steverice/h264-tools
 
-[Wine]: https://www.winehq.org/
+[edge264-mvc]: https://github.com/jens-duttke/edge264-mvc
 
 [Homebrew]: https://brew.sh/
 
@@ -262,8 +250,6 @@ Big thanks to:
 [Mac]: https://www.apple.com/mac/
 
 [macOS Sonoma]:https://apps.apple.com/us/app/macos-sonoma/id6450717509?mt=12
-
-[Rosetta 2]: https://support.apple.com/en-us/HT211861
 
 [MKVToolNix]: https://mkvtoolnix.download/
 

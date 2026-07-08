@@ -1,0 +1,129 @@
+import os
+import stat
+from pathlib import Path
+
+from bd_to_avp.modules.config import Stage, config
+
+
+class DependencyPreflightError(RuntimeError):
+    pass
+
+
+def verify_runtime_ready() -> None:
+    missing_binaries = get_missing_dependency_binaries_for_current_job()
+    if not missing_binaries:
+        return
+
+    message = build_missing_dependency_message(missing_binaries)
+    raise DependencyPreflightError(message)
+
+
+def get_missing_dependency_binaries_for_current_job() -> list[Path]:
+    required_paths = get_required_dependency_binaries_for_current_job()
+    missing_binaries = [path for path in required_paths if not path.exists()]
+    if (
+        needs_native_mvc_splitter()
+        and config.EDGE264_TEST_PATH not in missing_binaries
+        and not ensure_native_mvc_splitter_executable()
+    ):
+        missing_binaries.append(config.EDGE264_TEST_PATH)
+    return missing_binaries
+
+
+def get_required_dependency_binaries_for_current_job() -> list[Path]:
+    required_paths = [config.FFMPEG_PATH, config.FFPROBE_PATH]
+
+    if needs_makemkv():
+        required_paths.append(config.MAKEMKVCON_PATH)
+    if needs_subtitle_extraction():
+        required_paths.extend([config.MKVEXTRACT_PATH, config.MKVMERGE_PATH, config.TESSERACT_PATH])
+    if needs_native_mvc_splitter():
+        required_paths.append(config.EDGE264_TEST_PATH)
+    if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
+        required_paths.append(config.SPATIAL_MEDIA_PATH)
+    if config.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
+        required_paths.append(config.MP4BOX_PATH)
+    if config.fx_upscale and config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
+        required_paths.append(config.FX_UPSCALE_PATH)
+
+    return dedupe_paths(required_paths)
+
+
+def dedupe_paths(paths: list[Path]) -> list[Path]:
+    deduped_paths: list[Path] = []
+    for path in paths:
+        if path not in deduped_paths:
+            deduped_paths.append(path)
+    return deduped_paths
+
+
+def needs_makemkv() -> bool:
+    source_path = config.source_path
+    if source_path and source_path.suffix.lower() in config.MTS_EXTENSIONS:
+        return False
+    return True
+
+
+def needs_subtitle_extraction() -> bool:
+    return not config.skip_subtitles and config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value
+
+
+def needs_native_mvc_splitter() -> bool:
+    return config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value
+
+
+def build_missing_dependency_message(missing_binaries: list[Path]) -> str:
+    missing_names = "\n".join(f"- {get_dependency_name(path)}" for path in missing_binaries)
+    if config.app.is_gui:
+        recovery_steps = get_gui_recovery_steps(missing_binaries)
+        return (
+            f"Blu-ray to Vision Pro needs these tools before it can convert video:\n{missing_names}\n\n{recovery_steps}"
+        )
+
+    missing_paths = "\n".join(f"- {path}" for path in missing_binaries)
+    return (
+        "Required tools are missing:\n"
+        f"{missing_paths}\n\n"
+        "Install MakeMKV for disc conversion. If you installed BD_to_AVP as a command-line tool, "
+        "also make sure the listed tools are installed and available in PATH."
+    )
+
+
+def get_gui_recovery_steps(missing_binaries: list[Path]) -> str:
+    missing_makemkv = config.MAKEMKVCON_PATH in missing_binaries
+    missing_bundled_tools = any(path != config.MAKEMKVCON_PATH for path in missing_binaries)
+    if missing_makemkv and missing_bundled_tools:
+        return "Install MakeMKV for macOS. If other tools are listed, reinstall the app."
+    if missing_makemkv:
+        return "Install MakeMKV for macOS, then open the app again."
+    return "Reinstall the app, then open it again."
+
+
+def get_dependency_name(path: Path) -> str:
+    dependency_names = {
+        config.FFMPEG_PATH: "FFmpeg",
+        config.FFPROBE_PATH: "FFprobe",
+        config.MAKEMKVCON_PATH: "MakeMKV",
+        config.MKVEXTRACT_PATH: "MKVExtract",
+        config.MKVMERGE_PATH: "MKVMerge",
+        config.MP4BOX_PATH: "MP4Box",
+        config.TESSERACT_PATH: "Tesseract",
+        config.EDGE264_TEST_PATH: "Native MVC helper",
+        config.SPATIAL_MEDIA_PATH: "Spatial media tool",
+        config.FX_UPSCALE_PATH: "FX Upscale",
+    }
+    return dependency_names.get(path, path.name)
+
+
+def ensure_native_mvc_splitter_executable() -> bool:
+    if not config.EDGE264_TEST_PATH.is_file():
+        return False
+    if os.access(config.EDGE264_TEST_PATH, os.X_OK):
+        return True
+
+    try:
+        current_mode = config.EDGE264_TEST_PATH.stat().st_mode
+        config.EDGE264_TEST_PATH.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except OSError:
+        return False
+    return os.access(config.EDGE264_TEST_PATH, os.X_OK)

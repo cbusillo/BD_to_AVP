@@ -55,9 +55,6 @@ def create_mvc_and_audio(
             audio_output_path,
         )
 
-    # if not config.keep_files and mkv_output_path and config.source_path != mkv_output_path:
-    #     mkv_output_path.unlink(missing_ok=True)
-
     return audio_output_path, video_output_path
 
 
@@ -68,7 +65,9 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
         config.MP4BOX_PATH,
         "-new",
         "-add",
-        mv_hevc_path,
+        # QuickTime and AVP seeking depend on a useful sync sample table. MP4Box can
+        # collapse imported MV-HEVC tracks to one sync sample unless this is forced.
+        f"{mv_hevc_path}:forcesync",
     ]
     output_track_index += 1
     for stream in audio_streams:
@@ -113,7 +112,7 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
 
 
 def get_audio_stream_data(file_path: Path) -> list[dict[str, Any]]:
-    probe = ffmpeg.probe(str(file_path))
+    probe = ffmpeg.probe(str(file_path), cmd=config.FFPROBE_PATH.as_posix())
     if not probe or "streams" not in probe:
         return []
     audio_streams = [stream for stream in probe["streams"] if stream["codec_type"] == "audio"]

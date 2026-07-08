@@ -1,5 +1,4 @@
 import sys
-from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtWidgets import QWidget
@@ -10,9 +9,6 @@ from ..modules.command import terminate_process, Spinner
 from bd_to_avp.modules.process import start_process
 from ..modules.config import Stage
 from ..modules.sub import SRTCreationError
-
-if TYPE_CHECKING:
-    from .main_window import MainWindow
 
 
 class ProcessingSignals(QObject):
@@ -25,32 +21,39 @@ class ProcessingThread(QThread):
     srt_creation_error = Signal(SRTCreationError)
     file_exists_error = Signal(FileExistsError)
     process_completed = Signal()
+    process_failed = Signal()
 
-    def __init__(self, main_window: "MainWindow", parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.signals = ProcessingSignals()
         self.output_handler = OutputHandler(self.signals.progress_updated.emit)
-        self.main_window = main_window
+        self.start_stage = Stage.CREATE_MKV
 
     def run(self) -> None:
         sys.stdout = self.output_handler  # type: ignore
+        signal_emitted = False
 
         try:
-            selected_stage = int(self.main_window.start_stage_combobox.current_text().split(" - ")[0])
-            start_process(Stage.get_stage(selected_stage))
+            start_process(self.start_stage)
             self.process_completed.emit()
+            signal_emitted = True
         except MKVCreationError as error:
             self.mkv_creation_error.emit(error)
+            signal_emitted = True
         except SRTCreationError as error:
             self.srt_creation_error.emit(error)
+            signal_emitted = True
         except FileExistsError as error:
             self.file_exists_error.emit(error)
-        except (RuntimeError, ValueError, KeyError) as error:
+            signal_emitted = True
+        except Exception as error:
             self.error_occurred.emit(error)
+            signal_emitted = True
         finally:
             Spinner.stop_all()
             sys.stdout = sys.__stdout__
-            self.main_window.process_button.setText(self.main_window.START_PROCESSING_TEXT)
+            if not signal_emitted:
+                self.process_failed.emit()
 
     def terminate(self) -> None:
         terminate_process()

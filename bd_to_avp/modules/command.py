@@ -58,7 +58,11 @@ class Spinner:
 
 def add_quotes_to_path_if_space(commands: list[str | Path | bytes]) -> list[str]:
     commands_with_paths_as_strings = [
-        (f'"{command}"' if isinstance(command, Path) and " " in command.as_posix() else str(command))
+        f'"{command}"'
+        if isinstance(command, Path) and " " in command.as_posix()
+        else f'"{command}"'
+        if isinstance(command, str) and " " in command
+        else str(command)
         for command in commands
     ]
     return commands_with_paths_as_strings
@@ -117,7 +121,9 @@ def run_command(commands: list[Any], command_name: str = "", env: dict[str, str]
 def run_ffmpeg_print_errors(stream_spec: Any, message: str, quiet: bool = True, **kwargs) -> None:
     kwargs["quiet"] = quiet
     if config.output_commands:
-        output_commands_quoted = add_quotes_to_path_if_space(ffmpeg.compile(stream_spec))
+        output_commands_quoted = add_quotes_to_path_if_space(
+            ffmpeg.compile(stream_spec, cmd=config.FFMPEG_PATH.as_posix())
+        )
         output_commands_str = " ".join(output_commands_quoted)
 
         print(f"Running command:\n{output_commands_str}")
@@ -125,7 +131,7 @@ def run_ffmpeg_print_errors(stream_spec: Any, message: str, quiet: bool = True, 
     spinner_thread = threading.Thread(target=spinner.start)
     spinner_thread.start()
     try:
-        ffmpeg.run(stream_spec, **kwargs)
+        ffmpeg.run(stream_spec, cmd=config.FFMPEG_PATH.as_posix(), **kwargs)
     except ffmpeg.Error as e:
         print("FFmpeg Error:")
         print("STDOUT:", e.stdout.decode("utf-8") if e.stdout else "")
@@ -134,15 +140,6 @@ def run_ffmpeg_print_errors(stream_spec: Any, message: str, quiet: bool = True, 
     finally:
         spinner.stop()
         spinner_thread.join()
-
-
-def run_ffmpeg_async(command_list: list[Any], log_path: Path) -> subprocess.Popen:
-    command_list = normalize_command_elements(command_list)
-    if config.output_commands:
-        print(f"Running command:\n{' '.join(str(command) for command in command_list)}")
-    with open(log_path, "w") as log_file:
-        process = subprocess.Popen(command_list, stdout=log_file, stderr=subprocess.STDOUT, text=True)
-    return process
 
 
 def cleanup_process(process: subprocess.Popen) -> None:
@@ -166,5 +163,6 @@ def kill_processes_by_name(process_names: list[str]) -> None:
 def kill_process_by_name(process_name: str) -> None:
     try:
         subprocess.run(["pkill", "-f", process_name], check=True)
-    except subprocess.CalledProcessError:
-        pass
+    except subprocess.CalledProcessError as error:
+        if error.returncode != 1:
+            raise

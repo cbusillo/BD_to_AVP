@@ -9,7 +9,7 @@
     "main": {
       "system": "classic",
       "requiresPullRequest": true,
-      "requiredStatusChecks": ["validate"],
+      "requiredStatusChecks": ["validate", "Analyze (actions)", "Analyze (python)"],
       "requiredApprovals": 0,
       "enforceAdmins": true,
       "blocksForcePushes": true,
@@ -22,7 +22,7 @@
       "target": "refs/heads/release",
       "requiresPullRequest": true,
       "allowedMergeMethods": ["merge"],
-      "requiredStatusChecks": ["validate"],
+      "requiredStatusChecks": ["validate", "Analyze (actions)", "Analyze (python)"],
       "requiredApprovals": 0,
       "blocksForcePushes": true,
       "blocksDeletion": true,
@@ -33,7 +33,6 @@
     "overview": "README.md",
     "packageManifest": "pyproject.toml",
     "lockfile": "uv.lock",
-    "installer": "installer.sh",
     "releaseWorkflows": [
       ".github/workflows/briefcase.yml",
       ".github/workflows/publish-to-pypi.yml"
@@ -54,6 +53,7 @@
       "default": "uv run mypy bd_to_avp"
     },
     "test": {
+      "unitSmoke": "uv run python -m unittest discover -s tests -t .",
       "importSmoke": "uv run python -c 'import bd_to_avp; import bd_to_avp.__main__; import bd_to_avp.app'",
       "cliSmoke": "uv run bd-to-avp --help"
     },
@@ -78,9 +78,12 @@
   },
   "importantWorkflows": [
     "CI",
+    "CodeQL",
     "Package with Briefcase and Create Release",
+    "Update FFmpeg Vendor Pins",
     "Publish Python distribution to PyPI"
   ],
+  "requiredStatusChecks": ["validate", "Analyze (actions)", "Analyze (python)"],
   "qaLabels": [],
   "deployLabels": [],
   "healthUrls": [],
@@ -94,8 +97,8 @@
       "dependencyGraph": "available",
       "dependabotAlerts": "available",
       "securityAdvisories": "available",
-      "codeScanning": "not_configured",
-      "secretScanning": "not_enabled"
+      "codeScanning": "available",
+      "secretScanning": "available"
     },
     "refreshWhen": [
       "repo visibility changes",

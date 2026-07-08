@@ -50,13 +50,14 @@ class MainWindow(QMainWindow):
         self.setup_window()
         self.create_main_layout()
 
-        self.processing_thread = ProcessingThread(main_window=self)
+        self.processing_thread = ProcessingThread(parent=self)
         self.processing_thread.signals.progress_updated.connect(self.update_processing_output)
         self.processing_thread.error_occurred.connect(self.handle_processing_error)
         self.processing_thread.mkv_creation_error.connect(self.handle_mkv_creation_error)
         self.processing_thread.srt_creation_error.connect(self.handle_srt_creation_error)
         self.processing_thread.file_exists_error.connect(self.handle_file_exists_error)
         self.processing_thread.process_completed.connect(self.finished_processing)
+        self.processing_thread.process_failed.connect(self.reset_processing_button)
 
     def setup_window(self) -> None:
         app = QApplication.instance()
@@ -331,14 +332,15 @@ class MainWindow(QMainWindow):
         continue_button = message_box.addButton("Continue On Errors", QMessageBox.ButtonRole.NoRole)
 
         result = message_box.exec()
+        clicked_button = message_box.clickedButton()
 
-        if result == QMessageBox.StandardButton.Abort:
+        if result == QMessageBox.StandardButton.Abort or clicked_button is None:
             self.handle_processing_error(error)
             return
 
-        if message_box.clickedButton() == skip_button:
+        if clicked_button == skip_button:
             config.skip_subtitles = True
-        elif message_box.clickedButton() == continue_button:
+        elif clicked_button == continue_button:
             config.continue_on_error = True
 
         config.start_stage = Stage.CREATE_LEFT_RIGHT_FILES
@@ -449,6 +451,7 @@ class MainWindow(QMainWindow):
             )
             self.save_config()
             self.process_start_time = datetime.now()
+        self.processing_thread.start_stage = config.start_stage
         self.processing_thread.start()
         self.process_button.setText(self.STOP_PROCESSING_TEXT)
 
@@ -462,6 +465,9 @@ class MainWindow(QMainWindow):
         self.process_button.setText(self.START_PROCESSING_TEXT)
         self.notify_user_with_sound("Glass")
         QMessageBox.information(self, "", message)
+
+    def reset_processing_button(self) -> None:
+        self.process_button.setText(self.START_PROCESSING_TEXT)
 
     def save_config_to_file(self) -> None:
         self.save_config()

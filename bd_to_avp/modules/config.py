@@ -1,13 +1,61 @@
 import argparse
 import configparser
+import importlib
+import os
+import shutil
 import sys
 
 from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Iterable
 
 from bd_to_avp.modules.util import get_pyproject_data
+
+
+SCRIPT_PATH = Path(__file__).parent.parent
+SCRIPT_PATH_BIN = SCRIPT_PATH / "bin"
+HOMEBREW_PREFIX = Path("/opt/homebrew")
+HOMEBREW_PREFIX_BIN = HOMEBREW_PREFIX / "bin"
+MAKEMKV_APP_BUNDLE_BIN = Path("/Applications/MakeMKV.app/Contents/MacOS")
+
+
+def tool_env_var(tool_name: str) -> str:
+    env_tool_name = tool_name.upper().replace("-", "_")
+    return f"BD_TO_AVP_{env_tool_name}_PATH"
+
+
+def resolve_tool_path(
+    tool_name: str,
+    *,
+    env_var: str | None = None,
+    bundled_name: str | None = None,
+    extra_paths: Iterable[Path] = (),
+    script_bin_path: Path = SCRIPT_PATH_BIN,
+    homebrew_bin_path: Path = HOMEBREW_PREFIX_BIN,
+) -> Path:
+    configured_path = os.environ.get(env_var or tool_env_var(tool_name))
+    if configured_path:
+        return Path(configured_path).expanduser()
+
+    bundled_path = script_bin_path / (bundled_name or tool_name)
+    if bundled_path.exists():
+        return bundled_path
+
+    path_tool = shutil.which(tool_name)
+    if path_tool:
+        return Path(path_tool)
+
+    for extra_path in extra_paths:
+        if extra_path.exists():
+            return extra_path
+
+    return homebrew_bin_path / tool_name
+
+
+def resolve_makemkvcon_path() -> Path:
+    app_bundle_tool = MAKEMKV_APP_BUNDLE_BIN / "makemkvcon"
+    return resolve_tool_path("makemkvcon", extra_paths=[app_bundle_tool])
 
 
 class Stage(Enum):
@@ -96,39 +144,9 @@ class Config:
             except PackageNotFoundError:
                 return "0.0.0"
 
-        def load_version_from_file(self) -> str | None:
-            config_file = configparser.ConfigParser()
-            config_file.read(self.config_file)
-            if "Application" in config_file and "installed_version" in config_file["Application"]:
-                return config_file.get("Application", "installed_version")
-            return None
-
-        def save_version_from_file(self) -> None:
-            config_parser = configparser.ConfigParser()
-            config_parser.read(self.config_file)
-
-            if not config_parser.has_section("Application"):
-                config_parser.add_section("Application")
-            config_parser.set("Application", "installed_version", self.code_version)
-
-            with open(self.config_file, "w") as config_file:
-                config_parser.write(config_file)
-
-    BREW_CASKS_TO_INSTALL: ClassVar[list[str]] = [
-        "makemkv",
-        "wine-stable",
-    ]
-    BREW_PACKAGES_TO_INSTALL: ClassVar[list[str]] = [
-        "ffmpeg",
-        "gpac",
-        "tesseract",
-        "mkvtoolnix",
-    ]
     PROCESS_NAMES_TO_KILL: ClassVar[list[str]] = [
         "ffmpeg",
         "makemkvcon",
-        "wine",
-        "FRIMDecode64.exe",
         "spatial-media-kit-tool",
         "MP4Box",
         "fx-upscale",
@@ -150,18 +168,18 @@ class Config:
         "Program reads data faster than it can write to disk",
     ]
 
-    SCRIPT_PATH = Path(__file__).parent.parent
-    SCRIPT_PATH_BIN = SCRIPT_PATH / "bin"
+    SCRIPT_PATH = SCRIPT_PATH
+    SCRIPT_PATH_BIN = SCRIPT_PATH_BIN
 
-    HOMEBREW_PREFIX = Path("/opt/homebrew")
-    HOMEBREW_PREFIX_BIN = HOMEBREW_PREFIX / "bin"
-
-    MAKEMKVCON_PATH = Path(HOMEBREW_PREFIX_BIN / "makemkvcon")
-    WINE_PATH = HOMEBREW_PREFIX_BIN / "wine"
-    FRIM_PATH = SCRIPT_PATH_BIN / "FRIM_x64_version_1.31" / "x64"
-    FRIMDECODE_PATH = FRIM_PATH / "FRIMDecode64.exe"
+    FFMPEG_PATH = resolve_tool_path("ffmpeg")
+    FFPROBE_PATH = resolve_tool_path("ffprobe")
+    MAKEMKVCON_PATH = resolve_makemkvcon_path()
+    MKVEXTRACT_PATH = resolve_tool_path("mkvextract")
+    MKVMERGE_PATH = resolve_tool_path("mkvmerge")
+    MP4BOX_PATH = resolve_tool_path("MP4Box")
+    TESSERACT_PATH = resolve_tool_path("tesseract")
+    EDGE264_TEST_PATH = SCRIPT_PATH_BIN / "edge264_test"
     SPATIAL_MEDIA_PATH = SCRIPT_PATH_BIN / "spatial-media-kit-tool"
-    MP4BOX_PATH = HOMEBREW_PREFIX_BIN / "MP4Box"
     FX_UPSCALE_PATH = SCRIPT_PATH_BIN / "fx-upscale"
 
     FINAL_FILE_TAG = "_AVP"
@@ -198,6 +216,49 @@ class Config:
         self.language_code = "eng"
         self.remove_extra_languages = False
         self.keep_awake = True
+
+    def configure_tool_environment(self) -> None:
+        configured_dirs = [
+            self.FFMPEG_PATH.parent,
+            self.FFPROBE_PATH.parent,
+            self.MAKEMKVCON_PATH.parent,
+            self.MKVEXTRACT_PATH.parent,
+            self.MKVMERGE_PATH.parent,
+            self.MP4BOX_PATH.parent,
+            self.TESSERACT_PATH.parent,
+        ]
+        existing_path = os.environ.get("PATH", "")
+        existing_dirs = [path for path in existing_path.split(os.pathsep) if path]
+        prepend_dirs: list[str] = []
+
+        for path_dir in configured_dirs:
+            if not path_dir.exists():
+                continue
+            path_dir_str = path_dir.as_posix()
+            if path_dir_str not in prepend_dirs and path_dir_str not in existing_dirs:
+                prepend_dirs.append(path_dir_str)
+
+        script_bin_path = self.SCRIPT_PATH_BIN.as_posix()
+        if (
+            self.SCRIPT_PATH_BIN.exists()
+            and script_bin_path not in prepend_dirs
+            and script_bin_path not in existing_dirs
+        ):
+            prepend_dirs.append(script_bin_path)
+
+        if prepend_dirs:
+            os.environ["PATH"] = os.pathsep.join([*prepend_dirs, *existing_dirs])
+
+        os.environ.setdefault("FFMPEG_BINARY", self.FFMPEG_PATH.as_posix())
+        os.environ.setdefault("FFPROBE_BINARY", self.FFPROBE_PATH.as_posix())
+        self.configure_tesseract_command()
+
+    def configure_tesseract_command(self) -> None:
+        try:
+            pytesseract = importlib.import_module("pytesseract")
+        except ImportError:
+            return
+        pytesseract.pytesseract.tesseract_cmd = self.TESSERACT_PATH.as_posix()
 
     def save_config_to_file(self) -> None:
         config_parser = configparser.ConfigParser()

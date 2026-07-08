@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bd_to_avp"
-version = "0.2.141"
+version = "0.2.142"
 description = "Script to convert 3D Blu-ray Discs (and mts) to Apple Vision Pro (MV-HEVC) files"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -16,16 +16,20 @@ authors = [
 keywords = ["Blu-ray", "3D", "Apple Vision Pro", "MV-HEVC", "Conversion", "Vision Pro", "BD3D"]
 dependencies = [
     "babelfish>=0.6.1,<0.7",
+    "cleanit>=0.4.8,<0.5",
+    "click>=8.1.3,<9",
     "ffmpeg-python>=0.2.0,<0.3",
     "humanize>=4.9.0,<5",
+    "numpy>=2,<3",
     "opencv-python==4.10.0.84",
     "packaging>=24.1,<27",
-    "pgsrip==0.1.11",
     "psutil>=5.9.8,<8",
     "pygithub>=2.3.0,<3",
     "pyside6>=6.7.1,<7",
+    "pysrt>=1.1.2,<2",
+    "pytesseract>=0.3.10,<0.4",
     "requests>=2.32.3,<3",
-    "setuptools>=70.3.0,<71",
+    "trakit>=0.2.2,<0.3",
     "wakepy>=0.9.1,<1.1",
 ]
 
@@ -69,7 +73,7 @@ include = [
 project_name = "3D Blu-ray to Vision pro"
 bundle = "com.shinycomputers"
 architectures = ["arm64"]
-version = "0.2.141"
+version = "0.2.142"
 icon = "bd_to_avp/resources/app_icon"
 organization = "Shiny Computers"
 
@@ -81,16 +85,20 @@ copyright = "Shiny Computers 2024"
 sources = ["bd_to_avp", "pyproject.toml", "README.md"]
 requires = [
     "babelfish>=0.6.1,<0.7",
+    "cleanit>=0.4.8,<0.5",
+    "click>=8.1.3,<9",
     "ffmpeg-python>=0.2.0,<0.3",
     "humanize>=4.9.0,<5",
+    "numpy>=2,<3",
     "opencv-python==4.10.0.84",
     "packaging>=24.1,<27",
-    "pgsrip==0.1.11",
     "psutil>=5.9.8,<8",
     "pygithub>=2.3.0,<3",
     "pyside6>=6.7.1,<7",
+    "pysrt>=1.1.2,<2",
+    "pytesseract>=0.3.10,<0.4",
     "requests>=2.32.3,<3",
-    "setuptools>=70.3.0,<71",
+    "trakit>=0.2.2,<0.3",
     "wakepy>=0.9.1,<1.1",
 ]
 
@@ -100,6 +108,7 @@ universal_build = false
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+extend-exclude = ["bd_to_avp/vendor/pgsrip"]
 
 [tool.ruff.lint]
 select = ["E", "F", "B", "RUF"]

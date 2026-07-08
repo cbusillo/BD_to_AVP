@@ -1,11 +1,12 @@
 import os
 import threading
 from pathlib import Path
+from typing import Any
 
 import ffmpeg
 import requests
-from babelfish import Language
-from pgsrip import Mkv, Options, pgsrip
+from babelfish import Error as BabelfishError, Language
+from bd_to_avp.vendor.pgsrip import Mkv, Options, pgsrip
 
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.command import Spinner
@@ -30,14 +31,9 @@ def extract_subtitle_to_srt(mkv_path: Path) -> None:
     tessdata_path = config.app.config_path / "tessdata"
     subtitle_tracks = get_languages_in_mkv(mkv_path)
 
-    if not subtitle_tracks and not config.continue_on_error:
-        raise SRTCreationError("No subtitle tracks found in source.")
-
     if not subtitle_tracks:
+        print("No PGS subtitle tracks found in source; continuing without subtitles.")
         return None
-
-    forced_subtitle_tracks = [track for track in subtitle_tracks if track["forced"] == 1]
-    forced_track_language = forced_subtitle_tracks[0]["language"] if forced_subtitle_tracks else None
 
     needed_languages = [track["language"] for track in subtitle_tracks]
     if needed_languages:
@@ -49,31 +45,68 @@ def extract_subtitle_to_srt(mkv_path: Path) -> None:
     spinner_thread = threading.Thread(target=spinner.start)
     spinner_thread.start()
 
-    for subtitle_path in output_path.glob("*.srt"):
-        subtitle_path.unlink()
+    try:
+        for subtitle_path in output_path.glob("*.srt"):
+            subtitle_path.unlink()
 
-    mkv_file = Mkv(mkv_path.as_posix())
-    os.environ["TESSDATA_PREFIX"] = tessdata_path.as_posix()
+        mkv_file = Mkv(mkv_path.as_posix())
+        os.environ["TESSDATA_PREFIX"] = tessdata_path.as_posix()
 
-    pgsrip.rip(mkv_file, sub_options)
+        pgsrip.rip(mkv_file, sub_options)
 
-    for srt_file in output_path.glob("*.srt"):
-        if srt_file.stat().st_size == 0:
-            srt_file.unlink()
+        for srt_file in output_path.glob("*.srt"):
+            if srt_file.stat().st_size == 0:
+                srt_file.unlink()
 
-    if not any(output_path.glob("*.srt")) and not config.continue_on_error:
-        raise SRTCreationError("No SRT subtitle files with data created.")
+        if not any(output_path.glob("*.srt")) and not config.continue_on_error:
+            raise SRTCreationError("No SRT subtitle files with data created.")
 
-    if forced_track_language:
-        two_alpha_language_code = Language.fromietf(forced_track_language).alpha2
+        mark_forced_srt_files(output_path, subtitle_tracks)
+    finally:
+        spinner.stop()
+        spinner_thread.join()
 
-        forced_srt_file = next(output_path.glob(f"*{two_alpha_language_code}.srt"))
-        if forced_srt_file and forced_srt_file.exists():
-            new_stem = forced_srt_file.stem.replace(f".{two_alpha_language_code}", f".forced.{two_alpha_language_code}")
-            forced_srt_file.rename(forced_srt_file.with_stem(new_stem))
 
-    spinner.stop()
-    spinner_thread.join()
+def mark_forced_srt_files(output_path: Path, subtitle_tracks: list[dict[str, Any]]) -> None:
+    language_counts: dict[str, int] = {}
+    for track in sorted(subtitle_tracks, key=lambda track: (track["forced"] == 1, int(track["index"]))):
+        language_code = subtitle_language_alpha2(track["language"])
+        if not language_code:
+            continue
+
+        track_number_for_language = language_counts.get(language_code, 0)
+        language_counts[language_code] = track_number_for_language + 1
+
+        if track["forced"] != 1:
+            continue
+
+        forced_srt_file = find_srt_for_subtitle_track(output_path, language_code, track_number_for_language)
+        if not forced_srt_file:
+            print(f"Forced subtitle track {track['index']} did not create an SRT file.")
+            continue
+
+        if ".forced." in forced_srt_file.stem:
+            continue
+
+        forced_stem = forced_srt_file.stem.replace(f".{language_code}", f".forced.{language_code}")
+        forced_srt_file.rename(forced_srt_file.with_stem(forced_stem))
+
+
+def find_srt_for_subtitle_track(output_path: Path, language_code: str, track_number_for_language: int) -> Path | None:
+    suffix = f"-{track_number_for_language}.{language_code}" if track_number_for_language else f".{language_code}"
+    candidates = [
+        candidate for candidate in sorted(output_path.glob(f"*{suffix}.srt")) if candidate.stem.endswith(suffix)
+    ]
+    return candidates[0] if candidates else None
+
+
+def subtitle_language_alpha2(language_code: str) -> str | None:
+    if not language_code or language_code == "und":
+        return None
+    try:
+        return Language.fromietf(language_code).alpha2
+    except (BabelfishError, ValueError):
+        return None
 
 
 def get_missing_tessdata_files(languages: list[str], tessdata_path: Path) -> None:
@@ -90,12 +123,16 @@ def get_missing_tessdata_files(languages: list[str], tessdata_path: Path) -> Non
                 f.write(response.content)
 
 
-def get_languages_in_mkv(mkv_path: Path) -> None | list[dict[str, str]]:
-    mkv_info = ffmpeg.probe(str(mkv_path))
+def get_languages_in_mkv(mkv_path: Path) -> None | list[dict[str, Any]]:
+    mkv_info = ffmpeg.probe(str(mkv_path), cmd=config.FFPROBE_PATH.as_posix())
     streams = mkv_info["streams"]
-    subtitle_streams = [stream for stream in streams if stream["codec_type"] == "subtitle"]
+    subtitle_streams = [
+        stream
+        for stream in streams
+        if stream["codec_type"] == "subtitle" and stream.get("codec_name") == "hdmv_pgs_subtitle"
+    ]
     if not subtitle_streams:
-        print("No subtitle streams found in MKV.")
+        print("No PGS subtitle streams found in MKV.")
         return None
     subtitle_info = []
     for stream in subtitle_streams:
