@@ -1,6 +1,8 @@
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -202,15 +204,20 @@ class NativeMvcSelectionTests(unittest.TestCase):
                 side_effect=[splitter_crash, ffmpeg_broken_pipe, splitter_retry, ffmpeg_retry],
             ),
         ):
-            result = video.split_mvc_to_stereo_native(
-                Path("movie_mvc.h264"), Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov", DiscInfo(), ""
-            )
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                result = video.split_mvc_to_stereo_native(
+                    Path("movie_mvc.h264"), Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov", DiscInfo(), ""
+                )
 
         self.assertEqual(result, (Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov"))
         self.assertEqual(
             [command_call.kwargs for command_call in splitter_command.call_args_list],
             [{"single_threaded": False}, {"single_threaded": True}],
         )
+        self.assertIn("Running native MVC split and encode (multi-threaded).", stdout.getvalue())
+        self.assertIn("Native MVC splitter crashed; retrying once in single-threaded mode.", stdout.getvalue())
+        self.assertIn("Running native MVC split and encode (single-threaded).", stdout.getvalue())
 
     def test_native_split_probes_iso_sources_and_skips_doomed_multithread_attempt(self) -> None:
         splitter_retry = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=0, poll_results=[0])
@@ -228,13 +235,18 @@ class NativeMvcSelectionTests(unittest.TestCase):
             patch("bd_to_avp.modules.video.generate_native_mvc_ffmpeg_command", return_value=["ffmpeg"]),
             patch("bd_to_avp.modules.video.subprocess.Popen", side_effect=[splitter_retry, ffmpeg_retry]),
         ):
-            result = video.split_mvc_to_stereo_native(
-                Path("movie_mvc.h264"), Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov", DiscInfo(), ""
-            )
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                result = video.split_mvc_to_stereo_native(
+                    Path("movie_mvc.h264"), Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov", DiscInfo(), ""
+                )
 
         self.assertEqual(result, (Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov"))
         probe.assert_called_once()
         self.assertEqual([call.kwargs for call in splitter_command.call_args_list], [{"single_threaded": True}])
+        self.assertIn("Checking native MVC splitter with a short multi-threaded probe.", stdout.getvalue())
+        self.assertIn("Native MVC splitter probe crashed; using slower single-threaded mode.", stdout.getvalue())
+        self.assertIn("Running native MVC split and encode (single-threaded).", stdout.getvalue())
 
     def test_native_split_does_not_probe_mkv_sources(self) -> None:
         splitter = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=0, poll_results=[0])

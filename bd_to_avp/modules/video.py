@@ -154,6 +154,7 @@ def split_mvc_to_stereo_native(
     try:
         skip_multithreaded_attempt = False
         if should_probe_native_multithread_splitter():
+            print("Checking native MVC splitter with a short multi-threaded probe.")
             skip_multithreaded_attempt = native_multithread_splitter_probe_crashed(
                 native_input_path,
                 splitter_log_path,
@@ -244,6 +245,8 @@ def run_native_mvc_split_attempt(
     single_threaded: bool,
 ) -> None:
     splitter_command = generate_native_mvc_splitter_command(native_input_path, single_threaded=single_threaded)
+    attempt_name = "single-threaded" if single_threaded else "multi-threaded"
+    print(f"Running native MVC split and encode ({attempt_name}).")
 
     if config.output_commands:
         splitter_command_text = " ".join(str(command) for command in splitter_command)
@@ -254,7 +257,6 @@ def run_native_mvc_split_attempt(
     ffmpeg_process = None
     try:
         with open(ffmpeg_log_path, "a") as ffmpeg_log, open(splitter_log_path, "ab") as splitter_log:
-            attempt_name = "single-threaded" if single_threaded else "multi-threaded"
             ffmpeg_log.write(f"\n--- Native MVC split attempt: {attempt_name} ---\n")
             splitter_log.write(f"\n--- Native MVC split attempt: {attempt_name} ---\n".encode())
             splitter_process = subprocess.Popen(splitter_command, stdout=subprocess.PIPE, stderr=splitter_log)
