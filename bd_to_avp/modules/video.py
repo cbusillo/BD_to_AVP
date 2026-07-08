@@ -240,7 +240,7 @@ def build_native_splitter_failure_message(error: subprocess.CalledProcessError, 
         try:
             signal_name = signal.Signals(-error.returncode).name
         except ValueError:
-            pass
+            signal_name = f"signal {-error.returncode}"
     return (
         "The native MVC splitter crashed while decoding this MVC video stream "
         f"({signal_name}). This usually means the bundled native decoder hit a Blu-ray MVC bitstream it does not "
