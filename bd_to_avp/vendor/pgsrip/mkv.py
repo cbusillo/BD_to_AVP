@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 class MkvPgs(Pgs):
 
+    @staticmethod
+    def expected_srt_path(media_path: MediaPath, language: Language, number: int):
+        return media_path.translate(language=language, number=number, extension='srt')
+
     @classmethod
     def read_data(cls, media_path: MediaPath, track_id: int, temp_folder: str):
         lang_ext = f'.{media_path.language!s}' if media_path.language else ''
@@ -84,18 +88,19 @@ class Mkv(Media):
         super().__init__(MediaPath(path), languages={t.language for t in tracks})
         self.tracks = tracks
 
-    def get_pgs_medias(self, options: Options):
+    def get_selected_pgs_tracks(self, options: Options):
         tracks = [t for t in self.tracks
                   if t.type == 'subtitles' and t.codec == 'HDMV PGS' and t.enabled]
         tracks.sort(key=lambda x: (x.forced, x.id))
-        selected_languages: typing.Dict[Language, int] = {}
+        selected_languages: typing.Dict[str, int] = {}
         for t in tracks:
             language = t.language
             if options.languages and language not in options.languages:
                 logger.debug('Filtering out track %s:%s in %s', t.id, language, self)
                 continue
 
-            if options.one_per_lang and language in selected_languages:
+            language_key = str(language)
+            if options.one_per_lang and language_key in selected_languages:
                 logger.debug('Skipping track %s:%s in %s', t.id, language, self)
                 continue
 
@@ -103,8 +108,27 @@ class Mkv(Media):
                 logger.debug('Skipping unknown language track %s in %s', t.id, self)
                 continue
 
-            pgs = MkvPgs(self.media_path, t.id, language, selected_languages.get(language, 0), options=options)
+            number = selected_languages.get(language_key, 0)
+            srt_path = MkvPgs.expected_srt_path(self.media_path, language, number)
+            selected_languages[language_key] = number + 1
+            if srt_path.exists():
+                if not options.overwrite:
+                    logger.debug('Skipping %s:%s in %s since SRT already exists', t.id, language, self)
+                    continue
+
+                if options.srt_age and srt_path.m_age < options.srt_age:
+                    logger.debug('Skipping track %s:%s in %s since SRT is too new', t.id, language, self)
+                    continue
+
+            yield t, language, number
+
+    def get_selected_pgs_medias(self, options: Options):
+        for t, language, number in self.get_selected_pgs_tracks(options):
+            pgs = MkvPgs(self.media_path, t.id, language, number, options=options)
             if pgs.matches(options):
                 logger.debug('Selecting track %s:%s in %s', t.id, language, self)
-                yield pgs
-                selected_languages[language] = selected_languages.get(language, 0) + 1
+                yield t, pgs
+
+    def get_pgs_medias(self, options: Options):
+        for _, pgs in self.get_selected_pgs_medias(options):
+            yield pgs

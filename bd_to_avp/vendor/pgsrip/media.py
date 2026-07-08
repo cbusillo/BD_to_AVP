@@ -155,7 +155,7 @@ class Pgs:
 
     @property
     def srt_path(self):
-        return self.media_path.translate(number=0, extension='srt')
+        return self.media_path.translate(extension='srt')
 
     @property
     def items(self):
