@@ -171,6 +171,12 @@ def verify_macos_binary(binary_path: Path, validation: ValidationConfig) -> None
         raise BuildFailure(f"MP4Box version probe did not look valid:\n{version_output}")
 
 
+def verify_binary_checksum(binary_path: Path, expected_sha256: str) -> None:
+    actual_sha256 = sha256(binary_path)
+    if actual_sha256 != expected_sha256:
+        raise BuildFailure(f"MP4Box binary checksum mismatch:\nexpected {expected_sha256}\nactual   {actual_sha256}")
+
+
 def install_binary(binary_path: Path, output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "MP4Box"
@@ -196,7 +202,8 @@ def main() -> int:
         mp4box_path = build_mp4box(source_dir, install_dir, manifest)
         verify_macos_binary(mp4box_path, manifest.validation)
         output_path = install_binary(mp4box_path, args.output_dir)
-        print(f"Built MP4Box {manifest.tag}: {output_path} ({sha256(output_path)})")
+        verify_binary_checksum(output_path, manifest.binary_sha256)
+        print(f"Built MP4Box {manifest.tag}: {output_path} ({manifest.binary_sha256})")
     except (BuildFailure, subprocess.CalledProcessError) as error:
         print(f"MP4Box build failed: {error}")
         return 1

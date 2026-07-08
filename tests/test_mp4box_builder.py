@@ -160,6 +160,21 @@ class MP4BoxBuilderTests(unittest.TestCase):
             self.assertEqual(output_path.name, "MP4Box")
             self.assertTrue(output_path.stat().st_mode & 0o111)
 
+    def test_verify_binary_checksum_accepts_matching_hash(self) -> None:
+        with tempfile.NamedTemporaryFile() as binary_file:
+            binary_path = Path(binary_file.name)
+            binary_path.write_bytes(b"binary")
+
+            build_mp4box_macos.verify_binary_checksum(binary_path, build_mp4box_macos.sha256(binary_path))
+
+    def test_verify_binary_checksum_rejects_mismatch(self) -> None:
+        with tempfile.NamedTemporaryFile() as binary_file:
+            binary_path = Path(binary_file.name)
+            binary_path.write_bytes(b"binary")
+
+            with self.assertRaisesRegex(build_mp4box_macos.BuildFailure, "checksum mismatch"):
+                build_mp4box_macos.verify_binary_checksum(binary_path, "0" * 64)
+
 
 if __name__ == "__main__":
     unittest.main()
