@@ -228,7 +228,9 @@ class NativeMvcSelectionTests(unittest.TestCase):
             patch.object(video.config, "EDGE264_TEST_PATH", Path("edge264_test")),
             patch("bd_to_avp.modules.video.generate_native_mvc_splitter_command", return_value=["edge264_test"]),
             patch("bd_to_avp.modules.video.generate_native_mvc_ffmpeg_command", return_value=["ffmpeg"]),
-            patch("bd_to_avp.modules.video.subprocess.Popen", side_effect=[splitter_cancelled, ffmpeg_broken_pipe]) as popen,
+            patch(
+                "bd_to_avp.modules.video.subprocess.Popen", side_effect=[splitter_cancelled, ffmpeg_broken_pipe]
+            ) as popen,
         ):
             with self.assertRaises(subprocess.CalledProcessError):
                 video.split_mvc_to_stereo_native(
