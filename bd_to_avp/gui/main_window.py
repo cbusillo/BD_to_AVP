@@ -332,14 +332,15 @@ class MainWindow(QMainWindow):
         continue_button = message_box.addButton("Continue On Errors", QMessageBox.ButtonRole.NoRole)
 
         result = message_box.exec()
+        clicked_button = message_box.clickedButton()
 
-        if result == QMessageBox.StandardButton.Abort:
+        if result == QMessageBox.StandardButton.Abort or clicked_button is None:
             self.handle_processing_error(error)
             return
 
-        if message_box.clickedButton() == skip_button:
+        if clicked_button == skip_button:
             config.skip_subtitles = True
-        elif message_box.clickedButton() == continue_button:
+        elif clicked_button == continue_button:
             config.continue_on_error = True
 
         config.start_stage = Stage.CREATE_LEFT_RIGHT_FILES
