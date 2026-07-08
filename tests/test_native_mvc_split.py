@@ -219,6 +219,24 @@ class NativeMvcSelectionTests(unittest.TestCase):
         self.assertIn("Native MVC splitter crashed; retrying once in single-threaded mode.", stdout.getvalue())
         self.assertIn("Running native MVC split and encode (single-threaded).", stdout.getvalue())
 
+    def test_native_split_does_not_retry_when_splitter_is_cancelled(self) -> None:
+        splitter_cancelled = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=-15, poll_results=[-15])
+        ffmpeg_broken_pipe = _FakeProcess(returncode=1, stdout=None, stderr=None)
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(video.config, "EDGE264_TEST_PATH", Path("edge264_test")),
+            patch("bd_to_avp.modules.video.generate_native_mvc_splitter_command", return_value=["edge264_test"]),
+            patch("bd_to_avp.modules.video.generate_native_mvc_ffmpeg_command", return_value=["ffmpeg"]),
+            patch("bd_to_avp.modules.video.subprocess.Popen", side_effect=[splitter_cancelled, ffmpeg_broken_pipe]) as popen,
+        ):
+            with self.assertRaises(subprocess.CalledProcessError):
+                video.split_mvc_to_stereo_native(
+                    Path("movie_mvc.h264"), Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov", DiscInfo(), ""
+                )
+
+        self.assertEqual(popen.call_count, 2)
+
     def test_native_split_probes_iso_sources_and_skips_doomed_multithread_attempt(self) -> None:
         splitter_retry = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=0, poll_results=[0])
         ffmpeg_retry = _FakeProcess(returncode=0, stdout=None, stderr=None)
@@ -286,7 +304,7 @@ class NativeMvcSelectionTests(unittest.TestCase):
         self.assertTrue(result)
 
     def test_native_multithread_probe_returns_false_after_timeout(self) -> None:
-        splitter = _FakeProcess(returncode=None, stdout=None, returncode_after_wait=None, raises_timeout=True)
+        splitter = _FakeProcess(returncode=None, stdout=None, returncode_after_wait=-15, raises_timeout_once=True)
 
         with (
             tempfile.TemporaryDirectory() as temp_dir,
@@ -299,6 +317,28 @@ class NativeMvcSelectionTests(unittest.TestCase):
 
         self.assertFalse(result)
         splitter.terminate.assert_called_once()
+        splitter.kill.assert_not_called()
+
+    def test_native_multithread_probe_kills_splitter_when_timeout_cleanup_stalls(self) -> None:
+        splitter = _FakeProcess(
+            returncode=None,
+            stdout=None,
+            returncode_after_wait=-9,
+            raises_timeout_count=2,
+        )
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.video.generate_native_mvc_splitter_command", return_value=["edge264_test"]),
+            patch("bd_to_avp.modules.video.subprocess.Popen", return_value=splitter),
+        ):
+            result = video.native_multithread_splitter_probe_crashed(
+                Path("movie_mvc.264"), Path(temp_dir) / "split.native_mvc.log"
+            )
+
+        self.assertFalse(result)
+        splitter.terminate.assert_called_once()
+        splitter.kill.assert_called_once()
 
     def test_native_split_raises_clear_error_when_single_thread_retry_sigaborts(self) -> None:
         splitter_crash = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=-6, poll_results=[-6])
@@ -337,17 +377,28 @@ class _FakeProcess:
         returncode_after_wait: int | None = None,
         poll_results: list[int | None] | None = None,
         raises_timeout: bool = False,
+        raises_timeout_once: bool = False,
+        raises_timeout_count: int = 0,
     ) -> None:
         self.returncode = returncode
         self.returncode_after_wait = returncode_after_wait if returncode_after_wait is not None else returncode
         self.poll_results = poll_results or []
         self.raises_timeout = raises_timeout
+        self.raises_timeout_once = raises_timeout_once
+        self.raises_timeout_count = raises_timeout_count
         self.stdout = stdout
         self.stderr = stderr
         self.terminate = Mock()
+        self.kill = Mock()
 
     def wait(self, timeout=None) -> int:
         if self.raises_timeout:
+            raise subprocess.TimeoutExpired("edge264_test", timeout or 0)
+        if self.raises_timeout_count > 0:
+            self.raises_timeout_count -= 1
+            raise subprocess.TimeoutExpired("edge264_test", timeout or 0)
+        if self.raises_timeout_once:
+            self.raises_timeout_once = False
             raise subprocess.TimeoutExpired("edge264_test", timeout or 0)
         self.returncode = self.returncode_after_wait
         if self.returncode is None:

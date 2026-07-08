@@ -49,6 +49,13 @@ class NativeMvcSplitError(RuntimeError):
 
 
 NATIVE_MVC_PROBE_TIMEOUT_SECONDS = 30
+NATIVE_MVC_RETRY_SIGNALS = {
+    signal.SIGABRT,
+    signal.SIGBUS,
+    signal.SIGFPE,
+    signal.SIGILL,
+    signal.SIGSEGV,
+}
 
 
 def generate_native_mvc_splitter_command(video_input_path: Path, *, single_threaded: bool = False) -> list[str | Path]:
@@ -193,7 +200,7 @@ def split_mvc_to_stereo_native(
                 single_threaded=True,
             )
     except subprocess.CalledProcessError as error:
-        if error.cmd and Path(error.cmd[0]).name == config.EDGE264_TEST_PATH.name:
+        if native_splitter_should_report_crash(error):
             raise NativeMvcSplitError(build_native_splitter_failure_message(error, splitter_log_path)) from error
         raise
     finally:
@@ -221,8 +228,8 @@ def native_multithread_splitter_probe_crashed(native_input_path: Path, splitter_
                 try:
                     splitter_process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    # The probe already survived long enough; leave full cleanup to the process group handler.
-                    pass
+                    splitter_process.kill()
+                    splitter_process.wait(timeout=2)
             return False
 
     if splitter_process.returncode == 0:
@@ -293,7 +300,18 @@ def run_native_mvc_split_attempt(
 
 
 def native_splitter_died_by_signal(error: subprocess.CalledProcessError) -> bool:
-    return error.returncode < 0 and bool(error.cmd) and Path(error.cmd[0]).name == config.EDGE264_TEST_PATH.name
+    if error.returncode >= 0 or not error.cmd or Path(error.cmd[0]).name != config.EDGE264_TEST_PATH.name:
+        return False
+    try:
+        return signal.Signals(-error.returncode) in NATIVE_MVC_RETRY_SIGNALS
+    except ValueError:
+        return False
+
+
+def native_splitter_should_report_crash(error: subprocess.CalledProcessError) -> bool:
+    if not error.cmd or Path(error.cmd[0]).name != config.EDGE264_TEST_PATH.name:
+        return False
+    return error.returncode >= 0 or native_splitter_died_by_signal(error)
 
 
 def build_native_splitter_failure_message(error: subprocess.CalledProcessError, splitter_log_path: Path) -> str:
