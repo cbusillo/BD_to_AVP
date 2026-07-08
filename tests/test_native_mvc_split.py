@@ -189,10 +189,13 @@ class NativeMvcSelectionTests(unittest.TestCase):
 
         with (
             tempfile.TemporaryDirectory() as temp_dir,
-            patch("bd_to_avp.modules.video.generate_native_mvc_splitter_command", side_effect=[
-                ["edge264_test", "-Omk"],
-                ["edge264_test", "-Osk"],
-            ]) as splitter_command,
+            patch(
+                "bd_to_avp.modules.video.generate_native_mvc_splitter_command",
+                side_effect=[
+                    ["edge264_test", "-Omk"],
+                    ["edge264_test", "-Osk"],
+                ],
+            ) as splitter_command,
             patch("bd_to_avp.modules.video.generate_native_mvc_ffmpeg_command", return_value=["ffmpeg"]),
             patch(
                 "bd_to_avp.modules.video.subprocess.Popen",
@@ -218,10 +221,13 @@ class NativeMvcSelectionTests(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as temp_dir,
             patch.object(video.config, "EDGE264_TEST_PATH", Path("edge264_test")),
-            patch("bd_to_avp.modules.video.generate_native_mvc_splitter_command", side_effect=[
-                ["edge264_test", "-Omk"],
-                ["edge264_test", "-Osk"],
-            ]),
+            patch(
+                "bd_to_avp.modules.video.generate_native_mvc_splitter_command",
+                side_effect=[
+                    ["edge264_test", "-Omk"],
+                    ["edge264_test", "-Osk"],
+                ],
+            ),
             patch("bd_to_avp.modules.video.generate_native_mvc_ffmpeg_command", return_value=["ffmpeg"]),
             patch(
                 "bd_to_avp.modules.video.subprocess.Popen",
