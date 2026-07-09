@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from contextlib import chdir
 from pathlib import Path
 from unittest.mock import patch
 
@@ -194,6 +195,131 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
 
         self.assertFalse(stale_subtitle.exists())
         extract.assert_not_called()
+
+    def test_skip_subtitles_uses_explicit_output_folder_not_source_folder(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(sub.config, "skip_subtitles", True),
+            patch.object(sub.config, "start_stage", sub.Stage.EXTRACT_SUBTITLES),
+            patch("bd_to_avp.modules.sub.extract_subtitle_to_srt") as extract,
+        ):
+            temp_path = Path(temp_dir)
+            source_folder = temp_path / "source"
+            output_folder = temp_path / "output"
+            source_folder.mkdir()
+            output_folder.mkdir()
+            source_subtitle = source_folder / "movie.en.srt"
+            output_subtitle = output_folder / "movie.en.srt"
+            source_subtitle.write_text("manual", encoding="utf-8")
+            output_subtitle.write_text("stale", encoding="utf-8")
+
+            create_srt_from_mkv(source_folder / "movie.mkv", output_folder)
+
+            source_subtitle_exists = source_subtitle.exists()
+            output_subtitle_exists = output_subtitle.exists()
+
+        self.assertTrue(source_subtitle_exists)
+        self.assertFalse(output_subtitle_exists)
+        extract.assert_not_called()
+
+    def test_subtitle_extraction_aliases_direct_source_into_output_folder(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
+            patch.object(sub.config, "skip_subtitles", False),
+            patch.object(sub.config, "continue_on_error", False),
+            patch("bd_to_avp.modules.sub.Mkv") as mkv_class,
+            patch("bd_to_avp.modules.sub.get_selected_subtitle_tracks", return_value=[]),
+            patch("bd_to_avp.modules.sub.mark_forced_srt_files") as mark_forced,
+        ):
+            temp_path = Path(temp_dir)
+            source_folder = temp_path / "source"
+            output_folder = temp_path / "output"
+            source_folder.mkdir()
+            output_folder.mkdir()
+            source_mkv = source_folder / "movie.mkv"
+            source_mkv.write_bytes(b"mkv")
+
+            def write_srt(mkv_file, _options):
+                Path(str(mkv_file.media_path)).with_suffix(".en.srt").write_text("subtitle", encoding="utf-8")
+
+            with patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=write_srt) as rip:
+                mkv_class.side_effect = lambda path: type("MkvStub", (), {"media_path": Path(path)})()
+
+                extract_subtitle_to_srt(source_mkv, output_folder)
+
+            created_srt = output_folder / "movie.en.srt"
+            self.assertTrue(created_srt.exists())
+            self.assertEqual(created_srt.read_text(encoding="utf-8"), "subtitle")
+            self.assertFalse((source_folder / "movie.en.srt").exists())
+            self.assertFalse((output_folder / "movie.mkv").exists())
+            rip.assert_called_once()
+            mark_forced.assert_called_once_with([])
+
+    def test_subtitle_source_alias_uses_absolute_target_for_relative_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_folder = temp_path / "source"
+            output_folder = temp_path / "output"
+            source_folder.mkdir()
+            output_folder.mkdir()
+            source_mkv = source_folder / "movie.mkv"
+            source_mkv.write_bytes(b"mkv")
+
+            with chdir(temp_path), sub.subtitle_source_alias(Path("source/movie.mkv"), output_folder) as alias_path:
+                self.assertTrue(alias_path.is_symlink())
+                self.assertEqual(alias_path.resolve(strict=True), source_mkv.resolve(strict=True))
+
+            self.assertFalse(alias_path.is_symlink())
+
+    def test_subtitle_source_alias_reuses_media_already_in_output_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_folder = Path(temp_dir)
+            source_mkv = output_folder / "movie.mkv"
+            source_mkv.write_bytes(b"mkv")
+
+            with sub.subtitle_source_alias(source_mkv, output_folder.resolve()) as alias_path:
+                self.assertEqual(alias_path, source_mkv)
+                self.assertFalse(alias_path.is_symlink())
+
+            self.assertTrue(source_mkv.exists())
+
+    def test_subtitle_source_alias_cleans_existing_matching_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_folder = temp_path / "source"
+            output_folder = temp_path / "output"
+            source_folder.mkdir()
+            output_folder.mkdir()
+            source_mkv = source_folder / "movie.mkv"
+            source_mkv.write_bytes(b"mkv")
+            stale_alias = output_folder / "movie.mkv"
+            stale_alias.symlink_to(source_mkv)
+
+            with sub.subtitle_source_alias(source_mkv, output_folder) as alias_path:
+                self.assertEqual(alias_path, stale_alias)
+                self.assertTrue(alias_path.is_symlink())
+
+            self.assertFalse(stale_alias.is_symlink())
+
+    def test_subtitle_source_alias_avoids_stale_broken_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_folder = temp_path / "source"
+            output_folder = temp_path / "output"
+            source_folder.mkdir()
+            output_folder.mkdir()
+            source_mkv = source_folder / "movie.mkv"
+            source_mkv.write_bytes(b"mkv")
+            stale_alias = output_folder / "movie.mkv"
+            stale_alias.symlink_to(output_folder / "missing.mkv")
+
+            with sub.subtitle_source_alias(source_mkv, output_folder) as alias_path:
+                self.assertEqual(alias_path, stale_alias)
+                self.assertTrue(alias_path.is_symlink())
+                self.assertEqual(alias_path.resolve(strict=True), source_mkv.resolve(strict=True))
+
+            self.assertFalse(stale_alias.is_symlink())
 
     def test_skip_subtitles_preserves_srt_files_when_subtitle_stage_is_skipped(self) -> None:
         with (

@@ -5,7 +5,7 @@ from wakepy.modes import keep
 
 from bd_to_avp import preflight
 from bd_to_avp.modules.audio import create_transcoded_audio_file
-from bd_to_avp.modules.config import config, Stage
+from bd_to_avp.modules.config import config, is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.container import create_muxed_file, create_mvc_and_audio
 from bd_to_avp.modules.disc import create_mkv_file, get_disc_and_mvc_video_info
 from bd_to_avp.modules.file import (
@@ -69,7 +69,7 @@ def process_each() -> None:
     disc_info.color_depth = get_video_color_depth(mkv_output_path)
     crop_params = detect_crop_parameters(mkv_output_path)
     audio_output_path, video_output_path = create_mvc_and_audio(disc_info.name, mkv_output_path, output_folder)
-    create_srt_from_mkv(mkv_output_path)
+    create_srt_from_mkv(mkv_output_path, output_folder)
     left_output_path, right_output_path = create_left_right_files(
         disc_info, output_folder, video_output_path, crop_params
     )
@@ -88,7 +88,7 @@ def process_each() -> None:
     if not config.keep_files:
         remove_folder_if_exists(tmp_folder)
 
-    if config.remove_original and config.source_path:
+    if config.remove_original and config.source_path and not is_direct_pipeline_source_reused():
         if config.source_path.is_dir():
             remove_folder_if_exists(config.source_path)
         else:

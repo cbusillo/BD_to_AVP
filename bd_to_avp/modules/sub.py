@@ -1,4 +1,6 @@
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -15,17 +17,17 @@ class SRTCreationError(Exception):
     pass
 
 
-def create_srt_from_mkv(mkv_path: Path) -> None:
+def create_srt_from_mkv(mkv_path: Path, output_path: Path | None = None) -> None:
+    output_path = output_path or mkv_path.parent
     if config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
         if config.skip_subtitles:
-            cleanup_existing_subtitle_files(mkv_path.parent)
+            cleanup_existing_subtitle_files(output_path)
             return None
-        extract_subtitle_to_srt(mkv_path)
+        extract_subtitle_to_srt(mkv_path, output_path)
 
 
-def extract_subtitle_to_srt(mkv_path: Path) -> None:
-    output_path = mkv_path.parent
-
+def extract_subtitle_to_srt(mkv_path: Path, output_path: Path | None = None) -> None:
+    output_path = output_path or mkv_path.parent
     cleanup_existing_subtitle_files(output_path)
 
     if config.skip_subtitles:
@@ -43,22 +45,66 @@ def extract_subtitle_to_srt(mkv_path: Path) -> None:
     spinner_thread.start()
 
     try:
-        mkv_file = Mkv(mkv_path.as_posix())
-        selected_subtitle_tracks = get_selected_subtitle_tracks(mkv_file, sub_options)
+        with subtitle_source_alias(mkv_path, output_path) as subtitle_mkv_path:
+            mkv_file = Mkv(subtitle_mkv_path.as_posix())
+            selected_subtitle_tracks = get_selected_subtitle_tracks(mkv_file, sub_options)
 
-        pgsrip.rip(mkv_file, sub_options)
+            pgsrip.rip(mkv_file, sub_options)
 
-        for srt_file in output_path.glob("*.srt"):
-            if srt_file.stat().st_size == 0:
-                srt_file.unlink()
+            for srt_file in output_path.glob("*.srt"):
+                if srt_file.stat().st_size == 0:
+                    srt_file.unlink()
 
-        if not any(output_path.glob("*.srt")) and not config.continue_on_error:
-            raise SRTCreationError("No SRT subtitle files with data created.")
+            if not any(output_path.glob("*.srt")) and not config.continue_on_error:
+                raise SRTCreationError("No SRT subtitle files with data created.")
 
-        mark_forced_srt_files(selected_subtitle_tracks)
+            mark_forced_srt_files(selected_subtitle_tracks)
     finally:
         spinner.stop()
         spinner_thread.join()
+
+
+@contextmanager
+def subtitle_source_alias(mkv_path: Path, output_path: Path) -> Iterator[Path]:
+    if mkv_path.parent.resolve() == output_path.resolve():
+        yield mkv_path
+        return
+
+    source_path = mkv_path.resolve(strict=True)
+    alias_path = output_path / mkv_path.name
+    if alias_path.is_symlink() and not alias_path.exists():
+        alias_path.unlink()
+
+    if alias_path.exists() or alias_path.is_symlink():
+        try:
+            if alias_path.samefile(source_path):
+                if alias_path.is_symlink():
+                    try:
+                        yield alias_path
+                    finally:
+                        alias_path.unlink(missing_ok=True)
+                else:
+                    yield alias_path
+                return
+        except OSError:
+            pass
+
+        alias_path = unique_subtitle_source_alias_path(mkv_path, output_path)
+
+    alias_path.symlink_to(source_path)
+    try:
+        yield alias_path
+    finally:
+        alias_path.unlink(missing_ok=True)
+
+
+def unique_subtitle_source_alias_path(mkv_path: Path, output_path: Path) -> Path:
+    for index in range(1, 1000):
+        candidate = output_path / f"{mkv_path.stem}.subtitle-source-{index}{mkv_path.suffix}"
+        if not candidate.exists() and not candidate.is_symlink():
+            return candidate
+
+    raise FileExistsError(f"Unable to create a subtitle source alias in {output_path}")
 
 
 def cleanup_existing_subtitle_files(output_path: Path) -> None:
