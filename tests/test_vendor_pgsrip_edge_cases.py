@@ -1,6 +1,9 @@
 import unittest
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import Mock, patch
+
+import numpy as np
 
 from bd_to_avp.vendor.pgsrip.media_path import MediaPath
 from bd_to_avp.vendor.pgsrip.media import PgsSubtitleItem
@@ -105,6 +108,46 @@ class PgsRipperEmptyTrackTests(unittest.TestCase):
 
         subs.clean_indexes.assert_called_once()
         subs.append.assert_not_called()
+
+    def test_ripper_uses_injected_ocr_backend_to_create_srt_item(self) -> None:
+        item = _subtitle_item(start=1000, end=2000)
+        image = Mock()
+        image.data = np.full((10, 30), 255, dtype=np.uint8)
+        image.shape = image.data.shape
+        cast(Any, item).image = image
+        pgs = Mock()
+        pgs.items = [item]
+        pgs.language = None
+        pgs.temp_folder = ""
+        pgs.media_path = Mock()
+        pgs.media_path.translate.return_value = Path("movie.srt")
+        ocr_backend = Mock()
+        ocr_backend.image_to_data.return_value = {
+            "level": [5],
+            "page_num": [1],
+            "block_num": [1],
+            "par_num": [1],
+            "line_num": [1],
+            "word_num": [1],
+            "left": [1],
+            "top": [1],
+            "width": [30],
+            "height": [10],
+            "conf": [99],
+            "text": ["Hello"],
+        }
+
+        ripper = PgsToSrtRipper(pgs, Options(ocr_backend=ocr_backend))
+
+        with patch("bd_to_avp.vendor.pgsrip.ripper.SubRipFile") as subrip_file:
+            subs = Mock()
+            subrip_file.return_value = subs
+
+            ripper.rip(lambda text: text)
+
+        ocr_backend.image_to_data.assert_called()
+        subs.append.assert_called_once()
+        self.assertEqual(subs.append.call_args.args[0].text, "Hello")
 
 
 def _subtitle_item(start: int, end: int) -> PgsSubtitleItem:

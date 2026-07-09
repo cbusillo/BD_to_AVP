@@ -15,7 +15,6 @@ CORE_TOOLS = {
 GUI_RUNTIME_TOOLS = {
     "edge264_test": ["--help"],
     "spatial-media-kit-tool": ["--help"],
-    "tesseract": ["--version"],
 }
 REQUIRED_TOOLS = CORE_TOOLS | GUI_RUNTIME_TOOLS
 

@@ -42,6 +42,14 @@ class ReleaseSmokeTests(unittest.TestCase):
             with self.assertRaisesRegex(smoke_release_app.SmokeFailure, "version mismatch"):
                 smoke_release_app.verify_cli_version(bundle, smoke_release_app.build_clean_env())
 
+    def test_apple_vision_ocr_smoke_requires_expected_cli_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = make_fake_app(Path(temp_dir), version="1.2.3", apple_vision_smoke=False)
+            bundle = smoke_release_app.read_bundle(app_path)
+
+            with self.assertRaisesRegex(smoke_release_app.SmokeFailure, "Apple Vision OCR"):
+                smoke_release_app.verify_apple_vision_ocr(bundle, smoke_release_app.build_clean_env())
+
     def test_default_app_search_uses_first_existing_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             first_path = Path(temp_dir) / "Missing.app"
@@ -114,7 +122,13 @@ class ReleaseSmokeTests(unittest.TestCase):
         self.assertEqual(run.call_count, 1)
 
 
-def make_fake_app(root: Path, *, version: str, executable_version: str | None = None) -> Path:
+def make_fake_app(
+    root: Path,
+    *,
+    version: str,
+    executable_version: str | None = None,
+    apple_vision_smoke: bool = True,
+) -> Path:
     app_path = root / "3D Blu-ray to Vision Pro.app"
     contents_path = app_path / "Contents"
     macos_path = contents_path / "MacOS"
@@ -142,6 +156,10 @@ def make_fake_app(root: Path, *, version: str, executable_version: str | None = 
             'if [ "$1" = "--help" ]; then',
             "  echo 'Process 3D Blu-ray to MV-HEVC compatible with the Apple Vision Pro.'",
             "  echo '--source SOURCE'",
+            "  exit 0",
+            "fi",
+            'if [ "$1" = "-c" ]; then',
+            f"  echo '{'Apple Vision OCR import smoke passed' if apple_vision_smoke else 'Apple Vision unavailable'}'",
             "  exit 0",
             "fi",
             "exit 0",

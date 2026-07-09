@@ -91,7 +91,7 @@ With MakeMKV installed:
 
 ## Known Release Blockers
 
-- `v0.2.143rc2` does not bundle `mkvextract`, `mkvmerge`, or `tesseract`, so it cannot pass the clean-machine GUI subtitle path. MKVToolNix is being removed from the subtitle path in #143; do not promote an RC while the remaining OCR tool requirement is unresolved.
+- `v0.2.143rc2` does not bundle the subtitle runtime tools required by that build, so it cannot pass the clean-machine GUI subtitle path. #143 removes MKVToolNix and Tesseract from the subtitle runtime path; do not promote an RC until that replacement has shipped and passed the clean-machine subtitle smoke.
 
 ## Follow-Up Routing
 

@@ -25,7 +25,6 @@ REQUIRED_BUNDLED_TOOLS = {
     "edge264_test": ["--help"],
     "MP4Box": ["-version"],
     "spatial-media-kit-tool": ["--help"],
-    "tesseract": ["--version"],
 }
 OPTIONAL_BUNDLED_TOOLS = {
     "fx-upscale": ["--help"],
@@ -201,6 +200,17 @@ def verify_cli_help(bundle: AppBundle, clean_env: dict[str, str]) -> None:
         raise SmokeFailure("CLI help output did not include expected BD_to_AVP options")
 
 
+def verify_apple_vision_ocr(bundle: AppBundle, clean_env: dict[str, str]) -> None:
+    command = (
+        "from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr; "
+        "AppleVisionOcr._load_frameworks(); "
+        "print('Apple Vision OCR import smoke passed')"
+    )
+    output = run([bundle.executable, "-c", command], env=clean_env).stdout
+    if "Apple Vision OCR import smoke passed" not in output:
+        raise SmokeFailure(f"Apple Vision OCR smoke output was unexpected: {output}")
+
+
 def verify_makemkv_probe(bundle: AppBundle, clean_env: dict[str, str]) -> None:
     makemkv_path = Path("/Applications/MakeMKV.app/Contents/MacOS/makemkvcon")
     if not makemkv_path.exists():
@@ -224,6 +234,7 @@ def smoke_app(app_path: Path, *, skip_spctl: bool) -> None:
     verify_bundled_tools(bundle, clean_env)
     verify_cli_version(bundle, clean_env)
     verify_cli_help(bundle, clean_env)
+    verify_apple_vision_ocr(bundle, clean_env)
     verify_makemkv_probe(bundle, clean_env)
     print("Release app smoke passed")
 

@@ -63,7 +63,7 @@ and install MakeMKV from the [MakeMKV] website.
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
 # Install Homebrew formula dependencies. MP4Box is provided by gpac.
-brew install ffmpeg gpac mkvtoolnix python@3.12 tesseract
+brew install ffmpeg gpac python@3.12
 
 # Install the current macOS MakeMKV build from https://www.makemkv.com/.
 # The app bundle is detected automatically from /Applications/MakeMKV.app.

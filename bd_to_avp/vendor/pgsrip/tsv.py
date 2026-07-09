@@ -14,7 +14,7 @@ class TsvDataItem:
         self.top = int(top)
         self.width = int(width)
         self.height = int(height)
-        self.conf = int(float(conf))  # cast to float first to handle strings passed by pytesseract<0.3.10
+        self.conf = int(float(conf))
         self.text = text
 
     def __repr__(self):

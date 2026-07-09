@@ -24,11 +24,10 @@ dependencies = [
     "opencv-python==4.10.0.84",
     "packaging>=24.1,<27",
     "psutil>=5.9.8,<8",
+    "pyobjc-framework-vision>=11.0,<12",
     "pygithub>=2.3.0,<3",
     "pyside6>=6.7.1,<7",
     "pysrt>=1.1.2,<2",
-    "pytesseract>=0.3.10,<0.4",
-    "requests>=2.32.3,<3",
     "trakit>=0.2.2,<0.3",
     "wakepy>=0.9.1,<1.1",
 ]
@@ -48,7 +47,6 @@ dev = [
     "mypy>=2.1.0,<3",
     "ruff>=0.15.20,<0.16",
     "types-psutil>=5.9.5.20240516",
-    "types-requests>=2.32.0.20240602",
 ]
 
 [tool.uv]
@@ -93,11 +91,10 @@ requires = [
     "opencv-python==4.10.0.84",
     "packaging>=24.1,<27",
     "psutil>=5.9.8,<8",
+    "pyobjc-framework-vision>=11.0,<12",
     "pygithub>=2.3.0,<3",
     "pyside6>=6.7.1,<7",
     "pysrt>=1.1.2,<2",
-    "pytesseract>=0.3.10,<0.4",
-    "requests>=2.32.3,<3",
     "trakit>=0.2.2,<0.3",
     "wakepy>=0.9.1,<1.1",
 ]
