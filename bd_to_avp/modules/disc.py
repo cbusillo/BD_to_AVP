@@ -163,11 +163,15 @@ def create_custom_makemkv_profile(custom_profile_path: Path, language_code: str)
 
 def create_mkv_file(output_folder: Path, disc_info: DiscInfo, language_code: str) -> Path:
     if config.source_path and config.source_path.suffix.lower() in [*config.MTS_EXTENSIONS, ".mkv"]:
+        if not config.source_path.is_file():
+            raise FileNotFoundError(f"Source file not found: {config.source_path}")
         if is_direct_pipeline_source_reused():
-            if not config.source_path.is_file():
-                raise FileNotFoundError(f"Direct source file not found: {config.source_path}")
             return config.source_path
-        shutil.copy(config.source_path, output_folder)
+        destination_path = output_folder / config.source_path.name
+        if config.source_path.resolve() == destination_path.resolve():
+            return config.source_path
+        if config.start_stage.value <= Stage.CREATE_MKV.value:
+            shutil.copy2(config.source_path, destination_path)
         if mkv_file := find_largest_file_with_extensions(output_folder, [".mkv", *config.MTS_EXTENSIONS]):
             return mkv_file
 

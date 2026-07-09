@@ -177,13 +177,13 @@ class MainWindow(QMainWindow):
     def create_misc_options(self, config_layout: QVBoxLayout) -> None:
         self.crop_black_bars_checkbox = self.create_checkbox("Crop Black Bars", config.crop_black_bars)
         self.swap_eyes_checkbox = self.create_checkbox("Swap Eyes", config.swap_eyes)
-        self.keep_files_checkbox = self.create_checkbox("Keep Temporary Files", config.keep_files)
+        self.keep_files_checkbox = self.create_checkbox("Keep Durable Stage Files", config.keep_files)
         self.output_commands_checkbox = self.create_checkbox("Output Commands", config.output_commands)
         self.software_encoder_checkbox = self.create_checkbox("Use Software Encoder", config.software_encoder)
         self.fx_upscale_checkbox = self.create_checkbox(
             "AI FX Upscale (2x resolution)", config.fx_upscale, self.toggle_upscale
         )
-        self.remove_original_checkbox = self.create_checkbox("Remove Original", config.remove_original)
+        self.remove_original_checkbox = self.create_checkbox("Remove Original After Success", config.remove_original)
         self.overwrite_checkbox = self.create_checkbox("Overwrite", config.overwrite)
         self.transcode_audio_checkbox = self.create_checkbox(
             "Transcode Audio", config.transcode_audio, self.toggle_transcode

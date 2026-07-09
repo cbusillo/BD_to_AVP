@@ -1,29 +1,31 @@
 # Direct Pipeline Contracts
 
-BD_to_AVP currently uses named files as the contract between processing stages.
-That is simple, debuggable, and important for users who stop at a stage, run an
-external AI upscaler, inspect an intermediate, and later resume with
-`--start-stage`.
+BD_to_AVP preserves named files as the durable contract between processing
+stages while using fewer intermediates for a normal unattended run. Named files
+remain important for users who stop at a stage, run an external AI upscaler,
+inspect an intermediate, and later resume with `--start-stage`.
 
-Issue #126 investigates whether a one-shot mode can reduce disk writes without
-creating a second conversion pipeline. The design constraint is DRY: direct mode
-must reuse the same stage code and stage contracts. The only difference should
-be whether a stage output is materialized as a named restartable file or treated
-as an ephemeral stream/artifact for a full unattended run.
+The design constraint is DRY: automatic minimum-materialization and
+`--keep-files` reuse the same stage code and logical contracts. The difference
+is whether an eligible stage output is streamed/reused or materialized as a
+named restartable file.
 
 ## Current Stage Contracts
 
 ### `CREATE_MKV`
 
 - Input: disc, ISO/image, MKV, MTS, or M2TS source plus selected title metadata.
-- Output: largest MKV/MTS/M2TS in the per-title output folder.
+- Output: the selected MKV/MTS/M2TS source in default mode; a copy in the
+  per-title output folder with `--keep-files`; MakeMKV output for disc/images.
 - Restart/debug value: high. This is the common resume point and MakeMKV
   boundary.
 
 ### `EXTRACT_MVC_AND_AUDIO`
 
 - Input: MKV/MTS/M2TS source.
-- Output: `<name>_mvc.h264` and `<name>_audio_PCM.mov`.
+- Output: the source container as the logical MVC input in default mode; the
+  source as audio input when AAC transcoding is enabled; PCM audio otherwise;
+  `<name>_mvc.h264` and `<name>_audio_PCM.mov` with `--keep-files`.
 - Restart/debug value: high. These files feed video split, audio mux/transcode,
   and subtitle timing context.
 
@@ -36,7 +38,8 @@ as an ephemeral stream/artifact for a full unattended run.
 
 ### `CREATE_LEFT_RIGHT_FILES`
 
-- Input: extracted MVC elementary stream plus crop/title metadata.
+- Input: streamed source container in default mode or extracted MVC elementary
+  stream with `--keep-files`, plus crop/title metadata.
 - Output: `<name>_left_movie.mov` and `<name>_right_movie.mov`.
 - Restart/debug value: very high. External AI upscaling workflows often start
   here.
@@ -57,7 +60,8 @@ as an ephemeral stream/artifact for a full unattended run.
 
 ### `TRANSCODE_AUDIO`
 
-- Input: PCM audio movie.
+- Input: source container in default AAC mode or PCM audio movie with
+  `--keep-files`.
 - Output: `<folder>_audio_AAC.mov` when enabled.
 - Restart/debug value: medium. This is the final mux input and useful for audio
   debugging.
@@ -88,36 +92,36 @@ explicit materialization decision per stage:
 - `stream-only`: allowed only when both producer and consumer can share one
   process pipeline without losing restart/debug behavior for normal mode.
 
-Default mode remains persistent. Direct mode should be opt-in until benchmarks
-prove that it is safe and worth the complexity.
+Default mode uses minimum materialization. `--keep-files` selects persistent
+stage boundaries for restart, inspection, and external-tool workflows.
 
-## Internal Direct-Pipeline Prototype
+## Automatic Direct Pipeline
 
-The runtime prototype uses an internal direct-pipeline toggle. It is
-intentionally hidden from the supported CLI surface until benchmark evidence
-and the final UX decision are available. Direct MKV/MTS/M2TS inputs reuse the
-original source path, AAC transcoding reads audio from that source without an
+When `--keep-files` is absent, direct MKV/MTS/M2TS inputs reuse the original
+source path, AAC transcoding reads audio from that source without an
 intermediate PCM MOV, and MVC video is demuxed as Annex B into the native
 splitter without an intermediate `.h264` file.
 
 The MVC path is a bounded three-process pipeline: source FFmpeg to
 `edge264_test` to encoding FFmpeg. Subtitles, AAC, left/right eye files,
-MV-HEVC, and the final movie remain named files. Disc/ISO inputs retain their
-MakeMKV materialization, while restart and external-upscaler artifacts remain
-unchanged. `--keep-files` disables the direct MVC and audio boundaries so the
-durable PCM and MVC files are available for inspection and staged workflows.
+MV-HEVC, and the final movie remain named stage artifacts. Default mode removes
+consumed intermediates after the final output is complete; `--keep-files`
+retains them. Disc/ISO inputs retain their MakeMKV materialization.
 
-The reused source is user-owned. Cleanup and `--remove-original` do not delete
-it while this prototype is active. The supported CLI surface and boundaries
-remain subject to the benchmark and UX decisions tracked by GitHub issue #126.
+The reused source is user-owned. Automatic cleanup never deletes it.
+`--remove-original` is the explicit exception and removes the source only after
+the complete conversion succeeds. With `--keep-files`, the source is copied
+into the per-title output folder and the durable stage contract applies. If the
+selected source is already that retained copy, `--remove-original` explicitly
+removes it while leaving the other durable stage artifacts intact.
 
-## Likely Safe Boundaries
+## Supported Direct Boundaries
 
 ### Source Reuse For Existing MKV/MTS/M2TS Inputs
 
-For direct file inputs, `CREATE_MKV` currently copies the source into the output
-folder and then downstream stages read that copy. A direct mode can likely reuse
-the original source path as an unowned artifact instead.
+For direct file inputs, default mode reuses the original source path as an
+unowned artifact. `--keep-files` copies it into the output folder so downstream
+stages have a durable source boundary.
 
 That keeps downstream stage code path-based and avoids one large copy. The
 ownership rule is the critical part: direct mode must never delete a user source
@@ -130,17 +134,16 @@ This boundary streams internally: source FFmpeg writes Annex B MVC to
 produces left/right eye movie files. The output files remain important because
 they are the main external upscaler/restart boundary.
 
-Initial work here should focus on measuring and tightening the existing stream,
-not removing left/right outputs.
+Left/right outputs remain materialized as the external-upscaler and restart
+boundary during processing and are retained after completion with
+`--keep-files`.
 
 ### Extracted Audio To Transcoded Audio
 
-When AAC transcoding is enabled, BD_to_AVP writes PCM audio and then reads it
-back to produce AAC. The internal direct-mode prototype now skips that PCM file
-when AAC transcoding is enabled and `--keep-files` is not requested. MVC video
-uses the same source container through the direct splitter pipeline, while the
+When AAC transcoding is enabled without `--keep-files`, the
 `TRANSCODE_AUDIO` stage reads audio from the MKV/MTS/M2TS source and writes the
-final AAC MOV directly.
+final AAC MOV directly. MVC video uses the same source container through the
+direct splitter pipeline.
 
 The final mux still needs a seekable audio file, so the AAC MOV remains
 materialized. Durable mode and `--keep-files` retain the existing PCM boundary,
@@ -161,7 +164,7 @@ The direct MVC implementation uses anonymous subprocess pipes, not filesystem
 FIFOs. The patched native splitter supports stdin with bounded NAL buffering;
 regular-file input remains available for durable mode.
 
-Risks to prove first:
+Constraints retained by the implementation:
 
 - FFmpeg cannot write every container format, especially MOV, to a non-seekable
   output.
@@ -176,10 +179,10 @@ remain outside the Python pipeline.
 
 ### MKV Materialization
 
-The MKV is currently the shared source for color-depth probing, crop detection,
-MVC/audio extraction, subtitle OCR, and restart. It is also the boundary most
-likely to change if MakeMKV is replaced later. Do not optimize this away in this
-issue.
+The MKV remains the shared source for color-depth probing, crop detection,
+MVC/audio extraction, subtitle OCR, and restart. Existing MKV/MTS/M2TS inputs
+are reused in place by default, while disc/image inputs retain MakeMKV output as
+a seekable source boundary.
 
 ### MVC And PCM Extraction
 
@@ -192,55 +195,34 @@ transcode have completed.
 ### Left/Right Eye Files
 
 These are large, but they are user-facing workflow artifacts. External AI
-upscaling users depend on stopping here. Direct mode must not remove this
-boundary from the standard staged pipeline.
+upscaling users depend on stopping here. They are retained after completion
+when `--keep-files` is enabled.
 
 ### MV-HEVC File
 
 The MV-HEVC intermediate is the input to optional upscaling and final MP4Box
-muxing. It is also useful for Apple playback debugging. Treat it as persistent
-until final-mux benchmarks prove there is a safe replacement.
+muxing. Default mode removes it after the final mux; `--keep-files` retains it
+for Apple playback debugging and staged resumes.
 
 ### Subtitle Files
 
-`.srt` files are both final mux inputs and debugging artifacts. Keep them named
-and persistent for now.
+`.srt` files are named final-mux inputs. Default mode removes the completed
+output folder after muxing; `--keep-files` retains subtitles for debugging and
+resume workflows.
 
-## Benchmark Plan
+## Benchmark Evidence
 
-Use existing artifacts on the external volume to avoid re-ripping discs while
-measuring the expensive boundaries:
+- Reusing a 7.4 GB MKV took about 0.15 seconds and wrote no copy; durable mode
+  took about 8.55 seconds and wrote 7.4 GB.
+- A five-minute four-track direct audio transcode produced a 56 MB AAC file in
+  about 9.9 seconds without PCM or partial artifacts.
+- A real MVC container streamed through source FFmpeg, `edge264_test`, and
+  encoding FFmpeg into matching 1920x1080 left/right HEVC outputs without an
+  extracted `.h264` intermediate.
+- Existing left/right outputs remain the external-upscaler and stage-resume
+  checkpoint.
 
-- Representative manual workspace:
-  `/Volumes/Docker-External/BD_to_AVP_artifacts/bd-to-avp-125/manual`
-- Rainforest fallback workspace:
-  `/Volumes/Docker-External/BD_to_AVP_artifacts/rainforest-main-probe-test`
-
-Record, per run:
-
-- wall-clock time
-- peak disk usage in the output folder
-- size of each stage artifact
-- whether the stage can be resumed with `--start-stage`
-- whether external upscaling can still use the same files
-
-## Recommended First Prototype
-
-Do not add a user-facing direct mode immediately. First, introduce a small
-internal vocabulary for stage artifacts and materialization decisions. A useful
-prototype would be a pure planning/refactor step:
-
-1. Define each stage's logical output in one place.
-2. Keep current filenames and behavior unchanged.
-3. Add tests that prove `--start-stage` still resolves the same expected files.
-4. Add ownership tests proving unowned source files are never deleted.
-5. Only after that, experiment with one ephemeral boundary behind tests.
-
-This keeps MakeMKV replacement compatible with #126. A future source-ingest
-implementation can produce the same logical MKV/source artifact contract, while
-the rest of the pipeline keeps using shared stage code.
-
-## Tests Before Runtime Changes
+## Regression Coverage
 
 - Durable mode keeps the current deterministic filenames for every stage.
 - `--start-stage` continues to find the same expected files in durable mode.
@@ -251,5 +233,5 @@ the rest of the pipeline keeps using shared stage code.
 - Subtitle extraction still produces SRT files discoverable by final mux.
 - Audio transcode direct experiments preserve stream count, language metadata,
   and final mux command construction.
-- Any FIFO experiment has cancellation and failure tests for both producer and
-  consumer processes.
+- The MVC pipe has cancellation, timeout, retry, SIGPIPE cascade, and producer,
+  splitter, and encoder failure-attribution tests.

@@ -30,8 +30,8 @@ See [Distribution Policy](docs/distribution-policy.md) for the current GUI
 release artifact and dependency policy.
 
 See [Direct Pipeline Contracts](docs/direct-pipeline-contracts.md) for the
-restartable-stage design constraints behind future direct/no-intermediate mode
-work.
+automatic minimum-materialization behavior and the durable `--keep-files`
+stage contracts.
 
 ## Terminal install or update (power users)
 
@@ -51,11 +51,12 @@ Ensure the following are installed on your Mac *(if using the terminal/PyPI vers
 - **[spatial-media-kit-tool]**: A tool for injecting 360° metadata into video files.
 - **[MP4Box]**: A multimedia packager available for Windows, Mac, and Linux.
 
-Current release note: BD_to_AVP still uses MakeMKV for Blu-ray title extraction. Extracted MVC `.h264` video, including
-MVC video extracted from direct `.mts`/`.m2ts` sources, now uses a bundled native Apple Silicon MVC splitter when
-available. Native MVC splitting supports 8-bit Blu-ray 3D MVC sources only. Disc image sources are probed for up to
-30 seconds before splitting; if the multi-threaded native splitter is unstable for that stream, BD_to_AVP automatically
-continues in slower single-threaded mode.
+Current release note: BD_to_AVP still uses MakeMKV for Blu-ray title extraction. By default, existing MKV/MTS/M2TS
+sources are reused in place, MVC video streams directly into the bundled native Apple Silicon splitter, and AAC
+transcoding avoids an intermediate PCM file. `--keep-files` restores the durable source copy, extracted MVC `.h264`,
+and PCM boundaries for inspection, stage resume, and external workflows. Native MVC splitting supports 8-bit Blu-ray
+3D MVC sources only. Disc image sources using durable MVC input are probed for up to 30 seconds before splitting; if
+the multi-threaded native splitter is unstable for that stream, BD_to_AVP continues in slower single-threaded mode.
 
 Runtime tool lookup prefers explicit `BD_TO_AVP_<TOOL>_PATH` environment overrides, bundled tools in `bd_to_avp/bin`,
 tools already available in `PATH`, and finally the legacy `/opt/homebrew/bin` location. The GUI app uses bundled tools
@@ -115,9 +116,11 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - `--source-folder`: Source folder path. This option will recurively scan for image files or mkv files. Will take
   precedence over --source if both are provided.
 - `--fx-upscale`: Upscale video to 4K resolution using fx-upscale (disabled by default).
-- `--remove-original`: Remove original file after processing.
+- `--remove-original`: Remove the original source after processing completes successfully.
 - `--overwrite`: Overwrite existing output file.
-- `--keep-files`: Keep intermediate files (disabled by default).
+- `--keep-files`: Use durable stage boundaries and keep the source copy, extracted MVC, PCM audio, and later
+  intermediates. Without this option, BD_to_AVP automatically uses the minimum-materialization pipeline. An explicit
+  `--remove-original` still removes the selected source after a successful conversion.
 - `--output-root-folder`: Output folder path. Defaults to the current directory.
 - `--transcode-audio`: Enable audio transcoding to AAC (disabled by default).
 - `--audio-bitrate`: Audio bitrate for transcoding in kb/s do not include unit (default: "384").

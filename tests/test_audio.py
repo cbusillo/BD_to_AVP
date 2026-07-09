@@ -22,7 +22,6 @@ class DirectAudioTranscodeTests(unittest.TestCase):
                 output_path.write_bytes(b"aac")
 
             with (
-                patch.object(audio.config, "direct_pipeline", True),
                 patch.object(audio.config, "transcode_audio", True),
                 patch.object(audio.config, "keep_files", False),
                 patch.object(audio.config, "remove_extra_languages", False),
@@ -53,7 +52,6 @@ class DirectAudioTranscodeTests(unittest.TestCase):
                 output_path.write_bytes(b"aac")
 
             with (
-                patch.object(audio.config, "direct_pipeline", True),
                 patch.object(audio.config, "transcode_audio", True),
                 patch.object(audio.config, "keep_files", False),
                 patch.object(audio.config, "remove_extra_languages", True),
@@ -78,7 +76,6 @@ class DirectAudioTranscodeTests(unittest.TestCase):
                 raise RuntimeError("transcode failed")
 
             with (
-                patch.object(audio.config, "direct_pipeline", True),
                 patch.object(audio.config, "transcode_audio", True),
                 patch.object(audio.config, "keep_files", False),
                 patch.object(audio.config, "remove_extra_languages", False),
@@ -103,7 +100,6 @@ class DirectAudioTranscodeTests(unittest.TestCase):
                 output_path.write_bytes(b"aac")
 
             with (
-                patch.object(audio.config, "direct_pipeline", True),
                 patch.object(audio.config, "transcode_audio", True),
                 patch.object(audio.config, "keep_files", True),
                 patch.object(audio.config, "remove_extra_languages", True),
@@ -127,7 +123,6 @@ class DirectAudioTranscodeTests(unittest.TestCase):
             aac_path.write_bytes(b"aac")
 
             with (
-                patch.object(audio.config, "direct_pipeline", True),
                 patch.object(audio.config, "transcode_audio", True),
                 patch.object(audio.config, "keep_files", False),
                 patch.object(audio.config, "remove_extra_languages", False),
@@ -149,7 +144,6 @@ class DirectAudioTranscodeTests(unittest.TestCase):
             output_folder.mkdir()
 
             with (
-                patch.object(audio.config, "direct_pipeline", True),
                 patch.object(audio.config, "transcode_audio", True),
                 patch.object(audio.config, "keep_files", False),
                 patch.object(audio.config, "remove_extra_languages", False),
@@ -162,7 +156,6 @@ class DirectAudioTranscodeTests(unittest.TestCase):
     def test_transcode_disabled_returns_original_audio(self) -> None:
         original_audio_path = Path("Movie_audio_PCM.mov")
         with (
-            patch.object(audio.config, "direct_pipeline", True),
             patch.object(audio.config, "transcode_audio", False),
             patch.object(audio.config, "keep_files", False),
             patch.object(audio.config, "start_stage", Stage.TRANSCODE_AUDIO),

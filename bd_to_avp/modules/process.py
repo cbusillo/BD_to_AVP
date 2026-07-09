@@ -1,17 +1,20 @@
 import os
 import subprocess
+from pathlib import Path
 
 from wakepy.modes import keep
 
 from bd_to_avp import preflight
 from bd_to_avp.modules.audio import create_transcoded_audio_file
-from bd_to_avp.modules.config import config, is_direct_pipeline_source_reused, Stage
+from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.container import create_muxed_file, create_mvc_and_audio
 from bd_to_avp.modules.disc import create_mkv_file, get_disc_and_mvc_video_info
 from bd_to_avp.modules.file import (
     file_exists_normalized,
     move_file_to_output_root_folder,
+    path_is_relative_to,
     prepare_output_folder_for_source,
+    remove_output_folder_if_safe,
     remove_folder_if_exists,
 )
 from bd_to_avp.modules.sub import create_srt_from_mkv
@@ -86,13 +89,24 @@ def process_each() -> None:
     move_file_to_output_root_folder(muxed_output_path)
 
     if not config.keep_files:
-        remove_folder_if_exists(tmp_folder)
+        remove_output_folder_if_safe(tmp_folder)
 
-    if config.remove_original and config.source_path and not is_direct_pipeline_source_reused():
-        if config.source_path.is_dir():
-            remove_folder_if_exists(config.source_path)
-        else:
-            config.source_path.unlink(missing_ok=True)
+    if config.remove_original:
+        remove_original_source(completed_path)
+
+
+def remove_original_source(completed_path: Path) -> bool:
+    source_path = config.source_path
+    if not source_path:
+        return False
+    if source_path.is_dir():
+        if path_is_relative_to(completed_path, source_path):
+            print(f"Refusing to remove source directory containing final output: {source_path}")
+            return False
+        remove_folder_if_exists(source_path)
+    else:
+        source_path.unlink(missing_ok=True)
+    return True
 
 
 def start_process(gui_start_stage: Stage = config.start_stage) -> None:

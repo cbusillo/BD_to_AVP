@@ -110,7 +110,6 @@ class NativeMvcSelectionTests(unittest.TestCase):
 
             with (
                 patch.object(video.config, "EDGE264_TEST_PATH", helper_path),
-                patch.object(video.config, "direct_pipeline", True),
                 patch.object(video.config, "keep_files", False),
                 patch.object(video.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
                 patch(
@@ -241,7 +240,6 @@ class NativeMvcSelectionTests(unittest.TestCase):
 
         with (
             tempfile.TemporaryDirectory() as temp_dir,
-            patch.object(video.config, "direct_pipeline", True),
             patch.object(video.config, "keep_files", False),
             patch.object(video.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
             patch("bd_to_avp.modules.video.prepare_native_mvc_input") as prepare_input,
@@ -284,7 +282,6 @@ class NativeMvcSelectionTests(unittest.TestCase):
 
         with (
             tempfile.TemporaryDirectory() as temp_dir,
-            patch.object(video.config, "direct_pipeline", True),
             patch.object(video.config, "keep_files", False),
             patch.object(video.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
             patch(
