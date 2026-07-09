@@ -77,17 +77,19 @@ def subtitle_source_alias(mkv_path: Path, output_path: Path) -> Iterator[Path]:
 
     if alias_path.exists() or alias_path.is_symlink():
         try:
-            if alias_path.samefile(source_path):
-                if alias_path.is_symlink():
-                    try:
-                        yield alias_path
-                    finally:
-                        alias_path.unlink(missing_ok=True)
-                else:
-                    yield alias_path
-                return
+            alias_matches_source = alias_path.samefile(source_path)
         except OSError:
-            pass
+            alias_matches_source = False
+
+        if alias_matches_source:
+            if alias_path.is_symlink():
+                try:
+                    yield alias_path
+                finally:
+                    alias_path.unlink(missing_ok=True)
+            else:
+                yield alias_path
+            return
 
         alias_path = unique_subtitle_source_alias_path(mkv_path, output_path)
 
