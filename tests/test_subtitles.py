@@ -12,6 +12,7 @@ from bd_to_avp.modules.sub import (
     get_selected_subtitle_tracks,
     get_languages_in_mkv,
     mark_forced_srt_files,
+    subtitle_rip_options,
     subtitle_language_alpha2,
 )
 
@@ -99,6 +100,28 @@ class SubtitleLanguageTests(unittest.TestCase):
 
     def test_invalid_language_returns_none(self) -> None:
         self.assertIsNone(subtitle_language_alpha2("xxx"))
+
+
+class SubtitleRipOptionsTests(unittest.TestCase):
+    def test_remove_extra_languages_limits_pgsrip_to_configured_language(self) -> None:
+        with (
+            patch.object(sub.config, "remove_extra_languages", True),
+            patch.object(sub.config, "language_code", "eng"),
+            patch.object(sub.config, "keep_files", False),
+        ):
+            options = subtitle_rip_options()
+
+        self.assertEqual({str(language) for language in options.languages}, {"en"})
+
+    def test_keep_extra_languages_leaves_pgsrip_unfiltered(self) -> None:
+        with (
+            patch.object(sub.config, "remove_extra_languages", False),
+            patch.object(sub.config, "language_code", "eng"),
+            patch.object(sub.config, "keep_files", False),
+        ):
+            options = subtitle_rip_options()
+
+        self.assertEqual(options.languages, set())
 
 
 class SubtitleStreamDetectionTests(unittest.TestCase):

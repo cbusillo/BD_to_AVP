@@ -2,6 +2,7 @@ import os
 import stat
 from pathlib import Path
 
+from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr, OcrError
 from bd_to_avp.modules.config import Stage, config
 
 
@@ -12,6 +13,7 @@ class DependencyPreflightError(RuntimeError):
 def verify_runtime_ready() -> None:
     missing_binaries = get_missing_dependency_binaries_for_current_job()
     if not missing_binaries:
+        verify_apple_vision_ocr_ready()
         return
 
     message = build_missing_dependency_message(missing_binaries)
@@ -35,8 +37,6 @@ def get_required_dependency_binaries_for_current_job() -> list[Path]:
 
     if needs_makemkv():
         required_paths.append(config.MAKEMKVCON_PATH)
-    if needs_subtitle_extraction():
-        required_paths.append(config.TESSERACT_PATH)
     if needs_native_mvc_splitter():
         required_paths.append(config.EDGE264_TEST_PATH)
     if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
@@ -91,7 +91,6 @@ def build_missing_dependency_message(missing_binaries: list[Path]) -> str:
 
 def get_gui_recovery_steps(missing_binaries: list[Path]) -> str:
     missing_makemkv = config.MAKEMKVCON_PATH in missing_binaries
-    missing_subtitle_tools = any(is_subtitle_tool_path(path) for path in missing_binaries)
     missing_other_tools = any(
         path != config.MAKEMKVCON_PATH and not is_subtitle_tool_path(path) for path in missing_binaries
     )
@@ -99,13 +98,11 @@ def get_gui_recovery_steps(missing_binaries: list[Path]) -> str:
         return "Install MakeMKV for macOS. If other tools are listed, reinstall the app."
     if missing_makemkv:
         return "Install MakeMKV for macOS, then open the app again."
-    if missing_subtitle_tools and not missing_other_tools:
-        return "Subtitle extraction requires Tesseract. Reinstall the app or enable Skip Subtitles before processing."
     return "Reinstall the app, then open it again."
 
 
 def is_subtitle_tool_path(path: Path) -> bool:
-    return path == config.TESSERACT_PATH
+    return False
 
 
 def get_dependency_name(path: Path) -> str:
@@ -113,10 +110,7 @@ def get_dependency_name(path: Path) -> str:
         config.FFMPEG_PATH: "FFmpeg",
         config.FFPROBE_PATH: "FFprobe",
         config.MAKEMKVCON_PATH: "MakeMKV",
-        config.MKVEXTRACT_PATH: "MKVExtract",
-        config.MKVMERGE_PATH: "MKVMerge",
         config.MP4BOX_PATH: "MP4Box",
-        config.TESSERACT_PATH: "Tesseract",
         config.EDGE264_TEST_PATH: "Native MVC helper",
         config.SPATIAL_MEDIA_PATH: "Spatial media tool",
         config.FX_UPSCALE_PATH: "FX Upscale",
@@ -136,3 +130,15 @@ def ensure_native_mvc_splitter_executable() -> bool:
     except OSError:
         return False
     return os.access(config.EDGE264_TEST_PATH, os.X_OK)
+
+
+def verify_apple_vision_ocr_ready() -> None:
+    if not needs_subtitle_extraction():
+        return
+    try:
+        AppleVisionOcr._load_frameworks()
+    except OcrError as error:
+        raise DependencyPreflightError(
+            "Subtitle extraction requires Apple Vision OCR support from macOS and the packaged PyObjC frameworks. "
+            "Reinstall the app or enable Skip Subtitles before processing."
+        ) from error

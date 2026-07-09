@@ -11,10 +11,9 @@ import numpy as np
 
 from pysrt import SubRipFile, SubRipItem
 
-import pytesseract as tess
-
 from bd_to_avp.vendor.pgsrip.media import Pgs, PgsSubtitleItem
-from bd_to_avp.vendor.pgsrip.options import Options, TesseractEngineMode, TesseractPageSegmentationMode
+from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr
+from bd_to_avp.vendor.pgsrip.options import Options
 from bd_to_avp.vendor.pgsrip.tsv import TsvData
 
 
@@ -121,10 +120,8 @@ class PgsToSrtRipper:
     def __init__(self, pgs: Pgs, options: Options):
         self.pgs = pgs
         self.confidence = min(max(options.confidence or 65, 0), 100)
-        self.max_tess_width = min(max(options.tesseract_width or 31 * 1024, 10 * 1024), 31 * 1024)
-        self.omp_thread_limit = options.max_workers
-        self.oem = options.tesseract_oem or TesseractEngineMode.NEURAL
-        self.psm = options.tesseract_psm or TesseractPageSegmentationMode.SINGLE_UNIFORM_BLOCK_OF_TEXT
+        self.max_ocr_width = min(max(options.ocr_width or 31 * 1024, 10 * 1024), 31 * 1024)
+        self.ocr = options.ocr_backend or AppleVisionOcr()
         max_height = max([item.height for item in self.pgs.items], default=0) // 2
         self.gap = (max_height // 2 + 30, max_height // 2 + 100)
         self.keep_temp_files = options.keep_temp_files
@@ -134,39 +131,29 @@ class PgsToSrtRipper:
                 items: typing.List[PgsSubtitleItem],
                 post_process,
                 confidence: int,
-                max_width: int,
-                oem: TesseractEngineMode,
-                psm: TesseractPageSegmentationMode):
-        full_image = FullImage.from_items(items, self.gap, max_width)
-
-        config = {
-            'output_type': tess.Output.DICT,
-            'config': f'--psm {psm.value} --oem {oem.value}'
-        }
-
-        if self.pgs.language:
-            config.update({'lang': self.pgs.language.alpha3})
-
-        if self.omp_thread_limit:
-            os.environ['OMP_THREAD_LIMIT'] = str(self.omp_thread_limit)
+                max_width: int):
         if self.keep_temp_files:
-            png_file = os.path.join(self.pgs.temp_folder,
-                                    f'{os.path.basename(subs.path)}-{len(items)}'
-                                    f'-psm{psm.value}-{oem.name}-{confidence}.png')
-            logger.debug('Writing temporary png file %s', png_file)
-            cv2.imwrite(png_file, full_image.data)
-
-        data = TsvData(tess.image_to_data(full_image.data, **config), confidence=confidence)
-
-        if self.keep_temp_files:
-            results_file = os.path.join(self.pgs.temp_folder,
-                                        f'{os.path.basename(subs.path)}-{len(items)}-{confidence}.json')
-            logger.debug('Writing temporary results file %s', results_file)
-            with open(results_file, mode='w', encoding='utf8') as f:
-                json.dump([i.__dict__ for i in data.items], f, indent=2, ensure_ascii=False)
+            logger.debug('Processing %s subtitle images with Apple Vision OCR', len(items))
 
         remaining = []
         for item in items:
+            if self.keep_temp_files:
+                png_file = os.path.join(self.pgs.temp_folder,
+                                        f'{os.path.basename(subs.path)}-{item.index}'
+                                        f'-apple-vision-{confidence}.png')
+                logger.debug('Writing temporary png file %s', png_file)
+                cv2.imwrite(png_file, item.image.data)
+
+            data = TsvData(self.ocr.image_to_data(item.image.data, self.pgs.language), confidence=confidence)
+
+            if self.keep_temp_files:
+                results_file = os.path.join(self.pgs.temp_folder,
+                                            f'{os.path.basename(subs.path)}-{item.index}-{confidence}.json')
+                logger.debug('Writing temporary results file %s', results_file)
+                with open(results_file, mode='w', encoding='utf8') as f:
+                    json.dump([i.__dict__ for i in data.items], f, indent=2, ensure_ascii=False)
+
+            item.place = (0, 0, item.image.shape[0], item.image.shape[1])
             text = self.accept(data, item, confidence)
             if text is None:
                 remaining.append(item)
@@ -211,24 +198,24 @@ class PgsToSrtRipper:
 
     def rip(self, post_process: typing.Callable[[str], str]):
         subs = SubRipFile(path=str(self.pgs.media_path.translate(extension='srt')))
-        oem, psm, confidence, max_width = self.oem, self.psm, self.confidence, self.max_tess_width
+        confidence, max_width = self.confidence, self.max_ocr_width
         items = self.pgs.items
         previous_size = len(items)
         while previous_size > 0:
-            items = self.process(subs, items, post_process, confidence, max_width, oem, psm)
+            items = self.process(subs, items, post_process, confidence, max_width)
             if not items:
                 break
 
             current_size = len(items)
             if current_size < 20:
-                max_width = min(sum([item.width + self.gap[1] for item in items]), self.max_tess_width)
+                max_width = min(sum([item.width + self.gap[1] for item in items]), self.max_ocr_width)
                 confidence = 0
-                remaining_items = self.process(subs, items, post_process, confidence, max_width, oem, psm)
+                remaining_items = self.process(subs, items, post_process, confidence, max_width)
                 if remaining_items:
                     logger.warning('Subtitles were not ripped: %r', remaining_items)
                 break
             elif current_size > previous_size * 0.8:
-                max_width = min(sum([item.width + self.gap[1] for item in items]), self.max_tess_width) // 2
+                max_width = min(sum([item.width + self.gap[1] for item in items]), self.max_ocr_width) // 2
                 confidence = max(0, confidence - 5)
             previous_size = current_size
 

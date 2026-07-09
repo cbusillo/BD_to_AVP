@@ -1,7 +1,6 @@
 import os
 import subprocess
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -49,13 +48,13 @@ class ToolResolutionTests(unittest.TestCase):
     def test_path_wins_over_homebrew_fallback(self) -> None:
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("bd_to_avp.modules.config.shutil.which", return_value="/usr/bin/mkvmerge"),
+            patch("bd_to_avp.modules.config.shutil.which", return_value="/usr/bin/example-tool"),
         ):
-            self.assertEqual(resolve_tool_path("mkvmerge"), Path("/usr/bin/mkvmerge"))
+            self.assertEqual(resolve_tool_path("example-tool"), Path("/usr/bin/example-tool"))
 
     def test_homebrew_path_is_last_resort(self) -> None:
         with patch.dict(os.environ, {}, clear=True), patch("bd_to_avp.modules.config.shutil.which", return_value=None):
-            self.assertEqual(resolve_tool_path("tesseract"), Path("/opt/homebrew/bin/tesseract"))
+            self.assertEqual(resolve_tool_path("example-tool"), Path("/opt/homebrew/bin/example-tool"))
 
     def test_makemkv_app_bundle_is_used_before_homebrew_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -83,28 +82,13 @@ class ToolResolutionTests(unittest.TestCase):
                 patch.object(config, "FFMPEG_PATH", custom_bin / "ffmpeg"),
                 patch.object(config, "FFPROBE_PATH", custom_bin / "ffprobe"),
                 patch.object(config, "MAKEMKVCON_PATH", custom_bin / "makemkvcon"),
-                patch.object(config, "MKVEXTRACT_PATH", custom_bin / "mkvextract"),
-                patch.object(config, "MKVMERGE_PATH", custom_bin / "mkvmerge"),
                 patch.object(config, "MP4BOX_PATH", custom_bin / "MP4Box"),
-                patch.object(config, "TESSERACT_PATH", custom_bin / "tesseract"),
                 patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True),
-                patch.object(config, "configure_tesseract_command"),
             ):
                 config.configure_tool_environment()
                 path_dirs = os.environ["PATH"].split(os.pathsep)
 
         self.assertEqual(path_dirs[:3], [custom_bin.as_posix(), app_bin.as_posix(), "/usr/bin"])
-
-    def test_configure_tesseract_command_sets_pytesseract_binary(self) -> None:
-        fake_pytesseract = types.SimpleNamespace(pytesseract=types.SimpleNamespace(tesseract_cmd="tesseract"))
-
-        with (
-            patch.object(config, "TESSERACT_PATH", Path("/tools/tesseract")),
-            patch("bd_to_avp.modules.config.importlib.import_module", return_value=fake_pytesseract),
-        ):
-            config.configure_tesseract_command()
-
-        self.assertEqual(fake_pytesseract.pytesseract.tesseract_cmd, "/tools/tesseract")
 
 
 class MkvToolPathTests(unittest.TestCase):

@@ -9,8 +9,6 @@ from babelfish import Error as BabelfishError, Language
 
 import click
 
-import pytesseract as tess
-
 from bd_to_avp.vendor.pgsrip import Pgs, __version__, api
 from bd_to_avp.vendor.pgsrip.media import Media
 from bd_to_avp.vendor.pgsrip.options import Options
@@ -124,8 +122,7 @@ def pgsrip(config: typing.Optional[str],
         handler.setFormatter(logging.Formatter(logging.BASIC_FORMAT))
         logger.addHandler(handler)
         logger.setLevel(logging.DEBUG)
-        logger.info(f'Tesseract version: {tess.get_tesseract_version()}')
-        logger.info(f'Tesseract data: {os.getenv("TESSDATA_PREFIX")}')
+        logger.info('OCR backend: Apple Vision')
 
     if config and (not os.path.isfile(config) or os.path.isdir(config)):
         click.echo(f"Invalid configuration is defined: {click.style(config, bold=True)}")

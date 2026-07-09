@@ -1,10 +1,8 @@
-import os
 import threading
 from pathlib import Path
 from typing import Any
 
 import ffmpeg
-import requests
 from babelfish import Error as BabelfishError, Language
 from bd_to_avp.vendor.pgsrip import Mkv, Options, pgsrip
 from bd_to_avp.vendor.pgsrip.mkv import MkvPgs
@@ -32,18 +30,13 @@ def extract_subtitle_to_srt(mkv_path: Path) -> None:
 
     if config.skip_subtitles:
         return None
-    tessdata_path = config.app.config_path / "tessdata"
     subtitle_tracks = get_languages_in_mkv(mkv_path)
 
     if not subtitle_tracks:
         print("No PGS subtitle tracks found in source; continuing without subtitles.")
         return None
 
-    needed_languages = [track["language"] for track in subtitle_tracks]
-    if needed_languages:
-        get_missing_tessdata_files(needed_languages, tessdata_path)
-
-    sub_options = Options(overwrite=True, one_per_lang=False, keep_temp_files=config.keep_files)
+    sub_options = subtitle_rip_options()
 
     spinner = Spinner("Sup subtitles extraction and SRT conversion")
     spinner_thread = threading.Thread(target=spinner.start)
@@ -52,7 +45,6 @@ def extract_subtitle_to_srt(mkv_path: Path) -> None:
     try:
         mkv_file = Mkv(mkv_path.as_posix())
         selected_subtitle_tracks = get_selected_subtitle_tracks(mkv_file, sub_options)
-        os.environ["TESSDATA_PREFIX"] = tessdata_path.as_posix()
 
         pgsrip.rip(mkv_file, sub_options)
 
@@ -72,6 +64,17 @@ def extract_subtitle_to_srt(mkv_path: Path) -> None:
 def cleanup_existing_subtitle_files(output_path: Path) -> None:
     for subtitle_path in output_path.glob("*.srt"):
         subtitle_path.unlink()
+
+
+def subtitle_rip_options() -> Options:
+    languages = set()
+    if config.remove_extra_languages:
+        try:
+            languages.add(Language.fromietf(config.language_code))
+        except (BabelfishError, ValueError):
+            print(f"Invalid subtitle language code {config.language_code!r}; extracting all subtitle languages.")
+
+    return Options(overwrite=True, one_per_lang=False, keep_temp_files=config.keep_files, languages=languages)
 
 
 def get_selected_subtitle_tracks(mkv_file: Mkv, sub_options: Options) -> list[dict[str, Any]]:
@@ -121,20 +124,6 @@ def subtitle_language_alpha2(language_code: str) -> str | None:
         return Language.fromietf(language_code).alpha2
     except (BabelfishError, ValueError):
         return None
-
-
-def get_missing_tessdata_files(languages: list[str], tessdata_path: Path) -> None:
-    tessdata_path.mkdir(exist_ok=True)
-    if "zho" in languages:
-        languages.remove("zho")
-        languages += ["chi_sim", "chi_tra", "chi_sim_vert", "chi_tra_vert"]
-
-    for language in languages:
-        if not (tessdata_path / f"{language}.traineddata").exists():
-            print(f"Downloading {language}.traineddata")
-            response = requests.get(f"https://github.com/tesseract-ocr/tessdata_best/raw/main/{language}.traineddata")
-            with open(tessdata_path / f"{language}.traineddata", "wb") as f:
-                f.write(response.content)
 
 
 def get_languages_in_mkv(mkv_path: Path) -> None | list[dict[str, Any]]:

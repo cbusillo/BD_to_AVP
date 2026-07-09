@@ -1,6 +1,5 @@
 import argparse
 import configparser
-import importlib
 import os
 import shutil
 import sys
@@ -174,10 +173,7 @@ class Config:
     FFMPEG_PATH = resolve_tool_path("ffmpeg")
     FFPROBE_PATH = resolve_tool_path("ffprobe")
     MAKEMKVCON_PATH = resolve_makemkvcon_path()
-    MKVEXTRACT_PATH = resolve_tool_path("mkvextract")
-    MKVMERGE_PATH = resolve_tool_path("mkvmerge")
     MP4BOX_PATH = resolve_tool_path("MP4Box")
-    TESSERACT_PATH = resolve_tool_path("tesseract")
     EDGE264_TEST_PATH = SCRIPT_PATH_BIN / "edge264_test"
     SPATIAL_MEDIA_PATH = SCRIPT_PATH_BIN / "spatial-media-kit-tool"
     FX_UPSCALE_PATH = SCRIPT_PATH_BIN / "fx-upscale"
@@ -222,10 +218,7 @@ class Config:
             self.FFMPEG_PATH.parent,
             self.FFPROBE_PATH.parent,
             self.MAKEMKVCON_PATH.parent,
-            self.MKVEXTRACT_PATH.parent,
-            self.MKVMERGE_PATH.parent,
             self.MP4BOX_PATH.parent,
-            self.TESSERACT_PATH.parent,
         ]
         existing_path = os.environ.get("PATH", "")
         existing_dirs = [path for path in existing_path.split(os.pathsep) if path]
@@ -251,14 +244,6 @@ class Config:
 
         os.environ.setdefault("FFMPEG_BINARY", self.FFMPEG_PATH.as_posix())
         os.environ.setdefault("FFPROBE_BINARY", self.FFPROBE_PATH.as_posix())
-        self.configure_tesseract_command()
-
-    def configure_tesseract_command(self) -> None:
-        try:
-            pytesseract = importlib.import_module("pytesseract")
-        except ImportError:
-            return
-        pytesseract.pytesseract.tesseract_cmd = self.TESSERACT_PATH.as_posix()
 
     def save_config_to_file(self) -> None:
         config_parser = configparser.ConfigParser()
