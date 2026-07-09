@@ -305,6 +305,22 @@ class NativeMvcSelectionTests(unittest.TestCase):
 
         self.assertTrue(result)
 
+    def test_native_multithread_probe_does_not_treat_sigterm_as_crash(self) -> None:
+        splitter_cancelled = _FakeProcess(returncode=None, stdout=None, returncode_after_wait=-15)
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(video.config, "EDGE264_TEST_PATH", Path("edge264_test")),
+            patch("bd_to_avp.modules.video.generate_native_mvc_splitter_command", return_value=["edge264_test"]),
+            patch("bd_to_avp.modules.video.subprocess.Popen", return_value=splitter_cancelled),
+            self.assertRaises(subprocess.CalledProcessError) as raised,
+        ):
+            video.native_multithread_splitter_probe_crashed(
+                Path("movie_mvc.264"), Path(temp_dir) / "split.native_mvc.log"
+            )
+
+        self.assertEqual(raised.exception.returncode, -15)
+
     def test_native_multithread_probe_returns_false_after_timeout(self) -> None:
         splitter = _FakeProcess(returncode=None, stdout=None, returncode_after_wait=-15, raises_timeout_once=True)
 
