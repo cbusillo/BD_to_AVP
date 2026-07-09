@@ -4,6 +4,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from typing import cast
 from unittest.mock import Mock, patch
 
 from bd_to_avp.modules.disc import DiscInfo
@@ -25,6 +26,31 @@ class NativeMvcCommandTests(unittest.TestCase):
             command = video.generate_native_mvc_splitter_command(Path("movie_mvc.h264"), single_threaded=True)
 
         self.assertEqual(command, [Path("/tools/edge264_test"), Path("movie_mvc.h264"), "-Osk"])
+
+    def test_mvc_container_stream_command_emits_annex_b_to_stdout(self) -> None:
+        with patch.object(video.config, "FFMPEG_PATH", Path("/tools/ffmpeg")):
+            command = video.generate_mvc_annex_b_stream_command(Path("movie.mkv"))
+
+        self.assertEqual(
+            command,
+            [
+                Path("/tools/ffmpeg"),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                Path("movie.mkv"),
+                "-map",
+                "0:v:0",
+                "-c:v",
+                "copy",
+                "-bsf:v",
+                "h264_mp4toannexb",
+                "-f",
+                "h264",
+                "-",
+            ],
+        )
 
     def test_native_ffmpeg_command_splits_side_by_side_stream(self) -> None:
         with (
@@ -73,6 +99,29 @@ class NativeMvcCommandTests(unittest.TestCase):
 
 
 class NativeMvcSelectionTests(unittest.TestCase):
+    def test_direct_pipeline_keeps_streamed_source_file(self) -> None:
+        disc_info = DiscInfo(name="Sample")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "source.mkv"
+            source_path.touch()
+            helper_path = Path(temp_dir) / "edge264_test"
+            helper_path.touch(mode=0o755)
+
+            with (
+                patch.object(video.config, "EDGE264_TEST_PATH", helper_path),
+                patch.object(video.config, "direct_pipeline", True),
+                patch.object(video.config, "keep_files", False),
+                patch.object(video.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
+                patch(
+                    "bd_to_avp.modules.video.split_mvc_to_stereo_native",
+                    return_value=(Path("left.mov"), Path("right.mov")),
+                ),
+            ):
+                video.split_mvc_to_stereo(source_path, Path("left.mov"), Path("right.mov"), disc_info, "")
+
+            self.assertTrue(source_path.exists())
+
     def test_split_uses_native_helper_when_present_for_extracted_mvc(self) -> None:
         disc_info = DiscInfo(name="Sample")
 
@@ -182,6 +231,173 @@ class NativeMvcSelectionTests(unittest.TestCase):
                 )
 
         splitter.terminate.assert_called_once()
+
+    def test_streaming_split_connects_producer_splitter_and_encoder(self) -> None:
+        producer_stdout = Mock()
+        splitter_stdout = Mock()
+        producer = _FakeProcess(returncode=None, stdout=producer_stdout, returncode_after_wait=0, poll_results=[0])
+        splitter = _FakeProcess(returncode=None, stdout=splitter_stdout, returncode_after_wait=0, poll_results=[0])
+        ffmpeg_process = _FakeProcess(returncode=0, stdout=None, stderr=None)
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(video.config, "direct_pipeline", True),
+            patch.object(video.config, "keep_files", False),
+            patch.object(video.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
+            patch("bd_to_avp.modules.video.prepare_native_mvc_input") as prepare_input,
+            patch("bd_to_avp.modules.video.native_multithread_splitter_probe_crashed") as probe,
+            patch(
+                "bd_to_avp.modules.video.generate_mvc_annex_b_stream_command",
+                return_value=["source-ffmpeg"],
+            ),
+            patch(
+                "bd_to_avp.modules.video.generate_native_mvc_splitter_command",
+                return_value=["edge264_test", "-", "-Omk"],
+            ),
+            patch("bd_to_avp.modules.video.generate_native_mvc_ffmpeg_command", return_value=["encode-ffmpeg"]),
+            patch(
+                "bd_to_avp.modules.video.subprocess.Popen",
+                side_effect=[producer, splitter, ffmpeg_process],
+            ) as popen,
+            patch("pathlib.Path.unlink") as unlink,
+        ):
+            result = video.split_mvc_to_stereo_native(
+                Path("source.mkv"), Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov", DiscInfo(), ""
+            )
+
+        self.assertEqual(result, (Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov"))
+        prepare_input.assert_not_called()
+        probe.assert_not_called()
+        self.assertEqual(popen.call_args_list[1].kwargs["stdin"], producer_stdout)
+        self.assertEqual(popen.call_args_list[2].kwargs["stdin"], splitter_stdout)
+        producer_stdout.close.assert_called_once()
+        splitter_stdout.close.assert_called_once()
+        unlink.assert_not_called()
+
+    def test_streaming_split_restarts_producer_for_single_threaded_retry(self) -> None:
+        first_producer = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=-13, poll_results=[-13])
+        first_splitter = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=-6, poll_results=[-6])
+        first_ffmpeg = _FakeProcess(returncode=1, stdout=None, stderr=None)
+        retry_producer = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=0, poll_results=[0])
+        retry_splitter = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=0, poll_results=[0])
+        retry_ffmpeg = _FakeProcess(returncode=0, stdout=None, stderr=None)
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(video.config, "direct_pipeline", True),
+            patch.object(video.config, "keep_files", False),
+            patch.object(video.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
+            patch(
+                "bd_to_avp.modules.video.generate_mvc_annex_b_stream_command",
+                return_value=["source-ffmpeg"],
+            ),
+            patch(
+                "bd_to_avp.modules.video.generate_native_mvc_splitter_command",
+                side_effect=[["edge264_test", "-", "-Omk"], ["edge264_test", "-", "-Osk"]],
+            ),
+            patch("bd_to_avp.modules.video.generate_native_mvc_ffmpeg_command", return_value=["encode-ffmpeg"]),
+            patch(
+                "bd_to_avp.modules.video.subprocess.Popen",
+                side_effect=[
+                    first_producer,
+                    first_splitter,
+                    first_ffmpeg,
+                    retry_producer,
+                    retry_splitter,
+                    retry_ffmpeg,
+                ],
+            ) as popen,
+        ):
+            result = video.split_mvc_to_stereo_native(
+                Path("source.mkv"), Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov", DiscInfo(), ""
+            )
+
+        self.assertEqual(result, (Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov"))
+        self.assertEqual(popen.call_args_list[0].args[0], ["source-ffmpeg"])
+        self.assertEqual(popen.call_args_list[3].args[0], ["source-ffmpeg"])
+
+    def test_streaming_split_reports_producer_failure_before_pipe_cascade(self) -> None:
+        producer = _FakeProcess(returncode=254, stdout=Mock(), poll_results=[254])
+        splitter = _FakeProcess(returncode=1, stdout=Mock(), poll_results=[1])
+        ffmpeg_process = _FakeProcess(returncode=234, stdout=None, stderr=None)
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.video.generate_native_mvc_splitter_command", return_value=["edge264_test"]),
+            patch("bd_to_avp.modules.video.subprocess.Popen", side_effect=[producer, splitter, ffmpeg_process]),
+        ):
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
+                video.run_native_mvc_split_attempt(
+                    Path("-"),
+                    ["encode-ffmpeg"],
+                    Path(temp_dir) / "encode.log",
+                    Path(temp_dir) / "split.log",
+                    producer_command=["source-ffmpeg"],
+                    producer_log_path=Path(temp_dir) / "extract.log",
+                    single_threaded=False,
+                )
+
+        self.assertEqual(raised.exception.cmd, ["source-ffmpeg"])
+
+    def test_streaming_split_reports_encoder_failure_when_upstream_gets_sigpipe(self) -> None:
+        producer = _FakeProcess(returncode=-13, stdout=Mock(), poll_results=[-13])
+        splitter = _FakeProcess(returncode=-13, stdout=Mock(), poll_results=[-13])
+        ffmpeg_process = _FakeProcess(returncode=234, stdout=None, stderr=None)
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.video.generate_native_mvc_splitter_command", return_value=["edge264_test"]),
+            patch("bd_to_avp.modules.video.subprocess.Popen", side_effect=[producer, splitter, ffmpeg_process]),
+        ):
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
+                video.run_native_mvc_split_attempt(
+                    Path("-"),
+                    ["encode-ffmpeg"],
+                    Path(temp_dir) / "encode.log",
+                    Path(temp_dir) / "split.log",
+                    producer_command=["source-ffmpeg"],
+                    producer_log_path=Path(temp_dir) / "extract.log",
+                    single_threaded=False,
+                )
+
+        self.assertEqual(raised.exception.cmd, ["encode-ffmpeg"])
+
+    def test_streaming_split_terminates_upstream_processes_when_encoder_fails(self) -> None:
+        producer = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=-15, poll_results=[None])
+        splitter = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=-15, poll_results=[None])
+        ffmpeg_process = _FakeProcess(returncode=1, stdout=None, stderr=None)
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.video.generate_native_mvc_splitter_command", return_value=["edge264_test"]),
+            patch("bd_to_avp.modules.video.subprocess.Popen", side_effect=[producer, splitter, ffmpeg_process]),
+        ):
+            with self.assertRaises(subprocess.CalledProcessError):
+                video.run_native_mvc_split_attempt(
+                    Path("-"),
+                    ["encode-ffmpeg"],
+                    Path(temp_dir) / "encode.log",
+                    Path(temp_dir) / "split.log",
+                    producer_command=["source-ffmpeg"],
+                    producer_log_path=Path(temp_dir) / "extract.log",
+                    single_threaded=False,
+                )
+
+        producer.terminate.assert_called_once()
+        splitter.terminate.assert_called_once()
+
+    def test_pipeline_cleanup_kills_process_when_termination_stalls(self) -> None:
+        process = _FakeProcess(
+            returncode=None,
+            stdout=None,
+            returncode_after_wait=-9,
+            raises_timeout_count=1,
+        )
+
+        video.terminate_native_pipeline_process(cast(subprocess.Popen, process))
+
+        process.terminate.assert_called_once()
+        process.kill.assert_called_once()
 
     def test_native_split_retries_single_threaded_when_splitter_sigaborts(self) -> None:
         splitter_crash = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=-6, poll_results=[-6])

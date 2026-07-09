@@ -9,7 +9,7 @@ from bd_to_avp.modules.config import Stage
 
 
 class AudioExtractionTests(unittest.TestCase):
-    def test_direct_audio_transcode_extracts_video_without_pcm(self) -> None:
+    def test_direct_pipeline_skips_intermediate_video_and_pcm(self) -> None:
         with (
             patch.object(container.config, "direct_pipeline", True),
             patch.object(container.config, "transcode_audio", True),
@@ -19,11 +19,9 @@ class AudioExtractionTests(unittest.TestCase):
         ):
             audio_path, video_path = container.create_mvc_and_audio("Movie", Path("source.mkv"), Path("output"))
 
-        command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
         self.assertEqual(audio_path, Path("source.mkv"))
-        self.assertEqual(video_path, Path("output/Movie_mvc.h264"))
-        self.assertNotIn("output/Movie_audio_PCM.mov", " ".join(command))
-        self.assertNotIn("pcm_s24le", command)
+        self.assertEqual(video_path, Path("source.mkv"))
+        run_ffmpeg.assert_not_called()
 
     def test_durable_audio_path_still_extracts_pcm(self) -> None:
         with (
@@ -33,10 +31,11 @@ class AudioExtractionTests(unittest.TestCase):
             patch.object(container.config, "start_stage", Stage.CREATE_MKV),
             patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
         ):
-            audio_path, _video_path = container.create_mvc_and_audio("Movie", Path("source.mkv"), Path("output"))
+            audio_path, video_path = container.create_mvc_and_audio("Movie", Path("source.mkv"), Path("output"))
 
         command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
         self.assertEqual(audio_path, Path("output/Movie_audio_PCM.mov"))
+        self.assertEqual(video_path, Path("output/Movie_mvc.h264"))
         self.assertIn("pcm_s24le", command)
         self.assertIn("file:output/Movie_audio_PCM.mov", command)
 
@@ -48,11 +47,13 @@ class AudioExtractionTests(unittest.TestCase):
             patch.object(container.config, "start_stage", Stage.CREATE_MKV),
             patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
         ):
-            audio_path, _video_path = container.create_mvc_and_audio("Movie", Path("source.mkv"), Path("output"))
+            audio_path, video_path = container.create_mvc_and_audio("Movie", Path("source.mkv"), Path("output"))
 
         command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
         self.assertEqual(audio_path, Path("output/Movie_audio_PCM.mov"))
+        self.assertEqual(video_path, Path("output/Movie_mvc.h264"))
         self.assertIn("pcm_s24le", command)
+        self.assertIn("file:output/Movie_mvc.h264", command)
 
     def test_direct_mode_without_audio_transcode_preserves_pcm_boundary(self) -> None:
         with (
@@ -62,11 +63,13 @@ class AudioExtractionTests(unittest.TestCase):
             patch.object(container.config, "start_stage", Stage.CREATE_MKV),
             patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
         ):
-            audio_path, _video_path = container.create_mvc_and_audio("Movie", Path("source.mkv"), Path("output"))
+            audio_path, video_path = container.create_mvc_and_audio("Movie", Path("source.mkv"), Path("output"))
 
         command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
         self.assertEqual(audio_path, Path("output/Movie_audio_PCM.mov"))
+        self.assertEqual(video_path, Path("source.mkv"))
         self.assertIn("pcm_s24le", command)
+        self.assertNotIn("file:output/Movie_mvc.h264", command)
 
 
 class MuxCommandTests(unittest.TestCase):

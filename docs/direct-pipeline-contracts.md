@@ -91,18 +91,21 @@ explicit materialization decision per stage:
 Default mode remains persistent. Direct mode should be opt-in until benchmarks
 prove that it is safe and worth the complexity.
 
-## Internal Source-Reuse Prototype
+## Internal Direct-Pipeline Prototype
 
-The first runtime prototype uses an internal direct-pipeline toggle. It is
+The runtime prototype uses an internal direct-pipeline toggle. It is
 intentionally hidden from the supported CLI surface until benchmark evidence
-and the final UX decision are available. Its scope is narrow: direct
-MKV/MTS/M2TS inputs reuse the original source path instead of copying the source
-into the per-title output folder.
+and the final UX decision are available. Direct MKV/MTS/M2TS inputs reuse the
+original source path, AAC transcoding reads audio from that source without an
+intermediate PCM MOV, and MVC video is demuxed as Annex B into the native
+splitter without an intermediate `.h264` file.
 
-This does not create a second processing pipeline and does not stream later
-stage boundaries. Downstream stages continue to consume paths, subtitles remain
-persistent in the output folder, disc/ISO inputs retain their existing MakeMKV
-materialization, and restart/external-upscaler artifacts remain unchanged.
+The MVC path is a bounded three-process pipeline: source FFmpeg to
+`edge264_test` to encoding FFmpeg. Subtitles, AAC, left/right eye files,
+MV-HEVC, and the final movie remain named files. Disc/ISO inputs retain their
+MakeMKV materialization, while restart and external-upscaler artifacts remain
+unchanged. `--keep-files` disables the direct MVC and audio boundaries so the
+durable PCM and MVC files are available for inspection and staged workflows.
 
 The reused source is user-owned. Cleanup and `--remove-original` do not delete
 it while this prototype is active. The supported CLI surface and boundaries
@@ -122,9 +125,10 @@ that was not created by BD_to_AVP.
 
 ### Native MVC Splitter To Left/Right Encode
 
-This boundary already streams internally: `edge264_test` writes Y4M to stdout and
-FFmpeg consumes it to produce left/right eye movie files. The output files remain
-important because they are the main external upscaler/restart boundary.
+This boundary streams internally: source FFmpeg writes Annex B MVC to
+`edge264_test` stdin, `edge264_test` writes Y4M to stdout, and encoding FFmpeg
+produces left/right eye movie files. The output files remain important because
+they are the main external upscaler/restart boundary.
 
 Initial work here should focus on measuring and tightening the existing stream,
 not removing left/right outputs.
@@ -134,8 +138,9 @@ not removing left/right outputs.
 When AAC transcoding is enabled, BD_to_AVP writes PCM audio and then reads it
 back to produce AAC. The internal direct-mode prototype now skips that PCM file
 when AAC transcoding is enabled and `--keep-files` is not requested. MVC video
-extraction remains its own stage, while the `TRANSCODE_AUDIO` stage reads audio
-from the MKV/MTS/M2TS source and writes the final AAC MOV directly.
+uses the same source container through the direct splitter pipeline, while the
+`TRANSCODE_AUDIO` stage reads audio from the MKV/MTS/M2TS source and writes the
+final AAC MOV directly.
 
 The final mux still needs a seekable audio file, so the AAC MOV remains
 materialized. Durable mode and `--keep-files` retain the existing PCM boundary,
@@ -152,22 +157,22 @@ it direct because it does not create a large intermediate by itself.
 
 ### FIFO Or Pipe Chaining
 
-Named pipes are tempting because they can make existing path-based stage
-functions talk to each other without changing every call site. Treat them as an
-experiment, not the starting architecture.
+The direct MVC implementation uses anonymous subprocess pipes, not filesystem
+FIFOs. The patched native splitter supports stdin with bounded NAL buffering;
+regular-file input remains available for durable mode.
 
 Risks to prove first:
 
-- `edge264_test` may require a regular or seekable `.264` file.
 - FFmpeg cannot write every container format, especially MOV, to a non-seekable
   output.
 - Consumer failure can leave producers blocked or can surface as SIGPIPE.
 - Concurrent producer/consumer orchestration is harder to cancel and clean up
   than the current sequential stage model.
 
-The safer first step is transient files with explicit ownership and cleanup.
-Only use FIFOs after a focused probe proves the exact producer and consumer pair
-can tolerate them.
+The MVC supervisor closes inherited pipe handles, attributes cascade failures to
+the originating process, restarts all three processes for the single-threaded
+retry, and uses terminate/wait/kill cleanup with bounded waits. Filesystem FIFOs
+remain outside the Python pipeline.
 
 ### MKV Materialization
 
@@ -178,10 +183,11 @@ issue.
 
 ### MVC And PCM Extraction
 
-The extracted MVC stream and PCM audio are large, but they decouple video split,
-audio processing, subtitle timing context, and restart. Streaming MVC directly
-from MKV extraction into the native splitter may be possible later, but it would
-couple several failure domains and should not be the first prototype.
+Durable mode and `--keep-files` retain the extracted MVC stream and PCM audio
+because they decouple video split, audio processing, debugging, and restart.
+Direct mode removes both intermediates during an unattended full run. The
+source container remains available until the MVC split and direct audio
+transcode have completed.
 
 ### Left/Right Eye Files
 
