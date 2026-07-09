@@ -132,10 +132,16 @@ not removing left/right outputs.
 ### Extracted Audio To Transcoded Audio
 
 When AAC transcoding is enabled, BD_to_AVP writes PCM audio and then reads it
-back to produce AAC. This may be a good direct-mode candidate after source reuse
-is understood. The final mux still needs an audio file, so the likely win is
-avoiding the PCM file in one-shot transcode runs, not removing audio
-materialization completely.
+back to produce AAC. The internal direct-mode prototype now skips that PCM file
+when AAC transcoding is enabled and `--keep-files` is not requested. MVC video
+extraction remains its own stage, while the `TRANSCODE_AUDIO` stage reads audio
+from the MKV/MTS/M2TS source and writes the final AAC MOV directly.
+
+The final mux still needs a seekable audio file, so the AAC MOV remains
+materialized. Durable mode and `--keep-files` retain the existing PCM boundary,
+and direct-mode resumes at `TRANSCODE_AUDIO` can recreate AAC from the source.
+As with durable resumes, video artifacts from earlier stages must already exist
+when restarting after `EXTRACT_MVC_AND_AUDIO`.
 
 ### Final Move
 

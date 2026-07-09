@@ -4,7 +4,7 @@ from typing import Any
 import ffmpeg
 from babelfish import Language
 
-from bd_to_avp.modules.config import Stage, config
+from bd_to_avp.modules.config import Stage, config, is_direct_audio_transcode_enabled
 from bd_to_avp.modules.command import run_command, run_ffmpeg_print_errors
 from bd_to_avp.modules.util import sorted_files_by_creation_filtered_on_suffix
 
@@ -12,16 +12,19 @@ from bd_to_avp.modules.util import sorted_files_by_creation_filtered_on_suffix
 def extract_mvc_and_audio(
     input_path: Path,
     video_output_path: Path,
-    audio_output_path: Path,
+    audio_output_path: Path | None,
 ) -> None:
     stream = ffmpeg.input(str(input_path))
 
     video_stream = ffmpeg.output(stream["v:0"], f"file:{video_output_path}", c="copy", bsf="h264_mp4toannexb")
-    audio_track = ":0" if config.remove_extra_languages else ""
-    audio_stream = ffmpeg.output(stream[f"a{audio_track}"], f"file:{audio_output_path}", c="pcm_s24le")
+    output_streams = [video_stream]
 
-    output_message = "ffmpeg to extract video, audio, and subtitles from MKV"
-    run_ffmpeg_print_errors([video_stream, audio_stream], output_message, overwrite_output=True)
+    if audio_output_path:
+        audio_track = ":0" if config.remove_extra_languages else ""
+        output_streams.append(ffmpeg.output(stream[f"a{audio_track}"], f"file:{audio_output_path}", c="pcm_s24le"))
+
+    output_message = "ffmpeg to extract MVC video and audio from source"
+    run_ffmpeg_print_errors(output_streams, output_message, overwrite_output=True)
 
 
 def create_muxed_file(
@@ -47,15 +50,16 @@ def create_mvc_and_audio(
 ) -> tuple[Path, Path]:
     video_output_path = output_folder / f"{disc_name}_mvc.h264"
     audio_output_path = output_folder / f"{disc_name}_audio_PCM.mov"
+    direct_audio_transcode = is_direct_audio_transcode_enabled()
 
     if config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
         extract_mvc_and_audio(
             mkv_output_path,
             video_output_path,
-            audio_output_path,
+            None if direct_audio_transcode else audio_output_path,
         )
 
-    return audio_output_path, video_output_path
+    return (mkv_output_path if direct_audio_transcode else audio_output_path), video_output_path
 
 
 def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path, output_folder: Path) -> None:
