@@ -29,6 +29,10 @@ MakeMKV remains an external requirement for reading Blu-ray discs; install the c
 See [Distribution Policy](docs/distribution-policy.md) for the current GUI
 release artifact and dependency policy.
 
+See [Direct Pipeline Contracts](docs/direct-pipeline-contracts.md) for the
+restartable-stage design constraints behind future direct/no-intermediate mode
+work.
+
 ## Terminal install or update (power users)
 
 The terminal/PyPI version is for power users who manage their own command-line dependencies. Install the tools listed
