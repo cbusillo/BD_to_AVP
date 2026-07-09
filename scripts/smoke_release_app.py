@@ -201,12 +201,7 @@ def verify_cli_help(bundle: AppBundle, clean_env: dict[str, str]) -> None:
 
 
 def verify_apple_vision_ocr(bundle: AppBundle, clean_env: dict[str, str]) -> None:
-    command = (
-        "from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr; "
-        "AppleVisionOcr._load_frameworks(); "
-        "print('Apple Vision OCR import smoke passed')"
-    )
-    output = run([bundle.executable, "-c", command], env=clean_env).stdout
+    output = run([bundle.executable, "--smoke-apple-vision-ocr"], env=clean_env).stdout
     if "Apple Vision OCR import smoke passed" not in output:
         raise SmokeFailure(f"Apple Vision OCR smoke output was unexpected: {output}")
 

@@ -212,6 +212,7 @@ class Config:
         self.language_code = "eng"
         self.remove_extra_languages = False
         self.keep_awake = True
+        self.smoke_apple_vision_ocr = False
 
     def configure_tool_environment(self) -> None:
         configured_dirs = [
@@ -300,7 +301,12 @@ class Config:
         parser = argparse.ArgumentParser(
             description="Process 3D Blu-ray to MV-HEVC compatible with the Apple Vision Pro."
         )
-        source_group = parser.add_mutually_exclusive_group(required=True)
+        parser.add_argument(
+            "--smoke-apple-vision-ocr",
+            action="store_true",
+            help=argparse.SUPPRESS,
+        )
+        source_group = parser.add_mutually_exclusive_group(required=False)
 
         source_group.add_argument(
             "--source",
@@ -438,6 +444,9 @@ class Config:
         )
 
         args = parser.parse_args()
+
+        if not args.smoke_apple_vision_ocr and not args.source and not args.source_folder:
+            parser.error("one of the arguments --source/-s --source-folder/-f is required")
 
         for key, value in vars(args).items():
             if value is not None:
