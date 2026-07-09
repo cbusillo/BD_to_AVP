@@ -110,8 +110,6 @@ def get_dependency_name(path: Path) -> str:
         config.FFMPEG_PATH: "FFmpeg",
         config.FFPROBE_PATH: "FFprobe",
         config.MAKEMKVCON_PATH: "MakeMKV",
-        config.MKVEXTRACT_PATH: "MKVExtract",
-        config.MKVMERGE_PATH: "MKVMerge",
         config.MP4BOX_PATH: "MP4Box",
         config.EDGE264_TEST_PATH: "Native MVC helper",
         config.SPATIAL_MEDIA_PATH: "Spatial media tool",

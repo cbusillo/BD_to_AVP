@@ -14,8 +14,6 @@ class DependencyPreflightTests(unittest.TestCase):
             patch.object(preflight.config, "FFMPEG_PATH", Path(__file__)),
             patch.object(preflight.config, "FFPROBE_PATH", Path(__file__)),
             patch.object(preflight.config, "MAKEMKVCON_PATH", Path("/missing/makemkvcon")),
-            patch.object(preflight.config, "MKVEXTRACT_PATH", Path(__file__)),
-            patch.object(preflight.config, "MKVMERGE_PATH", Path(__file__)),
             patch.object(preflight.config, "MP4BOX_PATH", Path("/missing/MP4Box")),
             patch.object(preflight.config, "EDGE264_TEST_PATH", Path(__file__)),
             self.assertRaisesRegex(preflight.DependencyPreflightError, "MakeMKV"),
@@ -28,8 +26,6 @@ class DependencyPreflightTests(unittest.TestCase):
             patch.object(preflight.config, "FFMPEG_PATH", Path(__file__)),
             patch.object(preflight.config, "FFPROBE_PATH", Path(__file__)),
             patch.object(preflight.config, "MAKEMKVCON_PATH", Path(__file__)),
-            patch.object(preflight.config, "MKVEXTRACT_PATH", Path(__file__)),
-            patch.object(preflight.config, "MKVMERGE_PATH", Path(__file__)),
             patch.object(preflight.config, "MP4BOX_PATH", Path(__file__)),
             patch.object(preflight.config, "EDGE264_TEST_PATH", Path("/missing/edge264_test")),
             self.assertRaisesRegex(preflight.DependencyPreflightError, "edge264_test"),
@@ -70,8 +66,6 @@ class DependencyPreflightTests(unittest.TestCase):
             patch.object(preflight.config, "FFMPEG_PATH", Path(__file__)),
             patch.object(preflight.config, "FFPROBE_PATH", Path(__file__)),
             patch.object(preflight.config, "MAKEMKVCON_PATH", Path(__file__)),
-            patch.object(preflight.config, "MKVEXTRACT_PATH", Path(__file__)),
-            patch.object(preflight.config, "MKVMERGE_PATH", Path(__file__)),
             patch.object(preflight.config, "MP4BOX_PATH", Path(__file__)),
             patch.object(preflight.config, "EDGE264_TEST_PATH", Path(__file__)),
         ):
@@ -98,16 +92,6 @@ class DependencyPreflightTests(unittest.TestCase):
 
         self.assertIn(preflight.config.MAKEMKVCON_PATH, required_paths)
 
-    def test_skip_subtitles_does_not_require_subtitle_tools(self) -> None:
-        with (
-            patch.object(preflight.config, "skip_subtitles", True),
-            patch.object(preflight.config, "start_stage", Stage.EXTRACT_SUBTITLES),
-        ):
-            required_paths = preflight.get_required_dependency_binaries_for_current_job()
-
-        self.assertNotIn(preflight.config.MKVEXTRACT_PATH, required_paths)
-        self.assertNotIn(preflight.config.MKVMERGE_PATH, required_paths)
-
     def test_subtitle_extraction_no_longer_requires_external_subtitle_tools(self) -> None:
         with (
             patch.object(preflight.config, "skip_subtitles", False),
@@ -115,8 +99,7 @@ class DependencyPreflightTests(unittest.TestCase):
         ):
             required_paths = preflight.get_required_dependency_binaries_for_current_job()
 
-        self.assertNotIn(preflight.config.MKVEXTRACT_PATH, required_paths)
-        self.assertNotIn(preflight.config.MKVMERGE_PATH, required_paths)
+        self.assertEqual(required_paths.count(preflight.config.FFMPEG_PATH), 1)
 
     def test_subtitle_extraction_requires_apple_vision_frameworks(self) -> None:
         with (

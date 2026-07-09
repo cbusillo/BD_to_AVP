@@ -173,8 +173,6 @@ class Config:
     FFMPEG_PATH = resolve_tool_path("ffmpeg")
     FFPROBE_PATH = resolve_tool_path("ffprobe")
     MAKEMKVCON_PATH = resolve_makemkvcon_path()
-    MKVEXTRACT_PATH = resolve_tool_path("mkvextract")
-    MKVMERGE_PATH = resolve_tool_path("mkvmerge")
     MP4BOX_PATH = resolve_tool_path("MP4Box")
     EDGE264_TEST_PATH = SCRIPT_PATH_BIN / "edge264_test"
     SPATIAL_MEDIA_PATH = SCRIPT_PATH_BIN / "spatial-media-kit-tool"
@@ -220,8 +218,6 @@ class Config:
             self.FFMPEG_PATH.parent,
             self.FFPROBE_PATH.parent,
             self.MAKEMKVCON_PATH.parent,
-            self.MKVEXTRACT_PATH.parent,
-            self.MKVMERGE_PATH.parent,
             self.MP4BOX_PATH.parent,
         ]
         existing_path = os.environ.get("PATH", "")

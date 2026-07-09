@@ -48,9 +48,9 @@ class ToolResolutionTests(unittest.TestCase):
     def test_path_wins_over_homebrew_fallback(self) -> None:
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("bd_to_avp.modules.config.shutil.which", return_value="/usr/bin/mkvmerge"),
+            patch("bd_to_avp.modules.config.shutil.which", return_value="/usr/bin/example-tool"),
         ):
-            self.assertEqual(resolve_tool_path("mkvmerge"), Path("/usr/bin/mkvmerge"))
+            self.assertEqual(resolve_tool_path("example-tool"), Path("/usr/bin/example-tool"))
 
     def test_homebrew_path_is_last_resort(self) -> None:
         with patch.dict(os.environ, {}, clear=True), patch("bd_to_avp.modules.config.shutil.which", return_value=None):
@@ -82,8 +82,6 @@ class ToolResolutionTests(unittest.TestCase):
                 patch.object(config, "FFMPEG_PATH", custom_bin / "ffmpeg"),
                 patch.object(config, "FFPROBE_PATH", custom_bin / "ffprobe"),
                 patch.object(config, "MAKEMKVCON_PATH", custom_bin / "makemkvcon"),
-                patch.object(config, "MKVEXTRACT_PATH", custom_bin / "mkvextract"),
-                patch.object(config, "MKVMERGE_PATH", custom_bin / "mkvmerge"),
                 patch.object(config, "MP4BOX_PATH", custom_bin / "MP4Box"),
                 patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True),
             ):

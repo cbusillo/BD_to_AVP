@@ -43,7 +43,6 @@ Ensure the following are installed on your Mac *(if using the terminal/PyPI vers
 - **[MakeMKV]**: For converting disc video content into MKV files.
 - **[spatial-media-kit-tool]**: A tool for injecting 360° metadata into video files.
 - **[MP4Box]**: A multimedia packager available for Windows, Mac, and Linux.
-- **[MKVToolNix]**: A set of tools to create, alter, and inspect Matroska files.
 
 Current release note: BD_to_AVP still uses MakeMKV for Blu-ray title extraction. Extracted MVC `.h264` video, including
 MVC video extracted from direct `.mts`/`.m2ts` sources, now uses a bundled native Apple Silicon MVC splitter when
@@ -250,7 +249,5 @@ Big thanks to:
 [Mac]: https://www.apple.com/mac/
 
 [macOS Sonoma]:https://apps.apple.com/us/app/macos-sonoma/id6450717509?mt=12
-
-[MKVToolNix]: https://mkvtoolnix.download/
 
 [releases page]: https://github.com/cbusillo/BD_to_AVP/releases
