@@ -268,6 +268,35 @@ class NativeMvcSelectionTests(unittest.TestCase):
         self.assertIn("Native MVC splitter probe crashed; using slower single-threaded mode.", stdout.getvalue())
         self.assertIn("Running native MVC split and encode (single-threaded).", stdout.getvalue())
 
+    def test_native_split_probes_iso_sources_and_uses_multithreaded_when_probe_passes(self) -> None:
+        splitter = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=0, poll_results=[0])
+        ffmpeg_process = _FakeProcess(returncode=0, stdout=None, stderr=None)
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(video.config, "source_path", Path("movie.iso")),
+            patch.object(video.config, "IMAGE_EXTENSIONS", [".iso"]),
+            patch("bd_to_avp.modules.video.native_multithread_splitter_probe_crashed", return_value=False) as probe,
+            patch(
+                "bd_to_avp.modules.video.generate_native_mvc_splitter_command",
+                return_value=["edge264_test", "-Omk"],
+            ) as splitter_command,
+            patch("bd_to_avp.modules.video.generate_native_mvc_ffmpeg_command", return_value=["ffmpeg"]),
+            patch("bd_to_avp.modules.video.subprocess.Popen", side_effect=[splitter, ffmpeg_process]),
+        ):
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                result = video.split_mvc_to_stereo_native(
+                    Path("movie_mvc.h264"), Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov", DiscInfo(), ""
+                )
+
+        self.assertEqual(result, (Path(temp_dir) / "left.mov", Path(temp_dir) / "right.mov"))
+        probe.assert_called_once()
+        self.assertEqual([call.kwargs for call in splitter_command.call_args_list], [{"single_threaded": False}])
+        self.assertIn("Checking native MVC splitter with a short multi-threaded probe.", stdout.getvalue())
+        self.assertIn("Native MVC splitter probe passed; proceeding with multi-threaded mode.", stdout.getvalue())
+        self.assertIn("Running native MVC split and encode (multi-threaded).", stdout.getvalue())
+
     def test_native_split_does_not_probe_mkv_sources(self) -> None:
         splitter = _FakeProcess(returncode=None, stdout=Mock(), returncode_after_wait=0, poll_results=[0])
         ffmpeg_process = _FakeProcess(returncode=0, stdout=None, stderr=None)
@@ -329,13 +358,17 @@ class NativeMvcSelectionTests(unittest.TestCase):
             patch("bd_to_avp.modules.video.generate_native_mvc_splitter_command", return_value=["edge264_test"]),
             patch("bd_to_avp.modules.video.subprocess.Popen", return_value=splitter),
         ):
-            result = video.native_multithread_splitter_probe_crashed(
-                Path("movie_mvc.264"), Path(temp_dir) / "split.native_mvc.log"
-            )
+            log_path = Path(temp_dir) / "split.native_mvc.log"
+            result = video.native_multithread_splitter_probe_crashed(Path("movie_mvc.264"), log_path)
+            log_text = log_path.read_text(encoding="utf-8")
 
         self.assertFalse(result)
         splitter.terminate.assert_called_once()
         splitter.kill.assert_not_called()
+        self.assertIn(
+            "Probe timed out; process stayed alive, continuing multi-threaded",
+            log_text,
+        )
 
     def test_native_multithread_probe_kills_splitter_when_timeout_cleanup_stalls(self) -> None:
         splitter = _FakeProcess(
