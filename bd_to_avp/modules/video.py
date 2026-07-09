@@ -166,6 +166,8 @@ def split_mvc_to_stereo_native(
                 native_input_path,
                 splitter_log_path,
             )
+            if not skip_multithreaded_attempt:
+                print("Native MVC splitter probe passed; proceeding with multi-threaded mode.")
 
         try:
             if skip_multithreaded_attempt:
@@ -223,6 +225,7 @@ def native_multithread_splitter_probe_crashed(native_input_path: Path, splitter_
             )
             splitter_process.wait(timeout=NATIVE_MVC_PROBE_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
+            splitter_log.write(b"\n--- Probe timed out; process stayed alive, continuing multi-threaded ---\n")
             if splitter_process:
                 cleanup_process(splitter_process)
                 try:
@@ -323,12 +326,13 @@ def native_splitter_returncode_is_retry_signal(returncode: int) -> bool:
 def native_splitter_should_report_crash(error: subprocess.CalledProcessError) -> bool:
     if not error.cmd or Path(error.cmd[0]).name != config.EDGE264_TEST_PATH.name:
         return False
-    return error.returncode >= 0 or native_splitter_died_by_signal(error)
+    return error.returncode > 0 or native_splitter_died_by_signal(error)
 
 
 def build_native_splitter_failure_message(error: subprocess.CalledProcessError, splitter_log_path: Path) -> str:
-    signal_name = f"signal {-error.returncode}" if error.returncode < 0 else f"exit code {error.returncode}"
-    if error.returncode < 0:
+    if error.returncode >= 0:
+        signal_name = f"exit code {error.returncode}"
+    else:
         try:
             signal_name = signal.Signals(-error.returncode).name
         except ValueError:
