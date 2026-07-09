@@ -73,6 +73,12 @@ esac
 PATH="$MINIMAL_PATH" "$APP_EXECUTABLE" --help >/dev/null 2>&1 || fail "CLI help failed"
 pass "CLI help with sanitized PATH"
 
+OCR_OUTPUT="$(PATH="$MINIMAL_PATH" "$APP_EXECUTABLE" --smoke-apple-vision-ocr 2>&1)"
+case "$OCR_OUTPUT" in
+  *"Apple Vision OCR import smoke passed"*) pass "Apple Vision OCR smoke" ;;
+  *) fail "Apple Vision OCR smoke output was unexpected: $OCR_OUTPUT" ;;
+esac
+
 if [ -x /Applications/MakeMKV.app/Contents/MacOS/makemkvcon ]; then
   pass "MakeMKV installed"
 else

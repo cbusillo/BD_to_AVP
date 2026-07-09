@@ -26,6 +26,9 @@ The GUI app does not install Homebrew or modify your shell setup. Runtime tools 
 MakeMKV remains an external requirement for reading Blu-ray discs; install the current macOS version from the
 [MakeMKV] website before converting discs.
 
+See [Distribution Policy](docs/distribution-policy.md) for the current GUI
+release artifact and dependency policy.
+
 ## Terminal install or update (power users)
 
 The terminal/PyPI version is for power users who manage their own command-line dependencies. Install the tools listed
