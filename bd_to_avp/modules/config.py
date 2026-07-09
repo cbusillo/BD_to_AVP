@@ -145,6 +145,7 @@ class Config:
 
     PROCESS_NAMES_TO_KILL: ClassVar[list[str]] = [
         "ffmpeg",
+        "edge264_test",
         "makemkvcon",
         "spatial-media-kit-tool",
         "MP4Box",
@@ -480,3 +481,7 @@ def is_direct_pipeline_source_reused() -> bool:
 
 def is_direct_audio_transcode_enabled() -> bool:
     return bool(config.direct_pipeline and config.transcode_audio and not config.keep_files)
+
+
+def is_direct_mvc_stream_enabled() -> bool:
+    return bool(config.direct_pipeline and not config.keep_files)

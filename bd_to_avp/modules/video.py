@@ -8,7 +8,7 @@ from pathlib import Path
 
 import ffmpeg
 
-from bd_to_avp.modules.config import Stage, config
+from bd_to_avp.modules.config import Stage, config, is_direct_mvc_stream_enabled
 from bd_to_avp.modules.disc import DiscInfo
 from bd_to_avp.modules.command import cleanup_process, run_command
 
@@ -49,6 +49,7 @@ class NativeMvcSplitError(RuntimeError):
 
 
 NATIVE_MVC_PROBE_TIMEOUT_SECONDS = 30
+NATIVE_MVC_PROCESS_EXIT_TIMEOUT_SECONDS = 5
 NATIVE_MVC_RETRY_SIGNALS = {
     signal.SIGABRT,
     signal.SIGBUS,
@@ -64,6 +65,30 @@ def generate_native_mvc_splitter_command(video_input_path: Path, *, single_threa
         config.EDGE264_TEST_PATH,
         video_input_path,
         options,
+    ]
+
+
+def should_stream_mvc_from_container(video_input_path: Path) -> bool:
+    return bool(is_direct_mvc_stream_enabled() and video_input_path.suffix.lower() in [*config.MTS_EXTENSIONS, ".mkv"])
+
+
+def generate_mvc_annex_b_stream_command(video_input_path: Path) -> list[str | Path]:
+    return [
+        config.FFMPEG_PATH,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        video_input_path,
+        "-map",
+        "0:v:0",
+        "-c:v",
+        "copy",
+        "-bsf:v",
+        "h264_mp4toannexb",
+        "-f",
+        "h264",
+        "-",
     ]
 
 
@@ -155,12 +180,15 @@ def split_mvc_to_stereo_native(
     crop_params: str,
 ) -> tuple[Path, Path]:
     ffmpeg_command = generate_native_mvc_ffmpeg_command(left_output_path, right_output_path, disc_info, crop_params)
-    native_input_path = prepare_native_mvc_input(video_input_path)
+    stream_from_container = should_stream_mvc_from_container(video_input_path)
+    producer_command = generate_mvc_annex_b_stream_command(video_input_path) if stream_from_container else None
+    native_input_path = Path("-") if stream_from_container else prepare_native_mvc_input(video_input_path)
     splitter_log_path = left_output_path.with_suffix(".native_mvc.log")
     ffmpeg_log_path = left_output_path.with_suffix(".native_ffmpeg.log")
+    producer_log_path = left_output_path.with_suffix(".mvc_extract.log")
     try:
         skip_multithreaded_attempt = False
-        if should_probe_native_multithread_splitter():
+        if not stream_from_container and should_probe_native_multithread_splitter():
             print("Checking native MVC splitter with a short multi-threaded probe.")
             skip_multithreaded_attempt = native_multithread_splitter_probe_crashed(
                 native_input_path,
@@ -177,6 +205,8 @@ def split_mvc_to_stereo_native(
                     ffmpeg_command,
                     ffmpeg_log_path,
                     splitter_log_path,
+                    producer_command=producer_command,
+                    producer_log_path=producer_log_path,
                     single_threaded=True,
                 )
             else:
@@ -185,6 +215,8 @@ def split_mvc_to_stereo_native(
                     ffmpeg_command,
                     ffmpeg_log_path,
                     splitter_log_path,
+                    producer_command=producer_command,
+                    producer_log_path=producer_log_path,
                     single_threaded=False,
                 )
         except subprocess.CalledProcessError as error:
@@ -199,6 +231,8 @@ def split_mvc_to_stereo_native(
                 ffmpeg_command,
                 ffmpeg_log_path,
                 splitter_log_path,
+                producer_command=producer_command,
+                producer_log_path=producer_log_path,
                 single_threaded=True,
             )
     except subprocess.CalledProcessError as error:
@@ -206,7 +240,7 @@ def split_mvc_to_stereo_native(
             raise NativeMvcSplitError(build_native_splitter_failure_message(error, splitter_log_path)) from error
         raise
     finally:
-        if native_input_path != video_input_path:
+        if not stream_from_container and native_input_path != video_input_path:
             native_input_path.unlink(missing_ok=True)
 
     return left_output_path, right_output_path
@@ -258,6 +292,8 @@ def run_native_mvc_split_attempt(
     ffmpeg_log_path: Path,
     splitter_log_path: Path,
     *,
+    producer_command: list[str | Path] | None = None,
+    producer_log_path: Path | None = None,
     single_threaded: bool,
 ) -> None:
     splitter_command = generate_native_mvc_splitter_command(native_input_path, single_threaded=single_threaded)
@@ -267,15 +303,42 @@ def run_native_mvc_split_attempt(
     if config.output_commands:
         splitter_command_text = " ".join(str(command) for command in splitter_command)
         ffmpeg_command_text = " ".join(ffmpeg_command)
-        print(f"Running command:\n{splitter_command_text} | {ffmpeg_command_text}")
+        command_text = f"{splitter_command_text} | {ffmpeg_command_text}"
+        if producer_command:
+            producer_command_text = " ".join(str(command) for command in producer_command)
+            command_text = f"{producer_command_text} | {command_text}"
+        print(f"Running command:\n{command_text}")
 
+    producer_process = None
     splitter_process = None
     ffmpeg_process = None
     try:
-        with open(ffmpeg_log_path, "a") as ffmpeg_log, open(splitter_log_path, "ab") as splitter_log:
+        producer_log_context = (
+            open(producer_log_path, "a") if producer_command and producer_log_path else open(os.devnull, "w")
+        )
+        with (
+            open(ffmpeg_log_path, "a") as ffmpeg_log,
+            open(splitter_log_path, "ab") as splitter_log,
+            producer_log_context as producer_log,
+        ):
             ffmpeg_log.write(f"\n--- Native MVC split attempt: {attempt_name} ---\n")
             splitter_log.write(f"\n--- Native MVC split attempt: {attempt_name} ---\n".encode())
-            splitter_process = subprocess.Popen(splitter_command, stdout=subprocess.PIPE, stderr=splitter_log)
+            if producer_command:
+                producer_log.write(f"\n--- MVC extraction stream attempt: {attempt_name} ---\n")
+                producer_process = subprocess.Popen(
+                    producer_command,
+                    stdout=subprocess.PIPE,
+                    stderr=producer_log,
+                )
+            splitter_process = subprocess.Popen(
+                splitter_command,
+                stdin=producer_process.stdout if producer_process else None,
+                stdout=subprocess.PIPE,
+                stderr=splitter_log,
+            )
+
+            if producer_process and producer_process.stdout:
+                producer_process.stdout.close()
             ffmpeg_process = subprocess.Popen(
                 ffmpeg_command,
                 stdin=splitter_process.stdout,
@@ -289,23 +352,77 @@ def run_native_mvc_split_attempt(
 
             ffmpeg_process.wait()
             splitter_failed_before_cleanup = splitter_process.poll() is not None
-            if ffmpeg_process.returncode != 0 and not splitter_failed_before_cleanup:
-                cleanup_process(splitter_process)
-            splitter_process.wait()
+            producer_exited_before_cleanup = producer_process is not None and producer_process.poll() is not None
+            if ffmpeg_process.returncode != 0:
+                terminate_native_pipeline_process(splitter_process)
+                if producer_process:
+                    terminate_native_pipeline_process(producer_process)
+            else:
+                wait_for_native_pipeline_process(splitter_process)
+            if producer_process:
+                wait_for_native_pipeline_process(producer_process)
 
-        if splitter_process.returncode != 0 and (ffmpeg_process.returncode == 0 or splitter_failed_before_cleanup):
+        if (
+            splitter_process.returncode != 0
+            and splitter_failed_before_cleanup
+            and native_splitter_returncode_is_retry_signal(splitter_process.returncode)
+        ):
             raise subprocess.CalledProcessError(
                 splitter_process.returncode,
                 splitter_command,
                 output=splitter_log_path.read_text(errors="replace"),
             )
+        if (
+            producer_process
+            and producer_process.returncode != 0
+            and producer_exited_before_cleanup
+            and producer_process.returncode != -signal.SIGPIPE
+        ):
+            assert producer_command is not None
+            raise subprocess.CalledProcessError(
+                producer_process.returncode,
+                producer_command,
+                output=producer_log_path.read_text(errors="replace") if producer_log_path else "",
+            )
         if ffmpeg_process.returncode != 0:
             raise subprocess.CalledProcessError(ffmpeg_process.returncode, ffmpeg_command)
+        if splitter_process.returncode != 0:
+            raise subprocess.CalledProcessError(
+                splitter_process.returncode,
+                splitter_command,
+                output=splitter_log_path.read_text(errors="replace"),
+            )
+        if producer_process and producer_process.returncode != 0:
+            assert producer_command is not None
+            raise subprocess.CalledProcessError(
+                producer_process.returncode,
+                producer_command,
+                output=producer_log_path.read_text(errors="replace") if producer_log_path else "",
+            )
     finally:
+        if producer_process:
+            terminate_native_pipeline_process(producer_process)
         if splitter_process:
-            cleanup_process(splitter_process)
+            terminate_native_pipeline_process(splitter_process)
         if ffmpeg_process:
-            cleanup_process(ffmpeg_process)
+            terminate_native_pipeline_process(ffmpeg_process)
+
+
+def wait_for_native_pipeline_process(process: subprocess.Popen) -> None:
+    try:
+        process.wait(timeout=NATIVE_MVC_PROCESS_EXIT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        terminate_native_pipeline_process(process)
+
+
+def terminate_native_pipeline_process(process: subprocess.Popen) -> None:
+    if process.poll() is None:
+        process.terminate()
+    try:
+        process.wait(timeout=NATIVE_MVC_PROCESS_EXIT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=NATIVE_MVC_PROCESS_EXIT_TIMEOUT_SECONDS)
 
 
 def native_splitter_died_by_signal(error: subprocess.CalledProcessError) -> bool:
@@ -363,7 +480,9 @@ def split_mvc_to_stereo(
         if not config.keep_files:
             left_output_path.with_suffix(".native_ffmpeg.log").unlink(missing_ok=True)
             left_output_path.with_suffix(".native_mvc.log").unlink(missing_ok=True)
-            video_input_path.unlink(missing_ok=True)
+            left_output_path.with_suffix(".mvc_extract.log").unlink(missing_ok=True)
+            if not should_stream_mvc_from_container(video_input_path):
+                video_input_path.unlink(missing_ok=True)
         return result
 
     raise RuntimeError(explain_native_mvc_unavailable(disc_info))

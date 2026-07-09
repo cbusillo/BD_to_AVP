@@ -65,6 +65,8 @@ include = [
     "LICENSE",
     "README.md",
     "pyproject.toml",
+    "scripts/build_edge264_macos.py",
+    "scripts/patches/edge264-mvc-stream-input.patch",
 ]
 
 [tool.briefcase]
