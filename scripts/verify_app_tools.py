@@ -10,7 +10,12 @@ APP_TOOL_DIR = APP_PATH / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin"
 REQUIRED_TOOLS = {
     "ffmpeg": ["-hide_banner", "-version"],
     "ffprobe": ["-hide_banner", "-version"],
+    "edge264_test": ["--help"],
+    "mkvextract": ["--version"],
+    "mkvmerge": ["--version"],
     "MP4Box": ["-version"],
+    "spatial-media-kit-tool": ["--help"],
+    "tesseract": ["--version"],
 }
 
 

@@ -13,6 +13,21 @@ class VerifyAppToolsTests(unittest.TestCase):
         self.assertIn("MP4Box", verify_app_tools.REQUIRED_TOOLS)
         self.assertEqual(verify_app_tools.REQUIRED_TOOLS["MP4Box"], ["-version"])
 
+    def test_required_tools_cover_gui_runtime_dependencies(self) -> None:
+        self.assertEqual(
+            set(verify_app_tools.REQUIRED_TOOLS),
+            {
+                "ffmpeg",
+                "ffprobe",
+                "edge264_test",
+                "mkvextract",
+                "mkvmerge",
+                "MP4Box",
+                "spatial-media-kit-tool",
+                "tesseract",
+            },
+        )
+
     def test_verify_tool_uses_probe_args_and_rejects_usr_local_linkage(self) -> None:
         with tempfile.NamedTemporaryFile() as tool_file:
             tool_path = Path(tool_file.name)

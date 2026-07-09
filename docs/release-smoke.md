@@ -89,6 +89,10 @@ With MakeMKV installed:
 - Installing MakeMKV clears the MakeMKV preflight blocker.
 - Any remaining missing tool is recorded as a release blocker or linked to a follow-up issue. A reinstall-app message for an unbundled tool such as MP4Box, MKVToolNix, or Tesseract is a blocker, because reinstalling the current app will not add those tools.
 
+## Known Release Blockers
+
+- `v0.2.143rc2` does not bundle `mkvextract`, `mkvmerge`, or `tesseract`, so it cannot pass the clean-machine GUI subtitle path. Do not promote an RC with this gap unless the release contract is explicitly changed to make those tools external dependencies and the GUI recovery message explains that path.
+
 ## Follow-Up Routing
 
 - Missing bundled GUI dependency: file or update the relevant #88 child issue.
