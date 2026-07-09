@@ -235,7 +235,13 @@ def native_multithread_splitter_probe_crashed(native_input_path: Path, splitter_
     if splitter_process.returncode == 0:
         return False
     if splitter_process.returncode < 0:
-        return True
+        if native_splitter_returncode_is_retry_signal(splitter_process.returncode):
+            return True
+        raise subprocess.CalledProcessError(
+            splitter_process.returncode,
+            splitter_command,
+            output=splitter_log_path.read_text(errors="replace"),
+        )
     raise subprocess.CalledProcessError(
         splitter_process.returncode,
         splitter_command,
@@ -302,8 +308,14 @@ def run_native_mvc_split_attempt(
 def native_splitter_died_by_signal(error: subprocess.CalledProcessError) -> bool:
     if error.returncode >= 0 or not error.cmd or Path(error.cmd[0]).name != config.EDGE264_TEST_PATH.name:
         return False
+    return native_splitter_returncode_is_retry_signal(error.returncode)
+
+
+def native_splitter_returncode_is_retry_signal(returncode: int) -> bool:
+    if returncode >= 0:
+        return False
     try:
-        return signal.Signals(-error.returncode) in NATIVE_MVC_RETRY_SIGNALS
+        return signal.Signals(-returncode) in NATIVE_MVC_RETRY_SIGNALS
     except ValueError:
         return False
 
