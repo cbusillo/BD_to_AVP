@@ -9,7 +9,7 @@ from bd_to_avp.vendor.pgsrip.media_path import MediaPath
 from bd_to_avp.vendor.pgsrip.media import PgsSubtitleItem
 from bd_to_avp.vendor.pgsrip.mkv import Mkv, MkvTrack
 from bd_to_avp.vendor.pgsrip.options import Options
-from bd_to_avp.vendor.pgsrip.pgs import WindowDefinitionSegment
+from bd_to_avp.vendor.pgsrip.pgs import Palette, PgsImage, WindowDefinitionSegment
 from bd_to_avp.vendor.pgsrip.ripper import PgsToSrtRipper
 from bd_to_avp.vendor.pgsrip.utils import from_hex, to_time
 
@@ -81,6 +81,17 @@ class PgsSubtitleItemWindowTests(unittest.TestCase):
 
     def test_empty_hex_converts_to_none(self) -> None:
         self.assertIsNone(from_hex(b""))
+
+
+class PgsImageRenderTests(unittest.TestCase):
+    def test_binary_render_composes_visible_palette_entries_for_ocr(self) -> None:
+        palettes = [Palette(0, 0, 0, 0)] * 256
+        palettes[1] = Palette(17, 128, 128, 255)
+        palettes[2] = Palette(126, 128, 128, 255)
+
+        self.assertEqual(PgsImage.get_color(palettes[0], binary=True), [255])
+        self.assertEqual(PgsImage.get_color(palettes[1], binary=True), [17])
+        self.assertEqual(PgsImage.get_color(palettes[2], binary=True), [126])
 
 
 class PgsRipperEmptyTrackTests(unittest.TestCase):

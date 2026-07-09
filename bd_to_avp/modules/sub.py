@@ -36,7 +36,7 @@ def extract_subtitle_to_srt(mkv_path: Path) -> None:
         print("No PGS subtitle tracks found in source; continuing without subtitles.")
         return None
 
-    sub_options = Options(overwrite=True, one_per_lang=False, keep_temp_files=config.keep_files)
+    sub_options = subtitle_rip_options()
 
     spinner = Spinner("Sup subtitles extraction and SRT conversion")
     spinner_thread = threading.Thread(target=spinner.start)
@@ -64,6 +64,17 @@ def extract_subtitle_to_srt(mkv_path: Path) -> None:
 def cleanup_existing_subtitle_files(output_path: Path) -> None:
     for subtitle_path in output_path.glob("*.srt"):
         subtitle_path.unlink()
+
+
+def subtitle_rip_options() -> Options:
+    languages = set()
+    if config.remove_extra_languages:
+        try:
+            languages.add(Language.fromietf(config.language_code))
+        except (BabelfishError, ValueError):
+            pass
+
+    return Options(overwrite=True, one_per_lang=False, keep_temp_files=config.keep_files, languages=languages)
 
 
 def get_selected_subtitle_tracks(mkv_file: Mkv, sub_options: Options) -> list[dict[str, Any]]:
