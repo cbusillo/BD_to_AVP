@@ -4,7 +4,7 @@ import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 
-from bd_to_avp.modules.config import Stage, config
+from bd_to_avp.modules.config import Stage, config, is_direct_pipeline_source_reused
 from bd_to_avp.modules.command import run_command
 
 
@@ -44,10 +44,44 @@ def remove_folder_if_exists(folder_path: Path) -> None:
         print(f"Removed existing directory: {folder_path}")
 
 
+def path_is_relative_to(path: Path, parent: Path) -> bool:
+    path_pairs = (
+        (path.absolute(), parent.absolute()),
+        (path.resolve(), parent.resolve()),
+    )
+    for candidate, candidate_parent in path_pairs:
+        try:
+            candidate.relative_to(candidate_parent)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def output_folder_contains_reused_source(output_path: Path) -> bool:
+    return bool(
+        is_direct_pipeline_source_reused()
+        and config.source_path
+        and path_is_relative_to(config.source_path, output_path)
+    )
+
+
+def remove_output_folder_if_safe(output_path: Path, *, raise_if_unsafe: bool = False) -> bool:
+    if output_folder_contains_reused_source(output_path):
+        message = f"Refusing to clear output folder containing direct source media: {config.source_path}"
+        if raise_if_unsafe:
+            raise ValueError(message)
+        print(message)
+        return False
+
+    remove_folder_if_exists(output_path)
+    return True
+
+
 def prepare_output_folder_for_source(disc_name: str) -> Path:
     output_path = config.output_root_path / disc_name
     if config.start_stage == next(iter(Stage)):
-        remove_folder_if_exists(output_path)
+        remove_output_folder_if_safe(output_path, raise_if_unsafe=True)
     output_path.mkdir(parents=True, exist_ok=True)
     return output_path
 
@@ -56,7 +90,7 @@ def move_file_to_output_root_folder(muxed_output_path: Path) -> None:
     final_path = config.output_root_path / muxed_output_path.name
     muxed_output_path.replace(final_path)
     if not config.keep_files:
-        remove_folder_if_exists(muxed_output_path.parent)
+        remove_output_folder_if_safe(muxed_output_path.parent)
 
 
 @contextmanager

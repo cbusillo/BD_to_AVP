@@ -5,7 +5,7 @@ from pathlib import Path
 
 import ffmpeg
 
-from bd_to_avp.modules.config import config, Stage
+from bd_to_avp.modules.config import config, is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.file import find_largest_file_with_extensions, sanitize_filename
 from bd_to_avp.modules.command import run_command
 
@@ -163,6 +163,10 @@ def create_custom_makemkv_profile(custom_profile_path: Path, language_code: str)
 
 def create_mkv_file(output_folder: Path, disc_info: DiscInfo, language_code: str) -> Path:
     if config.source_path and config.source_path.suffix.lower() in [*config.MTS_EXTENSIONS, ".mkv"]:
+        if is_direct_pipeline_source_reused():
+            if not config.source_path.is_file():
+                raise FileNotFoundError(f"Direct source file not found: {config.source_path}")
+            return config.source_path
         shutil.copy(config.source_path, output_folder)
         if mkv_file := find_largest_file_with_extensions(output_folder, [".mkv", *config.MTS_EXTENSIONS]):
             return mkv_file

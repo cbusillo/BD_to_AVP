@@ -91,6 +91,23 @@ explicit materialization decision per stage:
 Default mode remains persistent. Direct mode should be opt-in until benchmarks
 prove that it is safe and worth the complexity.
 
+## Internal Source-Reuse Prototype
+
+The first runtime prototype uses an internal direct-pipeline toggle. It is
+intentionally hidden from the supported CLI surface until benchmark evidence
+and the final UX decision are available. Its scope is narrow: direct
+MKV/MTS/M2TS inputs reuse the original source path instead of copying the source
+into the per-title output folder.
+
+This does not create a second processing pipeline and does not stream later
+stage boundaries. Downstream stages continue to consume paths, subtitles remain
+persistent in the output folder, disc/ISO inputs retain their existing MakeMKV
+materialization, and restart/external-upscaler artifacts remain unchanged.
+
+The reused source is user-owned. Cleanup and `--remove-original` do not delete
+it while this prototype is active. The supported CLI surface and boundaries
+remain subject to the benchmark and UX decisions tracked by GitHub issue #126.
+
 ## Likely Safe Boundaries
 
 ### Source Reuse For Existing MKV/MTS/M2TS Inputs
