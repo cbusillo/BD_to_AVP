@@ -23,8 +23,6 @@ class VerifyAppToolsTests(unittest.TestCase):
                 "ffmpeg",
                 "ffprobe",
                 "edge264_test",
-                "mkvextract",
-                "mkvmerge",
                 "MP4Box",
                 "spatial-media-kit-tool",
                 "tesseract",
@@ -33,8 +31,8 @@ class VerifyAppToolsTests(unittest.TestCase):
 
     def test_release_profile_adds_gui_runtime_dependencies(self) -> None:
         self.assertLess(set(verify_app_tools.CORE_TOOLS), set(verify_app_tools.REQUIRED_TOOLS))
-        self.assertIn("mkvextract", verify_app_tools.REQUIRED_TOOLS)
-        self.assertNotIn("mkvextract", verify_app_tools.CORE_TOOLS)
+        self.assertIn("tesseract", verify_app_tools.REQUIRED_TOOLS)
+        self.assertNotIn("tesseract", verify_app_tools.CORE_TOOLS)
 
     def test_verify_tool_uses_probe_args_and_rejects_usr_local_linkage(self) -> None:
         with tempfile.NamedTemporaryFile() as tool_file:

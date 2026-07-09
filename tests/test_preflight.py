@@ -65,25 +65,16 @@ class DependencyPreflightTests(unittest.TestCase):
         self.assertIn("Reinstall the app", message)
         self.assertNotIn("/missing", message)
 
-    def test_gui_missing_subtitle_tools_message_does_not_recommend_reinstall(self) -> None:
+    def test_gui_missing_tesseract_message_does_not_recommend_reinstall(self) -> None:
         with (
             patch.object(preflight.config.app, "is_gui", True),
-            patch.object(preflight.config, "MKVEXTRACT_PATH", Path("/missing/mkvextract")),
-            patch.object(preflight.config, "MKVMERGE_PATH", Path("/missing/mkvmerge")),
             patch.object(preflight.config, "TESSERACT_PATH", Path("/missing/tesseract")),
         ):
-            message = preflight.build_missing_dependency_message(
-                [
-                    Path("/missing/mkvextract"),
-                    Path("/missing/mkvmerge"),
-                    Path("/missing/tesseract"),
-                ]
-            )
+            message = preflight.build_missing_dependency_message([Path("/missing/tesseract")])
 
-        self.assertIn("MKVToolNix", message)
         self.assertIn("Tesseract", message)
         self.assertIn("Skip Subtitles", message)
-        self.assertNotIn("Reinstall the app", message)
+        self.assertIn("Reinstall the app", message)
         self.assertNotIn("/missing", message)
 
     def test_runtime_ready_does_not_import_subprocess(self) -> None:
@@ -131,6 +122,17 @@ class DependencyPreflightTests(unittest.TestCase):
         self.assertNotIn(preflight.config.MKVEXTRACT_PATH, required_paths)
         self.assertNotIn(preflight.config.MKVMERGE_PATH, required_paths)
         self.assertNotIn(preflight.config.TESSERACT_PATH, required_paths)
+
+    def test_subtitle_extraction_no_longer_requires_mkvtoolnix(self) -> None:
+        with (
+            patch.object(preflight.config, "skip_subtitles", False),
+            patch.object(preflight.config, "start_stage", Stage.EXTRACT_SUBTITLES),
+        ):
+            required_paths = preflight.get_required_dependency_binaries_for_current_job()
+
+        self.assertNotIn(preflight.config.MKVEXTRACT_PATH, required_paths)
+        self.assertNotIn(preflight.config.MKVMERGE_PATH, required_paths)
+        self.assertIn(preflight.config.TESSERACT_PATH, required_paths)
 
     def test_final_mux_always_requires_mp4box_even_before_srt_files_exist(self) -> None:
         with (

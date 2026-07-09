@@ -46,12 +46,12 @@ else
   printf 'note - developer tools unavailable; skipping otool linkage checks\n'
 fi
 
-for tool in ffmpeg ffprobe edge264_test mkvextract mkvmerge MP4Box spatial-media-kit-tool tesseract; do
+for tool in ffmpeg ffprobe edge264_test MP4Box spatial-media-kit-tool tesseract; do
   TOOL_PATH="$APP_BIN_DIR/$tool"
   [ -x "$TOOL_PATH" ] || fail "missing or non-executable bundled tool: $TOOL_PATH"
   case "$tool" in
     ffmpeg|ffprobe) "$TOOL_PATH" -hide_banner -version >/dev/null 2>&1 || fail "$tool did not run" ;;
-    mkvextract|mkvmerge|tesseract) "$TOOL_PATH" --version >/dev/null 2>&1 || fail "$tool did not run" ;;
+    tesseract) "$TOOL_PATH" --version >/dev/null 2>&1 || fail "$tool did not run" ;;
     MP4Box) "$TOOL_PATH" -version >/dev/null 2>&1 || fail "$tool did not run" ;;
     *) "$TOOL_PATH" --help >/dev/null 2>&1 || fail "$tool did not run" ;;
   esac

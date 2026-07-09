@@ -1,4 +1,5 @@
 import os
+import subprocess
 import tempfile
 import types
 import unittest
@@ -107,35 +108,157 @@ class ToolResolutionTests(unittest.TestCase):
 
 
 class MkvToolPathTests(unittest.TestCase):
-    def test_mkv_metadata_uses_configured_mkvmerge_path(self) -> None:
-        metadata = b'{"tracks": []}'
+    def test_mkv_metadata_uses_configured_ffprobe_path(self) -> None:
+        metadata: dict[str, object] = {"streams": []}
         with (
-            patch.object(mkv.config, "MKVMERGE_PATH", Path("/tools/mkvmerge")),
-            patch("bd_to_avp.vendor.pgsrip.mkv.check_output", return_value=metadata) as check_output,
+            patch.object(mkv.config, "FFPROBE_PATH", Path("/tools/ffprobe")),
+            patch("bd_to_avp.vendor.pgsrip.mkv.ffmpeg.probe", return_value=metadata) as probe,
         ):
             mkv.Mkv("movie.mkv")
 
-        check_output.assert_called_once_with([Path("/tools/mkvmerge"), "-i", "-F", "json", "movie.mkv"])
+        probe.assert_called_once_with("movie.mkv", cmd="/tools/ffprobe")
 
-    def test_pgs_extraction_uses_configured_mkvextract_path(self) -> None:
+    def test_mkv_metadata_maps_ffprobe_pgs_streams_to_existing_track_model(self) -> None:
+        metadata = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264"},
+                {
+                    "index": 4,
+                    "codec_type": "subtitle",
+                    "codec_name": "hdmv_pgs_subtitle",
+                    "tags": {"language": "eng", "title": "English forced"},
+                    "disposition": {"default": 1, "forced": 1},
+                },
+            ]
+        }
+
+        with patch("bd_to_avp.vendor.pgsrip.mkv.ffmpeg.probe", return_value=metadata):
+            movie = mkv.Mkv("movie.mkv")
+
+        video_track, subtitle_track = movie.tracks
+        self.assertEqual(video_track.type, "video")
+        self.assertEqual(subtitle_track.id, 4)
+        self.assertEqual(subtitle_track.type, "subtitles")
+        self.assertEqual(subtitle_track.codec, "HDMV PGS")
+        self.assertEqual(str(subtitle_track.language), "en")
+        self.assertTrue(subtitle_track.forced)
+        self.assertTrue(subtitle_track.properties["default_track"])
+
+    def test_mkv_metadata_preserves_ffprobe_language_ietf_tag(self) -> None:
+        track = mkv.MkvTrack.from_ffprobe_stream(
+            {
+                "index": 2,
+                "codec_type": "subtitle",
+                "codec_name": "hdmv_pgs_subtitle",
+                "tags": {"language": "por", "language_ietf": "pt-BR"},
+                "disposition": {},
+            }
+        )
+
+        self.assertEqual(track.properties["language"], "por")
+        self.assertEqual(track.properties["language_ietf"], "pt-BR")
+
+    def test_pgs_selection_ignores_disabled_ffprobe_subtitle_streams(self) -> None:
+        metadata = {
+            "streams": [
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "hdmv_pgs_subtitle",
+                    "tags": {"language": "eng"},
+                    "disposition": {"disabled": 1},
+                },
+                {
+                    "index": 4,
+                    "codec_type": "subtitle",
+                    "codec_name": "hdmv_pgs_subtitle",
+                    "tags": {"language": "eng"},
+                    "disposition": {},
+                },
+            ]
+        }
+
+        with patch("bd_to_avp.vendor.pgsrip.mkv.ffmpeg.probe", return_value=metadata):
+            movie = mkv.Mkv("movie.mkv")
+
+        selected = list(movie.get_selected_pgs_tracks(mkv.Options(overwrite=True, one_per_lang=False)))
+
+        self.assertEqual([track.id for track, _, _ in selected], [4])
+
+    def test_mkv_metadata_wraps_ffprobe_errors_as_called_process_error(self) -> None:
+        error = mkv.ffmpeg.Error("ffprobe", b"out", b"err")
+        with (
+            patch.object(mkv.config, "FFPROBE_PATH", Path("/tools/ffprobe")),
+            patch("bd_to_avp.vendor.pgsrip.mkv.ffmpeg.probe", side_effect=error),
+            self.assertRaises(subprocess.CalledProcessError) as raised,
+        ):
+            mkv.Mkv("movie.mkv")
+
+        self.assertEqual(raised.exception.cmd, [Path("/tools/ffprobe"), "movie.mkv"])
+        self.assertEqual(raised.exception.stderr, b"err")
+
+    def test_pgs_selection_ignores_non_pgs_subtitle_streams(self) -> None:
+        metadata = {
+            "streams": [
+                {
+                    "index": 2,
+                    "codec_type": "subtitle",
+                    "codec_name": "subrip",
+                    "tags": {"language": "eng"},
+                    "disposition": {"forced": 0},
+                },
+                {
+                    "index": 4,
+                    "codec_type": "subtitle",
+                    "codec_name": "hdmv_pgs_subtitle",
+                    "tags": {"language": "eng"},
+                    "disposition": {"forced": 0},
+                },
+            ]
+        }
+
+        with patch("bd_to_avp.vendor.pgsrip.mkv.ffmpeg.probe", return_value=metadata):
+            movie = mkv.Mkv("movie.mkv")
+
+        selected = list(movie.get_selected_pgs_tracks(mkv.Options(overwrite=True, one_per_lang=False)))
+
+        self.assertEqual([track.id for track, _, _ in selected], [4])
+
+    def test_pgs_extraction_uses_configured_ffmpeg_path_and_stream_index(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            sup_path = temp_path / "3.en.sup"
-
-            def write_sup(_command: list[object]) -> bytes:
-                sup_path.write_bytes(b"pgs")
-                return b""
-
             media_path = mkv.MediaPath("movie.mkv").translate(language=mkv.Language("eng"))
 
             with (
-                patch.object(mkv.config, "MKVEXTRACT_PATH", Path("/tools/mkvextract")),
-                patch("bd_to_avp.vendor.pgsrip.mkv.check_output", side_effect=write_sup) as check_output,
+                patch.object(mkv.config, "FFMPEG_PATH", Path("/tools/ffmpeg")),
+                patch(
+                    "bd_to_avp.vendor.pgsrip.mkv.subprocess.run",
+                    return_value=mkv.subprocess.CompletedProcess(args=[], returncode=0, stdout=b"pgs", stderr=b""),
+                ) as run,
             ):
                 data = mkv.MkvPgs.read_data(media_path, 3, temp_dir)
 
         self.assertEqual(data, b"pgs")
-        check_output.assert_called_once_with([Path("/tools/mkvextract"), str(media_path), "tracks", f"3:{sup_path}"])
+        run.assert_called_once_with(
+            [
+                Path("/tools/ffmpeg"),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-i",
+                str(media_path),
+                "-map",
+                "0:3",
+                "-c:s",
+                "copy",
+                "-f",
+                "sup",
+                "pipe:1",
+            ],
+            stdout=mkv.subprocess.PIPE,
+            stderr=mkv.subprocess.PIPE,
+            check=True,
+        )
 
 
 if __name__ == "__main__":

@@ -23,8 +23,6 @@ REQUIRED_BUNDLED_TOOLS = {
     "ffmpeg": ["-hide_banner", "-version"],
     "ffprobe": ["-hide_banner", "-version"],
     "edge264_test": ["--help"],
-    "mkvextract": ["--version"],
-    "mkvmerge": ["--version"],
     "MP4Box": ["-version"],
     "spatial-media-kit-tool": ["--help"],
     "tesseract": ["--version"],
