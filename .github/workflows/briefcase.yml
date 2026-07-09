@@ -206,7 +206,7 @@ jobs:
             
             ** The GUI app no longer installs Homebrew or command-line dependencies on first launch. Install MakeMKV separately before converting Blu-ray discs. Power users who use the terminal/PyPI version should follow the manual dependency instructions in the README. **
             
-            You can use the terminal version with "/Applications/Blu-ray to AVP.app/Contents/MacOS/Blu-ray to AVP". If you run the binary with any arguments, it will work like the previous terminal app.  No arguments will open the GUI.
+            You can use the terminal version with "/Applications/3D Blu-ray to Vision Pro.app/Contents/MacOS/3D Blu-ray to Vision Pro". If you run the binary with any arguments, it will work like the previous terminal app. No arguments will open the GUI.
           draft: false
           prerelease: ${{ steps.release_metadata.outputs.prerelease }}
           make_latest: ${{ steps.release_metadata.outputs.make_latest }}
