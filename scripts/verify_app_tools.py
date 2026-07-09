@@ -14,8 +14,6 @@ CORE_TOOLS = {
 }
 GUI_RUNTIME_TOOLS = {
     "edge264_test": ["--help"],
-    "mkvextract": ["--version"],
-    "mkvmerge": ["--version"],
     "spatial-media-kit-tool": ["--help"],
     "tesseract": ["--version"],
 }

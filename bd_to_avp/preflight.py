@@ -36,7 +36,7 @@ def get_required_dependency_binaries_for_current_job() -> list[Path]:
     if needs_makemkv():
         required_paths.append(config.MAKEMKVCON_PATH)
     if needs_subtitle_extraction():
-        required_paths.extend([config.MKVEXTRACT_PATH, config.MKVMERGE_PATH, config.TESSERACT_PATH])
+        required_paths.append(config.TESSERACT_PATH)
     if needs_native_mvc_splitter():
         required_paths.append(config.EDGE264_TEST_PATH)
     if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
@@ -100,15 +100,12 @@ def get_gui_recovery_steps(missing_binaries: list[Path]) -> str:
     if missing_makemkv:
         return "Install MakeMKV for macOS, then open the app again."
     if missing_subtitle_tools and not missing_other_tools:
-        return (
-            "Subtitle extraction requires MKVToolNix and Tesseract, which are not bundled in this release. "
-            "Install those tools separately or enable Skip Subtitles before processing."
-        )
+        return "Subtitle extraction requires Tesseract. Reinstall the app or enable Skip Subtitles before processing."
     return "Reinstall the app, then open it again."
 
 
 def is_subtitle_tool_path(path: Path) -> bool:
-    return path in {config.MKVEXTRACT_PATH, config.MKVMERGE_PATH, config.TESSERACT_PATH}
+    return path == config.TESSERACT_PATH
 
 
 def get_dependency_name(path: Path) -> str:

@@ -87,11 +87,11 @@ With MakeMKV installed:
 - The app's bundled tools are used where expected.
 - Missing MakeMKV produces a clear recovery path.
 - Installing MakeMKV clears the MakeMKV preflight blocker.
-- Any remaining missing tool is recorded as a release blocker or linked to a follow-up issue. A reinstall-app message for an unbundled tool such as MP4Box, MKVToolNix, or Tesseract is a blocker, because reinstalling the current app will not add those tools.
+- Any remaining missing bundled tool is recorded as a release blocker or linked to a follow-up issue. A reinstall-app message for a tool that is not part of the app bundle is a blocker, because reinstalling the current app will not add it.
 
 ## Known Release Blockers
 
-- `v0.2.143rc2` does not bundle `mkvextract`, `mkvmerge`, or `tesseract`, so it cannot pass the clean-machine GUI subtitle path. Do not promote an RC with this gap unless the release contract is explicitly changed to make those tools external dependencies and the GUI recovery message explains that path.
+- `v0.2.143rc2` does not bundle `mkvextract`, `mkvmerge`, or `tesseract`, so it cannot pass the clean-machine GUI subtitle path. MKVToolNix is being removed from the subtitle path in #143; do not promote an RC while the remaining OCR tool requirement is unresolved.
 
 ## Follow-Up Routing
 
