@@ -50,6 +50,19 @@ class ReleaseSmokeTests(unittest.TestCase):
             with self.assertRaisesRegex(smoke_release_app.SmokeFailure, "Apple Vision OCR"):
                 smoke_release_app.verify_apple_vision_ocr(bundle, smoke_release_app.build_clean_env())
 
+    def test_apple_vision_ocr_smoke_uses_app_smoke_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = make_fake_app(Path(temp_dir), version="1.2.3")
+            bundle = smoke_release_app.read_bundle(app_path)
+
+            with patch.object(smoke_release_app, "run") as run:
+                run.return_value = smoke_release_app.subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="Apple Vision OCR import smoke passed"
+                )
+                smoke_release_app.verify_apple_vision_ocr(bundle, smoke_release_app.build_clean_env())
+
+        self.assertEqual(run.call_args.args[0], [bundle.executable, "--smoke-apple-vision-ocr"])
+
     def test_default_app_search_uses_first_existing_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             first_path = Path(temp_dir) / "Missing.app"
@@ -158,7 +171,7 @@ def make_fake_app(
             "  echo '--source SOURCE'",
             "  exit 0",
             "fi",
-            'if [ "$1" = "-c" ]; then',
+            'if [ "$1" = "--smoke-apple-vision-ocr" ]; then',
             f"  echo '{'Apple Vision OCR import smoke passed' if apple_vision_smoke else 'Apple Vision unavailable'}'",
             "  exit 0",
             "fi",
