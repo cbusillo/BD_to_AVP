@@ -65,6 +65,27 @@ class DependencyPreflightTests(unittest.TestCase):
         self.assertIn("Reinstall the app", message)
         self.assertNotIn("/missing", message)
 
+    def test_gui_missing_subtitle_tools_message_does_not_recommend_reinstall(self) -> None:
+        with (
+            patch.object(preflight.config.app, "is_gui", True),
+            patch.object(preflight.config, "MKVEXTRACT_PATH", Path("/missing/mkvextract")),
+            patch.object(preflight.config, "MKVMERGE_PATH", Path("/missing/mkvmerge")),
+            patch.object(preflight.config, "TESSERACT_PATH", Path("/missing/tesseract")),
+        ):
+            message = preflight.build_missing_dependency_message(
+                [
+                    Path("/missing/mkvextract"),
+                    Path("/missing/mkvmerge"),
+                    Path("/missing/tesseract"),
+                ]
+            )
+
+        self.assertIn("MKVToolNix", message)
+        self.assertIn("Tesseract", message)
+        self.assertIn("Skip Subtitles", message)
+        self.assertNotIn("Reinstall the app", message)
+        self.assertNotIn("/missing", message)
+
     def test_runtime_ready_does_not_import_subprocess(self) -> None:
         with (
             patch.object(preflight.config.app, "is_gui", False),

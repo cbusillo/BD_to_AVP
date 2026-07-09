@@ -186,7 +186,7 @@ jobs:
           done
           find build/bd-to-avp/macos/app -path "*/bd_to_avp/bin/*" -type f -perm +111 -exec codesign --force --options runtime --timestamp --sign "${{ secrets.DEV_ID }}" {} \;
           find build/bd-to-avp/macos/app -name "*.dylib" -exec codesign --force --sign - {} \;
-          uv run python scripts/verify_app_tools.py
+          uv run python scripts/verify_app_tools.py --profile release
           uv run python scripts/briefcase_app.py package -i "${{ secrets.DEV_ID }}"
       - name: Upload log on failure
         if: failure()

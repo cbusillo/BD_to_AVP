@@ -7,11 +7,19 @@ from pathlib import Path
 
 APP_PATH = Path("build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app")
 APP_TOOL_DIR = APP_PATH / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin"
-REQUIRED_TOOLS = {
+CORE_TOOLS = {
     "ffmpeg": ["-hide_banner", "-version"],
     "ffprobe": ["-hide_banner", "-version"],
     "MP4Box": ["-version"],
 }
+GUI_RUNTIME_TOOLS = {
+    "edge264_test": ["--help"],
+    "mkvextract": ["--version"],
+    "mkvmerge": ["--version"],
+    "spatial-media-kit-tool": ["--help"],
+    "tesseract": ["--version"],
+}
+REQUIRED_TOOLS = CORE_TOOLS | GUI_RUNTIME_TOOLS
 
 
 def run(command: list[str | Path]) -> subprocess.CompletedProcess[str]:
@@ -40,10 +48,12 @@ def verify_tool(tool_path: Path, probe_args: list[str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify app-local command-line tools in the Briefcase app bundle.")
     parser.add_argument("--app-path", type=Path, default=APP_PATH)
+    parser.add_argument("--profile", choices=["core", "release"], default="core")
     args = parser.parse_args()
 
     tool_dir = args.app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin"
-    for tool_name, probe_args in REQUIRED_TOOLS.items():
+    tools = CORE_TOOLS if args.profile == "core" else REQUIRED_TOOLS
+    for tool_name, probe_args in tools.items():
         verify_tool(tool_dir / tool_name, probe_args)
     print(f"Verified app-local tools in {tool_dir}")
 
