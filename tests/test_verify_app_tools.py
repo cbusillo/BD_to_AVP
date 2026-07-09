@@ -13,6 +13,9 @@ class VerifyAppToolsTests(unittest.TestCase):
         self.assertIn("MP4Box", verify_app_tools.REQUIRED_TOOLS)
         self.assertEqual(verify_app_tools.REQUIRED_TOOLS["MP4Box"], ["-version"])
 
+    def test_core_tools_match_ci_briefcase_smoke_scope(self) -> None:
+        self.assertEqual(set(verify_app_tools.CORE_TOOLS), {"ffmpeg", "ffprobe", "MP4Box"})
+
     def test_required_tools_cover_gui_runtime_dependencies(self) -> None:
         self.assertEqual(
             set(verify_app_tools.REQUIRED_TOOLS),
@@ -27,6 +30,11 @@ class VerifyAppToolsTests(unittest.TestCase):
                 "tesseract",
             },
         )
+
+    def test_release_profile_adds_gui_runtime_dependencies(self) -> None:
+        self.assertLess(set(verify_app_tools.CORE_TOOLS), set(verify_app_tools.REQUIRED_TOOLS))
+        self.assertIn("mkvextract", verify_app_tools.REQUIRED_TOOLS)
+        self.assertNotIn("mkvextract", verify_app_tools.CORE_TOOLS)
 
     def test_verify_tool_uses_probe_args_and_rejects_usr_local_linkage(self) -> None:
         with tempfile.NamedTemporaryFile() as tool_file:
