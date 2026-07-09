@@ -72,7 +72,7 @@ def subtitle_rip_options() -> Options:
         try:
             languages.add(Language.fromietf(config.language_code))
         except (BabelfishError, ValueError):
-            pass
+            print(f"Invalid subtitle language code {config.language_code!r}; extracting all subtitle languages.")
 
     return Options(overwrite=True, one_per_lang=False, keep_temp_files=config.keep_files, languages=languages)
 
