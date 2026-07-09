@@ -4,7 +4,7 @@ import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 
-from bd_to_avp.modules.config import Stage, config, is_direct_pipeline_source_reused
+from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.command import run_command
 
 
@@ -58,17 +58,17 @@ def path_is_relative_to(path: Path, parent: Path) -> bool:
     return False
 
 
-def output_folder_contains_reused_source(output_path: Path) -> bool:
+def output_folder_contains_source(output_path: Path) -> bool:
     return bool(
-        is_direct_pipeline_source_reused()
-        and config.source_path
+        config.source_path
+        and (config.source_path.exists() or config.source_path.is_symlink())
         and path_is_relative_to(config.source_path, output_path)
     )
 
 
 def remove_output_folder_if_safe(output_path: Path, *, raise_if_unsafe: bool = False) -> bool:
-    if output_folder_contains_reused_source(output_path):
-        message = f"Refusing to clear output folder containing direct source media: {config.source_path}"
+    if output_folder_contains_source(output_path):
+        message = f"Refusing to clear folder containing source media: {config.source_path}"
         if raise_if_unsafe:
             raise ValueError(message)
         print(message)

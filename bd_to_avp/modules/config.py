@@ -214,7 +214,6 @@ class Config:
         self.remove_extra_languages = False
         self.keep_awake = True
         self.smoke_apple_vision_ocr = False
-        self.direct_pipeline = False
 
     def configure_tool_environment(self) -> None:
         configured_dirs = [
@@ -326,7 +325,7 @@ class Config:
             "--remove-original",
             "-r",
             action="store_true",
-            help="Remove original file after processing.",
+            help="Remove the original source after processing completes successfully.",
         )
         parser.add_argument(
             "--overwrite",
@@ -396,7 +395,7 @@ class Config:
         parser.add_argument(
             "--keep-files",
             action="store_true",
-            help="Keep temporary files after processing.",
+            help="Use durable stage files for restart, inspection, and external processing.",
         )
         parser.add_argument(
             "--start-stage",
@@ -444,12 +443,6 @@ class Config:
             action="store_false",
             help="Prevent the computer from sleeping during processing.",
         )
-        parser.add_argument(
-            "--direct-pipeline",
-            action="store_true",
-            help=argparse.SUPPRESS,
-        )
-
         args = parser.parse_args()
 
         if not args.smoke_apple_vision_ocr and not args.source and not args.source_folder:
@@ -473,15 +466,15 @@ config = Config()
 
 def is_direct_pipeline_source_reused() -> bool:
     return bool(
-        config.direct_pipeline
+        not config.keep_files
         and config.source_path
         and config.source_path.suffix.lower() in [*config.MTS_EXTENSIONS, ".mkv"]
     )
 
 
 def is_direct_audio_transcode_enabled() -> bool:
-    return bool(config.direct_pipeline and config.transcode_audio and not config.keep_files)
+    return bool(config.transcode_audio and not config.keep_files)
 
 
 def is_direct_mvc_stream_enabled() -> bool:
-    return bool(config.direct_pipeline and not config.keep_files)
+    return not config.keep_files

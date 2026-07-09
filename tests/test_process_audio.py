@@ -9,7 +9,7 @@ from bd_to_avp.modules.disc import DiscInfo
 
 
 class ProcessAudioWiringTests(unittest.TestCase):
-    def test_direct_audio_source_is_replaced_by_aac_before_final_mux(self) -> None:
+    def test_direct_audio_source_is_replaced_by_aac_and_removed_after_success(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             source_path = temp_path / "source.mkv"
@@ -27,8 +27,8 @@ class ProcessAudioWiringTests(unittest.TestCase):
                 stack.enter_context(patch.object(process.config, "source_path", source_path))
                 stack.enter_context(patch.object(process.config, "output_root_path", temp_path))
                 stack.enter_context(patch.object(process.config, "overwrite", True))
-                stack.enter_context(patch.object(process.config, "keep_files", True))
-                stack.enter_context(patch.object(process.config, "remove_original", False))
+                stack.enter_context(patch.object(process.config, "keep_files", False))
+                stack.enter_context(patch.object(process.config, "remove_original", True))
                 stack.enter_context(patch.object(process.config, "language_code", "eng"))
                 stack.enter_context(patch.object(process.preflight, "verify_runtime_ready"))
                 stack.enter_context(
@@ -60,6 +60,7 @@ class ProcessAudioWiringTests(unittest.TestCase):
 
                 transcode.assert_called_once_with(source_path, output_folder)
                 mux.assert_called_once_with(aac_path, mv_hevc_path, output_folder, "Movie")
+                self.assertFalse(source_path.exists())
 
 
 if __name__ == "__main__":

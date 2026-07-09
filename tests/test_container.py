@@ -11,7 +11,6 @@ from bd_to_avp.modules.config import Stage
 class AudioExtractionTests(unittest.TestCase):
     def test_direct_pipeline_skips_intermediate_video_and_pcm(self) -> None:
         with (
-            patch.object(container.config, "direct_pipeline", True),
             patch.object(container.config, "transcode_audio", True),
             patch.object(container.config, "keep_files", False),
             patch.object(container.config, "start_stage", Stage.CREATE_MKV),
@@ -23,25 +22,8 @@ class AudioExtractionTests(unittest.TestCase):
         self.assertEqual(video_path, Path("source.mkv"))
         run_ffmpeg.assert_not_called()
 
-    def test_durable_audio_path_still_extracts_pcm(self) -> None:
+    def test_keep_files_preserves_mvc_and_pcm_boundaries(self) -> None:
         with (
-            patch.object(container.config, "direct_pipeline", False),
-            patch.object(container.config, "transcode_audio", True),
-            patch.object(container.config, "keep_files", False),
-            patch.object(container.config, "start_stage", Stage.CREATE_MKV),
-            patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
-        ):
-            audio_path, video_path = container.create_mvc_and_audio("Movie", Path("source.mkv"), Path("output"))
-
-        command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
-        self.assertEqual(audio_path, Path("output/Movie_audio_PCM.mov"))
-        self.assertEqual(video_path, Path("output/Movie_mvc.h264"))
-        self.assertIn("pcm_s24le", command)
-        self.assertIn("file:output/Movie_audio_PCM.mov", command)
-
-    def test_keep_files_preserves_pcm_boundary_in_direct_mode(self) -> None:
-        with (
-            patch.object(container.config, "direct_pipeline", True),
             patch.object(container.config, "transcode_audio", True),
             patch.object(container.config, "keep_files", True),
             patch.object(container.config, "start_stage", Stage.CREATE_MKV),
@@ -57,7 +39,6 @@ class AudioExtractionTests(unittest.TestCase):
 
     def test_direct_mode_without_audio_transcode_preserves_pcm_boundary(self) -> None:
         with (
-            patch.object(container.config, "direct_pipeline", True),
             patch.object(container.config, "transcode_audio", False),
             patch.object(container.config, "keep_files", False),
             patch.object(container.config, "start_stage", Stage.CREATE_MKV),

@@ -6,7 +6,11 @@ from unittest.mock import patch
 from bd_to_avp import preflight
 from bd_to_avp.modules import process
 from bd_to_avp.modules.config import is_direct_pipeline_source_reused, Stage
-from bd_to_avp.modules.file import move_file_to_output_root_folder, prepare_output_folder_for_source
+from bd_to_avp.modules.file import (
+    move_file_to_output_root_folder,
+    prepare_output_folder_for_source,
+    remove_output_folder_if_safe,
+)
 
 
 class ProcessPreflightTests(unittest.TestCase):
@@ -24,15 +28,15 @@ class ProcessPreflightTests(unittest.TestCase):
 
     def test_direct_pipeline_reused_file_source_is_not_cleanup_owned(self) -> None:
         with (
-            patch.object(process.config, "direct_pipeline", True),
+            patch.object(process.config, "keep_files", False),
             patch.object(process.config, "source_path", Path("movie.mkv")),
             patch.object(process.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
         ):
             self.assertTrue(is_direct_pipeline_source_reused())
 
-    def test_default_pipeline_file_source_remains_cleanup_owned(self) -> None:
+    def test_keep_files_source_remains_cleanup_owned(self) -> None:
         with (
-            patch.object(process.config, "direct_pipeline", False),
+            patch.object(process.config, "keep_files", True),
             patch.object(process.config, "source_path", Path("movie.mkv")),
             patch.object(process.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
         ):
@@ -40,7 +44,7 @@ class ProcessPreflightTests(unittest.TestCase):
 
     def test_direct_pipeline_iso_source_remains_cleanup_owned(self) -> None:
         with (
-            patch.object(process.config, "direct_pipeline", True),
+            patch.object(process.config, "keep_files", False),
             patch.object(process.config, "source_path", Path("movie.iso")),
             patch.object(process.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
         ):
@@ -55,16 +59,78 @@ class ProcessPreflightTests(unittest.TestCase):
             source_path.write_bytes(b"source")
 
             with (
-                patch.object(process.config, "direct_pipeline", True),
+                patch.object(process.config, "keep_files", False),
                 patch.object(process.config, "source_path", source_path),
                 patch.object(process.config, "output_root_path", output_root),
                 patch.object(process.config, "start_stage", Stage.CREATE_MKV),
                 patch.object(process.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
-                self.assertRaisesRegex(ValueError, "direct source media"),
+                self.assertRaisesRegex(ValueError, "source media"),
             ):
                 prepare_output_folder_for_source("Movie")
 
             self.assertTrue(source_path.exists())
+
+    def test_keep_files_create_mkv_start_refuses_to_clear_folder_containing_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir)
+            output_folder = output_root / "Movie"
+            output_folder.mkdir()
+            source_path = output_folder / "Movie.mkv"
+            source_path.write_bytes(b"source")
+
+            with (
+                patch.object(process.config, "keep_files", True),
+                patch.object(process.config, "source_path", source_path),
+                patch.object(process.config, "output_root_path", output_root),
+                patch.object(process.config, "start_stage", Stage.CREATE_MKV),
+                self.assertRaisesRegex(ValueError, "source media"),
+            ):
+                prepare_output_folder_for_source("Movie")
+
+            self.assertTrue(source_path.exists())
+
+    def test_temp_cleanup_preserves_source_inside_temp_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_folder = Path(temp_dir) / "temp_files"
+            temp_folder.mkdir()
+            source_path = temp_folder / "Movie.mkv"
+            source_path.write_bytes(b"source")
+
+            with patch.object(process.config, "source_path", source_path):
+                removed = remove_output_folder_if_safe(temp_folder)
+
+            self.assertFalse(removed)
+            self.assertTrue(source_path.exists())
+
+    def test_remove_original_refuses_source_directory_containing_final_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_folder = Path(temp_dir) / "source"
+            final_path = source_folder / "output" / "Movie_AVP.mov"
+            final_path.parent.mkdir(parents=True)
+            final_path.write_bytes(b"final")
+
+            with patch.object(process.config, "source_path", source_folder):
+                removed = process.remove_original_source(final_path)
+
+            self.assertFalse(removed)
+            self.assertEqual(final_path.read_bytes(), b"final")
+
+    def test_remove_original_file_preserves_sibling_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_folder = Path(temp_dir) / "source"
+            source_folder.mkdir()
+            source_path = source_folder / "Movie.mkv"
+            sibling_path = source_folder / "notes.txt"
+            final_path = Path(temp_dir) / "output" / "Movie_AVP.mov"
+            source_path.write_bytes(b"source")
+            sibling_path.write_bytes(b"notes")
+
+            with patch.object(process.config, "source_path", source_path):
+                removed = process.remove_original_source(final_path)
+
+            self.assertTrue(removed)
+            self.assertFalse(source_path.exists())
+            self.assertEqual(sibling_path.read_bytes(), b"notes")
 
     def test_output_move_preserves_folder_containing_direct_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -77,7 +143,6 @@ class ProcessPreflightTests(unittest.TestCase):
             muxed_path.write_bytes(b"final")
 
             with (
-                patch.object(process.config, "direct_pipeline", True),
                 patch.object(process.config, "source_path", source_path),
                 patch.object(process.config, "output_root_path", output_root),
                 patch.object(process.config, "keep_files", False),
@@ -103,12 +168,12 @@ class ProcessPreflightTests(unittest.TestCase):
             source_path.symlink_to(external_source)
 
             with (
-                patch.object(process.config, "direct_pipeline", True),
+                patch.object(process.config, "keep_files", False),
                 patch.object(process.config, "source_path", source_path),
                 patch.object(process.config, "output_root_path", output_root),
                 patch.object(process.config, "start_stage", Stage.CREATE_MKV),
                 patch.object(process.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
-                self.assertRaisesRegex(ValueError, "direct source media"),
+                self.assertRaisesRegex(ValueError, "source media"),
             ):
                 prepare_output_folder_for_source("Movie")
 
