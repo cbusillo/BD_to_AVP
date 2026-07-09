@@ -93,7 +93,18 @@ class AppleVisionOcr:
             return language_code
         if error or not supported_languages:
             return None
-        return language_code if language_code in set(supported_languages) else None
+        return AppleVisionOcr._best_supported_language(language_code, supported_languages)
+
+    @staticmethod
+    def _best_supported_language(language_code: str, supported_languages: list[str]) -> str | None:
+        if language_code in supported_languages:
+            return language_code
+        language_prefix = language_code.split("-", 1)[0].casefold()
+        for supported_language in supported_languages:
+            supported_prefix = supported_language.split("-", 1)[0].casefold()
+            if supported_prefix == language_prefix:
+                return supported_language
+        return None
 
     @classmethod
     def _words_from_results(cls, observations: list[Any], image_shape: tuple[int, ...]) -> list[OcrWord]:

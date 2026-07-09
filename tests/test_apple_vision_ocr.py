@@ -28,7 +28,9 @@ class MockVisionObservation:
 
 
 class MockVisionRequestInstance:
-    language_codes: list[str] | None = None
+    def __init__(self) -> None:
+        self.language_codes: list[str] | None = None
+        self.supported_languages: list[str] = ["en"]
 
     def setRecognitionLevel_(self, _level: int) -> None:
         pass
@@ -40,7 +42,7 @@ class MockVisionRequestInstance:
         self.language_codes = language_codes
 
     def supportedRecognitionLanguagesAndReturnError_(self, _error: object) -> tuple[list[str], None]:
-        return ["en"], None
+        return self.supported_languages, None
 
     def results(self) -> list[MockVisionObservation]:
         return [MockVisionObservation()]
@@ -146,6 +148,14 @@ class AppleVisionOcrTests(unittest.TestCase):
         language_code = AppleVisionOcr._recognition_language(Language("eng"), request)
 
         self.assertEqual(language_code, "en")
+
+    def test_locale_qualified_supported_language_hint_is_used(self) -> None:
+        request = MockVisionRequestInstance()
+        request.supported_languages = ["en-US", "fr-FR"]
+
+        language_code = AppleVisionOcr._recognition_language(Language("eng"), request)
+
+        self.assertEqual(language_code, "en-US")
 
     def test_unsupported_language_hint_is_skipped(self) -> None:
         request = MockVisionRequestInstance()
