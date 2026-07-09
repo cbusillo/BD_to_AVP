@@ -476,3 +476,7 @@ def is_direct_pipeline_source_reused() -> bool:
         and config.source_path
         and config.source_path.suffix.lower() in [*config.MTS_EXTENSIONS, ".mkv"]
     )
+
+
+def is_direct_audio_transcode_enabled() -> bool:
+    return bool(config.direct_pipeline and config.transcode_audio and not config.keep_files)

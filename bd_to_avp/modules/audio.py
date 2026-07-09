@@ -2,14 +2,14 @@ from pathlib import Path
 
 import ffmpeg
 
-from bd_to_avp.modules.config import Stage, config
+from bd_to_avp.modules.config import Stage, config, is_direct_audio_transcode_enabled
 from bd_to_avp.modules.command import run_ffmpeg_print_errors
 
 
-def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int):
+def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int, audio_selector: str = "a") -> None:
     audio_input = ffmpeg.input(str(input_path))
     audio_transcoded = ffmpeg.output(
-        audio_input["a"],
+        audio_input[audio_selector],
         str(f"file:{transcoded_audio_path}"),
         acodec="aac",
         audio_bitrate=f"{bitrate}k",
@@ -18,13 +18,24 @@ def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int)
 
 
 def create_transcoded_audio_file(original_audio_path: Path, output_folder: Path) -> Path:
-    trancoded_audio_path = output_folder / f"{output_folder.stem}_audio_AAC.mov"
+    transcoded_audio_path = output_folder / f"{output_folder.stem}_audio_AAC.mov"
+    direct_audio_transcode = is_direct_audio_transcode_enabled()
+
     if config.transcode_audio and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
-        transcode_audio(original_audio_path, trancoded_audio_path, config.audio_bitrate)
-        if not config.keep_files:
+        temporary_audio_path = transcoded_audio_path.with_suffix(".part.mov")
+        audio_selector = "a:0" if direct_audio_transcode and config.remove_extra_languages else "a"
+        try:
+            transcode_audio(original_audio_path, temporary_audio_path, config.audio_bitrate, audio_selector)
+            temporary_audio_path.replace(transcoded_audio_path)
+        finally:
+            temporary_audio_path.unlink(missing_ok=True)
+
+        if not config.keep_files and not direct_audio_transcode:
             original_audio_path.unlink(missing_ok=True)
-        return trancoded_audio_path
-    else:
-        if config.transcode_audio and trancoded_audio_path.exists():
-            return trancoded_audio_path
-        return original_audio_path
+        return transcoded_audio_path
+
+    if config.transcode_audio and transcoded_audio_path.exists():
+        return transcoded_audio_path
+    if direct_audio_transcode and config.transcode_audio:
+        raise FileNotFoundError(f"Direct AAC audio artifact not found: {transcoded_audio_path}")
+    return original_audio_path
