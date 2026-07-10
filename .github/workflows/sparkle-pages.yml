@@ -1,59 +1,373 @@
 ---
-name: Disable Sparkle Updates
+name: Manage Sparkle Pages
 
 "on":
+  workflow_call:
+    inputs:
+      operation:
+        description: Deploy a release snapshot
+        required: true
+        type: string
+      release_tag:
+        description: Release tag whose durable appcast asset should be deployed
+        required: true
+        type: string
+      expected_appcast_sha256:
+        description: Optional digest from the release orchestration run
+        required: false
+        type: string
+        default: ""
+      expected_base_release_tag:
+        description: Active snapshot that the release was built from, or bootstrap
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Deploy, restore, or temporarily disable Sparkle updates
+        required: true
+        type: choice
+        default: restore
+        options:
+          - deploy
+          - restore
+          - disable
+      release_tag:
+        description: Required for deploy/restore; ignored for disable
+        required: false
+        type: string
 
 permissions: {}
 
 concurrency:
   group: sparkle-pages
-  cancel-in-progress: false
+  cancel-in-progress: ${{ inputs.operation == 'disable' }}
 
 jobs:
-  build:
-    if: github.ref == 'refs/heads/release'
+  validate:
+    name: Validate feed operation
     runs-on: ubuntu-latest
-    environment: sparkle-release
+    timeout-minutes: 5
     permissions:
       contents: read
-      pages: write
-      id-token: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-      - name: Configure Pages
-        uses: actions/configure-pages@v6
-      - name: Validate appcast XML
-        run: |
-          python scripts/sparkle_appcast.py validate \
-            --feed sparkle-feed/appcast.xml
-          python - <<'PY'
-          import xml.etree.ElementTree as ET
-
-          channel = (
-              ET.parse("sparkle-feed/appcast.xml")
-              .getroot()
-              .find("channel")
-          )
-          if channel is None or channel.findall("item"):
-              raise SystemExit("Emergency feed must be a valid empty appcast")
-          PY
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v5
+      - name: Checkout protected feed tooling
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          path: sparkle-feed
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Validate protected main operation
+        env:
+          EXPECTED_BASE_RELEASE_TAG: ${{ inputs.expected_base_release_tag }}
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Sparkle feed operations must run from protected main." >&2
+            exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]; then
+            echo "Feed tooling checkout does not match github.sha." >&2
+            exit 1
+          fi
+          case "$OPERATION" in
+            deploy|restore)
+              if [ -z "$RELEASE_TAG" ]; then
+                echo "release_tag is required for $OPERATION." >&2
+                exit 1
+              fi
+              python scripts/release.py validate-tag "$RELEASE_TAG"
+              if [ "$OPERATION" = "deploy" ] \
+                && [ -n "$EXPECTED_BASE_RELEASE_TAG" ] \
+                && [ "$EXPECTED_BASE_RELEASE_TAG" != "bootstrap" ]; then
+                python scripts/release.py validate-tag "$EXPECTED_BASE_RELEASE_TAG"
+              fi
+              ;;
+            disable)
+              if [ -n "$RELEASE_TAG" ]; then
+                echo "release_tag must be empty for emergency disable." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unsupported Sparkle feed operation: $OPERATION" >&2
+              exit 1
+              ;;
+          esac
+
+  prepare:
+    name: Prepare validated Pages artifact
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: sparkle-release
+    outputs:
+      appcast_sha256: ${{ steps.feed.outputs.appcast_sha256 }}
+    permissions:
+      contents: read
+      id-token: write
+      pages: write
+    steps:
+      - name: Checkout protected feed tooling
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Prepare release snapshot or empty feed
+        id: feed
+        env:
+          EXPECTED_APPCAST_SHA256: ${{ inputs.expected_appcast_sha256 }}
+          EXPECTED_BASE_RELEASE_TAG: ${{ inputs.expected_base_release_tag }}
+          GH_TOKEN: ${{ github.token }}
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p appcast-site
+
+          fetch_state() {
+            local output="$1"
+            local status
+            local exit_code
+            set +e
+            status=$(curl --location --silent --show-error \
+              --retry 3 --retry-delay 2 --retry-all-errors \
+              --connect-timeout 10 --max-time 45 \
+              --output "$output" --write-out '%{http_code}' \
+              "https://cbusillo.github.io/BD_to_AVP/appcast-state.json?run=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT")
+            exit_code=$?
+            set -e
+            if [ "$exit_code" -ne 0 ]; then
+              rm -f "$output"
+              printf '000\n'
+            else
+              printf '%s\n' "$status"
+            fi
+          }
+
+          if [ "$OPERATION" = "deploy" ]; then
+            CURRENT_STATE_STATUS=$(fetch_state current-appcast-state.json)
+            if [ "$CURRENT_STATE_STATUS" = "200" ]; then
+              if ! jq -e '
+                type == "object"
+                and .schema == 1
+                and (
+                  .status == "disabled"
+                  or (
+                    .status == "enabled"
+                    and (.release_tag | type == "string")
+                    and (.appcast_sha256 | test("^[0-9a-f]{64}$"))
+                  )
+                )
+              ' current-appcast-state.json >/dev/null; then
+                echo "Published Sparkle state is invalid; use restore instead." >&2
+                exit 1
+              fi
+              if [ "$(jq -r .status current-appcast-state.json)" = "disabled" ]; then
+                echo "Sparkle updates are disabled; use restore to re-enable them." >&2
+                exit 1
+              fi
+            elif [ "$CURRENT_STATE_STATUS" != "404" ]; then
+              echo "Unable to verify current Sparkle state; HTTP $CURRENT_STATE_STATUS." >&2
+              exit 1
+            fi
+
+            if [ "$EXPECTED_BASE_RELEASE_TAG" = "bootstrap" ]; then
+              if [ "$CURRENT_STATE_STATUS" != "404" ]; then
+                echo "Sparkle deployment state changed after release preparation." >&2
+                exit 1
+              fi
+            elif [ -n "$EXPECTED_BASE_RELEASE_TAG" ]; then
+              if [ "$CURRENT_STATE_STATUS" != "200" ] \
+                || [ "$(jq -r .release_tag current-appcast-state.json)" \
+                  != "$EXPECTED_BASE_RELEASE_TAG" ]; then
+                echo "Active Sparkle snapshot changed after release preparation." >&2
+                exit 1
+              fi
+            fi
+          fi
+
+          if [ "$OPERATION" = "disable" ]; then
+            cp sparkle-feed/appcast.xml appcast-site/appcast.xml
+            python scripts/sparkle_appcast.py validate-empty \
+              --feed appcast-site/appcast.xml
+            jq -n '{schema: 1, status: "disabled"}' \
+              > appcast-site/appcast-state.json
+          else
+            RELEASE_JSON=$(gh api \
+              "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
+            if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "false" ]; then
+              echo "Only a published release snapshot may be deployed." >&2
+              exit 1
+            fi
+            APPCAST_COUNT=$(jq \
+              '[.assets[] | select(.name == "appcast.xml")] | length' \
+              <<< "$RELEASE_JSON")
+            if [ "$APPCAST_COUNT" != "1" ]; then
+              echo "Release must contain exactly one appcast.xml asset." >&2
+              exit 1
+            fi
+            gh release download "$RELEASE_TAG" \
+              --pattern appcast.xml \
+              --dir appcast-site
+            python scripts/sparkle_appcast.py validate-snapshot \
+              --feed appcast-site/appcast.xml \
+              --short-version "${RELEASE_TAG#v}"
+            ACTUAL_SHA256=$(sha256sum appcast-site/appcast.xml | awk '{print $1}')
+            if [ -n "$EXPECTED_APPCAST_SHA256" ]; then
+              if [ "$ACTUAL_SHA256" != "$EXPECTED_APPCAST_SHA256" ]; then
+                echo "Release appcast digest differs from the orchestrated snapshot." >&2
+                exit 1
+              fi
+            fi
+            jq -n --arg release_tag "$RELEASE_TAG" \
+              --arg appcast_sha256 "$ACTUAL_SHA256" \
+              '{
+                schema: 1,
+                status: "enabled",
+                release_tag: $release_tag,
+                appcast_sha256: $appcast_sha256
+              }' > appcast-site/appcast-state.json
+          fi
+          APPCAST_SHA256=$(sha256sum appcast-site/appcast.xml | awk '{print $1}')
+          echo "appcast_sha256=$APPCAST_SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        with:
+          path: appcast-site
 
   deploy:
-    needs: build
+    name: Deploy Sparkle feed
+    needs: prepare
     runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      id-token: write
+      pages: write
     steps:
+      - name: Refuse a stale or disabled release deployment
+        if: inputs.operation == 'deploy'
+        env:
+          EXPECTED_BASE_RELEASE_TAG: ${{ inputs.expected_base_release_tag }}
+        run: |
+          set -euo pipefail
+          set +e
+          STATE_STATUS=$(curl --location --silent --show-error \
+            --retry 3 --retry-delay 2 --retry-all-errors \
+            --connect-timeout 10 --max-time 45 \
+            --output current-appcast-state.json --write-out '%{http_code}' \
+            "https://cbusillo.github.io/BD_to_AVP/appcast-state.json?deploy=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT")
+          CURL_EXIT=$?
+          set -e
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            STATE_STATUS=000
+          fi
+          if [ "$STATE_STATUS" = "200" ] && ! jq -e '
+            type == "object"
+            and .schema == 1
+            and (
+              .status == "disabled"
+              or (
+                .status == "enabled"
+                and (.release_tag | type == "string")
+                and (.appcast_sha256 | test("^[0-9a-f]{64}$"))
+              )
+            )
+          ' current-appcast-state.json >/dev/null; then
+            echo "Published Sparkle state is invalid; refusing deployment." >&2
+            exit 1
+          fi
+          if [ "$STATE_STATUS" = "200" ] \
+            && [ "$(jq -r .status current-appcast-state.json)" = "disabled" ]; then
+            echo "Sparkle updates are disabled; use restore to re-enable them." >&2
+            exit 1
+          fi
+          if [ "$EXPECTED_BASE_RELEASE_TAG" = "bootstrap" ]; then
+            if [ "$STATE_STATUS" != "404" ]; then
+              echo "Sparkle deployment state changed before Pages deployment." >&2
+              exit 1
+            fi
+          elif [ -n "$EXPECTED_BASE_RELEASE_TAG" ]; then
+            if [ "$STATE_STATUS" != "200" ] \
+              || [ "$(jq -r .status current-appcast-state.json)" != "enabled" ] \
+              || [ "$(jq -r .release_tag current-appcast-state.json)" \
+                != "$EXPECTED_BASE_RELEASE_TAG" ]; then
+              echo "Active Sparkle snapshot changed before Pages deployment." >&2
+              exit 1
+            fi
+          elif [ "$STATE_STATUS" != "200" ] && [ "$STATE_STATUS" != "404" ]; then
+            echo "Unable to verify current Sparkle state; HTTP $STATE_STATUS." >&2
+            exit 1
+          fi
+
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
+
+      - name: Verify the live Pages state
+        env:
+          EXPECTED_APPCAST_SHA256: ${{ needs.prepare.outputs.appcast_sha256 }}
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          for attempt in {1..24}; do
+            CACHE_KEY="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$attempt"
+            set +e
+            APPCAST_STATUS=$(curl --location --silent --show-error \
+              --connect-timeout 10 --max-time 30 \
+              --output live-appcast.xml --write-out '%{http_code}' \
+              "https://cbusillo.github.io/BD_to_AVP/appcast.xml?verify=$CACHE_KEY")
+            APPCAST_EXIT=$?
+            STATE_STATUS=$(curl --location --silent --show-error \
+              --connect-timeout 10 --max-time 30 \
+              --output live-appcast-state.json --write-out '%{http_code}' \
+              "https://cbusillo.github.io/BD_to_AVP/appcast-state.json?verify=$CACHE_KEY")
+            STATE_EXIT=$?
+            set -e
+            if [ "$APPCAST_EXIT" -eq 0 ] && [ "$STATE_EXIT" -eq 0 ] \
+              && [ "$APPCAST_STATUS" = "200" ] && [ "$STATE_STATUS" = "200" ] \
+              && [ "$(sha256sum live-appcast.xml | awk '{print $1}')" \
+                = "$EXPECTED_APPCAST_SHA256" ]; then
+              if [ "$OPERATION" = "disable" ]; then
+                if jq -e '.schema == 1 and .status == "disabled"' \
+                  live-appcast-state.json >/dev/null; then
+                  exit 0
+                fi
+              elif jq -e --arg tag "$RELEASE_TAG" \
+                --arg sha "$EXPECTED_APPCAST_SHA256" '
+                  .schema == 1
+                  and .status == "enabled"
+                  and .release_tag == $tag
+                  and .appcast_sha256 == $sha
+                ' live-appcast-state.json >/dev/null; then
+                exit 0
+              fi
+            fi
+            if [ "$attempt" -eq 24 ]; then
+              echo "GitHub Pages did not serve the expected Sparkle state." >&2
+              exit 1
+            fi
+            sleep 5
+          done

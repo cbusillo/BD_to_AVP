@@ -36,10 +36,12 @@ GitHub Releases link and never initialize Sparkle.
 
 Briefcase writes the direct-distribution metadata and repository build counter,
 and the repo-owned signing extension adds nested `.xpc` bundles to Briefcase's
-inside-out signing pass. The release workflow validates the final notarized DMG,
-signs it with the protected environment key, and deploys a validated full-update
-appcast. The live feed remains empty until the first enabled release is
-published.
+inside-out signing pass. The manual main-only release workflow validates the
+final notarized DMG, creates a draft release, signs it with the protected
+environment key, attaches a cumulative appcast snapshot, re-downloads and
+verifies every asset, publishes the draft, and deploys that durable snapshot.
+The live feed remains empty until the first enabled release is published. See
+[release-process.md](release-process.md) for the operator sequence.
 
 ## Implementation Evidence
 
@@ -124,6 +126,15 @@ independently of the human version. If #163 upgrades Briefcase instead, the
 generated app must prove that the replacement configuration writes the expected
 `CFBundleVersion` before this direct override can be removed.
 
+Briefcase 0.4.3 inherits the human version from `[project].version`; the
+duplicate `[tool.briefcase].version` key is intentionally absent. Full RC and
+Stable versions are committed before release. Prepare both the human version,
+the monotonic build counter, and `uv.lock` with:
+
+```sh
+uv run python scripts/release.py prepare --version <version> --build <build>
+```
+
 Because the v0.4.3 template emits its default before custom `info` entries,
 implementation issue #163 must inspect the generated plist with
 `plutil -extract CFBundleVersion raw <Info.plist>` and fail unless the resolved
@@ -160,25 +171,32 @@ disable procedure are maintained in
 Only the public key is embedded in the app. Private key material must never be
 committed, printed, uploaded as an artifact, or copied into issue/PR text.
 
-The appcast publication job must:
+The appcast publication path must:
 
-1. wait until the matching GitHub Release DMG is downloadable;
-2. verify the pinned Sparkle tooling archive;
-3. compute the DMG's EdDSA signature with `sign_update --ed-key-file -`, without
-   modifying the DMG;
-4. add only a full-DMG enclosure and never generate delta elements;
-5. set each new enclosure to its exact tag-qualified GitHub Release asset URL;
-6. validate the appcast version, URL, length, EdDSA signature, and absence of
-   delta enclosures; and
-7. deploy the feed atomically to GitHub Pages.
+1. create an unpublished draft release targeting the validated `main` SHA;
+2. re-download the matching draft DMG and prove its exact name, size, SHA-256,
+   notarization, Gatekeeper assessment, and bundle metadata;
+3. start from the newest published `appcast.xml` release asset, or the committed
+   empty feed before the first snapshot;
+4. verify the pinned Sparkle tooling archive;
+5. compute and verify the DMG's EdDSA signature with
+   `sign_update --ed-key-file -`, without modifying the DMG;
+6. add only a full-DMG enclosure and never generate delta elements;
+7. set each new enclosure to its exact tag-qualified GitHub Release asset URL;
+8. attach the cumulative `appcast.xml` snapshot to the draft release;
+9. re-download and verify the DMG, checksum, and appcast assets; and
+10. publish the draft before deploying its durable appcast asset atomically to
+    GitHub Pages.
 
 Release publication rejects an existing tag or short version, disables release
 asset overwrite, and verifies that the downloaded GitHub Release DMG has the
 same name, size, and SHA-256 digest as the locally notarized artifact before it
 is signed into the appcast.
 
-If appcast publication fails, the GitHub Release remains available for manual
-installation and the existing feed remains unchanged.
+If appcast construction or verification fails, the GitHub Release remains an
+unpublished draft and the existing feed remains unchanged. If Pages deployment
+fails after publication, the durable release snapshot can be deployed again
+without rebuilding or retagging.
 
 ## Stable and Prerelease Policy
 
@@ -230,7 +248,13 @@ removed from application and Briefcase requirements.
 
 - An unreachable feed or invalid EdDSA signature must fail closed without
   replacing the installed app.
-- A bad feed publication is recovered by restoring the previous Pages content.
+- A bad feed publication is recovered by redeploying the previous release's
+  durable `appcast.xml` snapshot.
+- Emergency disable deploys the committed empty feed without deleting or
+  replacing any cumulative release snapshot. The companion
+  `appcast-state.json` marker keeps disable sticky: release and normal deploy
+  paths refuse to re-enable updates until an explicit restore selects a durable
+  snapshot.
 - A bad application release is fixed by publishing a newer build number;
   automatic downgrade is not part of the initial design.
 - Previous signed DMGs remain available for manual recovery.

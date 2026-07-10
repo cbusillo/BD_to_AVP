@@ -96,6 +96,43 @@ class SparkleAppcastTests(unittest.TestCase):
             with self.assertRaisesRegex(sparkle_appcast.AppcastError, "already published"):
                 sparkle_appcast.check_new_release(stable_feed, "145", "0.2.143")
 
+    def test_rejects_semantically_older_release_with_new_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            empty_feed = root / "empty.xml"
+            stable_feed = root / "stable.xml"
+            make_empty_feed(empty_feed)
+            sparkle_appcast.append_item(empty_feed, stable_feed, item("144", "0.2.143", None))
+
+            with self.assertRaisesRegex(sparkle_appcast.AppcastError, "newer than published version"):
+                sparkle_appcast.check_new_release(stable_feed, "145", "0.2.143rc4")
+
+    def test_accepts_rc_to_rc_to_stable_sequence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            empty_feed = root / "empty.xml"
+            rc1_feed = root / "rc1.xml"
+            rc2_feed = root / "rc2.xml"
+            stable_feed = root / "stable.xml"
+            make_empty_feed(empty_feed)
+
+            sparkle_appcast.append_item(empty_feed, rc1_feed, item("144", "0.2.143rc4", "rc"))
+            sparkle_appcast.append_item(rc1_feed, rc2_feed, item("145", "0.2.143rc5", "rc"))
+            sparkle_appcast.append_item(rc2_feed, stable_feed, item("146", "0.2.143", None))
+
+            sparkle_appcast.validate_appcast(stable_feed)
+
+    def test_rejects_noncanonical_short_versions(self) -> None:
+        for short_version in ("01.2.3", "1.02.3", "1.2.03", "1.2.3rc01"):
+            with (
+                self.subTest(short_version=short_version),
+                self.assertRaisesRegex(
+                    sparkle_appcast.AppcastError,
+                    "Invalid Sparkle short version",
+                ),
+            ):
+                sparkle_appcast._release_channel(short_version)
+
     def test_rejects_noncanonical_build_numbers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             feed = Path(temp_dir) / "appcast.xml"
@@ -206,6 +243,62 @@ class SparkleAppcastTests(unittest.TestCase):
 
             with self.assertRaisesRegex(sparkle_appcast.AppcastError, "64-byte"):
                 sparkle_appcast.append_item(feed, Path(temp_dir) / "output.xml", invalid_item)
+
+    def test_verifies_release_item_against_exact_asset(self) -> None:
+        expected = item("144", "0.2.143", None)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            empty_feed = root / "empty.xml"
+            feed = root / "appcast.xml"
+            make_empty_feed(empty_feed)
+            sparkle_appcast.append_item(empty_feed, feed, expected)
+
+            sparkle_appcast.verify_release_item(
+                feed,
+                build_version=expected.build_version,
+                short_version=expected.short_version,
+                download_url=expected.download_url,
+                length=expected.length,
+            )
+
+    def test_rejects_release_item_asset_mismatch(self) -> None:
+        expected = item("144", "0.2.143", None)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            empty_feed = root / "empty.xml"
+            feed = root / "appcast.xml"
+            make_empty_feed(empty_feed)
+            sparkle_appcast.append_item(empty_feed, feed, expected)
+
+            with self.assertRaisesRegex(sparkle_appcast.AppcastError, "length"):
+                sparkle_appcast.verify_release_item(
+                    feed,
+                    build_version=expected.build_version,
+                    short_version=expected.short_version,
+                    download_url=expected.download_url,
+                    length=expected.length + 1,
+                )
+
+    def test_validates_empty_emergency_feed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            feed = Path(temp_dir) / "appcast.xml"
+            make_empty_feed(feed)
+
+            sparkle_appcast.validate_empty_appcast(feed)
+
+    def test_snapshot_requires_matching_newest_release(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            empty_feed = root / "empty.xml"
+            stable_feed = root / "stable.xml"
+            rc_feed = root / "rc.xml"
+            make_empty_feed(empty_feed)
+            sparkle_appcast.append_item(empty_feed, stable_feed, item("144", "0.2.143", None))
+            sparkle_appcast.append_item(stable_feed, rc_feed, item("145", "0.2.144rc1", "rc"))
+
+            sparkle_appcast.validate_release_snapshot(rc_feed, "0.2.144rc1")
+            with self.assertRaisesRegex(sparkle_appcast.AppcastError, "must start"):
+                sparkle_appcast.validate_release_snapshot(rc_feed, "0.2.143")
 
 
 if __name__ == "__main__":

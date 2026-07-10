@@ -8,29 +8,39 @@ name: CI
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
   validate:
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - name: Check out repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
       - name: Set up uv
         # Trusted toolchain publisher for uv; see CodeQL alert triage from 2026-07-07.
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --all-groups --python 3.12
+        run: uv sync --locked --all-groups --python 3.12
+
+      - name: Validate committed release metadata
+        run: uv run python scripts/release.py validate
 
       - name: Check formatting
         run: uv run ruff format --check .

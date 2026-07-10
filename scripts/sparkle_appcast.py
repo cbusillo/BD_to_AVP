@@ -18,7 +18,12 @@ SPARKLE_NAMESPACE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 DC_NAMESPACE = "http://purl.org/dc/elements/1.1/"
 REPOSITORY_PATH = "/cbusillo/BD_to_AVP"
 SPARKLE = f"{{{SPARKLE_NAMESPACE}}}"
-SHORT_VERSION_PATTERN = re.compile(r"^[0-9]+(?:\.[0-9]+){2}(?:rc[0-9]+)?$")
+SHORT_VERSION_PATTERN = re.compile(
+    r"^(?P<major>0|[1-9][0-9]*)\."
+    r"(?P<minor>0|[1-9][0-9]*)\."
+    r"(?P<patch>0|[1-9][0-9]*)"
+    r"(?:rc(?P<rc>0|[1-9][0-9]*))?$"
+)
 ET.register_namespace("sparkle", SPARKLE_NAMESPACE)
 ET.register_namespace("dc", DC_NAMESPACE)
 
@@ -72,10 +77,23 @@ def _build_number(item: ET.Element) -> int:
     return _parse_build_number(_text(item, f"{SPARKLE}version"), "sparkle:version")
 
 
-def _release_channel(short_version: str) -> str | None:
-    if SHORT_VERSION_PATTERN.fullmatch(short_version) is None:
+def _release_order(short_version: str) -> tuple[int, int, int, int, int]:
+    match = SHORT_VERSION_PATTERN.fullmatch(short_version)
+    if match is None:
         raise AppcastError(f"Invalid Sparkle short version: {short_version!r}")
-    return "rc" if re.search(r"rc[0-9]+$", short_version, flags=re.IGNORECASE) else None
+    rc = int(match.group("rc")) if match.group("rc") is not None else None
+    return (
+        int(match.group("major")),
+        int(match.group("minor")),
+        int(match.group("patch")),
+        0 if rc is not None else 1,
+        rc or 0,
+    )
+
+
+def _release_channel(short_version: str) -> str | None:
+    _release_order(short_version)
+    return "rc" if "rc" in short_version else None
 
 
 def maximum_build_version(channel: ET.Element) -> int | None:
@@ -94,10 +112,17 @@ def check_new_build(feed_path: Path, build_version: str) -> None:
 
 def check_new_release(feed_path: Path, build_version: str, short_version: str) -> None:
     check_new_build(feed_path, build_version)
-    _release_channel(short_version)
+    candidate_order = _release_order(short_version)
     _, channel = load_appcast(feed_path)
-    if any(_text(item, f"{SPARKLE}shortVersionString") == short_version for item in channel.findall("item")):
+    items = channel.findall("item")
+    if any(_text(item, f"{SPARKLE}shortVersionString") == short_version for item in items):
         raise AppcastError(f"Sparkle short version is already published: {short_version}")
+    if items:
+        newest_short_version = _text(items[0], f"{SPARKLE}shortVersionString")
+        if candidate_order <= _release_order(newest_short_version):
+            raise AppcastError(
+                f"Candidate version {short_version} must be newer than published version {newest_short_version}."
+            )
 
 
 def _validate_https_url(value: str, label: str) -> None:
@@ -146,11 +171,13 @@ def validate_appcast_channel(channel: ET.Element) -> None:
         raise AppcastError("Delta updates are not allowed in the Sparkle appcast.")
 
     build_versions: list[int] = []
+    release_versions: list[tuple[int, int, int, int, int]] = []
     short_versions: set[str] = set()
     download_urls: set[str] = set()
     for item in channel.findall("item"):
         build_version = _build_number(item)
         short_version = _text(item, f"{SPARKLE}shortVersionString")
+        release_version = _release_order(short_version)
         expected_channel = _release_channel(short_version)
         item_channel = _text(item, f"{SPARKLE}channel") or None
         if item_channel not in {None, "rc"}:
@@ -195,16 +222,60 @@ def validate_appcast_channel(channel: ET.Element) -> None:
         if download_url in download_urls:
             raise AppcastError(f"Duplicate Sparkle download URL: {download_url}")
         build_versions.append(build_version)
+        release_versions.append(release_version)
         short_versions.add(short_version)
         download_urls.add(download_url)
 
     if build_versions != sorted(build_versions, reverse=True):
         raise AppcastError("Appcast items must be ordered from newest to oldest build version.")
+    if release_versions != sorted(release_versions, reverse=True):
+        raise AppcastError("Appcast items must be ordered from newest to oldest release version.")
 
 
 def validate_appcast(path: Path) -> None:
     _, channel = load_appcast(path)
     validate_appcast_channel(channel)
+
+
+def validate_empty_appcast(path: Path) -> None:
+    validate_appcast(path)
+    _, channel = load_appcast(path)
+    if channel.findall("item"):
+        raise AppcastError("Emergency feed must be a valid empty appcast.")
+
+
+def validate_release_snapshot(path: Path, short_version: str) -> None:
+    validate_appcast(path)
+    _release_channel(short_version)
+    _, channel = load_appcast(path)
+    items = channel.findall("item")
+    if not items or _text(items[0], f"{SPARKLE}shortVersionString") != short_version:
+        raise AppcastError(f"Appcast snapshot must start with release {short_version}.")
+
+
+def verify_release_item(
+    feed_path: Path,
+    *,
+    build_version: str,
+    short_version: str,
+    download_url: str,
+    length: int,
+) -> None:
+    validate_appcast(feed_path)
+    _, channel = load_appcast(feed_path)
+    matches = [item for item in channel.findall("item") if _text(item, f"{SPARKLE}shortVersionString") == short_version]
+    if len(matches) != 1:
+        raise AppcastError(f"Expected exactly one appcast item for {short_version}; found {len(matches)}.")
+    item = matches[0]
+    if _text(item, f"{SPARKLE}version") != build_version:
+        raise AppcastError(f"Appcast build for {short_version} does not match {build_version}.")
+    enclosure = item.find("enclosure")
+    if enclosure is None:
+        raise AppcastError(f"Appcast item for {short_version} is missing its enclosure.")
+    if enclosure.get("url") != download_url:
+        raise AppcastError(f"Appcast enclosure URL for {short_version} does not match the release asset.")
+    if enclosure.get("length") != str(length):
+        raise AppcastError(f"Appcast enclosure length for {short_version} does not match the release asset.")
 
 
 def append_item(feed_path: Path, output_path: Path, item: AppcastItem) -> None:
@@ -281,6 +352,16 @@ def main() -> int:
     validate = commands.add_parser("validate", help="Validate all appcast entries.")
     validate.add_argument("--feed", type=Path, required=True)
 
+    validate_empty = commands.add_parser("validate-empty", help="Validate an emergency empty appcast.")
+    validate_empty.add_argument("--feed", type=Path, required=True)
+
+    validate_snapshot = commands.add_parser(
+        "validate-snapshot",
+        help="Validate a cumulative snapshot whose newest item matches a release.",
+    )
+    validate_snapshot.add_argument("--feed", type=Path, required=True)
+    validate_snapshot.add_argument("--short-version", required=True)
+
     check = commands.add_parser("check-build", help="Require a build number newer than the appcast.")
     check.add_argument("--feed", type=Path, required=True)
     check.add_argument("--build-version", required=True)
@@ -290,13 +371,35 @@ def main() -> int:
     check_release.add_argument("--build-version", required=True)
     check_release.add_argument("--short-version", required=True)
 
+    verify_release = commands.add_parser(
+        "verify-release",
+        help="Verify one release item against an exact GitHub Release asset.",
+    )
+    verify_release.add_argument("--feed", type=Path, required=True)
+    verify_release.add_argument("--build-version", required=True)
+    verify_release.add_argument("--short-version", required=True)
+    verify_release.add_argument("--download-url", required=True)
+    verify_release.add_argument("--length", type=int, required=True)
+
     args = parser.parse_args()
     if args.command == "validate":
         validate_appcast(args.feed)
+    elif args.command == "validate-empty":
+        validate_empty_appcast(args.feed)
+    elif args.command == "validate-snapshot":
+        validate_release_snapshot(args.feed, args.short_version)
     elif args.command == "check-build":
         check_new_build(args.feed, args.build_version)
     elif args.command == "check-release":
         check_new_release(args.feed, args.build_version, args.short_version)
+    elif args.command == "verify-release":
+        verify_release_item(
+            args.feed,
+            build_version=args.build_version,
+            short_version=args.short_version,
+            download_url=args.download_url,
+            length=args.length,
+        )
     else:
         published_at = datetime.fromisoformat(args.published_at) if args.published_at else datetime.now(timezone.utc)
         if published_at.tzinfo is None:

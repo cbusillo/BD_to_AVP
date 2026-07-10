@@ -19,28 +19,16 @@
       "blocksForcePushes": true,
       "blocksDeletion": true,
       "requiresConversationResolution": true
-    },
-    "release": {
-      "system": "ruleset",
-      "rulesetName": "protect-release",
-      "target": "refs/heads/release",
-      "requiresPullRequest": true,
-      "allowedMergeMethods": ["merge"],
-      "requiredStatusChecks": ["validate"],
-      "requiredApprovals": 0,
-      "blocksForcePushes": true,
-      "blocksDeletion": true,
-      "requiresConversationResolution": true
     }
   },
   "docs": {
     "overview": "README.md",
     "packageManifest": "pyproject.toml",
     "lockfile": "uv.lock",
+    "releaseProcess": "docs/release-process.md",
     "releaseWorkflows": [
       ".github/workflows/briefcase.yml",
-      ".github/workflows/sparkle-pages.yml",
-      ".github/workflows/publish-to-pypi.yml"
+      ".github/workflows/sparkle-pages.yml"
     ]
   },
   "qualityGate": {
@@ -84,10 +72,9 @@
   "importantWorkflows": [
     "CI",
     "CodeQL",
-    "Package with Briefcase and Create Release",
-    "Disable Sparkle Updates",
-    "Update FFmpeg Vendor Pins",
-    "Publish Python distribution to PyPI"
+    "Release from protected main",
+    "Manage Sparkle Pages",
+    "Update FFmpeg Vendor Pins"
   ],
   "requiredStatusChecks": ["validate", "Analyze (actions)", "Analyze (python)"],
   "qaLabels": [],
