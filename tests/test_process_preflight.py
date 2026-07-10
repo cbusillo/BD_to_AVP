@@ -1,11 +1,13 @@
 import tempfile
+import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from bd_to_avp import preflight
 from bd_to_avp.modules import process
 from bd_to_avp.modules.config import is_direct_pipeline_source_reused, Stage
+from bd_to_avp.modules.disc import MKVCreationError
 from bd_to_avp.modules.file import (
     move_file_to_output_root_folder,
     prepare_output_folder_for_source,
@@ -25,6 +27,98 @@ class ProcessPreflightTests(unittest.TestCase):
                 self.assertRaisesRegex(preflight.DependencyPreflightError, "missing tool"),
             ):
                 process.process(Stage.CREATE_MKV)
+
+    def test_batch_processing_stops_after_cancellation(self) -> None:
+        cancellation_event = threading.Event()
+        processed_sources: list[Path | None] = []
+
+        def cancel_after_first_source(_cancellation_event: threading.Event | None = None) -> None:
+            processed_sources.append(process.config.source_path)
+            cancellation_event.set()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_folder = Path(temp_dir)
+            (source_folder / "first.m2ts").touch()
+            (source_folder / "second.m2ts").touch()
+
+            with (
+                patch.object(process.config, "source_folder_path", source_folder),
+                patch.object(process, "process_each", side_effect=cancel_after_first_source),
+                self.assertRaises(process.ProcessingCancelled),
+            ):
+                process.process(Stage.CREATE_MKV, cancellation_event)
+
+        self.assertEqual(len(processed_sources), 1)
+
+    def test_batch_resume_stage_only_applies_to_failed_source(self) -> None:
+        processed_sources: list[tuple[Path | None, Stage]] = []
+
+        def record_source(_cancellation_event: threading.Event | None = None) -> None:
+            processed_sources.append((process.config.source_path, process.config.start_stage))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_folder = Path(temp_dir)
+            first_source = source_folder / "first.m2ts"
+            failed_source = source_folder / "failed.m2ts"
+            next_source = source_folder / "next.m2ts"
+            for source in (first_source, failed_source, next_source):
+                source.touch()
+            batch_folder = Mock()
+            batch_folder.rglob.return_value = [next_source, failed_source, first_source]
+            batch_sources = (first_source, failed_source, next_source)
+
+            with (
+                patch.object(process.config, "source_folder_path", batch_folder),
+                patch.object(process, "process_each", side_effect=record_source),
+            ):
+                process.process(
+                    Stage.EXTRACT_MVC_AND_AUDIO,
+                    resume_source_path=failed_source,
+                    batch_start_stage=Stage.CREATE_MKV,
+                    batch_sources=batch_sources,
+                )
+
+        self.assertEqual(
+            processed_sources,
+            [
+                (failed_source, Stage.EXTRACT_MVC_AND_AUDIO),
+                (next_source, Stage.CREATE_MKV),
+            ],
+        )
+
+    def test_batch_source_manifest_is_sorted_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_folder = Path(temp_dir)
+            first_source = source_folder / "a.m2ts"
+            second_source = source_folder / "b.mkv"
+            third_source = source_folder / "c.iso"
+            for source in (first_source, second_source, third_source):
+                source.touch()
+            batch_folder = Mock()
+            batch_folder.rglob.return_value = [third_source, first_source, second_source]
+
+            batch_sources = process.find_batch_sources(batch_folder)
+
+        self.assertEqual(batch_sources, (first_source, second_source, third_source))
+
+    def test_batch_error_records_failed_source_for_continuation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "failed.m2ts"
+            source.touch()
+            batch_folder = Mock()
+            batch_folder.rglob.return_value = [source]
+            error = MKVCreationError("failed")
+
+            with (
+                patch.object(process.config, "source_folder_path", batch_folder),
+                patch.object(process, "process_each", side_effect=error),
+                self.assertRaises(process.BatchProcessingError) as raised,
+            ):
+                process.process(Stage.CREATE_MKV)
+
+        self.assertEqual(raised.exception.source_path, source)
+        self.assertIs(raised.exception.error, error)
+        self.assertEqual(raised.exception.batch_sources, (source,))
 
     def test_direct_pipeline_reused_file_source_is_not_cleanup_owned(self) -> None:
         with (

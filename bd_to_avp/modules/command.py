@@ -5,12 +5,23 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, ClassVar
+from typing import Any, Callable, ClassVar, cast
 
 import ffmpeg
 
 from bd_to_avp.modules.config import config
 from bd_to_avp.modules.util import formatted_time_elapsed
+
+
+SpinnerUpdate = Callable[[str], object]
+
+
+def get_spinner_update_func() -> SpinnerUpdate | None:
+    stdout = cast(Any, sys.stdout)
+    if not hasattr(stdout, "current_writer"):
+        return None
+    writer = stdout.current_writer()
+    return writer if callable(writer) else None
 
 
 class Spinner:
@@ -24,13 +35,17 @@ class Spinner:
         self.current_symbol = 0
         self.start_time = datetime.now()
 
-    def _update_spinner(self) -> None:
+    def _update_spinner(self, update_func: SpinnerUpdate | None = None) -> None:
         if not self.stop_spinner_flag:
-            sys.stdout.write(f"\rRunning {self.command_name} {self.symbols[self.current_symbol]}")
-            sys.stdout.flush()
+            message = f"\rRunning {self.command_name} {self.symbols[self.current_symbol]}"
+            if update_func:
+                update_func(message)
+            else:
+                sys.stdout.write(message)
+                sys.stdout.flush()
             self.current_symbol = (self.current_symbol + 1) % len(self.symbols)
 
-    def start(self, update_func: Callable[[str], None] | None = None) -> None:
+    def start(self, update_func: SpinnerUpdate | None = None) -> None:
         self.stop_spinner_flag = False
         Spinner._stop_all_spinners = False
         if update_func:
@@ -39,10 +54,10 @@ class Spinner:
             print(f"Running {self.command_name}", end="", flush=True)
 
         while not self.stop_spinner_flag and not Spinner._stop_all_spinners:
-            self._update_spinner()
+            self._update_spinner(update_func)
             time.sleep(self.update_interval)
 
-    def stop(self, update_func: Callable[[str], None] | None = None) -> None:
+    def stop(self, update_func: SpinnerUpdate | None = None) -> None:
         self.stop_spinner_flag = True
         time_elapsed_formatted = formatted_time_elapsed(self.start_time)
         message = f"\rFinished {self.command_name} in {time_elapsed_formatted}"
@@ -84,7 +99,8 @@ def run_command(commands: list[Any], command_name: str = "", env: dict[str, str]
     env = env if env else os.environ.copy()
     output_lines = []
     spinner = Spinner(command_name)
-    spinner_thread = threading.Thread(target=spinner.start)
+    spinner_update_func = get_spinner_update_func()
+    spinner_thread = threading.Thread(target=spinner.start, args=(spinner_update_func,))
     spinner_thread.start()
     process = None
     try:
@@ -113,7 +129,7 @@ def run_command(commands: list[Any], command_name: str = "", env: dict[str, str]
         raise
 
     finally:
-        spinner.stop()
+        spinner.stop(spinner_update_func)
         spinner_thread.join()
     return "".join(output_lines)
 
@@ -128,7 +144,8 @@ def run_ffmpeg_print_errors(stream_spec: Any, message: str, quiet: bool = True, 
 
         print(f"Running command:\n{output_commands_str}")
     spinner = Spinner(message)
-    spinner_thread = threading.Thread(target=spinner.start)
+    spinner_update_func = get_spinner_update_func()
+    spinner_thread = threading.Thread(target=spinner.start, args=(spinner_update_func,))
     spinner_thread.start()
     try:
         ffmpeg.run(stream_spec, cmd=config.FFMPEG_PATH.as_posix(), **kwargs)
@@ -138,7 +155,7 @@ def run_ffmpeg_print_errors(stream_spec: Any, message: str, quiet: bool = True, 
         print("STDERR:", e.stderr.decode("utf-8") if e.stderr else "")
         raise
     finally:
-        spinner.stop()
+        spinner.stop(spinner_update_func)
         spinner_thread.join()
 
 

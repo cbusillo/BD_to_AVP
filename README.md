@@ -100,6 +100,13 @@ bd-to-avp
 
 As long as you provide no arguments, the GUI will open.
 
+The GUI locks configuration load/save actions while a job is active so each
+run uses the settings captured at startup. Choosing **Stop Processing**
+requests a cooperative stop and keeps the button in a stopping state until the
+worker exits. For source-folder jobs, accepted MKV or subtitle error
+continuations resume the failed source and then continue through the original
+batch queue.
+
 ## Terminal Usage
 
 Navigate to the tool's directory in your terminal and execute the command with the required and optional parameters:
