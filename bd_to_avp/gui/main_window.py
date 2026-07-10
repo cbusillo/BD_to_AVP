@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Callable, ClassVar
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QFont, QTextCursor
+from PySide6.QtGui import QAction, QCloseEvent, QFont, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QGroupBox,
@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from babelfish import Language
 
 from bd_to_avp.gui.dialog import AboutDialog
-from bd_to_avp.gui.processing import ProcessingThread
+from bd_to_avp.gui.processing import ProcessingController, ProcessingRequest
 from bd_to_avp.gui.widget import FileFolderPicker, LabeledComboBox, LabeledLineEdit, LabeledSpinBox
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
@@ -39,6 +39,7 @@ from bd_to_avp.modules.command import Spinner
 class MainWindow(QMainWindow):
     START_PROCESSING_TEXT = "Start Processing (⌘+P)"
     STOP_PROCESSING_TEXT = "Stop Processing (⌘+P)"
+    STOPPING_PROCESSING_TEXT = "Stopping Processing…"
     MAIN_WIDGET_MIN_WIDTH = 300
     SPLITTER_INITIAL_SIZES: ClassVar[list[int]] = [400, 400]
     SPLITTER_MINIMUM_SIZE = 300
@@ -50,14 +51,15 @@ class MainWindow(QMainWindow):
         self.setup_window()
         self.create_main_layout()
 
-        self.processing_thread = ProcessingThread(parent=self)
-        self.processing_thread.signals.progress_updated.connect(self.update_processing_output)
-        self.processing_thread.error_occurred.connect(self.handle_processing_error)
-        self.processing_thread.mkv_creation_error.connect(self.handle_mkv_creation_error)
-        self.processing_thread.srt_creation_error.connect(self.handle_srt_creation_error)
-        self.processing_thread.file_exists_error.connect(self.handle_file_exists_error)
-        self.processing_thread.process_completed.connect(self.finished_processing)
-        self.processing_thread.process_failed.connect(self.reset_processing_button)
+        self.processing_controller = ProcessingController(parent=self)
+        self.processing_controller.progress_updated.connect(self.update_processing_output)
+        self.processing_controller.error_occurred.connect(self.handle_processing_error)
+        self.processing_controller.mkv_creation_error.connect(self.handle_mkv_creation_error)
+        self.processing_controller.srt_creation_error.connect(self.handle_srt_creation_error)
+        self.processing_controller.file_exists_error.connect(self.handle_file_exists_error)
+        self.processing_controller.process_completed.connect(self.finished_processing)
+        self.processing_controller.process_cancelled.connect(self.processing_cancelled)
+        self.processing_controller.process_failed.connect(self.handle_processing_failure)
 
     def setup_window(self) -> None:
         app = QApplication.instance()
@@ -279,15 +281,14 @@ class MainWindow(QMainWindow):
             if sound_path.exists():
                 os.system(f"afplay /System/Library/Sounds/{sound_name}.aiff")
 
-    def handle_processing_error(self, error: Exception) -> None:
+    def handle_processing_error(self, _request: ProcessingRequest, error: Exception) -> None:
         self.notify_user_with_sound("Sosumi")
         QMessageBox.warning(self, "", "Failure in processing.\n\n" + str(error))
         time_elapsed = formatted_time_elapsed(self.process_start_time)
         self.update_processing_output(str(error) + f"\n❌ Processing failed in {time_elapsed} ❌")
-        self.stop_processing()
-        self.process_button.setText(self.START_PROCESSING_TEXT)
+        self.reset_processing_button()
 
-    def handle_mkv_creation_error(self, error: MKVCreationError) -> None:
+    def handle_mkv_creation_error(self, request: ProcessingRequest, error: MKVCreationError) -> None:
         self.notify_user_with_sound("Sosumi")
         result = QMessageBox.critical(
             self,
@@ -297,14 +298,12 @@ class MainWindow(QMainWindow):
         )
 
         if result == QMessageBox.StandardButton.Yes:
-            config.continue_on_error = True
-            config.start_stage = Stage.EXTRACT_MVC_AND_AUDIO
-            self.start_processing(is_continuing=True)
+            self.start_processing(is_continuing=True, request=request.continue_after_mkv_error())
             return
 
-        self.handle_processing_error(error)
+        self.handle_processing_error(request, error)
 
-    def handle_file_exists_error(self, error: FileExistsError) -> None:
+    def handle_file_exists_error(self, request: ProcessingRequest, error: FileExistsError) -> None:
         self.notify_user_with_sound("Sosumi")
         result = QMessageBox.critical(
             self,
@@ -314,13 +313,12 @@ class MainWindow(QMainWindow):
         )
 
         if result == QMessageBox.StandardButton.Yes:
-            config.overwrite = True
-            self.start_processing(is_continuing=True)
+            self.start_processing(is_continuing=True, request=request.overwrite_existing_output())
             return
 
-        self.handle_processing_error(error)
+        self.handle_processing_error(request, error)
 
-    def handle_srt_creation_error(self, error: SRTCreationError) -> None:
+    def handle_srt_creation_error(self, request: ProcessingRequest, error: SRTCreationError) -> None:
         self.notify_user_with_sound("Sosumi")
         message_box = QMessageBox(
             QMessageBox.Icon.Critical,
@@ -335,16 +333,18 @@ class MainWindow(QMainWindow):
         clicked_button = message_box.clickedButton()
 
         if result == QMessageBox.StandardButton.Abort or clicked_button is None:
-            self.handle_processing_error(error)
+            self.handle_processing_error(request, error)
             return
 
         if clicked_button == skip_button:
-            config.skip_subtitles = True
+            continuation = request.continue_after_srt_error(skip_subtitles=True)
         elif clicked_button == continue_button:
-            config.continue_on_error = True
+            continuation = request.continue_after_srt_error(skip_subtitles=False)
+        else:
+            self.handle_processing_error(request, error)
+            return
 
-        config.start_stage = Stage.CREATE_LEFT_RIGHT_FILES
-        self.start_processing(is_continuing=True)
+        self.start_processing(is_continuing=True, request=continuation)
 
     def toggle_read_from_disc(self) -> None:
         self.source_folder_widget.setEnabled(not self.read_from_disc_checkbox.isChecked())
@@ -389,6 +389,8 @@ class MainWindow(QMainWindow):
                 self.mv_hevc_quality_spinbox.set_value(value)
 
     def load_config_and_update_ui(self) -> None:
+        if self.processing_controller.is_active:
+            return
         config.load_config_from_file()
         self.source_folder_widget.set_text(config.source_folder_path.as_posix() if config.source_folder_path else "")
         self.source_file_widget.set_text(config.source_path.as_posix() if config.source_path else "")
@@ -418,7 +420,7 @@ class MainWindow(QMainWindow):
         self.keep_awake_checkbox.setChecked(config.keep_awake)
 
     def toggle_processing(self) -> None:
-        if self.process_button.text() == self.START_PROCESSING_TEXT:
+        if not self.processing_controller.is_active:
             self.processing_output_textedit.clear()
             self.source_folder_widget.set_text(self.source_folder_widget.text().strip())
             self.source_file_widget.set_text(self.source_file_widget.text().strip())
@@ -443,7 +445,7 @@ class MainWindow(QMainWindow):
 
         self.process_button.setShortcut("Ctrl+P")
 
-    def start_processing(self, is_continuing: bool = False) -> None:
+    def start_processing(self, is_continuing: bool = False, request: ProcessingRequest | None = None) -> None:
         if not is_continuing:
             start_time = format_timestamp(datetime.now())
             self.processing_output_textedit.append(
@@ -451,27 +453,52 @@ class MainWindow(QMainWindow):
             )
             self.save_config()
             self.process_start_time = datetime.now()
-        self.processing_thread.start_stage = config.start_stage
-        self.processing_thread.start()
-        self.process_button.setText(self.STOP_PROCESSING_TEXT)
+            request = ProcessingRequest.from_config()
+        elif request is None:
+            raise ValueError("A continuation request is required when resuming processing.")
 
-    def finished_processing(self) -> None:
+        if self.processing_controller.start(request):
+            self.set_config_actions_enabled(False)
+            self.process_button.setEnabled(True)
+            self.process_button.setText(self.STOP_PROCESSING_TEXT)
+
+    def finished_processing(self, _request: ProcessingRequest) -> None:
         time_elapsed = formatted_time_elapsed(self.process_start_time)
         message = (
             f"✅ Processing completed in {time_elapsed} with version {config.app.code_version}. "
             "You can now play from the Files or Screenlit app on the AVP ✅"
         )
         self.processing_output_textedit.append(message)
-        self.process_button.setText(self.START_PROCESSING_TEXT)
+        self.reset_processing_button()
         self.notify_user_with_sound("Glass")
         QMessageBox.information(self, "", message)
 
     def reset_processing_button(self) -> None:
+        self.set_config_actions_enabled(True)
+        self.process_button.setEnabled(True)
         self.process_button.setText(self.START_PROCESSING_TEXT)
 
+    def processing_cancelled(self, _request: ProcessingRequest) -> None:
+        time_elapsed = formatted_time_elapsed(self.process_start_time)
+        self.processing_output_textedit.append(f"🛑 Processing stopped after {time_elapsed} 🛑")
+        self.reset_processing_button()
+
+    def handle_processing_failure(self, _request: ProcessingRequest, error: BaseException | None) -> None:
+        message = (
+            f"Processing worker exited unexpectedly: {error}" if error else "Processing worker exited unexpectedly."
+        )
+        self.update_processing_output(message)
+        self.reset_processing_button()
+
     def save_config_to_file(self) -> None:
+        if self.processing_controller.is_active:
+            return
         self.save_config()
         config.save_config_to_file()
+
+    def set_config_actions_enabled(self, enabled: bool) -> None:
+        self.load_config_button.setEnabled(enabled)
+        self.save_config_button.setEnabled(enabled)
 
     def save_config(self) -> None:
         if self.read_from_disc_checkbox.isChecked():
@@ -510,10 +537,17 @@ class MainWindow(QMainWindow):
         config.keep_awake = self.keep_awake_checkbox.isChecked()
 
     def stop_processing(self) -> None:
-        time_elapsed = formatted_time_elapsed(self.process_start_time)
-        self.processing_output_textedit.append(f"🛑 Processing stopped after {time_elapsed} 🛑")
-        self.processing_thread.terminate()
-        self.process_button.setText(self.START_PROCESSING_TEXT)
+        if self.processing_controller.request_cancel():
+            self.processing_output_textedit.append("🛑 Stopping processing…")
+            self.process_button.setText(self.STOPPING_PROCESSING_TEXT)
+            self.process_button.setEnabled(False)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self.processing_controller.shutdown():
+            event.accept()
+            return
+        event.ignore()
+        QMessageBox.warning(self, "", "Processing is still stopping. Please wait before closing the app.")
 
     def update_processing_output(self, message: str) -> None:
         output_textedit = self.processing_output_textedit
