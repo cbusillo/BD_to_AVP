@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>3D Blu-ray to Vision Pro Updates</title>
+    <link>https://github.com/cbusillo/BD_to_AVP</link>
+    <description>Stable direct-DMG updates for 3D Blu-ray to Vision Pro.</description>
+    <language>en</language>
+  </channel>
+</rss>

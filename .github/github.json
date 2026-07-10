@@ -9,7 +9,11 @@
     "main": {
       "system": "classic",
       "requiresPullRequest": true,
-      "requiredStatusChecks": ["validate", "Analyze (actions)", "Analyze (python)"],
+      "requiredStatusChecks": [
+        "validate",
+        "Analyze (actions)",
+        "Analyze (python)"
+      ],
       "requiredApprovals": 0,
       "enforceAdmins": true,
       "blocksForcePushes": true,
@@ -35,6 +39,7 @@
     "lockfile": "uv.lock",
     "releaseWorkflows": [
       ".github/workflows/briefcase.yml",
+      ".github/workflows/sparkle-pages.yml",
       ".github/workflows/publish-to-pypi.yml"
     ]
   },
@@ -80,13 +85,14 @@
     "CI",
     "CodeQL",
     "Package with Briefcase and Create Release",
+    "Publish Sparkle Appcast",
     "Update FFmpeg Vendor Pins",
     "Publish Python distribution to PyPI"
   ],
   "requiredStatusChecks": ["validate", "Analyze (actions)", "Analyze (python)"],
   "qaLabels": [],
   "deployLabels": [],
-  "healthUrls": [],
+  "healthUrls": ["https://cbusillo.github.io/BD_to_AVP/appcast.xml"],
   "relatedRepos": [],
   "githubSignals": {
     "postMerge": {
