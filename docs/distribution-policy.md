@@ -71,7 +71,9 @@ document it as an external dependency with preflight behavior.
 - PKG artifact policy is tracked in #118. Until that issue decides otherwise,
   PKG output is not the normal-user release path.
 - Homebrew distribution for CLI users is tracked in #119.
-- Sparkle-style auto-updates for direct DMG builds are tracked in #120.
+- The accepted Sparkle direct-DMG architecture is documented in
+  [sparkle-updates.md](sparkle-updates.md). Implementation is split across
+  #162 through #165.
 - App Store feasibility and sandbox constraints are tracked in #121.
 - MakeMKV replacement/removal is tracked in #103.
 - Native MVC splitter stability and upstream edge264 follow-through are tracked
@@ -89,3 +91,5 @@ Before promoting a GUI release beyond tester/RC use:
 6. Installed MakeMKV clears the preflight blocker.
 7. A tester or maintainer records at least one media-path smoke result for the
    release candidate when test media is available.
+8. If a Sparkle appcast is promoted for normal users, an installed-app upgrade
+   smoke and appcast validation pass first.
