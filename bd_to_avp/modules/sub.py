@@ -10,7 +10,7 @@ from bd_to_avp.vendor.pgsrip import Mkv, Options, pgsrip
 from bd_to_avp.vendor.pgsrip.mkv import MkvPgs
 
 from bd_to_avp.modules.config import config, Stage
-from bd_to_avp.modules.command import Spinner
+from bd_to_avp.modules.command import get_spinner_update_func, Spinner
 
 
 class SRTCreationError(Exception):
@@ -41,7 +41,8 @@ def extract_subtitle_to_srt(mkv_path: Path, output_path: Path | None = None) -> 
     sub_options = subtitle_rip_options()
 
     spinner = Spinner("Sup subtitles extraction and SRT conversion")
-    spinner_thread = threading.Thread(target=spinner.start)
+    spinner_update_func = get_spinner_update_func()
+    spinner_thread = threading.Thread(target=spinner.start, args=(spinner_update_func,))
     spinner_thread.start()
 
     try:
@@ -60,7 +61,7 @@ def extract_subtitle_to_srt(mkv_path: Path, output_path: Path | None = None) -> 
 
             mark_forced_srt_files(selected_subtitle_tracks)
     finally:
-        spinner.stop()
+        spinner.stop(spinner_update_func)
         spinner_thread.join()
 
 
