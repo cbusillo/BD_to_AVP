@@ -30,9 +30,10 @@ jobs:
       prerelease: ${{ steps.metadata.outputs.prerelease }}
       make_latest: ${{ steps.metadata.outputs.make_latest }}
       publish_pypi: ${{ steps.metadata.outputs.publish_pypi }}
+      base_snapshot_tag: ${{ steps.feed_state.outputs.base_snapshot_tag }}
     steps:
       - name: Checkout dispatch commit
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -58,7 +59,7 @@ jobs:
           fi
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
@@ -68,36 +69,78 @@ jobs:
 
       - name: Reject existing release identity
         env:
+          EXPECTED_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ steps.metadata.outputs.prerelease }}
           RELEASE_TAG: ${{ steps.metadata.outputs.release_tag }}
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Release tag already exists: $RELEASE_TAG" >&2
-            exit 1
-          fi
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "GitHub Release already exists: $RELEASE_TAG" >&2
+          TAG_REFS=$(git ls-remote --tags origin \
+            "refs/tags/$RELEASE_TAG" \
+            "refs/tags/$RELEASE_TAG^{}")
+          TAG_SHA=$(awk '
+            $2 ~ /\^\{\}$/ { peeled = $1 }
+            $2 !~ /\^\{\}$/ { direct = $1 }
+            END { print peeled != "" ? peeled : direct }
+          ' <<< "$TAG_REFS")
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --paginate --slurp > release-identities.json
+          RELEASE_COUNT=$(jq -r --arg tag "$RELEASE_TAG" \
+            '[.[][] | select(.tag_name == $tag)] | length' \
+            release-identities.json)
+          if [ "$RELEASE_COUNT" = "0" ]; then
+            if [ -n "$TAG_SHA" ]; then
+              echo "Release tag already exists without a resumable draft: $RELEASE_TAG" >&2
+              exit 1
+            fi
+          elif [ "$RELEASE_COUNT" = "1" ]; then
+            RELEASE_JSON=$(jq -c --arg tag "$RELEASE_TAG" \
+              '.[][] | select(.tag_name == $tag)' \
+              release-identities.json)
+            if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ] \
+              || [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$EXPECTED_SHA" ] \
+              || [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "$PRERELEASE" ]; then
+              echo "Existing release cannot be safely resumed: $RELEASE_TAG" >&2
+              exit 1
+            fi
+            if [ -n "$TAG_SHA" ] && [ "$TAG_SHA" != "$EXPECTED_SHA" ]; then
+              echo "Existing draft tag does not target the dispatch commit." >&2
+              exit 1
+            fi
+          else
+            echo "Multiple GitHub Releases use tag $RELEASE_TAG." >&2
             exit 1
           fi
 
-      - name: Validate against live and durable appcasts
+      - name: Resolve active and durable appcast state
+        id: feed_state
         env:
           BUILD_VERSION: ${{ steps.metadata.outputs.build_version }}
           GH_TOKEN: ${{ github.token }}
           SHORT_VERSION: ${{ steps.metadata.outputs.package_version }}
         run: |
           set -euo pipefail
-          mkdir -p release-preflight/latest
-          curl --fail --location --silent --show-error \
-            https://cbusillo.github.io/BD_to_AVP/appcast.xml \
-            --output release-preflight/live-appcast.xml
-          python scripts/sparkle_appcast.py validate \
-            --feed release-preflight/live-appcast.xml
-          python scripts/sparkle_appcast.py check-release \
-            --feed release-preflight/live-appcast.xml \
-            --build-version "$BUILD_VERSION" \
-            --short-version "$SHORT_VERSION"
+          mkdir -p release-preflight/active release-preflight/latest
+
+          fetch_url() {
+            local url="$1"
+            local output="$2"
+            local status
+            local exit_code
+            set +e
+            status=$(curl --location --silent --show-error \
+              --retry 3 --retry-delay 2 --retry-all-errors \
+              --connect-timeout 10 --max-time 45 \
+              --output "$output" --write-out '%{http_code}' "$url")
+            exit_code=$?
+            set -e
+            if [ "$exit_code" -ne 0 ]; then
+              rm -f "$output"
+              printf '000\n'
+            else
+              printf '%s\n' "$status"
+            fi
+          }
 
           gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
             --paginate --slurp > release-preflight/releases.json
@@ -111,17 +154,115 @@ jobs:
             | reverse
             | .[0].tag_name // empty
           ' release-preflight/releases.json)
-          if [ -n "$LATEST_SNAPSHOT_TAG" ]; then
+
+          CACHE_KEY="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          STATE_STATUS=$(fetch_url \
+            "https://cbusillo.github.io/BD_to_AVP/appcast-state.json?run=$CACHE_KEY" \
+            release-preflight/appcast-state.json)
+          if [ "$STATE_STATUS" = "200" ]; then
+            if ! jq -e '
+              type == "object"
+              and .schema == 1
+              and (
+                .status == "disabled"
+                or (
+                  .status == "enabled"
+                  and (.release_tag | type == "string")
+                  and (.appcast_sha256 | test("^[0-9a-f]{64}$"))
+                )
+              )
+            ' release-preflight/appcast-state.json >/dev/null; then
+              echo "Published Sparkle state is invalid; restore a known-good snapshot." >&2
+              exit 1
+            fi
+            if [ "$(jq -r .status release-preflight/appcast-state.json)" = "disabled" ]; then
+              echo "Sparkle updates are disabled; restore a known-good snapshot before releasing." >&2
+              exit 1
+            fi
+
+            BASE_SNAPSHOT_TAG=$(jq -r .release_tag release-preflight/appcast-state.json)
+            STATE_APPCAST_SHA256=$(jq -r .appcast_sha256 release-preflight/appcast-state.json)
+            python scripts/release.py validate-tag "$BASE_SNAPSHOT_TAG" >/dev/null
+            BASE_RELEASE_COUNT=$(jq -r --arg tag "$BASE_SNAPSHOT_TAG" '
+              [
+                .[][]
+                | select(.draft == false and .tag_name == $tag)
+                | select(any(.assets[]?; .name == "appcast.xml"))
+              ]
+              | length
+            ' release-preflight/releases.json)
+            if [ "$BASE_RELEASE_COUNT" != "1" ]; then
+              echo "Published Sparkle state does not name one durable release snapshot." >&2
+              exit 1
+            fi
+            gh release download "$BASE_SNAPSHOT_TAG" \
+              --pattern appcast.xml \
+              --dir release-preflight/active
+            python scripts/sparkle_appcast.py validate-snapshot \
+              --feed release-preflight/active/appcast.xml \
+              --short-version "${BASE_SNAPSHOT_TAG#v}"
+            ACTIVE_SHA256=$(sha256sum release-preflight/active/appcast.xml | awk '{print $1}')
+            if [ "$ACTIVE_SHA256" != "$STATE_APPCAST_SHA256" ]; then
+              echo "Published Sparkle state digest differs from its durable snapshot." >&2
+              exit 1
+            fi
+
+            LIVE_STATUS=$(fetch_url \
+              "https://cbusillo.github.io/BD_to_AVP/appcast.xml?run=$CACHE_KEY" \
+              release-preflight/live-appcast.xml)
+            if [ "$LIVE_STATUS" != "200" ]; then
+              echo "Unable to verify the active Sparkle feed; HTTP $LIVE_STATUS." >&2
+              exit 1
+            fi
+            python scripts/sparkle_appcast.py validate \
+              --feed release-preflight/live-appcast.xml
+            LIVE_SHA256=$(sha256sum release-preflight/live-appcast.xml | awk '{print $1}')
+            if [ "$LIVE_SHA256" != "$STATE_APPCAST_SHA256" ]; then
+              echo "Live Sparkle feed differs from the active durable snapshot." >&2
+              exit 1
+            fi
+          elif [ "$STATE_STATUS" = "404" ]; then
+            if [ -n "$LATEST_SNAPSHOT_TAG" ]; then
+              echo "Sparkle state is missing despite durable snapshots; restore one before releasing." >&2
+              exit 1
+            fi
+            BASE_SNAPSHOT_TAG=bootstrap
+            LIVE_STATUS=$(fetch_url \
+              "https://cbusillo.github.io/BD_to_AVP/appcast.xml?run=$CACHE_KEY" \
+              release-preflight/active/appcast.xml)
+            if [ "$LIVE_STATUS" = "200" ]; then
+              python scripts/sparkle_appcast.py validate-empty \
+                --feed release-preflight/active/appcast.xml
+            elif [ "$LIVE_STATUS" = "404" ]; then
+              cp sparkle-feed/appcast.xml release-preflight/active/appcast.xml
+            else
+              echo "Unable to verify bootstrap Sparkle feed; HTTP $LIVE_STATUS." >&2
+              exit 1
+            fi
+          else
+            echo "Unable to verify Sparkle deployment state; HTTP $STATE_STATUS." >&2
+            exit 1
+          fi
+
+          python scripts/sparkle_appcast.py check-release \
+            --feed release-preflight/active/appcast.xml \
+            --build-version "$BUILD_VERSION" \
+            --short-version "$SHORT_VERSION"
+
+          if [ -n "$LATEST_SNAPSHOT_TAG" ] \
+            && [ "$LATEST_SNAPSHOT_TAG" != "$BASE_SNAPSHOT_TAG" ]; then
             gh release download "$LATEST_SNAPSHOT_TAG" \
               --pattern appcast.xml \
               --dir release-preflight/latest
-            python scripts/sparkle_appcast.py validate \
-              --feed release-preflight/latest/appcast.xml
+            python scripts/sparkle_appcast.py validate-snapshot \
+              --feed release-preflight/latest/appcast.xml \
+              --short-version "${LATEST_SNAPSHOT_TAG#v}"
             python scripts/sparkle_appcast.py check-release \
               --feed release-preflight/latest/appcast.xml \
               --build-version "$BUILD_VERSION" \
               --short-version "$SHORT_VERSION"
           fi
+          echo "base_snapshot_tag=$BASE_SNAPSHOT_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Reject an existing stable PyPI version
         if: steps.metadata.outputs.publish_pypi == 'true'
@@ -146,21 +287,18 @@ jobs:
   package:
     name: Build, sign, notarize, and validate DMG
     needs: prepare
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 120
+    environment: macos-signing
     permissions:
       contents: read
     outputs:
       dmg_name: ${{ steps.package_artifact.outputs.dmg_name }}
       dmg_sha256: ${{ steps.package_artifact.outputs.dmg_sha256 }}
       dmg_size: ${{ steps.package_artifact.outputs.dmg_size }}
-    env:
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
-      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
     steps:
       - name: Checkout validated main commit
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -170,23 +308,34 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
 
       - name: Install locked dependencies
         run: uv sync --locked --all-groups --python 3.12
 
+      - name: Generate ephemeral build keychain password
+        run: |
+          set -euo pipefail
+          BUILD_KEYCHAIN_PASSWORD=$(openssl rand -hex 32)
+          echo "::add-mask::$BUILD_KEYCHAIN_PASSWORD"
+          echo "BUILD_KEYCHAIN_PASSWORD=$BUILD_KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+
       - name: Install certificates
+        env:
+          CERTIFICATE: ${{ secrets.CERTIFICATE }}
+          CERTIFICATE_INSTALLER: ${{ secrets.CERTIFICATE_INSTALLER }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
           KEYCHAIN_PATH="$(pwd)/build.keychain"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security create-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           USER_KEYCHAINS=()
           while IFS= read -r keychain; do
             USER_KEYCHAINS+=("$keychain")
@@ -194,40 +343,47 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH" "${USER_KEYCHAINS[@]}"
           security default-keychain -s "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          echo "${{ secrets.CERTIFICATE }}" | base64 --decode > app_certificate.p12
-          echo "${{ secrets.CERTIFICATE_INSTALLER }}" | base64 --decode > installer_certificate.p12
+          security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          printf '%s' "$CERTIFICATE" | base64 --decode > app_certificate.p12
+          printf '%s' "$CERTIFICATE_INSTALLER" | base64 --decode > installer_certificate.p12
           security import app_certificate.p12 -k "$KEYCHAIN_PATH" -P "$CERTIFICATE_PASSWORD" \
             -A -T "/usr/bin/codesign" -T "/usr/bin/productsign"
           security import installer_certificate.p12 -k "$KEYCHAIN_PATH" -P "$CERTIFICATE_PASSWORD" \
             -A -T "/usr/bin/codesign" -T "/usr/bin/productsign"
           security set-key-partition-list \
             -S apple-tool:,apple:,codesign:,productsign: \
-            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            -s -k "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
       - name: Store notarization credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          KEYCHAIN_NAME: ${{ secrets.KEYCHAIN_NAME }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
         run: |
-          xcrun notarytool store-credentials "${{ secrets.KEYCHAIN_NAME }}" \
+          xcrun notarytool store-credentials "$KEYCHAIN_NAME" \
             --apple-id "$APPLE_ID" \
-            --password "$KEYCHAIN_PASSWORD" \
-            --team-id "${{ secrets.TEAM_ID }}"
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$TEAM_ID"
 
       - name: Package application for GitHub
         id: package_artifact
         env:
+          BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
+          DEV_ID: ${{ secrets.DEV_ID }}
           PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
         run: |
           set -euo pipefail
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$(pwd)/build.keychain"
+          security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$(pwd)/build.keychain"
           uv run python scripts/briefcase_app.py create
           uv run python scripts/briefcase_app.py build
           find . -name QtWebEngineCore.framework -type d | while read -r dir; do
             find "$dir" -type f -execdir codesign --force --verify --verbose \
-              --sign "${{ secrets.DEV_ID }}" {} \;
+              --sign "$DEV_ID" {} \;
           done
           find build/bd-to-avp/macos/app -path "*/bd_to_avp/bin/*" -type f -perm +111 \
             -exec codesign --force --options runtime --timestamp \
-              --sign "${{ secrets.DEV_ID }}" {} \;
+              --sign "$DEV_ID" {} \;
           find build/bd-to-avp/macos/app -name "*.dylib" \
             -exec codesign --force --sign - {} \;
           uv run python scripts/verify_app_tools.py --profile release
@@ -238,7 +394,7 @@ jobs:
             echo "Built app version does not match $PACKAGE_VERSION." >&2
             exit 1
           fi
-          uv run python scripts/briefcase_app.py package -i "${{ secrets.DEV_ID }}"
+          uv run python scripts/briefcase_app.py package -i "$DEV_ID"
           uv run python scripts/sparkle_bundle.py \
             --app "build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app" \
             --verify-signatures
@@ -258,6 +414,10 @@ jobs:
             echo "Packaged DMG version does not match $PACKAGE_VERSION." >&2
             exit 1
           fi
+          if [ "$(jq -r .build_version dmg-metadata.json)" != "$BUILD_VERSION" ]; then
+            echo "Packaged DMG build does not match $BUILD_VERSION." >&2
+            exit 1
+          fi
           DMG_NAME=$(basename "$DMG_PATH")
           DMG_SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
           DMG_SIZE=$(stat -f %z "$DMG_PATH")
@@ -270,7 +430,7 @@ jobs:
 
       - name: Upload log on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: briefcase-log
           path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/briefcase.*.log
@@ -283,7 +443,7 @@ jobs:
 
       - name: Upload verified release package
         if: success()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-package
           path: |
@@ -305,7 +465,7 @@ jobs:
       contents: write
     steps:
       - name: Download verified release package
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: release-package
           path: release-package
@@ -453,7 +613,7 @@ jobs:
       - prepare
       - package
       - create-draft
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 30
     environment: sparkle-release
     permissions:
@@ -463,13 +623,13 @@ jobs:
       appcast_size: ${{ steps.sign_appcast.outputs.appcast_size }}
     steps:
       - name: Checkout protected release tooling
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
@@ -557,32 +717,24 @@ jobs:
             echo "minimum_system_version=$(jq -r .minimum_system_version bundle-metadata.json)"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Load latest durable appcast snapshot
+      - name: Load active durable appcast snapshot
         env:
+          BASE_SNAPSHOT_TAG: ${{ needs.prepare.outputs.base_snapshot_tag }}
           BUILD_VERSION: ${{ steps.bundle.outputs.build_version }}
           GH_TOKEN: ${{ github.token }}
           SHORT_VERSION: ${{ steps.bundle.outputs.short_version }}
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-            --paginate --slurp > appcast-site/releases.json
-          LATEST_SNAPSHOT_TAG=$(jq -r '
-            [
-              .[][]
-              | select(.draft == false)
-              | select(any(.assets[]?; .name == "appcast.xml"))
-            ]
-            | sort_by(.published_at)
-            | reverse
-            | .[0].tag_name // empty
-          ' appcast-site/releases.json)
-          rm appcast-site/releases.json
-          if [ -n "$LATEST_SNAPSHOT_TAG" ]; then
-            gh release download "$LATEST_SNAPSHOT_TAG" \
+          if [ "$BASE_SNAPSHOT_TAG" = "bootstrap" ]; then
+            cp sparkle-feed/appcast.xml appcast-site/appcast.xml
+          else
+            python scripts/release.py validate-tag "$BASE_SNAPSHOT_TAG" >/dev/null
+            gh release download "$BASE_SNAPSHOT_TAG" \
               --pattern appcast.xml \
               --dir appcast-site
-          else
-            cp sparkle-feed/appcast.xml appcast-site/appcast.xml
+            python scripts/sparkle_appcast.py validate-snapshot \
+              --feed appcast-site/appcast.xml \
+              --short-version "${BASE_SNAPSHOT_TAG#v}"
           fi
           python scripts/sparkle_appcast.py validate \
             --feed appcast-site/appcast.xml
@@ -637,7 +789,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload signed appcast for verification
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: signed-appcast
           path: appcast-site/appcast.xml
@@ -651,24 +803,24 @@ jobs:
       - package
       - create-draft
       - publish-appcast
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 45
     permissions:
       contents: write
     steps:
       - name: Checkout protected verification tooling
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
       - name: Download signed appcast
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: signed-appcast
           path: signed-appcast
@@ -903,18 +1055,18 @@ jobs:
       id-token: write
     steps:
       - name: Checkout released commit
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
 
       - name: Validate and build distributions
         run: |
@@ -939,6 +1091,7 @@ jobs:
       operation: deploy
       release_tag: ${{ needs.prepare.outputs.release_tag }}
       expected_appcast_sha256: ${{ needs.publish-appcast.outputs.appcast_sha256 }}
+      expected_base_release_tag: ${{ needs.prepare.outputs.base_snapshot_tag }}
     permissions:
       contents: read
       id-token: write

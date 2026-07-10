@@ -27,6 +27,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(checkout["with"]["persist-credentials"], "false")
         self.assertIn("refs/heads/main", str(prepare))
         self.assertIn("refs/remotes/origin/main", str(prepare))
+        self.assertIn("refs/tags/$RELEASE_TAG^{}", str(prepare))
         self.assertNotIn("refs/heads/release", str(workflow))
 
     def test_release_metadata_is_derived_by_tested_python(self) -> None:
@@ -40,18 +41,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("check-release", str(prepare))
         self.assertIn("live-appcast.xml", str(prepare))
         self.assertIn("LATEST_SNAPSHOT_TAG", str(prepare))
+        self.assertIn("base_snapshot_tag", prepare["outputs"])
+        self.assertIn("appcast-state.json", str(prepare))
 
     def test_package_preserves_dmg_validation_without_write_token(self) -> None:
         workflow = load_workflow("briefcase.yml")
         package = workflow["jobs"]["package"]
 
         self.assertEqual(package["needs"], "prepare")
+        self.assertEqual(package["environment"], "macos-signing")
         self.assertEqual(package["permissions"]["contents"], "read")
         self.assertIn("--verify-signatures", str(package))
         self.assertIn("--verify-distribution", str(package))
+        self.assertIn("BUILD_VERSION", str(package))
+        self.assertIn(".build_version", str(package))
         self.assertIn("dmg_sha256", package["outputs"])
         self.assertIn("dmg_size", package["outputs"])
         self.assertIn("SHA256SUMS", str(package))
+        self.assertIn("BUILD_KEYCHAIN_PASSWORD", str(package))
+        self.assertIn("APPLE_APP_PASSWORD", str(package))
         self.assertNotIn("SPARKLE_EDDSA_PRIVATE_KEY", str(package))
 
     def test_release_is_draft_until_assets_are_redownloaded_and_verified(self) -> None:
@@ -91,8 +99,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         publish = workflow["jobs"]["publish-appcast"]
         verify = workflow["jobs"]["verify-draft"]
 
-        self.assertIn('select(any(.assets[]?; .name == "appcast.xml"))', str(publish))
-        self.assertIn("LATEST_SNAPSHOT_TAG", str(publish))
+        self.assertIn("BASE_SNAPSHOT_TAG", str(publish))
+        self.assertIn("bootstrap", str(publish))
         self.assertIn("signed-appcast", str(publish))
         self.assertIn("gh release upload", str(verify))
         self.assertIn("EXPECTED_APPCAST_SHA256", str(verify))
@@ -121,6 +129,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             deploy["with"]["expected_appcast_sha256"],
             "${{ needs.publish-appcast.outputs.appcast_sha256 }}",
         )
+        self.assertEqual(
+            deploy["with"]["expected_base_release_tag"],
+            "${{ needs.prepare.outputs.base_snapshot_tag }}",
+        )
 
     def test_all_release_checkouts_use_dispatch_sha(self) -> None:
         workflow = load_workflow("briefcase.yml")
@@ -135,6 +147,20 @@ class ReleaseWorkflowTests(unittest.TestCase):
         for checkout in checkouts:
             self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
             self.assertEqual(checkout["with"]["persist-credentials"], "false")
+
+    def test_release_actions_are_pinned_to_commit_shas(self) -> None:
+        for workflow_name in ("briefcase.yml", "sparkle-pages.yml"):
+            workflow = load_workflow(workflow_name)
+            action_uses = [
+                step["uses"]
+                for job in workflow["jobs"].values()
+                for step in job.get("steps", [])
+                if "uses" in step and not step["uses"].startswith("./")
+            ]
+            self.assertTrue(action_uses)
+            for action in action_uses:
+                with self.subTest(workflow=workflow_name, action=action):
+                    self.assertRegex(action, r"^[^@]+@[0-9a-f]{40}$")
 
 
 class SparklePagesWorkflowTests(unittest.TestCase):
@@ -159,9 +185,13 @@ class SparklePagesWorkflowTests(unittest.TestCase):
         self.assertIn("validate-empty", str(prepare))
         self.assertIn("gh release download", str(prepare))
         self.assertIn("validate-snapshot", str(prepare))
+        self.assertIn("appcast-state.json", str(prepare))
+        self.assertIn('status: "disabled"', str(prepare))
+        self.assertIn('status: "enabled"', str(prepare))
         self.assertNotIn("gh release upload", str(prepare))
         self.assertNotIn("SPARKLE_EDDSA_PRIVATE_KEY", str(workflow))
         self.assertEqual(workflow["jobs"]["deploy"]["environment"]["name"], "github-pages")
+        self.assertIn("Verify the live Pages state", str(workflow["jobs"]["deploy"]))
 
 
 if __name__ == "__main__":

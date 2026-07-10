@@ -1,5 +1,6 @@
 import hashlib
 import tempfile
+import tomllib
 import unittest
 import zipfile
 from pathlib import Path
@@ -41,6 +42,36 @@ class UpdateFfmpegManifestTests(unittest.TestCase):
                 ]
             ),
         )
+
+    def test_render_manifest_escapes_control_characters(self) -> None:
+        manifest = update_ffmpeg_manifest.UpdatedManifest(
+            version="8.1.3\nrc",
+            base_url="https://example.invalid/8.1.3",
+            license_mode="GPLv3\tverified",
+            build='quoted "build"',
+            assets=[],
+        )
+
+        rendered = update_ffmpeg_manifest.render_manifest(manifest)
+
+        self.assertEqual(tomllib.loads(rendered)["version"], "8.1.3\nrc")
+        self.assertEqual(tomllib.loads(rendered)["license_mode"], "GPLv3\tverified")
+        self.assertEqual(tomllib.loads(rendered)["build"], 'quoted "build"')
+
+    def test_extract_asset_binary_never_uses_archive_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            archive_path = temp_path / "ffmpeg.zip"
+            output_dir = temp_path / "output"
+            output_dir.mkdir()
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr("../../ffmpeg", b"safe bytes")
+
+            binary_path = update_ffmpeg_manifest.extract_asset_binary("ffmpeg", archive_path, output_dir)
+
+            self.assertEqual(binary_path, output_dir / "ffmpeg")
+            self.assertEqual(binary_path.read_bytes(), b"safe bytes")
+            self.assertFalse((temp_path.parent / "ffmpeg").exists())
 
     def test_build_candidate_manifest_downloads_and_hashes_assets(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

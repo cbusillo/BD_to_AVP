@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import shutil
 import tempfile
 import urllib.parse
 import zipfile
@@ -44,9 +46,7 @@ def validate_base_url(base_url: str) -> None:
     if parsed.scheme != "https":
         raise ValueError(f"FFmpeg base URL must use HTTPS: {base_url}")
     if parsed.netloc != APPROVED_FFMPEG_BASE_HOST:
-        raise ValueError(
-            f"FFmpeg base URL host must be {APPROVED_FFMPEG_BASE_HOST!r}, got: {parsed.netloc!r}"
-        )
+        raise ValueError(f"FFmpeg base URL host must be {APPROVED_FFMPEG_BASE_HOST!r}, got: {parsed.netloc!r}")
 
 
 def build_candidate_manifest(
@@ -109,15 +109,15 @@ def merge_manifest_assets(
 
 def extract_asset_binary(asset_name: str, archive_path: Path, output_dir: Path) -> Path:
     with zipfile.ZipFile(archive_path) as archive:
-        matches = [name for name in archive.namelist() if Path(name).name == asset_name]
+        matches = [
+            member for member in archive.infolist() if not member.is_dir() and Path(member.filename).name == asset_name
+        ]
         if len(matches) != 1:
-            raise ValueError(f"Expected one {asset_name} binary in {archive_path.name}, found {matches}")
-        extracted_path = Path(archive.extract(matches[0], output_dir))
-
-    output_path = output_dir / asset_name
-    if extracted_path != output_path:
-        output_path.unlink(missing_ok=True)
-        extracted_path.replace(output_path)
+            names = [member.filename for member in matches]
+            raise ValueError(f"Expected one {asset_name} binary in {archive_path.name}, found {names}")
+        output_path = output_dir / asset_name
+        with archive.open(matches[0]) as source, output_path.open("wb") as destination:
+            shutil.copyfileobj(source, destination)
     return output_path
 
 
@@ -143,8 +143,7 @@ def render_manifest(manifest: UpdatedManifest) -> str:
 
 
 def toml_string(key: str, value: str) -> str:
-    escaped_value = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'{key} = "{escaped_value}"'
+    return f"{key} = {json.dumps(value, ensure_ascii=False)}"
 
 
 def write_manifest(manifest_path: Path, manifest: UpdatedManifest) -> None:

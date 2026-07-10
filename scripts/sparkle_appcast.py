@@ -18,7 +18,12 @@ SPARKLE_NAMESPACE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 DC_NAMESPACE = "http://purl.org/dc/elements/1.1/"
 REPOSITORY_PATH = "/cbusillo/BD_to_AVP"
 SPARKLE = f"{{{SPARKLE_NAMESPACE}}}"
-SHORT_VERSION_PATTERN = re.compile(r"^[0-9]+(?:\.[0-9]+){2}(?:rc[0-9]+)?$")
+SHORT_VERSION_PATTERN = re.compile(
+    r"^(?P<major>0|[1-9][0-9]*)\."
+    r"(?P<minor>0|[1-9][0-9]*)\."
+    r"(?P<patch>0|[1-9][0-9]*)"
+    r"(?:rc(?P<rc>0|[1-9][0-9]*))?$"
+)
 ET.register_namespace("sparkle", SPARKLE_NAMESPACE)
 ET.register_namespace("dc", DC_NAMESPACE)
 
@@ -72,10 +77,23 @@ def _build_number(item: ET.Element) -> int:
     return _parse_build_number(_text(item, f"{SPARKLE}version"), "sparkle:version")
 
 
-def _release_channel(short_version: str) -> str | None:
-    if SHORT_VERSION_PATTERN.fullmatch(short_version) is None:
+def _release_order(short_version: str) -> tuple[int, int, int, int, int]:
+    match = SHORT_VERSION_PATTERN.fullmatch(short_version)
+    if match is None:
         raise AppcastError(f"Invalid Sparkle short version: {short_version!r}")
-    return "rc" if re.search(r"rc[0-9]+$", short_version, flags=re.IGNORECASE) else None
+    rc = int(match.group("rc")) if match.group("rc") is not None else None
+    return (
+        int(match.group("major")),
+        int(match.group("minor")),
+        int(match.group("patch")),
+        0 if rc is not None else 1,
+        rc or 0,
+    )
+
+
+def _release_channel(short_version: str) -> str | None:
+    _release_order(short_version)
+    return "rc" if "rc" in short_version else None
 
 
 def maximum_build_version(channel: ET.Element) -> int | None:
@@ -94,10 +112,17 @@ def check_new_build(feed_path: Path, build_version: str) -> None:
 
 def check_new_release(feed_path: Path, build_version: str, short_version: str) -> None:
     check_new_build(feed_path, build_version)
-    _release_channel(short_version)
+    candidate_order = _release_order(short_version)
     _, channel = load_appcast(feed_path)
-    if any(_text(item, f"{SPARKLE}shortVersionString") == short_version for item in channel.findall("item")):
+    items = channel.findall("item")
+    if any(_text(item, f"{SPARKLE}shortVersionString") == short_version for item in items):
         raise AppcastError(f"Sparkle short version is already published: {short_version}")
+    if items:
+        newest_short_version = _text(items[0], f"{SPARKLE}shortVersionString")
+        if candidate_order <= _release_order(newest_short_version):
+            raise AppcastError(
+                f"Candidate version {short_version} must be newer than published version {newest_short_version}."
+            )
 
 
 def _validate_https_url(value: str, label: str) -> None:
@@ -146,11 +171,13 @@ def validate_appcast_channel(channel: ET.Element) -> None:
         raise AppcastError("Delta updates are not allowed in the Sparkle appcast.")
 
     build_versions: list[int] = []
+    release_versions: list[tuple[int, int, int, int, int]] = []
     short_versions: set[str] = set()
     download_urls: set[str] = set()
     for item in channel.findall("item"):
         build_version = _build_number(item)
         short_version = _text(item, f"{SPARKLE}shortVersionString")
+        release_version = _release_order(short_version)
         expected_channel = _release_channel(short_version)
         item_channel = _text(item, f"{SPARKLE}channel") or None
         if item_channel not in {None, "rc"}:
@@ -195,11 +222,14 @@ def validate_appcast_channel(channel: ET.Element) -> None:
         if download_url in download_urls:
             raise AppcastError(f"Duplicate Sparkle download URL: {download_url}")
         build_versions.append(build_version)
+        release_versions.append(release_version)
         short_versions.add(short_version)
         download_urls.add(download_url)
 
     if build_versions != sorted(build_versions, reverse=True):
         raise AppcastError("Appcast items must be ordered from newest to oldest build version.")
+    if release_versions != sorted(release_versions, reverse=True):
+        raise AppcastError("Appcast items must be ordered from newest to oldest release version.")
 
 
 def validate_appcast(path: Path) -> None:

@@ -7,7 +7,7 @@ pull request before release orchestration runs. Use the repository command:
 
 ```sh
 uv run python scripts/release.py prepare \
-  --version 0.2.144rc1 \
+  --version 0.2.143rc5 \
   --build 145
 ```
 
@@ -16,6 +16,11 @@ such as `0.2.144` or `0.2.144rc1`. The numeric `CFBundleVersion` must increase
 for every RC and Stable DMG. The command stages a refreshed `uv.lock`, validates
 the staged metadata, and updates `pyproject.toml` and `uv.lock` together only
 after every check succeeds. A lock refresh failure leaves both files unchanged.
+
+The main-only migration itself is prepared as `0.2.143rc4` with build `144`.
+After that RC is published, prepare `0.2.143rc5` with build `145` for the real
+RC-to-RC updater smoke. Prepare Stable `0.2.143` with build `146` only after the
+smoke passes.
 
 Review and commit all resulting changes. CI runs
 `scripts/release.py validate`, the unit suite, Python package builds, and the
@@ -33,17 +38,17 @@ The workflow performs these ordered boundaries:
 
 1. Prove `github.sha` is the current protected `main` HEAD and validate the
    committed version, build counter, and `uv.lock`.
-2. Reject an existing tag, GitHub Release, Sparkle version/build, or Stable PyPI
-   version. Both the live feed and the latest durable release snapshot are
-   checked.
+2. Reject a conflicting tag, release, Sparkle version/build, or Stable PyPI
+   version while allowing a matching draft to resume. The active Pages state
+   and newest durable snapshot are both checked.
 3. Build, sign, notarize, and Gatekeeper-validate the macOS DMG without a
    write-capable repository token. Record its exact name, byte size, SHA-256,
    and `SHA256SUMS` entry.
 4. Create a draft GitHub Release targeting only `github.sha` and upload the
    package assets with overwrite disabled by default.
 5. In the protected `sparkle-release` environment, re-download the draft DMG,
-   verify its exact identity and distribution signatures, load the newest
-   published `appcast.xml` release asset, sign the DMG, verify the EdDSA
+   verify its exact identity and distribution signatures, load the active
+   durable `appcast.xml` selected by Pages state, sign the DMG, verify the EdDSA
    signature, and build the cumulative snapshot.
 6. Upload `appcast.xml` to the draft, re-download the DMG, checksum, and appcast,
    and repeat the exact digest, size, notarization, Gatekeeper, bundle-version,
@@ -54,16 +59,24 @@ The workflow performs these ordered boundaries:
 8. Deploy the durable `appcast.xml` release asset to GitHub Pages. A deployment
    failure can be retried without rebuilding, retagging, or re-signing.
 
+For Stable releases, PyPI publication and Sparkle Pages deployment are
+independent post-publication jobs. Either channel can be retried without
+rebuilding or changing the published GitHub Release.
+
 The cumulative `appcast.xml` attached to every published GitHub Release is the
-recovery source of truth. GitHub Pages is a deployment target, not the only copy
-of feed history.
+recovery source of truth. Pages also publishes `appcast-state.json`, which binds
+the live feed to one durable release snapshot or records that updates are
+disabled. GitHub Pages is a deployment target, not the only copy of feed
+history.
 
 ## Retry, Restore, and Disable
 
 If a release run fails before publication, leave the release as a draft while
-diagnosing it. Never replace a published DMG or appcast asset. If the Pages job
-fails after publication, rerun the failed job or dispatch `Manage Sparkle Pages`
-from `main` with `deploy` and the release tag.
+diagnosing it, then rerun the failed jobs or dispatch the same committed release
+again. A matching draft and its byte-identical assets resume safely; a
+conflicting draft or tag fails closed. Never replace a published DMG or appcast
+asset. If the Pages job fails after publication, rerun the failed job or dispatch
+`Manage Sparkle Pages` from `main` with `deploy` and the release tag.
 
 To restore an earlier last-good cumulative feed, dispatch `Manage Sparkle Pages`
 from `main` with `restore` and the selected published release tag. The workflow
@@ -71,9 +84,10 @@ downloads and validates that release's `appcast.xml` asset before deployment.
 
 For an emergency stop, dispatch the same workflow with `disable` and no tag.
 Emergency disable preempts an in-flight Pages deployment and deploys the
-committed valid empty feed. It does not edit or delete any GitHub Release,
-release asset, or cumulative snapshot. Restore the last-good tag when updates
-may resume.
+committed valid empty feed plus a durable public disabled-state marker. Release
+orchestration and normal deploy operations fail closed while that marker is
+active. It does not edit or delete any GitHub Release, release asset, or
+cumulative snapshot. Restore the last-good tag when updates may resume.
 
 ## Required Repository Settings
 
@@ -82,6 +96,11 @@ settings. Before the first release on this path:
 
 - change the `sparkle-release` environment deployment branch policy from
   `release` to protected `main`;
+- create a protected `macos-signing` environment limited to `main`, then move
+  the Apple certificate, identity, notarization, and keychain secrets from
+  repository scope into it. The legacy `KEYCHAIN_PASSWORD` value is the Apple
+  app-specific password; the workflow generates a separate ephemeral build
+  keychain password for every run;
 - configure a PyPI Trusted Publisher for repository `cbusillo/BD_to_AVP`,
   workflow `briefcase.yml`, environment `pypi`, and the `bd_to_avp` project;
 - create/protect the `pypi` GitHub environment as desired, then remove the

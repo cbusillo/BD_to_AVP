@@ -251,7 +251,10 @@ removed from application and Briefcase requirements.
 - A bad feed publication is recovered by redeploying the previous release's
   durable `appcast.xml` snapshot.
 - Emergency disable deploys the committed empty feed without deleting or
-  replacing any cumulative release snapshot.
+  replacing any cumulative release snapshot. The companion
+  `appcast-state.json` marker keeps disable sticky: release and normal deploy
+  paths refuse to re-enable updates until an explicit restore selects a durable
+  snapshot.
 - A bad application release is fixed by publishing a newer build number;
   automatic downgrade is not part of the initial design.
 - Previous signed DMGs remain available for manual recovery.

@@ -75,6 +75,18 @@ class ReleaseMetadataTests(unittest.TestCase):
             briefcase_console.Console(input_enabled=False),
         )
         self.assertEqual(str(apps["bd-to-avp"]["version"]), pyproject["project"]["version"])
+        self.assertEqual(
+            apps["bd-to-avp"]["info"]["CFBundleVersion"],
+            pyproject["tool"]["briefcase"]["app"]["bd-to-avp"]["macOS"]["info"]["CFBundleVersion"],
+        )
+
+    def test_repository_is_prepared_for_first_sparkle_rc(self) -> None:
+        metadata = release.load_release_metadata()
+
+        self.assertEqual(metadata.package_version, "0.2.143rc4")
+        self.assertEqual(metadata.build_version, "144")
+        self.assertEqual(metadata.channel, "rc")
+        self.assertFalse(metadata.publish_pypi)
 
     def test_metadata_derives_release_policy_from_committed_version(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -170,6 +182,40 @@ class ReleasePreparationTests(unittest.TestCase):
                 release.prepare_release(
                     "1.2.4rc1",
                     "10",
+                    pyproject_path=pyproject_path,
+                    lock_path=lock_path,
+                    lock_runner=fake_lock_runner,
+                )
+
+    def test_prepare_supports_rc_to_rc_to_stable_but_not_back_to_rc(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pyproject_path, lock_path = make_release_files(
+                Path(temp_dir),
+                version="1.2.4rc1",
+                build="11",
+            )
+
+            rc2 = release.prepare_release(
+                "1.2.4rc2",
+                "12",
+                pyproject_path=pyproject_path,
+                lock_path=lock_path,
+                lock_runner=fake_lock_runner,
+            )
+            stable = release.prepare_release(
+                "1.2.4",
+                "13",
+                pyproject_path=pyproject_path,
+                lock_path=lock_path,
+                lock_runner=fake_lock_runner,
+            )
+
+            self.assertEqual(rc2.package_version, "1.2.4rc2")
+            self.assertEqual(stable.package_version, "1.2.4")
+            with self.assertRaisesRegex(release.ReleaseError, "must be newer"):
+                release.prepare_release(
+                    "1.2.4rc3",
+                    "14",
                     pyproject_path=pyproject_path,
                     lock_path=lock_path,
                     lock_runner=fake_lock_runner,

@@ -134,7 +134,9 @@ The appcast-signing job must:
 - To disable updates without changing installed apps, dispatch
   `Manage Sparkle Pages` from protected `main` with the `disable` operation and
   no tag. It preempts an in-flight feed deployment, deploys the valid empty
-  appcast, and leaves every GitHub Release and cumulative snapshot unchanged.
+  appcast plus a disabled `appcast-state.json`, and leaves every GitHub Release
+  and cumulative snapshot unchanged. Release and normal deploy workflows fail
+  closed until restore clears that state.
 - To restore updates, dispatch `Manage Sparkle Pages` from protected `main` with
   `restore` and a published release tag. The workflow validates and redeploys
   that release's durable `appcast.xml` asset.
