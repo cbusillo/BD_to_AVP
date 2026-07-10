@@ -71,7 +71,6 @@ include = [
 project_name = "3D Blu-ray to Vision pro"
 bundle = "com.shinycomputers"
 architectures = ["arm64"]
-version = "0.2.143"
 icon = "bd_to_avp/resources/app_icon"
 organization = "Shiny Computers"
 

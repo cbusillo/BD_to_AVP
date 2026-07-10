@@ -120,7 +120,7 @@ With MakeMKV installed:
 
 ## Sparkle Packaging Gate
 
-Before a GitHub Release is created, the release workflow must run:
+Before a draft GitHub Release is published, the release workflow must run:
 
 ```sh
 uv run python scripts/sparkle_bundle.py \
@@ -138,8 +138,10 @@ The gate must confirm the repository build number, direct-distribution metadata,
 public key, feed URL, automatic-update policy, pinned framework, `Updater.app`,
 both XPC services, nested signatures, containing app signature, notarization,
 and Gatekeeper assessment. The build number must also be newer than every item
-in the live appcast, the short version must be unpublished, and the final
-released DMG digest must match the locally validated artifact.
+in both the live appcast and latest durable release snapshot, the short version
+must be unpublished, and the draft DMG name, size, and digest must match the
+locally validated artifact before and after upload. The cumulative appcast and
+checksum are re-downloaded and verified before the draft is published.
 
 ## Sparkle Update Smoke (After Enablement)
 

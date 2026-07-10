@@ -1,58 +1,180 @@
 ---
-name: Disable Sparkle Updates
+name: Manage Sparkle Pages
 
 "on":
+  workflow_call:
+    inputs:
+      operation:
+        description: Deploy a release snapshot
+        required: true
+        type: string
+      release_tag:
+        description: Release tag whose durable appcast asset should be deployed
+        required: true
+        type: string
+      expected_appcast_sha256:
+        description: Optional digest from the release orchestration run
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Deploy, restore, or temporarily disable Sparkle updates
+        required: true
+        type: choice
+        default: restore
+        options:
+          - deploy
+          - restore
+          - disable
+      release_tag:
+        description: Required for deploy/restore; ignored for disable
+        required: false
+        type: string
 
 permissions: {}
 
 concurrency:
   group: sparkle-pages
-  cancel-in-progress: false
+  cancel-in-progress: ${{ inputs.operation == 'disable' }}
 
 jobs:
-  build:
-    if: github.ref == 'refs/heads/release'
+  validate:
+    name: Validate feed operation
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout protected feed tooling
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Validate protected main operation
+        env:
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Sparkle feed operations must run from protected main." >&2
+            exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]; then
+            echo "Feed tooling checkout does not match github.sha." >&2
+            exit 1
+          fi
+          case "$OPERATION" in
+            deploy|restore)
+              if [ -z "$RELEASE_TAG" ]; then
+                echo "release_tag is required for $OPERATION." >&2
+                exit 1
+              fi
+              python scripts/release.py validate-tag "$RELEASE_TAG"
+              ;;
+            disable)
+              if [ -n "$RELEASE_TAG" ]; then
+                echo "release_tag must be empty for emergency disable." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unsupported Sparkle feed operation: $OPERATION" >&2
+              exit 1
+              ;;
+          esac
+
+  prepare:
+    name: Prepare validated Pages artifact
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: sparkle-release
     permissions:
       contents: read
-      pages: write
       id-token: write
+      pages: write
     steps:
-      - name: Checkout repository
+      - name: Checkout protected feed tooling
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Prepare release snapshot or empty feed
+        env:
+          EXPECTED_APPCAST_SHA256: ${{ inputs.expected_appcast_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p appcast-site
+          if [ "$OPERATION" = "disable" ]; then
+            cp sparkle-feed/appcast.xml appcast-site/appcast.xml
+            python scripts/sparkle_appcast.py validate-empty \
+              --feed appcast-site/appcast.xml
+          else
+            RELEASE_JSON=$(gh api \
+              "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
+            if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "false" ]; then
+              echo "Only a published release snapshot may be deployed." >&2
+              exit 1
+            fi
+            APPCAST_COUNT=$(jq \
+              '[.assets[] | select(.name == "appcast.xml")] | length' \
+              <<< "$RELEASE_JSON")
+            if [ "$APPCAST_COUNT" != "1" ]; then
+              echo "Release must contain exactly one appcast.xml asset." >&2
+              exit 1
+            fi
+            gh release download "$RELEASE_TAG" \
+              --pattern appcast.xml \
+              --dir appcast-site
+            python scripts/sparkle_appcast.py validate-snapshot \
+              --feed appcast-site/appcast.xml \
+              --short-version "${RELEASE_TAG#v}"
+            if [ -n "$EXPECTED_APPCAST_SHA256" ]; then
+              ACTUAL_SHA256=$(sha256sum appcast-site/appcast.xml | awk '{print $1}')
+              if [ "$ACTUAL_SHA256" != "$EXPECTED_APPCAST_SHA256" ]; then
+                echo "Release appcast digest differs from the orchestrated snapshot." >&2
+                exit 1
+              fi
+            fi
+          fi
+
       - name: Configure Pages
         uses: actions/configure-pages@v6
-      - name: Validate appcast XML
-        run: |
-          python scripts/sparkle_appcast.py validate \
-            --feed sparkle-feed/appcast.xml
-          python - <<'PY'
-          import xml.etree.ElementTree as ET
 
-          channel = (
-              ET.parse("sparkle-feed/appcast.xml")
-              .getroot()
-              .find("channel")
-          )
-          if channel is None or channel.findall("item"):
-              raise SystemExit("Emergency feed must be a valid empty appcast")
-          PY
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: sparkle-feed
+          path: appcast-site
 
   deploy:
-    needs: build
+    name: Deploy Sparkle feed
+    needs: prepare
     runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      id-token: write
+      pages: write
     steps:
       - name: Deploy to GitHub Pages
         id: deployment

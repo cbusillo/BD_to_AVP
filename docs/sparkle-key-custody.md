@@ -16,13 +16,15 @@ printed in logs, or uploaded as a workflow artifact.
   login keychain.
 - Recovery store: an Apple Passwords entry synchronized by iCloud Keychain.
 - GitHub environment: `sparkle-release`.
-- Environment protection: required maintainer approval and the `release` branch
-  only.
+- Target environment protection for the main-only workflow: required maintainer
+  approval and protected `main` only.
 - Reserved environment secret: `SPARKLE_EDDSA_PRIVATE_KEY`.
 - Production public key: `sparkle-public-ed-key.txt`.
 - Feed URL: `https://cbusillo.github.io/BD_to_AVP/appcast.xml`.
 - Emergency empty-feed source: `sparkle-feed/appcast.xml`, deployed only by the
   manual `.github/workflows/sparkle-pages.yml` workflow.
+- Durable feed history: the cumulative `appcast.xml` asset attached to every
+  published GitHub Release.
 
 The release workflow's appcast job uses the `sparkle-release` environment and
 receives the private key only in its signing step. The emergency empty-feed
@@ -40,6 +42,10 @@ recovery copy is imported into Apple Passwords, and
 `SPARKLE_EDDSA_PRIVATE_KEY` is stored only in the protected `sparkle-release`
 environment. The matching public key is committed at
 `sparkle-public-ed-key.txt` for #163 and future recovery verification.
+
+The environment's deployment branch policy still names `release` until the
+main-only workflow migration is integrated. Change that policy to `main` before
+dispatching the new release or feed workflows; no key or secret move is needed.
 
 ## One-Time Provisioning
 
@@ -114,9 +120,9 @@ working key.
 The appcast-signing job must:
 
 - declare `environment: sparkle-release`;
-- run only from the protected `release` branch;
+- run only from protected `main` and package only the validated `github.sha`;
 - check out and execute only the protected workflow revision in the key-bearing
-  job, never the selected package source ref;
+  job;
 - receive the private key only as
   `${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}`;
 - pipe the secret to Sparkle with `--ed-key-file -`;
@@ -126,8 +132,12 @@ The appcast-signing job must:
 ## Feed Disable and Key Loss
 
 - To disable updates without changing installed apps, dispatch
-  `Disable Sparkle Updates` from the protected `release` branch. It deploys the
-  valid empty appcast and leaves the GitHub Release download path available.
+  `Manage Sparkle Pages` from protected `main` with the `disable` operation and
+  no tag. It preempts an in-flight feed deployment, deploys the valid empty
+  appcast, and leaves every GitHub Release and cumulative snapshot unchanged.
+- To restore updates, dispatch `Manage Sparkle Pages` from protected `main` with
+  `restore` and a published release tag. The workflow validates and redeploys
+  that release's durable `appcast.xml` asset.
 - If the GitHub secret is lost but the recovery entry remains, restore the
   secret from the recovery entry through a RAM-disk file and standard input.
 - If the working login-keychain item is lost, restore it from the recovery entry
