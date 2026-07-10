@@ -34,9 +34,9 @@ verify, install, or relaunch an update.
 
 The current release workflow already creates a Developer ID signed and
 notarized DMG with Briefcase. It does not embed Sparkle, publish signed appcast
-items, or hold a Sparkle signing key. GitHub Pages is configured for Actions
-deployment, and the #162 foundation provides a separate valid empty appcast;
-production key generation and signed update entries remain pending.
+items, or consume the Sparkle signing key. GitHub Pages is configured for
+Actions deployment, and the #162 foundation provides a production public key
+and a separate valid empty appcast; signed update entries remain pending.
 
 The generated local app bundle also uses `CFBundleVersion = 1`. Sparkle uses
 the bundle build version for update ordering, so a monotonic build-number policy
@@ -76,7 +76,8 @@ BDToAVPDistributionChannel = direct
 The direct-DMG build will also contain:
 
 - `SUFeedURL = https://cbusillo.github.io/BD_to_AVP/appcast.xml`;
-- the approved `SUPublicEDKey`;
+- the approved `SUPublicEDKey` from
+  [`sparkle-public-ed-key.txt`](../sparkle-public-ed-key.txt);
 - `SUAllowsAutomaticUpdates = false`, so every install remains user-approved;
   and
 - `SUVerifyUpdateBeforeExtraction = true`.
