@@ -102,7 +102,8 @@ settings. Before the first release on this path:
   the Apple certificate, identity, notarization, and keychain secrets from
   repository scope into it. The legacy `KEYCHAIN_PASSWORD` value is the Apple
   app-specific password; the workflow generates a separate ephemeral build
-  keychain password for every run;
+  keychain password for every run and derives Briefcase's notarization profile
+  name from `TEAM_ID`, so no `KEYCHAIN_NAME` secret is required;
 - configure a PyPI Trusted Publisher for repository `cbusillo/BD_to_AVP`,
   workflow `briefcase.yml`, environment `pypi`, and the `bd_to_avp` project;
 - create/protect the `pypi` GitHub environment as desired, then remove the

@@ -358,10 +358,10 @@ jobs:
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          KEYCHAIN_NAME: ${{ secrets.KEYCHAIN_NAME }}
           TEAM_ID: ${{ secrets.TEAM_ID }}
         run: |
-          xcrun notarytool store-credentials "$KEYCHAIN_NAME" \
+          NOTARY_PROFILE="briefcase-macOS-$TEAM_ID"
+          xcrun notarytool store-credentials "$NOTARY_PROFILE" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --team-id "$TEAM_ID"
