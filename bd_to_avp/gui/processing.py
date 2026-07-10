@@ -17,11 +17,14 @@ from .util import OutputHandler
 
 
 class TextOutputStream(Protocol):
-    def write(self, text: str, /) -> int: ...
+    def write(self, text: str, /) -> int:
+        raise NotImplementedError
 
-    def writelines(self, lines: Iterable[str], /) -> None: ...
+    def writelines(self, lines: Iterable[str], /) -> None:
+        raise NotImplementedError
 
-    def flush(self) -> None: ...
+    def flush(self) -> None:
+        raise NotImplementedError
 
 
 class NullOutput:
@@ -196,8 +199,10 @@ class ProcessingThread(QThread):
                 self._process_runner(self.request)
             outcome_kind = ProcessingOutcomeKind.CANCELLED if self.cancel_requested else ProcessingOutcomeKind.COMPLETED
             self.outcome = ProcessingOutcome(outcome_kind)
-        except BaseException as error:
+        except Exception as error:
             self.outcome = self._outcome_for_error(error)
+        except (SystemExit, KeyboardInterrupt, GeneratorExit) as error:
+            self.outcome = ProcessingOutcome(ProcessingOutcomeKind.FAILED, error)
         finally:
             if self.cancel_requested:
                 self.outcome = ProcessingOutcome(ProcessingOutcomeKind.CANCELLED)
