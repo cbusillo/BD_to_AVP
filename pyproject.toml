@@ -22,10 +22,8 @@ dependencies = [
     "humanize>=4.9.0,<5",
     "numpy>=2,<3",
     "opencv-python==4.10.0.84",
-    "packaging>=24.1,<27",
     "psutil>=5.9.8,<8",
     "pyobjc-framework-vision>=11.0,<12",
-    "pygithub>=2.3.0,<3",
     "pyside6>=6.7.1,<7",
     "pysrt>=1.1.2,<2",
     "trakit>=0.2.2,<0.3",
@@ -43,7 +41,7 @@ bd-to-avp = "bd_to_avp.__main__:main"
 [dependency-groups]
 dev = [
     "black>=26.5.1,<27",
-    "briefcase>=0.4.3,<0.5",
+    "briefcase==0.4.3",
     "mypy>=2.1.0,<3",
     "ruff>=0.15.20,<0.16",
     "types-psutil>=5.9.5.20240516",
@@ -91,10 +89,8 @@ requires = [
     "humanize>=4.9.0,<5",
     "numpy>=2,<3",
     "opencv-python==4.10.0.84",
-    "packaging>=24.1,<27",
     "psutil>=5.9.8,<8",
     "pyobjc-framework-vision>=11.0,<12",
-    "pygithub>=2.3.0,<3",
     "pyside6>=6.7.1,<7",
     "pysrt>=1.1.2,<2",
     "trakit>=0.2.2,<0.3",
@@ -103,6 +99,14 @@ requires = [
 
 [tool.briefcase.app.bd-to-avp.macOS]
 universal_build = false
+
+[tool.briefcase.app.bd-to-avp.macOS.info]
+CFBundleVersion = "144"
+BDToAVPDistributionChannel = "direct"
+SUFeedURL = "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
+SUPublicEDKey = "nJv1BH0mc2KFORVIDLlSI2A9mvGpVWdLcxlmz++OODU="
+SUAllowsAutomaticUpdates = false
+SUVerifyUpdateBeforeExtraction = true
 
 [tool.ruff]
 line-length = 120

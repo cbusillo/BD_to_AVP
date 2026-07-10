@@ -316,6 +316,17 @@ class ProcessingControllerTests(unittest.TestCase):
 
         self.assertTrue(self.threads[0].cancel_requested)
 
+    def test_controller_emits_idle_after_attempt_finishes(self) -> None:
+        controller = ProcessingController()
+        idle = Mock()
+        controller.processing_became_idle.connect(idle)
+
+        with patch("bd_to_avp.gui.processing.ProcessingThread", side_effect=self.make_thread):
+            controller.start(self.request)
+            self.threads[0].finish(ProcessingOutcome(ProcessingOutcomeKind.COMPLETED))
+
+        idle.assert_called_once_with()
+
     def test_controller_late_cancel_overrides_completed_outcome(self) -> None:
         controller = ProcessingController()
         cancellations: list[ProcessingRequest] = []

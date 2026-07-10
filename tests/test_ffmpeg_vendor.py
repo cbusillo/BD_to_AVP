@@ -122,6 +122,18 @@ class BriefcaseVendorHookTests(unittest.TestCase):
         self.assertTrue(briefcase_app.should_sync_vendored_tools(["build"]))
         self.assertFalse(briefcase_app.should_sync_vendored_tools(["package", "-i", "Developer ID"]))
         self.assertFalse(briefcase_app.should_sync_vendored_tools(["--help"]))
+        self.assertTrue(briefcase_app.should_sync_vendored_tools_after(["create", "--no-input"]))
+        self.assertFalse(briefcase_app.should_sync_vendored_tools_after(["build"]))
+
+    def test_embed_sparkle_for_app_commands(self) -> None:
+        self.assertTrue(briefcase_app.should_embed_sparkle(["create", "--no-input"]))
+        self.assertTrue(briefcase_app.should_embed_sparkle(["build"]))
+        self.assertTrue(briefcase_app.should_embed_sparkle(["package", "-i", "Developer ID"]))
+        self.assertFalse(briefcase_app.should_embed_sparkle(["--help"]))
+        self.assertTrue(briefcase_app.should_embed_sparkle_after(["create", "--no-input"]))
+        self.assertFalse(briefcase_app.should_embed_sparkle_after(["build"]))
+        self.assertTrue(briefcase_app.should_force_extract_sparkle(["package", "--no-input"]))
+        self.assertFalse(briefcase_app.should_force_extract_sparkle(["build", "--no-input"]))
 
     def test_do_not_vendor_ffmpeg_for_non_app_commands(self) -> None:
         self.assertFalse(briefcase_app.should_vendor_ffmpeg(["--help"]))
@@ -149,16 +161,43 @@ class BriefcaseVendorHookTests(unittest.TestCase):
                 self.assertTrue((app_bin / tool_name).stat().st_mode & 0o111)
 
     def test_briefcase_package_does_not_resync_signed_tools(self) -> None:
-        with (
-            patch.object(briefcase_app, "run") as run,
-            patch.object(briefcase_app, "build_wheelhouse") as build_wheelhouse,
-            patch.object(briefcase_app, "sync_vendored_tools_to_existing_app") as sync_tools,
-        ):
-            briefcase_app.main_with_args(["package", "--no-input"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(briefcase_app, "APP_PATH", Path(temp_dir) / "missing.app"),
+                patch.object(briefcase_app, "run_briefcase") as run_briefcase,
+                patch.object(briefcase_app, "build_wheelhouse") as build_wheelhouse,
+                patch.object(briefcase_app, "sync_vendored_tools_to_existing_app") as sync_tools,
+                patch.object(briefcase_app, "sync_sparkle_to_existing_app") as sync_sparkle,
+            ):
+                briefcase_app.main_with_args(["package", "--no-input"])
 
         build_wheelhouse.assert_called_once()
-        run.assert_called_once()
+        run_briefcase.assert_called_once()
         sync_tools.assert_not_called()
+        sync_sparkle.assert_called_once_with(force_extract=True)
+
+    def test_briefcase_package_embeds_only_before_final_signing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = Path(temp_dir) / "App.app"
+            app_path.mkdir()
+            events: list[str] = []
+            with (
+                patch.object(briefcase_app, "APP_PATH", app_path),
+                patch.object(briefcase_app, "build_wheelhouse"),
+                patch.object(
+                    briefcase_app,
+                    "sync_sparkle_to_existing_app",
+                    side_effect=lambda **_kwargs: events.append("embed"),
+                ) as sync_sparkle,
+                patch.object(briefcase_app, "run_briefcase", side_effect=lambda _args: events.append("sign")),
+                patch.object(
+                    briefcase_app, "verify_framework_layout", side_effect=lambda _path: events.append("verify")
+                ),
+            ):
+                briefcase_app.main_with_args(["package", "--no-input"])
+
+        self.assertEqual(events, ["embed", "sign", "verify"])
+        sync_sparkle.assert_called_once_with(force_extract=True)
 
 
 if __name__ == "__main__":

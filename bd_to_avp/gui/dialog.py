@@ -1,13 +1,8 @@
 from pathlib import Path
 from typing import cast
-from urllib.parse import urlparse
 
 from PySide6.QtCore import QCoreApplication, Qt
-from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
-from github import Github, GithubException, UnknownObjectException
-from github.GitRelease import GitRelease
-from packaging import version
-from packaging.version import InvalidVersion
+from PySide6.QtWidgets import QApplication, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 
 # noinspection PyAttributeOutsideInit
@@ -23,7 +18,6 @@ class AboutDialog(QDialog):
 
         self.app = app
         self.readme_url = self.app.property("url")
-        self.repo_name = urlparse(self.readme_url).path.lstrip("/")
 
         self.setWindowTitle(f"About {self.app.applicationDisplayName()}")
         self.create_dialog()
@@ -37,7 +31,6 @@ class AboutDialog(QDialog):
         self.add_company_label(layout)
         self.add_authors_label(layout)
         self.add_readme_label(layout)
-        self.add_update_section(layout)
         self.add_description_label(layout)
         self.add_close_button(layout)
 
@@ -93,69 +86,6 @@ class AboutDialog(QDialog):
         readme_label.setOpenExternalLinks(True)
         readme_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(readme_label)
-
-    def add_update_section(self, layout: QVBoxLayout) -> None:
-        self.update_label = QLabel()
-        self.prerelease_checkbox = QCheckBox("Include pre-releases")
-        self.prerelease_checkbox.stateChanged.connect(self.update_github_update_label)
-
-        if self.is_pre_release() or self.is_pre_release() is None:
-            self.prerelease_checkbox.setChecked(True)
-
-        self.update_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.update_label.setTextFormat(Qt.TextFormat.RichText)
-        self.update_label.setOpenExternalLinks(True)
-
-        checkbox_layout = QHBoxLayout()
-        checkbox_layout.addStretch(1)
-        checkbox_layout.addWidget(self.prerelease_checkbox)
-        checkbox_layout.addStretch(1)
-
-        layout.addLayout(checkbox_layout)
-        layout.addWidget(self.update_label)
-
-        self.update_github_update_label()
-
-    def update_github_update_label(self) -> None:
-        try:
-            latest_release = self.fetch_latest_release()
-
-            if not latest_release:
-                self.update_label.setText("No releases found.")
-                return
-
-            latest_release_version = latest_release.tag_name.lstrip("v")
-            latest_release_url = latest_release.html_url
-            latest_version = version.parse(latest_release_version)
-            app_version = version.parse(self.app.applicationVersion())
-            if latest_version > app_version:
-                self.update_label.setText(
-                    f"New version available: <a href='{latest_release_url}'>v{latest_release_version}</a>"
-                )
-
-            else:
-                self.update_label.setText(f"You are using the latest <a href='{latest_release_url}'>version</a>.")
-        except (GithubException, InvalidVersion):
-            self.update_label.setText("Failed to check for updates.")
-
-    def fetch_latest_release(self) -> GitRelease | None:
-        repo = Github().get_repo(self.repo_name)
-        releases = repo.get_releases()
-        for release in releases:
-            if not release.prerelease or self.prerelease_checkbox.isChecked():
-                return release
-        return None
-
-    def is_pre_release(self) -> bool | None:
-        repo = Github().get_repo(self.repo_name)
-        try:
-            current_release = repo.get_release(f"v{self.app.applicationVersion()}")
-        except UnknownObjectException:
-            return None
-
-        if current_release.prerelease:
-            return True
-        return False
 
     def add_description_label(self, layout: QVBoxLayout) -> None:
         description_label = QLabel(self.get_section_from_readme("Introduction"))

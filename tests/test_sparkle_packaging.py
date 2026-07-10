@@ -1,0 +1,362 @@
+import concurrent.futures
+import io
+import plistlib
+import tarfile
+import tempfile
+import unittest
+
+from pathlib import Path
+from unittest.mock import Mock, patch
+
+from scripts import briefcase_macos_signing, sparkle_bundle, sparkle_macos
+
+
+def make_framework(root: Path, *, version: str = "2.9.4") -> Path:
+    framework = root / "Sparkle.framework"
+    for required_path in sparkle_macos.REQUIRED_FRAMEWORK_PATHS:
+        path = framework / required_path
+        if required_path.suffix in {".app", ".xpc"}:
+            path.mkdir(parents=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"binary")
+    info_path = framework / "Versions/B/Resources/Info.plist"
+    info_path.parent.mkdir(parents=True, exist_ok=True)
+    with info_path.open("wb") as handle:
+        plistlib.dump(
+            {
+                "CFBundleIdentifier": "org.sparkle-project.Sparkle",
+                "CFBundleShortVersionString": version,
+            },
+            handle,
+        )
+    (framework / "Versions/Current").symlink_to("B")
+    (framework / "Sparkle").symlink_to("Versions/Current/Sparkle")
+    return framework
+
+
+def make_app(root: Path, info: dict[str, object]) -> Path:
+    app_path = root / "Test.app"
+    info_path = app_path / "Contents/Info.plist"
+    info_path.parent.mkdir(parents=True)
+    with info_path.open("wb") as handle:
+        plistlib.dump(info, handle)
+    framework = make_framework(app_path / "Contents/Frameworks")
+    self_contained_framework = app_path / sparkle_macos.FRAMEWORK_RELATIVE_PATH
+    if framework != self_contained_framework:
+        self_contained_framework.parent.mkdir(parents=True, exist_ok=True)
+        framework.rename(self_contained_framework)
+    return app_path
+
+
+class SparkleMacOSTests(unittest.TestCase):
+    def test_manifest_pins_expected_release(self) -> None:
+        release = sparkle_macos.load_release()
+
+        self.assertEqual(release.version, "2.9.4")
+        self.assertEqual(
+            release.archive_sha256,
+            "ce89daf967db1e1893ed3ebd67575ed82d3902563e3191ca92aaec9164fbdef9",
+        )
+        self.assertTrue(release.archive_url.startswith("https://"))
+
+    def test_manifest_rejects_non_https_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "sparkle.toml"
+            manifest_path.write_text(
+                'version = "2.9.4"\narchive_url = "http://example.invalid/Sparkle.tar.xz"\n'
+                f'archive_sha256 = "{"0" * 64}"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(sparkle_macos.SparkleBuildError, "HTTPS"):
+                sparkle_macos.load_release(manifest_path)
+
+    def test_extract_archive_rejects_traversal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path = root / "Sparkle.tar.xz"
+            with tarfile.open(archive_path, "w:xz") as archive:
+                member = tarfile.TarInfo("../outside")
+                member.size = 1
+                archive.addfile(member, io.BytesIO(b"x"))
+            release = sparkle_macos.SparkleRelease(
+                version="test",
+                archive_url="https://example.invalid/Sparkle.tar.xz",
+                archive_sha256=sparkle_macos.sha256_file(archive_path),
+            )
+
+            with self.assertRaisesRegex(sparkle_macos.SparkleBuildError, "escapes"):
+                sparkle_macos.extract_archive(archive_path, release, root / "cache")
+
+    def test_extract_archive_rebuilds_corrupt_cached_framework(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_root = root / "archive-root"
+            framework = make_framework(archive_root, version="test")
+            archive_path = root / "Sparkle.tar.xz"
+            with tarfile.open(archive_path, "w:xz") as archive:
+                archive.add(framework, arcname="Sparkle.framework")
+            release = sparkle_macos.SparkleRelease(
+                version="test",
+                archive_url="https://example.invalid/Sparkle.tar.xz",
+                archive_sha256=sparkle_macos.sha256_file(archive_path),
+            )
+            cache_root = root / "cache"
+            cached_root = cache_root / release.version
+            cached_root.mkdir(parents=True)
+            (cached_root / ".archive-sha256").write_text(release.archive_sha256, encoding="utf-8")
+
+            extracted_framework = sparkle_macos.extract_archive(archive_path, release, cache_root)
+
+            sparkle_macos.verify_framework_layout(extracted_framework)
+
+    def test_embed_preserves_framework_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app_path = root / "App.app"
+            app_path.mkdir()
+            source_framework = make_framework(root / "source", version="test")
+            release = sparkle_macos.SparkleRelease(
+                version="test",
+                archive_url="https://example.invalid/Sparkle.tar.xz",
+                archive_sha256="0" * 64,
+            )
+
+            with (
+                patch.object(sparkle_macos, "download_archive", return_value=root / "archive"),
+                patch.object(sparkle_macos, "extract_archive", return_value=source_framework),
+            ):
+                destination = sparkle_macos.embed_sparkle(
+                    app_path,
+                    release=release,
+                    cache_root=root / "cache",
+                    verify_architecture=False,
+                )
+
+            self.assertTrue((destination / "Versions/Current").is_symlink())
+            self.assertEqual((destination / "Versions/Current").readlink(), Path("B"))
+            sparkle_macos.verify_framework_layout(destination)
+
+    def test_framework_version_must_match_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            framework = make_framework(Path(temp_dir), version="2.9.3")
+
+            with self.assertRaisesRegex(sparkle_macos.SparkleBuildError, "version must be 2.9.4"):
+                sparkle_macos.verify_framework_layout(framework, expected_version="2.9.4")
+
+
+class BriefcaseSigningTests(unittest.TestCase):
+    def test_collect_sign_targets_includes_xpc_bundles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = Path(temp_dir) / "App.app"
+            downloader = app_path / "Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
+            installer = app_path / "Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc"
+            updater = app_path / "Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
+            framework = app_path / "Contents/Frameworks/Sparkle.framework"
+            for path in (downloader, installer, updater):
+                path.mkdir(parents=True)
+            (app_path / "Contents/Resources").mkdir(parents=True)
+
+            class Command:
+                @staticmethod
+                def package_path(_app):
+                    return app_path
+
+            targets = briefcase_macos_signing.collect_sign_targets(Command(), object())
+
+        self.assertIn(downloader, targets)
+        self.assertIn(installer, targets)
+        self.assertIn(updater, targets)
+        self.assertIn(framework, targets)
+        self.assertEqual(targets[-1], app_path)
+
+    def test_sparkle_targets_do_not_receive_app_entitlements(self) -> None:
+        app_path = Path("/tmp/App.app")
+        sparkle_path = app_path / "Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
+        other_path = app_path / "Contents/Frameworks/Other.framework"
+
+        self.assertTrue(briefcase_macos_signing.is_sparkle_target(sparkle_path, app_path))
+        self.assertFalse(briefcase_macos_signing.is_sparkle_target(other_path, app_path))
+
+    def test_signing_patch_rejects_unexpected_briefcase_version(self) -> None:
+        with patch.object(briefcase_macos_signing.briefcase, "__version__", "0.4.4"):
+            with self.assertRaisesRegex(RuntimeError, "requires Briefcase 0.4.3"):
+                briefcase_macos_signing.install_patch()
+
+    def test_sign_app_uses_inside_out_order_and_no_host_entitlements_for_sparkle(self) -> None:
+        app_path = Path("/tmp/App.app")
+        downloader = app_path / "Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
+        updater_app = app_path / "Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
+        framework = app_path / "Contents/Frameworks/Sparkle.framework"
+        other_framework = app_path / "Contents/Frameworks/Other.framework"
+        groups = [[downloader], [updater_app], [framework, other_framework], [app_path]]
+        signed: list[tuple[Path, object]] = []
+
+        class ProgressBar:
+            def add_task(self, _label: str, *, total: int) -> int:
+                self.total = total
+                return 1
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def update(self, _task_id: int, *, advance: int) -> None:
+                self.advance = advance
+
+        class Command:
+            console = Mock(is_deep_debug=False)
+            tools = Mock()
+
+            @staticmethod
+            def package_path(_app):
+                return app_path
+
+            @staticmethod
+            def entitlements_path(_app):
+                return Path("host.entitlements")
+
+            @staticmethod
+            def sign_file(path, *, entitlements, identity):
+                signed.append((path, entitlements))
+
+        command = Command()
+        command.console.progress_bar.return_value = ProgressBar()
+        command.tools.file.sorted_depth_first_groups.return_value = (iter(group) for group in groups)
+        real_executor = concurrent.futures.ThreadPoolExecutor
+        executor_workers: list[int | None] = []
+
+        def create_executor(*, max_workers=None):
+            executor_workers.append(max_workers)
+            return real_executor(max_workers=max_workers)
+
+        with (
+            patch.object(
+                briefcase_macos_signing,
+                "collect_sign_targets",
+                return_value=[path for group in groups for path in group],
+            ),
+            patch.object(
+                briefcase_macos_signing.concurrent.futures,
+                "ThreadPoolExecutor",
+                side_effect=create_executor,
+            ),
+        ):
+            briefcase_macos_signing.sign_app_with_xpc(command, object(), "Developer ID")
+
+        self.assertEqual([path for path, _ in signed], [path for group in groups for path in group])
+        self.assertEqual(executor_workers, [1, 1, 1, None])
+        entitlements_by_path = dict(signed)
+        self.assertIsNone(entitlements_by_path[downloader])
+        self.assertIsNone(entitlements_by_path[updater_app])
+        self.assertIsNone(entitlements_by_path[framework])
+        self.assertEqual(entitlements_by_path[other_framework], Path("host.entitlements"))
+        self.assertEqual(entitlements_by_path[app_path], Path("host.entitlements"))
+
+
+class SparkleBundleTests(unittest.TestCase):
+    def expected_info(self) -> dict[str, object]:
+        return {
+            "CFBundleVersion": "144",
+            "BDToAVPDistributionChannel": "direct",
+            "SUFeedURL": "https://example.invalid/appcast.xml",
+            "SUPublicEDKey": "public-key",
+            "SUAllowsAutomaticUpdates": False,
+            "SUVerifyUpdateBeforeExtraction": True,
+        }
+
+    def test_inspect_app_bundle_validates_metadata_and_layout(self) -> None:
+        expected = self.expected_info()
+        info = {
+            **expected,
+            "CFBundleIdentifier": "com.example.test",
+            "CFBundleShortVersionString": "1.2.3rc1",
+            "LSMinimumSystemVersion": "11.0",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = make_app(Path(temp_dir), info)
+
+            metadata = sparkle_bundle.inspect_app_bundle(app_path, expected_info=expected)
+
+        self.assertEqual(metadata.build_version, "144")
+        self.assertEqual(metadata.short_version, "1.2.3rc1")
+        self.assertEqual(metadata.distribution_channel, "direct")
+        self.assertEqual(metadata.minimum_system_version, "11.0")
+
+    def test_inspect_app_bundle_rejects_default_build_number(self) -> None:
+        expected = self.expected_info()
+        expected["CFBundleVersion"] = "1"
+        info = {
+            **expected,
+            "CFBundleIdentifier": "com.example.test",
+            "CFBundleShortVersionString": "1.2.3",
+            "LSMinimumSystemVersion": "11.0",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = make_app(Path(temp_dir), info)
+
+            with self.assertRaisesRegex(sparkle_bundle.SparkleBundleError, "greater than 1"):
+                sparkle_bundle.inspect_app_bundle(app_path, expected_info=expected)
+
+    def test_inspect_app_bundle_rejects_noncanonical_build_numbers(self) -> None:
+        for build_version in ("0", "00", "01"):
+            with self.subTest(build_version=build_version), tempfile.TemporaryDirectory() as temp_dir:
+                expected = self.expected_info()
+                expected["CFBundleVersion"] = build_version
+                info = {
+                    **expected,
+                    "CFBundleIdentifier": "com.example.test",
+                    "CFBundleShortVersionString": "1.2.3",
+                    "LSMinimumSystemVersion": "11.0",
+                }
+                app_path = make_app(Path(temp_dir), info)
+
+                with self.assertRaisesRegex(sparkle_bundle.SparkleBundleError, "canonical numeric"):
+                    sparkle_bundle.inspect_app_bundle(app_path, expected_info=expected)
+
+    def test_release_artifact_accepts_newer_numeric_build(self) -> None:
+        expected = self.expected_info()
+        info = {
+            **expected,
+            "CFBundleVersion": "145",
+            "CFBundleIdentifier": "com.example.test",
+            "CFBundleShortVersionString": "1.2.4rc1",
+            "LSMinimumSystemVersion": "11.0",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = make_app(Path(temp_dir), info)
+
+            metadata = sparkle_bundle.inspect_app_bundle(
+                app_path,
+                expected_info=expected,
+                require_repository_build=False,
+            )
+
+        self.assertEqual(metadata.build_version, "145")
+
+    def test_inspect_app_bundle_rejects_output_unsafe_versions(self) -> None:
+        expected = self.expected_info()
+        info = {
+            **expected,
+            "CFBundleIdentifier": "com.example.test",
+            "CFBundleShortVersionString": "1.2.3\nforged=value",
+            "LSMinimumSystemVersion": "11.0",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = make_app(Path(temp_dir), info)
+
+            with self.assertRaisesRegex(sparkle_bundle.SparkleBundleError, "three-part version"):
+                sparkle_bundle.inspect_app_bundle(app_path, expected_info=expected)
+
+    def test_repository_public_key_matches_briefcase_metadata(self) -> None:
+        info = sparkle_bundle.load_expected_info()
+
+        self.assertEqual(info["CFBundleVersion"], "144")
+        self.assertEqual(info["SUPublicEDKey"], sparkle_bundle.PUBLIC_KEY_PATH.read_text().strip())
+
+
+if __name__ == "__main__":
+    unittest.main()
