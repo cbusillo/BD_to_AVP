@@ -118,10 +118,31 @@ With MakeMKV installed:
   the app bundle is a blocker, because reinstalling the current app will not add
   it.
 
+## Sparkle Update Smoke (After Enablement)
+
+This is the acceptance smoke for #165. Do not begin it until #162 through #164
+have provided the production key/feed, packaged framework, and runtime
+integration described in [sparkle-updates.md](sparkle-updates.md).
+
+1. Install an older signed/notarized DMG build in `/Applications` and launch it
+   from there. Do not test the update while running from the mounted DMG.
+2. Confirm Help > `Check for Updates…` opens Sparkle's standard update UI.
+3. Confirm the candidate version, release notes, and download size match the
+   GitHub Release DMG.
+4. Install the update, relaunch, and confirm the displayed and packaged versions
+   match the candidate.
+5. Repeat with an unavailable feed and an intentionally invalid test signature;
+   the installed app must remain unchanged.
+6. Start media processing and confirm installation/relaunch is postponed until
+   processing is idle.
+7. Verify the manual GitHub Releases download remains usable as the recovery
+   path.
+
 ## Follow-Up Routing
 
 - Missing bundled GUI dependency: file or update the relevant #88 child issue.
 - MakeMKV replacement/removal question: #103.
 - Release artifact confusion such as PKG vs DMG: #118.
-- Direct-DMG auto-update behavior: #120.
+- Sparkle architecture: #120 and `docs/sparkle-updates.md`.
+- Sparkle implementation and validation: #162 through #165.
 - App Store sandbox/name/compliance question: #121.
