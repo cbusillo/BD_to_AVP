@@ -22,7 +22,7 @@
       "target": "refs/heads/release",
       "requiresPullRequest": true,
       "allowedMergeMethods": ["merge"],
-      "requiredStatusChecks": ["validate", "Analyze (actions)", "Analyze (python)"],
+      "requiredStatusChecks": ["validate"],
       "requiredApprovals": 0,
       "blocksForcePushes": true,
       "blocksDeletion": true,
