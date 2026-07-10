@@ -2,8 +2,9 @@
 
 ## Status
 
-This document is the accepted architecture for issue #120. It defines the
-production path, but does not enable Sparkle in current releases.
+This document is the accepted architecture for issue #120 and the implementation
+contract for #163 through #165. Published builds before the first
+Sparkle-enabled release still use manual GitHub Release downloads.
 
 The work is intentionally split across #162 through #165 so key custody,
 framework packaging, runtime integration, appcast publication, and clean-machine
@@ -16,33 +17,31 @@ validation can be reviewed independently.
 - GitHub Pages will host a stable HTTPS appcast. Appcast enclosures will point
   to versioned DMG assets on GitHub Releases that release policy treats as
   immutable after publication.
-- The first production rollout will publish stable updates only. Prerelease
-  DMGs remain manual downloads until the stable path is proven.
+- Stable is the default update channel. Release Candidates are an explicit
+  opt-in and use Sparkle's `rc` channel in the same appcast.
 - Sparkle's standard user interface will own download, signature verification,
   installation, and relaunch. BD_to_AVP will expose `Check for Updates…` and
   will not silently install updates.
-- A production EdDSA key will not be generated until private-key backup and
-  recovery ownership are explicitly approved.
+- The production EdDSA key follows the custody boundary in
+  [sparkle-key-custody.md](sparkle-key-custody.md).
 - The existing GitHub release link remains the fallback until the packaged
   Sparkle path passes an installed-app upgrade smoke.
 
 ## Current State
 
-The current About dialog performs synchronous unauthenticated GitHub API calls,
-compares release tags, and links to the release page. It does not download,
-verify, install, or relaunch an update.
+The implementation embeds pinned Sparkle 2.9.4 in direct-DMG builds, removes the
+synchronous PyGithub About-dialog checker, and exposes Sparkle's standard
+`Check for Updates…` action. Source/development builds retain only a manual
+GitHub Releases link and never initialize Sparkle.
 
-The current release workflow already creates a Developer ID signed and
-notarized DMG with Briefcase. It does not embed Sparkle, publish signed appcast
-items, or consume the Sparkle signing key. GitHub Pages is configured for
-Actions deployment, and the #162 foundation provides a production public key
-and a separate valid empty appcast; signed update entries remain pending.
+Briefcase writes the direct-distribution metadata and repository build counter,
+and the repo-owned signing extension adds nested `.xpc` bundles to Briefcase's
+inside-out signing pass. The release workflow validates the final notarized DMG,
+signs it with the protected environment key, and deploys a validated full-update
+appcast. The live feed remains empty until the first enabled release is
+published.
 
-The generated local app bundle also uses `CFBundleVersion = 1`. Sparkle uses
-the bundle build version for update ordering, so a monotonic build-number policy
-is required before updates can be enabled.
-
-## Feasibility Evidence
+## Implementation Evidence
 
 Research for #120 used Briefcase 0.4.3 and Sparkle 2.9.4.
 
@@ -53,14 +52,16 @@ Research for #120 used Briefcase 0.4.3 and Sparkle 2.9.4.
   and resolved `SPUStandardUpdaterController` in a local feasibility probe.
 - Briefcase 0.4.3 signs Mach-O files, embedded frameworks, and embedded apps,
   but does not treat Sparkle's nested `.xpc` services as bundle-signing targets.
-  #163 must augment the signing path and prove the complete inside-out order.
+  `scripts/briefcase_macos_signing.py` adds `.xpc` targets to the same
+  depth-first signing pass and is guarded to Briefcase 0.4.3.
 - Briefcase 0.4.3 supports arbitrary macOS Info.plist entries through its
   `macOS.info` map. Its v0.4.3 app template hard-codes `CFBundleVersion = 1`
-  and does not consume a `build` value, so #163 must override that plist key
-  explicitly or first upgrade Briefcase and prove the generated value.
+  and does not consume a `build` value, so the macOS `info` map overrides that
+  plist key explicitly.
 
-These checks prove the integration is feasible. They do not replace a signed,
-notarized, installed-app update test.
+Local create/build validation proves metadata resolution, framework layout,
+PyObjC delegate bridging, and ad-hoc nested signing. It does not replace a
+Developer ID signed, notarized, installed-app update test.
 
 ## Build Boundary
 
@@ -90,16 +91,19 @@ missing, the app fails closed to the manual GitHub Releases path.
 A future App Store build will set its channel to `app-store`, omit Sparkle
 metadata, and omit `Sparkle.framework` entirely.
 
-The Sparkle release must be pinned by version and archive digest. The framework
-must be copied after `briefcase build` and before `briefcase package`, preserving
-symlinks and executable permissions.
+`vendor/sparkle-macos.toml` pins the Sparkle version, archive URL, and digest.
+`scripts/sparkle_macos.py` verifies and safely extracts the archive, then copies
+the framework before Briefcase's build/package signing pass while preserving
+symlinks and executable permissions. Production packaging and `sign_update`
+preparation force a fresh extraction from the verified archive instead of
+trusting the extraction cache.
 
 Sparkle 2.9.4 contains `Updater.app`, `Downloader.xpc`, and `Installer.xpc`.
-Briefcase 0.4.3 does not sign `.xpc` bundles as first-class targets, so #163 must
-extend or supplement the signing path. Nested XPC services and apps must be
-signed before `Sparkle.framework`, which must be signed before the containing
-app. Briefcase may own final app signing, DMG packaging, and notarization only
-after that nested-bundle order is proven.
+Briefcase 0.4.3 does not sign `.xpc` bundles as first-class targets, so the
+repo-owned signing patch includes them without modifying site-packages. Nested
+XPC services and apps are signed before `Sparkle.framework`, which is signed
+before the containing app. Sparkle targets do not inherit the host app's Python
+runtime entitlements.
 
 ## Build Versioning
 
@@ -160,34 +164,41 @@ The appcast publication job must:
 
 1. wait until the matching GitHub Release DMG is downloadable;
 2. verify the pinned Sparkle tooling archive;
-3. compute the DMG's EdDSA signature with `generate_appcast --ed-key-file -` or
-   `sign_update`, without modifying the DMG;
-4. disable delta generation with `--maximum-deltas 0` or an equivalent
-   full-update-only path;
+3. compute the DMG's EdDSA signature with `sign_update --ed-key-file -`, without
+   modifying the DMG;
+4. add only a full-DMG enclosure and never generate delta elements;
 5. set each new enclosure to its exact tag-qualified GitHub Release asset URL;
 6. validate the appcast version, URL, length, EdDSA signature, and absence of
    delta enclosures; and
 7. deploy the feed atomically to GitHub Pages.
+
+Release publication rejects an existing tag or short version, disables release
+asset overwrite, and verifies that the downloaded GitHub Release DMG has the
+same name, size, and SHA-256 digest as the locally notarized artifact before it
+is signed into the appcast.
 
 If appcast publication fails, the GitHub Release remains available for manual
 installation and the existing feed remains unchanged.
 
 ## Stable and Prerelease Policy
 
-The initial updater serves stable releases only. This keeps current RC builds
-manual and avoids introducing channel delegates or a user preference before the
-base upgrade path is proven.
+One appcast serves both release policies:
 
-After stable rollout evidence exists, a separate decision may add a prerelease
-feed or Sparkle channel. A prerelease design must guarantee that prerelease
-clients can later receive the stable release and that stable clients never see
-prerelease items.
+- production items omit `sparkle:channel` and are therefore on Sparkle's default
+  channel;
+- release candidates include `<sparkle:channel>rc</sparkle:channel>`;
+- every installation defaults to Stable; and
+- users who opt into Release Candidates allow `rc` while Sparkle continues to
+  include the default channel automatically.
+
+This guarantees that Stable users never select RC items and RC users can later
+receive the production release without changing feeds.
 
 ## Runtime Integration and UX
 
-The runtime integration will use a small wrapper that loads the bundled
-framework on the main thread and retains `SPUStandardUpdaterController` for the
-application lifetime.
+The runtime integration loads the bundled framework on the main thread and
+retains `SPUStandardUpdaterController` and its delegate for the application
+lifetime.
 
 A live packaged-app test must prove that Qt's macOS event loop delivers
 Sparkle's timers, windows, and delegate callbacks. Resolving the Objective-C
@@ -196,6 +207,9 @@ class alone is not sufficient evidence.
 The direct-DMG user experience is:
 
 - Help contains `Check for Updates…`.
+- Help contains an `Update Channel` submenu with Stable and Release Candidates;
+  the preference is persisted in the app's `NSUserDefaults` domain and defaults
+  to Stable.
 - Sparkle uses its standard permission and update windows.
 - Automatic checks may be enabled only through Sparkle's normal consent path.
 - Downloaded updates require user approval to install and relaunch.
@@ -208,8 +222,9 @@ Development and PyPI builds continue to link to GitHub Releases and do not try
 to load Sparkle. A future App Store build reports that updates are managed by
 the App Store.
 
-After Sparkle is active, the synchronous PyGithub update check and the About
-dialog prerelease checkbox become redundant and should be removed.
+The synchronous PyGithub update check and About-dialog prerelease checkbox are
+removed. PyGithub and the now-unused direct `packaging` dependency are also
+removed from application and Briefcase requirements.
 
 ## Failure and Recovery
 
@@ -243,6 +258,8 @@ Before enabling the appcast for normal users:
   build version, `SUAllowsAutomaticUpdates = false`, and
   `SUVerifyUpdateBeforeExtraction = true`;
 - the appcast enclosure URL, size, build version, and EdDSA signature validate;
+- Stable clients reject RC items, while RC clients remain eligible for both RC
+  and default-channel production items;
 - the appcast contains no delta enclosures;
 - Sparkle timers, windows, and delegate callbacks work under the packaged Qt
   event loop;
@@ -258,7 +275,6 @@ Before enabling the appcast for normal users:
 - Silent background installation.
 - Delta updates.
 - Phased rollout.
-- Prerelease opt-in or channel switching.
 - Replacing GitHub Releases as the DMG artifact host.
 
 ## Primary References

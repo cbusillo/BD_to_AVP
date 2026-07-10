@@ -22,8 +22,11 @@ name: Package with Briefcase and Create Release
     branches:
       - release
 
-permissions:
-  contents: write
+permissions: {}
+
+concurrency:
+  group: sparkle-pages
+  cancel-in-progress: false
 
 jobs:
   package:
@@ -31,6 +34,15 @@ jobs:
       github.ref == 'refs/heads/release' ||
       github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
+    permissions:
+      contents: write
+    outputs:
+      package_version: ${{ steps.release_metadata.outputs.package_version }}
+      prerelease: ${{ steps.release_metadata.outputs.prerelease }}
+      release_tag: ${{ steps.release_metadata.outputs.release_tag }}
+      dmg_name: ${{ steps.package_artifact.outputs.dmg_name }}
+      dmg_sha256: ${{ steps.package_artifact.outputs.dmg_sha256 }}
+      dmg_size: ${{ steps.package_artifact.outputs.dmg_size }}
     env:
       KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -49,6 +61,10 @@ jobs:
           SOURCE_REF: ${{ inputs.source_ref }}
         run: |
           set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.ref }}" != "refs/heads/release" ]; then
+            echo "Manual releases must dispatch this workflow from the protected release branch." >&2
+            exit 1
+          fi
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [[ "$SOURCE_REF" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
             echo "Manual releases must use a branch or tag ref, not a raw SHA. Tag the commit first or package a branch." >&2
             exit 1
@@ -77,10 +93,14 @@ jobs:
           if [ -z "$MESSAGES" ]; then
             MESSAGES="- No user-facing commits found in this release range."
           fi
+          MESSAGES_DELIMITER="MESSAGES_$(openssl rand -hex 16)"
+          while grep -Fqx "$MESSAGES_DELIMITER" <<< "$MESSAGES"; do
+            MESSAGES_DELIMITER="MESSAGES_$(openssl rand -hex 16)"
+          done
           {
-            echo "messages<<EOF"
+            echo "messages<<$MESSAGES_DELIMITER"
             echo "$MESSAGES"
-            echo "EOF"
+            echo "$MESSAGES_DELIMITER"
           } >> "$GITHUB_OUTPUT"
           echo "Commit messages since last release or initial commit:"
           echo "$MESSAGES"
@@ -132,6 +152,14 @@ jobs:
           set -euo pipefail
           VERSION="${{ steps.extract_version.outputs.version }}"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [[ ! "$RELEASE_TAG_SUFFIX_INPUT" =~ ^rc[0-9]+$ ]]; then
+              echo "Manual release suffix must use the rc<number> form." >&2
+              exit 1
+            fi
+            if [ -z "$RELEASE_NAME_INPUT" ] || [[ "$RELEASE_NAME_INPUT" == *$'\n'* ]] || [[ "$RELEASE_NAME_INPUT" == *$'\r'* ]]; then
+              echo "Release name must be a non-empty single line." >&2
+              exit 1
+            fi
             PACKAGE_VERSION="${VERSION}${RELEASE_TAG_SUFFIX_INPUT}"
             RELEASE_NAME="$RELEASE_NAME_INPUT"
             PRERELEASE=true
@@ -146,6 +174,10 @@ jobs:
             RELEASE_TAG="v${PACKAGE_VERSION}"
           fi
 
+          NOTES_DELIMITER="NOTES_$(openssl rand -hex 16)"
+          while grep -Fqx "$NOTES_DELIMITER" <<< "$RELEASE_NOTES_INPUT"; do
+            NOTES_DELIMITER="NOTES_$(openssl rand -hex 16)"
+          done
           {
             echo "package_version=$PACKAGE_VERSION"
             echo "prerelease=$PRERELEASE"
@@ -153,9 +185,9 @@ jobs:
             echo "release_name=$RELEASE_NAME"
             echo "release_tag=$RELEASE_TAG"
             echo "target_commitish=$(git rev-parse HEAD)"
-            echo "release_notes<<EOF"
+            echo "release_notes<<$NOTES_DELIMITER"
             echo "$RELEASE_NOTES_INPUT"
-            echo "EOF"
+            echo "$NOTES_DELIMITER"
           } >> "$GITHUB_OUTPUT"
       - name: Apply prerelease package version
         if: github.event_name == 'workflow_dispatch'
@@ -176,8 +208,46 @@ jobs:
             { print }
           ' pyproject.toml > pyproject.toml.tmp
           mv pyproject.toml.tmp pyproject.toml
-      - name: Package application for GitHub
+      - name: Validate release identity and Sparkle version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_VERSION: ${{ steps.release_metadata.outputs.package_version }}
+          RELEASE_TAG: ${{ steps.release_metadata.outputs.release_tag }}
         run: |
+          set -euo pipefail
+          PROJECT_VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          BRIEFCASE_VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['tool']['briefcase']['version'])")
+          if [ "$PROJECT_VERSION" != "$PACKAGE_VERSION" ] || [ "$BRIEFCASE_VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "Project and Briefcase versions must both match $PACKAGE_VERSION." >&2
+            exit 1
+          fi
+          if [ "$RELEASE_TAG" != "v$PACKAGE_VERSION" ]; then
+            echo "Release tag must be derived from the package version." >&2
+            exit 1
+          fi
+          if git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+            echo "Release tag already exists: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "GitHub Release already exists: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          curl --fail --location --silent --show-error \
+            https://cbusillo.github.io/BD_to_AVP/appcast.xml \
+            --output /tmp/current-appcast.xml
+          BUILD_VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['tool']['briefcase']['app']['bd-to-avp']['macOS']['info']['CFBundleVersion'])")
+          uv run python scripts/sparkle_appcast.py validate --feed /tmp/current-appcast.xml
+          uv run python scripts/sparkle_appcast.py check-release \
+            --feed /tmp/current-appcast.xml \
+            --build-version "$BUILD_VERSION" \
+            --short-version "$PACKAGE_VERSION"
+      - name: Package application for GitHub
+        id: package_artifact
+        env:
+          PACKAGE_VERSION: ${{ steps.release_metadata.outputs.package_version }}
+        run: |
+          set -euo pipefail
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$(pwd)/build.keychain"
           uv run python scripts/briefcase_app.py create
           uv run python scripts/briefcase_app.py build
@@ -187,13 +257,44 @@ jobs:
           find build/bd-to-avp/macos/app -path "*/bd_to_avp/bin/*" -type f -perm +111 -exec codesign --force --options runtime --timestamp --sign "${{ secrets.DEV_ID }}" {} \;
           find build/bd-to-avp/macos/app -name "*.dylib" -exec codesign --force --sign - {} \;
           uv run python scripts/verify_app_tools.py --profile release
+          uv run python scripts/sparkle_bundle.py \
+            --app "build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app" \
+            > app-metadata.json
+          if [ "$(jq -r .short_version app-metadata.json)" != "$PACKAGE_VERSION" ]; then
+            echo "Built app version does not match $PACKAGE_VERSION." >&2
+            exit 1
+          fi
           uv run python scripts/briefcase_app.py package -i "${{ secrets.DEV_ID }}"
+          uv run python scripts/sparkle_bundle.py \
+            --app "build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app" \
+            --verify-signatures
+
+          DMG_COUNT=$(find dist -maxdepth 1 -type f -name '*.dmg' | wc -l | tr -d ' ')
+          if [ "$DMG_COUNT" != "1" ]; then
+            echo "Expected exactly one DMG in dist; found $DMG_COUNT." >&2
+            exit 1
+          fi
+          DMG_PATH=$(find dist -maxdepth 1 -type f -name '*.dmg' -print -quit)
+          uv run python scripts/sparkle_bundle.py \
+            --dmg "$DMG_PATH" \
+            --verify-signatures \
+            --verify-distribution \
+            > dmg-metadata.json
+          if [ "$(jq -r .short_version dmg-metadata.json)" != "$PACKAGE_VERSION" ]; then
+            echo "Packaged DMG version does not match $PACKAGE_VERSION." >&2
+            exit 1
+          fi
+          {
+            echo "dmg_name=$(basename "$DMG_PATH")"
+            echo "dmg_sha256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"
+            echo "dmg_size=$(stat -f %z "$DMG_PATH")"
+          } >> "$GITHUB_OUTPUT"
       - name: Upload log on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: briefcase-log
-          path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/briefcase.*.build.log
+          path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/briefcase.*.log
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
@@ -203,13 +304,14 @@ jobs:
 
             Commits:
             ${{ steps.get_commit_messages.outputs.messages }}
-            
+
             ** The GUI app no longer installs Homebrew or command-line dependencies on first launch. Install MakeMKV separately before converting Blu-ray discs. Power users who use the terminal/PyPI version should follow the manual dependency instructions in the README. **
-            
+
             You can use the terminal version with "/Applications/3D Blu-ray to Vision Pro.app/Contents/MacOS/3D Blu-ray to Vision Pro". If you run the binary with any arguments, it will work like the previous terminal app. No arguments will open the GUI.
           draft: false
           prerelease: ${{ steps.release_metadata.outputs.prerelease }}
           make_latest: ${{ steps.release_metadata.outputs.make_latest }}
+          overwrite_files: false
           tag_name: ${{ steps.release_metadata.outputs.release_tag }}
           target_commitish: ${{ steps.release_metadata.outputs.target_commitish }}
           name: ${{ steps.release_metadata.outputs.release_name }} v${{ steps.release_metadata.outputs.package_version }}
@@ -217,4 +319,173 @@ jobs:
             dist/*.zip
             dist/*.dmg
             dist/*.pkg
-            
+
+  publish-appcast:
+    name: Build signed Sparkle appcast
+    needs: package
+    if: github.ref == 'refs/heads/release'
+    runs-on: macos-latest
+    environment: sparkle-release
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - name: Checkout protected release tooling
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Download released DMG
+        id: release_asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
+          EXPECTED_DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
+          EXPECTED_DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
+          RELEASE_TAG: ${{ needs.package.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p appcast-site release-assets
+          gh release download "$RELEASE_TAG" --pattern '*.dmg' --dir release-assets
+          DMG_COUNT=$(find release-assets -maxdepth 1 -type f -name '*.dmg' | wc -l | tr -d ' ')
+          if [ "$DMG_COUNT" != "1" ]; then
+            echo "Expected exactly one released DMG; found $DMG_COUNT." >&2
+            exit 1
+          fi
+          DMG_PATH=$(find release-assets -maxdepth 1 -type f -name '*.dmg' -print -quit)
+          ASSET_NAME=$(basename "$DMG_PATH")
+          if [ "$ASSET_NAME" != "$EXPECTED_DMG_NAME" ]; then
+            echo "Released DMG name does not match the validated package." >&2
+            exit 1
+          fi
+          ACTUAL_SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
+          if [ "$ACTUAL_SHA256" != "$EXPECTED_DMG_SHA256" ]; then
+            echo "Released DMG digest does not match the validated package." >&2
+            exit 1
+          fi
+          RELEASE_JSON=$(gh api "repos/${{ github.repository }}/releases/tags/$RELEASE_TAG")
+          ASSET_URL=$(jq -r --arg name "$ASSET_NAME" '.assets[] | select(.name == $name) | .browser_download_url' <<< "$RELEASE_JSON")
+          ASSET_SIZE=$(jq -r --arg name "$ASSET_NAME" '.assets[] | select(.name == $name) | .size' <<< "$RELEASE_JSON")
+          PUBLISHED_AT=$(jq -r '.published_at' <<< "$RELEASE_JSON")
+          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
+            echo "Released DMG URL was not found." >&2
+            exit 1
+          fi
+          if [ "$ASSET_SIZE" != "$(stat -f %z "$DMG_PATH")" ]; then
+            echo "Released DMG size does not match the downloaded asset." >&2
+            exit 1
+          fi
+          if [ "$ASSET_SIZE" != "$EXPECTED_DMG_SIZE" ]; then
+            echo "Released DMG size does not match the validated package." >&2
+            exit 1
+          fi
+          curl --fail --location --silent --show-error --range 0-0 "$ASSET_URL" --output /dev/null
+          {
+            echo "dmg_path=$DMG_PATH"
+            echo "asset_url=$ASSET_URL"
+            echo "asset_size=$ASSET_SIZE"
+            echo "published_at=$PUBLISHED_AT"
+          } >> "$GITHUB_OUTPUT"
+      - name: Inspect released DMG
+        id: bundle
+        env:
+          DMG_PATH: ${{ steps.release_asset.outputs.dmg_path }}
+          EXPECTED_SHORT_VERSION: ${{ needs.package.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          python scripts/sparkle_bundle.py \
+            --dmg "$DMG_PATH" \
+            --release-artifact \
+            --verify-signatures \
+            --verify-distribution \
+            > bundle-metadata.json
+          if [ "$(jq -r .short_version bundle-metadata.json)" != "$EXPECTED_SHORT_VERSION" ]; then
+            echo "Released DMG version does not match $EXPECTED_SHORT_VERSION." >&2
+            exit 1
+          fi
+          {
+            echo "build_version=$(jq -r .build_version bundle-metadata.json)"
+            echo "short_version=$(jq -r .short_version bundle-metadata.json)"
+            echo "minimum_system_version=$(jq -r .minimum_system_version bundle-metadata.json)"
+          } >> "$GITHUB_OUTPUT"
+      - name: Download and validate current appcast
+        env:
+          BUILD_VERSION: ${{ steps.bundle.outputs.build_version }}
+          SHORT_VERSION: ${{ steps.bundle.outputs.short_version }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            https://cbusillo.github.io/BD_to_AVP/appcast.xml \
+            --output appcast-site/appcast.xml
+          python scripts/sparkle_appcast.py validate \
+            --feed appcast-site/appcast.xml
+          python scripts/sparkle_appcast.py check-release \
+            --feed appcast-site/appcast.xml \
+            --build-version "$BUILD_VERSION" \
+            --short-version "$SHORT_VERSION"
+      - name: Sign DMG and build appcast
+        env:
+          DMG_PATH: ${{ steps.release_asset.outputs.dmg_path }}
+          ASSET_URL: ${{ steps.release_asset.outputs.asset_url }}
+          ASSET_SIZE: ${{ steps.release_asset.outputs.asset_size }}
+          PUBLISHED_AT: ${{ steps.release_asset.outputs.published_at }}
+          BUILD_VERSION: ${{ steps.bundle.outputs.build_version }}
+          SHORT_VERSION: ${{ steps.bundle.outputs.short_version }}
+          MINIMUM_SYSTEM_VERSION: ${{ steps.bundle.outputs.minimum_system_version }}
+          RELEASE_TAG: ${{ needs.package.outputs.release_tag }}
+          PRERELEASE: ${{ needs.package.outputs.prerelease }}
+          SPARKLE_EDDSA_PRIVATE_KEY: ${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          set +x
+          SIGN_UPDATE=$(python scripts/sparkle_macos.py --tool sign_update)
+          SIGNATURE=$(printf '%s' "$SPARKLE_EDDSA_PRIVATE_KEY" | "$SIGN_UPDATE" --ed-key-file - -p "$DMG_PATH")
+          if [ -z "$SIGNATURE" ]; then
+            echo "Sparkle did not produce an EdDSA signature." >&2
+            exit 1
+          fi
+          if [ "$PRERELEASE" = "true" ]; then
+            CHANNEL=rc
+          else
+            CHANNEL=stable
+          fi
+          python scripts/sparkle_appcast.py add \
+            --feed appcast-site/appcast.xml \
+            --output appcast-site/appcast.xml \
+            --build-version "$BUILD_VERSION" \
+            --short-version "$SHORT_VERSION" \
+            --channel "$CHANNEL" \
+            --download-url "$ASSET_URL" \
+            --length "$ASSET_SIZE" \
+            --signature "$SIGNATURE" \
+            --release-notes-url "https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG" \
+            --minimum-system-version "$MINIMUM_SYSTEM_VERSION" \
+            --published-at "$PUBLISHED_AT"
+          python scripts/sparkle_appcast.py validate \
+            --feed appcast-site/appcast.xml
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: appcast-site
+
+  deploy-appcast:
+    name: Deploy Sparkle appcast
+    needs: publish-appcast
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

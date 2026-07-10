@@ -85,7 +85,7 @@
     "CI",
     "CodeQL",
     "Package with Briefcase and Create Release",
-    "Publish Sparkle Appcast",
+    "Disable Sparkle Updates",
     "Update FFmpeg Vendor Pins",
     "Publish Python distribution to PyPI"
   ],

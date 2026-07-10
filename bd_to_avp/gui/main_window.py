@@ -1,10 +1,11 @@
 import os
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Callable, ClassVar
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QCloseEvent, QFont, QTextCursor
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QFont, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QGroupBox,
@@ -26,6 +27,7 @@ from babelfish import Language
 
 from bd_to_avp.gui.dialog import AboutDialog
 from bd_to_avp.gui.processing import ProcessingController, ProcessingRequest
+from bd_to_avp.gui.updater import UpdateChannel, UpdaterManager
 from bd_to_avp.gui.widget import FileFolderPicker, LabeledComboBox, LabeledLineEdit, LabeledSpinBox
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
@@ -60,6 +62,7 @@ class MainWindow(QMainWindow):
         self.processing_controller.process_completed.connect(self.finished_processing)
         self.processing_controller.process_cancelled.connect(self.processing_cancelled)
         self.processing_controller.process_failed.connect(self.handle_processing_failure)
+        self.updater_manager = UpdaterManager(self.processing_controller, parent=self)
 
     def setup_window(self) -> None:
         app = QApplication.instance()
@@ -266,14 +269,38 @@ class MainWindow(QMainWindow):
 
         file_menu.addAction(QAction("Open", self))
 
-        update_action = QAction("Update", self)
-        update_action.triggered.connect(self.show_about_dialog)
+        self.update_action = QAction("Check for Updates…", self)
+        self.update_action.triggered.connect(self.check_for_updates)
 
         about_action = QAction(f"About {QApplication.applicationName()}", self)
         about_action.triggered.connect(self.show_about_dialog)
 
         app_menu.addAction(about_action)
-        help_menu.addAction(update_action)
+        help_menu.addAction(self.update_action)
+
+        if self.updater_manager.supports_channels:
+            channel_menu = help_menu.addMenu("Update Channel")
+            channel_actions = QActionGroup(self)
+            channel_actions.setExclusive(True)
+            for channel, label in (
+                (UpdateChannel.STABLE, "Stable"),
+                (UpdateChannel.RELEASE_CANDIDATES, "Release Candidates"),
+            ):
+                action = QAction(label, self)
+                action.setCheckable(True)
+                action.setChecked(self.updater_manager.channel is channel)
+                action.triggered.connect(partial(self.set_update_channel, channel))
+                channel_actions.addAction(action)
+                channel_menu.addAction(action)
+            self.update_channel_menu = channel_menu
+            self.update_channel_actions = channel_actions
+
+    def set_update_channel(self, channel: UpdateChannel, checked: bool = True) -> None:
+        if checked:
+            self.updater_manager.set_channel(channel)
+
+    def check_for_updates(self, _checked: bool = False) -> None:
+        self.updater_manager.check_for_updates(self)
 
     def notify_user_with_sound(self, sound_name: str) -> None:
         if self.play_sound_checkbox.isChecked():

@@ -245,6 +245,7 @@ class ProcessingController(QObject):
     process_completed = Signal(object)
     process_cancelled = Signal(object)
     process_failed = Signal(object, object)
+    processing_became_idle = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -281,6 +282,7 @@ class ProcessingController(QObject):
         if self._thread is thread:
             self._thread = None
             thread.deleteLater()
+            self.processing_became_idle.emit()
         return True
 
     @Slot()
@@ -289,6 +291,7 @@ class ProcessingController(QObject):
         if thread is None:
             return
         self._thread = None
+        self.processing_became_idle.emit()
         outcome = thread.outcome or ProcessingOutcome(
             ProcessingOutcomeKind.FAILED,
             RuntimeError("Processing thread exited without an outcome."),

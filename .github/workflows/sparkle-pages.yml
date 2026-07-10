@@ -1,28 +1,24 @@
 ---
-name: Publish Sparkle Appcast
+name: Disable Sparkle Updates
 
 "on":
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/sparkle-pages.yml
-      - sparkle-feed/**
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+permissions: {}
 
 concurrency:
-  group: pages
+  group: sparkle-pages
   cancel-in-progress: false
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/release'
     runs-on: ubuntu-latest
+    environment: sparkle-release
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -30,10 +26,18 @@ jobs:
         uses: actions/configure-pages@v6
       - name: Validate appcast XML
         run: |
+          python scripts/sparkle_appcast.py validate \
+            --feed sparkle-feed/appcast.xml
           python - <<'PY'
           import xml.etree.ElementTree as ET
 
-          ET.parse("sparkle-feed/appcast.xml")
+          channel = (
+              ET.parse("sparkle-feed/appcast.xml")
+              .getroot()
+              .find("channel")
+          )
+          if channel is None or channel.findall("item"):
+              raise SystemExit("Emergency feed must be a valid empty appcast")
           PY
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
@@ -43,6 +47,9 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

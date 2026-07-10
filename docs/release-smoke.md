@@ -118,6 +118,29 @@ With MakeMKV installed:
   the app bundle is a blocker, because reinstalling the current app will not add
   it.
 
+## Sparkle Packaging Gate
+
+Before a GitHub Release is created, the release workflow must run:
+
+```sh
+uv run python scripts/sparkle_bundle.py \
+  --app "build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app"
+uv run python scripts/sparkle_bundle.py \
+  --app "build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app" \
+  --verify-signatures
+uv run python scripts/sparkle_bundle.py \
+  --dmg dist/<release>.dmg \
+  --verify-signatures \
+  --verify-distribution
+```
+
+The gate must confirm the repository build number, direct-distribution metadata,
+public key, feed URL, automatic-update policy, pinned framework, `Updater.app`,
+both XPC services, nested signatures, containing app signature, notarization,
+and Gatekeeper assessment. The build number must also be newer than every item
+in the live appcast, the short version must be unpublished, and the final
+released DMG digest must match the locally validated artifact.
+
 ## Sparkle Update Smoke (After Enablement)
 
 This is the acceptance smoke for #165. Do not begin it until #162 through #164
@@ -126,21 +149,27 @@ integration described in [sparkle-updates.md](sparkle-updates.md).
 
 1. Install an older signed/notarized DMG build in `/Applications` and launch it
    from there. Do not test the update while running from the mounted DMG.
-2. Confirm Help > `Check for Updates…` opens Sparkle's standard update UI.
-3. Inspect the selected appcast item and confirm its `sparkle:version`,
+2. Confirm Help > `Update Channel` defaults to Stable. With an RC newer than the
+   installed build in the appcast, confirm `Check for Updates…` does not select
+   it.
+3. Select Release Candidates, run `Check for Updates…`, and confirm Sparkle's
+   standard update UI selects the RC item.
+4. Inspect the selected appcast item and confirm its `sparkle:version`,
    `sparkle:shortVersionString`, release-notes content or URL, enclosure URL, and
    enclosure length match the candidate and published GitHub Release DMG, and
    that its `sparkle:edSignature` is present and non-empty.
-4. Confirm Sparkle's update UI displays the candidate version and release notes
+5. Confirm Sparkle's update UI displays the candidate version and release notes
    from that same appcast item.
-5. Install the update, relaunch, and confirm the displayed and packaged versions
+6. Install the update, relaunch, and confirm the displayed and packaged versions
    match the candidate.
-6. Repeat with an unavailable feed and an intentionally invalid test signature;
+7. Publish or stage a newer unchanneled production item and confirm the
+   Release Candidates client selects it without changing its preference.
+8. Repeat with an unavailable feed and an intentionally invalid test signature;
    the installed app must remain unchanged.
-7. Start media processing and confirm installation/relaunch is postponed until
+9. Start media processing and confirm installation/relaunch is postponed until
    processing is idle.
-8. Verify the manual GitHub Releases download remains usable as the recovery
-   path.
+10. Verify the manual GitHub Releases download remains usable as the recovery
+    path.
 
 ## Follow-Up Routing
 
