@@ -60,6 +60,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("SHA256SUMS", str(package))
         self.assertIn("BUILD_KEYCHAIN_PASSWORD", str(package))
         self.assertIn("APPLE_APP_PASSWORD", str(package))
+        self.assertIn('NOTARY_PROFILE="briefcase-macOS-$TEAM_ID"', str(package))
+        self.assertNotIn("KEYCHAIN_NAME", str(package))
         self.assertNotIn("SPARKLE_EDDSA_PRIVATE_KEY", str(package))
 
     def test_release_is_draft_until_assets_are_redownloaded_and_verified(self) -> None:
