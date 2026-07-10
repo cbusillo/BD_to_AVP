@@ -19,6 +19,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         prepare = workflow["jobs"]["prepare"]
 
         self.assertEqual(set(workflow["on"]), {"workflow_dispatch"})
+        self.assertEqual(workflow["env"]["GH_REPO"], "${{ github.repository }}")
         self.assertNotIn("source_ref", str(workflow))
         self.assertEqual(workflow["concurrency"]["group"], "release")
         self.assertEqual(workflow["concurrency"]["cancel-in-progress"], "false")

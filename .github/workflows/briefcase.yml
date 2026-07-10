@@ -12,6 +12,9 @@ name: Release from protected main
 permissions:
   contents: read
 
+env:
+  GH_REPO: ${{ github.repository }}
+
 concurrency:
   group: release
   cancel-in-progress: false
