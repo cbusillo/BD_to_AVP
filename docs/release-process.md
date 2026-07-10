@@ -106,10 +106,12 @@ settings. Before the first release on this path:
 - create/protect the `pypi` GitHub environment as desired, then remove the
   obsolete `PYPI_TOKEN` secret after a successful Trusted Publishing run;
 - confirm GitHub Pages remains Actions-managed and restricted to `main`;
-- enable immutable GitHub Releases after the draft-upload-verify-publish path
-  has completed its first controlled RC; and
+- enable immutable GitHub Releases before the first release; drafts remain
+  resumable while published tags and assets become immutable; and
 - retire the long-lived `release` branch and its ruleset after the main-only
   migration is merged and verified.
 
-Apple signing/notarization credential migration and broader Actions provenance
-hardening remain separate follow-up work under the parent release-control plan.
+The environment, Actions-permission, immutable-release, and release-branch
+settings migration follows immediately after this workflow lands. GitHub does
+not expose existing secret values, and PyPI Trusted Publisher authorization is
+completed through the maintainer UI.
