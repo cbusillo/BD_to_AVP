@@ -127,15 +127,19 @@ integration described in [sparkle-updates.md](sparkle-updates.md).
 1. Install an older signed/notarized DMG build in `/Applications` and launch it
    from there. Do not test the update while running from the mounted DMG.
 2. Confirm Help > `Check for Updates…` opens Sparkle's standard update UI.
-3. Confirm the candidate version, release notes, and download size match the
-   GitHub Release DMG.
-4. Install the update, relaunch, and confirm the displayed and packaged versions
+3. Inspect the selected appcast item and confirm its `sparkle:version`,
+   `sparkle:shortVersionString`, release-notes content or URL, enclosure URL, and
+   enclosure length match the candidate and published GitHub Release DMG, and
+   that its `sparkle:edSignature` is present and non-empty.
+4. Confirm Sparkle's update UI displays the candidate version and release notes
+   from that same appcast item.
+5. Install the update, relaunch, and confirm the displayed and packaged versions
    match the candidate.
-5. Repeat with an unavailable feed and an intentionally invalid test signature;
+6. Repeat with an unavailable feed and an intentionally invalid test signature;
    the installed app must remain unchanged.
-6. Start media processing and confirm installation/relaunch is postponed until
+7. Start media processing and confirm installation/relaunch is postponed until
    processing is idle.
-7. Verify the manual GitHub Releases download remains usable as the recovery
+8. Verify the manual GitHub Releases download remains usable as the recovery
    path.
 
 ## Follow-Up Routing
