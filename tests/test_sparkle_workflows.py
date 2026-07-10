@@ -66,7 +66,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         workflow = load_workflow("briefcase.yml")
         jobs = workflow["jobs"]
 
-        self.assertEqual(set(jobs["create-draft"]["needs"]), {"prepare", "package"})
+        self.assertEqual(
+            set(jobs["create-draft"]["needs"]),
+            {"prepare", "package", "attest-package"},
+        )
         self.assertIn("--draft", str(jobs["create-draft"]))
         self.assertIn("--target", str(jobs["create-draft"]))
         self.assertEqual(
@@ -77,8 +80,26 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("gh release download", str(jobs["verify-draft"]))
         self.assertIn("appcast.xml", str(jobs["verify-draft"]))
         self.assertIn("--verify-distribution", str(jobs["verify-draft"]))
-        self.assertEqual(set(jobs["publish-release"]["needs"]), {"prepare", "package", "verify-draft"})
+        self.assertEqual(
+            set(jobs["publish-release"]["needs"]),
+            {"build-python", "prepare", "package", "verify-draft"},
+        )
+        self.assertIn("needs.build-python.result == 'success'", jobs["publish-release"]["if"])
         self.assertIn("--draft=false", str(jobs["publish-release"]))
+
+    def test_release_package_provenance_is_attested_and_verified(self) -> None:
+        workflow = load_workflow("briefcase.yml")
+        attest = workflow["jobs"]["attest-package"]
+        verify = workflow["jobs"]["verify-draft"]
+
+        self.assertEqual(attest["permissions"]["attestations"], "write")
+        self.assertEqual(attest["permissions"]["id-token"], "write")
+        self.assertIn("actions/attest@", str(attest))
+        self.assertNotIn("release-package/*", str(attest))
+        self.assertEqual(verify["permissions"]["attestations"], "read")
+        self.assertIn("gh attestation verify", str(verify))
+        self.assertIn('--source-digest "$GITHUB_SHA"', str(verify))
+        self.assertIn("TOTAL_ASSET_COUNT", str(verify))
 
     def test_private_key_is_only_exposed_to_read_only_signing_step(self) -> None:
         workflow = load_workflow("briefcase.yml")
@@ -109,14 +130,20 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_stable_pypi_publish_uses_oidc_trusted_publishing(self) -> None:
         workflow = load_workflow("briefcase.yml")
+        build = workflow["jobs"]["build-python"]
         publish = workflow["jobs"]["publish-pypi"]
 
         self.assertFalse((REPO_ROOT / ".github" / "workflows" / "publish-to-pypi.yml").exists())
-        self.assertEqual(publish["if"], "needs.prepare.outputs.publish_pypi == 'true'")
+        self.assertIn("needs.build-python.result == 'success'", publish["if"])
+        self.assertIn("needs.publish-release.result == 'success'", publish["if"])
+        self.assertIn("needs.prepare.outputs.publish_pypi == 'true'", publish["if"])
         self.assertEqual(publish["environment"]["name"], "pypi")
         self.assertEqual(publish["permissions"]["id-token"], "write")
-        self.assertIn("--trusted-publishing always", str(publish))
-        self.assertIn("--check-url", str(publish))
+        self.assertEqual(set(publish["needs"]), {"build-python", "prepare", "publish-release"})
+        self.assertIn("uv build", str(build))
+        self.assertNotIn("uv build", str(publish))
+        self.assertIn("pypa/gh-action-pypi-publish@", str(publish))
+        self.assertIn("attestations", str(publish))
         self.assertNotIn("PYPI_TOKEN", str(workflow))
 
     def test_release_deploy_uses_resumable_pages_workflow(self) -> None:
