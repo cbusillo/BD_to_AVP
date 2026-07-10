@@ -33,9 +33,10 @@ compares release tags, and links to the release page. It does not download,
 verify, install, or relaunch an update.
 
 The current release workflow already creates a Developer ID signed and
-notarized DMG with Briefcase. It does not embed Sparkle, publish an appcast, or
-hold a Sparkle signing key. GitHub Pages is not currently configured for this
-repository.
+notarized DMG with Briefcase. It does not embed Sparkle, publish signed appcast
+items, or hold a Sparkle signing key. GitHub Pages is configured for Actions
+deployment, and the #162 foundation provides a separate valid empty appcast;
+production key generation and signed update entries remain pending.
 
 The generated local app bundle also uses `CFBundleVersion = 1`. Sparkle uses
 the bundle build version for update ordering, so a monotonic build-number policy
@@ -136,11 +137,20 @@ is part of the distribution contract. GitHub Release DMGs remain the
 downloadable update archives and must not be replaced after an appcast references
 them.
 
-The Sparkle EdDSA private key must exist only in:
+The Sparkle EdDSA private key may exist only in these approved locations:
 
-1. an approved offline backup with a named owner and recovery procedure; and
-2. a protected GitHub Actions environment secret used by the release/appcast
+1. Sparkle's working item in the maintainer's login keychain;
+2. a maintainer-owned Apple Passwords recovery entry synchronized by iCloud
+   Keychain; and
+3. a protected GitHub Actions environment secret used by the release/appcast
    workflow.
+
+Temporary plaintext material is permitted only on a RAM disk during the
+one-time Passwords import or a documented recovery test.
+
+The operational names, one-time provisioning sequence, recovery test, and feed
+disable procedure are maintained in
+[sparkle-key-custody.md](sparkle-key-custody.md).
 
 Only the public key is embedded in the app. Private key material must never be
 committed, printed, uploaded as an artifact, or copied into issue/PR text.
