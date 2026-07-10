@@ -9,7 +9,7 @@ name: CI
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -35,7 +35,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --frozen --all-groups --python 3.12
+        run: uv sync --locked --all-groups --python 3.12
 
       - name: Check formatting
         run: uv run ruff format --check .
