@@ -43,7 +43,8 @@ The workflow performs these ordered boundaries:
    and newest durable snapshot are both checked.
 3. Build, sign, notarize, and Gatekeeper-validate the macOS DMG without a
    write-capable repository token. Record its exact name, byte size, SHA-256,
-   and `SHA256SUMS` entry.
+   and `SHA256SUMS` entry, then publish GitHub artifact attestations for the
+   verified package before release creation.
 4. Create a draft GitHub Release targeting only `github.sha` and upload the
    package assets with overwrite disabled by default.
 5. In the protected `sparkle-release` environment, re-download the draft DMG,
@@ -52,10 +53,11 @@ The workflow performs these ordered boundaries:
    signature, and build the cumulative snapshot.
 6. Upload `appcast.xml` to the draft, re-download the DMG, checksum, and appcast,
    and repeat the exact digest, size, notarization, Gatekeeper, bundle-version,
-   and appcast-item checks.
+   appcast-item, and exact-main-commit GitHub provenance checks.
 7. Publish the verified draft only if it still targets the current `main` HEAD.
-   Stable releases then publish the Python distributions through PyPI Trusted
-   Publishing; RC releases never publish to PyPI.
+   Stable releases then publish separately built Python distributions through
+   PyPI Trusted Publishing with PEP 740 attestations; RC releases never publish
+   to PyPI.
 8. Deploy the durable `appcast.xml` release asset to GitHub Pages. A deployment
    failure can be retried without rebuilding, retagging, or re-signing.
 

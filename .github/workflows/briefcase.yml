@@ -447,10 +447,82 @@ jobs:
         with:
           name: release-package
           path: |
-            dist/*.zip
             dist/*.dmg
-            dist/*.pkg
             dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  attest-package:
+    name: Attest verified release package
+    needs:
+      - prepare
+      - package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Download verified release package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-package
+          path: release-package
+
+      - name: Verify package identity before attestation
+        env:
+          EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
+          EXPECTED_DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
+          EXPECTED_DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
+        run: |
+          set -euo pipefail
+          DMG_PATH="release-package/$EXPECTED_DMG_NAME"
+          test -f "$DMG_PATH"
+          test "$(sha256sum "$DMG_PATH" | awk '{print $1}')" = "$EXPECTED_DMG_SHA256"
+          test "$(stat -c %s "$DMG_PATH")" = "$EXPECTED_DMG_SIZE"
+          test "$(cat release-package/SHA256SUMS)" = \
+            "$EXPECTED_DMG_SHA256  $EXPECTED_DMG_NAME"
+          (cd release-package && sha256sum --check SHA256SUMS)
+
+      - name: Attest package provenance
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
+        with:
+          subject-path: release-package/${{ needs.package.outputs.dmg_name }}
+
+  build-python:
+    name: Build stable Python distributions
+    needs: prepare
+    if: needs.prepare.outputs.publish_pypi == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout released commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+
+      - name: Validate and build distributions
+        run: |
+          python scripts/release.py validate
+          uv build
+
+      - name: Upload Python distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: python-distributions
+          path: dist/*
           if-no-files-found: error
           retention-days: 7
 
@@ -459,6 +531,7 @@ jobs:
     needs:
       - prepare
       - package
+      - attest-package
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -499,6 +572,7 @@ jobs:
 
       - name: Create or resume immutable-intent draft
         env:
+          EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
           GH_TOKEN: ${{ github.token }}
           MAKE_LATEST: ${{ needs.prepare.outputs.make_latest }}
           PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
@@ -560,8 +634,8 @@ jobs:
           fi
 
           mkdir -p existing-package-assets
-          for ASSET_PATH in release-package/*; do
-            ASSET_NAME=$(basename "$ASSET_PATH")
+          for ASSET_NAME in "$EXPECTED_DMG_NAME" SHA256SUMS; do
+            ASSET_PATH="release-package/$ASSET_NAME"
             RELEASE_JSON=$(gh api \
               "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
             ASSET_COUNT=$(jq -r --arg name "$ASSET_NAME" \
@@ -806,6 +880,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 45
     permissions:
+      attestations: read
       contents: write
     steps:
       - name: Checkout protected verification tooling
@@ -905,6 +980,12 @@ jobs:
             exit 1
           fi
           (cd verified-assets && shasum -a 256 --check SHA256SUMS)
+          gh attestation verify "$DMG_PATH" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/briefcase.yml" \
+            --source-digest "$GITHUB_SHA" \
+            --source-ref refs/heads/main \
+            --deny-self-hosted-runners
           if [ "$(shasum -a 256 verified-assets/appcast.xml | awk '{print $1}')" \
             != "$EXPECTED_APPCAST_SHA256" ]; then
             echo "Re-downloaded appcast digest mismatch." >&2
@@ -928,9 +1009,10 @@ jobs:
             '[.assets[] | select(.name == $name)] | length' <<< "$RELEASE_JSON")
           APPCAST_ASSET_COUNT=$(jq '[.assets[] | select(.name == "appcast.xml")] | length' <<< "$RELEASE_JSON")
           CHECKSUM_ASSET_COUNT=$(jq '[.assets[] | select(.name == "SHA256SUMS")] | length' <<< "$RELEASE_JSON")
+          TOTAL_ASSET_COUNT=$(jq '.assets | length' <<< "$RELEASE_JSON")
           if [ "$DMG_ASSET_COUNT" != "1" ] || [ "$APPCAST_ASSET_COUNT" != "1" ] \
-            || [ "$CHECKSUM_ASSET_COUNT" != "1" ]; then
-            echo "Draft release is missing a unique DMG, checksum, or appcast asset." >&2
+            || [ "$CHECKSUM_ASSET_COUNT" != "1" ] || [ "$TOTAL_ASSET_COUNT" != "3" ]; then
+            echo "Draft release must contain only one DMG, checksum, and appcast asset." >&2
             exit 1
           fi
           ASSET_URL=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
@@ -966,9 +1048,19 @@ jobs:
   publish-release:
     name: Publish verified GitHub Release
     needs:
+      - build-python
       - prepare
       - package
       - verify-draft
+    if: >-
+      !cancelled() &&
+      needs.prepare.result == 'success' &&
+      needs.package.result == 'success' &&
+      needs.verify-draft.result == 'success' &&
+      (
+        needs.prepare.outputs.publish_pypi != 'true' ||
+        needs.build-python.result == 'success'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -1042,9 +1134,15 @@ jobs:
   publish-pypi:
     name: Publish stable Python distribution with trusted publishing
     needs:
+      - build-python
       - prepare
       - publish-release
-    if: needs.prepare.outputs.publish_pypi == 'true'
+    if: >-
+      !cancelled() &&
+      needs.build-python.result == 'success' &&
+      needs.prepare.result == 'success' &&
+      needs.prepare.outputs.publish_pypi == 'true' &&
+      needs.publish-release.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
@@ -1054,31 +1152,16 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Checkout released commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Download Python distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
+          name: python-distributions
+          path: dist
 
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - name: Publish with PyPI trusted publishing and attestations
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
-          python-version: "3.12"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-
-      - name: Validate and build distributions
-        run: |
-          python scripts/release.py validate
-          uv build
-
-      - name: Publish with PyPI trusted publishing
-        run: >-
-          uv publish
-          --trusted-publishing always
-          --check-url https://pypi.org/simple/bd-to-avp/
-          dist/*
+          attestations: true
 
   deploy-appcast:
     name: Deploy verified appcast snapshot
