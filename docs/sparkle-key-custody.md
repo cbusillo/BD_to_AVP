@@ -19,6 +19,7 @@ printed in logs, or uploaded as a workflow artifact.
 - Environment protection: required maintainer approval and the `release` branch
   only.
 - Reserved environment secret: `SPARKLE_EDDSA_PRIVATE_KEY`.
+- Production public key: `sparkle-public-ed-key.txt`.
 - Feed URL: `https://cbusillo.github.io/BD_to_AVP/appcast.xml`.
 - Feed source: `sparkle-feed/appcast.xml`, deployed only by
   `.github/workflows/sparkle-pages.yml`.
@@ -33,9 +34,11 @@ GitHub Pages uses the GitHub Actions deployment source, and the
 `sparkle-release` environment is configured. The initial feed is a valid empty
 RSS appcast so clients receive "no update" rather than malformed XML.
 
-Production key generation and the environment secret remain pending until the
-maintainer is available for the one-time Apple Passwords import. No production
-Sparkle key has been generated for this account yet.
+The production working key is stored in the maintainer's login keychain, its
+recovery copy is imported into Apple Passwords, and
+`SPARKLE_EDDSA_PRIVATE_KEY` is stored only in the protected `sparkle-release`
+environment. The matching public key is committed at
+`sparkle-public-ed-key.txt` for #163 and future recovery verification.
 
 ## One-Time Provisioning
 
