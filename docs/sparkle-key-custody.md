@@ -21,12 +21,13 @@ printed in logs, or uploaded as a workflow artifact.
 - Reserved environment secret: `SPARKLE_EDDSA_PRIVATE_KEY`.
 - Production public key: `sparkle-public-ed-key.txt`.
 - Feed URL: `https://cbusillo.github.io/BD_to_AVP/appcast.xml`.
-- Feed source: `sparkle-feed/appcast.xml`, deployed only by
-  `.github/workflows/sparkle-pages.yml`.
+- Emergency empty-feed source: `sparkle-feed/appcast.xml`, deployed only by the
+  manual `.github/workflows/sparkle-pages.yml` workflow.
 
-The Pages workflow has only `contents: read`, `pages: write`, and
-`id-token: write`. It does not reference the `sparkle-release` environment or
-the private key.
+The release workflow's appcast job uses the `sparkle-release` environment and
+receives the private key only in its signing step. The emergency empty-feed
+workflow uses the same approval environment but never references the private
+key.
 
 ## Current State
 
@@ -110,10 +111,12 @@ working key.
 
 ## Environment Use
 
-Future appcast-signing jobs must:
+The appcast-signing job must:
 
 - declare `environment: sparkle-release`;
 - run only from the protected `release` branch;
+- check out and execute only the protected workflow revision in the key-bearing
+  job, never the selected package source ref;
 - receive the private key only as
   `${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}`;
 - pipe the secret to Sparkle with `--ed-key-file -`;
@@ -122,8 +125,9 @@ Future appcast-signing jobs must:
 
 ## Feed Disable and Key Loss
 
-- To disable updates without changing installed apps, deploy the valid empty
-  appcast and leave the GitHub Release download path available.
+- To disable updates without changing installed apps, dispatch
+  `Disable Sparkle Updates` from the protected `release` branch. It deploys the
+  valid empty appcast and leaves the GitHub Release download path available.
 - If the GitHub secret is lost but the recovery entry remains, restore the
   secret from the recovery entry through a RAM-disk file and standard input.
 - If the working login-keychain item is lost, restore it from the recovery entry

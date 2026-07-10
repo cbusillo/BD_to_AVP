@@ -71,8 +71,8 @@ document it as an external dependency with preflight behavior.
 - PKG artifact policy is tracked in #118. Until that issue decides otherwise,
   PKG output is not the normal-user release path.
 - Homebrew distribution for CLI users is tracked in #119.
-- The accepted Sparkle direct-DMG architecture is documented in
-  [sparkle-updates.md](sparkle-updates.md). Implementation is split across
+- The Sparkle direct-DMG implementation and Stable/Release Candidates policy is
+  documented in [sparkle-updates.md](sparkle-updates.md) and tracked through
   #162 through #165.
 - App Store feasibility and sandbox constraints are tracked in #121.
 - MakeMKV replacement/removal is tracked in #103.
@@ -93,3 +93,5 @@ Before promoting a GUI release beyond tester/RC use:
    release candidate when test media is available.
 8. If a Sparkle appcast is promoted for normal users, an installed-app upgrade
    smoke and appcast validation pass first.
+9. Stable-channel smoke excludes RC items, and Release Candidates smoke proves
+   the client can later select the unchanneled production release.
