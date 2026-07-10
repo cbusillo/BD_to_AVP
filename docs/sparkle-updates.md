@@ -53,8 +53,10 @@ Research for #120 used Briefcase 0.4.3 and Sparkle 2.9.4.
 - Briefcase 0.4.3 signs Mach-O files, embedded frameworks, and embedded apps,
   but does not treat Sparkle's nested `.xpc` services as bundle-signing targets.
   #163 must augment the signing path and prove the complete inside-out order.
-- Briefcase supports arbitrary macOS Info.plist entries and a dedicated integer
-  `build` value for `CFBundleVersion`.
+- Briefcase 0.4.3 supports arbitrary macOS Info.plist entries through its
+  `macOS.info` map. Its v0.4.3 app template hard-codes `CFBundleVersion = 1`
+  and does not consume a `build` value, so #163 must override that plist key
+  explicitly or first upgrade Briefcase and prove the generated value.
 
 These checks prove the integration is feasible. They do not replace a signed,
 notarized, installed-app update test.
@@ -102,9 +104,24 @@ after that nested-bundle order is proven.
 `CFBundleShortVersionString` remains the human release version, such as
 `0.2.144` or `0.2.144rc1`.
 
-`CFBundleVersion` must be a repository-tracked monotonic integer supplied
-through Briefcase's `build` setting. It must increment for every published
-direct-DMG build, including prereleases, independently of the human version.
+`CFBundleVersion` must be a repository-tracked monotonic integer string. With
+the currently locked Briefcase 0.4.3, #163 must set it explicitly through the
+macOS Info.plist map, for example:
+
+```toml
+[tool.briefcase.app.bd-to-avp.macOS.info]
+CFBundleVersion = "144"
+```
+
+It must increment for every published direct-DMG build, including prereleases,
+independently of the human version. If #163 upgrades Briefcase instead, the
+generated app must prove that the replacement configuration writes the expected
+`CFBundleVersion` before this direct override can be removed.
+
+Because the v0.4.3 template emits its default before custom `info` entries,
+implementation issue #163 must inspect the generated plist with
+`plutil -extract CFBundleVersion raw <Info.plist>` and fail unless the resolved
+value exactly matches the repository counter.
 
 The workflow must fail before release publication if the build number is
 missing, still `1`, non-numeric, duplicated by an existing release, or not newer
