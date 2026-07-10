@@ -7,19 +7,20 @@ on:
         description: FFmpeg version represented by the candidate build, for example 8.1.3
         required: true
       base_url:
-        description: Base URL containing ffmpeg.zip and ffprobe.zip
+        description: "Base URL containing ffmpeg.zip and ffprobe.zip (must be https://ffmpeg.martin-riedl.de/…)"
         required: true
 
-permissions:
-  contents: write
-  pull-requests: write
-
 jobs:
-  update-ffmpeg-vendor:
+  # Download candidate archives, regenerate the manifest, and run smoke tests.
+  # This job executes the candidate binaries and therefore runs with read-only
+  # permissions so that a malicious build cannot use write tokens.
+  verify-and-update-manifest:
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-15
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
@@ -49,6 +50,30 @@ jobs:
             echo "Vendored FFmpeg tools must not link to Homebrew libraries"
             exit 1
           fi
+
+      - name: Upload updated manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ffmpeg-manifest
+          path: vendor/ffmpeg-macos-arm64.toml
+          retention-days: 1
+
+  # Create the PR using the verified manifest. This job holds write tokens but
+  # never executes any downloaded binary.
+  create-pr:
+    needs: verify-and-update-manifest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Download updated manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ffmpeg-manifest
+          path: vendor/
 
       - name: Create update pull request
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8

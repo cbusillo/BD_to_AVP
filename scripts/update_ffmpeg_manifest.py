@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import tempfile
+import urllib.parse
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,7 @@ from scripts import vendor_ffmpeg_macos
 
 DEFAULT_MANIFEST_PATH = vendor_ffmpeg_macos.DEFAULT_MANIFEST_PATH
 DEFAULT_ASSET_NAMES = ["ffmpeg", "ffprobe"]
+APPROVED_FFMPEG_BASE_HOST = "ffmpeg.martin-riedl.de"
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,16 @@ def updated_asset_from_existing(asset: vendor_ffmpeg_macos.BinaryAsset) -> Updat
     )
 
 
+def validate_base_url(base_url: str) -> None:
+    parsed = urllib.parse.urlparse(base_url)
+    if parsed.scheme != "https":
+        raise ValueError(f"FFmpeg base URL must use HTTPS: {base_url}")
+    if parsed.netloc != APPROVED_FFMPEG_BASE_HOST:
+        raise ValueError(
+            f"FFmpeg base URL host must be {APPROVED_FFMPEG_BASE_HOST!r}, got: {parsed.netloc!r}"
+        )
+
+
 def build_candidate_manifest(
     *,
     version: str,
@@ -45,6 +57,7 @@ def build_candidate_manifest(
     build: str,
     asset_names: list[str],
 ) -> UpdatedManifest:
+    validate_base_url(base_url)
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         archive_dir = temp_path / "archives"
