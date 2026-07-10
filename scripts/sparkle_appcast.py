@@ -207,6 +207,47 @@ def validate_appcast(path: Path) -> None:
     validate_appcast_channel(channel)
 
 
+def validate_empty_appcast(path: Path) -> None:
+    validate_appcast(path)
+    _, channel = load_appcast(path)
+    if channel.findall("item"):
+        raise AppcastError("Emergency feed must be a valid empty appcast.")
+
+
+def validate_release_snapshot(path: Path, short_version: str) -> None:
+    validate_appcast(path)
+    _release_channel(short_version)
+    _, channel = load_appcast(path)
+    items = channel.findall("item")
+    if not items or _text(items[0], f"{SPARKLE}shortVersionString") != short_version:
+        raise AppcastError(f"Appcast snapshot must start with release {short_version}.")
+
+
+def verify_release_item(
+    feed_path: Path,
+    *,
+    build_version: str,
+    short_version: str,
+    download_url: str,
+    length: int,
+) -> None:
+    validate_appcast(feed_path)
+    _, channel = load_appcast(feed_path)
+    matches = [item for item in channel.findall("item") if _text(item, f"{SPARKLE}shortVersionString") == short_version]
+    if len(matches) != 1:
+        raise AppcastError(f"Expected exactly one appcast item for {short_version}; found {len(matches)}.")
+    item = matches[0]
+    if _text(item, f"{SPARKLE}version") != build_version:
+        raise AppcastError(f"Appcast build for {short_version} does not match {build_version}.")
+    enclosure = item.find("enclosure")
+    if enclosure is None:
+        raise AppcastError(f"Appcast item for {short_version} is missing its enclosure.")
+    if enclosure.get("url") != download_url:
+        raise AppcastError(f"Appcast enclosure URL for {short_version} does not match the release asset.")
+    if enclosure.get("length") != str(length):
+        raise AppcastError(f"Appcast enclosure length for {short_version} does not match the release asset.")
+
+
 def append_item(feed_path: Path, output_path: Path, item: AppcastItem) -> None:
     check_new_release(feed_path, item.build_version, item.short_version)
     if item.channel not in {None, "rc"}:
@@ -281,6 +322,16 @@ def main() -> int:
     validate = commands.add_parser("validate", help="Validate all appcast entries.")
     validate.add_argument("--feed", type=Path, required=True)
 
+    validate_empty = commands.add_parser("validate-empty", help="Validate an emergency empty appcast.")
+    validate_empty.add_argument("--feed", type=Path, required=True)
+
+    validate_snapshot = commands.add_parser(
+        "validate-snapshot",
+        help="Validate a cumulative snapshot whose newest item matches a release.",
+    )
+    validate_snapshot.add_argument("--feed", type=Path, required=True)
+    validate_snapshot.add_argument("--short-version", required=True)
+
     check = commands.add_parser("check-build", help="Require a build number newer than the appcast.")
     check.add_argument("--feed", type=Path, required=True)
     check.add_argument("--build-version", required=True)
@@ -290,13 +341,35 @@ def main() -> int:
     check_release.add_argument("--build-version", required=True)
     check_release.add_argument("--short-version", required=True)
 
+    verify_release = commands.add_parser(
+        "verify-release",
+        help="Verify one release item against an exact GitHub Release asset.",
+    )
+    verify_release.add_argument("--feed", type=Path, required=True)
+    verify_release.add_argument("--build-version", required=True)
+    verify_release.add_argument("--short-version", required=True)
+    verify_release.add_argument("--download-url", required=True)
+    verify_release.add_argument("--length", type=int, required=True)
+
     args = parser.parse_args()
     if args.command == "validate":
         validate_appcast(args.feed)
+    elif args.command == "validate-empty":
+        validate_empty_appcast(args.feed)
+    elif args.command == "validate-snapshot":
+        validate_release_snapshot(args.feed, args.short_version)
     elif args.command == "check-build":
         check_new_build(args.feed, args.build_version)
     elif args.command == "check-release":
         check_new_release(args.feed, args.build_version, args.short_version)
+    elif args.command == "verify-release":
+        verify_release_item(
+            args.feed,
+            build_version=args.build_version,
+            short_version=args.short_version,
+            download_url=args.download_url,
+            length=args.length,
+        )
     else:
         published_at = datetime.fromisoformat(args.published_at) if args.published_at else datetime.now(timezone.utc)
         if published_at.tzinfo is None:
