@@ -75,10 +75,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
             set(jobs["create-draft"]["needs"]),
             {"prepare", "package", "attest-package"},
         )
+        self.assertIn("release_id", jobs["create-draft"]["outputs"])
         self.assertIn("--draft", str(jobs["create-draft"]))
         self.assertIn("--target", str(jobs["create-draft"]))
         self.assertIn("--notes-start-tag", str(jobs["create-draft"]))
         self.assertNotIn("--fail-on-no-commits", str(jobs["create-draft"]))
+        self.assertIn("select(.tag_name == $tag)", str(jobs["create-draft"]))
+        self.assertNotIn("--json databaseId", str(jobs["create-draft"]))
         self.assertEqual(
             set(jobs["verify-draft"]["needs"]),
             {"prepare", "package", "create-draft", "publish-appcast"},
@@ -89,10 +92,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("--verify-distribution", str(jobs["verify-draft"]))
         self.assertEqual(
             set(jobs["publish-release"]["needs"]),
-            {"build-python", "prepare", "package", "verify-draft"},
+            {"build-python", "create-draft", "prepare", "package", "verify-draft"},
         )
+        self.assertIn("needs.create-draft.result == 'success'", jobs["publish-release"]["if"])
         self.assertIn("needs.build-python.result == 'success'", jobs["publish-release"]["if"])
         self.assertIn("--draft=false", str(jobs["publish-release"]))
+        self.assertNotIn("releases/tags/$RELEASE_TAG", str(workflow))
+        self.assertIn("releases/$RELEASE_ID", str(workflow))
 
     def test_release_package_provenance_is_attested_and_verified(self) -> None:
         workflow = load_workflow("briefcase.yml")
