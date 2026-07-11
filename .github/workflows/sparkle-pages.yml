@@ -1,5 +1,5 @@
 ---
-name: Manage Sparkle Pages
+name: Deploy Sparkle Pages Snapshot
 
 "on":
   workflow_call:
@@ -22,22 +22,6 @@ name: Manage Sparkle Pages
         required: false
         type: string
         default: ""
-  workflow_dispatch:
-    inputs:
-      operation:
-        description: Deploy, restore, or temporarily disable Sparkle updates
-        required: true
-        type: choice
-        default: restore
-        options:
-          - deploy
-          - restore
-          - disable
-      release_tag:
-        description: Required for deploy/restore; ignored for disable
-        required: false
-        type: string
-
 permissions: {}
 
 concurrency:
