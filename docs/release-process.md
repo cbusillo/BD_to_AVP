@@ -50,10 +50,11 @@ The workflow performs these ordered boundaries:
    ID for authenticated inspection, and transfer draft assets through release
    and asset IDs rather than runner-dependent tag lookup. Asset overwrite stays
    disabled by default.
-5. In the protected `sparkle-release` environment, re-download the draft DMG,
-   verify its exact identity and distribution signatures, load the active
-   durable `appcast.xml` selected by Pages state, sign the DMG, verify the EdDSA
-   signature, and build the cumulative snapshot.
+5. In the protected `sparkle-release` environment, download the verified package
+   workflow artifact without a write-capable repository token, verify its exact
+   identity and distribution signatures, load the active durable `appcast.xml`
+   selected by Pages state, sign the DMG, verify the EdDSA signature, and build
+   the cumulative snapshot.
 6. Upload `appcast.xml` to the draft, re-download the DMG, checksum, and appcast,
    and repeat the exact digest, size, notarization, Gatekeeper, bundle-version,
    appcast-item, and exact-main-commit GitHub provenance checks.

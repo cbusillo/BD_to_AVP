@@ -570,6 +570,7 @@ jobs:
     permissions:
       contents: write
     outputs:
+      release_created_at: ${{ steps.draft_release.outputs.release_created_at }}
       release_id: ${{ steps.draft_release.outputs.release_id }}
     steps:
       - name: Download verified release package
@@ -783,6 +784,7 @@ jobs:
             echo "A prerelease cannot be marked latest." >&2
             exit 1
           fi
+          echo "release_created_at=$(jq -r .created_at <<< "$RELEASE_JSON")" >> "$GITHUB_OUTPUT"
           echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
 
   publish-appcast:
@@ -811,58 +813,57 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Download and verify draft DMG
+      - name: Download verified release package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-package
+          path: release-assets
+
+      - name: Verify transferred release DMG
         id: release_asset
         env:
           EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
           EXPECTED_DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
           EXPECTED_DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
+          RELEASE_CREATED_AT: ${{ needs.create-draft.outputs.release_created_at }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
-          mkdir -p appcast-site release-assets
-          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
-          if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ]; then
-            echo "Appcast signing requires an unpublished draft release." >&2
-            exit 1
-          fi
-          ASSET_COUNT=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
-            '[.assets[] | select(.name == $name)] | length' <<< "$RELEASE_JSON")
-          if [ "$ASSET_COUNT" != "1" ]; then
-            echo "Expected exactly one draft DMG asset; found $ASSET_COUNT." >&2
-            exit 1
-          fi
-          ASSET_ID=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
-            '.assets[] | select(.name == $name) | .id' <<< "$RELEASE_JSON")
-          ASSET_URL=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
-            '.assets[] | select(.name == $name) | .browser_download_url' <<< "$RELEASE_JSON")
-          ASSET_SIZE=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
-            '.assets[] | select(.name == $name) | .size' <<< "$RELEASE_JSON")
-          if [ "$ASSET_SIZE" != "$EXPECTED_DMG_SIZE" ]; then
-            echo "GitHub draft asset size does not match the validated package." >&2
-            exit 1
-          fi
-
+          mkdir -p appcast-site
           DMG_PATH="release-assets/$EXPECTED_DMG_NAME"
-          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID" \
-            -H "Accept: application/octet-stream" > "$DMG_PATH"
+          if [ ! -f "$DMG_PATH" ]; then
+            echo "Expected release DMG is missing from the workflow artifact." >&2
+            exit 1
+          fi
           ACTUAL_SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
           if [ "$ACTUAL_SHA256" != "$EXPECTED_DMG_SHA256" ]; then
-            echo "Draft DMG digest does not match the validated package." >&2
+            echo "Transferred DMG digest does not match the validated package." >&2
             exit 1
           fi
           ACTUAL_SIZE=$(stat -f %z "$DMG_PATH")
           if [ "$ACTUAL_SIZE" != "$EXPECTED_DMG_SIZE" ]; then
-            echo "Draft DMG size does not match the validated package." >&2
+            echo "Transferred DMG size does not match the validated package." >&2
             exit 1
           fi
+          EXPECTED_SUM="$EXPECTED_DMG_SHA256  $EXPECTED_DMG_NAME"
+          if [ "$(cat release-assets/SHA256SUMS)" != "$EXPECTED_SUM" ]; then
+            echo "Transferred checksum manifest mismatch." >&2
+            exit 1
+          fi
+          (cd release-assets && shasum -a 256 --check SHA256SUMS)
+          if [ -z "$RELEASE_CREATED_AT" ]; then
+            echo "Draft release creation time is missing." >&2
+            exit 1
+          fi
+          python -c \
+            'import datetime, sys; datetime.datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))' \
+            "$RELEASE_CREATED_AT"
+          ASSET_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$EXPECTED_DMG_NAME"
           {
             echo "dmg_path=$DMG_PATH"
             echo "asset_url=$ASSET_URL"
-            echo "asset_size=$ASSET_SIZE"
-            echo "created_at=$(jq -r .created_at <<< "$RELEASE_JSON")"
+            echo "asset_size=$EXPECTED_DMG_SIZE"
+            echo "created_at=$RELEASE_CREATED_AT"
           } >> "$GITHUB_OUTPUT"
 
       - name: Inspect draft DMG
@@ -897,7 +898,6 @@ jobs:
         env:
           BASE_SNAPSHOT_TAG: ${{ needs.prepare.outputs.base_snapshot_tag }}
           BUILD_VERSION: ${{ steps.bundle.outputs.build_version }}
-          GH_TOKEN: ${{ github.token }}
           SHORT_VERSION: ${{ steps.bundle.outputs.short_version }}
         run: |
           set -euo pipefail
@@ -905,9 +905,11 @@ jobs:
             cp sparkle-feed/appcast.xml appcast-site/appcast.xml
           else
             python scripts/release.py validate-tag "$BASE_SNAPSHOT_TAG" >/dev/null
-            gh release download "$BASE_SNAPSHOT_TAG" \
-              --pattern appcast.xml \
-              --dir appcast-site
+            curl --fail --location --silent --show-error \
+              --retry 3 --retry-delay 2 --retry-all-errors \
+              --connect-timeout 10 --max-time 60 \
+              "https://github.com/$GITHUB_REPOSITORY/releases/download/$BASE_SNAPSHOT_TAG/appcast.xml" \
+              --output appcast-site/appcast.xml
             python scripts/sparkle_appcast.py validate-snapshot \
               --feed appcast-site/appcast.xml \
               --short-version "${BASE_SNAPSHOT_TAG#v}"
@@ -1104,8 +1106,7 @@ jobs:
             echo "Draft target changed after creation." >&2
             exit 1
           fi
-          ASSET_URL=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
-            '.assets[] | select(.name == $name) | .browser_download_url' <<< "$RELEASE_JSON")
+          ASSET_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$EXPECTED_DMG_NAME"
           ASSET_SIZE=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
             '.assets[] | select(.name == $name) | .size' <<< "$RELEASE_JSON")
           if [ "$ASSET_SIZE" != "$EXPECTED_DMG_SIZE" ]; then
