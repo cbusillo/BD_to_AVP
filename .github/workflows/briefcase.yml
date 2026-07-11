@@ -1321,6 +1321,11 @@ jobs:
       - prepare
       - publish-appcast
       - publish-release
+    if: >-
+      !cancelled() &&
+      needs.prepare.result == 'success' &&
+      needs.publish-appcast.result == 'success' &&
+      needs.publish-release.result == 'success'
     uses: ./.github/workflows/sparkle-pages.yml
     with:
       operation: deploy

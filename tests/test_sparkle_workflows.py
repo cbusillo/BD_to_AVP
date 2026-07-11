@@ -205,6 +205,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
         workflow = load_workflow("briefcase.yml")
         deploy = workflow["jobs"]["deploy-appcast"]
 
+        self.assertEqual(set(deploy["needs"]), {"prepare", "publish-appcast", "publish-release"})
+        self.assertIn("!cancelled()", deploy["if"])
+        self.assertIn("needs.prepare.result == 'success'", deploy["if"])
+        self.assertIn("needs.publish-appcast.result == 'success'", deploy["if"])
+        self.assertIn("needs.publish-release.result == 'success'", deploy["if"])
+        self.assertNotIn("build-python", deploy["if"])
+        self.assertNotIn("publish_pypi", deploy["if"])
         self.assertEqual(deploy["uses"], "./.github/workflows/sparkle-pages.yml")
         self.assertEqual(deploy["with"]["operation"], "deploy")
         self.assertEqual(
