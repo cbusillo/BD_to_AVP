@@ -34,6 +34,13 @@ release-note text; the committed project version determines RC versus Stable,
 the release tag, latest-release behavior, Sparkle channel, and whether PyPI is
 published.
 
+GitHub requests one maintainer approval when the run reaches the
+`macos-signing` environment. That approval authorizes the release intent for the
+specific run. The branch-restricted `sparkle-release`, `pypi`, and
+`github-pages` environments keep their separate secret and permission scopes,
+but do not request additional reviews; their jobs run only after the preceding
+verification boundaries succeed.
+
 The workflow performs these ordered boundaries:
 
 1. Prove `github.sha` is the current protected `main` HEAD and validate the
@@ -41,20 +48,20 @@ The workflow performs these ordered boundaries:
 2. Reject a conflicting tag, release, Sparkle version/build, or Stable PyPI
    version while allowing a matching draft to resume. The active Pages state
    and newest durable snapshot are both checked.
-3. Build, sign, notarize, and Gatekeeper-validate the macOS DMG without a
-   write-capable repository token. Normalize its release filename to use
-   hyphens instead of spaces, record its exact name, byte size, SHA-256, and
-   `SHA256SUMS` entry, then publish GitHub artifact attestations for the verified
-   package before release creation.
+3. After the single release approval, build, sign, notarize, and
+   Gatekeeper-validate the macOS DMG without a write-capable repository token.
+   Normalize its release filename to use hyphens instead of spaces, record its
+   exact name, byte size, SHA-256, and `SHA256SUMS` entry, then publish GitHub
+   artifact attestations for the verified package before release creation.
 4. Create a draft GitHub Release targeting only `github.sha`, retain its release
    ID for authenticated inspection, and transfer draft assets through release
    and asset IDs rather than runner-dependent tag lookup. Asset overwrite stays
    disabled by default.
-5. In the protected `sparkle-release` environment, download the verified package
-   workflow artifact without a write-capable repository token, verify its exact
-   identity and distribution signatures, load the active durable `appcast.xml`
-   selected by Pages state, sign the DMG, verify the EdDSA signature, and build
-   the cumulative snapshot.
+5. In the main-only `sparkle-release` environment, download the verified
+   package workflow artifact without a write-capable repository token, verify
+   its exact identity and distribution signatures, load the active durable
+   `appcast.xml` selected by Pages state, sign the DMG, verify the EdDSA
+   signature, and build the cumulative snapshot.
 6. Upload `appcast.xml` to the draft, re-download the DMG, checksum, and appcast,
    and repeat the exact digest, size, notarization, Gatekeeper, bundle-version,
    appcast-item, and exact-main-commit GitHub provenance checks.
@@ -97,28 +104,30 @@ cumulative snapshot. Restore the last-good tag when updates may resume.
 
 ## Required Repository Settings
 
-The workflow changes are committed without mutating repository or publisher
-settings. Before the first release on this path:
+Keep the live repository settings aligned with these contracts:
 
-- change the `sparkle-release` environment deployment branch policy from
-  `release` to protected `main`;
-- create a protected `macos-signing` environment limited to `main`, then move
-  the Apple certificate, identity, notarization, and keychain secrets from
-  repository scope into it. The legacy `KEYCHAIN_PASSWORD` value is the Apple
-  app-specific password; the workflow generates a separate ephemeral build
-  keychain password for every run and derives Briefcase's notarization profile
-  name from `TEAM_ID`, so no `KEYCHAIN_NAME` secret is required;
-- configure a PyPI Trusted Publisher for repository `cbusillo/BD_to_AVP`,
-  workflow `briefcase.yml`, environment `pypi`, and the `bd_to_avp` project;
-- create/protect the `pypi` GitHub environment as desired, then remove the
-  obsolete `PYPI_TOKEN` secret after a successful Trusted Publishing run;
-- confirm GitHub Pages remains Actions-managed and restricted to `main`;
-- enable immutable GitHub Releases before the first release; drafts remain
-  resumable while published tags and assets become immutable; and
-- retire the long-lived `release` branch and its ruleset after the main-only
-  migration is merged and verified.
+- `macos-signing` is limited to `main`, contains only the Apple certificate,
+  identity, notarization, and keychain secrets, and is the sole environment
+  with a required maintainer review. The legacy `KEYCHAIN_PASSWORD` value is
+  the Apple app-specific password; the workflow generates a separate ephemeral
+  build keychain password for every run and derives Briefcase's notarization
+  profile name from `TEAM_ID`, so no `KEYCHAIN_NAME` secret is required.
+- `sparkle-release` is limited to `main`, contains only
+  `SPARKLE_EDDSA_PRIVATE_KEY`, and has no separate required-review rule. The
+  private key remains visible only to the read-only signing step.
+- `sparkle-feed-ops` is limited to `main`, contains no secrets, and requires a
+  maintainer review only for manually dispatched deploy, restore, or disable
+  operations. It is not part of normal release orchestration.
+- `pypi` is limited to `main`, has no required-review rule, and is authorized by
+  the PyPI Trusted Publisher for repository `cbusillo/BD_to_AVP`, workflow
+  `briefcase.yml`, environment `pypi`, and project `bd_to_avp`. No
+  `PYPI_TOKEN` exists.
+- `github-pages` is Actions-managed, limited to `main`, and has no additional
+  required-review rule.
+- Immutable GitHub Releases remain enabled; drafts are resumable while
+  published tags and assets are immutable.
+- The retired long-lived `release` branch and its ruleset remain absent.
 
-The environment, Actions-permission, immutable-release, and release-branch
-settings migration follows immediately after this workflow lands. GitHub does
-not expose existing secret values, and PyPI Trusted Publisher authorization is
-completed through the maintainer UI.
+GitHub does not expose existing secret values. Repository-setting reviews must
+verify secret names, environment scopes, branch policies, and reviewer rules
+without attempting to read secret contents.

@@ -1,4 +1,5 @@
 import importlib
+import json
 import subprocess
 import sys
 import unittest
@@ -13,6 +14,11 @@ yaml = importlib.import_module("yaml")
 def load_workflow(name: str) -> dict:
     with (REPO_ROOT / ".github" / "workflows" / name).open(encoding="utf-8") as handle:
         return yaml.load(handle, Loader=yaml.BaseLoader)
+
+
+def load_github_config() -> dict:
+    with (REPO_ROOT / ".github" / "github.json").open(encoding="utf-8") as handle:
+        return json.load(handle)
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
@@ -251,19 +257,58 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 with self.subTest(workflow=workflow_name, action=action):
                     self.assertRegex(action, r"^[^@]+@[0-9a-f]{40}$")
 
+    def test_release_environment_contract_preserves_scoped_secrets(self) -> None:
+        environments = load_github_config()["releaseEnvironments"]
+
+        self.assertEqual(
+            set(environments),
+            {"macos-signing", "sparkle-release", "sparkle-feed-ops", "pypi", "github-pages"},
+        )
+        self.assertTrue(all(environment["branches"] == ["main"] for environment in environments.values()))
+        self.assertEqual(
+            {name for name, environment in environments.items() if environment["requiredReview"]},
+            {"macos-signing", "sparkle-feed-ops"},
+        )
+        self.assertEqual(environments["sparkle-release"]["secrets"], ["SPARKLE_EDDSA_PRIVATE_KEY"])
+        self.assertEqual(environments["sparkle-feed-ops"]["secrets"], [])
+        self.assertEqual(environments["pypi"]["secrets"], [])
+        self.assertEqual(environments["github-pages"]["secrets"], [])
+        self.assertTrue(
+            set(environments["macos-signing"]["secrets"]).isdisjoint(environments["sparkle-release"]["secrets"])
+        )
+
 
 class SparklePagesWorkflowTests(unittest.TestCase):
     def test_pages_workflow_supports_deploy_restore_and_disable(self) -> None:
         workflow = load_workflow("sparkle-pages.yml")
-        dispatch = workflow["on"]["workflow_dispatch"]["inputs"]
+        manual = load_workflow("manage-sparkle-pages.yml")
+        dispatch = manual["on"]["workflow_dispatch"]["inputs"]
 
-        self.assertEqual(set(workflow["on"]), {"workflow_call", "workflow_dispatch"})
+        self.assertEqual(set(workflow["on"]), {"workflow_call"})
+        self.assertEqual(set(manual["on"]), {"workflow_dispatch"})
+        self.assertEqual(manual.get("permissions"), {})
         self.assertEqual(dispatch["operation"]["options"], ["deploy", "restore", "disable"])
+        self.assertEqual(manual["jobs"]["approve"]["environment"], "sparkle-feed-ops")
+        self.assertEqual(manual["jobs"]["approve"].get("permissions"), {})
+        self.assertEqual(manual["jobs"]["manage"]["needs"], "approve")
+        self.assertEqual(manual["jobs"]["manage"]["uses"], "./.github/workflows/sparkle-pages.yml")
+        self.assertEqual(manual["jobs"]["manage"]["with"]["operation"], "${{ inputs.operation }}")
+        self.assertEqual(manual["jobs"]["manage"]["with"]["release_tag"], "${{ inputs.release_tag }}")
+        self.assertEqual(
+            manual["jobs"]["manage"]["permissions"],
+            {"contents": "read", "id-token": "write", "pages": "write"},
+        )
         self.assertEqual(workflow["concurrency"]["group"], "sparkle-pages")
         self.assertEqual(
             workflow["concurrency"]["cancel-in-progress"],
             "${{ inputs.operation == 'disable' }}",
         )
+        stale_guard = next(
+            step
+            for step in workflow["jobs"]["deploy"]["steps"]
+            if step.get("name") == "Refuse a stale or disabled release deployment"
+        )
+        self.assertEqual(stale_guard["if"], "inputs.operation == 'deploy'")
         self.assertIn("refs/heads/main", str(workflow["jobs"]["validate"]))
 
     def test_disable_is_non_destructive_and_restore_uses_release_snapshot(self) -> None:

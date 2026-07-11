@@ -16,36 +16,33 @@ printed in logs, or uploaded as a workflow artifact.
   login keychain.
 - Recovery store: an Apple Passwords entry synchronized by iCloud Keychain.
 - GitHub environment: `sparkle-release`.
-- Target environment protection for the main-only workflow: required maintainer
-  approval and protected `main` only.
+- Target environment protection: protected `main` only, with no separate
+  required-review rule. Release intent is approved once at `macos-signing`.
 - Reserved environment secret: `SPARKLE_EDDSA_PRIVATE_KEY`.
 - Production public key: `sparkle-public-ed-key.txt`.
 - Feed URL: `https://cbusillo.github.io/BD_to_AVP/appcast.xml`.
 - Emergency empty-feed source: `sparkle-feed/appcast.xml`, deployed only by the
-  manual `.github/workflows/sparkle-pages.yml` workflow.
+  manual `.github/workflows/manage-sparkle-pages.yml` workflow.
 - Durable feed history: the cumulative `appcast.xml` asset attached to every
   published GitHub Release.
 
 The release workflow's appcast job uses the `sparkle-release` environment and
-receives the private key only in its signing step. The emergency empty-feed
-workflow uses the same approval environment but never references the private
-key.
+receives the private key only in its signing step. Manual feed management first
+passes the reviewer-protected, secret-free `sparkle-feed-ops` environment, then
+calls the same validated Pages workflow without referencing the private key.
 
 ## Current State
 
-GitHub Pages uses the GitHub Actions deployment source, and the
-`sparkle-release` environment is configured. The initial feed is a valid empty
-RSS appcast so clients receive "no update" rather than malformed XML.
+GitHub Pages uses the GitHub Actions deployment source, and the live feed is
+bound by `appcast-state.json` to a verified durable release snapshot. The
+`sparkle-release` environment is limited to `main` and does not add a second
+approval after the run has passed the `macos-signing` release-intent gate.
 
 The production working key is stored in the maintainer's login keychain, its
 recovery copy is imported into Apple Passwords, and
 `SPARKLE_EDDSA_PRIVATE_KEY` is stored only in the protected `sparkle-release`
 environment. The matching public key is committed at
 `sparkle-public-ed-key.txt` for #163 and future recovery verification.
-
-The environment's deployment branch policy still names `release` until the
-main-only workflow migration is integrated. Change that policy to `main` before
-dispatching the new release or feed workflows; no key or secret move is needed.
 
 ## One-Time Provisioning
 

@@ -1,0 +1,48 @@
+---
+name: Manage Sparkle Pages
+
+"on":
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Deploy, restore, or temporarily disable Sparkle updates
+        required: true
+        type: choice
+        default: restore
+        options:
+          - deploy
+          - restore
+          - disable
+      release_tag:
+        description: Required for deploy/restore; ignored for disable
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  approve:
+    name: Approve manual feed operation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: sparkle-feed-ops
+    permissions: {}
+    steps:
+      - name: Record approved operation
+        env:
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          printf 'Approved Sparkle Pages operation: %s %s\n' "$OPERATION" "$RELEASE_TAG"
+
+  manage:
+    name: Run validated feed operation
+    needs: approve
+    uses: ./.github/workflows/sparkle-pages.yml
+    with:
+      operation: ${{ inputs.operation }}
+      release_tag: ${{ inputs.release_tag }}
+    permissions:
+      contents: read
+      id-token: write
+      pages: write

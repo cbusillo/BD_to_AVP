@@ -171,6 +171,14 @@ disable procedure are maintained in
 Only the public key is embedded in the app. Private key material must never be
 committed, printed, uploaded as an artifact, or copied into issue/PR text.
 
+The release receives one maintainer approval at the main-only
+`macos-signing` boundary. Apple signing credentials, the Sparkle private key,
+PyPI OIDC publication, and Pages deployment remain in separate environments,
+but the downstream environments do not add redundant reviews; each job remains
+blocked on the preceding verification results.
+Manual deploy, restore, and disable operations use a separate secret-free
+`sparkle-feed-ops` approval and are not part of normal release orchestration.
+
 The appcast publication path must:
 
 1. create an unpublished draft release targeting the validated `main` SHA;

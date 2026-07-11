@@ -21,6 +21,41 @@
       "requiresConversationResolution": true
     }
   },
+  "releaseEnvironments": {
+    "macos-signing": {
+      "branches": ["main"],
+      "requiredReview": true,
+      "secrets": [
+        "APPLE_ID",
+        "CERTIFICATE",
+        "CERTIFICATE_INSTALLER",
+        "CERTIFICATE_PASSWORD",
+        "DEV_ID",
+        "KEYCHAIN_PASSWORD",
+        "TEAM_ID"
+      ]
+    },
+    "sparkle-release": {
+      "branches": ["main"],
+      "requiredReview": false,
+      "secrets": ["SPARKLE_EDDSA_PRIVATE_KEY"]
+    },
+    "sparkle-feed-ops": {
+      "branches": ["main"],
+      "requiredReview": true,
+      "secrets": []
+    },
+    "pypi": {
+      "branches": ["main"],
+      "requiredReview": false,
+      "secrets": []
+    },
+    "github-pages": {
+      "branches": ["main"],
+      "requiredReview": false,
+      "secrets": []
+    }
+  },
   "docs": {
     "overview": "README.md",
     "packageManifest": "pyproject.toml",
@@ -28,7 +63,8 @@
     "releaseProcess": "docs/release-process.md",
     "releaseWorkflows": [
       ".github/workflows/briefcase.yml",
-      ".github/workflows/sparkle-pages.yml"
+      ".github/workflows/sparkle-pages.yml",
+      ".github/workflows/manage-sparkle-pages.yml"
     ]
   },
   "qualityGate": {
