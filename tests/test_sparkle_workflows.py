@@ -39,7 +39,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("awk -v version", str(workflow))
         self.assertNotIn("release_tag_suffix", str(workflow))
         self.assertIn("publish_pypi", prepare["outputs"])
+        self.assertIn("previous_release_tag", prepare["outputs"])
         self.assertIn("check-release", str(prepare))
+        self.assertIn("git merge-base --is-ancestor", str(prepare))
         self.assertIn("live-appcast.xml", str(prepare))
         self.assertIn("LATEST_SNAPSHOT_TAG", str(prepare))
         self.assertIn("base_snapshot_tag", prepare["outputs"])
@@ -75,6 +77,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertIn("--draft", str(jobs["create-draft"]))
         self.assertIn("--target", str(jobs["create-draft"]))
+        self.assertIn("--notes-start-tag", str(jobs["create-draft"]))
+        self.assertNotIn("--fail-on-no-commits", str(jobs["create-draft"]))
         self.assertEqual(
             set(jobs["verify-draft"]["needs"]),
             {"prepare", "package", "create-draft", "publish-appcast"},

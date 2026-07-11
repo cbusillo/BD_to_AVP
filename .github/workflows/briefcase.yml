@@ -33,6 +33,7 @@ jobs:
       prerelease: ${{ steps.metadata.outputs.prerelease }}
       make_latest: ${{ steps.metadata.outputs.make_latest }}
       publish_pypi: ${{ steps.metadata.outputs.publish_pypi }}
+      previous_release_tag: ${{ steps.release_history.outputs.previous_release_tag }}
       base_snapshot_tag: ${{ steps.feed_state.outputs.base_snapshot_tag }}
     steps:
       - name: Checkout dispatch commit
@@ -114,6 +115,30 @@ jobs:
             echo "Multiple GitHub Releases use tag $RELEASE_TAG." >&2
             exit 1
           fi
+
+      - name: Resolve ancestor release for generated notes
+        id: release_history
+        run: |
+          set -euo pipefail
+          PREVIOUS_RELEASE_TAG=""
+          while IFS= read -r candidate_tag; do
+            if git rev-parse --quiet --verify \
+              "refs/tags/$candidate_tag^{commit}" >/dev/null \
+              && git merge-base --is-ancestor \
+                "refs/tags/$candidate_tag^{commit}" "$GITHUB_SHA"; then
+              PREVIOUS_RELEASE_TAG="$candidate_tag"
+              break
+            fi
+          done < <(jq -r '
+            [
+              .[][]
+              | select(.draft == false)
+            ]
+            | sort_by(.published_at)
+            | reverse
+            | .[].tag_name
+          ' release-identities.json)
+          echo "previous_release_tag=$PREVIOUS_RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Resolve active and durable appcast state
         id: feed_state
@@ -578,6 +603,7 @@ jobs:
           EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
           GH_TOKEN: ${{ github.token }}
           MAKE_LATEST: ${{ needs.prepare.outputs.make_latest }}
+          PREVIOUS_RELEASE_TAG: ${{ needs.prepare.outputs.previous_release_tag }}
           PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
           RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
           RELEASE_NOTES_INPUT: ${{ inputs.release_notes }}
@@ -623,13 +649,17 @@ jobs:
             RELEASE_ARGS=(
               "$RELEASE_TAG"
               --draft
-              --fail-on-no-commits
-              --generate-notes
               --latest=false
               --notes-file release-notes-prefix.md
               --target "$GITHUB_SHA"
               --title "$RELEASE_NAME"
             )
+            if [ -n "$PREVIOUS_RELEASE_TAG" ]; then
+              RELEASE_ARGS+=(
+                --generate-notes
+                --notes-start-tag "$PREVIOUS_RELEASE_TAG"
+              )
+            fi
             if [ "$PRERELEASE" = "true" ]; then
               RELEASE_ARGS+=(--prerelease)
             fi
