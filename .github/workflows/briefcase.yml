@@ -76,6 +76,7 @@ jobs:
           EXPECTED_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
           PRERELEASE: ${{ steps.metadata.outputs.prerelease }}
+          RELEASE_NAME: ${{ steps.metadata.outputs.release_name }}
           RELEASE_TAG: ${{ steps.metadata.outputs.release_tag }}
         run: |
           set -euo pipefail
@@ -103,7 +104,8 @@ jobs:
               release-identities.json)
             if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ] \
               || [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$EXPECTED_SHA" ] \
-              || [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "$PRERELEASE" ]; then
+              || [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "$PRERELEASE" ] \
+              || [ "$(jq -r .name <<< "$RELEASE_JSON")" != "$RELEASE_NAME" ]; then
               echo "Existing release cannot be safely resumed: $RELEASE_TAG" >&2
               exit 1
             fi
@@ -116,29 +118,17 @@ jobs:
             exit 1
           fi
 
-      - name: Resolve ancestor release for generated notes
+      - name: Resolve channel-aware base for generated notes
         id: release_history
+        env:
+          RELEASE_TAG: ${{ steps.metadata.outputs.release_tag }}
         run: |
           set -euo pipefail
-          PREVIOUS_RELEASE_TAG=""
-          while IFS= read -r candidate_tag; do
-            if git rev-parse --quiet --verify \
-              "refs/tags/$candidate_tag^{commit}" >/dev/null \
-              && git merge-base --is-ancestor \
-                "refs/tags/$candidate_tag^{commit}" "$GITHUB_SHA"; then
-              PREVIOUS_RELEASE_TAG="$candidate_tag"
-              break
-            fi
-          done < <(jq -r '
-            [
-              .[][]
-              | select(.draft == false)
-            ]
-            | sort_by(.published_at)
-            | reverse
-            | .[].tag_name
-          ' release-identities.json)
-          echo "previous_release_tag=$PREVIOUS_RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          python scripts/release.py notes-base \
+            --release-tag "$RELEASE_TAG" \
+            --releases-json release-identities.json \
+            --head-ref "$GITHUB_SHA" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Resolve active and durable appcast state
         id: feed_state
@@ -702,7 +692,8 @@ jobs:
           if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ] \
             || [ "$(jq -r .tag_name <<< "$RELEASE_JSON")" != "$RELEASE_TAG" ] \
             || [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ] \
-            || [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "$PRERELEASE" ]; then
+            || [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "$PRERELEASE" ] \
+            || [ "$(jq -r .name <<< "$RELEASE_JSON")" != "$RELEASE_NAME" ]; then
             echo "Existing release cannot be safely resumed." >&2
             exit 1
           fi
@@ -1211,6 +1202,7 @@ jobs:
           MAKE_LATEST: ${{ needs.prepare.outputs.make_latest }}
           PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
           RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
+          RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
@@ -1253,6 +1245,10 @@ jobs:
           fi
           if [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "$PRERELEASE" ]; then
             echo "Published release channel does not match the committed version." >&2
+            exit 1
+          fi
+          if [ "$(jq -r .name <<< "$RELEASE_JSON")" != "$RELEASE_NAME" ]; then
+            echo "Published release title does not match the committed version." >&2
             exit 1
           fi
           if [ "$(jq -r .published_at <<< "$RELEASE_JSON")" = "null" ]; then

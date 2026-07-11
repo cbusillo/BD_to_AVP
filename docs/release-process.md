@@ -32,7 +32,15 @@ or from a stale main commit.
 Dispatch `Release from protected main` from `main`. The only optional input is
 release-note text; the committed project version determines RC versus Stable,
 the release tag, latest-release behavior, Sparkle channel, and whether PyPI is
-published.
+published. The GitHub Release title is the exact version tag so narrow release
+lists keep the distinguishing version visible.
+
+Generated notes use channel-aware history. An RC compares with the newest lower
+published release whose tag is an ancestor of the release commit, keeping RC
+notes incremental. A Stable release compares with the newest lower published
+Stable tag rather than the latest RC, so its notes summarize the complete change
+set since the previous Stable. Stable history is a product-version boundary and
+may cross the retired legacy release branch; RC history remains ancestry-bound.
 
 GitHub requests one maintainer approval when the run reaches the
 `macos-signing` environment. That approval authorizes the release intent for the
@@ -90,6 +98,12 @@ again. A matching draft and its byte-identical assets resume safely; a
 conflicting draft or tag fails closed. Never replace a published DMG or appcast
 asset. If the Pages job fails after publication, rerun the failed job or dispatch
 `Manage Sparkle Pages` from `main` with `deploy` and the release tag.
+
+Drafts are never deleted automatically because they preserve exact-commit
+diagnostic and retry evidence. If a newer immutable release supersedes a failed
+draft and no exact-commit retry remains useful, verify the published tag and
+assets, then delete only the abandoned draft through the GitHub Releases UI.
+Maintainers may otherwise see that draft pinned above newer published releases.
 
 To restore an earlier last-good cumulative feed, dispatch `Manage Sparkle Pages`
 from `main` with `restore` and the selected published release tag. The workflow
