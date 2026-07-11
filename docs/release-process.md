@@ -7,8 +7,8 @@ pull request before release orchestration runs. Use the repository command:
 
 ```sh
 uv run python scripts/release.py prepare \
-  --version 0.2.143rc5 \
-  --build 145
+  --version 0.2.143 \
+  --build 146
 ```
 
 The version must be a canonical three-part stable version or release candidate,
@@ -17,10 +17,10 @@ for every RC and Stable DMG. The command stages a refreshed `uv.lock`, validates
 the staged metadata, and updates `pyproject.toml` and `uv.lock` together only
 after every check succeeds. A lock refresh failure leaves both files unchanged.
 
-The main-only migration itself is prepared as `0.2.143rc4` with build `144`.
-After that RC is published, prepare `0.2.143rc5` with build `145` for the real
-RC-to-RC updater smoke. Prepare Stable `0.2.143` with build `146` only after the
-smoke passes.
+The initial main-only Sparkle migration used `0.2.143rc4` build `144` and
+`0.2.143rc5` build `145` to prove a real RC-to-RC updater path. Stable
+`0.2.143` build `146` follows only after that smoke passes. Future releases
+must continue increasing `CFBundleVersion` from this sequence.
 
 Review and commit all resulting changes. CI runs
 `scripts/release.py validate`, the unit suite, Python package builds, and the

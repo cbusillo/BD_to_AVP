@@ -80,13 +80,13 @@ class ReleaseMetadataTests(unittest.TestCase):
             pyproject["tool"]["briefcase"]["app"]["bd-to-avp"]["macOS"]["info"]["CFBundleVersion"],
         )
 
-    def test_repository_is_prepared_for_rc_to_rc_update_smoke(self) -> None:
+    def test_repository_is_prepared_for_stable_release(self) -> None:
         metadata = release.load_release_metadata()
 
-        self.assertEqual(metadata.package_version, "0.2.143rc5")
-        self.assertEqual(metadata.build_version, "145")
-        self.assertEqual(metadata.channel, "rc")
-        self.assertFalse(metadata.publish_pypi)
+        self.assertEqual(metadata.package_version, "0.2.143")
+        self.assertEqual(metadata.build_version, "146")
+        self.assertEqual(metadata.channel, "stable")
+        self.assertTrue(metadata.publish_pypi)
 
     def test_metadata_derives_release_policy_from_committed_version(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
