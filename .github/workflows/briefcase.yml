@@ -433,6 +433,12 @@ jobs:
             exit 1
           fi
           DMG_PATH=$(find dist -maxdepth 1 -type f -name '*.dmg' -print -quit)
+          ORIGINAL_DMG_NAME=$(basename "$DMG_PATH")
+          DMG_NAME=${ORIGINAL_DMG_NAME// /-}
+          if [ "$DMG_NAME" != "$ORIGINAL_DMG_NAME" ]; then
+            mv "$DMG_PATH" "dist/$DMG_NAME"
+            DMG_PATH="dist/$DMG_NAME"
+          fi
           uv run python scripts/sparkle_bundle.py \
             --dmg "$DMG_PATH" \
             --verify-signatures \
@@ -446,7 +452,6 @@ jobs:
             echo "Packaged DMG build does not match $BUILD_VERSION." >&2
             exit 1
           fi
-          DMG_NAME=$(basename "$DMG_PATH")
           DMG_SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
           DMG_SIZE=$(stat -f %z "$DMG_PATH")
           printf '%s  %s\n' "$DMG_SHA256" "$DMG_NAME" > dist/SHA256SUMS
@@ -674,7 +679,17 @@ jobs:
               RELEASE_ARGS+=(--prerelease)
             fi
             gh release create "${RELEASE_ARGS[@]}"
-            RELEASE_ID=$(resolve_release_id)
+            for attempt in {1..12}; do
+              RELEASE_ID=$(resolve_release_id)
+              if [ -n "$RELEASE_ID" ]; then
+                break
+              fi
+              if [ "$attempt" -eq 12 ]; then
+                echo "Draft release did not become visible through the API." >&2
+                exit 1
+              fi
+              sleep 2
+            done
           fi
 
           if ! [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]; then
@@ -701,13 +716,24 @@ jobs:
               <<< "$RELEASE_JSON")
             case "$ASSET_COUNT" in
               0)
-                gh release upload "$RELEASE_TAG" "$ASSET_PATH"
+                ASSET_NAME_ENCODED=$(jq -rn --arg value "$ASSET_NAME" '$value | @uri')
+                UPLOADED_ASSET=$(gh api --method POST \
+                  "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$ASSET_NAME_ENCODED" \
+                  -H "Content-Type: application/octet-stream" \
+                  --input "$ASSET_PATH")
+                if [ "$(jq -r .name <<< "$UPLOADED_ASSET")" != "$ASSET_NAME" ]; then
+                  echo "GitHub changed the uploaded asset name for $ASSET_NAME." >&2
+                  exit 1
+                fi
                 ;;
               1)
                 rm -f "existing-package-assets/$ASSET_NAME"
-                gh release download "$RELEASE_TAG" \
-                  --pattern "$ASSET_NAME" \
-                  --dir existing-package-assets
+                ASSET_ID=$(jq -r --arg name "$ASSET_NAME" \
+                  '.assets[] | select(.name == $name) | .id' \
+                  <<< "$RELEASE_JSON")
+                gh api "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID" \
+                  -H "Accept: application/octet-stream" \
+                  > "existing-package-assets/$ASSET_NAME"
                 if [ "$(sha256sum "$ASSET_PATH" | awk '{print $1}')" \
                   != "$(sha256sum "existing-package-assets/$ASSET_NAME" | awk '{print $1}')" ]; then
                   echo "Existing draft asset differs from $ASSET_NAME." >&2
@@ -721,7 +747,26 @@ jobs:
             esac
           done
 
-          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+          for attempt in {1..12}; do
+            RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+            DMG_ASSET_COUNT=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
+              '[.assets[] | select(.name == $name)] | length' \
+              <<< "$RELEASE_JSON")
+            CHECKSUM_ASSET_COUNT=$(jq \
+              '[.assets[] | select(.name == "SHA256SUMS")] | length' \
+              <<< "$RELEASE_JSON")
+            TOTAL_ASSET_COUNT=$(jq '.assets | length' <<< "$RELEASE_JSON")
+            if [ "$DMG_ASSET_COUNT" = "1" ] \
+              && [ "$CHECKSUM_ASSET_COUNT" = "1" ] \
+              && [ "$TOTAL_ASSET_COUNT" = "2" ]; then
+              break
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "Draft package assets did not become visible through the API." >&2
+              exit 1
+            fi
+            sleep 2
+          done
           if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ]; then
             echo "Release must remain a draft until all assets are verified." >&2
             exit 1
@@ -778,25 +823,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p appcast-site release-assets
-          gh release download "$RELEASE_TAG" \
-            --pattern "$EXPECTED_DMG_NAME" \
-            --dir release-assets
-          DMG_PATH="release-assets/$EXPECTED_DMG_NAME"
-          if [ ! -f "$DMG_PATH" ]; then
-            echo "Expected draft DMG was not downloaded." >&2
-            exit 1
-          fi
-          ACTUAL_SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
-          if [ "$ACTUAL_SHA256" != "$EXPECTED_DMG_SHA256" ]; then
-            echo "Draft DMG digest does not match the validated package." >&2
-            exit 1
-          fi
-          ACTUAL_SIZE=$(stat -f %z "$DMG_PATH")
-          if [ "$ACTUAL_SIZE" != "$EXPECTED_DMG_SIZE" ]; then
-            echo "Draft DMG size does not match the validated package." >&2
-            exit 1
-          fi
-
           RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
           if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ]; then
             echo "Appcast signing requires an unpublished draft release." >&2
@@ -808,12 +834,28 @@ jobs:
             echo "Expected exactly one draft DMG asset; found $ASSET_COUNT." >&2
             exit 1
           fi
+          ASSET_ID=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
+            '.assets[] | select(.name == $name) | .id' <<< "$RELEASE_JSON")
           ASSET_URL=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
             '.assets[] | select(.name == $name) | .browser_download_url' <<< "$RELEASE_JSON")
           ASSET_SIZE=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
             '.assets[] | select(.name == $name) | .size' <<< "$RELEASE_JSON")
           if [ "$ASSET_SIZE" != "$EXPECTED_DMG_SIZE" ]; then
             echo "GitHub draft asset size does not match the validated package." >&2
+            exit 1
+          fi
+
+          DMG_PATH="release-assets/$EXPECTED_DMG_NAME"
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID" \
+            -H "Accept: application/octet-stream" > "$DMG_PATH"
+          ACTUAL_SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
+          if [ "$ACTUAL_SHA256" != "$EXPECTED_DMG_SHA256" ]; then
+            echo "Draft DMG digest does not match the validated package." >&2
+            exit 1
+          fi
+          ACTUAL_SIZE=$(stat -f %z "$DMG_PATH")
+          if [ "$ACTUAL_SIZE" != "$EXPECTED_DMG_SIZE" ]; then
+            echo "Draft DMG size does not match the validated package." >&2
             exit 1
           fi
           {
@@ -987,13 +1029,23 @@ jobs:
           APPCAST_COUNT=$(jq '[.assets[] | select(.name == "appcast.xml")] | length' <<< "$RELEASE_JSON")
           case "$APPCAST_COUNT" in
             0)
-              gh release upload "$RELEASE_TAG" "$LOCAL_APPCAST"
+              UPLOADED_APPCAST=$(gh api --method POST \
+                "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=appcast.xml" \
+                -H "Content-Type: application/xml" \
+                --input "$LOCAL_APPCAST")
+              if [ "$(jq -r .name <<< "$UPLOADED_APPCAST")" != "appcast.xml" ]; then
+                echo "GitHub changed the uploaded appcast asset name." >&2
+                exit 1
+              fi
               ;;
             1)
               mkdir -p existing-appcast
-              gh release download "$RELEASE_TAG" \
-                --pattern appcast.xml \
-                --dir existing-appcast
+              APPCAST_ASSET_ID=$(jq -r \
+                '.assets[] | select(.name == "appcast.xml") | .id' \
+                <<< "$RELEASE_JSON")
+              gh api "repos/$GITHUB_REPOSITORY/releases/assets/$APPCAST_ASSET_ID" \
+                -H "Accept: application/octet-stream" \
+                > existing-appcast/appcast.xml
               if [ "$(shasum -a 256 existing-appcast/appcast.xml | awk '{print $1}')" \
                 != "$EXPECTED_APPCAST_SHA256" ]; then
                 echo "Existing draft appcast asset differs from the signed snapshot." >&2
@@ -1021,13 +1073,62 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p verified-assets
-          gh release download "$RELEASE_TAG" \
-            --pattern "$EXPECTED_DMG_NAME" \
-            --pattern SHA256SUMS \
-            --pattern appcast.xml \
-            --dir verified-assets
+          for attempt in {1..12}; do
+            RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+            DMG_ASSET_COUNT=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
+              '[.assets[] | select(.name == $name)] | length' <<< "$RELEASE_JSON")
+            APPCAST_ASSET_COUNT=$(jq \
+              '[.assets[] | select(.name == "appcast.xml")] | length' \
+              <<< "$RELEASE_JSON")
+            CHECKSUM_ASSET_COUNT=$(jq \
+              '[.assets[] | select(.name == "SHA256SUMS")] | length' \
+              <<< "$RELEASE_JSON")
+            TOTAL_ASSET_COUNT=$(jq '.assets | length' <<< "$RELEASE_JSON")
+            if [ "$DMG_ASSET_COUNT" = "1" ] \
+              && [ "$APPCAST_ASSET_COUNT" = "1" ] \
+              && [ "$CHECKSUM_ASSET_COUNT" = "1" ] \
+              && [ "$TOTAL_ASSET_COUNT" = "3" ]; then
+              break
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "Draft release must contain only one DMG, checksum, and appcast asset." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ]; then
+            echo "Release must still be a draft during final verification." >&2
+            exit 1
+          fi
+          if [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ]; then
+            echo "Draft target changed after creation." >&2
+            exit 1
+          fi
+          ASSET_URL=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
+            '.assets[] | select(.name == $name) | .browser_download_url' <<< "$RELEASE_JSON")
+          ASSET_SIZE=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
+            '.assets[] | select(.name == $name) | .size' <<< "$RELEASE_JSON")
+          if [ "$ASSET_SIZE" != "$EXPECTED_DMG_SIZE" ]; then
+            echo "GitHub DMG asset size changed after upload." >&2
+            exit 1
+          fi
+          DMG_ASSET_ID=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
+            '.assets[] | select(.name == $name) | .id' <<< "$RELEASE_JSON")
+          CHECKSUM_ASSET_ID=$(jq -r \
+            '.assets[] | select(.name == "SHA256SUMS") | .id' \
+            <<< "$RELEASE_JSON")
+          APPCAST_ASSET_ID=$(jq -r \
+            '.assets[] | select(.name == "appcast.xml") | .id' \
+            <<< "$RELEASE_JSON")
 
           DMG_PATH="verified-assets/$EXPECTED_DMG_NAME"
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$DMG_ASSET_ID" \
+            -H "Accept: application/octet-stream" > "$DMG_PATH"
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$CHECKSUM_ASSET_ID" \
+            -H "Accept: application/octet-stream" > verified-assets/SHA256SUMS
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$APPCAST_ASSET_ID" \
+            -H "Accept: application/octet-stream" > verified-assets/appcast.xml
+
           if [ "$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')" != "$EXPECTED_DMG_SHA256" ]; then
             echo "Re-downloaded DMG digest mismatch." >&2
             exit 1
@@ -1055,34 +1156,6 @@ jobs:
           fi
           if [ "$(stat -f %z verified-assets/appcast.xml)" != "$EXPECTED_APPCAST_SIZE" ]; then
             echo "Re-downloaded appcast size mismatch." >&2
-            exit 1
-          fi
-
-          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
-          if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ]; then
-            echo "Release must still be a draft during final verification." >&2
-            exit 1
-          fi
-          if [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ]; then
-            echo "Draft target changed after creation." >&2
-            exit 1
-          fi
-          DMG_ASSET_COUNT=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
-            '[.assets[] | select(.name == $name)] | length' <<< "$RELEASE_JSON")
-          APPCAST_ASSET_COUNT=$(jq '[.assets[] | select(.name == "appcast.xml")] | length' <<< "$RELEASE_JSON")
-          CHECKSUM_ASSET_COUNT=$(jq '[.assets[] | select(.name == "SHA256SUMS")] | length' <<< "$RELEASE_JSON")
-          TOTAL_ASSET_COUNT=$(jq '.assets | length' <<< "$RELEASE_JSON")
-          if [ "$DMG_ASSET_COUNT" != "1" ] || [ "$APPCAST_ASSET_COUNT" != "1" ] \
-            || [ "$CHECKSUM_ASSET_COUNT" != "1" ] || [ "$TOTAL_ASSET_COUNT" != "3" ]; then
-            echo "Draft release must contain only one DMG, checksum, and appcast asset." >&2
-            exit 1
-          fi
-          ASSET_URL=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
-            '.assets[] | select(.name == $name) | .browser_download_url' <<< "$RELEASE_JSON")
-          ASSET_SIZE=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
-            '.assets[] | select(.name == $name) | .size' <<< "$RELEASE_JSON")
-          if [ "$ASSET_SIZE" != "$EXPECTED_DMG_SIZE" ]; then
-            echo "GitHub DMG asset size changed after upload." >&2
             exit 1
           fi
 
@@ -1140,6 +1213,14 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
+          case "$PRERELEASE:$MAKE_LATEST" in
+            true:false|false:true)
+              ;;
+            *)
+              echo "Release channel metadata is inconsistent." >&2
+              exit 1
+              ;;
+          esac
           RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
           if [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ]; then
             echo "Release target no longer matches github.sha." >&2
@@ -1151,13 +1232,17 @@ jobs:
               echo "main advanced before publication; leaving the verified release as a draft." >&2
               exit 1
             fi
-            EDIT_ARGS=(--draft=false)
-            if [ "$PRERELEASE" = "true" ]; then
-              EDIT_ARGS+=(--prerelease --latest=false)
-            else
-              EDIT_ARGS+=(--prerelease=false --latest)
-            fi
-            gh release edit "$RELEASE_TAG" "${EDIT_ARGS[@]}"
+            jq -n \
+              --argjson prerelease "$PRERELEASE" \
+              --arg make_latest "$MAKE_LATEST" \
+              '{
+                draft: false,
+                prerelease: $prerelease,
+                make_latest: $make_latest
+              }' > publish-release.json
+            gh api --method PATCH \
+              "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+              --input publish-release.json >/dev/null
             RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
           fi
 
@@ -1180,8 +1265,9 @@ jobs:
           fi
           ASSET_URL=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
             '.assets[] | select(.name == $name) | .browser_download_url' <<< "$RELEASE_JSON")
-          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
-            echo "Published DMG asset URL is missing." >&2
+          EXPECTED_ASSET_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$EXPECTED_DMG_NAME"
+          if [ "$ASSET_URL" != "$EXPECTED_ASSET_URL" ]; then
+            echo "Published DMG asset URL does not match the immutable tag URL." >&2
             exit 1
           fi
           for attempt in {1..12}; do

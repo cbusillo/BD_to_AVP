@@ -42,12 +42,14 @@ The workflow performs these ordered boundaries:
    version while allowing a matching draft to resume. The active Pages state
    and newest durable snapshot are both checked.
 3. Build, sign, notarize, and Gatekeeper-validate the macOS DMG without a
-   write-capable repository token. Record its exact name, byte size, SHA-256,
-   and `SHA256SUMS` entry, then publish GitHub artifact attestations for the
-   verified package before release creation.
+   write-capable repository token. Normalize its release filename to use
+   hyphens instead of spaces, record its exact name, byte size, SHA-256, and
+   `SHA256SUMS` entry, then publish GitHub artifact attestations for the verified
+   package before release creation.
 4. Create a draft GitHub Release targeting only `github.sha`, retain its release
-   ID for authenticated draft inspection, and upload the package assets with
-   overwrite disabled by default.
+   ID for authenticated inspection, and transfer draft assets through release
+   and asset IDs rather than runner-dependent tag lookup. Asset overwrite stays
+   disabled by default.
 5. In the protected `sparkle-release` environment, re-download the draft DMG,
    verify its exact identity and distribution signatures, load the active
    durable `appcast.xml` selected by Pages state, sign the DMG, verify the EdDSA
