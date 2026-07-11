@@ -174,8 +174,9 @@ committed, printed, uploaded as an artifact, or copied into issue/PR text.
 The appcast publication path must:
 
 1. create an unpublished draft release targeting the validated `main` SHA;
-2. re-download the matching draft DMG and prove its exact name, size, SHA-256,
-   notarization, Gatekeeper assessment, and bundle metadata;
+2. transfer the already-verified package workflow artifact into the read-only
+   Sparkle signing job and prove its exact name, size, SHA-256, notarization,
+   Gatekeeper assessment, and bundle metadata;
 3. start from the newest published `appcast.xml` release asset, or the committed
    empty feed before the first snapshot;
 4. verify the pinned Sparkle tooling archive;

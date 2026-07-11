@@ -77,6 +77,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             {"prepare", "package", "attest-package"},
         )
         self.assertIn("release_id", jobs["create-draft"]["outputs"])
+        self.assertIn("release_created_at", jobs["create-draft"]["outputs"])
         self.assertIn("--draft", str(jobs["create-draft"]))
         self.assertIn("--target", str(jobs["create-draft"]))
         self.assertIn("--notes-start-tag", str(jobs["create-draft"]))
@@ -135,6 +136,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
         self.assertEqual(publish["environment"], "sparkle-release")
         self.assertEqual(publish["permissions"]["contents"], "read")
+        self.assertIn("release-package", str(publish))
+        self.assertIn("release_created_at", str(publish))
+        self.assertIn("Draft release creation time is missing", str(publish))
+        self.assertNotIn("GH_TOKEN", str(publish))
+        self.assertNotIn("RELEASE_ID", str(publish))
         self.assertEqual(len(matching_steps), 1)
         self.assertEqual(matching_steps[0]["name"], "Sign DMG and build appcast")
         self.assertIn("--verify --ed-key-file -", str(matching_steps[0]))
