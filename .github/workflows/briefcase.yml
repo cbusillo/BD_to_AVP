@@ -564,6 +564,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+    outputs:
+      release_id: ${{ steps.draft_release.outputs.release_id }}
     steps:
       - name: Download verified release package
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -599,6 +601,7 @@ jobs:
           (cd release-package && sha256sum --check SHA256SUMS)
 
       - name: Create or resume immutable-intent draft
+        id: draft_release
         env:
           EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
           GH_TOKEN: ${{ github.token }}
@@ -631,16 +634,23 @@ jobs:
           NOTES
           } > release-notes-prefix.md
 
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            RELEASE_JSON=$(gh api \
-              "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
-            if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ] \
-              || [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ] \
-              || [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "$PRERELEASE" ]; then
-              echo "Existing release cannot be safely resumed." >&2
-              exit 1
-            fi
-          else
+          resolve_release_id() {
+            gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --paginate --slurp \
+              | jq -r --arg tag "$RELEASE_TAG" '
+                [.[][] | select(.tag_name == $tag)]
+                | if length == 0 then
+                    ""
+                  elif length == 1 then
+                    .[0].id
+                  else
+                    error("Multiple releases use tag " + $tag)
+                  end
+              '
+          }
+
+          RELEASE_ID=$(resolve_release_id)
+          if [ -z "$RELEASE_ID" ]; then
             if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" \
               >/dev/null 2>&1; then
               echo "Git tag already exists without a resumable draft: $RELEASE_TAG" >&2
@@ -664,13 +674,28 @@ jobs:
               RELEASE_ARGS+=(--prerelease)
             fi
             gh release create "${RELEASE_ARGS[@]}"
+            RELEASE_ID=$(resolve_release_id)
+          fi
+
+          if ! [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]; then
+            echo "Unable to resolve the draft release ID." >&2
+            exit 1
+          fi
+          RELEASE_JSON=$(gh api \
+            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+          if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ] \
+            || [ "$(jq -r .tag_name <<< "$RELEASE_JSON")" != "$RELEASE_TAG" ] \
+            || [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ] \
+            || [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "$PRERELEASE" ]; then
+            echo "Existing release cannot be safely resumed." >&2
+            exit 1
           fi
 
           mkdir -p existing-package-assets
           for ASSET_NAME in "$EXPECTED_DMG_NAME" SHA256SUMS; do
             ASSET_PATH="release-package/$ASSET_NAME"
             RELEASE_JSON=$(gh api \
-              "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
+              "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
             ASSET_COUNT=$(jq -r --arg name "$ASSET_NAME" \
               '[.assets[] | select(.name == $name)] | length' \
               <<< "$RELEASE_JSON")
@@ -696,7 +721,7 @@ jobs:
             esac
           done
 
-          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
+          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
           if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ]; then
             echo "Release must remain a draft until all assets are verified." >&2
             exit 1
@@ -713,6 +738,7 @@ jobs:
             echo "A prerelease cannot be marked latest." >&2
             exit 1
           fi
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
 
   publish-appcast:
     name: Build signed cumulative appcast snapshot
@@ -747,6 +773,7 @@ jobs:
           EXPECTED_DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
           EXPECTED_DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
@@ -770,7 +797,7 @@ jobs:
             exit 1
           fi
 
-          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
+          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
           if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ]; then
             echo "Appcast signing requires an unpublished draft release." >&2
             exit 1
@@ -938,6 +965,7 @@ jobs:
           EXPECTED_APPCAST_SHA256: ${{ needs.publish-appcast.outputs.appcast_sha256 }}
           EXPECTED_APPCAST_SIZE: ${{ needs.publish-appcast.outputs.appcast_size }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
@@ -951,7 +979,7 @@ jobs:
             exit 1
           fi
 
-          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
+          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
           if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ]; then
             echo "Release was published before appcast verification." >&2
             exit 1
@@ -988,6 +1016,7 @@ jobs:
           EXPECTED_DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
           EXPECTED_SHORT_VERSION: ${{ needs.prepare.outputs.package_version }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
@@ -1029,7 +1058,7 @@ jobs:
             exit 1
           fi
 
-          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
+          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
           if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ]; then
             echo "Release must still be a draft during final verification." >&2
             exit 1
@@ -1082,11 +1111,13 @@ jobs:
     name: Publish verified GitHub Release
     needs:
       - build-python
+      - create-draft
       - prepare
       - package
       - verify-draft
     if: >-
       !cancelled() &&
+      needs.create-draft.result == 'success' &&
       needs.prepare.result == 'success' &&
       needs.package.result == 'success' &&
       needs.verify-draft.result == 'success' &&
@@ -1105,10 +1136,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MAKE_LATEST: ${{ needs.prepare.outputs.make_latest }}
           PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
-          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
+          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
           if [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ]; then
             echo "Release target no longer matches github.sha." >&2
             exit 1
@@ -1126,7 +1158,7 @@ jobs:
               EDIT_ARGS+=(--prerelease=false --latest)
             fi
             gh release edit "$RELEASE_TAG" "${EDIT_ARGS[@]}"
-            RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
+            RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
           fi
 
           if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "false" ]; then

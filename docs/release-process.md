@@ -45,8 +45,9 @@ The workflow performs these ordered boundaries:
    write-capable repository token. Record its exact name, byte size, SHA-256,
    and `SHA256SUMS` entry, then publish GitHub artifact attestations for the
    verified package before release creation.
-4. Create a draft GitHub Release targeting only `github.sha` and upload the
-   package assets with overwrite disabled by default.
+4. Create a draft GitHub Release targeting only `github.sha`, retain its release
+   ID for authenticated draft inspection, and upload the package assets with
+   overwrite disabled by default.
 5. In the protected `sparkle-release` environment, re-download the draft DMG,
    verify its exact identity and distribution signatures, load the active
    durable `appcast.xml` selected by Pages state, sign the DMG, verify the EdDSA
