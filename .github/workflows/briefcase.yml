@@ -403,8 +403,8 @@ jobs:
         run: |
           set -euo pipefail
           security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$(pwd)/build.keychain"
-          uv run python scripts/briefcase_app.py create
-          uv run python scripts/briefcase_app.py build
+          uv run python -m scripts.briefcase_app create
+          uv run python -m scripts.briefcase_app build
           find . -name QtWebEngineCore.framework -type d | while read -r dir; do
             find "$dir" -type f -execdir codesign --force --verify --verbose \
               --sign "$DEV_ID" {} \;
@@ -415,15 +415,15 @@ jobs:
           find build/bd-to-avp/macos/app -name "*.dylib" \
             -exec codesign --force --sign - {} \;
           uv run python scripts/verify_app_tools.py --profile release
-          uv run python scripts/sparkle_bundle.py \
+          uv run python -m scripts.sparkle_bundle \
             --app "build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app" \
             > app-metadata.json
           if [ "$(jq -r .short_version app-metadata.json)" != "$PACKAGE_VERSION" ]; then
             echo "Built app version does not match $PACKAGE_VERSION." >&2
             exit 1
           fi
-          uv run python scripts/briefcase_app.py package -i "$DEV_ID"
-          uv run python scripts/sparkle_bundle.py \
+          uv run python -m scripts.briefcase_app package -i "$DEV_ID"
+          uv run python -m scripts.sparkle_bundle \
             --app "build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app" \
             --verify-signatures
 
@@ -439,7 +439,7 @@ jobs:
             mv "$DMG_PATH" "dist/$DMG_NAME"
             DMG_PATH="dist/$DMG_NAME"
           fi
-          uv run python scripts/sparkle_bundle.py \
+          uv run python -m scripts.sparkle_bundle \
             --dmg "$DMG_PATH" \
             --verify-signatures \
             --verify-distribution \
@@ -874,7 +874,7 @@ jobs:
           EXPECTED_SHORT_VERSION: ${{ needs.prepare.outputs.package_version }}
         run: |
           set -euo pipefail
-          python scripts/sparkle_bundle.py \
+          python -m scripts.sparkle_bundle \
             --dmg "$DMG_PATH" \
             --release-artifact \
             --verify-signatures \
@@ -1160,7 +1160,7 @@ jobs:
             exit 1
           fi
 
-          python scripts/sparkle_bundle.py \
+          python -m scripts.sparkle_bundle \
             --dmg "$DMG_PATH" \
             --release-artifact \
             --verify-signatures \

@@ -52,8 +52,8 @@
     },
     "build": {
       "pythonPackage": "uv build",
-      "briefcaseCreate": "uv run python scripts/briefcase_app.py create --no-input",
-      "briefcaseBuild": "uv run python scripts/briefcase_app.py build --no-input"
+      "briefcaseCreate": "uv run python -m scripts.briefcase_app create --no-input",
+      "briefcaseBuild": "uv run python -m scripts.briefcase_app build --no-input"
     },
     "inspection": {
       "tool": "jetbrains",
