@@ -1,4 +1,6 @@
 import importlib
+import subprocess
+import sys
 import unittest
 
 from pathlib import Path
@@ -14,6 +16,27 @@ def load_workflow(name: str) -> dict:
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_sparkle_bundle_uses_importable_module_entrypoint(self) -> None:
+        workflow = load_workflow("briefcase.yml")
+        workflow_text = str(workflow)
+        ci_text = str(load_workflow("ci.yml"))
+        smoke_text = (REPO_ROOT / "docs" / "release-smoke.md").read_text(encoding="utf-8")
+
+        self.assertNotIn("python scripts/sparkle_bundle.py", workflow_text)
+        self.assertEqual(workflow_text.count("python -m scripts.sparkle_bundle"), 5)
+        self.assertNotIn("python scripts/sparkle_bundle.py", smoke_text)
+        self.assertNotIn("python scripts/briefcase_app.py", workflow_text + ci_text)
+        self.assertEqual((workflow_text + ci_text).count("python -m scripts.briefcase_app"), 5)
+
+        result = subprocess.run(
+            [sys.executable, "-S", "-m", "scripts.sparkle_bundle", "--help"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_release_is_manual_only_and_packages_github_sha_from_main(self) -> None:
         workflow = load_workflow("briefcase.yml")
         prepare = workflow["jobs"]["prepare"]

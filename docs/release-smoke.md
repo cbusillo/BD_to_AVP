@@ -123,12 +123,12 @@ With MakeMKV installed:
 Before a draft GitHub Release is published, the release workflow must run:
 
 ```sh
-uv run python scripts/sparkle_bundle.py \
+uv run python -m scripts.sparkle_bundle \
   --app "build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app"
-uv run python scripts/sparkle_bundle.py \
+uv run python -m scripts.sparkle_bundle \
   --app "build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app" \
   --verify-signatures
-uv run python scripts/sparkle_bundle.py \
+uv run python -m scripts.sparkle_bundle \
   --dmg dist/<release>.dmg \
   --verify-signatures \
   --verify-distribution

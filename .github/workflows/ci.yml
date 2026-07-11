@@ -63,10 +63,10 @@ jobs:
         run: uv build
 
       - name: Briefcase create smoke
-        run: uv run python scripts/briefcase_app.py create --no-input
+        run: uv run python -m scripts.briefcase_app create --no-input
 
       - name: Briefcase build smoke
-        run: uv run python scripts/briefcase_app.py build --no-input
+        run: uv run python -m scripts.briefcase_app build --no-input
 
       - name: Verify app-local FFmpeg tools
         run: uv run python scripts/verify_app_tools.py
