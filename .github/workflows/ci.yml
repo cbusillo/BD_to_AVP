@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   validate:
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - name: Check out repo
@@ -53,6 +53,14 @@ jobs:
 
       - name: Unit smoke tests
         run: uv run python -m unittest discover -s tests -t .
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Native shell tests
+        env:
+          BD_TO_AVP_NATIVE_DEPLOYMENT_TARGET_OVERRIDE: "26.0"
+        run: uv run python scripts/native_app.py test
 
       - name: Import smoke
         run: >-

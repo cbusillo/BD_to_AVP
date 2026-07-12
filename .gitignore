@@ -76,6 +76,7 @@ nosetests.xml
 coverage.xml
 *.cover
 *.py,cover
+*.profraw
 .hypothesis/
 .pytest_cache/
 cover/
@@ -195,3 +196,7 @@ cython_debug/
 /temp.py
 /temp.sh
 /temp/
+
+# Generated native macOS project and build products
+/macos/*.xcodeproj/
+/macos/build/
