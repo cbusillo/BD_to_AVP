@@ -357,6 +357,7 @@ def verify_codesign(app_path: Path) -> None:
 
 
 def smoke_packaged_worker(app_path: Path) -> None:
+    app_path = app_path.resolve()
     contents = app_path / "Contents"
     ffmpeg_path = contents / "Resources" / "app" / "bd_to_avp" / "bin" / "ffmpeg"
     worker_path = contents / "MacOS" / WORKER_EXECUTABLE_NAME
