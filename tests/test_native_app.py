@@ -1,3 +1,4 @@
+import importlib
 import json
 import plistlib
 import subprocess
@@ -32,6 +33,8 @@ from scripts.native_app import (
     verify_product_source_copy,
 )
 
+yaml = importlib.import_module("yaml")
+
 
 class NativeAppPackagingTests(unittest.TestCase):
     def test_uses_side_by_side_preview_identity(self) -> None:
@@ -47,6 +50,9 @@ class NativeAppPackagingTests(unittest.TestCase):
 
     def test_uses_one_native_settings_scene_and_release_grade_source_groups(self) -> None:
         project_spec = (MACOS_ROOT / "project.yml").read_text(encoding="utf-8")
+        project = yaml.load(project_spec, Loader=yaml.BaseLoader)
+        target_settings = project["targets"]["BluRayToVisionPro"]["settings"]
+        preview_settings = target_settings["configs"]["Preview"]
         app_source = (MACOS_ROOT / "BluRayToVisionPro" / "App" / "BluRayToVisionProApp.swift").read_text(
             encoding="utf-8"
         )
@@ -59,9 +65,10 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn("CommandGroup(replacing: .appSettings)", app_source)
         self.assertIn("openWindow(id: AppWindowID.settings)", app_source)
         self.assertIn(".windowResizability(.contentMinSize)", app_source)
-        self.assertIn("MARKETING_VERSION: 0.3.0", project_spec)
-        self.assertIn("PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.native-preview", project_spec)
-        self.assertIn("PRODUCT_NAME: 3D Blu-ray to Vision Pro Native Preview", project_spec)
+        self.assertEqual(target_settings["base"]["CURRENT_PROJECT_VERSION"], NATIVE_BUILD_VERSION)
+        self.assertEqual(preview_settings["MARKETING_VERSION"], NATIVE_SHORT_VERSION)
+        self.assertEqual(preview_settings["PRODUCT_BUNDLE_IDENTIFIER"], NATIVE_BUNDLE_IDENTIFIER)
+        self.assertEqual(preview_settings["PRODUCT_NAME"], NATIVE_PRODUCT_NAME)
         self.assertIn("Preview: release", project_spec)
 
     def test_native_ui_keeps_discs_primary_and_original_job_controls_visible(self) -> None:

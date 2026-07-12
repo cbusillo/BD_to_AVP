@@ -18,12 +18,12 @@ from scripts.native_app import (
     NATIVE_SHORT_VERSION,
 )
 from scripts.native_preview_release import (
-    PREVIEW_DMG_NAME,
-    PREVIEW_RELEASE_NAME,
-    PREVIEW_TAG,
+    PREVIEW_RELEASE_METADATA,
     NativePreviewReleaseError,
+    create_preview_release_metadata,
     create_preview_dmg,
     inspect_preview_info,
+    main,
     mounted_dmg,
     notarize_and_staple,
 )
@@ -63,11 +63,35 @@ def load_workflow() -> dict:
 
 
 class NativePreviewIdentityTests(unittest.TestCase):
-    def test_preview_release_identity_is_fixed_and_non_production(self) -> None:
-        self.assertEqual(PREVIEW_TAG, "native-ui-preview-1")
-        self.assertEqual(PREVIEW_RELEASE_NAME, "Native UI Preview 1")
-        self.assertEqual(PREVIEW_DMG_NAME, "3D-Blu-ray-to-Vision-Pro-Native-Preview-0.3.0-1.dmg")
+    def test_preview_release_identity_is_derived_and_non_production(self) -> None:
+        self.assertEqual(PREVIEW_RELEASE_METADATA.release_tag, f"native-ui-preview-{NATIVE_BUILD_VERSION}")
+        self.assertEqual(
+            PREVIEW_RELEASE_METADATA.release_name,
+            f"v{NATIVE_SHORT_VERSION} (Build {NATIVE_BUILD_VERSION}) — Native UI Preview",
+        )
+        self.assertTrue(PREVIEW_RELEASE_METADATA.release_name.startswith(f"v{NATIVE_SHORT_VERSION} "))
+        self.assertEqual(
+            PREVIEW_RELEASE_METADATA.dmg_name,
+            f"3D-Blu-ray-to-Vision-Pro-Native-Preview-{NATIVE_SHORT_VERSION}-{NATIVE_BUILD_VERSION}.dmg",
+        )
+        self.assertEqual(PREVIEW_RELEASE_METADATA.app_name, NATIVE_APP_NAME)
         self.assertNotEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp")
+
+    def test_metadata_command_writes_github_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_path = Path(temporary_directory) / "github-output"
+            with patch("builtins.print"):
+                main(["metadata", "--github-output", str(output_path)])
+
+            outputs = dict(line.split("=", maxsplit=1) for line in output_path.read_text(encoding="utf-8").splitlines())
+
+        self.assertEqual(outputs, PREVIEW_RELEASE_METADATA.github_outputs())
+
+    def test_release_metadata_rejects_invalid_version_or_build(self) -> None:
+        with self.assertRaisesRegex(NativePreviewReleaseError, "three numeric components"):
+            create_preview_release_metadata(short_version="0.3")
+        with self.assertRaisesRegex(NativePreviewReleaseError, "positive integer"):
+            create_preview_release_metadata(build_version="0")
 
     def test_accepts_exact_preview_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -97,7 +121,7 @@ class NativePreviewIdentityTests(unittest.TestCase):
     def test_refuses_to_replace_an_existing_dmg(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
-            output_path = temporary_path / PREVIEW_DMG_NAME
+            output_path = temporary_path / PREVIEW_RELEASE_METADATA.dmg_name
             output_path.touch()
 
             with self.assertRaisesRegex(NativePreviewReleaseError, "Refusing to replace"):
@@ -208,6 +232,10 @@ class NativePreviewWorkflowTests(unittest.TestCase):
         self.assertNotIn("xcodebuild -version |", str(package))
         self.assertNotIn("actions/setup-python", str(package))
         self.assertIn("uv python install 3.12", str(package))
+        self.assertEqual(workflow["name"], "Publish Native UI Preview")
+        self.assertIn("python -m scripts.native_preview_release metadata", str(prepare))
+        self.assertIn("needs.prepare.outputs.app_name", str(package))
+        self.assertIn("needs.prepare.outputs.dmg_name", str(package))
 
     def test_workflow_isolated_from_production_channels(self) -> None:
         workflow = load_workflow()
@@ -248,8 +276,16 @@ class NativePreviewWorkflowTests(unittest.TestCase):
         self.assertIn("native-ui-preview.yml", str(publish))
         self.assertIn("SHA256SUMS", str(publish))
         self.assertIn("PREVIEW_TAG", str(publish))
+        self.assertIn("needs.prepare.outputs.release_name", str(publish))
+        self.assertIn("needs.prepare.outputs.release_tag", str(publish))
+        self.assertIn("docs/native-ui-preview.md", str(publish))
+        self.assertNotIn("Native UI Preview 1", str(workflow))
+        self.assertNotIn(PREVIEW_RELEASE_METADATA.app_name, str(workflow))
+        self.assertNotIn(PREVIEW_RELEASE_METADATA.dmg_name, str(workflow))
+        self.assertNotIn(PREVIEW_RELEASE_METADATA.release_name, str(workflow))
+        self.assertNotIn(PREVIEW_RELEASE_METADATA.release_tag, str(workflow))
         self.assertIn(".github/workflows/native-ui-preview.yml", config["docs"]["releaseWorkflows"])
-        self.assertIn("Publish Native UI Preview 1", config["importantWorkflows"])
+        self.assertIn("Publish Native UI Preview", config["importantWorkflows"])
 
 
 if __name__ == "__main__":

@@ -84,9 +84,9 @@ For Stable releases, PyPI publication and Sparkle Pages deployment are
 independent post-publication jobs. Either channel can be retried without
 rebuilding or changing the published GitHub Release.
 
-### Native UI Preview 1
+### Native UI Preview
 
-The one-time native UI feedback release uses
+The native UI feedback release lane uses
 `.github/workflows/native-ui-preview.yml`, not the production Briefcase release
 workflow. Dispatch it only from the current protected `main` commit after CI is
 green and an ephemeral Apple Silicon runner labeled `bd-to-avp-release` is ready
@@ -94,10 +94,16 @@ with macOS 27, Xcode 27, and XcodeGen 2.45.4.
 
 The workflow uses the existing reviewed `macos-signing` environment to sign and
 notarize the side-by-side Preview bundle, creates and revalidates a DMG, and
-publishes fixed tag `native-ui-preview-1` as `Native UI Preview 1`. It never
-derives metadata from `pyproject.toml`, invokes the Sparkle/Pages workflows,
-publishes Python distributions, or marks the preview as GitHub latest. A failed
-run may resume only an exact matching draft; a published preview is immutable.
+derives its tag, version-first release title, app name, and DMG filename from the
+committed native app version and build metadata. Version `0.3.0` build `1`, for
+example, uses tag `native-ui-preview-1` and title
+`v0.3.0 (Build 1) — Native UI Preview`. Preview build numbers are monotonically
+increasing and may not be reused. The workflow never derives metadata from
+`pyproject.toml`, invokes the Sparkle/Pages workflows, publishes Python
+distributions, or marks a preview as GitHub latest. A failed run may resume only
+an exact matching draft. Published tags and assets are immutable; maintainers
+may correct the human-readable title or notes without replacing artifacts or
+changing the target commit.
 
 The cumulative `appcast.xml` attached to every published GitHub Release is the
 recovery source of truth. Pages also publishes `appcast-state.json`, which binds

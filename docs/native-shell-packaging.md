@@ -81,8 +81,8 @@ worker-only runtime after the native shell exercises more representative engine
 paths; slimming it now would create a third dependency graph before the worker
 surface is known.
 
-`Publish Native UI Preview 1` is the isolated distribution workflow for issue
-#202. It runs only from the current protected `main` commit, uses the reviewed
+`Publish Native UI Preview` is the isolated distribution workflow for native UI
+feedback builds. It runs only from the current protected `main` commit, uses the reviewed
 `macos-signing` environment, Developer-ID signs and notarizes both the app and
 DMG, staples and Gatekeeper-validates the result, repeats the packaged-worker
 smoke from the mounted DMG, attests the artifact, and publishes only the DMG and
@@ -111,12 +111,16 @@ line while Start Processing remains unavailable. Publishing this bundle through
 the normal Release Candidates appcast would replace a working converter with a
 UI-only build and would leave testers without the current updater path.
 
-Issue #202 owns the bounded feedback release. `Native UI Preview 1` uses a
-separate product name and bundle identifier, installs beside the production app,
-targets Apple Silicon macOS 27, and is published only as a GitHub prerelease. It
-does not mutate Sparkle Pages, either appcast channel, GitHub latest, or PyPI.
-The fixed tag is `native-ui-preview-1`; repeated runs may resume only a matching
-draft with byte-identical assets, and fail closed after publication.
+The preview uses a separate product name and bundle identifier, installs beside
+the production app, targets Apple Silicon macOS 27, and is published only as a
+GitHub prerelease. It does not mutate Sparkle Pages, either appcast channel,
+GitHub latest, or PyPI. Release identity is derived from the committed native
+version and monotonically increasing build number. Version `0.3.0` build `1`
+uses tag `native-ui-preview-1` and title
+`v0.3.0 (Build 1) — Native UI Preview`. Repeated runs may resume only a matching
+draft with byte-identical assets, and fail closed after publication. Published
+tags and assets remain immutable even if the human-readable title or notes need
+a metadata-only correction.
 
 The first native build eligible to replace production is reserved for
 `0.3.0rc1`. That candidate must use a production `CFBundleVersion` greater than

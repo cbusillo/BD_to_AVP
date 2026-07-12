@@ -1,5 +1,3 @@
-# Native UI Preview 1
-
 This is an opt-in preview of the new native macOS interface for 3D Blu-ray to
 Vision Pro. It installs beside the current production app and does not replace
 or update it.
