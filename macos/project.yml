@@ -1,0 +1,75 @@
+name: BluRayToVisionPro
+
+options:
+  createIntermediateGroups: true
+  defaultConfig: Debug
+  deploymentTarget:
+    macOS: "27.0"
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    CLANG_ENABLE_MODULES: YES
+    MACOSX_DEPLOYMENT_TARGET: "27.0"
+    SWIFT_VERSION: "5.0"
+
+targets:
+  BluRayToVisionPro:
+    type: application
+    platform: macOS
+    sources:
+      - path: BluRayToVisionPro
+      - path: ../bd_to_avp/resources/app_icon.icns
+        buildPhase: resources
+    settings:
+      base:
+        CODE_SIGN_STYLE: Automatic
+        CURRENT_PROJECT_VERSION: 1
+        ENABLE_APP_SANDBOX: NO
+        ENABLE_HARDENED_RUNTIME: YES
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: BluRayToVisionPro/Info.plist
+        MARKETING_VERSION: 0.2.143
+        PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp
+        PRODUCT_MODULE_NAME: BluRayToVisionPro
+        PRODUCT_NAME: 3D Blu-ray to Vision Pro
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.review
+        Release:
+          ARCHS: arm64
+          COPY_PHASE_STRIP: YES
+          DEAD_CODE_STRIPPING: YES
+          DEPLOYMENT_POSTPROCESSING: YES
+          ENABLE_CODE_COVERAGE: NO
+          ONLY_ACTIVE_ARCH: NO
+          OTHER_SWIFT_FLAGS: $(inherited) -file-prefix-map $(SRCROOT)/BluRayToVisionPro=/Sources -debug-prefix-map $(SRCROOT)/BluRayToVisionPro=/Sources -coverage-prefix-map $(SRCROOT)/BluRayToVisionPro=/Sources
+          SWIFT_SERIALIZE_DEBUGGING_OPTIONS: NO
+
+  BluRayToVisionProTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: BluRayToVisionProTests
+    dependencies:
+      - target: BluRayToVisionPro
+    settings:
+      base:
+        BUNDLE_LOADER: $(TEST_HOST)
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.tests
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/3D Blu-ray to Vision Pro.app/Contents/MacOS/3D Blu-ray to Vision Pro
+
+schemes:
+  BluRayToVisionPro:
+    build:
+      targets:
+        BluRayToVisionPro: all
+        BluRayToVisionProTests: [test]
+    test:
+      gatherCoverageData: true
+      targets:
+        - BluRayToVisionProTests
