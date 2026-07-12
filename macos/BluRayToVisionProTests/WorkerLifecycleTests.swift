@@ -78,6 +78,86 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertTrue(state.failureRetryable)
     }
 
+    func testConversionBeginSetsConversionStageMessage() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+
+        try state.begin(jobID: jobID, operationKind: .conversion)
+
+        XCTAssertEqual(state.phase, .inspecting)
+        XCTAssertEqual(state.stageMessage, "Preparing conversion")
+        XCTAssertEqual(state.operationKind, .conversion)
+    }
+
+    func testConversionJobCompletedStoresConversionResult() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID, operationKind: .conversion)
+        try state.receive(event(.workerReady, sequence: 0, payload: .init(workerVersion: "1.0")))
+
+        let convResult = ConversionResult(outputPath: "/Movies/movie_AVP.mov", durationSeconds: 7200)
+        try state.receive(event(.jobCompleted, sequence: 1, payload: .init(conversionResult: convResult)))
+
+        XCTAssertEqual(state.phase, .completed)
+        XCTAssertEqual(state.conversionResult, convResult)
+        XCTAssertNil(state.result)
+        XCTAssertEqual(state.stageMessage, "Conversion complete")
+    }
+
+    func testConversionCompleteStopUsesConversionMessage() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID, operationKind: .conversion)
+        try state.receive(event(.workerReady, sequence: 0))
+
+        state.requestStop()
+        state.completeStop()
+
+        XCTAssertEqual(state.phase, .cancelled)
+        XCTAssertEqual(state.activityMessage, "Conversion stopped.")
+    }
+
+    func testInspectionCompleteStopUsesInspectionMessage() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID)
+        try state.receive(event(.workerReady, sequence: 0))
+
+        state.requestStop()
+        state.completeStop()
+
+        XCTAssertEqual(state.phase, .cancelled)
+        XCTAssertEqual(state.activityMessage, "Inspection stopped.")
+    }
+
+    func testInspectionJobCompletedRejectsConversionResultPayload() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID)
+        try state.receive(event(.workerReady, sequence: 0))
+
+        let convResult = ConversionResult(outputPath: "/out.mov", durationSeconds: nil)
+        XCTAssertThrowsError(
+            try state.receive(event(.jobCompleted, sequence: 1, payload: .init(conversionResult: convResult)))
+        ) { error in
+            XCTAssertEqual(error as? WorkerLifecycleError, .missingPayload(event: .jobCompleted))
+        }
+    }
+
+    func testConversionJobCompletedRejectsInspectionResultPayload() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID, operationKind: .conversion)
+        try state.receive(event(.workerReady, sequence: 0))
+
+        let inspResult = SourceInspection(name: "m", resolution: "1920x1080", frameRate: "24/1", interlaced: false, sizeBytes: 10)
+        XCTAssertThrowsError(
+            try state.receive(event(.jobCompleted, sequence: 1, payload: .init(result: inspResult)))
+        ) { error in
+            XCTAssertEqual(error as? WorkerLifecycleError, .missingPayload(event: .jobCompleted))
+        }
+    }
+
     func testRejectsSequenceGap() throws {
         var state = WorkerLifecycleState()
         state.selectSource(sourceURL)

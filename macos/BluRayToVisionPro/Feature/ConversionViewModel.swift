@@ -102,6 +102,51 @@ final class ConversionViewModel: ObservableObject {
         }
     }
 
+    func startConversion(draft: ConversionDraft) {
+        guard !hasActiveWorker else {
+            return
+        }
+        guard draft.source.kind.supportsConversion else {
+            return
+        }
+
+        let job = WorkerJobSpec(draft: draft)
+        do {
+            try state.begin(jobID: job.jobID, operationKind: .conversion)
+            pendingTerminalEvent = nil
+            let client = try clientFactory()
+            self.client = client
+            runTask = Task { [weak self] in
+                guard let self else {
+                    return
+                }
+                do {
+                    let runResult = try await client.run(job: job) { [weak self] event in
+                        guard let self else {
+                            return
+                        }
+                        try await self.receive(event)
+                    }
+                    self.finish(runResult)
+                } catch {
+                    self.fail(error)
+                }
+            }
+        } catch {
+            state.failTransport(message: error.localizedDescription)
+            client = nil
+            runTask = nil
+        }
+    }
+
+    func stopActiveWorker() {
+        guard hasActiveWorker else {
+            return
+        }
+        state.requestStop()
+        client?.cancel()
+    }
+
     func stopInspection() {
         guard hasActiveWorker else {
             return

@@ -56,7 +56,7 @@ struct ContentView: View {
                     profile: selectedProfile,
                     options: options,
                     profileModified: profileModified,
-                    outputOptionsAvailable: conversionCanStart,
+                    outputOptionsAvailable: false,
                     destinationURL: $destinationURL,
                     outputLength: $outputLength,
                     samplePosition: $samplePosition,
@@ -274,7 +274,7 @@ struct ContentView: View {
             .accessibilityLabel(isShowingActivity ? "Hide activity details" : "Show activity details")
 
             if viewModel.hasActiveWorker {
-                Button("Stop", role: .destructive, action: viewModel.stopInspection)
+                Button("Stop", role: .destructive, action: viewModel.stopActiveWorker)
                     .keyboardShortcut("p", modifiers: .command)
             } else if viewModel.source == nil || !conversionCanStart {
                 Button("Start Processing") {}
@@ -283,10 +283,12 @@ struct ContentView: View {
                     .help(viewModel.source == nil ? "Choose a source before processing." : conversionUnavailableReason)
             } else {
                 Button("Start Processing") {
-                    startConversion?()
+                    if let draft {
+                        viewModel.startConversion(draft: draft)
+                    }
                 }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut("p", modifiers: .command)
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut("p", modifiers: .command)
             }
         }
         .padding(.horizontal, 16)
@@ -367,13 +369,21 @@ struct ContentView: View {
     }
 
     private var conversionCanStart: Bool {
-        capabilities.conversionAvailable && startConversion != nil
+        capabilities.conversionAvailable && viewModel.source?.kind.supportsConversion == true
     }
 
     private var conversionUnavailableReason: String {
-        capabilities.conversionAvailable
-            ? "Conversion is not connected in this build."
-            : capabilities.conversionUnavailableReason
+        guard capabilities.conversionAvailable else {
+            return capabilities.conversionUnavailableReason
+        }
+        switch viewModel.source?.kind {
+        case .physicalDisc, .discImage, .bluRayFolder:
+            return "Disc and folder sources are not yet supported for native conversion."
+        case .sourceFolder:
+            return "Batch folder conversion is not yet available."
+        case .none, .matroska, .transportStream:
+            return capabilities.conversionUnavailableReason
+        }
     }
 
     private func resetProfile() {
