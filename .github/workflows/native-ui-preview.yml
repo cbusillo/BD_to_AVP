@@ -138,18 +138,16 @@ jobs:
             exit 1
           fi
 
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-
       - name: Set up uv
         uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
+          python-version: "3.12"
 
-      - name: Install locked dependencies
-        run: uv sync --locked --all-groups --python 3.12
+      - name: Install Python and locked dependencies
+        run: |
+          uv python install 3.12
+          uv sync --locked --all-groups --python 3.12
 
       - name: Install signing certificate in an ephemeral keychain
         env:
