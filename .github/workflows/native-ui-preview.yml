@@ -1,5 +1,5 @@
 ---
-name: Publish Native UI Preview 1
+name: Publish Native UI Preview
 
 "on":
   workflow_dispatch:
@@ -8,10 +8,6 @@ permissions:
   contents: read
 
 env:
-  PREVIEW_APP_NAME: 3D Blu-ray to Vision Pro Native Preview.app
-  PREVIEW_DMG_NAME: 3D-Blu-ray-to-Vision-Pro-Native-Preview-0.3.0-1.dmg
-  PREVIEW_RELEASE_NAME: Native UI Preview 1
-  PREVIEW_TAG: native-ui-preview-1
   XCODEGEN_VERSION: 2.45.4
 
 concurrency:
@@ -26,7 +22,11 @@ jobs:
     permissions:
       contents: read
     outputs:
+      app_name: ${{ steps.metadata.outputs.app_name }}
+      dmg_name: ${{ steps.metadata.outputs.dmg_name }}
       latest_release_tag: ${{ steps.release_identity.outputs.latest_release_tag }}
+      release_name: ${{ steps.metadata.outputs.release_name }}
+      release_tag: ${{ steps.metadata.outputs.release_tag }}
     steps:
       - name: Checkout dispatch commit
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -51,17 +51,28 @@ jobs:
             echo "The dispatch commit is no longer the current main HEAD." >&2
             exit 1
           fi
-          if [[ "$PREVIEW_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-            echo "Native preview tags must stay outside the production semver namespace." >&2
-            exit 1
-          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Derive committed native preview metadata
+        id: metadata
+        run: python -m scripts.native_preview_release metadata --github-output "$GITHUB_OUTPUT"
 
       - name: Reject conflicting release identity
         id: release_identity
         env:
           GH_TOKEN: ${{ github.token }}
+          PREVIEW_RELEASE_NAME: ${{ steps.metadata.outputs.release_name }}
+          PREVIEW_TAG: ${{ steps.metadata.outputs.release_tag }}
         run: |
           set -euo pipefail
+          if [[ "$PREVIEW_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "Native preview tags must stay outside the production semver namespace." >&2
+            exit 1
+          fi
           TAG_REFS=$(git ls-remote --tags origin \
             "refs/tags/$PREVIEW_TAG" \
             "refs/tags/$PREVIEW_TAG^{}")
@@ -108,6 +119,9 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, bd-to-avp-release]
     timeout-minutes: 180
     environment: macos-signing
+    env:
+      PREVIEW_APP_NAME: ${{ needs.prepare.outputs.app_name }}
+      PREVIEW_DMG_NAME: ${{ needs.prepare.outputs.dmg_name }}
     permissions:
       attestations: write
       contents: read
@@ -232,36 +246,36 @@ jobs:
           uv run python scripts/native_app.py package \
             --sign-identity "$DEV_ID" \
             --sign-keychain "$KEYCHAIN_PATH"
-          uv run python scripts/native_preview_release.py verify-app \
+          uv run python -m scripts.native_preview_release verify-app \
             --app "$APP_PATH" \
             --verify-signatures \
             > dist/native-preview-app-metadata.json
 
           ditto -c -k --keepParent "$APP_PATH" "$APP_ARCHIVE"
-          uv run python scripts/native_preview_release.py notarize \
+          uv run python -m scripts.native_preview_release notarize \
             --submission "$APP_ARCHIVE" \
             --staple "$APP_PATH" \
             --keychain-profile "$NOTARY_PROFILE" \
             --keychain "$KEYCHAIN_PATH" \
             --log dist/notary/app-notary.json
-          uv run python scripts/native_preview_release.py verify-app \
+          uv run python -m scripts.native_preview_release verify-app \
             --app "$APP_PATH" \
             --verify-signatures \
             --verify-distribution \
             --smoke-worker \
             > dist/native-preview-app-metadata.json
 
-          uv run python scripts/native_preview_release.py create-dmg \
+          uv run python -m scripts.native_preview_release create-dmg \
             --app "$APP_PATH" \
             --output "$DMG_PATH"
           codesign --force --timestamp --sign "$DEV_ID" --keychain "$KEYCHAIN_PATH" "$DMG_PATH"
-          uv run python scripts/native_preview_release.py notarize \
+          uv run python -m scripts.native_preview_release notarize \
             --submission "$DMG_PATH" \
             --staple "$DMG_PATH" \
             --keychain-profile "$NOTARY_PROFILE" \
             --keychain "$KEYCHAIN_PATH" \
             --log dist/notary/dmg-notary.json
-          uv run python scripts/native_preview_release.py verify-dmg \
+          uv run python -m scripts.native_preview_release verify-dmg \
             --dmg "$DMG_PATH" \
             --verify-signatures \
             --verify-distribution \
@@ -326,6 +340,9 @@ jobs:
       - package
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      PREVIEW_RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
+      PREVIEW_TAG: ${{ needs.prepare.outputs.release_tag }}
     permissions:
       attestations: read
       contents: write
@@ -380,7 +397,7 @@ jobs:
               --latest=false \
               --target "$GITHUB_SHA" \
               --title "$PREVIEW_RELEASE_NAME" \
-              --notes-file docs/native-ui-preview-1.md
+              --notes-file docs/native-ui-preview.md
             for attempt in {1..12}; do
               RELEASE_ID=$(resolve_release_id)
               if [ -n "$RELEASE_ID" ]; then

@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import plistlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -26,15 +27,25 @@ from scripts.native_app import (
     verify_layout,
 )
 
-PREVIEW_TAG = "native-ui-preview-1"
-PREVIEW_RELEASE_NAME = "Native UI Preview 1"
-PREVIEW_DMG_NAME = "3D-Blu-ray-to-Vision-Pro-Native-Preview-0.3.0-1.dmg"
 PREVIEW_VOLUME_NAME = NATIVE_PRODUCT_NAME
 INFO_PLIST_RELATIVE_PATH = Path("Contents/Info.plist")
 
 
 class NativePreviewReleaseError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class NativePreviewReleaseMetadata:
+    app_name: str
+    build_version: str
+    dmg_name: str
+    release_name: str
+    release_tag: str
+    short_version: str
+
+    def github_outputs(self) -> dict[str, str]:
+        return {key: str(value) for key, value in asdict(self).items()}
 
 
 @dataclass(frozen=True)
@@ -45,6 +56,32 @@ class NativePreviewMetadata:
     minimum_system_version: str
     product_name: str
     short_version: str
+
+
+def create_preview_release_metadata(
+    *,
+    app_name: str = NATIVE_APP_NAME,
+    build_version: str = NATIVE_BUILD_VERSION,
+    product_name: str = NATIVE_PRODUCT_NAME,
+    short_version: str = NATIVE_SHORT_VERSION,
+) -> NativePreviewReleaseMetadata:
+    if re.fullmatch(r"\d+\.\d+\.\d+", short_version) is None:
+        raise NativePreviewReleaseError("Native preview short version must contain three numeric components.")
+    if re.fullmatch(r"[1-9]\d*", build_version) is None:
+        raise NativePreviewReleaseError("Native preview build version must be a positive integer.")
+
+    file_stem = product_name.replace(" ", "-")
+    return NativePreviewReleaseMetadata(
+        app_name=app_name,
+        build_version=build_version,
+        dmg_name=f"{file_stem}-{short_version}-{build_version}.dmg",
+        release_name=f"v{short_version} (Build {build_version}) — Native UI Preview",
+        release_tag=f"native-ui-preview-{build_version}",
+        short_version=short_version,
+    )
+
+
+PREVIEW_RELEASE_METADATA = create_preview_release_metadata()
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -284,6 +321,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Assemble and validate the Native UI Preview release artifact.")
     commands = parser.add_subparsers(dest="command", required=True)
 
+    metadata_parser = commands.add_parser("metadata")
+    metadata_parser.add_argument("--github-output", type=Path)
+
     verify_app_parser = commands.add_parser("verify-app")
     verify_app_parser.add_argument("--app", type=Path, required=True)
     add_verification_flags(verify_app_parser)
@@ -307,7 +347,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    if args.command == "verify-app":
+    if args.command == "metadata":
+        if args.github_output:
+            with args.github_output.open("a", encoding="utf-8") as handle:
+                for key, value in PREVIEW_RELEASE_METADATA.github_outputs().items():
+                    handle.write(f"{key}={value}\n")
+        print(json.dumps(asdict(PREVIEW_RELEASE_METADATA), sort_keys=True))
+    elif args.command == "verify-app":
         metadata = verify_preview_app(
             args.app,
             verify_signatures=args.verify_signatures,
