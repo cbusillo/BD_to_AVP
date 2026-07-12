@@ -1,0 +1,549 @@
+---
+name: Publish Native UI Preview 1
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PREVIEW_APP_NAME: 3D Blu-ray to Vision Pro Native Preview.app
+  PREVIEW_DMG_NAME: 3D-Blu-ray-to-Vision-Pro-Native-Preview-0.3.0-1.dmg
+  PREVIEW_RELEASE_NAME: Native UI Preview 1
+  PREVIEW_TAG: native-ui-preview-1
+  XCODEGEN_VERSION: 2.45.4
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Validate protected-main preview intent
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      latest_release_tag: ${{ steps.release_identity.outputs.latest_release_tag }}
+    steps:
+      - name: Checkout dispatch commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Require the current protected main commit
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Native previews must be dispatched from protected main." >&2
+            exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]; then
+            echo "Checkout does not match github.sha." >&2
+            exit 1
+          fi
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
+            echo "The dispatch commit is no longer the current main HEAD." >&2
+            exit 1
+          fi
+          if [[ "$PREVIEW_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "Native preview tags must stay outside the production semver namespace." >&2
+            exit 1
+          fi
+
+      - name: Reject conflicting release identity
+        id: release_identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG_REFS=$(git ls-remote --tags origin \
+            "refs/tags/$PREVIEW_TAG" \
+            "refs/tags/$PREVIEW_TAG^{}")
+          TAG_SHA=$(awk '
+            $2 ~ /\^\{\}$/ { peeled = $1 }
+            $2 !~ /\^\{\}$/ { direct = $1 }
+            END { print peeled != "" ? peeled : direct }
+          ' <<< "$TAG_REFS")
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --paginate --slurp > releases.json
+          RELEASE_COUNT=$(jq -r --arg tag "$PREVIEW_TAG" \
+            '[.[][] | select(.tag_name == $tag)] | length' releases.json)
+          if [ "$RELEASE_COUNT" = "0" ]; then
+            if [ -n "$TAG_SHA" ]; then
+              echo "Preview tag already exists without a resumable draft." >&2
+              exit 1
+            fi
+          elif [ "$RELEASE_COUNT" = "1" ]; then
+            RELEASE_JSON=$(jq -c --arg tag "$PREVIEW_TAG" \
+              '.[][] | select(.tag_name == $tag)' releases.json)
+            if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ] \
+              || [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ] \
+              || [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "true" ] \
+              || [ "$(jq -r .name <<< "$RELEASE_JSON")" != "$PREVIEW_RELEASE_NAME" ]; then
+              echo "Existing preview release cannot be safely resumed." >&2
+              exit 1
+            fi
+            if [ -n "$TAG_SHA" ] && [ "$TAG_SHA" != "$GITHUB_SHA" ]; then
+              echo "Existing preview draft tag targets another commit." >&2
+              exit 1
+            fi
+          else
+            echo "Multiple GitHub Releases use tag $PREVIEW_TAG." >&2
+            exit 1
+          fi
+
+          LATEST_RELEASE_TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" \
+            --jq .tag_name 2>/dev/null || true)
+          echo "latest_release_tag=$LATEST_RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+  package:
+    name: Build, sign, notarize, and validate preview DMG
+    needs: prepare
+    runs-on: [self-hosted, macOS, ARM64, bd-to-avp-release]
+    timeout-minutes: 180
+    environment: macos-signing
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    outputs:
+      dmg_name: ${{ steps.release_artifact.outputs.dmg_name }}
+      dmg_sha256: ${{ steps.release_artifact.outputs.dmg_sha256 }}
+      dmg_size: ${{ steps.release_artifact.outputs.dmg_size }}
+    steps:
+      - name: Checkout validated main commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Verify release runner and checkout
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(uname -m)" = "arm64"
+          test "$(sw_vers -productVersion | cut -d. -f1)" = "27"
+          xcodebuild -version | head -1 | grep -Eq '^Xcode 27([.]|$)'
+          command -v xcodegen >/dev/null
+          test "$(xcodegen --version)" = "Version: $XCODEGEN_VERSION"
+          if [ -n "${BD_TO_AVP_NATIVE_DEPLOYMENT_TARGET_OVERRIDE:-}" ]; then
+            echo "Release builds must not override the macOS 27 deployment target." >&2
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --locked --all-groups --python 3.12
+
+      - name: Install signing certificate in an ephemeral keychain
+        env:
+          CERTIFICATE: ${{ secrets.CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+          DEV_ID: ${{ secrets.DEV_ID }}
+        run: |
+          set -euo pipefail
+          case "$DEV_ID" in
+            "Developer ID Application:"*) ;;
+            *) echo "DEV_ID must name a Developer ID Application identity." >&2; exit 1 ;;
+          esac
+
+          BUILD_KEYCHAIN_PASSWORD=$(openssl rand -hex 32)
+          KEYCHAIN_PATH="$RUNNER_TEMP/native-preview-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.keychain-db"
+          CERTIFICATE_PATH="$RUNNER_TEMP/native-preview-$GITHUB_RUN_ID.p12"
+          echo "::add-mask::$BUILD_KEYCHAIN_PASSWORD"
+
+          {
+            echo "BUILD_KEYCHAIN_PASSWORD=$BUILD_KEYCHAIN_PASSWORD"
+            echo "CERTIFICATE_PATH=$CERTIFICATE_PATH"
+            echo "KEYCHAIN_PATH=$KEYCHAIN_PATH"
+          } >> "$GITHUB_ENV"
+
+          cleanup_on_failure() {
+            status=$?
+            trap - EXIT
+            if [ "$status" -ne 0 ]; then
+              security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
+              rm -f "$CERTIFICATE_PATH"
+            fi
+            exit "$status"
+          }
+          trap cleanup_on_failure EXIT
+
+          security create-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH"
+          security import "$CERTIFICATE_PATH" -k "$KEYCHAIN_PATH" -P "$CERTIFICATE_PASSWORD" \
+            -T "/usr/bin/codesign"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F "$DEV_ID"
+          trap - EXIT
+
+      - name: Store notarization credentials in the ephemeral keychain
+        env:
+          APPLE_APP_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+        run: |
+          set -euo pipefail
+          NOTARY_PROFILE="native-ui-preview-$TEAM_ID-$GITHUB_RUN_ID"
+          security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          xcrun notarytool store-credentials "$NOTARY_PROFILE" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$TEAM_ID" \
+            --keychain "$KEYCHAIN_PATH"
+          echo "NOTARY_PROFILE=$NOTARY_PROFILE" >> "$GITHUB_ENV"
+
+      - name: Build and notarize the native preview
+        id: release_artifact
+        env:
+          BD_TO_AVP_NATIVE_DEPLOYMENT_TARGET_OVERRIDE: ""
+          DEV_ID: ${{ secrets.DEV_ID }}
+        run: |
+          set -euo pipefail
+          security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          APP_PATH="macos/build/package/$PREVIEW_APP_NAME"
+          DMG_PATH="dist/$PREVIEW_DMG_NAME"
+          APP_ARCHIVE="$RUNNER_TEMP/native-preview-app-$GITHUB_RUN_ID.zip"
+          mkdir -p dist/notary
+
+          uv run python scripts/native_app.py package \
+            --sign-identity "$DEV_ID" \
+            --sign-keychain "$KEYCHAIN_PATH"
+          uv run python scripts/native_preview_release.py verify-app \
+            --app "$APP_PATH" \
+            --verify-signatures \
+            > dist/native-preview-app-metadata.json
+
+          ditto -c -k --keepParent "$APP_PATH" "$APP_ARCHIVE"
+          uv run python scripts/native_preview_release.py notarize \
+            --submission "$APP_ARCHIVE" \
+            --staple "$APP_PATH" \
+            --keychain-profile "$NOTARY_PROFILE" \
+            --keychain "$KEYCHAIN_PATH" \
+            --log dist/notary/app-notary.json
+          uv run python scripts/native_preview_release.py verify-app \
+            --app "$APP_PATH" \
+            --verify-signatures \
+            --verify-distribution \
+            --smoke-worker \
+            > dist/native-preview-app-metadata.json
+
+          uv run python scripts/native_preview_release.py create-dmg \
+            --app "$APP_PATH" \
+            --output "$DMG_PATH"
+          codesign --force --timestamp --sign "$DEV_ID" --keychain "$KEYCHAIN_PATH" "$DMG_PATH"
+          uv run python scripts/native_preview_release.py notarize \
+            --submission "$DMG_PATH" \
+            --staple "$DMG_PATH" \
+            --keychain-profile "$NOTARY_PROFILE" \
+            --keychain "$KEYCHAIN_PATH" \
+            --log dist/notary/dmg-notary.json
+          uv run python scripts/native_preview_release.py verify-dmg \
+            --dmg "$DMG_PATH" \
+            --verify-signatures \
+            --verify-distribution \
+            --smoke-worker \
+            > dist/native-preview-metadata.json
+
+          DMG_SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
+          DMG_SIZE=$(stat -f %z "$DMG_PATH")
+          printf '%s  %s\n' "$DMG_SHA256" "$PREVIEW_DMG_NAME" > dist/SHA256SUMS
+          {
+            echo "dmg_name=$PREVIEW_DMG_NAME"
+            echo "dmg_sha256=$DMG_SHA256"
+            echo "dmg_size=$DMG_SIZE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload notarization diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-preview-notarization-logs
+          path: dist/notary/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Remove ephemeral signing material
+        if: always()
+        run: |
+          set +e
+          if [ -n "${KEYCHAIN_PATH:-}" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
+          fi
+          rm -f "${CERTIFICATE_PATH:-}" "$RUNNER_TEMP/native-preview-app-$GITHUB_RUN_ID.zip"
+          {
+            echo "BUILD_KEYCHAIN_PASSWORD="
+            echo "CERTIFICATE_PATH="
+            echo "KEYCHAIN_PATH="
+            echo "NOTARY_PROFILE="
+          } >> "$GITHUB_ENV"
+
+      - name: Attest preview build provenance
+        if: success()
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
+        with:
+          subject-path: dist/${{ env.PREVIEW_DMG_NAME }}
+
+      - name: Upload verified preview package
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-preview-package
+          path: |
+            dist/*.dmg
+            dist/SHA256SUMS
+            dist/native-preview-metadata.json
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish immutable opt-in prerelease
+    needs:
+      - prepare
+      - package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      attestations: read
+      contents: write
+    steps:
+      - name: Checkout released commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Download verified preview package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: native-preview-package
+          path: release-package
+
+      - name: Create or resume the preview draft
+        id: draft_release
+        env:
+          EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
+          EXPECTED_DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
+          EXPECTED_DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          DMG_PATH="release-package/$EXPECTED_DMG_NAME"
+          test "$(sha256sum "$DMG_PATH" | awk '{print $1}')" = "$EXPECTED_DMG_SHA256"
+          test "$(stat -c %s "$DMG_PATH")" = "$EXPECTED_DMG_SIZE"
+          test "$(cat release-package/SHA256SUMS)" = \
+            "$EXPECTED_DMG_SHA256  $EXPECTED_DMG_NAME"
+          (cd release-package && sha256sum --check SHA256SUMS)
+
+          MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [ "$MAIN_SHA" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved after the preview was dispatched." >&2
+            exit 1
+          fi
+
+          resolve_release_id() {
+            gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --paginate --slurp \
+              | jq -r --arg tag "$PREVIEW_TAG" \
+                '[.[][] | select(.tag_name == $tag)] | if length == 1 then .[0].id else empty end'
+          }
+
+          RELEASE_ID=$(resolve_release_id)
+          if [ -z "$RELEASE_ID" ]; then
+            gh release create "$PREVIEW_TAG" \
+              --draft \
+              --prerelease \
+              --latest=false \
+              --target "$GITHUB_SHA" \
+              --title "$PREVIEW_RELEASE_NAME" \
+              --notes-file docs/native-ui-preview-1.md
+            for attempt in {1..12}; do
+              RELEASE_ID=$(resolve_release_id)
+              if [ -n "$RELEASE_ID" ]; then
+                break
+              fi
+              if [ "$attempt" -eq 12 ]; then
+                echo "Preview draft did not become visible through the API." >&2
+                exit 1
+              fi
+              sleep 2
+            done
+          fi
+
+          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+          if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ] \
+            || [ "$(jq -r .tag_name <<< "$RELEASE_JSON")" != "$PREVIEW_TAG" ] \
+            || [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ] \
+            || [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "true" ] \
+            || [ "$(jq -r .name <<< "$RELEASE_JSON")" != "$PREVIEW_RELEASE_NAME" ]; then
+            echo "Existing preview draft cannot be safely resumed." >&2
+            exit 1
+          fi
+
+          mkdir -p existing-assets
+          for ASSET_NAME in "$EXPECTED_DMG_NAME" SHA256SUMS; do
+            ASSET_PATH="release-package/$ASSET_NAME"
+            RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+            ASSET_COUNT=$(jq -r --arg name "$ASSET_NAME" \
+              '[.assets[] | select(.name == $name)] | length' <<< "$RELEASE_JSON")
+            case "$ASSET_COUNT" in
+              0)
+                ASSET_NAME_ENCODED=$(jq -rn --arg value "$ASSET_NAME" '$value | @uri')
+                gh api --method POST \
+                  "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$ASSET_NAME_ENCODED" \
+                  -H "Content-Type: application/octet-stream" \
+                  --input "$ASSET_PATH" >/dev/null
+                ;;
+              1)
+                ASSET_ID=$(jq -r --arg name "$ASSET_NAME" \
+                  '.assets[] | select(.name == $name) | .id' <<< "$RELEASE_JSON")
+                gh api "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID" \
+                  -H "Accept: application/octet-stream" > "existing-assets/$ASSET_NAME"
+                if [ "$(sha256sum "$ASSET_PATH" | awk '{print $1}')" \
+                  != "$(sha256sum "existing-assets/$ASSET_NAME" | awk '{print $1}')" ]; then
+                  echo "Existing preview asset differs from $ASSET_NAME." >&2
+                  exit 1
+                fi
+                ;;
+              *)
+                echo "Preview draft contains duplicate assets named $ASSET_NAME." >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          for attempt in {1..12}; do
+            RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+            DMG_COUNT=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
+              '[.assets[] | select(.name == $name)] | length' <<< "$RELEASE_JSON")
+            CHECKSUM_COUNT=$(jq '[.assets[] | select(.name == "SHA256SUMS")] | length' <<< "$RELEASE_JSON")
+            TOTAL_COUNT=$(jq '.assets | length' <<< "$RELEASE_JSON")
+            if [ "$DMG_COUNT" = "1" ] && [ "$CHECKSUM_COUNT" = "1" ] && [ "$TOTAL_COUNT" = "2" ]; then
+              break
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "Preview draft assets did not become visible through the API." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
+          mkdir -p verified-assets
+          for ASSET_NAME in "$EXPECTED_DMG_NAME" SHA256SUMS; do
+            ASSET_ID=$(jq -r --arg name "$ASSET_NAME" \
+              '.assets[] | select(.name == $name) | .id' <<< "$RELEASE_JSON")
+            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID" \
+              -H "Accept: application/octet-stream" > "verified-assets/$ASSET_NAME"
+          done
+          test "$(sha256sum "verified-assets/$EXPECTED_DMG_NAME" | awk '{print $1}')" = "$EXPECTED_DMG_SHA256"
+          test "$(stat -c %s "verified-assets/$EXPECTED_DMG_NAME")" = "$EXPECTED_DMG_SIZE"
+          test "$(cat verified-assets/SHA256SUMS)" = \
+            "$EXPECTED_DMG_SHA256  $EXPECTED_DMG_NAME"
+          (cd verified-assets && sha256sum --check SHA256SUMS)
+          gh attestation verify "verified-assets/$EXPECTED_DMG_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/native-ui-preview.yml" \
+            --source-digest "$GITHUB_SHA" \
+            --source-ref refs/heads/main
+
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Publish and verify the prerelease
+        env:
+          EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
+          EXPECTED_LATEST_RELEASE_TAG: ${{ needs.prepare.outputs.latest_release_tag }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.draft_release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [ "$MAIN_SHA" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved before preview publication." >&2
+            exit 1
+          fi
+
+          jq -n '{draft: false, prerelease: true, make_latest: "false"}' > publish.json
+          gh api --method PATCH \
+            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            --input publish.json > published.json
+          if [ "$(jq -r .draft published.json)" != "false" ] \
+            || [ "$(jq -r .prerelease published.json)" != "true" ] \
+            || [ "$(jq -r .tag_name published.json)" != "$PREVIEW_TAG" ] \
+            || [ "$(jq -r .name published.json)" != "$PREVIEW_RELEASE_NAME" ] \
+            || [ "$(jq '.assets | length' published.json)" != "2" ]; then
+            echo "Published preview release metadata is invalid." >&2
+            exit 1
+          fi
+
+          for attempt in {1..12}; do
+            git fetch --force origin "refs/tags/$PREVIEW_TAG:refs/tags/$PREVIEW_TAG" || true
+            TAG_SHA=$(git rev-list -n 1 "$PREVIEW_TAG" 2>/dev/null || true)
+            if [ "$TAG_SHA" = "$GITHUB_SHA" ]; then
+              break
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "Published preview tag did not resolve to github.sha." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
+          LATEST_RELEASE_TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" \
+            --jq .tag_name 2>/dev/null || true)
+          if [ "$LATEST_RELEASE_TAG" = "$PREVIEW_TAG" ] \
+            || [ "$LATEST_RELEASE_TAG" != "$EXPECTED_LATEST_RELEASE_TAG" ]; then
+            jq -n '{draft: true, prerelease: true, make_latest: "false"}' > unpublish.json
+            UNPUBLISHED=false
+            for attempt in {1..5}; do
+              if gh api --method PATCH \
+                "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+                --input unpublish.json > unpublished.json \
+                && [ "$(jq -r .draft unpublished.json)" = "true" ]; then
+                UNPUBLISHED=true
+                break
+              fi
+              sleep 2
+            done
+            if [ "$UNPUBLISHED" != "true" ]; then
+              echo "CRITICAL: latest-release validation failed and the preview could not be unpublished." >&2
+              exit 1
+            fi
+            echo "Native preview changed the repository's latest release." >&2
+            exit 1
+          fi
+
+          ASSET_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$PREVIEW_TAG/$EXPECTED_DMG_NAME"
+          for attempt in {1..12}; do
+            STATUS=$(curl --location --silent --show-error \
+              --output /dev/null --write-out '%{http_code}' \
+              --range 0-0 "$ASSET_URL")
+            if [ "$STATUS" = "206" ] || [ "$STATUS" = "200" ]; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "Published preview DMG did not become publicly downloadable." >&2
+              exit 1
+            fi
+            sleep 5
+          done

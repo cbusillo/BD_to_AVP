@@ -81,10 +81,12 @@ worker-only runtime after the native shell exercises more representative engine
 paths; slimming it now would create a third dependency graph before the worker
 surface is known.
 
-Before this becomes a release artifact, the normal release workflow still needs
-to apply the project's Developer ID identity, notarization, clean-machine smoke,
-and release-tool verification. Those are distribution integration tasks, not
-blockers to the architecture proof.
+`Publish Native UI Preview 1` is the isolated distribution workflow for issue
+#202. It runs only from the current protected `main` commit, uses the reviewed
+`macos-signing` environment, Developer-ID signs and notarizes both the app and
+DMG, staples and Gatekeeper-validates the result, repeats the packaged-worker
+smoke from the mounted DMG, attests the artifact, and publishes only the DMG and
+`SHA256SUMS` as a GitHub prerelease.
 
 The native shell targets macOS 27. Review and release builds use the Xcode 27 SDK
 without a compatibility deployment path for older macOS releases.
@@ -94,6 +96,13 @@ the `macos-26` runner and overrides the deployment target to macOS 26 only for
 the native test invocation. This is a compile/test
 compatibility gate, not a supported deployment target: local review packages and
 all eventual release artifacts continue to build with Xcode 27 for macOS 27.
+
+The preview release job therefore requires an ephemeral Apple Silicon
+self-hosted runner labeled `bd-to-avp-release`, running macOS 27 with Xcode 27
+and XcodeGen 2.45.4 already installed. The protected-main workflow never applies the
+CI deployment-target override. The runner is release infrastructure, not a
+general pull-request runner, and should be registered only for the bounded
+dispatch then removed after the job exits.
 
 ## Release Placement
 
@@ -106,6 +115,8 @@ Issue #202 owns the bounded feedback release. `Native UI Preview 1` uses a
 separate product name and bundle identifier, installs beside the production app,
 targets Apple Silicon macOS 27, and is published only as a GitHub prerelease. It
 does not mutate Sparkle Pages, either appcast channel, GitHub latest, or PyPI.
+The fixed tag is `native-ui-preview-1`; repeated runs may resume only a matching
+draft with byte-identical assets, and fail closed after publication.
 
 The first native build eligible to replace production is reserved for
 `0.3.0rc1`. That candidate must use a production `CFBundleVersion` greater than

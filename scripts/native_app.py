@@ -21,6 +21,9 @@ PROJECT_SPEC = MACOS_ROOT / "project.yml"
 NATIVE_PROJECT_NAME = "BluRayToVisionPro"
 NATIVE_PRODUCT_NAME = "3D Blu-ray to Vision Pro Native Preview"
 NATIVE_BUNDLE_IDENTIFIER = "com.shinycomputers.bd-to-avp.native-preview"
+NATIVE_SHORT_VERSION = "0.3.0"
+NATIVE_BUILD_VERSION = "1"
+NATIVE_MINIMUM_SYSTEM_VERSION = "27.0"
 NATIVE_EXECUTABLE_NAME = NATIVE_PRODUCT_NAME
 PROJECT_PATH = MACOS_ROOT / f"{NATIVE_PROJECT_NAME}.xcodeproj"
 SCHEME = NATIVE_PROJECT_NAME
@@ -230,6 +233,9 @@ def verify_product_identity(app_path: Path) -> None:
         "CFBundleName": NATIVE_PRODUCT_NAME,
         "CFBundleExecutable": NATIVE_EXECUTABLE_NAME,
         "CFBundleIdentifier": NATIVE_BUNDLE_IDENTIFIER,
+        "CFBundleShortVersionString": NATIVE_SHORT_VERSION,
+        "CFBundleVersion": NATIVE_BUILD_VERSION,
+        "LSMinimumSystemVersion": NATIVE_MINIMUM_SYSTEM_VERSION,
         "MainModule": "bd_to_avp.worker",
         "BluRayToVisionProEngineBundled": True,
     }
@@ -241,6 +247,9 @@ def verify_product_identity(app_path: Path) -> None:
     development_keys = [key for key in info if "DevelopmentRepositoryRoot" in key]
     if development_keys:
         mismatches.append("development repository metadata is present")
+    update_keys = sorted(key for key in info if key.startswith("SU") or key == "BDToAVPDistributionChannel")
+    if update_keys:
+        mismatches.append("production update metadata is present: " + ", ".join(update_keys))
 
     internal_documents = [
         app_path / "Contents" / "Resources" / "app" / "README.md",
@@ -313,8 +322,10 @@ def is_mach_o(path: Path) -> bool:
         return False
 
 
-def sign_package(app_path: Path, identity: str) -> None:
+def sign_package(app_path: Path, identity: str, keychain: str | None = None) -> None:
     sign_options = ["codesign", "--force", "--sign", identity, "--options", "runtime"]
+    if keychain:
+        sign_options.extend(["--keychain", keychain])
     sign_options.append("--timestamp=none" if identity == "-" else "--timestamp")
 
     contents = app_path / "Contents"
@@ -438,11 +449,11 @@ def validate_smoke_events(events: list[object], job_id: str) -> None:
         raise ValueError("Worker smoke returned an invalid result shape.")
 
 
-def package(identity: str) -> None:
+def package(identity: str, keychain: str | None = None) -> None:
     prepare_briefcase_runtime()
     xcodebuild("build", NATIVE_PACKAGE_CONFIGURATION)
     app_path = assemble_package()
-    sign_package(app_path, identity)
+    sign_package(app_path, identity, keychain)
     smoke_packaged_worker(app_path)
     verify_codesign(app_path)
     print(app_path)
@@ -460,6 +471,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=os.environ.get("BD_TO_AVP_NATIVE_SIGN_IDENTITY", "-"),
         help="codesign identity; defaults to ad-hoc signing (-).",
     )
+    package_parser.add_argument(
+        "--sign-keychain",
+        default=os.environ.get("BD_TO_AVP_NATIVE_SIGN_KEYCHAIN"),
+        help="keychain containing the signing identity.",
+    )
     return parser.parse_args(argv)
 
 
@@ -472,7 +488,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "build":
         xcodebuild("build", "Debug")
     elif args.command == "package":
-        package(args.sign_identity)
+        package(args.sign_identity, args.sign_keychain)
 
 
 if __name__ == "__main__":

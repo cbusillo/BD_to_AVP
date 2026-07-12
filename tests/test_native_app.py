@@ -3,18 +3,24 @@ import tempfile
 import unittest
 
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.native_app import (
     NATIVE_APP_NAME,
     NATIVE_BUNDLE_IDENTIFIER,
+    NATIVE_BUILD_VERSION,
     NATIVE_EXECUTABLE_NAME,
+    NATIVE_MINIMUM_SYSTEM_VERSION,
     NATIVE_PACKAGE_CONFIGURATION,
     NATIVE_PRODUCT_NAME,
+    NATIVE_SHORT_VERSION,
     MACOS_ROOT,
     PROJECT_PATH,
     REPO_ROOT,
     SCHEME,
     native_build_settings,
+    parse_args,
+    sign_package,
     validate_smoke_events,
     verify_native_binary_paths,
     verify_package_paths,
@@ -31,6 +37,9 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertEqual(NATIVE_APP_NAME, "3D Blu-ray to Vision Pro Native Preview.app")
         self.assertEqual(NATIVE_EXECUTABLE_NAME, NATIVE_PRODUCT_NAME)
         self.assertEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp.native-preview")
+        self.assertEqual(NATIVE_SHORT_VERSION, "0.3.0")
+        self.assertEqual(NATIVE_BUILD_VERSION, "1")
+        self.assertEqual(NATIVE_MINIMUM_SYSTEM_VERSION, "27.0")
 
     def test_uses_one_native_settings_scene_and_release_grade_source_groups(self) -> None:
         project_spec = (MACOS_ROOT / "project.yml").read_text(encoding="utf-8")
@@ -122,6 +131,41 @@ class NativeAppPackagingTests(unittest.TestCase):
                 {"BD_TO_AVP_NATIVE_DEPLOYMENT_TARGET_OVERRIDE": "latest"},
             )
 
+    def test_package_accepts_an_explicit_signing_keychain(self) -> None:
+        args = parse_args(
+            [
+                "package",
+                "--sign-identity",
+                "Developer ID Application: Example",
+                "--sign-keychain",
+                "/tmp/release.keychain-db",
+            ]
+        )
+
+        self.assertEqual(args.sign_identity, "Developer ID Application: Example")
+        self.assertEqual(args.sign_keychain, "/tmp/release.keychain-db")
+
+    def test_package_signing_uses_the_explicit_keychain(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app_path = Path(temporary_directory) / NATIVE_APP_NAME
+            (app_path / "Contents" / "MacOS").mkdir(parents=True)
+            with patch("scripts.native_app.run") as run_mock:
+                sign_package(
+                    app_path,
+                    "Developer ID Application: Example",
+                    "/tmp/release.keychain-db",
+                )
+
+        signing_commands = [
+            call.args[0]
+            for call in run_mock.call_args_list
+            if call.args[0][0] == "codesign" and "--sign" in call.args[0]
+        ]
+        self.assertGreaterEqual(len(signing_commands), 2)
+        for command in signing_commands:
+            self.assertIn("--keychain", command)
+            self.assertIn("/tmp/release.keychain-db", command)
+
     def test_product_copy_has_no_internal_labels(self) -> None:
         verify_product_source_copy()
 
@@ -155,6 +199,9 @@ class NativeAppPackagingTests(unittest.TestCase):
                         "CFBundleName": NATIVE_PRODUCT_NAME,
                         "CFBundleExecutable": NATIVE_EXECUTABLE_NAME,
                         "CFBundleIdentifier": NATIVE_BUNDLE_IDENTIFIER,
+                        "CFBundleShortVersionString": NATIVE_SHORT_VERSION,
+                        "CFBundleVersion": NATIVE_BUILD_VERSION,
+                        "LSMinimumSystemVersion": NATIVE_MINIMUM_SYSTEM_VERSION,
                         "MainModule": "bd_to_avp.worker",
                         "BluRayToVisionProEngineBundled": True,
                     },
@@ -175,6 +222,9 @@ class NativeAppPackagingTests(unittest.TestCase):
                         "CFBundleName": NATIVE_PRODUCT_NAME,
                         "CFBundleExecutable": NATIVE_EXECUTABLE_NAME,
                         "CFBundleIdentifier": NATIVE_BUNDLE_IDENTIFIER,
+                        "CFBundleShortVersionString": NATIVE_SHORT_VERSION,
+                        "CFBundleVersion": NATIVE_BUILD_VERSION,
+                        "LSMinimumSystemVersion": NATIVE_MINIMUM_SYSTEM_VERSION,
                         "MainModule": "bd_to_avp.worker",
                         "BluRayToVisionProEngineBundled": True,
                         "BDToAVPDevelopmentRepositoryRoot": "/private/tmp/source",
@@ -197,6 +247,9 @@ class NativeAppPackagingTests(unittest.TestCase):
                         "CFBundleName": NATIVE_PRODUCT_NAME,
                         "CFBundleExecutable": NATIVE_EXECUTABLE_NAME,
                         "CFBundleIdentifier": NATIVE_BUNDLE_IDENTIFIER,
+                        "CFBundleShortVersionString": NATIVE_SHORT_VERSION,
+                        "CFBundleVersion": NATIVE_BUILD_VERSION,
+                        "LSMinimumSystemVersion": NATIVE_MINIMUM_SYSTEM_VERSION,
                         "MainModule": "bd_to_avp.worker",
                         "BluRayToVisionProEngineBundled": True,
                     },
