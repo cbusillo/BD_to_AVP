@@ -1,7 +1,10 @@
+import json
 import plistlib
+import subprocess
 import tempfile
 import unittest
 
+from contextlib import chdir
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,6 +24,7 @@ from scripts.native_app import (
     native_build_settings,
     parse_args,
     sign_package,
+    smoke_packaged_worker,
     validate_smoke_events,
     verify_native_binary_paths,
     verify_package_paths,
@@ -303,6 +307,55 @@ class NativeAppPackagingTests(unittest.TestCase):
         ]
 
         validate_smoke_events(events, job_id)
+
+    def test_worker_smoke_resolves_relative_app_path_before_changing_directory(self) -> None:
+        job_id = "97456c4a-f3c5-44e4-a548-0bd833ead4bb"
+        events = [
+            {
+                "protocol_version": 1,
+                "type": event_type,
+                "job_id": job_id,
+                "sequence": sequence,
+                "payload": {
+                    "result": {
+                        "resolution": "160x90",
+                        "frame_rate": "24/1",
+                        "interlaced": False,
+                        "size_bytes": 1024,
+                    }
+                }
+                if event_type == "job.completed"
+                else {},
+            }
+            for sequence, event_type in enumerate(["worker.ready", "job.started", "stage.started", "job.completed"])
+        ]
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="\n".join(json.dumps(event) for event in events),
+            stderr="",
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            relative_app_path = Path("package") / NATIVE_APP_NAME
+            absolute_app_path = temporary_path / relative_app_path
+            absolute_app_path.mkdir(parents=True)
+            resolved_app_path = absolute_app_path.resolve()
+            with (
+                chdir(temporary_path),
+                patch("scripts.native_app.run"),
+                patch("scripts.native_app.uuid4", return_value=job_id),
+                patch("scripts.native_app.subprocess.run", return_value=completed) as run_mock,
+            ):
+                smoke_packaged_worker(relative_app_path)
+
+            worker_command = run_mock.call_args.args[0]
+            self.assertEqual(
+                worker_command,
+                [str(resolved_app_path / "Contents" / "MacOS" / "BluRayToVisionProEngine")],
+            )
+            self.assertEqual(run_mock.call_args.kwargs["cwd"], resolved_app_path)
 
     def test_rejects_wrong_job_or_result(self) -> None:
         events: list[object] = [
