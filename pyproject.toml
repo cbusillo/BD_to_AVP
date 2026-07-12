@@ -37,6 +37,7 @@ Documentation = "https://github.com/cbusillo/BD_to_AVP"
 
 [project.scripts]
 bd-to-avp = "bd_to_avp.__main__:main"
+bd-to-avp-worker = "bd_to_avp.worker.__main__:main"
 
 [dependency-groups]
 dev = [
