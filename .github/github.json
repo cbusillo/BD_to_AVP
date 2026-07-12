@@ -63,6 +63,7 @@
     "releaseProcess": "docs/release-process.md",
     "releaseWorkflows": [
       ".github/workflows/briefcase.yml",
+      ".github/workflows/native-ui-preview.yml",
       ".github/workflows/sparkle-pages.yml",
       ".github/workflows/manage-sparkle-pages.yml"
     ]
@@ -90,7 +91,8 @@
     "build": {
       "pythonPackage": "uv build",
       "briefcaseCreate": "uv run python -m scripts.briefcase_app create --no-input",
-      "briefcaseBuild": "uv run python -m scripts.briefcase_app build --no-input"
+      "briefcaseBuild": "uv run python -m scripts.briefcase_app build --no-input",
+      "nativePreviewPackage": "uv run python scripts/native_app.py package"
     },
     "inspection": {
       "tool": "jetbrains",
@@ -111,6 +113,7 @@
     "CI",
     "CodeQL",
     "Release from protected main",
+    "Publish Native UI Preview 1",
     "Manage Sparkle Pages",
     "Update FFmpeg Vendor Pins"
   ],
