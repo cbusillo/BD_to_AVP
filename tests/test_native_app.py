@@ -41,7 +41,7 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn("profileStore: profileStore", app_source)
         self.assertIn("capabilities: capabilities", app_source)
         self.assertIn("CommandGroup(replacing: .appSettings)", app_source)
-        self.assertIn('openWindow(id: AppWindowID.settings)', app_source)
+        self.assertIn("openWindow(id: AppWindowID.settings)", app_source)
         self.assertIn(".windowResizability(.contentMinSize)", app_source)
 
     def test_native_ui_keeps_discs_primary_and_original_job_controls_visible(self) -> None:
@@ -51,9 +51,9 @@ class NativeAppPackagingTests(unittest.TestCase):
         setup_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "ConversionSetupView.swift").read_text(
             encoding="utf-8"
         )
-        encoding_editor = (
-            MACOS_ROOT / "BluRayToVisionPro" / "Views" / "EncodingOptionsEditor.swift"
-        ).read_text(encoding="utf-8")
+        encoding_editor = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "EncodingOptionsEditor.swift").read_text(
+            encoding="utf-8"
+        )
         conversion_ui = setup_view + encoding_editor
 
         self.assertIn("Convert a 3D Blu-ray Disc", source_view)
@@ -81,12 +81,10 @@ class NativeAppPackagingTests(unittest.TestCase):
             self.assertIn(label, conversion_ui)
 
     def test_profile_settings_remain_resizable_and_scrollable_when_read_only(self) -> None:
-        settings_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "SettingsView.swift").read_text(
+        settings_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "SettingsView.swift").read_text(encoding="utf-8")
+        encoding_editor = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "EncodingOptionsEditor.swift").read_text(
             encoding="utf-8"
         )
-        encoding_editor = (
-            MACOS_ROOT / "BluRayToVisionPro" / "Views" / "EncodingOptionsEditor.swift"
-        ).read_text(encoding="utf-8")
 
         self.assertNotIn(".frame(width: 900, height: 600)", settings_view)
         self.assertIn("maxWidth: .infinity", settings_view)
