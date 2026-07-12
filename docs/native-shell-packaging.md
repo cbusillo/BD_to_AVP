@@ -11,10 +11,10 @@ is intentionally ignored. `scripts/native_app.py` coordinates XcodeGen, Xcode,
 the existing Briefcase runtime staging path, signing, and a real worker smoke.
 
 ```text
-3D Blu-ray to Vision Pro.app/
+3D Blu-ray to Vision Pro Native Preview.app/
 └── Contents/
     ├── MacOS/
-    │   ├── 3D Blu-ray to Vision Pro   SwiftUI/AppKit application
+    │   ├── 3D Blu-ray to Vision Pro Native Preview   SwiftUI/AppKit application
     │   └── BluRayToVisionProEngine    Briefcase Python launcher
     ├── Frameworks/
     │   └── Python.framework
@@ -38,11 +38,15 @@ uv run python scripts/native_app.py package
 ```
 
 `package` builds or updates the existing Briefcase staging app, builds the
-native Release app, copies the Python runtime into the native bundle, signs
+native `Preview` configuration, copies the Python runtime into the native bundle, signs
 nested Mach-O content from the inside out, verifies the complete signature, and
 runs `inspect_source` against a generated M2TS file through the packaged worker.
 It uses ad-hoc signing by default. Set `BD_TO_AVP_NATIVE_SIGN_IDENTITY` or pass
 `--sign-identity` to exercise a Developer ID identity.
+
+The package command always produces the side-by-side preview identity
+`com.shinycomputers.bd-to-avp.native-preview` with marketing version `0.3.0`
+and preview-local build number `1`. It cannot overwrite the production app.
 
 The auxiliary Python launcher is signed with the same direct-distribution
 entitlements already required by the Briefcase launcher: unsigned executable
@@ -84,6 +88,12 @@ blockers to the architecture proof.
 
 The native shell targets macOS 27. Review and release builds use the Xcode 27 SDK
 without a compatibility deployment path for older macOS releases.
+
+GitHub-hosted runners do not yet provide Xcode 27. Required CI therefore pins
+the `macos-26` runner and overrides the deployment target to macOS 26 only for
+the native test invocation. This is a compile/test
+compatibility gate, not a supported deployment target: local review packages and
+all eventual release artifacts continue to build with Xcode 27 for macOS 27.
 
 ## Release Placement
 

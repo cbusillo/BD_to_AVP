@@ -8,11 +8,13 @@ from scripts.native_app import (
     NATIVE_APP_NAME,
     NATIVE_BUNDLE_IDENTIFIER,
     NATIVE_EXECUTABLE_NAME,
+    NATIVE_PACKAGE_CONFIGURATION,
     NATIVE_PRODUCT_NAME,
     MACOS_ROOT,
     PROJECT_PATH,
     REPO_ROOT,
     SCHEME,
+    native_build_settings,
     validate_smoke_events,
     verify_native_binary_paths,
     verify_package_paths,
@@ -22,12 +24,13 @@ from scripts.native_app import (
 
 
 class NativeAppPackagingTests(unittest.TestCase):
-    def test_uses_release_grade_product_identity(self) -> None:
+    def test_uses_side_by_side_preview_identity(self) -> None:
         self.assertEqual(PROJECT_PATH.name, "BluRayToVisionPro.xcodeproj")
         self.assertEqual(SCHEME, "BluRayToVisionPro")
-        self.assertEqual(NATIVE_APP_NAME, "3D Blu-ray to Vision Pro.app")
+        self.assertEqual(NATIVE_PACKAGE_CONFIGURATION, "Preview")
+        self.assertEqual(NATIVE_APP_NAME, "3D Blu-ray to Vision Pro Native Preview.app")
         self.assertEqual(NATIVE_EXECUTABLE_NAME, NATIVE_PRODUCT_NAME)
-        self.assertEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp")
+        self.assertEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp.native-preview")
 
     def test_uses_one_native_settings_scene_and_release_grade_source_groups(self) -> None:
         project_spec = (MACOS_ROOT / "project.yml").read_text(encoding="utf-8")
@@ -43,6 +46,10 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn("CommandGroup(replacing: .appSettings)", app_source)
         self.assertIn("openWindow(id: AppWindowID.settings)", app_source)
         self.assertIn(".windowResizability(.contentMinSize)", app_source)
+        self.assertIn("MARKETING_VERSION: 0.3.0", project_spec)
+        self.assertIn("PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.native-preview", project_spec)
+        self.assertIn("PRODUCT_NAME: 3D Blu-ray to Vision Pro Native Preview", project_spec)
+        self.assertIn("Preview: release", project_spec)
 
     def test_native_ui_keeps_discs_primary_and_original_job_controls_visible(self) -> None:
         source_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "SourceWorkspaceView.swift").read_text(
@@ -93,6 +100,28 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn("ScrollView {", settings_view)
         self.assertNotIn("isEditable", encoding_editor)
 
+        content_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "ContentView.swift").read_text(encoding="utf-8")
+        self.assertIn(".onChange(of: defaultJobOptions)", content_view)
+
+    def test_native_build_settings_support_hosted_ci_deployment_override(self) -> None:
+        settings = native_build_settings(
+            "Debug",
+            {"BD_TO_AVP_NATIVE_DEPLOYMENT_TARGET_OVERRIDE": "26.0"},
+        )
+
+        self.assertIn("MACOSX_DEPLOYMENT_TARGET=26.0", settings)
+        self.assertNotIn("ARCHS=arm64", settings)
+
+        preview_settings = native_build_settings("Preview", {})
+        self.assertIn("ARCHS=arm64", preview_settings)
+
+    def test_native_build_settings_reject_invalid_deployment_override(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Invalid native deployment target override"):
+            native_build_settings(
+                "Debug",
+                {"BD_TO_AVP_NATIVE_DEPLOYMENT_TARGET_OVERRIDE": "latest"},
+            )
+
     def test_product_copy_has_no_internal_labels(self) -> None:
         verify_product_source_copy()
 
@@ -114,7 +143,7 @@ class NativeAppPackagingTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "development repository paths"):
                 verify_package_paths(app_path)
 
-    def test_accepts_release_product_metadata(self) -> None:
+    def test_accepts_preview_product_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             app_path = Path(temporary_directory) / NATIVE_APP_NAME
             info_path = app_path / "Contents" / "Info.plist"

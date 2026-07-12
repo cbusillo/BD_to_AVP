@@ -83,6 +83,7 @@
     },
     "test": {
       "unitSmoke": "uv run python -m unittest discover -s tests -t .",
+      "nativeShell": "uv run python scripts/native_app.py test",
       "importSmoke": "uv run python -c 'import bd_to_avp; import bd_to_avp.__main__; import bd_to_avp.app'",
       "cliSmoke": "uv run bd-to-avp --help"
     },
@@ -101,6 +102,7 @@
       "dependency or installer changes",
       "release workflow changes",
       "Briefcase packaging changes",
+      "native macOS packaging changes",
       "runtime toolchain changes",
       "GitHub repository settings change"
     ]

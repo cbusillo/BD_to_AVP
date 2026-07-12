@@ -197,34 +197,36 @@ class WorkerRuntimeTests(unittest.TestCase):
 
 
 class SourceInspectionTests(unittest.TestCase):
-    def test_inspects_m2ts_with_production_probe_path(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            temporary_path = Path(temporary_directory)
-            source_path = temporary_path / "movie.m2ts"
-            source_path.write_bytes(b"video")
-            fake_ffprobe = temporary_path / "ffprobe"
-            fake_ffprobe.write_text(
-                "#!/bin/sh\n"
-                'printf \'%s\\n\' \'{"streams":[{"width":1920,"height":1080,'
-                '"avg_frame_rate":"24000/1001","field_order":"progressive"}]}\'\n'
-            )
-            fake_ffprobe.chmod(fake_ffprobe.stat().st_mode | stat.S_IXUSR)
+    def test_inspects_direct_video_sources_with_production_probe_path(self) -> None:
+        for extension in (".m2ts", ".mkv"):
+            with self.subTest(extension=extension), tempfile.TemporaryDirectory() as temporary_directory:
+                temporary_path = Path(temporary_directory)
+                source_path = temporary_path / f"movie{extension}"
+                source_path.write_bytes(b"video")
+                fake_ffprobe = temporary_path / "ffprobe"
+                fake_ffprobe.write_text(
+                    "#!/bin/sh\n"
+                    'printf \'%s\\n\' \'{"streams":[{"codec_type":"audio"},'
+                    '{"codec_type":"video","width":1920,"height":1080,'
+                    '"avg_frame_rate":"24000/1001","field_order":"progressive"}]}\'\n'
+                )
+                fake_ffprobe.chmod(fake_ffprobe.stat().st_mode | stat.S_IXUSR)
 
-            with patch.object(config, "FFPROBE_PATH", fake_ffprobe):
-                result = inspect_source(source_path, WorkerProcessOwner())
+                with patch.object(config, "FFPROBE_PATH", fake_ffprobe):
+                    result = inspect_source(source_path, WorkerProcessOwner())
 
-        self.assertEqual(result["name"], "movie")
-        self.assertEqual(result["resolution"], "1920x1080")
-        self.assertEqual(result["frame_rate"], "24000/1001")
-        self.assertFalse(result["interlaced"])
-        self.assertEqual(result["size_bytes"], 5)
+                self.assertEqual(result["name"], "movie")
+                self.assertEqual(result["resolution"], "1920x1080")
+                self.assertEqual(result["frame_rate"], "24000/1001")
+                self.assertFalse(result["interlaced"])
+                self.assertEqual(result["size_bytes"], 5)
 
     def test_rejects_unsupported_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            source_path = Path(temporary_directory) / "movie.mkv"
+            source_path = Path(temporary_directory) / "movie.mp4"
             source_path.touch()
 
-            with self.assertRaisesRegex(WorkerOperationError, "only MTS and M2TS"):
+            with self.assertRaisesRegex(WorkerOperationError, "supports MKV, MTS, and M2TS"):
                 inspect_source(source_path, WorkerProcessOwner())
 
 

@@ -37,12 +37,7 @@ struct ContentView: View {
         let profile = profileStore.profile(withID: settings.selectedProfileID)
         let initialOptions = ConversionOptions(
             encoding: profile.options,
-            job: JobOptions(
-                keepStageFiles: settings.keepIntermediateFiles,
-                softwareEncoder: settings.useSoftwareEncoder,
-                keepAwake: settings.keepAwake,
-                playSound: settings.playSound
-            )
+            job: Self.jobOptions(from: settings)
         )
 
         _selectedProfileID = State(initialValue: profile.id)
@@ -145,6 +140,11 @@ struct ContentView: View {
         .onChange(of: settings.destinationURL) { _, newValue in
             if viewModel.source == nil {
                 destinationURL = newValue
+            }
+        }
+        .onChange(of: defaultJobOptions) { _, newValue in
+            if viewModel.source == nil, !viewModel.hasActiveWorker {
+                options.job = newValue
             }
         }
         .onChange(of: profileStore.customProfiles) { previousProfiles, currentProfiles in
@@ -302,6 +302,10 @@ struct ContentView: View {
         options.encoding != selectedProfile.options
     }
 
+    private var defaultJobOptions: JobOptions {
+        Self.jobOptions(from: settings)
+    }
+
     private var draft: ConversionDraft? {
         guard let source = viewModel.source else {
             return nil
@@ -374,6 +378,15 @@ struct ContentView: View {
 
     private func resetProfile() {
         options.encoding = selectedProfile.options
+    }
+
+    private static func jobOptions(from settings: AppSettings) -> JobOptions {
+        JobOptions(
+            keepStageFiles: settings.keepIntermediateFiles,
+            softwareEncoder: settings.useSoftwareEncoder,
+            keepAwake: settings.keepAwake,
+            playSound: settings.playSound
+        )
     }
 
     private func saveSelectedProfile() {

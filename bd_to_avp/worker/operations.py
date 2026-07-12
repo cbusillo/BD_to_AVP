@@ -12,7 +12,7 @@ from bd_to_avp.modules.disc import get_disc_and_mvc_video_info
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import JobSpec, WorkerOperation
 
-SUPPORTED_INSPECTION_EXTENSIONS = frozenset({".mts", ".m2ts"})
+SUPPORTED_INSPECTION_EXTENSIONS = frozenset({".mkv", ".mts", ".m2ts"})
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ def inspect_source(source_path: Path, owner: WorkerProcessOwner) -> dict[str, ob
     if source_path.suffix.lower() not in SUPPORTED_INSPECTION_EXTENSIONS:
         raise WorkerOperationError(
             "unsupported_source",
-            "This prototype currently inspects only MTS and M2TS files.",
+            "Source inspection supports MKV, MTS, and M2TS files.",
         )
     if not config.FFPROBE_PATH.is_file():
         raise WorkerOperationError("ffprobe_missing", "The FFprobe helper could not be found.")

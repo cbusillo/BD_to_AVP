@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -18,11 +19,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MACOS_ROOT = REPO_ROOT / "macos"
 PROJECT_SPEC = MACOS_ROOT / "project.yml"
 NATIVE_PROJECT_NAME = "BluRayToVisionPro"
-NATIVE_PRODUCT_NAME = "3D Blu-ray to Vision Pro"
-NATIVE_BUNDLE_IDENTIFIER = "com.shinycomputers.bd-to-avp"
+NATIVE_PRODUCT_NAME = "3D Blu-ray to Vision Pro Native Preview"
+NATIVE_BUNDLE_IDENTIFIER = "com.shinycomputers.bd-to-avp.native-preview"
 NATIVE_EXECUTABLE_NAME = NATIVE_PRODUCT_NAME
 PROJECT_PATH = MACOS_ROOT / f"{NATIVE_PROJECT_NAME}.xcodeproj"
 SCHEME = NATIVE_PROJECT_NAME
+NATIVE_PACKAGE_CONFIGURATION = "Preview"
 DERIVED_DATA = MACOS_ROOT / "build" / "DerivedData"
 NATIVE_APP_NAME = f"{NATIVE_PRODUCT_NAME}.app"
 BRIEFCASE_APP = REPO_ROOT / "build" / "bd-to-avp" / "macos" / "app" / "3D Blu-ray to Vision Pro.app"
@@ -30,6 +32,7 @@ PACKAGE_ROOT = MACOS_ROOT / "build" / "package"
 PACKAGED_APP = PACKAGE_ROOT / NATIVE_APP_NAME
 WORKER_EXECUTABLE_NAME = "BluRayToVisionProEngine"
 WORKER_ENTITLEMENTS = MACOS_ROOT / "BluRayToVisionPro" / "Worker.entitlements"
+DEPLOYMENT_TARGET_OVERRIDE_ENV = "BD_TO_AVP_NATIVE_DEPLOYMENT_TARGET_OVERRIDE"
 USER_INTERFACE_SOURCE_FILES = sorted(
     [
         *(MACOS_ROOT / "BluRayToVisionPro" / "App").glob("*.swift"),
@@ -98,9 +101,7 @@ def verify_product_source_copy() -> None:
 
 def xcodebuild(action: str, configuration: str) -> None:
     generate_project()
-    build_settings = ["CODE_SIGNING_ALLOWED=NO"]
-    if configuration == "Release":
-        build_settings.extend(["ARCHS=arm64", "ENABLE_CODE_COVERAGE=NO", "ONLY_ACTIVE_ARCH=NO"])
+    build_settings = native_build_settings(configuration, os.environ)
     run(
         [
             "xcodebuild",
@@ -120,6 +121,18 @@ def xcodebuild(action: str, configuration: str) -> None:
     )
 
 
+def native_build_settings(configuration: str, environment: Mapping[str, str]) -> list[str]:
+    build_settings = ["CODE_SIGNING_ALLOWED=NO"]
+    deployment_target = environment.get(DEPLOYMENT_TARGET_OVERRIDE_ENV, "").strip()
+    if deployment_target:
+        if re.fullmatch(r"\d+(?:\.\d+)+", deployment_target) is None:
+            raise ValueError(f"Invalid native deployment target override: {deployment_target!r}")
+        build_settings.append(f"MACOSX_DEPLOYMENT_TARGET={deployment_target}")
+    if configuration in {"Preview", "Release"}:
+        build_settings.extend(["ARCHS=arm64", "ENABLE_CODE_COVERAGE=NO", "ONLY_ACTIVE_ARCH=NO"])
+    return build_settings
+
+
 def prepare_briefcase_runtime() -> None:
     command = "update" if BRIEFCASE_APP.is_dir() else "create"
     run([sys.executable, "-m", "scripts.briefcase_app", command, "--no-input"])
@@ -129,7 +142,7 @@ def prepare_briefcase_runtime() -> None:
 
 
 def assemble_package() -> Path:
-    source_app = DERIVED_DATA / "Build" / "Products" / "Release" / NATIVE_APP_NAME
+    source_app = DERIVED_DATA / "Build" / "Products" / NATIVE_PACKAGE_CONFIGURATION / NATIVE_APP_NAME
     if not source_app.is_dir():
         raise RuntimeError(f"Native build product is missing at {source_app}")
 
@@ -427,7 +440,7 @@ def validate_smoke_events(events: list[object], job_id: str) -> None:
 
 def package(identity: str) -> None:
     prepare_briefcase_runtime()
-    xcodebuild("build", "Release")
+    xcodebuild("build", NATIVE_PACKAGE_CONFIGURATION)
     app_path = assemble_package()
     sign_package(app_path, identity)
     smoke_packaged_worker(app_path)
@@ -436,7 +449,7 @@ def package(identity: str) -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build and package the native macOS application.")
+    parser = argparse.ArgumentParser(description="Build and package the native macOS preview application.")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("generate", help="Generate the Xcode project from macos/project.yml.")
     commands.add_parser("test", help="Run the native unit tests.")

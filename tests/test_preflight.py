@@ -1,3 +1,4 @@
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,7 +16,7 @@ class DependencyPreflightTests(unittest.TestCase):
             patch.object(preflight.config, "FFPROBE_PATH", Path(__file__)),
             patch.object(preflight.config, "MAKEMKVCON_PATH", Path("/missing/makemkvcon")),
             patch.object(preflight.config, "MP4BOX_PATH", Path("/missing/MP4Box")),
-            patch.object(preflight.config, "EDGE264_TEST_PATH", Path(__file__)),
+            patch.object(preflight.config, "EDGE264_TEST_PATH", Path(sys.executable)),
             self.assertRaisesRegex(preflight.DependencyPreflightError, "MakeMKV"),
         ):
             preflight.verify_runtime_ready()
@@ -67,7 +68,7 @@ class DependencyPreflightTests(unittest.TestCase):
             patch.object(preflight.config, "FFPROBE_PATH", Path(__file__)),
             patch.object(preflight.config, "MAKEMKVCON_PATH", Path(__file__)),
             patch.object(preflight.config, "MP4BOX_PATH", Path(__file__)),
-            patch.object(preflight.config, "EDGE264_TEST_PATH", Path(__file__)),
+            patch.object(preflight.config, "EDGE264_TEST_PATH", Path(sys.executable)),
         ):
             preflight.verify_runtime_ready()
 

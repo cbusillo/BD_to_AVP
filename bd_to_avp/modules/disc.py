@@ -71,16 +71,19 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
     source = config.source_path.as_posix() if config.source_path else config.source_str
     if not source:
         raise ValueError("No source path provided.")
-    if any(source.lower().endswith(ext) for ext in config.MTS_EXTENSIONS):
+    if Path(source).suffix.lower() in {*config.MTS_EXTENSIONS, ".mkv"}:
         filename = Path(source).stem
         disc_info = DiscInfo(name=filename)
 
-        ffmpeg_probe_output = ffmpeg.probe(source, cmd=config.FFPROBE_PATH.as_posix())["streams"][0]
+        streams = ffmpeg.probe(source, cmd=config.FFPROBE_PATH.as_posix()).get("streams", [])
+        ffmpeg_probe_output = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
+        if ffmpeg_probe_output is None:
+            raise ValueError("No video stream found in source metadata.")
         if all(key in ffmpeg_probe_output for key in ["width", "height"]):
             disc_info.resolution = f"{ffmpeg_probe_output.get('width')}x{ffmpeg_probe_output.get('height')}"
         if "avg_frame_rate" in ffmpeg_probe_output:
             disc_info.frame_rate = ffmpeg_probe_output.get("avg_frame_rate")
-        if ffmpeg_probe_output.get("field_order") != "progressive":
+        if ffmpeg_probe_output.get("field_order") not in {None, "progressive", "unknown"}:
             disc_info.is_interlaced = True
         return disc_info
 

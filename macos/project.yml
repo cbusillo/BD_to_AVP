@@ -8,6 +8,7 @@ options:
 
 configs:
   Debug: debug
+  Preview: release
   Release: release
 
 settings:
@@ -38,7 +39,21 @@ targets:
         PRODUCT_NAME: 3D Blu-ray to Vision Pro
       configs:
         Debug:
-          PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.review
+          PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.native-preview.review
+          PRODUCT_NAME: 3D Blu-ray to Vision Pro Native Preview
+          MARKETING_VERSION: 0.3.0
+        Preview:
+          ARCHS: arm64
+          COPY_PHASE_STRIP: YES
+          DEAD_CODE_STRIPPING: YES
+          DEPLOYMENT_POSTPROCESSING: YES
+          ENABLE_CODE_COVERAGE: NO
+          MARKETING_VERSION: 0.3.0
+          ONLY_ACTIVE_ARCH: NO
+          OTHER_SWIFT_FLAGS: $(inherited) -file-prefix-map $(SRCROOT)/BluRayToVisionPro=/Sources -debug-prefix-map $(SRCROOT)/BluRayToVisionPro=/Sources -coverage-prefix-map $(SRCROOT)/BluRayToVisionPro=/Sources
+          PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.native-preview
+          PRODUCT_NAME: 3D Blu-ray to Vision Pro Native Preview
+          SWIFT_SERIALIZE_DEBUGGING_OPTIONS: NO
         Release:
           ARCHS: arm64
           COPY_PHASE_STRIP: YES
@@ -61,7 +76,7 @@ targets:
         BUNDLE_LOADER: $(TEST_HOST)
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.tests
-        TEST_HOST: $(BUILT_PRODUCTS_DIR)/3D Blu-ray to Vision Pro.app/Contents/MacOS/3D Blu-ray to Vision Pro
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/3D Blu-ray to Vision Pro Native Preview.app/Contents/MacOS/3D Blu-ray to Vision Pro Native Preview
 
 schemes:
   BluRayToVisionPro:
