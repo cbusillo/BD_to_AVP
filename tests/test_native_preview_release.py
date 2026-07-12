@@ -204,6 +204,8 @@ class NativePreviewWorkflowTests(unittest.TestCase):
         self.assertIn("XCODEGEN_VERSION", str(workflow))
         self.assertIn("sw_vers", str(package))
         self.assertIn("must not override", str(package))
+        self.assertNotIn("head -1", str(package))
+        self.assertNotIn("xcodebuild -version |", str(package))
         self.assertNotIn("actions/setup-python", str(package))
         self.assertIn("uv python install 3.12", str(package))
 

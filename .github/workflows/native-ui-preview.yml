@@ -130,7 +130,12 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(uname -m)" = "arm64"
           test "$(sw_vers -productVersion | cut -d. -f1)" = "27"
-          xcodebuild -version | head -1 | grep -Eq '^Xcode 27([.]|$)'
+          XCODE_VERSION=$(xcodebuild -version)
+          if [[ ! "$XCODE_VERSION" =~ ^Xcode\ 27([.]|$) ]]; then
+            echo "Release builds require Xcode 27." >&2
+            printf '%s\n' "$XCODE_VERSION" >&2
+            exit 1
+          fi
           command -v xcodegen >/dev/null
           test "$(xcodegen --version)" = "Version: $XCODEGEN_VERSION"
           if [ -n "${BD_TO_AVP_NATIVE_DEPLOYMENT_TARGET_OVERRIDE:-}" ]; then
