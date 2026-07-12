@@ -62,7 +62,16 @@ class ReleaseMetadata:
         return {key: str(value).lower() if isinstance(value, bool) else str(value) for key, value in values.items()}
 
 
+@dataclass(frozen=True)
+class PublishedRelease:
+    tag_name: str
+    version: ReleaseVersion
+    prerelease: bool
+
+
 LockRunner = Callable[[Path, str], None]
+TagExists = Callable[[str], bool]
+AncestorCheck = Callable[[str, str], bool]
 
 
 def parse_release_version(value: str) -> ReleaseVersion:
@@ -93,6 +102,93 @@ def parse_release_tag(value: str) -> ReleaseVersion:
     if value != f"v{version.text}":
         raise ReleaseError("Release tag must be the canonical v-prefixed project version.")
     return version
+
+
+def _release_records(release_history: Any) -> list[dict[str, Any]]:
+    if not isinstance(release_history, list):
+        raise ReleaseError("GitHub release history must be a JSON array.")
+    records: list[dict[str, Any]] = []
+    for item in release_history:
+        page = item if isinstance(item, list) else [item]
+        for record in page:
+            if not isinstance(record, dict):
+                raise ReleaseError("GitHub release history contains a non-object entry.")
+            records.append(record)
+    return records
+
+
+def _published_releases(release_history: Any) -> list[PublishedRelease]:
+    releases: list[PublishedRelease] = []
+    seen_tags: set[str] = set()
+    for record in _release_records(release_history):
+        if record.get("draft") is not False or not record.get("published_at"):
+            continue
+        tag_name = record.get("tag_name")
+        prerelease = record.get("prerelease")
+        if not isinstance(tag_name, str) or not isinstance(prerelease, bool):
+            raise ReleaseError("Published GitHub release metadata is incomplete.")
+        try:
+            version = parse_release_tag(tag_name)
+        except ReleaseError:
+            continue
+        if tag_name in seen_tags:
+            raise ReleaseError(f"Multiple published GitHub Releases use tag {tag_name}.")
+        seen_tags.add(tag_name)
+        releases.append(PublishedRelease(tag_name=tag_name, version=version, prerelease=prerelease))
+    return releases
+
+
+def _git_tag_exists(tag_name: str) -> bool:
+    result = subprocess.run(
+        ["git", "rev-parse", "--quiet", "--verify", f"refs/tags/{tag_name}^{{commit}}"],
+        cwd=REPO_ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _git_tag_is_ancestor(tag_name: str, head_ref: str) -> bool:
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", f"refs/tags/{tag_name}^{{commit}}", head_ref],
+        cwd=REPO_ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if result.returncode not in (0, 1):
+        raise ReleaseError(f"Unable to compare release tag {tag_name} with {head_ref}.")
+    return result.returncode == 0
+
+
+def select_release_notes_base(
+    current_tag: str,
+    release_history: Any,
+    head_ref: str,
+    *,
+    tag_exists: TagExists = _git_tag_exists,
+    is_ancestor: AncestorCheck = _git_tag_is_ancestor,
+) -> str:
+    current_version = parse_release_tag(current_tag)
+    candidates = sorted(
+        (
+            release
+            for release in _published_releases(release_history)
+            if release.version.order_key < current_version.order_key
+        ),
+        key=lambda release: release.version.order_key,
+        reverse=True,
+    )
+    if not current_version.prerelease:
+        candidates = [release for release in candidates if not release.prerelease and not release.version.prerelease]
+
+    for release in candidates:
+        if not tag_exists(release.tag_name):
+            raise ReleaseError(f"Published release tag is missing from the checkout: {release.tag_name}")
+        if not current_version.prerelease or is_ancestor(release.tag_name, head_ref):
+            return release.tag_name
+    return ""
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -149,7 +245,7 @@ def load_release_metadata(
         package_version=version.text,
         build_version=build_version,
         release_tag=f"v{version.text}",
-        release_name=("Release Candidate" if version.prerelease else "Release") + f" v{version.text}",
+        release_name=f"v{version.text}",
         channel="rc" if version.prerelease else "stable",
         prerelease=version.prerelease,
         make_latest=not version.prerelease,
@@ -277,6 +373,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_paths(metadata)
     metadata.add_argument("--github-output", type=Path)
 
+    notes_base = commands.add_parser(
+        "notes-base",
+        help="Select the channel-aware base tag for generated GitHub release notes.",
+    )
+    notes_base.add_argument("--release-tag", required=True)
+    notes_base.add_argument("--releases-json", type=Path, required=True)
+    notes_base.add_argument("--head-ref", required=True)
+    notes_base.add_argument("--github-output", type=Path)
+
     prepare = commands.add_parser("prepare", help="Atomically prepare a newer committed release version and build.")
     _add_paths(prepare)
     prepare.add_argument("--version", required=True)
@@ -292,6 +397,21 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "validate-tag":
         print(parse_release_tag(args.tag).text)
+        return 0
+    if args.command == "notes-base":
+        try:
+            release_history = json.loads(args.releases_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ReleaseError(f"Unable to load GitHub release history from {args.releases_json}: {error}") from error
+        previous_release_tag = select_release_notes_base(
+            args.release_tag,
+            release_history,
+            args.head_ref,
+        )
+        if args.github_output:
+            with args.github_output.open("a", encoding="utf-8") as handle:
+                handle.write(f"previous_release_tag={previous_release_tag}\n")
+        print(json.dumps({"previous_release_tag": previous_release_tag}, sort_keys=True))
         return 0
     if args.command == "prepare":
         metadata = prepare_release(

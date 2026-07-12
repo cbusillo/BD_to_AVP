@@ -47,6 +47,15 @@ source = {{ editable = "." }}
     return pyproject_path, lock_path
 
 
+def published_release(tag_name: str, *, prerelease: bool = False, draft: bool = False) -> dict[str, object]:
+    return {
+        "tag_name": tag_name,
+        "draft": draft,
+        "prerelease": prerelease,
+        "published_at": None if draft else "2026-07-11T00:00:00Z",
+    }
+
+
 def fake_lock_runner(stage_root: Path, _uv_executable: str) -> None:
     pyproject = tomllib.loads((stage_root / "pyproject.toml").read_text(encoding="utf-8"))
     version = pyproject["project"]["version"]
@@ -85,6 +94,7 @@ class ReleaseMetadataTests(unittest.TestCase):
 
         self.assertEqual(metadata.package_version, "0.2.143")
         self.assertEqual(metadata.build_version, "146")
+        self.assertEqual(metadata.release_name, "v0.2.143")
         self.assertEqual(metadata.channel, "stable")
         self.assertTrue(metadata.publish_pypi)
 
@@ -95,6 +105,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             metadata = release.load_release_metadata(pyproject_path, lock_path)
 
         self.assertEqual(metadata.release_tag, "v1.2.4rc2")
+        self.assertEqual(metadata.release_name, "v1.2.4rc2")
         self.assertEqual(metadata.channel, "rc")
         self.assertTrue(metadata.prerelease)
         self.assertFalse(metadata.make_latest)
@@ -117,6 +128,112 @@ class ReleaseMetadataTests(unittest.TestCase):
         for value in ("1.2", "1.2.3.post1", "01.2.3", "1.2.3RC1"):
             with self.subTest(value=value), self.assertRaises(release.ReleaseError):
                 release.parse_release_version(value)
+
+
+class ReleaseNotesBaseTests(unittest.TestCase):
+    def test_stable_uses_previous_stable_even_when_legacy_history_diverged(self) -> None:
+        history = [
+            [
+                published_release("v0.2.142"),
+                published_release("v0.2.143rc4", prerelease=True),
+                published_release("v0.2.143rc5", prerelease=True),
+            ]
+        ]
+
+        def unexpected_ancestor_check(_tag_name: str, _head_ref: str) -> bool:
+            self.fail("Stable release-note selection must not require commit ancestry.")
+
+        selected = release.select_release_notes_base(
+            "v0.2.143",
+            history,
+            "stable-head",
+            tag_exists=lambda tag_name: tag_name == "v0.2.142",
+            is_ancestor=unexpected_ancestor_check,
+        )
+
+        self.assertEqual(selected, "v0.2.142")
+
+    def test_rc_uses_latest_published_ancestor(self) -> None:
+        history = [
+            published_release("v1.2.3"),
+            published_release("v1.2.4rc1", prerelease=True),
+            published_release("v1.2.4rc2", prerelease=True),
+        ]
+        ancestors = {"v1.2.3", "v1.2.4rc1"}
+
+        selected = release.select_release_notes_base(
+            "v1.2.4rc3",
+            history,
+            "rc-head",
+            tag_exists=lambda _tag_name: True,
+            is_ancestor=lambda tag_name, _head_ref: tag_name in ancestors,
+        )
+
+        self.assertEqual(selected, "v1.2.4rc1")
+
+    def test_first_rc_after_stable_uses_stable_ancestor(self) -> None:
+        history = [
+            published_release("v1.2.3rc9", prerelease=True),
+            published_release("v1.2.3"),
+        ]
+
+        selected = release.select_release_notes_base(
+            "v1.2.4rc1",
+            history,
+            "rc-head",
+            tag_exists=lambda _tag_name: True,
+            is_ancestor=lambda _tag_name, _head_ref: True,
+        )
+
+        self.assertEqual(selected, "v1.2.3")
+
+    def test_selection_ignores_drafts_and_non_project_tags(self) -> None:
+        history = [
+            published_release("untagged-stale-draft", draft=True),
+            published_release("safety/pre-toolchain-state"),
+            published_release("v1.2.3"),
+        ]
+
+        selected = release.select_release_notes_base(
+            "v1.2.4",
+            history,
+            "stable-head",
+            tag_exists=lambda tag_name: tag_name == "v1.2.3",
+            is_ancestor=lambda _tag_name, _head_ref: False,
+        )
+
+        self.assertEqual(selected, "v1.2.3")
+
+    def test_selection_rejects_missing_or_duplicate_published_tags(self) -> None:
+        with self.assertRaisesRegex(release.ReleaseError, "missing from the checkout"):
+            release.select_release_notes_base(
+                "v1.2.4",
+                [published_release("v1.2.3")],
+                "stable-head",
+                tag_exists=lambda _tag_name: False,
+                is_ancestor=lambda _tag_name, _head_ref: False,
+            )
+
+        duplicate_history = [published_release("v1.2.3"), published_release("v1.2.3")]
+        with self.assertRaisesRegex(release.ReleaseError, "Multiple published GitHub Releases"):
+            release.select_release_notes_base(
+                "v1.2.4",
+                duplicate_history,
+                "stable-head",
+                tag_exists=lambda _tag_name: True,
+                is_ancestor=lambda _tag_name, _head_ref: False,
+            )
+
+    def test_first_stable_release_without_stable_history_has_no_base(self) -> None:
+        selected = release.select_release_notes_base(
+            "v1.0.0",
+            [published_release("v1.0.0rc1", prerelease=True)],
+            "stable-head",
+            tag_exists=lambda _tag_name: True,
+            is_ancestor=lambda _tag_name, _head_ref: True,
+        )
+
+        self.assertEqual(selected, "")
 
 
 class ReleasePreparationTests(unittest.TestCase):
