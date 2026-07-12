@@ -68,6 +68,14 @@ document it as an external dependency with preflight behavior.
 
 ## Deferred Tracks
 
+- The native SwiftUI shell and bundled-worker architecture proof is tracked in
+  #198. It remains a direct-distribution prototype and does not change the
+  current Briefcase DMG release channel.
+- An early native UI feedback build is tracked in #202. It must ship as a
+  separately identified, opt-in GitHub prerelease that installs beside the
+  production app and does not enter either Sparkle channel, GitHub latest, or
+  PyPI. The first native production-replacement candidate is reserved for the
+  `0.3.0rc1` line after real conversion and updater prerequisites are complete.
 - PKG artifact policy is tracked in #118. Until that issue decides otherwise,
   PKG output is not the normal-user release path.
 - Homebrew distribution for CLI users is tracked in #119.

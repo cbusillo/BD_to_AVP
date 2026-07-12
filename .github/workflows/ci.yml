@@ -54,6 +54,12 @@ jobs:
       - name: Unit smoke tests
         run: uv run python -m unittest discover -s tests -t .
 
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Native shell tests
+        run: uv run python scripts/native_app.py test
+
       - name: Import smoke
         run: >-
           uv run python -c
