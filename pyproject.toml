@@ -21,10 +21,11 @@ dependencies = [
     "ffmpeg-python>=0.2.0,<0.3",
     "humanize>=4.9.0,<5",
     "numpy>=2,<3",
-    "opencv-python==4.10.0.84",
+    "opencv-python==5.0.0.93",
     "psutil>=5.9.8,<8",
-    "pyobjc-framework-vision>=11.0,<12",
-    "pyside6>=6.7.1,<7",
+    "pyobjc-framework-vision>=11.0,<13",
+    # PySide6 6.10+ includes macOS binaries that require macOS 15.
+    "pyside6>=6.7.1,<6.10",
     "pysrt>=1.1.2,<2",
     "trakit>=0.2.2,<0.3",
     "wakepy>=0.9.1,<1.1",
@@ -42,7 +43,7 @@ bd-to-avp-worker = "bd_to_avp.worker.__main__:main"
 [dependency-groups]
 dev = [
     "black>=26.5.1,<27",
-    "briefcase==0.4.3",
+    "briefcase==0.4.4",
     "mypy>=2.1.0,<3",
     "ruff>=0.15.20,<0.16",
     "types-psutil>=5.9.5.20240516",
@@ -88,10 +89,11 @@ requires = [
     "ffmpeg-python>=0.2.0,<0.3",
     "humanize>=4.9.0,<5",
     "numpy>=2,<3",
-    "opencv-python==4.10.0.84",
+    "opencv-python==5.0.0.93",
     "psutil>=5.9.8,<8",
-    "pyobjc-framework-vision>=11.0,<12",
-    "pyside6>=6.7.1,<7",
+    "pyobjc-framework-vision>=11.0,<13",
+    # PySide6 6.10+ includes macOS binaries that require macOS 15.
+    "pyside6>=6.7.1,<6.10",
     "pysrt>=1.1.2,<2",
     "trakit>=0.2.2,<0.3",
     "wakepy>=0.9.1,<1.1",
@@ -99,6 +101,7 @@ requires = [
 
 [tool.briefcase.app.bd-to-avp.macOS]
 universal_build = false
+min_os_version = "14.0"
 
 [tool.briefcase.app.bd-to-avp.macOS.info]
 CFBundleVersion = "146"

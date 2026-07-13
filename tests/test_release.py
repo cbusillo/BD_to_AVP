@@ -7,7 +7,7 @@ import unittest
 
 from pathlib import Path
 
-from scripts import release
+from scripts import briefcase_macos_signing, release
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -71,11 +71,13 @@ def fake_lock_runner(stage_root: Path, _uv_executable: str) -> None:
 
 
 class ReleaseMetadataTests(unittest.TestCase):
-    def test_repository_uses_project_version_for_briefcase_043(self) -> None:
+    def test_repository_uses_expected_briefcase_version(self) -> None:
         with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
             pyproject = tomllib.load(handle)
 
-        self.assertEqual(briefcase.__version__, "0.4.3")
+        expected_version = briefcase_macos_signing.EXPECTED_BRIEFCASE_VERSION
+        self.assertEqual(briefcase.__version__, expected_version)
+        self.assertIn(f"briefcase=={expected_version}", pyproject["dependency-groups"]["dev"])
         self.assertNotIn("version", pyproject["tool"]["briefcase"])
         _, apps = briefcase_config.parse_config(
             REPO_ROOT / "pyproject.toml",
@@ -88,6 +90,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             apps["bd-to-avp"]["info"]["CFBundleVersion"],
             pyproject["tool"]["briefcase"]["app"]["bd-to-avp"]["macOS"]["info"]["CFBundleVersion"],
         )
+        self.assertEqual(apps["bd-to-avp"]["min_os_version"], "14.0")
 
     def test_repository_is_prepared_for_stable_release(self) -> None:
         metadata = release.load_release_metadata()

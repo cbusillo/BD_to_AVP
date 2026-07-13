@@ -74,5 +74,5 @@ jobs:
       - name: Briefcase build smoke
         run: uv run python -m scripts.briefcase_app build --no-input
 
-      - name: Verify app-local FFmpeg tools
+      - name: Verify bundled tools and deployment targets
         run: uv run python scripts/verify_app_tools.py

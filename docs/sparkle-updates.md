@@ -43,6 +43,11 @@ verifies every asset, publishes the draft, and deploys that durable snapshot.
 The live feed remains empty until the first enabled release is published. See
 [release-process.md](release-process.md) for the operator sequence.
 
+The direct app requires macOS 14 or later, matching the minimum deployment
+target of the bundled MP4Box and edge264 executables.
+PySide6 remains below 6.10 because newer wheels contain binaries requiring
+macOS 15 even though their wheel platform tags permit installation on 14.
+
 ## Implementation Evidence
 
 Research for #120 used Briefcase 0.4.3 and Sparkle 2.9.4.
@@ -52,12 +57,12 @@ Research for #120 used Briefcase 0.4.3 and Sparkle 2.9.4.
   `ce89daf967db1e1893ed3ebd67575ed82d3902563e3191ca92aaec9164fbdef9`.
 - PyObjC successfully loaded the official framework with `objc.loadBundle()`
   and resolved `SPUStandardUpdaterController` in a local feasibility probe.
-- Briefcase 0.4.3 signs Mach-O files, embedded frameworks, and embedded apps,
+- Briefcase 0.4.4 signs Mach-O files, embedded frameworks, and embedded apps,
   but does not treat Sparkle's nested `.xpc` services as bundle-signing targets.
   `scripts/briefcase_macos_signing.py` adds `.xpc` targets to the same
-  depth-first signing pass and is guarded to Briefcase 0.4.3.
-- Briefcase 0.4.3 supports arbitrary macOS Info.plist entries through its
-  `macOS.info` map. Its v0.4.3 app template hard-codes `CFBundleVersion = 1`
+  depth-first signing pass and is guarded to Briefcase 0.4.4.
+- Briefcase 0.4.4 supports arbitrary macOS Info.plist entries through its
+  `macOS.info` map. Its v0.4.4 app template hard-codes `CFBundleVersion = 1`
   and does not consume a `build` value, so the macOS `info` map overrides that
   plist key explicitly.
 
@@ -101,7 +106,7 @@ preparation force a fresh extraction from the verified archive instead of
 trusting the extraction cache.
 
 Sparkle 2.9.4 contains `Updater.app`, `Downloader.xpc`, and `Installer.xpc`.
-Briefcase 0.4.3 does not sign `.xpc` bundles as first-class targets, so the
+Briefcase 0.4.4 does not sign `.xpc` bundles as first-class targets, so the
 repo-owned signing patch includes them without modifying site-packages. Nested
 XPC services and apps are signed before `Sparkle.framework`, which is signed
 before the containing app. Sparkle targets do not inherit the host app's Python
@@ -113,7 +118,7 @@ runtime entitlements.
 `0.2.144` or `0.2.144rc1`.
 
 `CFBundleVersion` must be a repository-tracked monotonic integer string. With
-the currently locked Briefcase 0.4.3, #163 must set it explicitly through the
+the currently locked Briefcase 0.4.4, #163 must set it explicitly through the
 macOS Info.plist map, for example:
 
 ```toml
@@ -126,7 +131,7 @@ independently of the human version. If #163 upgrades Briefcase instead, the
 generated app must prove that the replacement configuration writes the expected
 `CFBundleVersion` before this direct override can be removed.
 
-Briefcase 0.4.3 inherits the human version from `[project].version`; the
+Briefcase 0.4.4 inherits the human version from `[project].version`; the
 duplicate `[tool.briefcase].version` key is intentionally absent. Full RC and
 Stable versions are committed before release. Prepare both the human version,
 the monotonic build counter, and `uv.lock` with:
@@ -135,7 +140,7 @@ the monotonic build counter, and `uv.lock` with:
 uv run python scripts/release.py prepare --version <version> --build <build>
 ```
 
-Because the v0.4.3 template emits its default before custom `info` entries,
+Because the v0.4.4 template emits its default before custom `info` entries,
 implementation issue #163 must inspect the generated plist with
 `plutil -extract CFBundleVersion raw <Info.plist>` and fail unless the resolved
 value exactly matches the repository counter.

@@ -43,7 +43,7 @@ below, create a Python environment, then install `BD_to_AVP` with `pip`.
 Ensure the following are installed on your Mac *(if using the terminal/PyPI version)*:
 
 - **Apple Silicon [Mac]**: A Mac with Apple Silicon, such as the M1, M1 Pro, or M1 Max
-- **[macOS Sonoma]**: The latest version of macOS.
+- **[macOS Sonoma]**: macOS 14 or later.
 - **[Python] 3.12**: The latest version of Python.
 - **[Homebrew]**: The missing package manager for macOS (or Linux).
 - **[FFmpeg]**: A complete, cross-platform solution to record, convert, and stream audio and video.
