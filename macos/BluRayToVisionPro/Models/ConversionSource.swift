@@ -45,11 +45,11 @@ enum ConversionSourceKind: String, CaseIterable, Identifiable {
     }
 
     var supportsMetadataInspection: Bool {
-        self == .matroska || self == .transportStream
+        self == .discImage || self == .matroska || self == .transportStream
     }
 
     var supportsConversion: Bool {
-        self == .matroska || self == .transportStream
+        self == .discImage || self == .matroska || self == .transportStream
     }
 
     var isDiscWorkflow: Bool {
@@ -63,7 +63,7 @@ enum ConversionSourceKind: String, CaseIterable, Identifiable {
     var allowedExtensions: [String] {
         switch self {
         case .discImage:
-            ["iso", "img", "bin"]
+            ["iso"]
         case .matroska:
             ["mkv"]
         case .transportStream:
@@ -111,7 +111,7 @@ struct ConversionSource: Equatable {
         }
 
         switch normalizedURL.pathExtension.lowercased() {
-        case "iso", "img", "bin":
+        case "iso":
             return ConversionSource(kind: .discImage, url: normalizedURL)
         case "mkv":
             return ConversionSource(kind: .matroska, url: normalizedURL)

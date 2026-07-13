@@ -5,10 +5,10 @@ or update it.
 ## What To Try
 
 - Launch the new SwiftUI workspace on an Apple Silicon Mac running macOS 27.
-- Choose a physical disc, disc image, Blu-ray folder, MKV, source folder, or
+- Choose a physical disc, ISO disc image, Blu-ray folder, MKV, source folder, or
   MTS/M2TS transport stream.
-- Inspect MKV, MTS, and M2TS source metadata through the bundled engine.
-- Convert an inspected MKV, MTS, or M2TS source to a completed MV-HEVC `.mov`
+- Inspect ISO, MKV, MTS, and M2TS source metadata through the bundled engine.
+- Convert an inspected ISO, MKV, MTS, or M2TS source to a completed MV-HEVC `.mov`
   through the bundled engine, with native progress, cancellation, and results.
 - Review the Video, Audio & Subtitles, and Files & Recovery controls.
 - Create, duplicate, edit, import, export, and delete named encoding profiles.
@@ -19,9 +19,9 @@ or update it.
 
 ## Important Limits
 
-- **Start Processing currently supports MKV, MTS, and M2TS files only.** Keep
-  the production app installed for physical discs, disc images, Blu-ray
-  folders, source-folder batches, and recovery decisions that require a second
+- **Start Processing currently supports ISO, MKV, MTS, and M2TS files only.**
+  Keep the production app installed for physical discs, Blu-ray folders,
+  source-folder batches, and recovery decisions that require a second
   interactive step.
 - Native conversion currently creates the full movie. Short sample outputs are
   not yet available.

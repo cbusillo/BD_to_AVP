@@ -18,7 +18,7 @@ class ProcessAudioWiringTests(unittest.TestCase):
             left_path = output_folder / "Movie_left.mov"
             right_path = output_folder / "Movie_right.mov"
             mv_hevc_path = output_folder / "Movie_MV-HEVC.mov"
-            aac_path = output_folder / "Movie_audio_AAC.mov"
+            aac_path = output_folder / "Movie_audio_AAC.m4a"
             final_path = output_folder / "Movie_AVP.mov"
             source_path.write_bytes(b"source")
             output_folder.mkdir()

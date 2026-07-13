@@ -93,14 +93,58 @@ class MuxCommandTests(unittest.TestCase):
         ):
             container.mux_video_audio_subs(
                 Path("movie_MV-HEVC.mov"),
-                Path("Movie_audio_AAC.mov"),
+                Path("Movie_audio_AAC.m4a"),
                 Path("movie_AVP.mov"),
                 Path("."),
             )
 
         command = run_command.call_args.args[0]
-        self.assertIn("Movie_audio_AAC.mov#1:lang=eng:group=1:alternate_group=1", command)
-        self.assertIn("Movie_audio_AAC.mov#2:lang=fra:group=1:alternate_group=1:disable", command)
+        self.assertIn("Movie_audio_AAC.m4a#1:lang=eng:group=1:alternate_group=1", command)
+        self.assertIn("Movie_audio_AAC.m4a#2:lang=fra:group=1:alternate_group=1:disable", command)
+
+    def test_final_mux_normalizes_bibliographic_audio_language(self) -> None:
+        with (
+            patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+            patch.object(
+                container,
+                "get_audio_stream_data",
+                return_value=[{"index": 0, "tags": {"language": "ger"}, "channel_layout": "5.1"}],
+            ),
+            patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
+            patch.object(container, "run_command") as run_command,
+        ):
+            container.mux_video_audio_subs(
+                Path("movie_MV-HEVC.mov"),
+                Path("Movie_audio_AAC.m4a"),
+                Path("movie_AVP.mov"),
+                Path("."),
+            )
+
+        command = run_command.call_args.args[0]
+        self.assertIn("Movie_audio_AAC.m4a#1:lang=deu:group=1:alternate_group=1", command)
+        self.assertIn("2:type=name:str='German 5.1 Audio'", command)
+
+    def test_final_mux_uses_unknown_for_invalid_audio_language(self) -> None:
+        with (
+            patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+            patch.object(
+                container,
+                "get_audio_stream_data",
+                return_value=[{"index": 0, "tags": {"language": "xxx"}, "channel_layout": "stereo"}],
+            ),
+            patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
+            patch.object(container, "run_command") as run_command,
+        ):
+            container.mux_video_audio_subs(
+                Path("movie_MV-HEVC.mov"),
+                Path("Movie_audio_AAC.m4a"),
+                Path("movie_AVP.mov"),
+                Path("."),
+            )
+
+        command = run_command.call_args.args[0]
+        self.assertIn("Movie_audio_AAC.m4a#1:lang=und:group=1:alternate_group=1", command)
+        self.assertIn("2:type=name:str='Unknown stereo Audio'", command)
 
     def test_final_mux_marks_forced_subtitles_for_quicktime(self) -> None:
         with (

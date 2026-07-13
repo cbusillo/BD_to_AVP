@@ -18,8 +18,9 @@ owns native lifecycle, presentation, and process supervision.
 
 ## Job Request
 
-`inspect_source` reads metadata from one existing `.mkv`, `.mts`, or `.m2ts`
-file. It is read-only and reuses the production FFprobe metadata path.
+`inspect_source` reads metadata from one existing `.iso`, `.mkv`, `.mts`, or
+`.m2ts` file. ISO inspection uses the installed MakeMKV application to identify
+the longest MVC title; existing video files reuse the production FFprobe path.
 
 ```json
 {
@@ -33,11 +34,13 @@ file. It is read-only and reuses the production FFprobe metadata path.
 }
 ```
 
-`convert_source` converts one existing `.mkv`, `.mts`, or `.m2ts` file through
-the production conversion engine. The request is immutable: source and
-destination paths must be absolute, all conversion options must be present, and
-unknown fields are rejected. This slice does not enable physical disc, ISO,
-Blu-ray folder, source-folder, queue, or batch conversion through the worker.
+`convert_source` converts one existing `.iso`, `.mkv`, `.mts`, or `.m2ts` file
+through the production conversion engine. ISO conversion requires MakeMKV and
+automatically selects the longest MVC title before continuing through the same
+pipeline. The request is immutable: source and destination paths must be
+absolute, all conversion options must be present, and unknown fields are
+rejected. This slice does not enable physical disc, Blu-ray folder,
+source-folder, queue, or batch conversion through the worker.
 
 `destination.path` is an absolute output folder. The worker returns the actual
 final `.mov` file path produced by the existing engine.
@@ -146,6 +149,11 @@ Subtitle extraction failures that require a user choice end with
 `job.cancelled`; dependency failures, helper failures, FFmpeg failures, existing
 outputs, missing outputs, and unsupported sources map to `job.failed` with stable
 error codes and optional details.
+
+MakeMKV warnings that stop ISO materialization use the same terminal decision
+surface with `mkv_creation_decision_required`. The recovery details direct the
+user to confirm that a usable MKV exists, enable Continue on Error, and restart
+from Extract MVC and Audio; the worker never guesses that a partial MKV is safe.
 
 ## Cancellation And Ownership
 

@@ -102,6 +102,16 @@ class DependencyPreflightTests(unittest.TestCase):
 
         self.assertIn(preflight.config.MAKEMKVCON_PATH, required_paths)
 
+    def test_iso_sources_require_makemkv(self) -> None:
+        with (
+            patch.object(preflight.config, "source_path", Path("movie.iso")),
+            patch.object(preflight.config, "source_str", None),
+            patch.object(preflight.config, "start_stage", Stage.CREATE_MKV),
+        ):
+            required_paths = preflight.get_required_dependency_binaries_for_current_job()
+
+        self.assertIn(preflight.config.MAKEMKVCON_PATH, required_paths)
+
     def test_subtitle_extraction_no_longer_requires_external_subtitle_tools(self) -> None:
         with (
             patch.object(preflight.config, "skip_subtitles", False),

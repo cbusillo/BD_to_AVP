@@ -87,6 +87,9 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
             disc_info.is_interlaced = True
         return disc_info
 
+    if config.source_path and config.source_path.suffix.lower() in config.IMAGE_EXTENSIONS:
+        source = f"iso:{config.source_path}"
+
     command = [
         config.MAKEMKVCON_PATH,
         "--robot",

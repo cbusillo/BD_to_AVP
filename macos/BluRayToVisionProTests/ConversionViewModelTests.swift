@@ -41,20 +41,66 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDiscImageSelectionDoesNotStartFileInspection() throws {
+    func testDiscImageSelectionStartsInspection() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         let imageURL = directoryURL.appendingPathComponent("Feature.iso")
         _ = FileManager.default.createFile(atPath: imageURL.path, contents: Data("disc".utf8))
         defer { try? FileManager.default.removeItem(at: directoryURL) }
-        let viewModel = ConversionViewModel()
+        let inspectionDone = expectation(description: "inspection done")
+        let viewModel = ConversionViewModel {
+            TwoPhaseWorkerClient(onInspectionComplete: { inspectionDone.fulfill() })
+        }
 
         viewModel.selectSource(ConversionSource(kind: .discImage, url: imageURL))
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
 
         XCTAssertEqual(viewModel.source?.kind, .discImage)
-        XCTAssertEqual(viewModel.state.phase, .empty)
+        XCTAssertEqual(viewModel.state.phase, .completed)
+        XCTAssertNotNil(viewModel.state.result)
         XCTAssertFalse(viewModel.hasActiveWorker)
+    }
+
+    @MainActor
+    func testStartConversionStartsWorkerForInspectedISO() async throws {
+        let inspectionDone = expectation(description: "inspection done")
+        let conversionStarted = expectation(description: "conversion started")
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { spec in
+                XCTAssertEqual(URL(fileURLWithPath: spec.source.path).pathExtension, "iso")
+                XCTAssertEqual(spec.operation, "convert_source")
+                conversionStarted.fulfill()
+            }
+        )
+        let viewModel = ConversionViewModel { worker }
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let imageURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: imageURL.path, contents: Data("disc".utf8))
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        viewModel.selectSource(ConversionSource(kind: .discImage, url: imageURL))
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+
+        let draft = ConversionDraft(
+            source: viewModel.source!,
+            sourceDetails: viewModel.state.result,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/Movies"),
+            outputLength: .fullMovie,
+            samplePosition: .beginning,
+            options: ConversionOptions()
+        )
+        viewModel.startConversion(draft: draft)
+
+        await fulfillment(of: [conversionStarted], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        XCTAssertEqual(viewModel.state.phase, .completed)
     }
 
     @MainActor

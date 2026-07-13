@@ -12,13 +12,15 @@ import ffmpeg
 
 from bd_to_avp import preflight
 from bd_to_avp.modules.config import Stage, config
-from bd_to_avp.modules.disc import get_disc_and_mvc_video_info
+from bd_to_avp.modules.disc import get_disc_and_mvc_video_info, MKVCreationError
 from bd_to_avp.modules.process import ProcessingCancelled, start_process
 from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import JobSpec, WorkerActivityReporter, WorkerOperation
 
-SUPPORTED_INSPECTION_EXTENSIONS = frozenset({".mkv", ".mts", ".m2ts"})
+DIRECT_VIDEO_EXTENSIONS = frozenset({".mkv", ".mts", ".m2ts"})
+DISC_IMAGE_EXTENSIONS = frozenset({".iso"})
+SUPPORTED_INSPECTION_EXTENSIONS = DIRECT_VIDEO_EXTENSIONS | DISC_IMAGE_EXTENSIONS
 SUPPORTED_CONVERSION_EXTENSIONS = SUPPORTED_INSPECTION_EXTENSIONS
 TOOL_ENVIRONMENT_KEYS = ("PATH", "FFMPEG_BINARY", "FFPROBE_BINARY", "TMPDIR")
 CONFIG_SNAPSHOT_FIELDS = (
@@ -93,9 +95,15 @@ def inspect_source(source_path: Path, owner: WorkerProcessOwner) -> dict[str, ob
     if source_path.suffix.lower() not in SUPPORTED_INSPECTION_EXTENSIONS:
         raise WorkerOperationError(
             "unsupported_source",
-            "Source inspection supports MKV, MTS, and M2TS files.",
+            "Source inspection supports ISO, MKV, MTS, and M2TS files.",
         )
-    if not config.FFPROBE_PATH.is_file():
+    if source_path.suffix.lower() in DISC_IMAGE_EXTENSIONS and not config.MAKEMKVCON_PATH.is_file():
+        raise WorkerOperationError(
+            "makemkv_missing",
+            "MakeMKV is required to inspect a Blu-ray ISO.",
+            retryable=True,
+        )
+    if source_path.suffix.lower() in DIRECT_VIDEO_EXTENSIONS and not config.FFPROBE_PATH.is_file():
         raise WorkerOperationError("ffprobe_missing", "The FFprobe helper could not be found.")
 
     owner.check_cancelled()
@@ -107,6 +115,16 @@ def inspect_source(source_path: Path, owner: WorkerProcessOwner) -> dict[str, ob
             raise WorkerCancelled("The source inspection was cancelled.") from error
         stderr = error.stderr.decode("utf-8", errors="replace") if error.stderr else None
         raise WorkerOperationError("probe_failed", "FFprobe could not inspect the selected source.", stderr) from error
+    except subprocess.CalledProcessError as error:
+        if owner.cancellation_event.is_set():
+            raise WorkerCancelled("The source inspection was cancelled.") from error
+        details = error.output if isinstance(error.output, str) else None
+        raise WorkerOperationError(
+            "disc_inspection_failed",
+            "MakeMKV could not inspect the selected Blu-ray ISO.",
+            details,
+            retryable=True,
+        ) from error
     except (OSError, KeyError, TypeError, ValueError) as error:
         if owner.cancellation_event.is_set():
             raise WorkerCancelled("The source inspection was cancelled.") from error
@@ -142,7 +160,7 @@ def convert_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActi
     if source_path.suffix.lower() not in SUPPORTED_CONVERSION_EXTENSIONS:
         raise WorkerOperationError(
             "unsupported_source",
-            "Conversion currently supports single existing MKV, MTS, and M2TS files only.",
+            "Conversion currently supports ISO, MKV, MTS, and M2TS files.",
         )
     if destination.path.exists() and not destination.path.is_dir():
         raise WorkerOperationError("destination_not_directory", "The destination path must be a folder.")
@@ -160,6 +178,16 @@ def convert_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActi
             owner.check_cancelled()
         except ProcessingCancelled as error:
             raise WorkerCancelled("The conversion was cancelled.") from error
+        except MKVCreationError as error:
+            if owner.cancellation_event.is_set():
+                raise WorkerCancelled("The conversion was cancelled.") from error
+            raise WorkerDecisionRequired(
+                "mkv_creation_decision_required",
+                "MakeMKV reported errors while creating the intermediate MKV.",
+                "If a usable MKV was created, enable Continue on Error and retry from Extract MVC and Audio."
+                f"\n\n{error}",
+                ("retry_continue_on_error", "cancel"),
+            ) from error
         except SRTCreationError as error:
             if owner.cancellation_event.is_set():
                 raise WorkerCancelled("The conversion was cancelled.") from error

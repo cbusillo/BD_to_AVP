@@ -8,6 +8,29 @@ from bd_to_avp.modules.config import Stage
 
 
 class DiscStageArtifactTests(unittest.TestCase):
+    def test_disc_info_uses_iso_source_prefix_for_image(self) -> None:
+        makemkv_output = "\n".join(
+            [
+                'CINFO:2,0,"Feature 3D"',
+                'TINFO:0,9,0,"0:45:00"',
+                'SINFO:0,1,6,0,"Mpeg4-MVC-3D"',
+                'SINFO:0,1,19,0,"1920x1080"',
+                'SINFO:0,1,21,0,"24000/1001"',
+            ]
+        )
+        with (
+            patch.object(disc.config, "source_path", Path("/Movies/Feature.iso")),
+            patch.object(disc.config, "source_str", None),
+            patch.object(disc.config, "IMAGE_EXTENSIONS", [".iso"]),
+            patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
+            patch.object(disc, "run_command", return_value=makemkv_output) as run_command,
+        ):
+            result = disc.get_disc_and_mvc_video_info()
+
+        self.assertEqual(result.name, "Feature 3D")
+        self.assertEqual(result.main_title_number, 0)
+        self.assertIn("iso:/Movies/Feature.iso", run_command.call_args.args[0])
+
     def test_keep_files_copies_mkv_source_to_output_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

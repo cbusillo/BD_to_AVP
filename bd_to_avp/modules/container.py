@@ -89,11 +89,10 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
     output_track_index += 1
     for stream in audio_streams:
         index = stream["index"] + 1
-        language_code_alpha3b = stream.get("tags", {}).get("language", "und")
-        language_name = Language.fromietf(language_code_alpha3b).name
+        language_code, language_name = normalize_track_language(stream.get("tags", {}).get("language"))
         channel_layout = stream.get("channel_layout", "unknown")
 
-        audio_track_options = f":lang={language_code_alpha3b}:group=1:alternate_group=1"
+        audio_track_options = f":lang={language_code}:group=1:alternate_group=1"
 
         if index > 1:
             audio_track_options += ":disable"
@@ -126,6 +125,20 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
 
     command += [muxed_path]
     run_command(command, "mux video, audio, and subtitles.")
+
+
+def normalize_track_language(language_code: object) -> tuple[str, str]:
+    if not isinstance(language_code, str) or not language_code or language_code == "und":
+        return "und", "Unknown"
+
+    for resolver in (Language.fromietf, Language.fromalpha3b, Language.fromalpha3t, Language.fromalpha2):
+        try:
+            language = resolver(language_code)
+        except (AttributeError, ValueError):
+            continue
+        return language.alpha3, language.name
+
+    return "und", "Unknown"
 
 
 def get_audio_stream_data(file_path: Path) -> list[dict[str, Any]]:
