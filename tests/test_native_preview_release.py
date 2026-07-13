@@ -26,6 +26,9 @@ from scripts.native_preview_release import (
     main,
     mounted_dmg,
     notarize_and_staple,
+    parse_args,
+    smoke_native_app_startup,
+    smoke_packaged_tools,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -92,6 +95,44 @@ class NativePreviewIdentityTests(unittest.TestCase):
             create_preview_release_metadata(short_version="0.3")
         with self.assertRaisesRegex(NativePreviewReleaseError, "positive integer"):
             create_preview_release_metadata(build_version="0")
+
+    def test_verify_dmg_accepts_native_and_tool_smoke_flags(self) -> None:
+        args = parse_args(
+            [
+                "verify-dmg",
+                "--dmg",
+                "/tmp/preview.dmg",
+                "--smoke-app",
+                "--smoke-tools",
+                "--smoke-worker",
+            ]
+        )
+
+        self.assertTrue(args.smoke_app)
+        self.assertTrue(args.smoke_tools)
+        self.assertTrue(args.smoke_worker)
+
+    def test_native_startup_smoke_uses_explicit_exit_argument(self) -> None:
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app_path = Path(temporary_directory) / NATIVE_APP_NAME
+            executable = app_path / "Contents" / "MacOS" / NATIVE_EXECUTABLE_NAME
+            executable.parent.mkdir(parents=True)
+            executable.touch()
+            with patch("scripts.native_preview_release.subprocess.run", return_value=completed) as run_mock:
+                smoke_native_app_startup(app_path)
+
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command, [str(executable), "--startup-smoke"])
+        self.assertEqual(run_mock.call_args.kwargs["timeout"], 20)
+
+    def test_packaged_tool_smoke_probes_release_tool_set(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app_path = Path(temporary_directory) / NATIVE_APP_NAME
+            with patch("scripts.native_preview_release.verify_tool") as verify_tool_mock:
+                smoke_packaged_tools(app_path)
+
+        self.assertGreaterEqual(verify_tool_mock.call_count, 6)
 
     def test_accepts_exact_preview_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -212,6 +253,7 @@ class NativePreviewWorkflowTests(unittest.TestCase):
         workflow = load_workflow()
         prepare = workflow["jobs"]["prepare"]
         package = workflow["jobs"]["package"]
+        compatibility = workflow["jobs"]["compatibility"]
 
         self.assertEqual(set(workflow["on"]), {"workflow_dispatch"})
         self.assertEqual(workflow["concurrency"]["group"], "release")
@@ -236,6 +278,14 @@ class NativePreviewWorkflowTests(unittest.TestCase):
         self.assertIn("python -m scripts.native_preview_release metadata", str(prepare))
         self.assertIn("needs.prepare.outputs.app_name", str(package))
         self.assertIn("needs.prepare.outputs.dmg_name", str(package))
+        self.assertEqual(compatibility["runs-on"], "macos-26")
+        self.assertEqual(compatibility["needs"], ["package"])
+        self.assertIn("actions/setup-python", str(compatibility))
+        self.assertIn("verify-dmg", str(compatibility))
+        self.assertIn("--smoke-app", str(compatibility))
+        self.assertIn("--smoke-tools", str(compatibility))
+        self.assertIn("--smoke-worker", str(compatibility))
+        self.assertIn("sw_vers", str(compatibility))
 
     def test_workflow_isolated_from_production_channels(self) -> None:
         workflow = load_workflow()
@@ -264,6 +314,7 @@ class NativePreviewWorkflowTests(unittest.TestCase):
     def test_workflow_attests_and_revalidates_exact_assets(self) -> None:
         workflow = load_workflow()
         package = workflow["jobs"]["package"]
+        compatibility = workflow["jobs"]["compatibility"]
         publish = workflow["jobs"]["publish"]
         config = json.loads((REPO_ROOT / ".github" / "github.json").read_text(encoding="utf-8"))
 
@@ -272,6 +323,8 @@ class NativePreviewWorkflowTests(unittest.TestCase):
         self.assertEqual(package["permissions"]["id-token"], "write")
         self.assertIn("actions/attest@", str(package))
         self.assertEqual(publish["permissions"]["contents"], "write")
+        self.assertEqual(set(publish["needs"]), {"prepare", "package", "compatibility"})
+        self.assertIn("native-preview-package", str(compatibility))
         self.assertIn("gh attestation verify", str(publish))
         self.assertIn("native-ui-preview.yml", str(publish))
         self.assertIn("SHA256SUMS", str(publish))

@@ -11,6 +11,7 @@ struct ConversionSetupView: View {
     let selectedProfile: EncodingProfile
     let profileModified: Bool
     let isLocked: Bool
+    let sourceKind: ConversionSourceKind?
     let saveSelectedProfile: () -> Void
     let saveAsNewProfile: () -> Void
     let resetProfile: () -> Void
@@ -122,11 +123,16 @@ struct ConversionSetupView: View {
                 Toggle(isOn: $options.job.removeOriginalAfterSuccess) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Remove original after success")
-                        Text("Destructive — the source is removed only after the finished movie is verified.")
+                        Text(
+                            sourceKind == .physicalDisc
+                                ? "Not available for physical discs. The disc is never modified."
+                                : "Destructive — the source is removed only after the finished movie is verified."
+                        )
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
+                .disabled(sourceKind == .physicalDisc)
             }
 
             Section("Run Behavior") {

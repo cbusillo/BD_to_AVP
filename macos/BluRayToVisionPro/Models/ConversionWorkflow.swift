@@ -128,7 +128,7 @@ struct AppCapabilities: Equatable {
     )
 
     var conversionUnavailableReason: String {
-        "Conversion requires a Blu-ray folder, ISO, MKV, MTS, or M2TS source."
+        "Conversion requires a Blu-ray disc, Blu-ray folder, ISO, MKV, MTS, or M2TS source."
     }
 
     var automaticUpdatesUnavailableReason: String {
@@ -147,6 +147,37 @@ struct ConversionDraft: Equatable {
 
     var proposedOutputURL: URL {
         destinationURL.appendingPathComponent("\(outputStem)_AVP.mov")
+    }
+
+    func retrying(
+        decision: WorkerDecision,
+        choice: WorkerRecoveryChoice
+    ) -> ConversionDraft? {
+        guard decision.choices.contains(choice.rawValue) else {
+            return nil
+        }
+
+        var retryOptions = options
+        switch (decision.identifier, choice) {
+        case ("mkv_creation_decision_required", .retryContinueOnError):
+            retryOptions.job.startStage = .extractMVCAndAudio
+            retryOptions.job.continueOnError = true
+        case ("subtitle_decision_required", .retryWithoutSubtitles):
+            retryOptions.job.startStage = .extractSubtitles
+            retryOptions.encoding.includeSubtitles = false
+        default:
+            return nil
+        }
+
+        return ConversionDraft(
+            source: source,
+            sourceDetails: sourceDetails,
+            profile: profile,
+            destinationURL: destinationURL,
+            outputLength: outputLength,
+            samplePosition: samplePosition,
+            options: retryOptions
+        )
     }
 
     private var outputStem: String {

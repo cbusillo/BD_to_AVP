@@ -64,11 +64,13 @@ struct ContentView: View {
                     openDiscImage: { chooseFile(.discImage) },
                     openBluRayFolder: { chooseFolder(.bluRayFolder) },
                     openMKV: { chooseFile(.matroska) },
-                    openSourceFolder: { chooseFolder(.sourceFolder) },
                     importTransportStream: { chooseFile(.transportStream) },
                     changeSource: chooseExistingSource,
                     chooseDestination: chooseDestination,
-                    retryAnalysis: viewModel.restartInspection
+                    retryAnalysis: viewModel.restartInspection,
+                    resolveRecoveryChoice: { choice in
+                        _ = viewModel.resolveRecoveryChoice(choice)
+                    }
                 )
                 .frame(minWidth: 350, idealWidth: 390, maxWidth: 450)
 
@@ -79,7 +81,8 @@ struct ContentView: View {
                     profiles: profileStore.profiles,
                     selectedProfile: selectedProfile,
                     profileModified: profileModified,
-                    isLocked: viewModel.hasActiveWorker,
+                    isLocked: viewModel.hasActiveWorker || viewModel.state.phase == .decisionRequired,
+                    sourceKind: viewModel.source?.kind,
                     saveSelectedProfile: saveSelectedProfile,
                     saveAsNewProfile: beginSaveAsNewProfile,
                     resetProfile: resetProfile
@@ -121,6 +124,18 @@ struct ContentView: View {
             }
         }
         .onAppear(perform: refreshDiscs)
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didMountNotification)) { _ in
+            refreshDiscs()
+        }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didUnmountNotification)) {
+            notification in
+            handleVolumeUnmount(notification)
+        }
+        .onChange(of: viewModel.hasActiveWorker) { _, isActive in
+            if !isActive {
+                refreshDiscs()
+            }
+        }
         .onChange(of: selectedProfileID) { _, _ in
             if preserveEncodingOnNextProfileChange {
                 preserveEncodingOnNextProfileChange = false
@@ -226,7 +241,6 @@ struct ContentView: View {
             Button("Open Disc Image…") { chooseFile(.discImage) }
             Button("Open Blu-ray Folder…") { chooseFolder(.bluRayFolder) }
             Button("Open 3D MKV…") { chooseFile(.matroska) }
-            Button("Open Source Folder…") { chooseFolder(.sourceFolder) }
 
             Divider()
             Button("Import MTS or M2TS…") { chooseFile(.transportStream) }
@@ -240,7 +254,7 @@ struct ContentView: View {
         } label: {
             Label(viewModel.source == nil ? "Choose Source" : "Change Source", systemImage: "opticaldiscdrive")
         }
-        .help("Choose a physical disc, disc image, Blu-ray folder, MKV, source folder, or transport stream")
+        .help("Choose a physical disc, disc image, Blu-ray folder, MKV, or transport stream")
         .disabled(!viewModel.canSelectSource)
     }
 
@@ -337,6 +351,9 @@ struct ContentView: View {
             return viewModel.state.stageMessage
                 ?? (viewModel.state.operationKind == .inspection ? "Reading source details" : "Converting video")
         }
+        if viewModel.state.phase == .decisionRequired {
+            return "Choose how to continue"
+        }
         if viewModel.state.phase == .failed {
             return "Source needs attention"
         }
@@ -349,14 +366,11 @@ struct ContentView: View {
         if viewModel.state.result != nil {
             return "Source analyzed and conversion settings ready"
         }
-        if source.kind == .physicalDisc {
-            return "Physical disc conversion is not available yet"
-        }
         if source.kind.isDiscWorkflow {
             return "Disc workflow ready"
         }
         if source.kind == .sourceFolder {
-            return "Source folder ready for batch processing"
+            return "Batch folder conversion is not available"
         }
         return "Conversion settings ready"
     }
@@ -382,6 +396,9 @@ struct ContentView: View {
         if viewModel.hasActiveWorker {
             return .blue
         }
+        if viewModel.state.phase == .decisionRequired {
+            return .orange
+        }
         if viewModel.state.phase == .failed {
             return .red
         }
@@ -392,20 +409,24 @@ struct ContentView: View {
         capabilities.conversionAvailable
             && viewModel.source?.kind.supportsConversion == true
             && viewModel.state.result != nil
+            && viewModel.state.phase != .decisionRequired
     }
 
     private var conversionUnavailableReason: String {
         guard capabilities.conversionAvailable else {
             return capabilities.conversionUnavailableReason
         }
+        if viewModel.state.phase == .decisionRequired {
+            return "Choose a recovery option before starting another conversion."
+        }
         switch viewModel.source?.kind {
-        case .physicalDisc:
-            return "Physical discs are not yet supported for native conversion."
         case .sourceFolder:
             return "Batch folder conversion is not yet available."
-        case .discImage, .bluRayFolder, .matroska, .transportStream where viewModel.state.result == nil:
-            return "Source analysis must complete before conversion can start."
-        case .none, .discImage, .bluRayFolder, .matroska, .transportStream:
+        case .physicalDisc, .discImage, .bluRayFolder, .matroska, .transportStream:
+            return viewModel.state.result == nil
+                ? "Source analysis must complete before conversion can start."
+                : capabilities.conversionUnavailableReason
+        case .none:
             return capabilities.conversionUnavailableReason
         }
     }
@@ -457,21 +478,44 @@ struct ContentView: View {
     }
 
     private func refreshDiscs() {
-        insertedDiscs = DiscSourceDetector.insertedDiscs()
+        let refreshedDiscs = DiscSourceDetector.insertedDiscs()
+        insertedDiscs = refreshedDiscs
+        guard !viewModel.hasActiveWorker,
+              let selectedSource = viewModel.source,
+              selectedSource.kind == .physicalDisc,
+              !refreshedDiscs.contains(where: { $0.workerSourcePath == selectedSource.workerSourcePath })
+        else {
+            return
+        }
+        viewModel.clearSource()
+    }
+
+    private func handleVolumeUnmount(_ notification: Notification) {
+        if let volumeURL = notification.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL {
+            viewModel.sourceVolumeDidUnmount(volumeURL)
+        }
+        refreshDiscs()
     }
 
     private func selectSource(_ source: ConversionSource) {
         guard viewModel.canSelectSource else {
             return
         }
+        if source.kind == .physicalDisc {
+            options.job.removeOriginalAfterSuccess = false
+        }
         viewModel.selectSource(source)
     }
 
     private func chooseExistingSource() {
-        guard viewModel.canSelectSource, let sourceURL = SourcePicker.chooseExistingSource() else {
+        guard viewModel.canSelectSource,
+              let sourceURL = SourcePicker.chooseExistingSource(),
+              let source = ConversionSource.infer(from: sourceURL),
+              source.kind.supportsMetadataInspection
+        else {
             return
         }
-        viewModel.selectSource(sourceURL)
+        selectSource(source)
     }
 
     private func chooseFile(_ kind: ConversionSourceKind) {
@@ -495,7 +539,11 @@ struct ContentView: View {
     }
 
     private func acceptDrop(_ urls: [URL], _ location: CGPoint) -> Bool {
-        guard viewModel.canSelectSource, let url = urls.first, let source = ConversionSource.infer(from: url) else {
+        guard viewModel.canSelectSource,
+              let url = urls.first,
+              let source = ConversionSource.infer(from: url),
+              source.kind.supportsMetadataInspection
+        else {
             return false
         }
         selectSource(source)

@@ -8,6 +8,7 @@ struct WorkerJobSpec: Encodable, Equatable {
             case directFile = "direct_file"
             case discImage = "disc_image"
             case bluRayFolder = "blu_ray_folder"
+            case physicalDisc = "physical_disc"
         }
 
         let kind: Kind
@@ -15,16 +16,18 @@ struct WorkerJobSpec: Encodable, Equatable {
 
         init(source: ConversionSource) {
             switch source.kind {
+            case .physicalDisc:
+                kind = .physicalDisc
             case .discImage:
                 kind = .discImage
             case .bluRayFolder:
                 kind = .bluRayFolder
             case .matroska, .transportStream:
                 kind = .directFile
-            case .physicalDisc, .sourceFolder:
+            case .sourceFolder:
                 preconditionFailure("Unsupported worker source kind: \(source.kind)")
             }
-            path = source.url.path
+            path = source.workerSourcePath
         }
 
         init(fileURL: URL) {
@@ -164,7 +167,7 @@ struct WorkerJobSpec: Encodable, Equatable {
             startStage: jobOptions.startStage.rawValue,
             keepFiles: jobOptions.keepStageFiles,
             overwrite: jobOptions.overwriteExisting,
-            removeOriginal: jobOptions.removeOriginalAfterSuccess,
+            removeOriginal: draft.source.kind == .physicalDisc ? false : jobOptions.removeOriginalAfterSuccess,
             continueOnError: jobOptions.continueOnError,
             softwareEncoder: jobOptions.softwareEncoder,
             outputCommands: jobOptions.outputCommands,

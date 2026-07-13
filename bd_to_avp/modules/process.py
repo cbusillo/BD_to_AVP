@@ -128,7 +128,7 @@ def process(
 
 def process_each(cancellation_event: Event | None = None, activity: ActivityReporter | None = None) -> Path:
     raise_if_cancelled(cancellation_event)
-    print(f"\nProcessing {config.source_path}")
+    print(f"\nProcessing {config.source_path or config.source_str}")
     if activity:
         activity.stage_started("preflight", "Checking required conversion tools")
     preflight.verify_runtime_ready()

@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from bd_to_avp.modules.config import config
 from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
+from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.worker.__main__ import run_worker
 from bd_to_avp.worker.operations import WorkerDecisionRequired, WorkerOperationError, convert_source, inspect_source
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
@@ -114,6 +115,14 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.source.kind, WorkerSourceKind.DIRECT_FILE)
         self.assertEqual(job.source.path, source_path)
 
+    def test_parses_physical_disc_request(self) -> None:
+        source_path = Path("/dev/disk9")
+
+        job = JobSpec.from_json_line(request_line(source_path, source_kind=WorkerSourceKind.PHYSICAL_DISC.value))
+
+        self.assertEqual(job.source.kind, WorkerSourceKind.PHYSICAL_DISC)
+        self.assertEqual(job.source.path, source_path)
+
     def test_parses_strict_conversion_request(self) -> None:
         source_path = Path("/tmp/movie.mkv")
         destination_path = Path("/tmp/output")
@@ -137,6 +146,31 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.source.path, Path("/tmp/movie.mkv"))
         self.assertEqual(job.destination.path if job.destination else None, Path("/tmp/output"))
         self.assertEqual(job.encoding.mv_hevc_quality if job.encoding else None, 75)
+
+    def test_parses_shared_swift_physical_disc_fixture(self) -> None:
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v2.json"
+
+        job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(job.source.kind, WorkerSourceKind.PHYSICAL_DISC)
+        self.assertEqual(job.source.path, Path("/dev/disk9"))
+        self.assertFalse(job.job.remove_original if job.job else True)
+
+    def test_rejects_remove_original_for_physical_disc(self) -> None:
+        request = json.loads(
+            conversion_request_line(
+                Path("/dev/disk9"),
+                Path("/tmp/output"),
+                source_kind=WorkerSourceKind.PHYSICAL_DISC.value,
+            )
+        )
+        request["job"]["remove_original"] = True
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request))
+
+        self.assertEqual(context.exception.code, "invalid_job_options")
+        self.assertIn("physical discs", context.exception.message)
 
     def test_rejects_sample_conversion_request(self) -> None:
         request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
@@ -537,6 +571,75 @@ class SourceInspectionTests(unittest.TestCase):
             self.assertEqual(context.exception.code, "makemkv_missing")
             self.assertTrue(context.exception.retryable)
 
+    def test_inspects_physical_disc_through_device_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fake_makemkv = Path(temporary_directory) / "makemkvcon"
+            fake_makemkv.touch()
+            source_path = Path("/dev/disk9")
+            observed: dict[str, object] = {}
+
+            def inspect_disc() -> DiscInfo:
+                observed["source_path"] = config.source_path
+                observed["source_str"] = config.source_str
+                return DiscInfo(name="Physical 3D", resolution="1920x1080", frame_rate="24000/1001")
+
+            with (
+                patch.object(config, "MAKEMKVCON_PATH", fake_makemkv),
+                patch("bd_to_avp.worker.operations.physical_disc_device_is_available", return_value=True),
+                patch("bd_to_avp.worker.operations.get_disc_and_mvc_video_info", side_effect=inspect_disc),
+            ):
+                result = inspect_source(
+                    JobSource(kind=WorkerSourceKind.PHYSICAL_DISC, path=source_path),
+                    WorkerProcessOwner(),
+                )
+
+            self.assertEqual(result["name"], "Physical 3D")
+            self.assertNotIn("size_bytes", result)
+            self.assertIsNone(observed["source_path"])
+            self.assertEqual(observed["source_str"], "dev:/dev/disk9")
+
+    def test_reports_unavailable_physical_disc_as_retryable(self) -> None:
+        with (
+            patch("bd_to_avp.worker.operations.physical_disc_device_is_available", return_value=False),
+            self.assertRaises(WorkerOperationError) as context,
+        ):
+            inspect_source(
+                JobSource(kind=WorkerSourceKind.PHYSICAL_DISC, path=Path("/dev/disk9")),
+                WorkerProcessOwner(),
+            )
+
+        self.assertEqual(context.exception.code, "disc_unavailable")
+        self.assertTrue(context.exception.retryable)
+
+    def test_rejects_non_device_path_for_physical_disc(self) -> None:
+        with self.assertRaises(WorkerOperationError) as context:
+            inspect_source(
+                JobSource(kind=WorkerSourceKind.PHYSICAL_DISC, path=Path("/tmp/disk9")),
+                WorkerProcessOwner(),
+            )
+
+        self.assertEqual(context.exception.code, "source_kind_mismatch")
+
+    def test_accepts_raw_device_path_for_physical_disc(self) -> None:
+        source_path = Path("/dev/rdisk9")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            fake_makemkv = Path(temporary_directory) / "makemkvcon"
+            fake_makemkv.touch()
+            with (
+                patch.object(config, "MAKEMKVCON_PATH", fake_makemkv),
+                patch("bd_to_avp.worker.operations.physical_disc_device_is_available", return_value=True),
+                patch(
+                    "bd_to_avp.worker.operations.get_disc_and_mvc_video_info",
+                    return_value=DiscInfo(name="Raw Device 3D"),
+                ),
+            ):
+                inspected = inspect_source(
+                    JobSource(kind=WorkerSourceKind.PHYSICAL_DISC, path=source_path),
+                    WorkerProcessOwner(),
+                )
+
+        self.assertEqual(inspected["name"], "Raw Device 3D")
+
     def test_inspects_bluray_folder_without_reporting_directory_size(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             source_path = Path(temporary_directory) / "Movie"
@@ -600,6 +703,43 @@ class SourceInspectionTests(unittest.TestCase):
 
 
 class SourceConversionTests(unittest.TestCase):
+    def test_physical_disc_conversion_uses_unowned_device_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = Path("/dev/disk9")
+            destination_path = temporary_path / "output"
+            final_path = destination_path / "movie_AVP.mov"
+            final_path.parent.mkdir()
+            final_path.write_bytes(b"final")
+            job = JobSpec.from_json_line(
+                conversion_request_line(
+                    source_path,
+                    destination_path,
+                    source_kind=WorkerSourceKind.PHYSICAL_DISC.value,
+                )
+            )
+            emitter = WorkerEventEmitter(io.StringIO(), job.job_id)
+            activity = WorkerActivityReporter(emitter)
+            observed: dict[str, object] = {}
+
+            def process_each(*_args: object, **_kwargs: object) -> Path:
+                observed["source_path"] = config.source_path
+                observed["source_str"] = config.source_str
+                observed["remove_original"] = config.remove_original
+                return final_path
+
+            with (
+                patch("bd_to_avp.worker.operations.physical_disc_device_is_available", return_value=True),
+                patch.object(config, "configure_tool_environment"),
+                patch("bd_to_avp.modules.process.process_each", side_effect=process_each),
+            ):
+                result = convert_source(job, WorkerProcessOwner(), activity)
+
+            self.assertEqual(result["source_path"], source_path.as_posix())
+            self.assertIsNone(observed["source_path"])
+            self.assertEqual(observed["source_str"], "dev:/dev/disk9")
+            self.assertFalse(observed["remove_original"])
+
     def test_bluray_folder_conversion_passes_explicit_file_source_to_engine(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
@@ -683,6 +823,27 @@ class SourceConversionTests(unittest.TestCase):
             self.assertEqual(context.exception.code, "mkv_creation_decision_required")
             self.assertEqual(context.exception.choices, ("retry_continue_on_error", "cancel"))
             self.assertIn("Extract MVC and Audio", context.exception.details or "")
+
+    def test_subtitle_failure_requests_skip_subtitles_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.iso"
+            source_path.write_bytes(b"disc")
+            destination_path = temporary_path / "output"
+            job = JobSpec.from_json_line(conversion_request_line(source_path, destination_path))
+            emitter = WorkerEventEmitter(io.StringIO(), job.job_id)
+            activity = WorkerActivityReporter(emitter)
+
+            with (
+                patch.object(config, "configure_tool_environment"),
+                patch("bd_to_avp.modules.process.process_each", side_effect=SRTCreationError("OCR error")),
+                self.assertRaises(WorkerDecisionRequired) as context,
+            ):
+                convert_source(job, WorkerProcessOwner(), activity)
+
+            self.assertEqual(context.exception.code, "subtitle_decision_required")
+            self.assertEqual(context.exception.choices, ("retry_without_subtitles", "cancel"))
+            self.assertIn("Turn off Include subtitles", context.exception.details or "")
 
     def test_conversion_restores_global_config_and_tool_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

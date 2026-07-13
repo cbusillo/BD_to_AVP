@@ -2,8 +2,8 @@
 
 The native macOS app communicates with its bundled Python engine over a bounded
 JSON Lines (JSONL) protocol. Version 2 makes the source kind explicit and adds
-single Blu-ray folder inspection and conversion. Physical-disc and batch-folder
-conversion remain outside this contract.
+single Blu-ray folder and physical-disc inspection and conversion. Batch-folder
+conversion remains outside this contract.
 
 ## Transport
 
@@ -22,12 +22,20 @@ Every request contains exactly one absolute source path and one source kind:
 | `direct_file` | Existing `.mkv`, `.mts`, or `.m2ts` file. |
 | `disc_image` | Existing `.iso` file. |
 | `blu_ray_folder` | Folder containing `BDMV`, or the `BDMV` folder itself. |
+| `physical_disc` | Available macOS whole-disc device such as `/dev/disk4`. |
 
 The worker validates that kind and path agree before launching tools. A selected
 `BDMV` folder is normalized to its parent disc root. Blu-ray folders are passed
 to MakeMKV as `file:<absolute path>`; ISO files are passed as
 `iso:<absolute path>`. A conversion destination may not be inside a Blu-ray
 source folder.
+
+The native app resolves a selected mounted Blu-ray volume to its stable BSD
+device with Disk Arbitration. The worker validates the `/dev/diskN` or
+`/dev/rdiskN` shape and availability, then passes it to MakeMKV as
+`dev:<device path>`. Physical devices are never stored as an owned source path,
+and conversion requests must set `job.remove_original` to `false`, so cleanup
+cannot modify or remove the device node.
 
 ## Inspection Request
 
@@ -47,6 +55,8 @@ source folder.
 Inspection completion places `name`, `resolution`, `frame_rate`, `interlaced`,
 and optional `size_bytes` under `payload.result`. Directory size is intentionally
 not reported because filesystem directory metadata is not the media size.
+Physical discs also omit `size_bytes` because the selected device is not an
+owned input file.
 
 ## Conversion Request
 
@@ -108,9 +118,22 @@ Supported event types are `worker.ready`, `job.started`, `stage.started`,
 `job.failed`, and `job.cancelled`.
 
 MakeMKV errors that may leave a usable intermediate MKV terminate with
-`mkv_creation_decision_required`. A retry is a new immutable job with
-`continue_on_error=true` and the requested resume stage. The worker never treats
-a partial MKV as safe without that explicit decision.
+`mkv_creation_decision_required`. The app presents only the choices supplied by
+the worker. Choosing `retry_continue_on_error` starts a new immutable job with
+`job.start_stage=2` and `job.continue_on_error=true`; choosing `cancel` starts no
+job. The worker never treats a partial MKV as safe without that explicit
+decision.
+
+Subtitle extraction failures that can continue without subtitles terminate with
+`subtitle_decision_required`. Choosing `retry_without_subtitles` starts a new
+immutable job with `job.start_stage=3` and `encoding.skip_subtitles=true`. Stage
+3 still runs so stale subtitle files are removed before left/right-eye output is
+created. Choosing `cancel` starts no job.
+
+The native app retains the exact validated draft from the failed conversion and
+applies these changes only to the retry job. Profile settings and the editable
+conversion defaults are not mutated. Unsupported decision identifiers or
+choices are not presented as retry actions.
 
 ## Cancellation And Ownership
 

@@ -75,12 +75,47 @@ final class ConversionWorkflowTests: XCTestCase {
         }
     }
 
+    func testInsertedDiscDetectionCarriesResolvedDevicePath() throws {
+        try withTemporaryDirectory { volumeURL in
+            try FileManager.default.createDirectory(
+                at: volumeURL.appendingPathComponent("BDMV", isDirectory: true),
+                withIntermediateDirectories: true
+            )
+
+            let discs = DiscSourceDetector.insertedDiscs(
+                in: [volumeURL],
+                devicePathResolver: { _ in "/dev/disk9" }
+            )
+
+            XCTAssertEqual(discs.count, 1)
+            XCTAssertEqual(discs.first?.kind, .physicalDisc)
+            XCTAssertEqual(discs.first?.url, volumeURL)
+            XCTAssertEqual(discs.first?.workerSourcePath, "/dev/disk9")
+        }
+    }
+
+    func testInsertedDiscDetectionOmitsUnresolvedVolumes() throws {
+        try withTemporaryDirectory { volumeURL in
+            try FileManager.default.createDirectory(
+                at: volumeURL.appendingPathComponent("BDMV", isDirectory: true),
+                withIntermediateDirectories: true
+            )
+
+            let discs = DiscSourceDetector.insertedDiscs(
+                in: [volumeURL],
+                devicePathResolver: { _ in nil }
+            )
+
+            XCTAssertTrue(discs.isEmpty)
+        }
+    }
+
     func testCurrentCapabilitiesStayHonest() {
         XCTAssertTrue(AppCapabilities.current.conversionAvailable)
         XCTAssertFalse(AppCapabilities.current.automaticUpdateChecksAvailable)
         XCTAssertEqual(
             AppCapabilities.current.conversionUnavailableReason,
-            "Conversion requires a Blu-ray folder, ISO, MKV, MTS, or M2TS source."
+            "Conversion requires a Blu-ray disc, Blu-ray folder, ISO, MKV, MTS, or M2TS source."
         )
     }
 
@@ -94,8 +129,9 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertTrue(ConversionSourceKind.transportStream.supportsConversion)
     }
 
-    func testPhysicalDiscAndBatchFolderKindsDoNotSupportConversion() {
-        XCTAssertFalse(ConversionSourceKind.physicalDisc.supportsConversion)
+    func testPhysicalDiscSupportsConversionWhileBatchFolderDoesNot() {
+        XCTAssertTrue(ConversionSourceKind.physicalDisc.supportsMetadataInspection)
+        XCTAssertTrue(ConversionSourceKind.physicalDisc.supportsConversion)
         XCTAssertFalse(ConversionSourceKind.sourceFolder.supportsConversion)
     }
 
@@ -146,6 +182,39 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(WorkerJobSpec(draft: draft).source.kind, .bluRayFolder)
     }
 
+    func testPhysicalDiscJobSpecUsesResolvedDevicePathAndPreservesSourceVolume() {
+        let source = ConversionSource(
+            kind: .physicalDisc,
+            url: URL(fileURLWithPath: "/Volumes/Feature", isDirectory: true),
+            workerSourcePath: "/dev/disk9"
+        )
+        let spec = WorkerJobSpec(source: source)
+
+        XCTAssertEqual(spec.source.kind, .physicalDisc)
+        XCTAssertEqual(spec.source.path, "/dev/disk9")
+        XCTAssertEqual(source.url.path, "/Volumes/Feature")
+    }
+
+    func testPhysicalDiscJobSpecNeverRequestsSourceRemoval() {
+        var jobOptions = JobOptions()
+        jobOptions.removeOriginalAfterSuccess = true
+        let draft = ConversionDraft(
+            source: ConversionSource(
+                kind: .physicalDisc,
+                url: URL(fileURLWithPath: "/Volumes/Feature", isDirectory: true),
+                workerSourcePath: "/dev/disk9"
+            ),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            outputLength: .fullMovie,
+            samplePosition: .beginning,
+            options: ConversionOptions(job: jobOptions)
+        )
+
+        XCTAssertFalse(WorkerJobSpec(draft: draft).job?.removeOriginal == true)
+    }
+
     func testConversionJobSpecEncodesVideoAndAudioSettings() {
         var encoding = EncodingOptions()
         encoding.hevcQuality = 80
@@ -190,6 +259,69 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(spec.job?.startStage, ConversionStage.extractMVCAndAudio.rawValue)
         XCTAssertTrue(spec.job?.keepFiles == true)
         XCTAssertTrue(spec.job?.softwareEncoder == true)
+    }
+
+    func testMakeMKVRecoveryBuildsFreshStageTwoDraft() throws {
+        let draft = makeDraft(kind: .discImage, extension: "iso")
+        let decision = WorkerDecision(
+            identifier: "mkv_creation_decision_required",
+            prompt: "MakeMKV reported errors.",
+            choices: ["retry_continue_on_error", "cancel"],
+            details: nil
+        )
+
+        let retry = try XCTUnwrap(
+            draft.retrying(decision: decision, choice: .retryContinueOnError)
+        )
+
+        XCTAssertEqual(draft.options.job.startStage, .createMKV)
+        XCTAssertFalse(draft.options.job.continueOnError)
+        XCTAssertEqual(retry.options.job.startStage, .extractMVCAndAudio)
+        XCTAssertTrue(retry.options.job.continueOnError)
+        XCTAssertEqual(retry.source, draft.source)
+        XCTAssertEqual(retry.destinationURL, draft.destinationURL)
+    }
+
+    func testSubtitleRecoveryBuildsFreshStageThreeDraftWithoutSubtitles() throws {
+        let draft = makeDraft(kind: .discImage, extension: "iso")
+        let decision = WorkerDecision(
+            identifier: "subtitle_decision_required",
+            prompt: "Subtitle extraction needs attention.",
+            choices: ["retry_without_subtitles", "cancel"],
+            details: nil
+        )
+
+        let retry = try XCTUnwrap(
+            draft.retrying(decision: decision, choice: .retryWithoutSubtitles)
+        )
+
+        XCTAssertTrue(draft.options.encoding.includeSubtitles)
+        XCTAssertEqual(retry.options.job.startStage, .extractSubtitles)
+        XCTAssertFalse(retry.options.encoding.includeSubtitles)
+        XCTAssertFalse(retry.options.job.continueOnError)
+    }
+
+    func testRecoveryDraftRejectsChoiceNotOfferedByDecision() {
+        let draft = makeDraft(kind: .discImage, extension: "iso")
+        let decision = WorkerDecision(
+            identifier: "subtitle_decision_required",
+            prompt: "Subtitle extraction needs attention.",
+            choices: ["cancel"],
+            details: nil
+        )
+
+        XCTAssertNil(draft.retrying(decision: decision, choice: .retryWithoutSubtitles))
+    }
+
+    func testDecisionOnlyExposesRecoveryChoicesForMatchingIdentifier() {
+        let decision = WorkerDecision(
+            identifier: "subtitle_decision_required",
+            prompt: "Subtitle extraction needs attention.",
+            choices: ["retry_continue_on_error", "retry_without_subtitles", "cancel", "future_choice"],
+            details: nil
+        )
+
+        XCTAssertEqual(decision.supportedChoices, [.retryWithoutSubtitles, .cancel])
     }
 
     func testInspectionJobSpecOmitsConversionSettings() throws {
@@ -250,6 +382,35 @@ final class ConversionWorkflowTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("tests/fixtures/native_worker_convert_v2.json")
+        let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? NSDictionary
+
+        XCTAssertEqual(encoded, fixture)
+    }
+
+    func testPhysicalDiscJobSpecMatchesSharedPythonFixture() throws {
+        let draft = ConversionDraft(
+            source: ConversionSource(
+                kind: .physicalDisc,
+                url: URL(fileURLWithPath: "/Volumes/Feature", isDirectory: true),
+                workerSourcePath: "/dev/disk9"
+            ),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            outputLength: .fullMovie,
+            samplePosition: .beginning,
+            options: ConversionOptions()
+        )
+        let spec = WorkerJobSpec(
+            draft: draft,
+            jobID: try XCTUnwrap(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
+        )
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("tests/fixtures/native_worker_convert_physical_disc_v2.json")
         let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)

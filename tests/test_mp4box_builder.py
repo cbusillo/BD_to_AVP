@@ -18,10 +18,13 @@ class MP4BoxBuilderTests(unittest.TestCase):
                         'version = "26.02.0"',
                         'repo_url = "https://example.invalid/gpac.git"',
                         'tag = "v26.02.0"',
+                        'source_commit = "118e60a905878e56dc4f9c5b309143c5f447c702"',
                         'license_mode = "LGPL-2.1-or-later"',
                         'binary = "MP4Box"',
                         f'binary_sha256 = "{"1" * 64}"',
                         'build = "static test build"',
+                        'install_prefix = "/opt/bd-to-avp/gpac"',
+                        'minimum_macos = "14.0"',
                         'configure_flags = ["--static-bin", "--use-ffmpeg=no"]',
                         "",
                         "[validation]",
@@ -36,19 +39,23 @@ class MP4BoxBuilderTests(unittest.TestCase):
             manifest = build_mp4box_macos.load_manifest(manifest_path)
 
         self.assertEqual(manifest.tag, "v26.02.0")
+        self.assertEqual(manifest.source_commit, "118e60a905878e56dc4f9c5b309143c5f447c702")
         self.assertEqual(manifest.binary, "MP4Box")
         self.assertEqual(manifest.binary_sha256, "1" * 64)
+        self.assertEqual(manifest.install_prefix, "/opt/bd-to-avp/gpac")
+        self.assertEqual(manifest.minimum_macos, "14.0")
         self.assertIn("--static-bin", manifest.configure_flags)
         self.assertEqual(manifest.validation.forbidden_link_prefixes, ("/opt/homebrew", "/usr/local"))
         self.assertIn("/usr/lib/libSystem.B.dylib", manifest.validation.expected_system_links)
 
     def test_build_env_hides_homebrew_tools(self) -> None:
-        env = build_mp4box_macos.build_env()
+        env = build_mp4box_macos.build_env("14.0")
 
         self.assertEqual(env["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin")
         self.assertEqual(env["CC"], "/usr/bin/clang")
         self.assertEqual(env["CXX"], "/usr/bin/clang++")
         self.assertEqual(env["PKG_CONFIG"], "/usr/bin/false")
+        self.assertEqual(env["MACOSX_DEPLOYMENT_TARGET"], "14.0")
 
     def test_verify_build_host_rejects_non_arm64_macos(self) -> None:
         with (
@@ -64,11 +71,12 @@ class MP4BoxBuilderTests(unittest.TestCase):
                 return "MP4Box: Mach-O 64-bit executable arm64"
             if command[0] == "otool":
                 return "MP4Box:\n\t/opt/homebrew/lib/libgpac.dylib\n"
-            return "MP4Box - GPAC version 26.02"
+            return "MP4Box - GPAC version 26.02\nGPAC Configuration: --prefix=/opt/bd-to-avp/gpac"
 
         with patch.object(build_mp4box_macos, "run", side_effect=fake_run):
             with self.assertRaisesRegex(build_mp4box_macos.BuildFailure, "/opt/homebrew"):
-                build_mp4box_macos.verify_macos_binary(Path("MP4Box"), build_mp4box_macos.load_manifest().validation)
+                manifest = build_mp4box_macos.load_manifest()
+                build_mp4box_macos.verify_macos_binary(Path("MP4Box"), manifest)
 
     def test_verify_macos_binary_accepts_system_only_linkage(self) -> None:
         def fake_run(command: list[str | Path], **kwargs) -> str:
@@ -76,10 +84,13 @@ class MP4BoxBuilderTests(unittest.TestCase):
                 return "MP4Box: Mach-O 64-bit executable arm64"
             if command[0] == "otool":
                 return "MP4Box:\n\t/usr/lib/libz.1.dylib\n\t/usr/lib/libSystem.B.dylib\n"
-            return "MP4Box - GPAC version 26.02"
+            if command[0] == "vtool":
+                return "platform MACOS\nminos 14.0\n"
+            return "MP4Box - GPAC version 26.02\nGPAC Configuration: --prefix=/opt/bd-to-avp/gpac"
 
         with patch.object(build_mp4box_macos, "run", side_effect=fake_run):
-            build_mp4box_macos.verify_macos_binary(Path("MP4Box"), build_mp4box_macos.load_manifest().validation)
+            manifest = build_mp4box_macos.load_manifest()
+            build_mp4box_macos.verify_macos_binary(Path("MP4Box"), manifest)
 
     def test_verify_macos_binary_rejects_unexpected_system_linkage(self) -> None:
         def fake_run(command: list[str | Path], **kwargs) -> str:
@@ -87,28 +98,65 @@ class MP4BoxBuilderTests(unittest.TestCase):
                 return "MP4Box: Mach-O 64-bit executable arm64"
             if command[0] == "otool":
                 return "MP4Box:\n\t/usr/lib/libz.1.dylib\n\t/usr/lib/libobjc.A.dylib\n"
-            return "MP4Box - GPAC version 26.02"
+            return "MP4Box - GPAC version 26.02\nGPAC Configuration: --prefix=/opt/bd-to-avp/gpac"
 
         with patch.object(build_mp4box_macos, "run", side_effect=fake_run):
             with self.assertRaisesRegex(build_mp4box_macos.BuildFailure, "unexpected"):
-                build_mp4box_macos.verify_macos_binary(Path("MP4Box"), build_mp4box_macos.load_manifest().validation)
+                manifest = build_mp4box_macos.load_manifest()
+                build_mp4box_macos.verify_macos_binary(Path("MP4Box"), manifest)
+
+    def test_verify_macos_binary_rejects_newer_minimum_system_version(self) -> None:
+        def fake_run(command: list[str | Path], **kwargs) -> str:
+            if command[0] == "file":
+                return "MP4Box: Mach-O 64-bit executable arm64"
+            if command[0] == "otool":
+                return "MP4Box:\n\t/usr/lib/libz.1.dylib\n\t/usr/lib/libSystem.B.dylib\n"
+            if command[0] == "vtool":
+                return "platform MACOS\nminos 27.0\n"
+            return "MP4Box - GPAC version 26.02\nGPAC Configuration: --prefix=/opt/bd-to-avp/gpac"
+
+        with patch.object(build_mp4box_macos, "run", side_effect=fake_run):
+            manifest = build_mp4box_macos.load_manifest()
+            with self.assertRaisesRegex(build_mp4box_macos.BuildFailure, "minimum macOS version"):
+                build_mp4box_macos.verify_macos_binary(Path("MP4Box"), manifest)
+
+    def test_verify_macos_binary_rejects_checkout_prefix(self) -> None:
+        def fake_run(command: list[str | Path], **kwargs) -> str:
+            if command[0] == "file":
+                return "MP4Box: Mach-O 64-bit executable arm64"
+            if command[0] == "otool":
+                return "MP4Box:\n\t/usr/lib/libz.1.dylib\n\t/usr/lib/libSystem.B.dylib\n"
+            if command[0] == "vtool":
+                return "platform MACOS\nminos 14.0\n"
+            return f"MP4Box - GPAC version 26.02\nGPAC Configuration: --prefix={build_mp4box_macos.REPO_ROOT}"
+
+        with patch.object(build_mp4box_macos, "run", side_effect=fake_run):
+            manifest = build_mp4box_macos.load_manifest()
+            with self.assertRaisesRegex(build_mp4box_macos.BuildFailure, "deterministic install prefix"):
+                build_mp4box_macos.verify_macos_binary(Path("MP4Box"), manifest)
 
     def test_clone_or_update_source_uses_cached_tag_without_fetch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             source_dir = Path(temp_dir) / "gpac-src"
             source_dir.mkdir()
             commands: list[list[str | Path]] = []
+            manifest = build_mp4box_macos.load_manifest()
 
             def fake_run(command: list[str | Path], **kwargs) -> str:
                 commands.append(command)
-                return "cached-commit"
+                if command[:4] == ["git", "remote", "get-url", "origin"]:
+                    return manifest.repo_url
+                if command[:3] == ["git", "status", "--porcelain"]:
+                    return ""
+                if command[:2] == ["git", "rev-parse"]:
+                    return manifest.source_commit
+                return ""
 
-            manifest = build_mp4box_macos.load_manifest()
             with patch.object(build_mp4box_macos, "run", side_effect=fake_run):
                 build_mp4box_macos.clone_or_update_source(source_dir, manifest, refresh=False)
 
-        self.assertIn(["git", "rev-parse", "--verify", f"{manifest.tag}^{{commit}}"], commands)
-        self.assertIn(["git", "checkout", manifest.tag], commands)
+        self.assertIn(["git", "rev-parse", "--verify", f"{manifest.source_commit}^{{commit}}"], commands)
+        self.assertIn(["git", "checkout", "--detach", manifest.source_commit], commands)
         self.assertNotIn(["git", "fetch", "--depth", "1", "origin", "tag", manifest.tag], commands)
 
     def test_clone_or_update_source_fetches_missing_cached_tag(self) -> None:
@@ -116,19 +164,48 @@ class MP4BoxBuilderTests(unittest.TestCase):
             source_dir = Path(temp_dir) / "gpac-src"
             source_dir.mkdir()
             commands: list[list[str | Path]] = []
+            manifest = build_mp4box_macos.load_manifest()
 
             def fake_run(command: list[str | Path], **kwargs) -> str:
                 commands.append(command)
+                if command[:4] == ["git", "remote", "get-url", "origin"]:
+                    return manifest.repo_url
+                if command[:3] == ["git", "status", "--porcelain"]:
+                    return ""
                 if command[:3] == ["git", "rev-parse", "--verify"]:
                     raise subprocess.CalledProcessError(returncode=128, cmd=command)
+                if command[:2] == ["git", "rev-parse"]:
+                    return manifest.source_commit
                 return ""
 
-            manifest = build_mp4box_macos.load_manifest()
             with patch.object(build_mp4box_macos, "run", side_effect=fake_run):
                 build_mp4box_macos.clone_or_update_source(source_dir, manifest, refresh=False)
 
         self.assertIn(["git", "fetch", "--depth", "1", "origin", "tag", manifest.tag], commands)
-        self.assertIn(["git", "checkout", manifest.tag], commands)
+        self.assertIn(["git", "checkout", "--detach", manifest.source_commit], commands)
+
+    def test_clone_or_update_source_rejects_mismatched_tag_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_dir = Path(temp_dir) / "gpac-src"
+            source_dir.mkdir()
+            manifest = build_mp4box_macos.load_manifest()
+
+            def fake_run(command: list[str | Path], **kwargs) -> str:
+                if command[:4] == ["git", "remote", "get-url", "origin"]:
+                    return manifest.repo_url
+                if command[:3] == ["git", "status", "--porcelain"]:
+                    return ""
+                if command[:3] == ["git", "rev-parse", "--verify"]:
+                    return manifest.source_commit
+                if command[:3] == ["git", "rev-parse", f"{manifest.tag}^{{commit}}"]:
+                    return "0" * 40
+                return ""
+
+            with (
+                patch.object(build_mp4box_macos, "run", side_effect=fake_run),
+                self.assertRaisesRegex(build_mp4box_macos.BuildFailure, "resolves to"),
+            ):
+                build_mp4box_macos.clone_or_update_source(source_dir, manifest, refresh=False)
 
     def test_build_mp4box_skips_distclean_without_makefile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -143,9 +220,10 @@ class MP4BoxBuilderTests(unittest.TestCase):
                 return ""
 
             with patch.object(build_mp4box_macos, "run", side_effect=fake_run):
-                build_mp4box_macos.build_mp4box(source_dir, source_dir / "install", build_mp4box_macos.load_manifest())
+                build_mp4box_macos.build_mp4box(source_dir, build_mp4box_macos.load_manifest())
 
         self.assertNotIn(["make", "distclean"], commands)
+        self.assertTrue(any(command[:2] == ["./configure", "--prefix=/opt/bd-to-avp/gpac"] for command in commands))
         self.assertIn(["make", f"-j{build_mp4box_macos.os.cpu_count() or 1}", "lib"], commands)
 
     def test_install_binary_sets_executable_bit(self) -> None:

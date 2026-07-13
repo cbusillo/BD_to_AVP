@@ -6,6 +6,7 @@ enum WorkerPhase: String, Equatable {
     case inspecting
     case processing
     case stopping
+    case decisionRequired
     case completed
     case cancelled
     case failed
@@ -15,7 +16,7 @@ enum WorkerPhase: String, Equatable {
     }
 
     var isTerminal: Bool {
-        self == .completed || self == .cancelled || self == .failed
+        self == .decisionRequired || self == .completed || self == .cancelled || self == .failed
     }
 }
 
@@ -64,7 +65,9 @@ struct WorkerLifecycleState: Equatable {
     private(set) var conversionResult: ConversionResult?
     private(set) var failureMessage: String?
     private(set) var failureDetails: String?
+    private(set) var failureCode: String?
     private(set) var failureRetryable = false
+    private(set) var recoveryDecision: WorkerDecision?
 
     mutating func selectSource(_ sourceURL: URL) {
         self.sourceURL = sourceURL
@@ -152,16 +155,22 @@ struct WorkerLifecycleState: Equatable {
             }
             failureMessage = failure.message
             failureDetails = failure.details
+            failureCode = failure.code
             failureRetryable = failure.retryable
             phase = .failed
         case .jobCancelled:
             activityMessage = event.payload.message ?? (operationKind == .inspection ? "Analysis stopped." : "Conversion stopped.")
             phase = .cancelled
         case .jobDecisionRequired:
-            failureMessage = event.payload.decision?.prompt ?? event.payload.message ?? "This source needs a choice before it can continue."
-            failureDetails = event.payload.decision?.details ?? "Adjust the conversion settings and try again."
+            guard let decision = event.payload.decision else {
+                throw WorkerLifecycleError.missingPayload(event: event.type)
+            }
+            recoveryDecision = decision
+            failureMessage = decision.prompt
+            failureDetails = decision.details ?? "Choose how this conversion should continue."
+            failureCode = decision.identifier
             failureRetryable = true
-            phase = .failed
+            phase = .decisionRequired
         }
     }
 
@@ -176,7 +185,9 @@ struct WorkerLifecycleState: Equatable {
     mutating func failTransport(message: String, details: String? = nil, retryable: Bool = true) {
         failureMessage = message
         failureDetails = details
+        failureCode = nil
         failureRetryable = retryable
+        recoveryDecision = nil
         phase = .failed
     }
 
@@ -190,8 +201,19 @@ struct WorkerLifecycleState: Equatable {
             phase = .empty
             return
         }
+        let inspectionResult = operationKind == .conversion ? result : nil
         phase = .ready
         resetJobState()
+        result = inspectionResult
+    }
+
+    mutating func cancelRecoveryDecision() {
+        guard phase == .decisionRequired else {
+            return
+        }
+        recoveryDecision = nil
+        failureRetryable = false
+        phase = .failed
     }
 
     mutating func clear() {
@@ -209,6 +231,8 @@ struct WorkerLifecycleState: Equatable {
         conversionResult = nil
         failureMessage = nil
         failureDetails = nil
+        failureCode = nil
         failureRetryable = false
+        recoveryDecision = nil
     }
 }

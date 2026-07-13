@@ -28,5 +28,6 @@ runtime and conversion engine with:
 uv run python scripts/native_app.py package
 ```
 
-The native application targets macOS 27 and uses the current platform controls,
-materials, and accessibility behavior as its native-shell baseline.
+The native application targets Apple Silicon macOS 26 or later while remaining
+buildable with the Xcode 27 SDK. Packaged release validation rejects a native
+binary, embedded engine, or bundled Mach-O that requires a newer system.
