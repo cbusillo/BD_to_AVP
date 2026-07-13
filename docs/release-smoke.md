@@ -116,10 +116,10 @@ With MakeMKV installed:
    conversion smoke and record the first failing stage, logs, runtime, and
    whether output files are created.
 
-### Physical-Disc RC Smoke
+### Physical-Disc Beta Smoke
 
-Complete this section on real hardware before promoting a physical-disc release
-candidate. A VM without an attached optical drive is not sufficient.
+Complete this section on real hardware during the physical-disc beta cycle. A
+VM without an attached optical drive is not sufficient.
 
 1. Connect a USB Blu-ray drive, preferably through a powered hub, install
    MakeMKV, and insert a known 3D Blu-ray disc.
@@ -156,7 +156,7 @@ way so device, permission, AACS, and media-read failures can be distinguished.
 - The app's bundled tools are used where expected.
 - Missing MakeMKV produces a clear recovery path.
 - Installing MakeMKV clears the MakeMKV preflight blocker.
-- A physical-disc RC passes inspection, cancellation/eject, automatic
+- The physical-disc beta passes inspection, cancellation/eject, automatic
   insertion/ejection refresh, and at least one recorded real-disc conversion
   attempt on supported hardware.
 - A recoverable MakeMKV or subtitle failure presents explicit actions and never

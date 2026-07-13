@@ -14,6 +14,7 @@ from scripts.native_app import (
     NATIVE_BUNDLE_IDENTIFIER,
     NATIVE_EXECUTABLE_NAME,
     NATIVE_MINIMUM_SYSTEM_VERSION,
+    NATIVE_PRERELEASE_VERSION,
     NATIVE_PRODUCT_NAME,
     NATIVE_SHORT_VERSION,
 )
@@ -67,15 +68,20 @@ def load_workflow() -> dict:
 
 class NativePreviewIdentityTests(unittest.TestCase):
     def test_preview_release_identity_is_derived_and_non_production(self) -> None:
-        self.assertEqual(PREVIEW_RELEASE_METADATA.release_tag, f"native-ui-preview-{NATIVE_BUILD_VERSION}")
+        self.assertEqual(PREVIEW_RELEASE_METADATA.prerelease_version, NATIVE_PRERELEASE_VERSION)
+        self.assertEqual(PREVIEW_RELEASE_METADATA.release_tag, f"v{NATIVE_PRERELEASE_VERSION}")
+        self.assertRegex(
+            PREVIEW_RELEASE_METADATA.release_tag,
+            r"^v\d+\.\d+\.\d+-(?:alpha|beta|rc)\.[1-9]\d*$",
+        )
         self.assertEqual(
             PREVIEW_RELEASE_METADATA.release_name,
-            f"v{NATIVE_SHORT_VERSION} (Build {NATIVE_BUILD_VERSION}) — Native UI Preview",
+            f"v{NATIVE_SHORT_VERSION} Beta 1 — Native UI Preview",
         )
         self.assertTrue(PREVIEW_RELEASE_METADATA.release_name.startswith(f"v{NATIVE_SHORT_VERSION} "))
         self.assertEqual(
             PREVIEW_RELEASE_METADATA.dmg_name,
-            f"3D-Blu-ray-to-Vision-Pro-Native-Preview-{NATIVE_SHORT_VERSION}-{NATIVE_BUILD_VERSION}.dmg",
+            f"3D-Blu-ray-to-Vision-Pro-Native-Preview-{NATIVE_PRERELEASE_VERSION}.dmg",
         )
         self.assertEqual(PREVIEW_RELEASE_METADATA.app_name, NATIVE_APP_NAME)
         self.assertNotEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp")
@@ -95,6 +101,10 @@ class NativePreviewIdentityTests(unittest.TestCase):
             create_preview_release_metadata(short_version="0.3")
         with self.assertRaisesRegex(NativePreviewReleaseError, "positive integer"):
             create_preview_release_metadata(build_version="0")
+        with self.assertRaisesRegex(NativePreviewReleaseError, "prerelease version"):
+            create_preview_release_metadata(prerelease_version="0.3.0")
+        with self.assertRaisesRegex(NativePreviewReleaseError, "short version"):
+            create_preview_release_metadata(prerelease_version="0.4.0-beta.1")
 
     def test_verify_dmg_accepts_native_and_tool_smoke_flags(self) -> None:
         args = parse_args(
@@ -266,6 +276,8 @@ class NativePreviewWorkflowTests(unittest.TestCase):
         self.assertEqual(package["permissions"]["contents"], "read")
         self.assertIn("refs/heads/main", str(prepare))
         self.assertIn("refs/remotes/origin/main", str(prepare))
+        self.assertIn("semantic prerelease identifier", str(prepare))
+        self.assertNotIn("outside the production semver namespace", str(prepare))
         self.assertIn("Xcode 27", str(package))
         self.assertIn("XCODEGEN_VERSION", str(workflow))
         self.assertIn("sw_vers", str(package))

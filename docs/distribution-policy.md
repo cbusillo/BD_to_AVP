@@ -76,13 +76,15 @@ document it as an external dependency with preflight behavior.
   production app and does not enter either Sparkle channel, GitHub latest, or
   PyPI. The first native production-replacement candidate is reserved for the
   `0.3.0rc1` line after real conversion and updater prerequisites are complete.
-  Native UI previews are published by their own protected-main workflow using a
-  version-first title and tag derived from the committed, monotonically
-  increasing native build number. Version `0.3.0` build `1` uses title
-  `v0.3.0 (Build 1) — Native UI Preview` and tag `native-ui-preview-1`. The lane
-  uses a dedicated macOS 27/Xcode 27 release runner to build a macOS 26-targeted
-  app, then verifies the notarized DMG on a macOS 26 runner before publication.
-  Its exact two-asset allowlist is the notarized DMG and `SHA256SUMS`.
+  Native UI prereleases are published by their own protected-main workflow with
+  an explicit semantic prerelease identity while retaining a monotonically
+  increasing native build number. Historical build `1` keeps its immutable tag
+  `native-ui-preview-1` and is identified as `v0.3.0 Alpha 1 — Native UI
+  Preview`. Build `2` is `v0.3.0 Beta 1 — Native UI Preview` with tag
+  `v0.3.0-beta.1`. The lane uses a dedicated macOS 27/Xcode 27 release runner to
+  build a macOS 26-targeted app, then verifies the notarized DMG on a macOS 26
+  runner before publication. Its exact two-asset allowlist is the notarized DMG
+  and `SHA256SUMS`.
 - PKG artifact policy is tracked in #118. Until that issue decides otherwise,
   PKG output is not the normal-user release path.
 - Homebrew distribution for CLI users is tracked in #119.

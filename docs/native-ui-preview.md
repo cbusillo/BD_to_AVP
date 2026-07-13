@@ -1,6 +1,6 @@
-This is an opt-in preview of the new native macOS interface for 3D Blu-ray to
-Vision Pro. It installs beside the current production app and does not replace
-or update it.
+This is **v0.3.0 Beta 1**, an opt-in preview of the new native macOS interface
+for 3D Blu-ray to Vision Pro. It installs beside the current production app and
+does not replace or update it.
 
 ## What To Try
 
@@ -30,15 +30,15 @@ or update it.
   preview and remains available only in the production app.
 - Native conversion currently creates the full movie. Short sample outputs are
   not yet available.
-- This preview has no automatic updater. Future preview builds must be
+- This beta has no automatic updater. Future prerelease builds must be
   downloaded manually.
 - Live playback of a file while it is still being generated is not supported.
   Finalized preview playback is planned separately.
 - MakeMKV remains an external dependency for physical discs, Blu-ray folders,
   and disc images. The source workspace links to the official download page when
   MakeMKV is missing.
-- The preview supports Apple Silicon and macOS 26 or later. macOS 25 and earlier
-  are not supported by this release candidate.
+- Beta 1 supports Apple Silicon and macOS 26 or later. macOS 25 and earlier are
+  not supported.
 
 Please report interface feedback in issue #202, including the source workflow,
 window size, appearance, and any controls or terminology that were unclear.
