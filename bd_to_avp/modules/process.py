@@ -42,9 +42,11 @@ class BatchProcessingError(Exception):
 
 
 class ActivityReporter(Protocol):
-    def stage_started(self, stage: str, message: str) -> None: ...
+    def stage_started(self, stage: str, message: str) -> None:
+        raise NotImplementedError
 
-    def log(self, message: str, *, stage: str | None = None, **fields: object) -> None: ...
+    def log(self, message: str, *, stage: str | None = None, **fields: object) -> None:
+        raise NotImplementedError
 
 
 def raise_if_cancelled(cancellation_event: Event | None) -> None:
