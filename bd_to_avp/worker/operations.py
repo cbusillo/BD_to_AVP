@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 
 from contextlib import contextmanager
@@ -95,7 +96,12 @@ def run_operation(
 def inspect_source(source: JobSource, owner: WorkerProcessOwner) -> dict[str, object]:
     source_path = validate_source(source)
     if (
-        source.kind in {WorkerSourceKind.DISC_IMAGE, WorkerSourceKind.BLU_RAY_FOLDER}
+        source.kind
+        in {
+            WorkerSourceKind.DISC_IMAGE,
+            WorkerSourceKind.BLU_RAY_FOLDER,
+            WorkerSourceKind.PHYSICAL_DISC,
+        }
         and not config.MAKEMKVCON_PATH.is_file()
     ):
         raise WorkerOperationError(
@@ -119,9 +125,15 @@ def inspect_source(source: JobSource, owner: WorkerProcessOwner) -> dict[str, ob
         if owner.cancellation_event.is_set():
             raise WorkerCancelled("The source inspection was cancelled.") from error
         details = error.output if isinstance(error.output, str) else None
+        message = (
+            "MakeMKV could not read the selected Blu-ray disc. Confirm it is inserted, "
+            "wait for the drive to finish spinning up, and try again."
+            if source.kind is WorkerSourceKind.PHYSICAL_DISC
+            else "MakeMKV could not inspect the selected Blu-ray source."
+        )
         raise WorkerOperationError(
             "disc_inspection_failed",
-            "MakeMKV could not inspect the selected Blu-ray source.",
+            message,
             details,
             retryable=True,
         ) from error
@@ -250,7 +262,7 @@ def configured_source(source: JobSource, source_path: Path) -> Iterator[None]:
     previous_source_str = config.source_str
     previous_source_folder_path = config.source_folder_path
     try:
-        config.source_path = source_path
+        config.source_path = None if source.kind is WorkerSourceKind.PHYSICAL_DISC else source_path
         config.source_str = makemkv_source(source.kind, source_path)
         config.source_folder_path = None
         yield
@@ -269,7 +281,7 @@ def configured_conversion(job: JobSpec, source_path: Path) -> Iterator[None]:
     environment_snapshot = {key: os.environ.get(key) for key in TOOL_ENVIRONMENT_KEYS}
     try:
         config.source_str = makemkv_source(job.source.kind, source_path)
-        config.source_path = source_path
+        config.source_path = None if job.source.kind is WorkerSourceKind.PHYSICAL_DISC else source_path
         config.source_folder_path = None
         config.output_root_path = job.destination.path
         config.overwrite = job.job.overwrite
@@ -284,7 +296,7 @@ def configured_conversion(job: JobSpec, source_path: Path) -> Iterator[None]:
         config.resolution = job.encoding.resolution
         config.keep_files = job.job.keep_files
         config.start_stage = Stage.get_stage(job.job.start_stage)
-        config.remove_original = job.job.remove_original
+        config.remove_original = False if job.source.kind is WorkerSourceKind.PHYSICAL_DISC else job.job.remove_original
         config.swap_eyes = job.encoding.swap_eyes
         config.skip_subtitles = job.encoding.skip_subtitles
         config.crop_black_bars = job.encoding.crop_black_bars
@@ -308,6 +320,20 @@ def configured_conversion(job: JobSpec, source_path: Path) -> Iterator[None]:
 
 def validate_source(source: JobSource) -> Path:
     source_path = source.path
+    if source.kind is WorkerSourceKind.PHYSICAL_DISC:
+        if not physical_disc_device_path_is_valid(source_path):
+            raise WorkerOperationError(
+                "source_kind_mismatch",
+                "Physical-disc sources must use a macOS device path such as /dev/disk4.",
+            )
+        if not physical_disc_device_is_available(source_path):
+            raise WorkerOperationError(
+                "disc_unavailable",
+                "The selected Blu-ray disc is no longer available. Reinsert it and try again.",
+                retryable=True,
+            )
+        return source_path
+
     if not source_path.exists():
         raise WorkerOperationError("source_not_found", "The selected source no longer exists.")
 
@@ -336,6 +362,27 @@ def validate_source(source: JobSource) -> Path:
     return blu_ray_root
 
 
+def physical_disc_device_path_is_valid(source_path: Path) -> bool:
+    device_name = source_path.name
+    if source_path.parent != Path("/dev"):
+        return False
+    if device_name.startswith("rdisk"):
+        identifier = device_name.removeprefix("rdisk")
+    elif device_name.startswith("disk"):
+        identifier = device_name.removeprefix("disk")
+    else:
+        return False
+    return identifier.isdecimal()
+
+
+def physical_disc_device_is_available(source_path: Path) -> bool:
+    try:
+        mode = source_path.stat().st_mode
+    except OSError:
+        return False
+    return stat.S_ISBLK(mode) or stat.S_ISCHR(mode)
+
+
 def normalize_blu_ray_root(source_path: Path) -> Path | None:
     if not source_path.is_dir():
         return None
@@ -349,6 +396,8 @@ def normalize_blu_ray_root(source_path: Path) -> Path | None:
 
 
 def makemkv_source(source_kind: WorkerSourceKind, source_path: Path) -> str | None:
+    if source_kind is WorkerSourceKind.PHYSICAL_DISC:
+        return f"dev:{source_path}"
     if source_kind is WorkerSourceKind.DISC_IMAGE:
         return f"iso:{source_path}"
     if source_kind is WorkerSourceKind.BLU_RAY_FOLDER:

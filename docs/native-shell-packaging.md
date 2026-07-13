@@ -108,7 +108,7 @@ dispatch then removed after the job exits.
 
 The native shell does not yet replace the current `0.2.x` Briefcase/Sparkle
 release line. Native Start Processing supports inspected Blu-ray folders, ISO,
-MKV, MTS, and M2TS sources; physical disc, batch, interactive recovery, and the
+physical disc, MKV, MTS, and M2TS sources; batch, interactive recovery, and the
 native updater path still need release-level completion before promotion through
 the normal Release Candidates appcast.
 

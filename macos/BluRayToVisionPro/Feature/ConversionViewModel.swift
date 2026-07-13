@@ -119,7 +119,16 @@ final class ConversionViewModel: ObservableObject {
               FileManager.default.fileExists(atPath: draft.source.url.path)
         else {
             state.failTransport(
-                message: "Conversion requires an existing Blu-ray folder, ISO, MKV, MTS, or M2TS source.",
+                message: "Conversion requires an inserted Blu-ray disc or existing Blu-ray folder, ISO, MKV, MTS, or M2TS source.",
+                retryable: false
+            )
+            return
+        }
+        if draft.source.kind == .physicalDisc,
+           Self.isInsideSourceVolume(draft.destinationURL, sourceURL: draft.source.url)
+        {
+            state.failTransport(
+                message: "Choose a destination outside the Blu-ray disc.",
                 retryable: false
             )
             return
@@ -187,6 +196,20 @@ final class ConversionViewModel: ObservableObject {
         diagnosticLog = ""
     }
 
+    func sourceVolumeDidUnmount(_ volumeURL: URL) {
+        guard let source,
+              source.kind == .physicalDisc,
+              source.url == volumeURL.standardizedFileURL
+        else {
+            return
+        }
+        if hasActiveWorker {
+            stopActiveWorker()
+        } else {
+            clearSource()
+        }
+    }
+
     func stopForQuit() async {
         guard let task = runTask else {
             return
@@ -212,7 +235,7 @@ final class ConversionViewModel: ObservableObject {
         }
         guard source.kind.supportsMetadataInspection else {
             state.failTransport(
-                message: "Choose a Blu-ray folder, ISO, MKV, MTS, or M2TS source.",
+                message: "Choose a Blu-ray disc, Blu-ray folder, ISO, MKV, MTS, or M2TS source.",
                 retryable: false
             )
             return
@@ -222,6 +245,13 @@ final class ConversionViewModel: ObservableObject {
             return
         }
         startInspection()
+    }
+
+    private static func isInsideSourceVolume(_ destinationURL: URL, sourceURL: URL) -> Bool {
+        let destinationPath = destinationURL.standardizedFileURL.path
+        let sourcePath = sourceURL.standardizedFileURL.path
+        let sourcePrefix = sourcePath.hasSuffix("/") ? sourcePath : "\(sourcePath)/"
+        return destinationPath == sourcePath || destinationPath.hasPrefix(sourcePrefix)
     }
 
     private func receive(_ event: WorkerEvent) throws {

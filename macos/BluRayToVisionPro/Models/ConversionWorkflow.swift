@@ -128,7 +128,7 @@ struct AppCapabilities: Equatable {
     )
 
     var conversionUnavailableReason: String {
-        "Conversion requires a Blu-ray folder, ISO, MKV, MTS, or M2TS source."
+        "Conversion requires a Blu-ray disc, Blu-ray folder, ISO, MKV, MTS, or M2TS source."
     }
 
     var automaticUpdatesUnavailableReason: String {

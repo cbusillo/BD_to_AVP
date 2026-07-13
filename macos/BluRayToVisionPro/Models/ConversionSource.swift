@@ -1,3 +1,4 @@
+import DiskArbitration
 import Foundation
 
 enum ConversionSourceKind: String, CaseIterable, Identifiable {
@@ -45,11 +46,15 @@ enum ConversionSourceKind: String, CaseIterable, Identifiable {
     }
 
     var supportsMetadataInspection: Bool {
-        self == .discImage || self == .bluRayFolder || self == .matroska || self == .transportStream
+        self == .physicalDisc
+            || self == .discImage
+            || self == .bluRayFolder
+            || self == .matroska
+            || self == .transportStream
     }
 
     var supportsConversion: Bool {
-        self == .discImage || self == .bluRayFolder || self == .matroska || self == .transportStream
+        supportsMetadataInspection
     }
 
     var isDiscWorkflow: Bool {
@@ -78,14 +83,21 @@ struct ConversionSource: Equatable {
     let kind: ConversionSourceKind
     let url: URL
     let displayName: String
+    let workerSourcePath: String
 
-    init(kind: ConversionSourceKind, url: URL, displayName: String? = nil) {
+    init(
+        kind: ConversionSourceKind,
+        url: URL,
+        displayName: String? = nil,
+        workerSourcePath: String? = nil
+    ) {
         let normalizedURL = kind == .bluRayFolder
             ? DiscSourceDetector.bluRayRoot(for: url) ?? url.standardizedFileURL
             : url.standardizedFileURL
         self.kind = kind
         self.url = normalizedURL
         self.displayName = displayName ?? Self.defaultDisplayName(for: normalizedURL)
+        self.workerSourcePath = workerSourcePath ?? normalizedURL.path
     }
 
     var proposedOutputStem: String {
@@ -147,19 +159,39 @@ enum DiscSourceDetector {
         return insertedDiscs(in: volumes, fileManager: fileManager)
     }
 
-    static func insertedDiscs(in volumes: [URL], fileManager: FileManager = .default) -> [ConversionSource] {
+    static func insertedDiscs(
+        in volumes: [URL],
+        fileManager: FileManager = .default,
+        devicePathResolver: (URL) -> String? = physicalDevicePath(for:)
+    ) -> [ConversionSource] {
         volumes.compactMap { volumeURL in
-            guard isBluRayFolder(volumeURL, fileManager: fileManager) else {
+            guard isBluRayFolder(volumeURL, fileManager: fileManager),
+                  let devicePath = devicePathResolver(volumeURL)
+            else {
                 return nil
             }
             let values = try? volumeURL.resourceValues(forKeys: [.volumeNameKey])
             return ConversionSource(
                 kind: .physicalDisc,
                 url: volumeURL,
-                displayName: values?.volumeName ?? volumeURL.lastPathComponent
+                displayName: values?.volumeName ?? volumeURL.lastPathComponent,
+                workerSourcePath: devicePath
             )
         }
         .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    private static func physicalDevicePath(for volumeURL: URL) -> String? {
+        guard let session = DASessionCreate(kCFAllocatorDefault),
+              let disk = DADiskCreateFromVolumePath(kCFAllocatorDefault, session, volumeURL as CFURL)
+        else {
+            return nil
+        }
+        let wholeDisk = DADiskCopyWholeDisk(disk) ?? disk
+        guard let deviceName = DADiskGetBSDName(wholeDisk) else {
+            return nil
+        }
+        return "/dev/\(String(cString: deviceName))"
     }
 
     static func isBluRayFolder(_ url: URL, fileManager: FileManager = .default) -> Bool {

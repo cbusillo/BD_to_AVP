@@ -108,12 +108,38 @@ With MakeMKV installed:
    conversion smoke and record the first failing stage, logs, runtime, and
    whether output files are created.
 
+### Physical-Disc RC Smoke
+
+Complete this section on real hardware before promoting a physical-disc release
+candidate. A VM without an attached optical drive is not sufficient.
+
+1. Connect a USB Blu-ray drive, preferably through a powered hub, install
+   MakeMKV, and insert a known 3D Blu-ray disc.
+2. Confirm the app detects the disc without relaunching. Select it and confirm
+   metadata inspection completes through MakeMKV.
+3. Start conversion, wait until MakeMKV is actively reading the disc, then press
+   Stop. Confirm processing exits and Finder can eject the disc without a reboot.
+4. Reinsert the disc and complete a conversion, or record the first failing
+   stage, the activity log, drive model, connection type, and whether the drive
+   disconnected or spun down.
+5. Eject the selected disc while the app is idle. Confirm the stale selection is
+   cleared, then reinsert it and confirm it reappears automatically.
+6. Confirm “Remove original after success” is unavailable for the physical disc
+   and that the selected output folder is outside the mounted disc volume.
+
+If the drive drops offline during heavy seeking, repeat once with a powered hub
+before classifying the failure as an app defect. Preserve the activity log either
+way so device, permission, AACS, and media-read failures can be distinguished.
+
 ## Pass Criteria
 
 - No Homebrew or admin setup is required for GUI launch.
 - The app's bundled tools are used where expected.
 - Missing MakeMKV produces a clear recovery path.
 - Installing MakeMKV clears the MakeMKV preflight blocker.
+- A physical-disc RC passes inspection, cancellation/eject, automatic
+  insertion/ejection refresh, and at least one recorded real-disc conversion
+  attempt on supported hardware.
 - Any remaining missing bundled tool is recorded as a release blocker or linked
   to a follow-up issue. A reinstall-app message for a tool that is not part of
   the app bundle is a blocker, because reinstalling the current app will not add
