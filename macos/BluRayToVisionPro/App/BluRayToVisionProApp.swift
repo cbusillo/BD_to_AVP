@@ -64,10 +64,10 @@ struct BluRayToVisionProApp: App {
         guard viewModel.canSelectSource else {
             return
         }
-        guard let source = SourcePicker.chooseExistingSource() else {
+        guard let sourceURL = SourcePicker.chooseExistingSource() else {
             return
         }
-        viewModel.selectSource(source)
+        viewModel.selectSource(sourceURL)
     }
 }
 

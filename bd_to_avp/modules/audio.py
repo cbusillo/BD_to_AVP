@@ -19,6 +19,7 @@ def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int,
 
 def create_transcoded_audio_file(original_audio_path: Path, output_folder: Path) -> Path:
     transcoded_audio_path = output_folder / f"{output_folder.stem}_audio_AAC.m4a"
+    legacy_transcoded_audio_path = output_folder / f"{output_folder.stem}_audio_AAC.mov"
     direct_audio_transcode = is_direct_audio_transcode_enabled()
 
     if config.transcode_audio and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
@@ -36,6 +37,11 @@ def create_transcoded_audio_file(original_audio_path: Path, output_folder: Path)
 
     if config.transcode_audio and transcoded_audio_path.exists():
         return transcoded_audio_path
+    if config.transcode_audio and legacy_transcoded_audio_path.exists():
+        raise FileNotFoundError(
+            "Legacy AAC audio artifact found. Restart from Transcode Audio to regenerate a compatible M4A file: "
+            f"{legacy_transcoded_audio_path}"
+        )
     if direct_audio_transcode and config.transcode_audio:
         raise FileNotFoundError(f"Direct AAC audio artifact not found: {transcoded_audio_path}")
     return original_audio_path

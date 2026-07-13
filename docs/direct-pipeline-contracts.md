@@ -65,6 +65,9 @@ named restartable file.
 - Output: `<folder>_audio_AAC.m4a` when enabled. The MPEG-4 audio container
   preserves AAC decoder configuration when MP4Box imports the tracks into the
   final spatial movie.
+- Older builds wrote `<folder>_audio_AAC.mov`. A resume directory containing
+  only that legacy artifact must restart from `TRANSCODE_AUDIO` so the app can
+  regenerate a compatible M4A instead of attempting an unsafe final mux.
 - Restart/debug value: medium. This is the final mux input and useful for audio
   debugging.
 

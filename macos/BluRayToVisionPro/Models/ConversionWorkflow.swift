@@ -128,7 +128,7 @@ struct AppCapabilities: Equatable {
     )
 
     var conversionUnavailableReason: String {
-        "Conversion requires an MKV, MTS, or M2TS source."
+        "Conversion requires an ISO, MKV, MTS, or M2TS source."
     }
 
     var automaticUpdatesUnavailableReason: String {

@@ -41,6 +41,38 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testUnsupportedSelectionClearsPreviouslyInspectedSource() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let validSourceURL = directoryURL.appendingPathComponent("Feature.mkv")
+        let unsupportedSourceURL = directoryURL.appendingPathComponent("Feature.img")
+        _ = FileManager.default.createFile(atPath: validSourceURL.path, contents: Data("video".utf8))
+        _ = FileManager.default.createFile(atPath: unsupportedSourceURL.path, contents: Data("disc".utf8))
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let inspectionDone = expectation(description: "inspection done")
+        let viewModel = ConversionViewModel {
+            TwoPhaseWorkerClient(onInspectionComplete: { inspectionDone.fulfill() })
+        }
+
+        viewModel.selectSource(validSourceURL)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        XCTAssertNotNil(viewModel.state.result)
+
+        viewModel.selectSource(unsupportedSourceURL)
+
+        XCTAssertNil(viewModel.source)
+        XCTAssertNil(viewModel.state.result)
+        XCTAssertEqual(viewModel.state.phase, .failed)
+        XCTAssertEqual(
+            viewModel.state.failureMessage,
+            "Choose a 3D Blu-ray disc, ISO, Blu-ray folder, MKV, MTS, or M2TS source."
+        )
+    }
+
+    @MainActor
     func testDiscImageSelectionStartsInspection() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 enum SourcePicker {
     @MainActor
-    static func chooseExistingSource() -> ConversionSource? {
+    static func chooseExistingSource() -> URL? {
         let panel = NSOpenPanel()
         panel.title = "Open a 3D Blu-ray Source"
         panel.prompt = "Open Source"
@@ -15,7 +15,7 @@ enum SourcePicker {
         guard panel.runModal() == .OK, let url = panel.url else {
             return nil
         }
-        return ConversionSource.infer(from: url)
+        return url.standardizedFileURL
     }
 
     @MainActor

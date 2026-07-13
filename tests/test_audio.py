@@ -153,6 +153,28 @@ class DirectAudioTranscodeTests(unittest.TestCase):
             ):
                 audio.create_transcoded_audio_file(source_path, output_folder)
 
+    def test_final_mux_resume_rejects_legacy_aac_mov_with_recovery_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_path = temp_path / "source.mkv"
+            output_folder = temp_path / "Movie"
+            source_path.write_bytes(b"source")
+            output_folder.mkdir()
+            legacy_aac_path = output_folder / "Movie_audio_AAC.mov"
+            legacy_aac_path.write_bytes(b"legacy-aac")
+
+            with (
+                patch.object(audio.config, "transcode_audio", True),
+                patch.object(audio.config, "keep_files", False),
+                patch.object(audio.config, "remove_extra_languages", False),
+                patch.object(audio.config, "start_stage", Stage.CREATE_FINAL_FILE),
+                patch.object(audio.config, "audio_bitrate", 384),
+                self.assertRaisesRegex(FileNotFoundError, "Restart from Transcode Audio"),
+            ):
+                audio.create_transcoded_audio_file(source_path, output_folder)
+
+            self.assertTrue(legacy_aac_path.exists())
+
     def test_transcode_disabled_returns_original_audio(self) -> None:
         original_audio_path = Path("Movie_audio_PCM.mov")
         with (

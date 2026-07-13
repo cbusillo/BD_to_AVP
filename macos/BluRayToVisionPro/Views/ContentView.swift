@@ -465,10 +465,10 @@ struct ContentView: View {
     }
 
     private func chooseExistingSource() {
-        guard viewModel.canSelectSource, let source = SourcePicker.chooseExistingSource() else {
+        guard viewModel.canSelectSource, let sourceURL = SourcePicker.chooseExistingSource() else {
             return
         }
-        selectSource(source)
+        viewModel.selectSource(sourceURL)
     }
 
     private func chooseFile(_ kind: ConversionSourceKind) {
