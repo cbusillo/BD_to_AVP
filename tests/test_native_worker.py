@@ -14,8 +14,9 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from bd_to_avp.modules.config import config
+from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
 from bd_to_avp.worker.__main__ import run_worker
-from bd_to_avp.worker.operations import WorkerOperationError, convert_source, inspect_source
+from bd_to_avp.worker.operations import WorkerDecisionRequired, WorkerOperationError, convert_source, inspect_source
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
     MAX_EVENT_BYTES,
@@ -446,29 +447,108 @@ class SourceInspectionTests(unittest.TestCase):
             source_path = Path(temporary_directory) / "movie.mp4"
             source_path.touch()
 
-            with self.assertRaisesRegex(WorkerOperationError, "supports MKV, MTS, and M2TS"):
+            with self.assertRaisesRegex(WorkerOperationError, "supports ISO, MKV, MTS, and M2TS"):
                 inspect_source(source_path, WorkerProcessOwner())
+
+    def test_inspects_iso_with_makemkv_disc_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.iso"
+            source_path.write_bytes(b"disc")
+            fake_makemkv = temporary_path / "makemkvcon"
+            fake_makemkv.touch()
+
+            with (
+                patch.object(config, "MAKEMKVCON_PATH", fake_makemkv),
+                patch(
+                    "bd_to_avp.worker.operations.get_disc_and_mvc_video_info",
+                    return_value=DiscInfo(
+                        name="Feature 3D",
+                        resolution="1920x1080",
+                        frame_rate="24000/1001",
+                    ),
+                ),
+            ):
+                result = inspect_source(source_path, WorkerProcessOwner())
+
+            self.assertEqual(result["name"], "Feature 3D")
+            self.assertEqual(result["resolution"], "1920x1080")
+            self.assertEqual(result["frame_rate"], "24000/1001")
+            self.assertEqual(result["size_bytes"], 4)
+
+    def test_iso_inspection_requires_makemkv(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source_path = Path(temporary_directory) / "movie.iso"
+            source_path.touch()
+
+            with (
+                patch.object(config, "MAKEMKVCON_PATH", Path(temporary_directory) / "missing-makemkvcon"),
+                self.assertRaises(WorkerOperationError) as context,
+            ):
+                inspect_source(source_path, WorkerProcessOwner())
+
+            self.assertEqual(context.exception.code, "makemkv_missing")
+            self.assertTrue(context.exception.retryable)
 
 
 class SourceConversionTests(unittest.TestCase):
-    def test_rejects_disc_iso_and_folder_sources(self) -> None:
-        for name in ("movie.iso", "BDMV"):
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary_directory:
-                temporary_path = Path(temporary_directory)
-                source_path = temporary_path / name
-                if name == "BDMV":
-                    source_path.mkdir()
-                else:
-                    source_path.touch()
-                destination_path = temporary_path / "output"
-                job = JobSpec.from_json_line(conversion_request_line(source_path, destination_path))
-                emitter = WorkerEventEmitter(io.StringIO(), job.job_id)
-                activity = WorkerActivityReporter(emitter)
+    def test_rejects_folder_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "BDMV"
+            source_path.mkdir()
+            destination_path = temporary_path / "output"
+            job = JobSpec.from_json_line(conversion_request_line(source_path, destination_path))
+            emitter = WorkerEventEmitter(io.StringIO(), job.job_id)
+            activity = WorkerActivityReporter(emitter)
 
-                with self.assertRaises(WorkerOperationError) as context:
-                    convert_source(job, WorkerProcessOwner(), activity)
+            with self.assertRaises(WorkerOperationError) as context:
+                convert_source(job, WorkerProcessOwner(), activity)
 
-                self.assertIn(context.exception.code, {"unsupported_source", "source_not_file"})
+            self.assertEqual(context.exception.code, "source_not_file")
+
+    def test_iso_conversion_passes_source_to_existing_engine(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.iso"
+            source_path.write_bytes(b"disc")
+            destination_path = temporary_path / "output"
+            final_path = destination_path / "movie_AVP.mov"
+            final_path.parent.mkdir()
+            final_path.write_bytes(b"final")
+            job = JobSpec.from_json_line(conversion_request_line(source_path, destination_path))
+            emitter = WorkerEventEmitter(io.StringIO(), job.job_id)
+            activity = WorkerActivityReporter(emitter)
+
+            with (
+                patch.object(config, "configure_tool_environment"),
+                patch("bd_to_avp.modules.process.process_each", return_value=final_path) as process_each_mock,
+            ):
+                result = convert_source(job, WorkerProcessOwner(), activity)
+
+            self.assertEqual(result["output_path"], final_path.as_posix())
+            process_each_mock.assert_called_once()
+
+    def test_iso_makemkv_failure_requests_recovery_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.iso"
+            source_path.write_bytes(b"disc")
+            destination_path = temporary_path / "output"
+            job = JobSpec.from_json_line(conversion_request_line(source_path, destination_path))
+            emitter = WorkerEventEmitter(io.StringIO(), job.job_id)
+            activity = WorkerActivityReporter(emitter)
+
+            with (
+                patch.object(config, "configure_tool_environment"),
+                patch("bd_to_avp.modules.process.process_each", side_effect=MKVCreationError("read error")),
+                self.assertRaises(WorkerDecisionRequired) as context,
+            ):
+                convert_source(job, WorkerProcessOwner(), activity)
+
+            self.assertEqual(context.exception.code, "mkv_creation_decision_required")
+            self.assertEqual(context.exception.choices, ("retry_continue_on_error", "cancel"))
+            self.assertIn("Extract MVC and Audio", context.exception.details or "")
 
     def test_conversion_restores_global_config_and_tool_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

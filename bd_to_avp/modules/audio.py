@@ -18,11 +18,11 @@ def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int,
 
 
 def create_transcoded_audio_file(original_audio_path: Path, output_folder: Path) -> Path:
-    transcoded_audio_path = output_folder / f"{output_folder.stem}_audio_AAC.mov"
+    transcoded_audio_path = output_folder / f"{output_folder.stem}_audio_AAC.m4a"
     direct_audio_transcode = is_direct_audio_transcode_enabled()
 
     if config.transcode_audio and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
-        temporary_audio_path = transcoded_audio_path.with_suffix(".part.mov")
+        temporary_audio_path = transcoded_audio_path.with_suffix(".part.m4a")
         audio_selector = "a:0" if direct_audio_transcode and config.remove_extra_languages else "a"
         try:
             transcode_audio(original_audio_path, temporary_audio_path, config.audio_bitrate, audio_selector)

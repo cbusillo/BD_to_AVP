@@ -5,7 +5,7 @@ import SwiftUI
 final class ConversionViewModel: ObservableObject {
     typealias ClientFactory = () throws -> any WorkerProcessRunning
 
-    static let supportedExtensions = Set(["mkv", "mts", "m2ts"])
+    static let supportedExtensions = Set(["iso", "mkv", "mts", "m2ts"])
 
     @Published private(set) var source: ConversionSource?
     @Published private(set) var state = WorkerLifecycleState()
@@ -122,7 +122,7 @@ final class ConversionViewModel: ObservableObject {
               FileManager.default.fileExists(atPath: draft.source.url.path)
         else {
             state.failTransport(
-                message: "Conversion requires an existing MKV, MTS, or M2TS source.",
+                message: "Conversion requires an existing ISO, MKV, MTS, or M2TS source.",
                 retryable: false
             )
             return
@@ -214,7 +214,7 @@ final class ConversionViewModel: ObservableObject {
             return
         }
         guard Self.supportedExtensions.contains(sourceURL.pathExtension.lowercased()) else {
-            state.failTransport(message: "Choose an MKV, MTS, or M2TS source file.", retryable: false)
+            state.failTransport(message: "Choose an ISO, MKV, MTS, or M2TS source file.", retryable: false)
             return
         }
         guard FileManager.default.fileExists(atPath: sourceURL.path) else {

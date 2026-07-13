@@ -67,7 +67,7 @@ enum SourcePicker {
     private static func pickerMessage(for kind: ConversionSourceKind) -> String {
         switch kind {
         case .discImage:
-            "Choose an ISO, IMG, or BIN disc image."
+            "Choose an ISO disc image."
         case .matroska:
             "Choose an existing 3D MKV file."
         case .transportStream:

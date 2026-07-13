@@ -62,7 +62,9 @@ named restartable file.
 
 - Input: source container in default AAC mode or PCM audio movie with
   `--keep-files`.
-- Output: `<folder>_audio_AAC.mov` when enabled.
+- Output: `<folder>_audio_AAC.m4a` when enabled. The MPEG-4 audio container
+  preserves AAC decoder configuration when MP4Box imports the tracks into the
+  final spatial movie.
 - Restart/debug value: medium. This is the final mux input and useful for audio
   debugging.
 
@@ -142,10 +144,10 @@ boundary during processing and are retained after completion with
 
 When AAC transcoding is enabled without `--keep-files`, the
 `TRANSCODE_AUDIO` stage reads audio from the MKV/MTS/M2TS source and writes the
-final AAC MOV directly. MVC video uses the same source container through the
+final AAC M4A directly. MVC video uses the same source container through the
 direct splitter pipeline.
 
-The final mux still needs a seekable audio file, so the AAC MOV remains
+The final mux still needs a seekable audio file, so the AAC M4A remains
 materialized. Durable mode and `--keep-files` retain the existing PCM boundary,
 and direct-mode resumes at `TRANSCODE_AUDIO` can recreate AAC from the source.
 As with durable resumes, video artifacts from earlier stages must already exist

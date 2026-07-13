@@ -31,8 +31,8 @@ class DirectAudioTranscodeTests(unittest.TestCase):
             ):
                 result = audio.create_transcoded_audio_file(source_path, output_folder)
 
-            final_path = output_folder / "Movie_audio_AAC.mov"
-            temporary_path = output_folder / "Movie_audio_AAC.part.mov"
+            final_path = output_folder / "Movie_audio_AAC.m4a"
+            temporary_path = output_folder / "Movie_audio_AAC.part.m4a"
             self.assertEqual(result, final_path)
             self.assertEqual(final_path.read_bytes(), b"aac")
             self.assertFalse(temporary_path.exists())
@@ -86,8 +86,8 @@ class DirectAudioTranscodeTests(unittest.TestCase):
                 audio.create_transcoded_audio_file(source_path, output_folder)
 
             self.assertTrue(source_path.exists())
-            self.assertFalse((output_folder / "Movie_audio_AAC.part.mov").exists())
-            self.assertFalse((output_folder / "Movie_audio_AAC.mov").exists())
+            self.assertFalse((output_folder / "Movie_audio_AAC.part.m4a").exists())
+            self.assertFalse((output_folder / "Movie_audio_AAC.m4a").exists())
 
     def test_keep_files_uses_durable_pcm_input(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -119,7 +119,7 @@ class DirectAudioTranscodeTests(unittest.TestCase):
             output_folder = temp_path / "Movie"
             source_path.write_bytes(b"source")
             output_folder.mkdir()
-            aac_path = output_folder / "Movie_audio_AAC.mov"
+            aac_path = output_folder / "Movie_audio_AAC.m4a"
             aac_path.write_bytes(b"aac")
 
             with (

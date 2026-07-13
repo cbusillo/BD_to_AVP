@@ -42,13 +42,16 @@ final class ConversionWorkflowTests: XCTestCase {
     func testSourceInferencePreservesProductHierarchy() throws {
         try withTemporaryDirectory { directoryURL in
             let imageURL = directoryURL.appendingPathComponent("Feature.iso")
+            let unsupportedImageURL = directoryURL.appendingPathComponent("Feature.img")
             let mkvURL = directoryURL.appendingPathComponent("Feature.mkv")
             let streamURL = directoryURL.appendingPathComponent("Feature.m2ts")
             _ = FileManager.default.createFile(atPath: imageURL.path, contents: Data())
+            _ = FileManager.default.createFile(atPath: unsupportedImageURL.path, contents: Data())
             _ = FileManager.default.createFile(atPath: mkvURL.path, contents: Data())
             _ = FileManager.default.createFile(atPath: streamURL.path, contents: Data())
 
             XCTAssertEqual(ConversionSource.infer(from: imageURL)?.kind, .discImage)
+            XCTAssertNil(ConversionSource.infer(from: unsupportedImageURL))
             XCTAssertEqual(ConversionSource.infer(from: mkvURL)?.kind, .matroska)
             XCTAssertEqual(ConversionSource.infer(from: streamURL)?.kind, .transportStream)
         }
@@ -70,14 +73,16 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertFalse(AppCapabilities.current.automaticUpdateChecksAvailable)
     }
 
-    func testMKVAndTransportStreamKindsSupportConversion() {
+    func testISOAndExistingFileKindsSupportConversion() {
+        XCTAssertTrue(ConversionSourceKind.discImage.supportsMetadataInspection)
+        XCTAssertTrue(ConversionSourceKind.discImage.supportsConversion)
+        XCTAssertEqual(ConversionSourceKind.discImage.allowedExtensions, ["iso"])
         XCTAssertTrue(ConversionSourceKind.matroska.supportsConversion)
         XCTAssertTrue(ConversionSourceKind.transportStream.supportsConversion)
     }
 
-    func testDiscAndFolderKindsDoNotSupportConversion() {
+    func testPhysicalDiscAndFolderKindsDoNotSupportConversion() {
         XCTAssertFalse(ConversionSourceKind.physicalDisc.supportsConversion)
-        XCTAssertFalse(ConversionSourceKind.discImage.supportsConversion)
         XCTAssertFalse(ConversionSourceKind.bluRayFolder.supportsConversion)
         XCTAssertFalse(ConversionSourceKind.sourceFolder.supportsConversion)
     }
