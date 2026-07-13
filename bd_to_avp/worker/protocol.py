@@ -34,6 +34,7 @@ class WorkerSourceKind(StrEnum):
     DIRECT_FILE = "direct_file"
     DISC_IMAGE = "disc_image"
     BLU_RAY_FOLDER = "blu_ray_folder"
+    PHYSICAL_DISC = "physical_disc"
 
 
 class WorkerEventType(StrEnum):
@@ -217,6 +218,12 @@ class JobSpec:
             )
             encoding = cls._parse_encoding(raw.get("encoding"), job_id)
             job_options = cls._parse_job_options(raw.get("job"), job_id)
+            if source_kind is WorkerSourceKind.PHYSICAL_DISC and job_options.remove_original:
+                raise WorkerProtocolError(
+                    "invalid_job_options",
+                    "job.remove_original must be false for physical discs.",
+                    job_id=job_id,
+                )
 
         return cls(
             protocol_version=protocol_version,

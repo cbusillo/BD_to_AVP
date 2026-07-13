@@ -79,6 +79,34 @@ class DiscStageArtifactTests(unittest.TestCase):
         self.assertFalse(disc.makemkv_source_supports_noscan("dev:/dev/rdisk4"))
         self.assertTrue(disc.makemkv_source_supports_noscan("file:/Movies/Feature"))
 
+    def test_disc_info_passes_device_source_to_makemkv_without_noscan(self) -> None:
+        makemkv_output = "\n".join(
+            [
+                'CINFO:2,0,"Physical 3D"',
+                'TINFO:0,9,0,"0:45:00"',
+                'SINFO:0,1,6,0,"Mpeg4-MVC-3D"',
+            ]
+        )
+        with (
+            patch.object(disc.config, "source_path", None),
+            patch.object(disc.config, "source_str", "dev:/dev/disk9"),
+            patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
+            patch.object(disc, "run_command", return_value=makemkv_output) as run_command,
+        ):
+            result = disc.get_disc_and_mvc_video_info()
+
+        self.assertEqual(result.name, "Physical 3D")
+        self.assertEqual(
+            run_command.call_args.args[0],
+            [
+                Path("/Applications/MakeMKV/makemkvcon"),
+                "--robot",
+                None,
+                "info",
+                "dev:/dev/disk9",
+            ],
+        )
+
     def test_keep_files_copies_mkv_source_to_output_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

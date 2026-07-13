@@ -177,23 +177,146 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testStartConversionForUnsupportedSourceKindDoesNotStartWorker() {
-        let viewModel = ConversionViewModel()
-        let discSource = ConversionSource(kind: .physicalDisc, url: URL(fileURLWithPath: "/Volumes/Disc"))
+    func testPhysicalDiscSelectionStartsInspectionAndConversion() async throws {
+        let inspectionDone = expectation(description: "inspection done")
+        let conversionStarted = expectation(description: "conversion started")
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { spec in
+                XCTAssertEqual(spec.source.kind, .physicalDisc)
+                XCTAssertEqual(spec.source.path, "/dev/disk9")
+                XCTAssertFalse(spec.job?.removeOriginal == true)
+                conversionStarted.fulfill()
+            }
+        )
+        let viewModel = ConversionViewModel { worker }
+        let volumeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: volumeURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: volumeURL) }
+        let discSource = ConversionSource(
+            kind: .physicalDisc,
+            url: volumeURL,
+            workerSourcePath: "/dev/disk9"
+        )
+
         viewModel.selectSource(discSource)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
 
         let draft = ConversionDraft(
             source: discSource,
-            sourceDetails: nil,
+            sourceDetails: viewModel.state.result,
             profile: BuiltInProfile.balanced.profile,
-            destinationURL: URL(fileURLWithPath: "/Movies"),
+            destinationURL: FileManager.default.temporaryDirectory,
             outputLength: .fullMovie,
             samplePosition: .beginning,
             options: ConversionOptions()
         )
         viewModel.startConversion(draft: draft)
 
+        await fulfillment(of: [conversionStarted], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        XCTAssertEqual(viewModel.state.phase, .completed)
+    }
+
+    @MainActor
+    func testPhysicalDiscConversionRejectsDestinationOnDisc() async throws {
+        let inspectionDone = expectation(description: "inspection done")
+        let viewModel = ConversionViewModel {
+            TwoPhaseWorkerClient(onInspectionComplete: { inspectionDone.fulfill() })
+        }
+        let volumeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: volumeURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: volumeURL) }
+        let discSource = ConversionSource(
+            kind: .physicalDisc,
+            url: volumeURL,
+            workerSourcePath: "/dev/disk9"
+        )
+
+        viewModel.selectSource(discSource)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        viewModel.startConversion(
+            draft: ConversionDraft(
+                source: discSource,
+                sourceDetails: viewModel.state.result,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: volumeURL.appendingPathComponent("Output", isDirectory: true),
+                outputLength: .fullMovie,
+                samplePosition: .beginning,
+                options: ConversionOptions()
+            )
+        )
+
         XCTAssertFalse(viewModel.hasActiveWorker)
+        XCTAssertEqual(viewModel.state.failureMessage, "Choose a destination outside the Blu-ray disc.")
+    }
+
+    @MainActor
+    func testUnmountedPhysicalDiscClearsIdleSelection() async throws {
+        let inspectionDone = expectation(description: "inspection done")
+        let viewModel = ConversionViewModel {
+            TwoPhaseWorkerClient(onInspectionComplete: { inspectionDone.fulfill() })
+        }
+        let volumeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: volumeURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: volumeURL) }
+
+        viewModel.selectSource(
+            ConversionSource(kind: .physicalDisc, url: volumeURL, workerSourcePath: "/dev/disk9")
+        )
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+
+        viewModel.sourceVolumeDidUnmount(volumeURL)
+
+        XCTAssertNil(viewModel.source)
+        XCTAssertEqual(viewModel.state.phase, .empty)
+    }
+
+    @MainActor
+    func testUnmountedPhysicalDiscStopsActiveConversion() async throws {
+        let inspectionDone = expectation(description: "inspection done")
+        let conversionStarted = expectation(description: "conversion started")
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { _ in conversionStarted.fulfill() },
+            waitsForConversionCancellation: true
+        )
+        let viewModel = ConversionViewModel { worker }
+        let volumeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: volumeURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: volumeURL) }
+        let source = ConversionSource(
+            kind: .physicalDisc,
+            url: volumeURL,
+            workerSourcePath: "/dev/disk9"
+        )
+
+        viewModel.selectSource(source)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        viewModel.startConversion(
+            draft: ConversionDraft(
+                source: source,
+                sourceDetails: viewModel.state.result,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: FileManager.default.temporaryDirectory,
+                outputLength: .fullMovie,
+                samplePosition: .beginning,
+                options: ConversionOptions()
+            )
+        )
+        await fulfillment(of: [conversionStarted], timeout: 2)
+
+        viewModel.sourceVolumeDidUnmount(volumeURL)
+
+        XCTAssertEqual(viewModel.state.phase, .stopping)
     }
 
     @MainActor
