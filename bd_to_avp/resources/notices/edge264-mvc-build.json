@@ -1,10 +1,10 @@
 {
   "repository": "https://github.com/jens-duttke/edge264-mvc.git",
-  "revision": "21723ed9e712408f1083a6397e6cd0dc89ea16d7",
+  "revision": "a64336a5dbeff07a5b3c31bb710991d331ebc406",
   "patch": "scripts/patches/edge264-mvc-stream-input.patch",
   "patch_sha256": "85ae96c558ad50483f60d94160834ad227299b4f805275dbcdf8680d85387962",
   "platform": "macOS arm64",
   "minimum_macos": "14.0",
   "linkage": "static",
-  "sha256": "c244a4b53aa2b895aa11449e3755aa2bf8ee135157efe04c5b00efaad0ce4268"
+  "sha256": "08a6ddd17140829a950301f00ba4081d621135b30fbac2a03dee07a8f773d3fa"
 }
