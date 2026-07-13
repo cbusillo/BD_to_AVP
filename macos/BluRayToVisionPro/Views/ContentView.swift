@@ -349,6 +349,9 @@ struct ContentView: View {
         if viewModel.state.result != nil {
             return "Source analyzed and conversion settings ready"
         }
+        if source.kind == .physicalDisc {
+            return "Physical disc conversion is not available yet"
+        }
         if source.kind.isDiscWorkflow {
             return "Disc workflow ready"
         }
@@ -396,13 +399,13 @@ struct ContentView: View {
             return capabilities.conversionUnavailableReason
         }
         switch viewModel.source?.kind {
-        case .physicalDisc, .bluRayFolder:
-            return "Physical discs and Blu-ray folders are not yet supported for native conversion."
+        case .physicalDisc:
+            return "Physical discs are not yet supported for native conversion."
         case .sourceFolder:
             return "Batch folder conversion is not yet available."
-        case .discImage, .matroska, .transportStream where viewModel.state.result == nil:
+        case .discImage, .bluRayFolder, .matroska, .transportStream where viewModel.state.result == nil:
             return "Source analysis must complete before conversion can start."
-        case .none, .discImage, .matroska, .transportStream:
+        case .none, .discImage, .bluRayFolder, .matroska, .transportStream:
             return capabilities.conversionUnavailableReason
         }
     }

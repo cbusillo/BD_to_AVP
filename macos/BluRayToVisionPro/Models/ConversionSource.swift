@@ -45,11 +45,11 @@ enum ConversionSourceKind: String, CaseIterable, Identifiable {
     }
 
     var supportsMetadataInspection: Bool {
-        self == .discImage || self == .matroska || self == .transportStream
+        self == .discImage || self == .bluRayFolder || self == .matroska || self == .transportStream
     }
 
     var supportsConversion: Bool {
-        self == .discImage || self == .matroska || self == .transportStream
+        self == .discImage || self == .bluRayFolder || self == .matroska || self == .transportStream
     }
 
     var isDiscWorkflow: Bool {
@@ -80,9 +80,12 @@ struct ConversionSource: Equatable {
     let displayName: String
 
     init(kind: ConversionSourceKind, url: URL, displayName: String? = nil) {
+        let normalizedURL = kind == .bluRayFolder
+            ? DiscSourceDetector.bluRayRoot(for: url) ?? url.standardizedFileURL
+            : url.standardizedFileURL
         self.kind = kind
-        self.url = url.standardizedFileURL
-        self.displayName = displayName ?? Self.defaultDisplayName(for: url)
+        self.url = normalizedURL
+        self.displayName = displayName ?? Self.defaultDisplayName(for: normalizedURL)
     }
 
     var proposedOutputStem: String {
@@ -160,10 +163,30 @@ enum DiscSourceDetector {
     }
 
     static func isBluRayFolder(_ url: URL, fileManager: FileManager = .default) -> Bool {
-        let candidates = [url, url.appendingPathComponent("BDMV", isDirectory: true)]
-        return candidates.contains { candidate in
-            candidate.lastPathComponent.caseInsensitiveCompare("BDMV") == .orderedSame
-                && fileManager.fileExists(atPath: candidate.path)
+        bluRayRoot(for: url, fileManager: fileManager) != nil
+    }
+
+    static func bluRayRoot(for url: URL, fileManager: FileManager = .default) -> URL? {
+        let normalizedURL = url.standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: normalizedURL.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return nil
         }
+        if normalizedURL.lastPathComponent.caseInsensitiveCompare("BDMV") == .orderedSame {
+            return normalizedURL.deletingLastPathComponent()
+        }
+        guard let children = try? fileManager.contentsOfDirectory(
+            at: normalizedURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ),
+            children.contains(where: { childURL in
+                childURL.lastPathComponent.caseInsensitiveCompare("BDMV") == .orderedSame
+                    && (try? childURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+            })
+        else {
+            return nil
+        }
+        return normalizedURL
     }
 }

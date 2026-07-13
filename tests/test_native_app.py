@@ -18,6 +18,7 @@ from scripts.native_app import (
     NATIVE_PACKAGE_CONFIGURATION,
     NATIVE_PRODUCT_NAME,
     NATIVE_SHORT_VERSION,
+    WORKER_PROTOCOL_VERSION,
     MACOS_ROOT,
     PROJECT_PATH,
     REPO_ROOT,
@@ -277,28 +278,28 @@ class NativeAppPackagingTests(unittest.TestCase):
         job_id = "97456c4a-f3c5-44e4-a548-0bd833ead4bb"
         events: list[object] = [
             {
-                "protocol_version": 1,
+                "protocol_version": WORKER_PROTOCOL_VERSION,
                 "type": "worker.ready",
                 "job_id": job_id,
                 "sequence": 0,
                 "payload": {"process_group_id": 123},
             },
             {
-                "protocol_version": 1,
+                "protocol_version": WORKER_PROTOCOL_VERSION,
                 "type": "job.started",
                 "job_id": job_id,
                 "sequence": 1,
                 "payload": {},
             },
             {
-                "protocol_version": 1,
+                "protocol_version": WORKER_PROTOCOL_VERSION,
                 "type": "stage.started",
                 "job_id": job_id,
                 "sequence": 2,
                 "payload": {},
             },
             {
-                "protocol_version": 1,
+                "protocol_version": WORKER_PROTOCOL_VERSION,
                 "type": "job.completed",
                 "job_id": job_id,
                 "sequence": 3,
@@ -319,7 +320,7 @@ class NativeAppPackagingTests(unittest.TestCase):
         job_id = "97456c4a-f3c5-44e4-a548-0bd833ead4bb"
         events = [
             {
-                "protocol_version": 1,
+                "protocol_version": WORKER_PROTOCOL_VERSION,
                 "type": event_type,
                 "job_id": job_id,
                 "sequence": sequence,
@@ -367,7 +368,7 @@ class NativeAppPackagingTests(unittest.TestCase):
     def test_rejects_wrong_job_or_result(self) -> None:
         events: list[object] = [
             {
-                "protocol_version": 1,
+                "protocol_version": WORKER_PROTOCOL_VERSION,
                 "type": event_type,
                 "job_id": "wrong-job",
                 "sequence": sequence,

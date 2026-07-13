@@ -7,9 +7,11 @@ or update it.
 - Launch the new SwiftUI workspace on an Apple Silicon Mac running macOS 27.
 - Choose a physical disc, ISO disc image, Blu-ray folder, MKV, source folder, or
   MTS/M2TS transport stream.
-- Inspect ISO, MKV, MTS, and M2TS source metadata through the bundled engine.
-- Convert an inspected ISO, MKV, MTS, or M2TS source to a completed MV-HEVC `.mov`
-  through the bundled engine, with native progress, cancellation, and results.
+- Inspect Blu-ray folder, ISO, MKV, MTS, and M2TS source metadata through the
+  bundled engine.
+- Convert an inspected Blu-ray folder, ISO, MKV, MTS, or M2TS source to a
+  completed MV-HEVC `.mov` through the bundled engine, with native progress,
+  cancellation, and results.
 - Review the Video, Audio & Subtitles, and Files & Recovery controls.
 - Create, duplicate, edit, import, export, and delete named encoding profiles.
 - Open Settings with `Command-,`, resize the window, and scroll through the
@@ -19,8 +21,8 @@ or update it.
 
 ## Important Limits
 
-- **Start Processing currently supports ISO, MKV, MTS, and M2TS files only.**
-  Keep the production app installed for physical discs, Blu-ray folders,
+- **Start Processing supports one Blu-ray folder, ISO, MKV, MTS, or M2TS source
+  at a time.** Keep the production app installed for physical discs,
   source-folder batches, and recovery decisions that require a second
   interactive step.
 - Native conversion currently creates the full movie. Short sample outputs are
@@ -29,7 +31,8 @@ or update it.
   downloaded manually.
 - Live playback of a file while it is still being generated is not supported.
   Finalized preview playback is planned separately.
-- MakeMKV remains an external dependency for physical discs and disc images.
+- MakeMKV remains an external dependency for physical discs, Blu-ray folders,
+  and disc images.
 - The preview supports Apple Silicon and macOS 27 only.
 
 Please report interface feedback in issue #202, including the source workflow,

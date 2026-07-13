@@ -1,5 +1,8 @@
 # Native Worker Protocol v1
 
+> Historical contract. The native app and bundled worker now use
+> [Native Worker Protocol v2](native-worker-protocol-v2.md).
+
 The native macOS prototype communicates with the existing Python engine over a
 bounded JSON Lines (JSONL) protocol. The boundary is intentionally independent
 of SwiftUI and PySide so the processing engine can remain Python while the app

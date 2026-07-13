@@ -68,14 +68,15 @@ def parse_makemkv_output(output: str) -> tuple[str, list[TitleInfo]]:
 
 
 def get_disc_and_mvc_video_info() -> DiscInfo:
-    source = config.source_path.as_posix() if config.source_path else config.source_str
+    source_path = config.source_path
+    source = source_path.as_posix() if source_path else config.source_str
     if not source:
         raise ValueError("No source path provided.")
-    if Path(source).suffix.lower() in {*config.MTS_EXTENSIONS, ".mkv"}:
-        filename = Path(source).stem
+    if source_path and source_path.suffix.lower() in {*config.MTS_EXTENSIONS, ".mkv"}:
+        filename = source_path.stem
         disc_info = DiscInfo(name=filename)
 
-        streams = ffmpeg.probe(source, cmd=config.FFPROBE_PATH.as_posix()).get("streams", [])
+        streams = ffmpeg.probe(source_path.as_posix(), cmd=config.FFPROBE_PATH.as_posix()).get("streams", [])
         ffmpeg_probe_output = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
         if ffmpeg_probe_output is None:
             raise ValueError("No video stream found in source metadata.")
@@ -87,13 +88,12 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
             disc_info.is_interlaced = True
         return disc_info
 
-    if config.source_path and config.source_path.suffix.lower() in config.IMAGE_EXTENSIONS:
-        source = f"iso:{config.source_path}"
+    source = get_makemkv_source()
 
     command = [
         config.MAKEMKVCON_PATH,
         "--robot",
-        "--noscan" if "disc:" not in source else None,
+        "--noscan" if makemkv_source_supports_noscan(source) else None,
         "info",
         source,
     ]
@@ -121,18 +121,11 @@ def rip_disc_to_mkv(output_folder: Path, disc_info: DiscInfo, language_code: str
     custom_profile_path = output_folder / "custom_profile.mmcp.xml"
     create_custom_makemkv_profile(custom_profile_path, language_code)
 
-    if config.source_path and config.source_path.suffix.lower() in config.IMAGE_EXTENSIONS:
-        source = f"iso:{config.source_path}"
-    elif config.source_path:
-        source = config.source_path.as_posix()
-    elif config.source_str:
-        source = config.source_str
-    else:
-        raise ValueError("No source provided.")
+    source = get_makemkv_source()
     command = [
         config.MAKEMKVCON_PATH,
         f"--profile={custom_profile_path}",
-        "--noscan" if "disc:" not in source else None,
+        "--noscan" if makemkv_source_supports_noscan(source) else None,
         "mkv",
         source,
         disc_info.main_title_number,
@@ -144,6 +137,22 @@ def rip_disc_to_mkv(output_folder: Path, disc_info: DiscInfo, language_code: str
     filtered_output = filter_lines_from_output(mkv_output, config.MKV_ERROR_FILTERS)
 
     raise MKVCreationError(f"Error occurred while ripping disc to MKV.\n\n{filtered_output}")
+
+
+def get_makemkv_source() -> str:
+    if config.source_path and config.source_path.suffix.lower() in config.IMAGE_EXTENSIONS:
+        return f"iso:{config.source_path}"
+    if config.source_path and config.source_path.is_dir():
+        return f"file:{config.source_path}"
+    if config.source_path:
+        return config.source_path.as_posix()
+    if config.source_str:
+        return config.source_str
+    raise ValueError("No source provided.")
+
+
+def makemkv_source_supports_noscan(source: str) -> bool:
+    return not source.startswith(("disc:", "dev:"))
 
 
 def filter_lines_from_output(output: str, filter_strings: list[str]) -> str:

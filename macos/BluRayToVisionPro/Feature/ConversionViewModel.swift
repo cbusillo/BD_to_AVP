@@ -5,8 +5,6 @@ import SwiftUI
 final class ConversionViewModel: ObservableObject {
     typealias ClientFactory = () throws -> any WorkerProcessRunning
 
-    static let supportedExtensions = Set(["iso", "mkv", "mts", "m2ts"])
-
     @Published private(set) var source: ConversionSource?
     @Published private(set) var state = WorkerLifecycleState()
     @Published private(set) var diagnosticLog = ""
@@ -69,11 +67,11 @@ final class ConversionViewModel: ObservableObject {
     }
 
     func startInspection() {
-        guard !hasActiveWorker, let sourceURL = state.sourceURL else {
+        guard !hasActiveWorker, let source, state.sourceURL == source.url else {
             return
         }
 
-        let job = WorkerJobSpec(sourceURL: sourceURL)
+        let job = WorkerJobSpec(source: source)
         do {
             try state.begin(jobID: job.jobID)
             pendingTerminalEvent = nil
@@ -118,11 +116,10 @@ final class ConversionViewModel: ObservableObject {
             return
         }
         guard draft.source.kind.supportsConversion,
-              Self.supportedExtensions.contains(draft.source.url.pathExtension.lowercased()),
               FileManager.default.fileExists(atPath: draft.source.url.path)
         else {
             state.failTransport(
-                message: "Conversion requires an existing ISO, MKV, MTS, or M2TS source.",
+                message: "Conversion requires an existing Blu-ray folder, ISO, MKV, MTS, or M2TS source.",
                 retryable: false
             )
             return
@@ -209,15 +206,18 @@ final class ConversionViewModel: ObservableObject {
     }
 
     private func validateSelectedSourceAndStart() {
-        guard let sourceURL = state.sourceURL else {
+        guard let source, state.sourceURL == source.url else {
             state.failTransport(message: "Choose a source before continuing.", retryable: false)
             return
         }
-        guard Self.supportedExtensions.contains(sourceURL.pathExtension.lowercased()) else {
-            state.failTransport(message: "Choose an ISO, MKV, MTS, or M2TS source file.", retryable: false)
+        guard source.kind.supportsMetadataInspection else {
+            state.failTransport(
+                message: "Choose a Blu-ray folder, ISO, MKV, MTS, or M2TS source.",
+                retryable: false
+            )
             return
         }
-        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
+        guard FileManager.default.fileExists(atPath: source.url.path) else {
             state.failTransport(message: "The selected source no longer exists.", retryable: false)
             return
         }

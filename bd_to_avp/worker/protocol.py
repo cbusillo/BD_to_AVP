@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping, TextIO
 from uuid import UUID
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_DETAIL_BYTES = 64 * 1024
@@ -28,6 +28,12 @@ def bounded_detail(value: str) -> str:
 class WorkerOperation(StrEnum):
     INSPECT_SOURCE = "inspect_source"
     CONVERT_SOURCE = "convert_source"
+
+
+class WorkerSourceKind(StrEnum):
+    DIRECT_FILE = "direct_file"
+    DISC_IMAGE = "disc_image"
+    BLU_RAY_FOLDER = "blu_ray_folder"
 
 
 class WorkerEventType(StrEnum):
@@ -62,6 +68,7 @@ class WorkerProtocolError(ValueError):
 
 @dataclass(frozen=True)
 class JobSource:
+    kind: WorkerSourceKind
     path: Path
 
 
@@ -170,14 +177,36 @@ class JobSpec:
         cls._reject_unknown_keys(raw, operation_keys, "request", job_id)
 
         source = raw.get("source")
-        if not isinstance(source, Mapping) or not isinstance(source.get("path"), str):
+        if not isinstance(source, Mapping):
             raise WorkerProtocolError(
                 "invalid_source",
-                "The request must contain a source path.",
+                "The request must contain a source kind and path.",
                 job_id=job_id,
             )
-        cls._reject_unknown_keys(source, {"path"}, "source", job_id)
-        source_path = cls._parse_absolute_path(source["path"], "source", job_id)
+        cls._require_exact_keys(source, {"kind", "path"}, "source", job_id)
+        raw_source_kind = source.get("kind")
+        if not isinstance(raw_source_kind, str):
+            raise WorkerProtocolError(
+                "invalid_source",
+                "source.kind must be a string.",
+                job_id=job_id,
+            )
+        try:
+            source_kind = WorkerSourceKind(raw_source_kind)
+        except ValueError as error:
+            raise WorkerProtocolError(
+                "invalid_source",
+                f"Unsupported source kind: {raw_source_kind!r}.",
+                job_id=job_id,
+            ) from error
+        raw_source_path = source.get("path")
+        if not isinstance(raw_source_path, str):
+            raise WorkerProtocolError(
+                "invalid_source",
+                "source.path must be a string.",
+                job_id=job_id,
+            )
+        source_path = cls._parse_absolute_path(raw_source_path, "source", job_id)
 
         destination: JobDestination | None = None
         encoding: EncodingOptions | None = None
@@ -193,7 +222,7 @@ class JobSpec:
             protocol_version=protocol_version,
             job_id=job_id,
             operation=operation,
-            source=JobSource(path=source_path),
+            source=JobSource(kind=source_kind, path=source_path),
             destination=destination,
             encoding=encoding,
             job=job_options,

@@ -19,6 +19,7 @@ from bd_to_avp.worker.__main__ import run_worker
 from bd_to_avp.worker.operations import WorkerDecisionRequired, WorkerOperationError, convert_source, inspect_source
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
+    JobSource,
     MAX_EVENT_BYTES,
     MAX_REQUEST_BYTES,
     MAX_DETAIL_BYTES,
@@ -28,28 +29,43 @@ from bd_to_avp.worker.protocol import (
     WorkerEventEmitter,
     WorkerEventType,
     WorkerProtocolError,
+    WorkerSourceKind,
 )
 
 
-def request_line(source_path: Path, **overrides: object) -> str:
+def source_kind_for_path(source_path: Path) -> str:
+    if source_path.suffix.lower() == ".iso":
+        return WorkerSourceKind.DISC_IMAGE.value
+    if source_path.is_dir():
+        return WorkerSourceKind.BLU_RAY_FOLDER.value
+    return WorkerSourceKind.DIRECT_FILE.value
+
+
+def request_line(source_path: Path, *, source_kind: str | None = None, **overrides: object) -> str:
     request: dict[str, object] = {
         "protocol_version": PROTOCOL_VERSION,
         "type": "job.start",
         "job_id": str(uuid4()),
         "operation": "inspect_source",
-        "source": {"path": str(source_path)},
+        "source": {"kind": source_kind or source_kind_for_path(source_path), "path": str(source_path)},
     }
     request.update(overrides)
     return json.dumps(request) + "\n"
 
 
-def conversion_request_line(source_path: Path, destination_path: Path, **overrides: object) -> str:
+def conversion_request_line(
+    source_path: Path,
+    destination_path: Path,
+    *,
+    source_kind: str | None = None,
+    **overrides: object,
+) -> str:
     request: dict[str, object] = {
         "protocol_version": PROTOCOL_VERSION,
         "type": "job.start",
         "job_id": str(uuid4()),
         "operation": "convert_source",
-        "source": {"path": str(source_path)},
+        "source": {"kind": source_kind or source_kind_for_path(source_path), "path": str(source_path)},
         "destination": {"path": str(destination_path)},
         "encoding": {
             "transcode_audio": True,
@@ -95,6 +111,7 @@ class JobSpecTests(unittest.TestCase):
 
         self.assertEqual(job.protocol_version, PROTOCOL_VERSION)
         self.assertEqual(job.operation.value, "inspect_source")
+        self.assertEqual(job.source.kind, WorkerSourceKind.DIRECT_FILE)
         self.assertEqual(job.source.path, source_path)
 
     def test_parses_strict_conversion_request(self) -> None:
@@ -111,11 +128,12 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.job.output_length if job.job else None, "full_movie")
 
     def test_parses_shared_swift_conversion_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v1.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v2.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
         self.assertEqual(job.operation.value, "convert_source")
+        self.assertEqual(job.source.kind, WorkerSourceKind.DIRECT_FILE)
         self.assertEqual(job.source.path, Path("/tmp/movie.mkv"))
         self.assertEqual(job.destination.path if job.destination else None, Path("/tmp/output"))
         self.assertEqual(job.encoding.mv_hevc_quality if job.encoding else None, 75)
@@ -186,6 +204,21 @@ class JobSpecTests(unittest.TestCase):
             JobSpec.from_json_line(request_line(Path("movie.m2ts")))
 
         self.assertEqual(context.exception.code, "source_not_absolute")
+
+    def test_rejects_missing_source_kind(self) -> None:
+        request = json.loads(request_line(Path("/tmp/movie.m2ts")))
+        del request["source"]["kind"]
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request) + "\n")
+
+        self.assertEqual(context.exception.code, "invalid_source")
+
+    def test_rejects_unknown_source_kind(self) -> None:
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(request_line(Path("/tmp/movie.m2ts"), source_kind="optical_disc"))
+
+        self.assertEqual(context.exception.code, "invalid_source")
 
     def test_rejects_oversized_request(self) -> None:
         oversized = "{" + (" " * MAX_REQUEST_BYTES) + "}"
@@ -331,7 +364,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 }
             },
         )
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v1.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v2.json"
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
 
         self.assertEqual(decoded_events(output)[-1], fixture)
@@ -434,7 +467,10 @@ class SourceInspectionTests(unittest.TestCase):
                 fake_ffprobe.chmod(fake_ffprobe.stat().st_mode | stat.S_IXUSR)
 
                 with patch.object(config, "FFPROBE_PATH", fake_ffprobe):
-                    result = inspect_source(source_path, WorkerProcessOwner())
+                    result = inspect_source(
+                        JobSource(kind=WorkerSourceKind.DIRECT_FILE, path=source_path),
+                        WorkerProcessOwner(),
+                    )
 
                 self.assertEqual(result["name"], "movie")
                 self.assertEqual(result["resolution"], "1920x1080")
@@ -447,8 +483,13 @@ class SourceInspectionTests(unittest.TestCase):
             source_path = Path(temporary_directory) / "movie.mp4"
             source_path.touch()
 
-            with self.assertRaisesRegex(WorkerOperationError, "supports ISO, MKV, MTS, and M2TS"):
-                inspect_source(source_path, WorkerProcessOwner())
+            with self.assertRaises(WorkerOperationError) as context:
+                inspect_source(
+                    JobSource(kind=WorkerSourceKind.DIRECT_FILE, path=source_path),
+                    WorkerProcessOwner(),
+                )
+
+            self.assertEqual(context.exception.code, "source_kind_mismatch")
 
     def test_inspects_iso_with_makemkv_disc_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -469,7 +510,10 @@ class SourceInspectionTests(unittest.TestCase):
                     ),
                 ),
             ):
-                result = inspect_source(source_path, WorkerProcessOwner())
+                result = inspect_source(
+                    JobSource(kind=WorkerSourceKind.DISC_IMAGE, path=source_path),
+                    WorkerProcessOwner(),
+                )
 
             self.assertEqual(result["name"], "Feature 3D")
             self.assertEqual(result["resolution"], "1920x1080")
@@ -485,27 +529,117 @@ class SourceInspectionTests(unittest.TestCase):
                 patch.object(config, "MAKEMKVCON_PATH", Path(temporary_directory) / "missing-makemkvcon"),
                 self.assertRaises(WorkerOperationError) as context,
             ):
-                inspect_source(source_path, WorkerProcessOwner())
+                inspect_source(
+                    JobSource(kind=WorkerSourceKind.DISC_IMAGE, path=source_path),
+                    WorkerProcessOwner(),
+                )
 
             self.assertEqual(context.exception.code, "makemkv_missing")
             self.assertTrue(context.exception.retryable)
 
+    def test_inspects_bluray_folder_without_reporting_directory_size(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source_path = Path(temporary_directory) / "Movie"
+            (source_path / "BDMV").mkdir(parents=True)
+            fake_makemkv = Path(temporary_directory) / "makemkvcon"
+            fake_makemkv.touch()
+
+            with (
+                patch.object(config, "MAKEMKVCON_PATH", fake_makemkv),
+                patch(
+                    "bd_to_avp.worker.operations.get_disc_and_mvc_video_info",
+                    return_value=DiscInfo(name="Folder 3D", resolution="1920x1080", frame_rate="24/1"),
+                ),
+            ):
+                result = inspect_source(
+                    JobSource(kind=WorkerSourceKind.BLU_RAY_FOLDER, path=source_path),
+                    WorkerProcessOwner(),
+                )
+
+            self.assertEqual(result["name"], "Folder 3D")
+            self.assertNotIn("size_bytes", result)
+
+    def test_normalizes_selected_bdmv_folder_to_disc_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source_path = Path(temporary_directory) / "Movie"
+            bdmv_path = source_path / "BDMV"
+            bdmv_path.mkdir(parents=True)
+            fake_makemkv = Path(temporary_directory) / "makemkvcon"
+            fake_makemkv.touch()
+            observed: dict[str, object] = {}
+
+            def inspect_disc() -> DiscInfo:
+                observed["source_path"] = config.source_path
+                observed["source_str"] = config.source_str
+                return DiscInfo(name="Folder 3D")
+
+            with (
+                patch.object(config, "MAKEMKVCON_PATH", fake_makemkv),
+                patch("bd_to_avp.worker.operations.get_disc_and_mvc_video_info", side_effect=inspect_disc),
+            ):
+                inspect_source(
+                    JobSource(kind=WorkerSourceKind.BLU_RAY_FOLDER, path=bdmv_path),
+                    WorkerProcessOwner(),
+                )
+
+            self.assertEqual(observed["source_path"], source_path)
+            self.assertEqual(observed["source_str"], f"file:{source_path}")
+
+    def test_rejects_folder_without_bdmv_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source_path = Path(temporary_directory) / "Not a Disc"
+            source_path.mkdir()
+
+            with self.assertRaises(WorkerOperationError) as context:
+                inspect_source(
+                    JobSource(kind=WorkerSourceKind.BLU_RAY_FOLDER, path=source_path),
+                    WorkerProcessOwner(),
+                )
+
+            self.assertEqual(context.exception.code, "invalid_bluray_folder")
+
 
 class SourceConversionTests(unittest.TestCase):
-    def test_rejects_folder_source(self) -> None:
+    def test_bluray_folder_conversion_passes_explicit_file_source_to_engine(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
-            source_path = temporary_path / "BDMV"
-            source_path.mkdir()
+            source_path = temporary_path / "Movie"
+            (source_path / "BDMV").mkdir(parents=True)
             destination_path = temporary_path / "output"
+            final_path = destination_path / "movie_AVP.mov"
+            final_path.parent.mkdir()
+            final_path.write_bytes(b"final")
             job = JobSpec.from_json_line(conversion_request_line(source_path, destination_path))
             emitter = WorkerEventEmitter(io.StringIO(), job.job_id)
             activity = WorkerActivityReporter(emitter)
+            observed: dict[str, object] = {}
+
+            def process_each(*_args: object, **_kwargs: object) -> Path:
+                observed["source_path"] = config.source_path
+                observed["source_str"] = config.source_str
+                return final_path
+
+            with (
+                patch.object(config, "configure_tool_environment"),
+                patch("bd_to_avp.modules.process.process_each", side_effect=process_each),
+            ):
+                result = convert_source(job, WorkerProcessOwner(), activity)
+
+            self.assertEqual(result["output_path"], final_path.as_posix())
+            self.assertEqual(observed["source_path"], source_path)
+            self.assertEqual(observed["source_str"], f"file:{source_path}")
+
+    def test_bluray_folder_destination_must_be_outside_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source_path = Path(temporary_directory) / "Movie"
+            (source_path / "BDMV").mkdir(parents=True)
+            job = JobSpec.from_json_line(conversion_request_line(source_path, source_path / "output"))
+            emitter = WorkerEventEmitter(io.StringIO(), job.job_id)
 
             with self.assertRaises(WorkerOperationError) as context:
-                convert_source(job, WorkerProcessOwner(), activity)
+                convert_source(job, WorkerProcessOwner(), WorkerActivityReporter(emitter))
 
-            self.assertEqual(context.exception.code, "source_not_file")
+            self.assertEqual(context.exception.code, "destination_inside_source")
 
     def test_iso_conversion_passes_source_to_existing_engine(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
