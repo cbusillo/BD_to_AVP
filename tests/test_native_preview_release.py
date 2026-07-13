@@ -76,9 +76,9 @@ class NativePreviewIdentityTests(unittest.TestCase):
         )
         self.assertEqual(
             PREVIEW_RELEASE_METADATA.release_name,
-            f"v{NATIVE_SHORT_VERSION} Beta 1 — Native UI Preview",
+            f"v{NATIVE_PRERELEASE_VERSION}",
         )
-        self.assertTrue(PREVIEW_RELEASE_METADATA.release_name.startswith(f"v{NATIVE_SHORT_VERSION} "))
+        self.assertTrue(PREVIEW_RELEASE_METADATA.release_name.startswith(f"v{NATIVE_SHORT_VERSION}-"))
         self.assertEqual(
             PREVIEW_RELEASE_METADATA.dmg_name,
             f"3D-Blu-ray-to-Vision-Pro-Native-Preview-{NATIVE_PRERELEASE_VERSION}.dmg",

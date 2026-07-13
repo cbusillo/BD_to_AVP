@@ -1,4 +1,4 @@
-This is **v0.3.0 Beta 1**, an opt-in preview of the new native macOS interface
+This is **v0.3.0-beta.1**, an opt-in preview of the new native macOS interface
 for 3D Blu-ray to Vision Pro. It installs beside the current production app and
 does not replace or update it.
 
