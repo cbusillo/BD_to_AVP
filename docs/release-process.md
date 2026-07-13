@@ -96,16 +96,16 @@ and packaged-worker execution on a separate macOS 26 runner.
 
 The workflow uses the existing reviewed `macos-signing` environment to sign and
 notarize the side-by-side Preview bundle, creates and revalidates a DMG, and
-derives its tag, version-first release title, app name, and DMG filename from the
-committed native app version and build metadata. Version `0.3.0` build `1`, for
-example, uses tag `native-ui-preview-1` and title
-`v0.3.0 (Build 1) — Native UI Preview`. Preview build numbers are monotonically
-increasing and may not be reused. The workflow never derives metadata from
-`pyproject.toml`, invokes the Sparkle/Pages workflows, publishes Python
-distributions, or marks a preview as GitHub latest. A failed run may resume only
-an exact matching draft. Published tags and assets are immutable; maintainers
-may correct the human-readable title or notes without replacing artifacts or
-changing the target commit.
+derives its semantic prerelease tag, version-first release title, app name, and
+DMG filename from committed native metadata. Historical build `1` keeps tag
+`native-ui-preview-1` and is titled `v0.3.0 Alpha 1 — Native UI Preview`. Build
+`2` uses tag `v0.3.0-beta.1` and title `v0.3.0 Beta 1 — Native UI Preview`.
+Native build numbers are monotonically increasing and may not be reused. The
+workflow never derives metadata from `pyproject.toml`, invokes the
+Sparkle/Pages workflows, publishes Python distributions, or marks a preview as
+GitHub latest. A failed run may resume only an exact matching draft. Published
+tags and assets are immutable; maintainers may correct the human-readable title
+or notes without replacing artifacts or changing the target commit.
 
 The cumulative `appcast.xml` attached to every published GitHub Release is the
 recovery source of truth. Pages also publishes `appcast-state.json`, which binds

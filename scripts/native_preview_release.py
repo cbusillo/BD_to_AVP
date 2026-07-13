@@ -20,6 +20,7 @@ from scripts.native_app import (
     NATIVE_BUNDLE_IDENTIFIER,
     NATIVE_EXECUTABLE_NAME,
     NATIVE_MINIMUM_SYSTEM_VERSION,
+    NATIVE_PRERELEASE_VERSION,
     NATIVE_PRODUCT_NAME,
     NATIVE_SHORT_VERSION,
     smoke_packaged_worker,
@@ -41,6 +42,7 @@ class NativePreviewReleaseMetadata:
     app_name: str
     build_version: str
     dmg_name: str
+    prerelease_version: str
     release_name: str
     release_tag: str
     short_version: str
@@ -63,6 +65,7 @@ def create_preview_release_metadata(
     *,
     app_name: str = NATIVE_APP_NAME,
     build_version: str = NATIVE_BUILD_VERSION,
+    prerelease_version: str = NATIVE_PRERELEASE_VERSION,
     product_name: str = NATIVE_PRODUCT_NAME,
     short_version: str = NATIVE_SHORT_VERSION,
 ) -> NativePreviewReleaseMetadata:
@@ -70,14 +73,25 @@ def create_preview_release_metadata(
         raise NativePreviewReleaseError("Native preview short version must contain three numeric components.")
     if re.fullmatch(r"[1-9]\d*", build_version) is None:
         raise NativePreviewReleaseError("Native preview build version must be a positive integer.")
+    prerelease_match = re.fullmatch(
+        rf"{re.escape(short_version)}-(alpha|beta|rc)\.([1-9]\d*)",
+        prerelease_version,
+    )
+    if prerelease_match is None:
+        raise NativePreviewReleaseError(
+            "Native preview prerelease version must match the short version followed by -alpha.N, -beta.N, or -rc.N."
+        )
 
+    phase, sequence = prerelease_match.groups()
+    phase_label = {"alpha": "Alpha", "beta": "Beta", "rc": "RC"}[phase]
     file_stem = product_name.replace(" ", "-")
     return NativePreviewReleaseMetadata(
         app_name=app_name,
         build_version=build_version,
-        dmg_name=f"{file_stem}-{short_version}-{build_version}.dmg",
-        release_name=f"v{short_version} (Build {build_version}) — Native UI Preview",
-        release_tag=f"native-ui-preview-{build_version}",
+        dmg_name=f"{file_stem}-{prerelease_version}.dmg",
+        prerelease_version=prerelease_version,
+        release_name=f"v{short_version} {phase_label} {sequence} — Native UI Preview",
+        release_tag=f"v{prerelease_version}",
         short_version=short_version,
     )
 
