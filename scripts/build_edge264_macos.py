@@ -19,8 +19,6 @@ PROVENANCE_RELATIVE_PATH = Path("bd_to_avp/resources/notices/edge264-mvc-build.j
 class BuildProvenance:
     repository: str
     revision: str
-    patch: str
-    patch_sha256: str
     platform: str
     minimum_macos: str
     linkage: str
@@ -48,11 +46,11 @@ def verify_checksum(path: Path, expected: str, description: str) -> str:
 
 def load_provenance(path: Path) -> BuildProvenance:
     data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise RuntimeError("edge264 provenance manifest must be a JSON object")
     required_fields = (
         "repository",
         "revision",
-        "patch",
-        "patch_sha256",
         "platform",
         "minimum_macos",
         "linkage",
@@ -61,6 +59,9 @@ def load_provenance(path: Path) -> BuildProvenance:
     for field in required_fields:
         if not isinstance(data.get(field), str) or not data[field]:
             raise RuntimeError(f"edge264 provenance field is missing or invalid: {field}")
+    unexpected_fields = sorted(set(data) - set(required_fields))
+    if unexpected_fields:
+        raise RuntimeError(f"unexpected edge264 provenance fields: {', '.join(unexpected_fields)}")
     return BuildProvenance(**{field: data[field] for field in required_fields})
 
 
@@ -70,19 +71,16 @@ def make_command(provenance: BuildProvenance, target: str) -> list[str]:
     return ["make", "STATIC=yes", target]
 
 
-def build_edge264(repository_root: Path, output_path: Path, provenance: BuildProvenance) -> str:
-    patch_path = repository_root / provenance.patch
-    verify_checksum(patch_path, provenance.patch_sha256, "edge264 patch")
-
+def build_edge264(output_path: Path, provenance: BuildProvenance) -> str:
     with tempfile.TemporaryDirectory(prefix="edge264-mvc-build-") as temp_dir:
         checkout = Path(temp_dir) / "edge264-mvc"
         run(["git", "clone", "--filter=blob:none", provenance.repository, str(checkout)])
         run(["git", "checkout", "--detach", provenance.revision], checkout)
-        run(["git", "apply", str(patch_path)], checkout)
         build_env = os.environ.copy()
         build_env["MACOSX_DEPLOYMENT_TARGET"] = provenance.minimum_macos
         run(make_command(provenance, "edge264_test"), checkout, build_env)
         run(make_command(provenance, "check-stream-input"), checkout, build_env)
+        run(make_command(provenance, "check-edge264-test-liveness"), checkout, build_env)
 
         built_binary = checkout / "edge264_test"
         linked_libraries = subprocess.check_output(["otool", "-L", str(built_binary)], text=True)
@@ -104,7 +102,7 @@ def build_edge264(repository_root: Path, output_path: Path, provenance: BuildPro
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build the patched arm64 macOS edge264 MVC splitter.")
+    parser = argparse.ArgumentParser(description="Build the pinned arm64 macOS edge264 MVC splitter.")
     parser.add_argument(
         "--output",
         type=Path,
@@ -121,7 +119,7 @@ def main() -> int:
         parser.error(f"this build script requires {provenance.platform}")
 
     output_path = args.output.resolve()
-    built_sha256 = build_edge264(repository_root, output_path, provenance)
+    built_sha256 = build_edge264(output_path, provenance)
 
     print(f"Wrote {output_path}")
     print(f"SHA-256: {built_sha256}")
