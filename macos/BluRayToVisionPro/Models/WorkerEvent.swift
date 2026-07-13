@@ -65,6 +65,54 @@ struct WorkerDecision: Decodable, Equatable {
     }
 }
 
+enum WorkerRecoveryChoice: String, Identifiable, Equatable {
+    case retryContinueOnError = "retry_continue_on_error"
+    case retryWithoutSubtitles = "retry_without_subtitles"
+    case cancel
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .retryContinueOnError:
+            "Continue From Created MKV"
+        case .retryWithoutSubtitles:
+            "Continue Without Subtitles"
+        case .cancel:
+            "Cancel"
+        }
+    }
+
+    var accessibilityHint: String {
+        switch self {
+        case .retryContinueOnError:
+            "Uses the intermediate MKV and resumes at MVC and audio extraction."
+        case .retryWithoutSubtitles:
+            "Skips subtitle extraction and resumes the remaining conversion stages."
+        case .cancel:
+            "Leaves the conversion stopped without starting another job."
+        }
+    }
+}
+
+extension WorkerDecision {
+    var supportedChoices: [WorkerRecoveryChoice] {
+        choices.compactMap { rawChoice in
+            guard let choice = WorkerRecoveryChoice(rawValue: rawChoice) else {
+                return nil
+            }
+            switch (identifier, choice) {
+            case ("mkv_creation_decision_required", .retryContinueOnError),
+                 ("subtitle_decision_required", .retryWithoutSubtitles),
+                 (_, .cancel):
+                return choice
+            default:
+                return nil
+            }
+        }
+    }
+}
+
 struct WorkerEventPayload: Decodable, Equatable {
     let workerVersion: String?
     let processGroupID: Int32?

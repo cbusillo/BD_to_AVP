@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from bd_to_avp.modules.config import config
 from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
+from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.worker.__main__ import run_worker
 from bd_to_avp.worker.operations import WorkerDecisionRequired, WorkerOperationError, convert_source, inspect_source
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
@@ -822,6 +823,27 @@ class SourceConversionTests(unittest.TestCase):
             self.assertEqual(context.exception.code, "mkv_creation_decision_required")
             self.assertEqual(context.exception.choices, ("retry_continue_on_error", "cancel"))
             self.assertIn("Extract MVC and Audio", context.exception.details or "")
+
+    def test_subtitle_failure_requests_skip_subtitles_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.iso"
+            source_path.write_bytes(b"disc")
+            destination_path = temporary_path / "output"
+            job = JobSpec.from_json_line(conversion_request_line(source_path, destination_path))
+            emitter = WorkerEventEmitter(io.StringIO(), job.job_id)
+            activity = WorkerActivityReporter(emitter)
+
+            with (
+                patch.object(config, "configure_tool_environment"),
+                patch("bd_to_avp.modules.process.process_each", side_effect=SRTCreationError("OCR error")),
+                self.assertRaises(WorkerDecisionRequired) as context,
+            ):
+                convert_source(job, WorkerProcessOwner(), activity)
+
+            self.assertEqual(context.exception.code, "subtitle_decision_required")
+            self.assertEqual(context.exception.choices, ("retry_without_subtitles", "cancel"))
+            self.assertIn("Turn off Include subtitles", context.exception.details or "")
 
     def test_conversion_restores_global_config_and_tool_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

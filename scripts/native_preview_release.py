@@ -26,6 +26,7 @@ from scripts.native_app import (
     verify_codesign,
     verify_layout,
 )
+from scripts.verify_app_tools import REQUIRED_TOOLS, verify_tool
 
 PREVIEW_VOLUME_NAME = NATIVE_PRODUCT_NAME
 INFO_PLIST_RELATIVE_PATH = Path("Contents/Info.plist")
@@ -135,6 +136,8 @@ def verify_preview_app(
     *,
     verify_signatures: bool = False,
     verify_distribution: bool = False,
+    smoke_app: bool = False,
+    smoke_tools: bool = False,
     smoke_worker: bool = False,
 ) -> NativePreviewMetadata:
     metadata = inspect_preview_info(app_path)
@@ -144,9 +147,52 @@ def verify_preview_app(
     if verify_distribution:
         run(["xcrun", "stapler", "validate", str(app_path)])
         run(["spctl", "--assess", "--type", "execute", "--verbose=4", str(app_path)])
+    if smoke_app:
+        smoke_native_app_startup(app_path)
+    if smoke_tools:
+        smoke_packaged_tools(app_path)
     if smoke_worker:
         smoke_packaged_worker(app_path)
     return metadata
+
+
+def smoke_native_app_startup(app_path: Path) -> None:
+    executable = app_path / "Contents" / "MacOS" / NATIVE_EXECUTABLE_NAME
+    with tempfile.TemporaryDirectory(prefix="native-preview-startup-") as temporary_directory:
+        environment = os.environ.copy()
+        environment["HOME"] = temporary_directory
+        environment["TMPDIR"] = temporary_directory
+        try:
+            completed = subprocess.run(
+                [str(executable), "--startup-smoke"],
+                cwd=temporary_directory,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise NativePreviewReleaseError("Native preview startup smoke did not exit within 20 seconds.") from error
+    if completed.returncode != 0:
+        details = (completed.stderr or completed.stdout).strip()
+        raise NativePreviewReleaseError(
+            f"Native preview startup smoke exited with status {completed.returncode}: {details}"
+        )
+
+
+def smoke_packaged_tools(app_path: Path) -> None:
+    tool_directory = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin"
+    try:
+        for tool_name, probe_args in REQUIRED_TOOLS.items():
+            verify_tool(tool_directory / tool_name, probe_args)
+    except (
+        FileNotFoundError,
+        PermissionError,
+        RuntimeError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ) as error:
+        raise NativePreviewReleaseError(f"Native preview bundled-tool smoke failed: {error}") from error
 
 
 def create_preview_dmg(app_path: Path, output_path: Path) -> Path:
@@ -287,6 +333,8 @@ def verify_preview_dmg(
     *,
     verify_signatures: bool = False,
     verify_distribution: bool = False,
+    smoke_app: bool = False,
+    smoke_tools: bool = False,
     smoke_worker: bool = False,
 ) -> NativePreviewMetadata:
     if not dmg_path.is_file():
@@ -307,6 +355,8 @@ def verify_preview_dmg(
             app_paths[0],
             verify_signatures=verify_signatures,
             verify_distribution=verify_distribution,
+            smoke_app=smoke_app,
+            smoke_tools=smoke_tools,
             smoke_worker=smoke_worker,
         )
 
@@ -314,6 +364,8 @@ def verify_preview_dmg(
 def add_verification_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--verify-signatures", action="store_true")
     parser.add_argument("--verify-distribution", action="store_true")
+    parser.add_argument("--smoke-app", action="store_true")
+    parser.add_argument("--smoke-tools", action="store_true")
     parser.add_argument("--smoke-worker", action="store_true")
 
 
@@ -358,6 +410,8 @@ def main(argv: list[str] | None = None) -> None:
             args.app,
             verify_signatures=args.verify_signatures,
             verify_distribution=args.verify_distribution,
+            smoke_app=args.smoke_app,
+            smoke_tools=args.smoke_tools,
             smoke_worker=args.smoke_worker,
         )
         print(json.dumps(asdict(metadata), sort_keys=True))
@@ -377,6 +431,8 @@ def main(argv: list[str] | None = None) -> None:
             args.dmg,
             verify_signatures=args.verify_signatures,
             verify_distribution=args.verify_distribution,
+            smoke_app=args.smoke_app,
+            smoke_tools=args.smoke_tools,
             smoke_worker=args.smoke_worker,
         )
         print(json.dumps(asdict(metadata), sort_keys=True))

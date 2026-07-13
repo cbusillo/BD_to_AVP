@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Any
 
 import ffmpeg
-from babelfish import Language
+from babelfish import Error as BabelfishError, Language
 
 from bd_to_avp.modules.config import (
     Stage,
@@ -134,9 +134,9 @@ def normalize_track_language(language_code: object) -> tuple[str, str]:
     for resolver in (Language.fromietf, Language.fromalpha3b, Language.fromalpha3t, Language.fromalpha2):
         try:
             language = resolver(language_code)
-        except (AttributeError, ValueError):
+            return language.alpha3, language.name
+        except (AttributeError, BabelfishError, ValueError):
             continue
-        return language.alpha3, language.name
 
     return "und", "Unknown"
 

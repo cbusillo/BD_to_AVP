@@ -64,11 +64,13 @@ struct ContentView: View {
                     openDiscImage: { chooseFile(.discImage) },
                     openBluRayFolder: { chooseFolder(.bluRayFolder) },
                     openMKV: { chooseFile(.matroska) },
-                    openSourceFolder: { chooseFolder(.sourceFolder) },
                     importTransportStream: { chooseFile(.transportStream) },
                     changeSource: chooseExistingSource,
                     chooseDestination: chooseDestination,
-                    retryAnalysis: viewModel.restartInspection
+                    retryAnalysis: viewModel.restartInspection,
+                    resolveRecoveryChoice: { choice in
+                        _ = viewModel.resolveRecoveryChoice(choice)
+                    }
                 )
                 .frame(minWidth: 350, idealWidth: 390, maxWidth: 450)
 
@@ -79,7 +81,7 @@ struct ContentView: View {
                     profiles: profileStore.profiles,
                     selectedProfile: selectedProfile,
                     profileModified: profileModified,
-                    isLocked: viewModel.hasActiveWorker,
+                    isLocked: viewModel.hasActiveWorker || viewModel.state.phase == .decisionRequired,
                     sourceKind: viewModel.source?.kind,
                     saveSelectedProfile: saveSelectedProfile,
                     saveAsNewProfile: beginSaveAsNewProfile,
@@ -239,7 +241,6 @@ struct ContentView: View {
             Button("Open Disc Image…") { chooseFile(.discImage) }
             Button("Open Blu-ray Folder…") { chooseFolder(.bluRayFolder) }
             Button("Open 3D MKV…") { chooseFile(.matroska) }
-            Button("Open Source Folder…") { chooseFolder(.sourceFolder) }
 
             Divider()
             Button("Import MTS or M2TS…") { chooseFile(.transportStream) }
@@ -253,7 +254,7 @@ struct ContentView: View {
         } label: {
             Label(viewModel.source == nil ? "Choose Source" : "Change Source", systemImage: "opticaldiscdrive")
         }
-        .help("Choose a physical disc, disc image, Blu-ray folder, MKV, source folder, or transport stream")
+        .help("Choose a physical disc, disc image, Blu-ray folder, MKV, or transport stream")
         .disabled(!viewModel.canSelectSource)
     }
 
@@ -350,6 +351,9 @@ struct ContentView: View {
             return viewModel.state.stageMessage
                 ?? (viewModel.state.operationKind == .inspection ? "Reading source details" : "Converting video")
         }
+        if viewModel.state.phase == .decisionRequired {
+            return "Choose how to continue"
+        }
         if viewModel.state.phase == .failed {
             return "Source needs attention"
         }
@@ -366,7 +370,7 @@ struct ContentView: View {
             return "Disc workflow ready"
         }
         if source.kind == .sourceFolder {
-            return "Source folder ready for batch processing"
+            return "Batch folder conversion is not available"
         }
         return "Conversion settings ready"
     }
@@ -392,6 +396,9 @@ struct ContentView: View {
         if viewModel.hasActiveWorker {
             return .blue
         }
+        if viewModel.state.phase == .decisionRequired {
+            return .orange
+        }
         if viewModel.state.phase == .failed {
             return .red
         }
@@ -402,11 +409,15 @@ struct ContentView: View {
         capabilities.conversionAvailable
             && viewModel.source?.kind.supportsConversion == true
             && viewModel.state.result != nil
+            && viewModel.state.phase != .decisionRequired
     }
 
     private var conversionUnavailableReason: String {
         guard capabilities.conversionAvailable else {
             return capabilities.conversionUnavailableReason
+        }
+        if viewModel.state.phase == .decisionRequired {
+            return "Choose a recovery option before starting another conversion."
         }
         switch viewModel.source?.kind {
         case .sourceFolder:
@@ -497,10 +508,14 @@ struct ContentView: View {
     }
 
     private func chooseExistingSource() {
-        guard viewModel.canSelectSource, let sourceURL = SourcePicker.chooseExistingSource() else {
+        guard viewModel.canSelectSource,
+              let sourceURL = SourcePicker.chooseExistingSource(),
+              let source = ConversionSource.infer(from: sourceURL),
+              source.kind.supportsMetadataInspection
+        else {
             return
         }
-        viewModel.selectSource(sourceURL)
+        selectSource(source)
     }
 
     private func chooseFile(_ kind: ConversionSourceKind) {
@@ -524,7 +539,11 @@ struct ContentView: View {
     }
 
     private func acceptDrop(_ urls: [URL], _ location: CGPoint) -> Bool {
-        guard viewModel.canSelectSource, let url = urls.first, let source = ConversionSource.infer(from: url) else {
+        guard viewModel.canSelectSource,
+              let url = urls.first,
+              let source = ConversionSource.infer(from: url),
+              source.kind.supportsMetadataInspection
+        else {
             return false
         }
         selectSource(source)

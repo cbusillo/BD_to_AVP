@@ -13,6 +13,7 @@ final class ConversionViewModel: ObservableObject {
     private var client: (any WorkerProcessRunning)?
     private var runTask: Task<Void, Never>?
     private var pendingTerminalEvent: WorkerEvent?
+    private var lastConversionDraft: ConversionDraft?
 
     init(clientFactory: @escaping ClientFactory = {
         WorkerProcessClient(configuration: try WorkerLaunchConfiguration.automatic())
@@ -29,17 +30,20 @@ final class ConversionViewModel: ObservableObject {
     }
 
     var canSelectSource: Bool {
-        !hasActiveWorker
+        !hasActiveWorker && state.phase != .decisionRequired
     }
 
     var canRetry: Bool {
-        !hasActiveWorker && (state.phase == .cancelled || state.failureRetryable)
+        !hasActiveWorker
+            && state.recoveryDecision == nil
+            && (state.phase == .cancelled || state.failureRetryable)
     }
 
     func selectSource(_ sourceURL: URL) {
         guard !hasActiveWorker else {
             return
         }
+        lastConversionDraft = nil
         guard let source = ConversionSource.infer(from: sourceURL) else {
             self.source = nil
             state.selectSource(sourceURL.standardizedFileURL)
@@ -56,6 +60,7 @@ final class ConversionViewModel: ObservableObject {
         guard !hasActiveWorker else {
             return
         }
+        lastConversionDraft = nil
         self.source = source
         state.clear()
         diagnosticLog = ""
@@ -144,6 +149,7 @@ final class ConversionViewModel: ObservableObject {
         let job = WorkerJobSpec(draft: draft)
         do {
             try state.begin(jobID: job.jobID, operationKind: .conversion)
+            lastConversionDraft = draft
             pendingTerminalEvent = nil
             diagnosticLog = ""
             let client = try clientFactory()
@@ -187,11 +193,38 @@ final class ConversionViewModel: ObservableObject {
         diagnosticLog = ""
     }
 
+    @discardableResult
+    func resolveRecoveryChoice(_ choice: WorkerRecoveryChoice) -> Bool {
+        guard !hasActiveWorker,
+              let decision = state.recoveryDecision,
+              decision.supportedChoices.contains(choice)
+        else {
+            return false
+        }
+        if choice == .cancel {
+            state.cancelRecoveryDecision()
+            return true
+        }
+        guard let lastConversionDraft,
+              let retryDraft = lastConversionDraft.retrying(decision: decision, choice: choice)
+        else {
+            state.failTransport(
+                message: "This recovery option is not available for the current conversion.",
+                retryable: false
+            )
+            return false
+        }
+        state.prepareForRetry()
+        startConversion(draft: retryDraft)
+        return state.phase.isRunning
+    }
+
     func clearSource() {
         guard !hasActiveWorker else {
             return
         }
         source = nil
+        lastConversionDraft = nil
         state.clear()
         diagnosticLog = ""
     }

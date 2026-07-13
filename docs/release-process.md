@@ -90,7 +90,9 @@ The native UI feedback release lane uses
 `.github/workflows/native-ui-preview.yml`, not the production Briefcase release
 workflow. Dispatch it only from the current protected `main` commit after CI is
 green and an ephemeral Apple Silicon runner labeled `bd-to-avp-release` is ready
-with macOS 27, Xcode 27, and XcodeGen 2.45.4.
+with macOS 27, Xcode 27, and XcodeGen 2.45.4. The builder uses the committed
+macOS 26 deployment target; publication is additionally gated by verification
+and packaged-worker execution on a separate macOS 26 runner.
 
 The workflow uses the existing reviewed `macos-signing` environment to sign and
 notarize the side-by-side Preview bundle, creates and revalidates a DMG, and

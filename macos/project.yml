@@ -4,7 +4,7 @@ options:
   createIntermediateGroups: true
   defaultConfig: Debug
   deploymentTarget:
-    macOS: "27.0"
+    macOS: "26.0"
 
 configs:
   Debug: debug
@@ -14,7 +14,7 @@ configs:
 settings:
   base:
     CLANG_ENABLE_MODULES: YES
-    MACOSX_DEPLOYMENT_TARGET: "27.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
     SWIFT_VERSION: "5.0"
 
 targets:
@@ -28,7 +28,7 @@ targets:
     settings:
       base:
         CODE_SIGN_STYLE: Automatic
-        CURRENT_PROJECT_VERSION: 1
+        CURRENT_PROJECT_VERSION: 2
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: YES
         GENERATE_INFOPLIST_FILE: NO

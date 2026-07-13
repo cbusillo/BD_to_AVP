@@ -9,7 +9,9 @@ and dependency policy.
 
 ## Test Machine
 
-- Apple Silicon macOS VM or spare Apple Silicon Mac.
+- Apple Silicon Mac or VM running macOS 26 for the minimum-version pass. A
+  second pass on the newest supported macOS is useful but does not replace the
+  macOS 26 gate.
 - Fresh user account.
 - No Homebrew install.
 - No repo checkout.
@@ -44,6 +46,11 @@ test ! -e /usr/local/Homebrew || \
   echo "Intel Homebrew is present; use a cleaner VM"
 spctl --assess --type open --verbose=4 ~/Downloads/*.dmg
 ```
+
+Before installation, confirm the app inside the DMG reports
+`LSMinimumSystemVersion` as `26.0`. Launching the native host, probing the bundled
+conversion tools, and running the packaged-worker smoke on macOS 26 are release
+gates, not best-effort compatibility checks.
 
 The DMG check uses `--type open` because it assesses the downloaded disk image.
 The app smoke uses `--type execute` because it assesses the installed app
@@ -98,6 +105,7 @@ With MakeMKV absent:
    request admin privileges.
 4. Start an ISO or Blu-ray-folder conversion far enough to trigger preflight.
 5. Confirm the message asks for MakeMKV in plain user-facing language.
+6. Confirm `Download MakeMKV…` opens the official MakeMKV download page.
 
 With MakeMKV installed:
 
@@ -126,6 +134,15 @@ candidate. A VM without an attached optical drive is not sufficient.
    cleared, then reinsert it and confirm it reappears automatically.
 6. Confirm “Remove original after success” is unavailable for the physical disc
    and that the selected output folder is outside the mounted disc volume.
+7. If MakeMKV reports that it left a potentially usable intermediate MKV,
+   confirm the app shows `Continue From Created MKV` and `Cancel` instead of a
+   generic failure. Continue only with a known usable MKV and confirm a fresh
+   job resumes at Extract MVC and Audio.
+8. If subtitle extraction reports unusable output, confirm the app shows
+   `Continue Without Subtitles` and `Cancel`. Continuing must start a fresh job
+   without changing the visible profile or Include subtitles setting.
+9. On either recovery card, confirm `Cancel` starts no worker and unlocks the
+   conversion settings.
 
 If the drive drops offline during heavy seeking, repeat once with a powered hub
 before classifying the failure as an app defect. Preserve the activity log either
@@ -134,12 +151,17 @@ way so device, permission, AACS, and media-read failures can be distinguished.
 ## Pass Criteria
 
 - No Homebrew or admin setup is required for GUI launch.
+- The notarized DMG installs, launches, probes every bundled conversion tool,
+  and completes its packaged-worker smoke on Apple Silicon macOS 26.
 - The app's bundled tools are used where expected.
 - Missing MakeMKV produces a clear recovery path.
 - Installing MakeMKV clears the MakeMKV preflight blocker.
 - A physical-disc RC passes inspection, cancellation/eject, automatic
   insertion/ejection refresh, and at least one recorded real-disc conversion
   attempt on supported hardware.
+- A recoverable MakeMKV or subtitle failure presents explicit actions and never
+  collapses into a generic dead end. The selected recovery starts a new job;
+  cancelling starts none.
 - Any remaining missing bundled tool is recorded as a release blocker or linked
   to a follow-up issue. A reinstall-app message for a tool that is not part of
   the app bundle is a blocker, because reinstalling the current app will not add

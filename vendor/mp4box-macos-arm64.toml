@@ -1,10 +1,13 @@
 version = "26.02.0"
 repo_url = "https://github.com/gpac/gpac.git"
 tag = "v26.02.0"
+source_commit = "118e60a905878e56dc4f9c5b309143c5f447c702"
 license_mode = "LGPL-2.1-or-later"
 binary = "MP4Box"
-binary_sha256 = "eb63ed3f3c73eadc61f9158961114a614c208cd5929f1abb7d13da3a679cfedf"
-build = "static arm64 macOS MP4Box built from GPAC source with Homebrew hidden and external libraries disabled"
+binary_sha256 = "61ddca2713e5de02798820e9e295edc959d09a8b15a30dcacc3d9c14df627a6a"
+build = "static arm64 macOS MP4Box targeting macOS 14.0 with Homebrew hidden and external libraries disabled"
+install_prefix = "/opt/bd-to-avp/gpac"
+minimum_macos = "14.0"
 
 configure_flags = [
     "--static-bin",

@@ -261,6 +261,69 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertTrue(spec.job?.softwareEncoder == true)
     }
 
+    func testMakeMKVRecoveryBuildsFreshStageTwoDraft() throws {
+        let draft = makeDraft(kind: .discImage, extension: "iso")
+        let decision = WorkerDecision(
+            identifier: "mkv_creation_decision_required",
+            prompt: "MakeMKV reported errors.",
+            choices: ["retry_continue_on_error", "cancel"],
+            details: nil
+        )
+
+        let retry = try XCTUnwrap(
+            draft.retrying(decision: decision, choice: .retryContinueOnError)
+        )
+
+        XCTAssertEqual(draft.options.job.startStage, .createMKV)
+        XCTAssertFalse(draft.options.job.continueOnError)
+        XCTAssertEqual(retry.options.job.startStage, .extractMVCAndAudio)
+        XCTAssertTrue(retry.options.job.continueOnError)
+        XCTAssertEqual(retry.source, draft.source)
+        XCTAssertEqual(retry.destinationURL, draft.destinationURL)
+    }
+
+    func testSubtitleRecoveryBuildsFreshStageThreeDraftWithoutSubtitles() throws {
+        let draft = makeDraft(kind: .discImage, extension: "iso")
+        let decision = WorkerDecision(
+            identifier: "subtitle_decision_required",
+            prompt: "Subtitle extraction needs attention.",
+            choices: ["retry_without_subtitles", "cancel"],
+            details: nil
+        )
+
+        let retry = try XCTUnwrap(
+            draft.retrying(decision: decision, choice: .retryWithoutSubtitles)
+        )
+
+        XCTAssertTrue(draft.options.encoding.includeSubtitles)
+        XCTAssertEqual(retry.options.job.startStage, .extractSubtitles)
+        XCTAssertFalse(retry.options.encoding.includeSubtitles)
+        XCTAssertFalse(retry.options.job.continueOnError)
+    }
+
+    func testRecoveryDraftRejectsChoiceNotOfferedByDecision() {
+        let draft = makeDraft(kind: .discImage, extension: "iso")
+        let decision = WorkerDecision(
+            identifier: "subtitle_decision_required",
+            prompt: "Subtitle extraction needs attention.",
+            choices: ["cancel"],
+            details: nil
+        )
+
+        XCTAssertNil(draft.retrying(decision: decision, choice: .retryWithoutSubtitles))
+    }
+
+    func testDecisionOnlyExposesRecoveryChoicesForMatchingIdentifier() {
+        let decision = WorkerDecision(
+            identifier: "subtitle_decision_required",
+            prompt: "Subtitle extraction needs attention.",
+            choices: ["retry_continue_on_error", "retry_without_subtitles", "cancel", "future_choice"],
+            details: nil
+        )
+
+        XCTAssertEqual(decision.supportedChoices, [.retryWithoutSubtitles, .cancel])
+    }
+
     func testInspectionJobSpecOmitsConversionSettings() throws {
         let spec = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/src/m.mkv"))
         XCTAssertEqual(spec.operation, "inspect_source")

@@ -2,12 +2,27 @@ import AppKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    nonisolated static let startupSmokeArgument = "--startup-smoke"
+
     weak var viewModel: ConversionViewModel?
     private weak var managedWindow: NSWindow?
     private var originalWindowDelegate: NSWindowDelegate?
     private var allowManagedWindowClose = false
     private var isStoppingForWindowClose = false
     private var isStoppingForTermination = false
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard Self.isStartupSmoke(arguments: ProcessInfo.processInfo.arguments) else {
+            return
+        }
+        DispatchQueue.main.async {
+            NSApp.terminate(nil)
+        }
+    }
+
+    nonisolated static func isStartupSmoke(arguments: [String]) -> Bool {
+        arguments.contains(startupSmokeArgument)
+    }
 
     func attach(window: NSWindow, viewModel: ConversionViewModel) {
         self.viewModel = viewModel

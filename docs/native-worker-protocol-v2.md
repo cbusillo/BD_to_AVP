@@ -118,9 +118,22 @@ Supported event types are `worker.ready`, `job.started`, `stage.started`,
 `job.failed`, and `job.cancelled`.
 
 MakeMKV errors that may leave a usable intermediate MKV terminate with
-`mkv_creation_decision_required`. A retry is a new immutable job with
-`continue_on_error=true` and the requested resume stage. The worker never treats
-a partial MKV as safe without that explicit decision.
+`mkv_creation_decision_required`. The app presents only the choices supplied by
+the worker. Choosing `retry_continue_on_error` starts a new immutable job with
+`job.start_stage=2` and `job.continue_on_error=true`; choosing `cancel` starts no
+job. The worker never treats a partial MKV as safe without that explicit
+decision.
+
+Subtitle extraction failures that can continue without subtitles terminate with
+`subtitle_decision_required`. Choosing `retry_without_subtitles` starts a new
+immutable job with `job.start_stage=3` and `encoding.skip_subtitles=true`. Stage
+3 still runs so stale subtitle files are removed before left/right-eye output is
+created. Choosing `cancel` starts no job.
+
+The native app retains the exact validated draft from the failed conversion and
+applies these changes only to the retry job. Profile settings and the editable
+conversion defaults are not mutated. Unsupported decision identifiers or
+choices are not presented as retry actions.
 
 ## Cancellation And Ownership
 
