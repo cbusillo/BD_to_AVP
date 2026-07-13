@@ -48,6 +48,10 @@ enum ConversionSourceKind: String, CaseIterable, Identifiable {
         self == .matroska || self == .transportStream
     }
 
+    var supportsConversion: Bool {
+        self == .matroska || self == .transportStream
+    }
+
     var isDiscWorkflow: Bool {
         self == .physicalDisc || self == .discImage || self == .bluRayFolder
     }

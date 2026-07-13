@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -5,7 +6,6 @@ struct ContentView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var profileStore: ProfileStore
     let capabilities: AppCapabilities
-    let startConversion: (() -> Void)?
 
     @State private var selectedProfileID: String
     @State private var options: ConversionOptions
@@ -25,14 +25,12 @@ struct ContentView: View {
         viewModel: ConversionViewModel,
         settings: AppSettings,
         profileStore: ProfileStore,
-        capabilities: AppCapabilities,
-        startConversion: (() -> Void)? = nil
+        capabilities: AppCapabilities
     ) {
         _viewModel = ObservedObject(wrappedValue: viewModel)
         _settings = ObservedObject(wrappedValue: settings)
         _profileStore = ObservedObject(wrappedValue: profileStore)
         self.capabilities = capabilities
-        self.startConversion = startConversion
 
         let profile = profileStore.profile(withID: settings.selectedProfileID)
         let initialOptions = ConversionOptions(
@@ -56,7 +54,7 @@ struct ContentView: View {
                     profile: selectedProfile,
                     options: options,
                     profileModified: profileModified,
-                    outputOptionsAvailable: conversionCanStart,
+                    outputOptionsAvailable: false,
                     destinationURL: $destinationURL,
                     outputLength: $outputLength,
                     samplePosition: $samplePosition,
@@ -145,6 +143,17 @@ struct ContentView: View {
         .onChange(of: defaultJobOptions) { _, newValue in
             if viewModel.source == nil, !viewModel.hasActiveWorker {
                 options.job = newValue
+            }
+        }
+        .onChange(of: viewModel.state.conversionResult) { _, result in
+            guard let result else {
+                return
+            }
+            if settings.revealOutput {
+                NSWorkspace.shared.activateFileViewerSelecting([result.outputURL])
+            }
+            if settings.playSound {
+                NSSound(named: "Glass")?.play()
             }
         }
         .onChange(of: profileStore.customProfiles) { previousProfiles, currentProfiles in
@@ -274,7 +283,7 @@ struct ContentView: View {
             .accessibilityLabel(isShowingActivity ? "Hide activity details" : "Show activity details")
 
             if viewModel.hasActiveWorker {
-                Button("Stop", role: .destructive, action: viewModel.stopInspection)
+                Button("Stop", role: .destructive, action: viewModel.stopActiveWorker)
                     .keyboardShortcut("p", modifiers: .command)
             } else if viewModel.source == nil || !conversionCanStart {
                 Button("Start Processing") {}
@@ -283,10 +292,12 @@ struct ContentView: View {
                     .help(viewModel.source == nil ? "Choose a source before processing." : conversionUnavailableReason)
             } else {
                 Button("Start Processing") {
-                    startConversion?()
+                    if let draft {
+                        viewModel.startConversion(draft: draft)
+                    }
                 }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut("p", modifiers: .command)
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut("p", modifiers: .command)
             }
         }
         .padding(.horizontal, 16)
@@ -323,10 +334,14 @@ struct ContentView: View {
 
     private var statusText: String {
         if viewModel.hasActiveWorker {
-            return viewModel.state.stageMessage ?? "Reading source details"
+            return viewModel.state.stageMessage
+                ?? (viewModel.state.operationKind == .inspection ? "Reading source details" : "Converting video")
         }
         if viewModel.state.phase == .failed {
             return "Source needs attention"
+        }
+        if viewModel.state.conversionResult != nil {
+            return "Conversion complete"
         }
         guard let source = viewModel.source else {
             return "Insert a 3D Blu-ray disc or choose another source"
@@ -345,13 +360,17 @@ struct ContentView: View {
 
     private var secondaryStatusText: String? {
         if viewModel.hasActiveWorker {
-            return viewModel.state.activityMessage ?? "Inspecting video streams"
+            return viewModel.state.activityMessage
+                ?? (viewModel.state.operationKind == .inspection ? "Inspecting video streams" : "Processing video")
         }
         guard viewModel.source != nil else {
             return DiscSourceDetector.makeMKVAvailable ? "MakeMKV is ready for physical discs" : "MakeMKV is required for physical discs"
         }
         if !conversionCanStart {
             return conversionUnavailableReason
+        }
+        if let outputPath = viewModel.state.conversionResult?.outputPath {
+            return outputPath
         }
         return draft?.proposedOutputURL.path
     }
@@ -367,13 +386,25 @@ struct ContentView: View {
     }
 
     private var conversionCanStart: Bool {
-        capabilities.conversionAvailable && startConversion != nil
+        capabilities.conversionAvailable
+            && viewModel.source?.kind.supportsConversion == true
+            && viewModel.state.result != nil
     }
 
     private var conversionUnavailableReason: String {
-        capabilities.conversionAvailable
-            ? "Conversion is not connected in this build."
-            : capabilities.conversionUnavailableReason
+        guard capabilities.conversionAvailable else {
+            return capabilities.conversionUnavailableReason
+        }
+        switch viewModel.source?.kind {
+        case .physicalDisc, .discImage, .bluRayFolder:
+            return "Disc and folder sources are not yet supported for native conversion."
+        case .sourceFolder:
+            return "Batch folder conversion is not yet available."
+        case .matroska, .transportStream where viewModel.state.result == nil:
+            return "Source analysis must complete before conversion can start."
+        case .none, .matroska, .transportStream:
+            return capabilities.conversionUnavailableReason
+        }
     }
 
     private func resetProfile() {
@@ -511,7 +542,13 @@ private struct ActivityDrawer: View {
     let showTechnicalDetails: Bool
 
     private var activityText: String {
-        var entries = [state.stageMessage, state.activityMessage, state.warningMessage, state.failureDetails]
+        var entries = [
+            state.stageMessage,
+            state.activityMessage,
+            state.warningMessage,
+            state.failureMessage,
+            state.failureDetails,
+        ]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
         if showTechnicalDetails, !diagnosticLog.isEmpty, !entries.contains(diagnosticLog) {

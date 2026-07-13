@@ -59,7 +59,7 @@ def dedupe_paths(paths: list[Path]) -> list[Path]:
 
 def needs_makemkv() -> bool:
     source_path = config.source_path
-    if source_path and source_path.suffix.lower() in config.MTS_EXTENSIONS:
+    if source_path and source_path.suffix.lower() in [*config.MTS_EXTENSIONS, ".mkv"]:
         return False
     return True
 

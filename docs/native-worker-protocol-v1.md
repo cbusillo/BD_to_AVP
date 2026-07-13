@@ -18,6 +18,9 @@ owns native lifecycle, presentation, and process supervision.
 
 ## Job Request
 
+`inspect_source` reads metadata from one existing `.mkv`, `.mts`, or `.m2ts`
+file. It is read-only and reuses the production FFprobe metadata path.
+
 ```json
 {
   "protocol_version": 1,
@@ -30,8 +33,57 @@ owns native lifecycle, presentation, and process supervision.
 }
 ```
 
-The v1 prototype supports only `inspect_source` for `.mts` and `.m2ts` files.
-The operation is read-only and reuses the production FFprobe metadata path.
+`convert_source` converts one existing `.mkv`, `.mts`, or `.m2ts` file through
+the production conversion engine. The request is immutable: source and
+destination paths must be absolute, all conversion options must be present, and
+unknown fields are rejected. This slice does not enable physical disc, ISO,
+Blu-ray folder, source-folder, queue, or batch conversion through the worker.
+
+`destination.path` is an absolute output folder. The worker returns the actual
+final `.mov` file path produced by the existing engine.
+
+```json
+{
+  "protocol_version": 1,
+  "type": "job.start",
+  "job_id": "d870b63d-939e-4584-a2a4-cd441f628cbe",
+  "operation": "convert_source",
+  "source": {
+    "path": "/absolute/path/to/movie.mkv"
+  },
+  "destination": {
+    "path": "/absolute/path/to/output-folder"
+  },
+  "encoding": {
+    "transcode_audio": true,
+    "audio_bitrate": 384,
+    "left_right_bitrate": 20,
+    "link_quality": true,
+    "mv_hevc_quality": 75,
+    "upscale_quality": 75,
+    "fov": 90,
+    "frame_rate": "",
+    "resolution": "",
+    "skip_subtitles": false,
+    "crop_black_bars": false,
+    "swap_eyes": false,
+    "fx_upscale": false,
+    "language_code": "eng",
+    "remove_extra_languages": false
+  },
+  "job": {
+    "start_stage": 1,
+    "keep_files": false,
+    "overwrite": false,
+    "remove_original": false,
+    "continue_on_error": false,
+    "software_encoder": false,
+    "output_commands": false,
+    "keep_awake": true,
+    "output_length": "full_movie"
+  }
+}
+```
 
 ## Event Envelope
 
@@ -58,19 +110,42 @@ rather than leaving the interface in an ambiguous state.
 
 | Type | Terminal | Purpose |
 | --- | --- | --- |
-| `worker.ready` | No | Confirms worker version and its owned process-group ID. |
+| `worker.ready` | No | Confirms worker version and owned process group. |
 | `job.started` | No | Confirms the immutable job was accepted. |
-| `stage.started` | No | Names the current processing stage and user-facing activity. |
+| `stage.started` | No | Names the current stage and user-facing activity. |
 | `heartbeat` | No | Reports elapsed activity while a stage is still alive. |
-| `log` | No | Optional structured diagnostic activity; raw logs remain on stderr. |
+| `log` | No | Structured diagnostic activity; raw logs remain on stderr. |
 | `warning` | No | Reports a recoverable warning without ending the job. |
-| `job.decision_required` | Yes | Stops safely when future work requires an unsupported user decision. |
+| `job.decision_required` | Yes | Stops safely when user input is required. |
 | `job.completed` | Yes | Returns the operation result. |
-| `job.failed` | Yes | Returns a stable error code, message, optional details, and retryability. |
+| `job.failed` | Yes | Returns a stable error object. |
 | `job.cancelled` | Yes | Confirms cancellation and owned-descendant cleanup. |
 
-The current inspection result contains `name`, `resolution`, `frame_rate`,
-`interlaced`, and `size_bytes`.
+The inspection result contains `name`, `resolution`, `frame_rate`, `interlaced`,
+and `size_bytes`.
+
+Inspection completion places its metadata under `payload.result`. Conversion
+completion places `source_path`, `destination_path`, `output_path`, and
+`size_bytes` under `payload.conversion_result`. `output_path` is the completed
+`.mov` file and is emitted only after the file exists. Existing output collisions
+fail with retryable `output_exists` unless `job.overwrite` is true; unsupported
+source kinds fail rather than being silently skipped or routed into disc/folder
+conversion. Protocol v1 accepts only `job.output_length = "full_movie"`.
+
+Conversion stages use the existing engine boundaries: `configure`, `preflight`,
+`inspect_source`, `create_mkv`, `probe_color`, `detect_crop`,
+`extract_mvc_and_audio`, `extract_subtitles`, `create_left_right_files`,
+`combine_to_mv_hevc`, optional `upscale_video`, `transcode_audio`,
+`create_final_file`, and `move_files`. Heartbeats report the current stage.
+Structured `log` and `warning` events are protocol events; raw helper output and
+Python diagnostics remain on standard error.
+
+Subtitle extraction failures that require a user choice end with
+`job.decision_required` with a structured `decision` containing `id`, `prompt`,
+`choices`, and optional `details` instead of guessing. Cancellation maps to
+`job.cancelled`; dependency failures, helper failures, FFmpeg failures, existing
+outputs, missing outputs, and unsupported sources map to `job.failed` with stable
+error codes and optional details.
 
 ## Cancellation And Ownership
 

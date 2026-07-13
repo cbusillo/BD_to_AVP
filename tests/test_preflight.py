@@ -83,6 +83,15 @@ class DependencyPreflightTests(unittest.TestCase):
 
         self.assertNotIn(preflight.config.MAKEMKVCON_PATH, required_paths)
 
+    def test_mkv_sources_do_not_require_makemkv(self) -> None:
+        with (
+            patch.object(preflight.config, "source_path", Path("movie.mkv")),
+            patch.object(preflight.config, "start_stage", Stage.CREATE_MKV),
+        ):
+            required_paths = preflight.get_required_dependency_binaries_for_current_job()
+
+        self.assertNotIn(preflight.config.MAKEMKVCON_PATH, required_paths)
+
     def test_disc_sources_require_makemkv(self) -> None:
         with (
             patch.object(preflight.config, "source_path", None),

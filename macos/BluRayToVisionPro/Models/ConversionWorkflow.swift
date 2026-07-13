@@ -123,12 +123,12 @@ struct AppCapabilities: Equatable {
     let automaticUpdateChecksAvailable: Bool
 
     static let current = AppCapabilities(
-        conversionAvailable: false,
+        conversionAvailable: true,
         automaticUpdateChecksAvailable: false
     )
 
     var conversionUnavailableReason: String {
-        "This build can analyze sources and prepare a conversion, but it cannot start one."
+        "Conversion requires an MKV, MTS, or M2TS source."
     }
 
     var automaticUpdatesUnavailableReason: String {

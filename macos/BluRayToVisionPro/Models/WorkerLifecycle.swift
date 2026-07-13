@@ -19,6 +19,11 @@ enum WorkerPhase: String, Equatable {
     }
 }
 
+enum WorkerOperationKind: Equatable {
+    case inspection
+    case conversion
+}
+
 enum WorkerLifecycleError: Error, LocalizedError, Equatable {
     case noSource
     case protocolMismatch(received: Int)
@@ -32,21 +37,22 @@ enum WorkerLifecycleError: Error, LocalizedError, Equatable {
         case .noSource:
             return "Choose a source before continuing."
         case .protocolMismatch:
-            return "The app could not read the source analysis."
+            return "The app could not read the engine response."
         case .unexpectedJob:
-            return "The app received an unexpected source response."
+            return "The app received an unexpected engine response."
         case .unexpectedSequence:
-            return "The source analysis ended unexpectedly."
+            return "The operation ended unexpectedly."
         case .eventAfterTerminal:
-            return "The source analysis returned extra data after it finished."
+            return "The operation returned extra data after it finished."
         case .missingPayload:
-            return "The source analysis did not return all required details."
+            return "The operation did not return all required details."
         }
     }
 }
 
 struct WorkerLifecycleState: Equatable {
     private(set) var phase: WorkerPhase = .empty
+    private(set) var operationKind: WorkerOperationKind = .inspection
     private(set) var sourceURL: URL?
     private(set) var jobID: UUID?
     private(set) var lastSequence: Int?
@@ -55,6 +61,7 @@ struct WorkerLifecycleState: Equatable {
     private(set) var warningMessage: String?
     private(set) var elapsedSeconds = 0
     private(set) var result: SourceInspection?
+    private(set) var conversionResult: ConversionResult?
     private(set) var failureMessage: String?
     private(set) var failureDetails: String?
     private(set) var failureRetryable = false
@@ -65,14 +72,19 @@ struct WorkerLifecycleState: Equatable {
         resetJobState()
     }
 
-    mutating func begin(jobID: UUID) throws {
+    mutating func begin(jobID: UUID, operationKind: WorkerOperationKind = .inspection) throws {
         guard sourceURL != nil else {
             throw WorkerLifecycleError.noSource
         }
+        let inspectionResult = result
         resetJobState()
+        if operationKind == .conversion {
+            result = inspectionResult
+        }
         self.jobID = jobID
-        phase = .inspecting
-        stageMessage = "Preparing analysis"
+        self.operationKind = operationKind
+        phase = operationKind == .inspection ? .inspecting : .processing
+        stageMessage = operationKind == .inspection ? "Preparing analysis" : "Preparing conversion"
     }
 
     mutating func receive(_ event: WorkerEvent) throws {
@@ -95,19 +107,19 @@ struct WorkerLifecycleState: Equatable {
         switch event.type {
         case .workerReady:
             if phase != .stopping {
-                phase = .inspecting
+                phase = operationKind == .inspection ? .inspecting : .processing
             }
-            stageMessage = "Preparing source"
+            stageMessage = operationKind == .inspection ? "Preparing source" : "Preparing conversion"
         case .jobStarted:
             if phase != .stopping {
-                phase = .inspecting
+                phase = operationKind == .inspection ? .inspecting : .processing
             }
-            stageMessage = "Reading video details"
+            stageMessage = operationKind == .inspection ? "Reading video details" : "Starting conversion"
         case .stageStarted:
             if phase != .stopping {
                 phase = .processing
             }
-            stageMessage = event.payload.message ?? event.payload.stage ?? "Analyzing source"
+            stageMessage = event.payload.message ?? event.payload.stage ?? "Processing"
         case .heartbeat:
             if phase != .stopping {
                 phase = .processing
@@ -117,13 +129,22 @@ struct WorkerLifecycleState: Equatable {
         case .log:
             activityMessage = event.payload.message
         case .warning:
-            warningMessage = event.payload.message ?? "The source analysis reported a warning."
+            warningMessage = event.payload.message ?? "The operation reported a warning."
         case .jobCompleted:
-            guard let result = event.payload.result else {
-                throw WorkerLifecycleError.missingPayload(event: event.type)
+            switch operationKind {
+            case .inspection:
+                guard let inspectionResult = event.payload.result else {
+                    throw WorkerLifecycleError.missingPayload(event: event.type)
+                }
+                result = inspectionResult
+                stageMessage = "Analysis complete"
+            case .conversion:
+                guard let convResult = event.payload.conversionResult else {
+                    throw WorkerLifecycleError.missingPayload(event: event.type)
+                }
+                conversionResult = convResult
+                stageMessage = "Conversion complete"
             }
-            self.result = result
-            stageMessage = "Analysis complete"
             phase = .completed
         case .jobFailed:
             guard let failure = event.payload.error else {
@@ -134,12 +155,12 @@ struct WorkerLifecycleState: Equatable {
             failureRetryable = failure.retryable
             phase = .failed
         case .jobCancelled:
-            activityMessage = event.payload.message ?? "Analysis stopped."
+            activityMessage = event.payload.message ?? (operationKind == .inspection ? "Analysis stopped." : "Conversion stopped.")
             phase = .cancelled
         case .jobDecisionRequired:
             failureMessage = event.payload.decision?.prompt ?? event.payload.message ?? "This source needs a choice before it can continue."
-            failureDetails = "Choose another source or try again."
-            failureRetryable = false
+            failureDetails = event.payload.decision?.details ?? "Adjust the conversion settings and try again."
+            failureRetryable = true
             phase = .failed
         }
     }
@@ -159,8 +180,8 @@ struct WorkerLifecycleState: Equatable {
         phase = .failed
     }
 
-    mutating func completeStop(message: String = "Inspection stopped.") {
-        activityMessage = message
+    mutating func completeStop() {
+        activityMessage = operationKind == .inspection ? "Inspection stopped." : "Conversion stopped."
         phase = .cancelled
     }
 
@@ -185,6 +206,7 @@ struct WorkerLifecycleState: Equatable {
         warningMessage = nil
         elapsedSeconds = 0
         result = nil
+        conversionResult = nil
         failureMessage = nil
         failureDetails = nil
         failureRetryable = false
