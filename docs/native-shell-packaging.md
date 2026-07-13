@@ -106,10 +106,11 @@ dispatch then removed after the job exits.
 
 ## Release Placement
 
-The native shell does not replace the current `0.2.x` Briefcase/Sparkle release
-line while Start Processing remains unavailable. Publishing this bundle through
-the normal Release Candidates appcast would replace a working converter with a
-UI-only build and would leave testers without the current updater path.
+The native shell does not yet replace the current `0.2.x` Briefcase/Sparkle
+release line. Native Start Processing is initially limited to inspected MKV,
+MTS, and M2TS files; disc, image, folder, batch, interactive recovery, and the
+native updater path still need release-level completion before promotion through
+the normal Release Candidates appcast.
 
 The preview uses a separate product name and bundle identifier, installs beside
 the production app, targets Apple Silicon macOS 27, and is published only as a

@@ -3,10 +3,22 @@ import Foundation
 struct ConversionResult: Decodable, Equatable {
     let outputPath: String
     let durationSeconds: Double?
+    let sizeBytes: Int64?
+
+    var outputURL: URL {
+        URL(fileURLWithPath: outputPath)
+    }
+
+    init(outputPath: String, durationSeconds: Double? = nil, sizeBytes: Int64? = nil) {
+        self.outputPath = outputPath
+        self.durationSeconds = durationSeconds
+        self.sizeBytes = sizeBytes
+    }
 
     enum CodingKeys: String, CodingKey {
         case outputPath = "output_path"
         case durationSeconds = "duration_seconds"
+        case sizeBytes = "size_bytes"
     }
 }
 
@@ -43,11 +55,13 @@ struct WorkerDecision: Decodable, Equatable {
     let identifier: String
     let prompt: String
     let choices: [String]
+    let details: String?
 
     enum CodingKeys: String, CodingKey {
         case identifier = "id"
         case prompt
         case choices
+        case details
     }
 }
 

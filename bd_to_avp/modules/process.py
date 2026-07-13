@@ -2,6 +2,7 @@ import os
 import subprocess
 from pathlib import Path
 from threading import Event
+from typing import Protocol
 
 from wakepy.modes import keep
 
@@ -40,6 +41,12 @@ class BatchProcessingError(Exception):
         self.batch_sources = batch_sources
 
 
+class ActivityReporter(Protocol):
+    def stage_started(self, stage: str, message: str) -> None: ...
+
+    def log(self, message: str, *, stage: str | None = None, **fields: object) -> None: ...
+
+
 def raise_if_cancelled(cancellation_event: Event | None) -> None:
     if cancellation_event is not None and cancellation_event.is_set():
         raise ProcessingCancelled("Processing was cancelled.")
@@ -66,10 +73,12 @@ def process(
     resume_source_path: Path | None = None,
     batch_start_stage: Stage | None = None,
     batch_sources: tuple[Path, ...] | None = None,
-) -> None:
+    activity: ActivityReporter | None = None,
+) -> Path | None:
     raise_if_cancelled(cancellation_event)
     batch_start_stage = batch_start_stage or gui_start_stage
     waiting_for_resume = resume_source_path is not None
+    final_output_path = None
     if config.source_folder_path:
         batch_sources = batch_sources if batch_sources is not None else find_batch_sources(config.source_folder_path)
         for source in batch_sources:
@@ -83,7 +92,11 @@ def process(
             config.source_path = source
             config.start_stage = gui_start_stage if is_resume_source else batch_start_stage
             try:
-                process_each(cancellation_event)
+                final_output_path = (
+                    process_each(cancellation_event, activity=activity)
+                    if activity
+                    else process_each(cancellation_event)
+                )
                 raise_if_cancelled(cancellation_event)
             except preflight.DependencyPreflightError:
                 raise
@@ -104,16 +117,26 @@ def process(
             raise FileNotFoundError(f"Could not resume batch source: {resume_source_path}")
 
     else:
-        process_each(cancellation_event)
+        final_output_path = (
+            process_each(cancellation_event, activity=activity) if activity else process_each(cancellation_event)
+        )
+
+    return final_output_path
 
 
-def process_each(cancellation_event: Event | None = None) -> None:
+def process_each(cancellation_event: Event | None = None, activity: ActivityReporter | None = None) -> Path:
     raise_if_cancelled(cancellation_event)
     print(f"\nProcessing {config.source_path}")
+    if activity:
+        activity.stage_started("preflight", "Checking required conversion tools")
     preflight.verify_runtime_ready()
     raise_if_cancelled(cancellation_event)
+    if activity:
+        activity.stage_started("inspect_source", "Reading video metadata")
     disc_info = get_disc_and_mvc_video_info()
     raise_if_cancelled(cancellation_event)
+    if activity:
+        activity.log("Source metadata loaded", stage="inspect_source", name=disc_info.name)
     output_folder = prepare_output_folder_for_source(disc_info.name)
 
     tmp_folder = config.output_root_path / "temp_files"
@@ -124,33 +147,55 @@ def process_each(cancellation_event: Event | None = None) -> None:
         raise RuntimeError(f"Failed to create temporary folder: {tmp_folder}")
 
     print(f"Using temporary folder: {os.environ['TMPDIR']}")
+    if activity:
+        activity.log("Temporary workspace ready", stage="preflight", path=os.environ["TMPDIR"])
 
     completed_path = config.output_root_path / f"{disc_info.name}{config.FINAL_FILE_TAG}.mov"
     if not config.overwrite and file_exists_normalized(completed_path):
         raise FileExistsError(f"Output file already exists for {disc_info.name}. Use --overwrite to replace.")
 
     raise_if_cancelled(cancellation_event)
+    if activity:
+        activity.stage_started("create_mkv", "Preparing source video")
     mkv_output_path = create_mkv_file(output_folder, disc_info, config.language_code)
     raise_if_cancelled(cancellation_event)
+    if activity:
+        activity.stage_started("probe_color", "Reading video color depth")
     disc_info.color_depth = get_video_color_depth(mkv_output_path)
     raise_if_cancelled(cancellation_event)
+    if activity:
+        activity.stage_started("detect_crop", "Checking frame crop parameters")
     crop_params = detect_crop_parameters(mkv_output_path)
     raise_if_cancelled(cancellation_event)
+    if activity:
+        activity.stage_started("extract_mvc_and_audio", "Extracting MVC video and audio")
     audio_output_path, video_output_path = create_mvc_and_audio(disc_info.name, mkv_output_path, output_folder)
     raise_if_cancelled(cancellation_event)
+    if activity:
+        activity.stage_started("extract_subtitles", "Extracting subtitles")
     create_srt_from_mkv(mkv_output_path, output_folder)
     raise_if_cancelled(cancellation_event)
+    if activity:
+        activity.stage_started("create_left_right_files", "Creating left and right eye video")
     left_output_path, right_output_path = create_left_right_files(
         disc_info, output_folder, video_output_path, crop_params
     )
     raise_if_cancelled(cancellation_event)
+    if activity:
+        activity.stage_started("combine_to_mv_hevc", "Combining stereo video into MV-HEVC")
     mv_hevc_path = create_mv_hevc_file(left_output_path, right_output_path, output_folder, disc_info)
     raise_if_cancelled(cancellation_event)
+    if activity and config.fx_upscale:
+        activity.stage_started("upscale_video", "Upscaling video")
     mv_hevc_path = create_upscaled_file(mv_hevc_path)
 
     raise_if_cancelled(cancellation_event)
+    if activity:
+        activity.stage_started("transcode_audio", "Preparing audio")
     audio_output_path = create_transcoded_audio_file(audio_output_path, output_folder)
     raise_if_cancelled(cancellation_event)
+    if activity:
+        activity.stage_started("create_final_file", "Muxing final spatial video")
     muxed_output_path = create_muxed_file(
         audio_output_path,
         mv_hevc_path,
@@ -158,7 +203,9 @@ def process_each(cancellation_event: Event | None = None) -> None:
         disc_info.name,
     )
     raise_if_cancelled(cancellation_event)
-    move_file_to_output_root_folder(muxed_output_path)
+    if activity:
+        activity.stage_started("move_files", "Moving completed video")
+    final_output_path = move_file_to_output_root_folder(muxed_output_path)
 
     raise_if_cancelled(cancellation_event)
     if not config.keep_files:
@@ -166,7 +213,9 @@ def process_each(cancellation_event: Event | None = None) -> None:
 
     raise_if_cancelled(cancellation_event)
     if config.remove_original:
-        remove_original_source(completed_path)
+        remove_original_source(final_output_path)
+
+    return final_output_path
 
 
 def remove_original_source(completed_path: Path) -> bool:
@@ -190,25 +239,27 @@ def start_process(
     resume_source_path: Path | None = None,
     batch_start_stage: Stage | None = None,
     batch_sources: tuple[Path, ...] | None = None,
-) -> None:
+    activity: ActivityReporter | None = None,
+) -> Path | None:
     gui_start_stage = gui_start_stage or config.start_stage
     if config.keep_awake:
         with keep.running():
-            process(
+            return process(
                 gui_start_stage,
                 cancellation_event,
                 resume_source_path=resume_source_path,
                 batch_start_stage=batch_start_stage,
                 batch_sources=batch_sources,
+                activity=activity,
             )
-    else:
-        process(
-            gui_start_stage,
-            cancellation_event,
-            resume_source_path=resume_source_path,
-            batch_start_stage=batch_start_stage,
-            batch_sources=batch_sources,
-        )
+    return process(
+        gui_start_stage,
+        cancellation_event,
+        resume_source_path=resume_source_path,
+        batch_start_stage=batch_start_stage,
+        batch_sources=batch_sources,
+        activity=activity,
+    )
 
 
 if __name__ == "__main__":

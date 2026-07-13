@@ -37,15 +37,15 @@ enum WorkerLifecycleError: Error, LocalizedError, Equatable {
         case .noSource:
             return "Choose a source before continuing."
         case .protocolMismatch:
-            return "The app could not read the source analysis."
+            return "The app could not read the engine response."
         case .unexpectedJob:
-            return "The app received an unexpected source response."
+            return "The app received an unexpected engine response."
         case .unexpectedSequence:
-            return "The source analysis ended unexpectedly."
+            return "The operation ended unexpectedly."
         case .eventAfterTerminal:
-            return "The source analysis returned extra data after it finished."
+            return "The operation returned extra data after it finished."
         case .missingPayload:
-            return "The source analysis did not return all required details."
+            return "The operation did not return all required details."
         }
     }
 }
@@ -76,10 +76,14 @@ struct WorkerLifecycleState: Equatable {
         guard sourceURL != nil else {
             throw WorkerLifecycleError.noSource
         }
+        let inspectionResult = result
         resetJobState()
+        if operationKind == .conversion {
+            result = inspectionResult
+        }
         self.jobID = jobID
         self.operationKind = operationKind
-        phase = .inspecting
+        phase = operationKind == .inspection ? .inspecting : .processing
         stageMessage = operationKind == .inspection ? "Preparing analysis" : "Preparing conversion"
     }
 
@@ -103,12 +107,12 @@ struct WorkerLifecycleState: Equatable {
         switch event.type {
         case .workerReady:
             if phase != .stopping {
-                phase = .inspecting
+                phase = operationKind == .inspection ? .inspecting : .processing
             }
             stageMessage = operationKind == .inspection ? "Preparing source" : "Preparing conversion"
         case .jobStarted:
             if phase != .stopping {
-                phase = .inspecting
+                phase = operationKind == .inspection ? .inspecting : .processing
             }
             stageMessage = operationKind == .inspection ? "Reading video details" : "Starting conversion"
         case .stageStarted:
@@ -155,8 +159,8 @@ struct WorkerLifecycleState: Equatable {
             phase = .cancelled
         case .jobDecisionRequired:
             failureMessage = event.payload.decision?.prompt ?? event.payload.message ?? "This source needs a choice before it can continue."
-            failureDetails = "Choose another source or try again."
-            failureRetryable = false
+            failureDetails = event.payload.decision?.details ?? "Adjust the conversion settings and try again."
+            failureRetryable = true
             phase = .failed
         }
     }

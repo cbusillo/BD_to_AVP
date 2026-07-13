@@ -182,12 +182,34 @@ struct SourceWorkspaceView: View {
                         ProgressView()
                             .controlSize(.small)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Reading source details…")
+                            Text(state.operationKind == .inspection ? "Reading source details…" : "Converting video…")
                                 .fontWeight(.medium)
-                            Text(state.stageMessage ?? "Inspecting video streams")
+                            Text(
+                                state.stageMessage
+                                    ?? (state.operationKind == .inspection ? "Inspecting video streams" : "Processing video")
+                            )
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                    }
+                } else if state.phase == .failed {
+                    Divider()
+                    Label(
+                        state.failureMessage
+                            ?? (state.operationKind == .inspection
+                                ? "The source could not be analyzed."
+                                : "The source could not be converted."),
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(.red)
+                    if let details = state.failureDetails, !details.isEmpty {
+                        Text(details)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    if state.operationKind == .inspection, state.failureRetryable {
+                        Button("Analyze Again", action: retryAnalysis)
                     }
                 } else if let result = state.result {
                     Divider()
@@ -209,13 +231,6 @@ struct SourceWorkspaceView: View {
                                 SourceFact(label: "Size", value: result.formattedSize)
                             }
                         }
-                    }
-                } else if state.phase == .failed {
-                    Divider()
-                    Label(state.failureMessage ?? "The source could not be analyzed.", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
-                    if state.failureRetryable {
-                        Button("Analyze Again", action: retryAnalysis)
                     }
                 } else if source.kind.isDiscWorkflow {
                     Divider()

@@ -248,6 +248,23 @@ class ProcessPreflightTests(unittest.TestCase):
             self.assertTrue(output_folder.exists())
             self.assertEqual((output_root / "Movie_AVP.mov").read_bytes(), b"final")
 
+    def test_output_move_returns_final_output_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir)
+            output_folder = output_root / "Movie"
+            output_folder.mkdir()
+            muxed_path = output_folder / "Movie_AVP.mov"
+            muxed_path.write_bytes(b"final")
+
+            with (
+                patch.object(process.config, "output_root_path", output_root),
+                patch.object(process.config, "keep_files", True),
+            ):
+                final_path = move_file_to_output_root_folder(muxed_path)
+
+            self.assertEqual(final_path, output_root / "Movie_AVP.mov")
+            self.assertEqual(final_path.read_bytes(), b"final")
+
     def test_create_mkv_start_preserves_symlink_source_inside_output_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

@@ -5,7 +5,7 @@ import XCTest
 
 final class ConversionViewModelTests: XCTestCase {
     @MainActor
-    func testTerminalEventWaitsForProcessExitAndQuitCancellationWins() async throws {
+    func testTerminalCompletionWinsIfStopIsRequestedBeforeProcessExit() async throws {
         let terminalDelivered = expectation(description: "terminal delivered")
         let worker = ControlledWorkerClient(terminalDelivered: terminalDelivered)
         let viewModel = ConversionViewModel { worker }
@@ -20,7 +20,8 @@ final class ConversionViewModelTests: XCTestCase {
             await viewModel.stopForQuit()
 
             XCTAssertFalse(viewModel.hasActiveWorker)
-            XCTAssertEqual(viewModel.state.phase, .cancelled)
+            XCTAssertEqual(viewModel.state.phase, .completed)
+            XCTAssertEqual(viewModel.state.result?.name, "movie")
         }
     }
 
@@ -84,8 +85,9 @@ final class ConversionViewModelTests: XCTestCase {
             onInspectionComplete: { inspectionDone.fulfill() },
             onConversionJobReceived: { spec in
                 XCTAssertEqual(spec.operation, "convert_source")
-                XCTAssertNotNil(spec.conversionSettings)
-                XCTAssertEqual(spec.conversionSettings?.outputLength, "full_movie")
+                XCTAssertNotNil(spec.destination)
+                XCTAssertNotNil(spec.encoding)
+                XCTAssertEqual(spec.job?.outputLength, "full_movie")
                 conversionStarted.fulfill()
             }
         )
@@ -109,8 +111,10 @@ final class ConversionViewModelTests: XCTestCase {
             viewModel.startConversion(draft: draft)
 
             await fulfillment(of: [conversionStarted], timeout: 2)
-            XCTAssertTrue(viewModel.hasActiveWorker)
+            while viewModel.hasActiveWorker { await Task.yield() }
             XCTAssertEqual(viewModel.state.operationKind, .conversion)
+            XCTAssertEqual(viewModel.state.phase, .completed)
+            XCTAssertEqual(viewModel.state.conversionResult?.outputPath, "/Movies/movie_AVP.mov")
         }
     }
 
@@ -120,7 +124,8 @@ final class ConversionViewModelTests: XCTestCase {
         let conversionStarted = expectation(description: "conversion started")
         let worker = TwoPhaseWorkerClient(
             onInspectionComplete: { inspectionDone.fulfill() },
-            onConversionJobReceived: { _ in conversionStarted.fulfill() }
+            onConversionJobReceived: { _ in conversionStarted.fulfill() },
+            waitsForConversionCancellation: true
         )
         let viewModel = ConversionViewModel { worker }
 
@@ -147,6 +152,71 @@ final class ConversionViewModelTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testStartConversionRejectsDraftForDifferentSource() async throws {
+        let inspectionDone = expectation(description: "inspection done")
+        let viewModel = ConversionViewModel {
+            TwoPhaseWorkerClient(onInspectionComplete: { inspectionDone.fulfill() })
+        }
+
+        try await withTemporarySource { sourceURL in
+            viewModel.selectSource(sourceURL)
+            await fulfillment(of: [inspectionDone], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+
+            let otherURL = sourceURL.deletingLastPathComponent().appendingPathComponent("other.m2ts")
+            _ = FileManager.default.createFile(atPath: otherURL.path, contents: Data("video".utf8))
+            let draft = ConversionDraft(
+                source: ConversionSource(kind: .transportStream, url: otherURL),
+                sourceDetails: viewModel.state.result,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: URL(fileURLWithPath: "/Movies"),
+                outputLength: .fullMovie,
+                samplePosition: .beginning,
+                options: ConversionOptions()
+            )
+
+            viewModel.startConversion(draft: draft)
+
+            XCTAssertFalse(viewModel.hasActiveWorker)
+            XCTAssertEqual(viewModel.state.phase, .failed)
+            XCTAssertEqual(viewModel.state.failureMessage, "Analyze the selected source before starting conversion.")
+        }
+    }
+
+    @MainActor
+    func testStartConversionRejectsSampleOutput() async throws {
+        let inspectionDone = expectation(description: "inspection done")
+        let viewModel = ConversionViewModel {
+            TwoPhaseWorkerClient(onInspectionComplete: { inspectionDone.fulfill() })
+        }
+
+        try await withTemporarySource { sourceURL in
+            viewModel.selectSource(sourceURL)
+            await fulfillment(of: [inspectionDone], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+
+            let draft = ConversionDraft(
+                source: viewModel.source!,
+                sourceDetails: viewModel.state.result,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: URL(fileURLWithPath: "/Movies"),
+                outputLength: .oneMinute,
+                samplePosition: .beginning,
+                options: ConversionOptions()
+            )
+
+            viewModel.startConversion(draft: draft)
+
+            XCTAssertFalse(viewModel.hasActiveWorker)
+            XCTAssertEqual(viewModel.state.phase, .failed)
+            XCTAssertEqual(
+                viewModel.state.failureMessage,
+                "Short sample conversion is not available yet. Choose Full Movie."
+            )
+        }
+    }
+
     private func withTemporarySource(_ operation: @MainActor (URL) async throws -> Void) async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -166,10 +236,16 @@ private final class TwoPhaseWorkerClient: WorkerProcessRunning, @unchecked Senda
 
     var onInspectionComplete: (() -> Void)?
     var onConversionJobReceived: ((WorkerJobSpec) -> Void)?
+    private let waitsForConversionCancellation: Bool
 
-    init(onInspectionComplete: (() -> Void)? = nil, onConversionJobReceived: ((WorkerJobSpec) -> Void)? = nil) {
+    init(
+        onInspectionComplete: (() -> Void)? = nil,
+        onConversionJobReceived: ((WorkerJobSpec) -> Void)? = nil,
+        waitsForConversionCancellation: Bool = false
+    ) {
         self.onInspectionComplete = onInspectionComplete
         self.onConversionJobReceived = onConversionJobReceived
+        self.waitsForConversionCancellation = waitsForConversionCancellation
     }
 
     func run(job: WorkerJobSpec, onEvent: @escaping (WorkerEvent) async throws -> Void) async throws -> WorkerRunResult {
@@ -190,16 +266,30 @@ private final class TwoPhaseWorkerClient: WorkerProcessRunning, @unchecked Senda
         if isConversion {
             onConversionJobReceived?(job)
             try await onEvent(ready)
-            await waitForConversionCancellation()
-            let cancelled = WorkerEvent(
+            if waitsForConversionCancellation {
+                await waitForConversionCancellation()
+                let cancelled = WorkerEvent(
+                    protocolVersion: WorkerJobSpec.protocolVersion,
+                    type: .jobCancelled,
+                    jobID: job.jobID,
+                    sequence: 1,
+                    payload: WorkerEventPayload(message: "Conversion stopped.")
+                )
+                try await onEvent(cancelled)
+                return WorkerRunResult(terminalEvent: cancelled, exitStatus: SIGTERM, diagnostics: "")
+            }
+
+            let completed = WorkerEvent(
                 protocolVersion: WorkerJobSpec.protocolVersion,
-                type: .jobCancelled,
+                type: .jobCompleted,
                 jobID: job.jobID,
                 sequence: 1,
-                payload: WorkerEventPayload(message: "Conversion stopped.")
+                payload: WorkerEventPayload(
+                    conversionResult: ConversionResult(outputPath: "/Movies/movie_AVP.mov")
+                )
             )
-            try await onEvent(cancelled)
-            return WorkerRunResult(terminalEvent: cancelled, exitStatus: SIGTERM, diagnostics: "")
+            try await onEvent(completed)
+            return WorkerRunResult(terminalEvent: completed, exitStatus: 0, diagnostics: "")
         } else {
             let result = SourceInspection(name: "movie", resolution: "1920x1080", frameRate: "24/1", interlaced: false, sizeBytes: 10)
             let completed = WorkerEvent(

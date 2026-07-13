@@ -86,13 +86,15 @@ final class ConversionWorkflowTests: XCTestCase {
         let draft = makeDraft(kind: .matroska, extension: "mkv")
         let spec = WorkerJobSpec(draft: draft)
         XCTAssertEqual(spec.operation, "convert_source")
-        XCTAssertNotNil(spec.conversionSettings)
+        XCTAssertNotNil(spec.destination)
+        XCTAssertNotNil(spec.encoding)
+        XCTAssertNotNil(spec.job)
     }
 
     func testConversionJobSpecAlwaysSendsFullMovie() {
         let draft = makeDraft(kind: .transportStream, extension: "m2ts", outputLength: .threeMinutes)
         let spec = WorkerJobSpec(draft: draft)
-        XCTAssertEqual(spec.conversionSettings?.outputLength, "full_movie")
+        XCTAssertEqual(spec.job?.outputLength, "full_movie")
     }
 
     func testConversionJobSpecEncodesSourceAndDestination() {
@@ -109,7 +111,7 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let spec = WorkerJobSpec(draft: draft)
         XCTAssertEqual(spec.source.path, "/src/movie.mkv")
-        XCTAssertEqual(spec.conversionSettings?.destination.path, "/Movies")
+        XCTAssertEqual(spec.destination?.path, "/Movies")
     }
 
     func testConversionJobSpecEncodesVideoAndAudioSettings() {
@@ -130,11 +132,11 @@ final class ConversionWorkflowTests: XCTestCase {
             options: ConversionOptions(encoding: encoding)
         )
         let spec = WorkerJobSpec(draft: draft)
-        XCTAssertEqual(spec.conversionSettings?.video.hevcQuality, 80)
-        XCTAssertTrue(spec.conversionSettings?.video.upscaleEnabled == true)
-        XCTAssertEqual(spec.conversionSettings?.video.fieldOfView, 120)
-        XCTAssertEqual(spec.conversionSettings?.audio.handling, "transcode_aac")
-        XCTAssertEqual(spec.conversionSettings?.audio.bitrate, 512)
+        XCTAssertEqual(spec.encoding?.mvHEVCQuality, 80)
+        XCTAssertTrue(spec.encoding?.fxUpscale == true)
+        XCTAssertEqual(spec.encoding?.fieldOfView, 120)
+        XCTAssertTrue(spec.encoding?.transcodeAudio == true)
+        XCTAssertEqual(spec.encoding?.audioBitrate, 512)
     }
 
     func testConversionJobSpecEncodesJobSettings() {
@@ -153,18 +155,63 @@ final class ConversionWorkflowTests: XCTestCase {
             options: ConversionOptions(job: job)
         )
         let spec = WorkerJobSpec(draft: draft)
-        XCTAssertEqual(spec.conversionSettings?.job.startStage, ConversionStage.extractMVCAndAudio.rawValue)
-        XCTAssertTrue(spec.conversionSettings?.job.keepStageFiles == true)
-        XCTAssertTrue(spec.conversionSettings?.job.softwareEncoder == true)
+        XCTAssertEqual(spec.job?.startStage, ConversionStage.extractMVCAndAudio.rawValue)
+        XCTAssertTrue(spec.job?.keepFiles == true)
+        XCTAssertTrue(spec.job?.softwareEncoder == true)
     }
 
     func testInspectionJobSpecOmitsConversionSettings() throws {
         let spec = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/src/m.mkv"))
         XCTAssertEqual(spec.operation, "inspect_source")
-        XCTAssertNil(spec.conversionSettings)
+        XCTAssertNil(spec.destination)
+        XCTAssertNil(spec.encoding)
+        XCTAssertNil(spec.job)
         let data = try JSONEncoder().encode(spec)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        XCTAssertNil(json?["conversion_settings"], "inspection spec must not include conversion_settings key")
+        XCTAssertNil(json?["destination"], "inspection spec must not include destination")
+        XCTAssertNil(json?["encoding"], "inspection spec must not include encoding")
+        XCTAssertNil(json?["job"], "inspection spec must not include job options")
+    }
+
+    func testConversionJobSpecWireFormatMatchesWorkerContract() throws {
+        let spec = WorkerJobSpec(draft: makeDraft(kind: .matroska, extension: "mkv"))
+        let data = try JSONEncoder().encode(spec)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let encoding = try XCTUnwrap(json["encoding"] as? [String: Any])
+        let job = try XCTUnwrap(json["job"] as? [String: Any])
+
+        XCTAssertEqual(json["operation"] as? String, "convert_source")
+        XCTAssertEqual((json["destination"] as? [String: Any])?["path"] as? String, "/Movies")
+        XCTAssertEqual(encoding["mv_hevc_quality"] as? Int, 75)
+        XCTAssertEqual(encoding["language_code"] as? String, "eng")
+        XCTAssertEqual(job["start_stage"] as? Int, 1)
+        XCTAssertEqual(job["output_length"] as? String, "full_movie")
+        XCTAssertNil(json["conversion_settings"])
+    }
+
+    func testConversionJobSpecMatchesSharedPythonFixture() throws {
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/movie.mkv")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            outputLength: .fullMovie,
+            samplePosition: .beginning,
+            options: ConversionOptions()
+        )
+        let spec = WorkerJobSpec(
+            draft: draft,
+            jobID: try XCTUnwrap(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
+        )
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("tests/fixtures/native_worker_convert_v1.json")
+        let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? NSDictionary
+
+        XCTAssertEqual(encoded, fixture)
     }
 
     private func makeDraft(
