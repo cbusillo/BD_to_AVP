@@ -1,10 +1,40 @@
 import Foundation
 
 struct WorkerJobSpec: Encodable, Equatable {
-    static let protocolVersion = 1
+    static let protocolVersion = 2
 
     struct Source: Encodable, Equatable {
+        enum Kind: String, Encodable {
+            case directFile = "direct_file"
+            case discImage = "disc_image"
+            case bluRayFolder = "blu_ray_folder"
+        }
+
+        let kind: Kind
         let path: String
+
+        init(source: ConversionSource) {
+            switch source.kind {
+            case .discImage:
+                kind = .discImage
+            case .bluRayFolder:
+                kind = .bluRayFolder
+            case .matroska, .transportStream:
+                kind = .directFile
+            case .physicalDisc, .sourceFolder:
+                preconditionFailure("Unsupported worker source kind: \(source.kind)")
+            }
+            path = source.url.path
+        }
+
+        init(fileURL: URL) {
+            if fileURL.hasDirectoryPath || DiscSourceDetector.isBluRayFolder(fileURL) {
+                kind = .bluRayFolder
+            } else {
+                kind = fileURL.pathExtension.lowercased() == "iso" ? .discImage : .directFile
+            }
+            path = fileURL.path
+        }
     }
 
     struct Destination: Encodable, Equatable {
@@ -80,12 +110,23 @@ struct WorkerJobSpec: Encodable, Equatable {
     let encoding: Encoding?
     let job: Job?
 
+    init(source: ConversionSource, jobID: UUID = UUID()) {
+        protocolVersion = Self.protocolVersion
+        type = "job.start"
+        self.jobID = jobID
+        operation = "inspect_source"
+        self.source = Source(source: source)
+        destination = nil
+        encoding = nil
+        job = nil
+    }
+
     init(sourceURL: URL, jobID: UUID = UUID()) {
         protocolVersion = Self.protocolVersion
         type = "job.start"
         self.jobID = jobID
         operation = "inspect_source"
-        source = Source(path: sourceURL.path)
+        source = Source(fileURL: sourceURL)
         destination = nil
         encoding = nil
         job = nil
@@ -96,7 +137,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         type = "job.start"
         self.jobID = jobID
         operation = "convert_source"
-        source = Source(path: draft.source.url.path)
+        source = Source(source: draft.source)
         destination = Destination(path: draft.destinationURL.path)
 
         let encodingOptions = draft.options.encoding

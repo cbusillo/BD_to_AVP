@@ -136,6 +136,47 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testBluRayFolderSelectionStartsInspectionAndConversion() async throws {
+        let inspectionDone = expectation(description: "inspection done")
+        let conversionStarted = expectation(description: "conversion started")
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { spec in
+                XCTAssertEqual(spec.source.kind, .bluRayFolder)
+                conversionStarted.fulfill()
+            }
+        )
+        let viewModel = ConversionViewModel { worker }
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let discURL = directoryURL.appendingPathComponent("Feature", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: discURL.appendingPathComponent("BDMV", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        viewModel.selectSource(discURL)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+
+        let draft = ConversionDraft(
+            source: try XCTUnwrap(viewModel.source),
+            sourceDetails: viewModel.state.result,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: directoryURL.appendingPathComponent("Output", isDirectory: true),
+            outputLength: .fullMovie,
+            samplePosition: .beginning,
+            options: ConversionOptions()
+        )
+        viewModel.startConversion(draft: draft)
+
+        await fulfillment(of: [conversionStarted], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        XCTAssertEqual(viewModel.state.phase, .completed)
+    }
+
+    @MainActor
     func testStartConversionForUnsupportedSourceKindDoesNotStartWorker() {
         let viewModel = ConversionViewModel()
         let discSource = ConversionSource(kind: .physicalDisc, url: URL(fileURLWithPath: "/Volumes/Disc"))

@@ -13,15 +13,20 @@ import ffmpeg
 from bd_to_avp import preflight
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.disc import get_disc_and_mvc_video_info, MKVCreationError
+from bd_to_avp.modules.file import path_is_relative_to
 from bd_to_avp.modules.process import ProcessingCancelled, start_process
 from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
-from bd_to_avp.worker.protocol import JobSpec, WorkerActivityReporter, WorkerOperation
+from bd_to_avp.worker.protocol import (
+    JobSource,
+    JobSpec,
+    WorkerActivityReporter,
+    WorkerOperation,
+    WorkerSourceKind,
+)
 
 DIRECT_VIDEO_EXTENSIONS = frozenset({".mkv", ".mts", ".m2ts"})
 DISC_IMAGE_EXTENSIONS = frozenset({".iso"})
-SUPPORTED_INSPECTION_EXTENSIONS = DIRECT_VIDEO_EXTENSIONS | DISC_IMAGE_EXTENSIONS
-SUPPORTED_CONVERSION_EXTENSIONS = SUPPORTED_INSPECTION_EXTENSIONS
 TOOL_ENVIRONMENT_KEYS = ("PATH", "FFMPEG_BINARY", "FFPROBE_BINARY", "TMPDIR")
 CONFIG_SNAPSHOT_FIELDS = (
     "source_str",
@@ -79,7 +84,7 @@ def run_operation(
     activity: WorkerActivityReporter | None = None,
 ) -> dict[str, object]:
     if job.operation is WorkerOperation.INSPECT_SOURCE:
-        return inspect_source(job.source.path, owner)
+        return inspect_source(job.source, owner)
     if job.operation is WorkerOperation.CONVERT_SOURCE:
         if activity is None:
             raise WorkerOperationError("internal_error", "Conversion requires an activity reporter.")
@@ -87,28 +92,23 @@ def run_operation(
     raise WorkerOperationError("unsupported_operation", f"Unsupported worker operation: {job.operation.value}.")
 
 
-def inspect_source(source_path: Path, owner: WorkerProcessOwner) -> dict[str, object]:
-    if not source_path.exists():
-        raise WorkerOperationError("source_not_found", "The selected source no longer exists.")
-    if not source_path.is_file():
-        raise WorkerOperationError("source_not_file", "The selected source is not a regular file.")
-    if source_path.suffix.lower() not in SUPPORTED_INSPECTION_EXTENSIONS:
-        raise WorkerOperationError(
-            "unsupported_source",
-            "Source inspection supports ISO, MKV, MTS, and M2TS files.",
-        )
-    if source_path.suffix.lower() in DISC_IMAGE_EXTENSIONS and not config.MAKEMKVCON_PATH.is_file():
+def inspect_source(source: JobSource, owner: WorkerProcessOwner) -> dict[str, object]:
+    source_path = validate_source(source)
+    if (
+        source.kind in {WorkerSourceKind.DISC_IMAGE, WorkerSourceKind.BLU_RAY_FOLDER}
+        and not config.MAKEMKVCON_PATH.is_file()
+    ):
         raise WorkerOperationError(
             "makemkv_missing",
-            "MakeMKV is required to inspect a Blu-ray ISO.",
+            "MakeMKV is required to inspect this Blu-ray source.",
             retryable=True,
         )
-    if source_path.suffix.lower() in DIRECT_VIDEO_EXTENSIONS and not config.FFPROBE_PATH.is_file():
+    if source.kind is WorkerSourceKind.DIRECT_FILE and not config.FFPROBE_PATH.is_file():
         raise WorkerOperationError("ffprobe_missing", "The FFprobe helper could not be found.")
 
     owner.check_cancelled()
     try:
-        with configured_source(source_path):
+        with configured_source(source, source_path):
             disc_info = get_disc_and_mvc_video_info()
     except ffmpeg.Error as error:
         if owner.cancellation_event.is_set():
@@ -121,7 +121,7 @@ def inspect_source(source_path: Path, owner: WorkerProcessOwner) -> dict[str, ob
         details = error.output if isinstance(error.output, str) else None
         raise WorkerOperationError(
             "disc_inspection_failed",
-            "MakeMKV could not inspect the selected Blu-ray ISO.",
+            "MakeMKV could not inspect the selected Blu-ray source.",
             details,
             retryable=True,
         ) from error
@@ -135,17 +135,19 @@ def inspect_source(source_path: Path, owner: WorkerProcessOwner) -> dict[str, ob
         ) from error
 
     owner.check_cancelled()
-    return {
+    result: dict[str, object] = {
         "name": disc_info.name,
         "resolution": disc_info.resolution,
         "frame_rate": disc_info.frame_rate,
         "interlaced": disc_info.is_interlaced,
-        "size_bytes": source_path.stat().st_size,
     }
+    if source_path.is_file():
+        result["size_bytes"] = source_path.stat().st_size
+    return result
 
 
 def convert_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActivityReporter) -> dict[str, object]:
-    source_path = job.source.path
+    source_path = validate_source(job.source)
     destination = job.destination
     encoding = job.encoding
     job_options = job.job
@@ -153,20 +155,16 @@ def convert_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActi
         raise WorkerOperationError(
             "invalid_request", "Conversion requests require destination, encoding, and job options."
         )
-    if not source_path.exists():
-        raise WorkerOperationError("source_not_found", "The selected source no longer exists.")
-    if not source_path.is_file():
-        raise WorkerOperationError("source_not_file", "The selected source is not a regular file.")
-    if source_path.suffix.lower() not in SUPPORTED_CONVERSION_EXTENSIONS:
-        raise WorkerOperationError(
-            "unsupported_source",
-            "Conversion currently supports ISO, MKV, MTS, and M2TS files.",
-        )
     if destination.path.exists() and not destination.path.is_dir():
         raise WorkerOperationError("destination_not_directory", "The destination path must be a folder.")
+    if job.source.kind is WorkerSourceKind.BLU_RAY_FOLDER and path_is_relative_to(destination.path, source_path):
+        raise WorkerOperationError(
+            "destination_inside_source",
+            "Choose a destination outside the Blu-ray source folder.",
+        )
 
     owner.check_cancelled()
-    with configured_conversion(job):
+    with configured_conversion(job, source_path):
         try:
             activity.stage_started("configure", "Preparing conversion settings")
             config.configure_tool_environment()
@@ -247,13 +245,13 @@ def convert_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActi
 
 
 @contextmanager
-def configured_source(source_path: Path) -> Iterator[None]:
+def configured_source(source: JobSource, source_path: Path) -> Iterator[None]:
     previous_source_path = config.source_path
     previous_source_str = config.source_str
     previous_source_folder_path = config.source_folder_path
     try:
         config.source_path = source_path
-        config.source_str = None
+        config.source_str = makemkv_source(source.kind, source_path)
         config.source_folder_path = None
         yield
     finally:
@@ -263,15 +261,15 @@ def configured_source(source_path: Path) -> Iterator[None]:
 
 
 @contextmanager
-def configured_conversion(job: JobSpec) -> Iterator[None]:
+def configured_conversion(job: JobSpec, source_path: Path) -> Iterator[None]:
     assert job.destination is not None
     assert job.encoding is not None
     assert job.job is not None
     config_snapshot = {field: getattr(config, field) for field in CONFIG_SNAPSHOT_FIELDS}
     environment_snapshot = {key: os.environ.get(key) for key in TOOL_ENVIRONMENT_KEYS}
     try:
-        config.source_str = None
-        config.source_path = job.source.path
+        config.source_str = makemkv_source(job.source.kind, source_path)
+        config.source_path = source_path
         config.source_folder_path = None
         config.output_root_path = job.destination.path
         config.overwrite = job.job.overwrite
@@ -306,3 +304,53 @@ def configured_conversion(job: JobSpec) -> Iterator[None]:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+
+def validate_source(source: JobSource) -> Path:
+    source_path = source.path
+    if not source_path.exists():
+        raise WorkerOperationError("source_not_found", "The selected source no longer exists.")
+
+    if source.kind is WorkerSourceKind.DIRECT_FILE:
+        if not source_path.is_file() or source_path.suffix.lower() not in DIRECT_VIDEO_EXTENSIONS:
+            raise WorkerOperationError(
+                "source_kind_mismatch",
+                "Direct-file sources must be MKV, MTS, or M2TS files.",
+            )
+        return source_path
+
+    if source.kind is WorkerSourceKind.DISC_IMAGE:
+        if not source_path.is_file() or source_path.suffix.lower() not in DISC_IMAGE_EXTENSIONS:
+            raise WorkerOperationError(
+                "source_kind_mismatch",
+                "Disc-image sources must be ISO files.",
+            )
+        return source_path
+
+    blu_ray_root = normalize_blu_ray_root(source_path)
+    if blu_ray_root is None:
+        raise WorkerOperationError(
+            "invalid_bluray_folder",
+            "Choose a Blu-ray folder containing a BDMV directory.",
+        )
+    return blu_ray_root
+
+
+def normalize_blu_ray_root(source_path: Path) -> Path | None:
+    if not source_path.is_dir():
+        return None
+    if source_path.name.casefold() == "bdmv":
+        return source_path.parent
+    try:
+        has_bdmv = any(child.is_dir() and child.name.casefold() == "bdmv" for child in source_path.iterdir())
+    except OSError:
+        return None
+    return source_path if has_bdmv else None
+
+
+def makemkv_source(source_kind: WorkerSourceKind, source_path: Path) -> str | None:
+    if source_kind is WorkerSourceKind.DISC_IMAGE:
+        return f"iso:{source_path}"
+    if source_kind is WorkerSourceKind.BLU_RAY_FOLDER:
+        return f"file:{source_path}"
+    return None

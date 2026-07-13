@@ -20,7 +20,7 @@ class DiscStageArtifactTests(unittest.TestCase):
         )
         with (
             patch.object(disc.config, "source_path", Path("/Movies/Feature.iso")),
-            patch.object(disc.config, "source_str", None),
+            patch.object(disc.config, "source_str", "disc:0"),
             patch.object(disc.config, "IMAGE_EXTENSIONS", [".iso"]),
             patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
             patch.object(disc, "run_command", return_value=makemkv_output) as run_command,
@@ -30,6 +30,54 @@ class DiscStageArtifactTests(unittest.TestCase):
         self.assertEqual(result.name, "Feature 3D")
         self.assertEqual(result.main_title_number, 0)
         self.assertIn("iso:/Movies/Feature.iso", run_command.call_args.args[0])
+
+    def test_selected_bluray_folder_overrides_stale_disc_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "Feature"
+            source_path.mkdir()
+            with (
+                patch.object(disc.config, "source_path", source_path),
+                patch.object(disc.config, "source_str", "disc:0"),
+            ):
+                source = disc.get_makemkv_source()
+
+            self.assertEqual(source, f"file:{source_path}")
+
+    def test_disc_info_uses_explicit_file_source_for_bluray_folder(self) -> None:
+        makemkv_output = "\n".join(
+            [
+                'CINFO:2,0,"Feature 3D"',
+                'TINFO:0,9,0,"0:45:00"',
+                'SINFO:0,1,6,0,"Mpeg4-MVC-3D"',
+            ]
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "Feature"
+            source_path.mkdir()
+            with (
+                patch.object(disc.config, "source_path", source_path),
+                patch.object(disc.config, "source_str", f"file:{source_path}"),
+                patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
+                patch.object(disc, "run_command", return_value=makemkv_output) as run_command,
+            ):
+                result = disc.get_disc_and_mvc_video_info()
+
+            self.assertEqual(result.name, "Feature 3D")
+            self.assertEqual(
+                run_command.call_args.args[0],
+                [
+                    Path("/Applications/MakeMKV/makemkvcon"),
+                    "--robot",
+                    "--noscan",
+                    "info",
+                    f"file:{source_path}",
+                ],
+            )
+
+    def test_device_sources_do_not_disable_drive_scanning(self) -> None:
+        self.assertFalse(disc.makemkv_source_supports_noscan("disc:0"))
+        self.assertFalse(disc.makemkv_source_supports_noscan("dev:/dev/rdisk4"))
+        self.assertTrue(disc.makemkv_source_supports_noscan("file:/Movies/Feature"))
 
     def test_keep_files_copies_mkv_source_to_output_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

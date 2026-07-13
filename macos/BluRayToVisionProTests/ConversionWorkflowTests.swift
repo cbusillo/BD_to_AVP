@@ -61,10 +61,17 @@ final class ConversionWorkflowTests: XCTestCase {
         try withTemporaryDirectory { directoryURL in
             let discURL = directoryURL.appendingPathComponent("Feature Disc", isDirectory: true)
             let bdmvURL = discURL.appendingPathComponent("BDMV", isDirectory: true)
+            let lowercaseDiscURL = directoryURL.appendingPathComponent("Lowercase Disc", isDirectory: true)
             try FileManager.default.createDirectory(at: bdmvURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: lowercaseDiscURL.appendingPathComponent("bdmv", isDirectory: true),
+                withIntermediateDirectories: true
+            )
 
             XCTAssertTrue(DiscSourceDetector.isBluRayFolder(discURL))
+            XCTAssertTrue(DiscSourceDetector.isBluRayFolder(lowercaseDiscURL))
             XCTAssertEqual(ConversionSource.infer(from: discURL)?.kind, .bluRayFolder)
+            XCTAssertEqual(ConversionSource.infer(from: bdmvURL)?.url, discURL)
         }
     }
 
@@ -73,21 +80,22 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertFalse(AppCapabilities.current.automaticUpdateChecksAvailable)
         XCTAssertEqual(
             AppCapabilities.current.conversionUnavailableReason,
-            "Conversion requires an ISO, MKV, MTS, or M2TS source."
+            "Conversion requires a Blu-ray folder, ISO, MKV, MTS, or M2TS source."
         )
     }
 
-    func testISOAndExistingFileKindsSupportConversion() {
+    func testFolderISOAndExistingFileKindsSupportConversion() {
         XCTAssertTrue(ConversionSourceKind.discImage.supportsMetadataInspection)
         XCTAssertTrue(ConversionSourceKind.discImage.supportsConversion)
         XCTAssertEqual(ConversionSourceKind.discImage.allowedExtensions, ["iso"])
+        XCTAssertTrue(ConversionSourceKind.bluRayFolder.supportsMetadataInspection)
+        XCTAssertTrue(ConversionSourceKind.bluRayFolder.supportsConversion)
         XCTAssertTrue(ConversionSourceKind.matroska.supportsConversion)
         XCTAssertTrue(ConversionSourceKind.transportStream.supportsConversion)
     }
 
-    func testPhysicalDiscAndFolderKindsDoNotSupportConversion() {
+    func testPhysicalDiscAndBatchFolderKindsDoNotSupportConversion() {
         XCTAssertFalse(ConversionSourceKind.physicalDisc.supportsConversion)
-        XCTAssertFalse(ConversionSourceKind.bluRayFolder.supportsConversion)
         XCTAssertFalse(ConversionSourceKind.sourceFolder.supportsConversion)
     }
 
@@ -119,8 +127,23 @@ final class ConversionWorkflowTests: XCTestCase {
             options: ConversionOptions()
         )
         let spec = WorkerJobSpec(draft: draft)
+        XCTAssertEqual(spec.source.kind, .directFile)
         XCTAssertEqual(spec.source.path, "/src/movie.mkv")
         XCTAssertEqual(spec.destination?.path, "/Movies")
+    }
+
+    func testBluRayFolderJobSpecUsesExplicitFolderKind() {
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .bluRayFolder, url: URL(fileURLWithPath: "/src/Disc")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/Movies", isDirectory: true),
+            outputLength: .fullMovie,
+            samplePosition: .beginning,
+            options: ConversionOptions()
+        )
+
+        XCTAssertEqual(WorkerJobSpec(draft: draft).source.kind, .bluRayFolder)
     }
 
     func testConversionJobSpecEncodesVideoAndAudioSettings() {
@@ -182,14 +205,23 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertNil(json?["job"], "inspection spec must not include job options")
     }
 
+    func testInspectionJobSpecClassifiesDirectoryURLAsBluRayFolder() {
+        let sourceURL = URL(fileURLWithPath: "/src/Disc", isDirectory: true)
+
+        XCTAssertEqual(WorkerJobSpec(sourceURL: sourceURL).source.kind, .bluRayFolder)
+    }
+
     func testConversionJobSpecWireFormatMatchesWorkerContract() throws {
         let spec = WorkerJobSpec(draft: makeDraft(kind: .matroska, extension: "mkv"))
         let data = try JSONEncoder().encode(spec)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         let encoding = try XCTUnwrap(json["encoding"] as? [String: Any])
         let job = try XCTUnwrap(json["job"] as? [String: Any])
+        let source = try XCTUnwrap(json["source"] as? [String: Any])
 
         XCTAssertEqual(json["operation"] as? String, "convert_source")
+        XCTAssertEqual(json["protocol_version"] as? Int, 2)
+        XCTAssertEqual(source["kind"] as? String, "direct_file")
         XCTAssertEqual((json["destination"] as? [String: Any])?["path"] as? String, "/Movies")
         XCTAssertEqual(encoding["mv_hevc_quality"] as? Int, 75)
         XCTAssertEqual(encoding["language_code"] as? String, "eng")
@@ -217,7 +249,7 @@ final class ConversionWorkflowTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/native_worker_convert_v1.json")
+            .appendingPathComponent("tests/fixtures/native_worker_convert_v2.json")
         let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)

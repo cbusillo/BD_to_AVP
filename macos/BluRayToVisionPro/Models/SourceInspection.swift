@@ -5,7 +5,7 @@ struct SourceInspection: Codable, Equatable {
     let resolution: String
     let frameRate: String
     let interlaced: Bool
-    let sizeBytes: Int64
+    let sizeBytes: Int64?
 
     enum CodingKeys: String, CodingKey {
         case name
@@ -16,7 +16,10 @@ struct SourceInspection: Codable, Equatable {
     }
 
     var formattedSize: String {
-        ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
+        guard let sizeBytes else {
+            return "Not reported"
+        }
+        return ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
     }
 
     var scanDescription: String {

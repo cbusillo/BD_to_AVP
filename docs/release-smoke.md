@@ -96,7 +96,7 @@ With MakeMKV absent:
 2. Confirm Gatekeeper does not block launch.
 3. Confirm the app does not ask to install Homebrew, run terminal commands, or
    request admin privileges.
-4. Start a disc-oriented conversion far enough to trigger preflight.
+4. Start an ISO or Blu-ray-folder conversion far enough to trigger preflight.
 5. Confirm the message asks for MakeMKV in plain user-facing language.
 
 With MakeMKV installed:
@@ -104,8 +104,9 @@ With MakeMKV installed:
 1. Install the current macOS MakeMKV app from the official MakeMKV website.
 2. Reopen BD_to_AVP.
 3. Confirm the MakeMKV preflight no longer blocks disc-oriented work.
-4. If test media is available, run a short conversion smoke and record the first
-   failing stage, logs, runtime, and whether output files are created.
+4. If test media is available, inspect both an ISO and a Blu-ray folder. Run a
+   conversion smoke and record the first failing stage, logs, runtime, and
+   whether output files are created.
 
 ## Pass Criteria
 

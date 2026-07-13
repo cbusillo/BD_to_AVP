@@ -34,6 +34,7 @@ BRIEFCASE_APP = REPO_ROOT / "build" / "bd-to-avp" / "macos" / "app" / "3D Blu-ra
 PACKAGE_ROOT = MACOS_ROOT / "build" / "package"
 PACKAGED_APP = PACKAGE_ROOT / NATIVE_APP_NAME
 WORKER_EXECUTABLE_NAME = "BluRayToVisionProEngine"
+WORKER_PROTOCOL_VERSION = 2
 WORKER_ENTITLEMENTS = MACOS_ROOT / "BluRayToVisionPro" / "Worker.entitlements"
 DEPLOYMENT_TARGET_OVERRIDE_ENV = "BD_TO_AVP_NATIVE_DEPLOYMENT_TARGET_OVERRIDE"
 USER_INTERFACE_SOURCE_FILES = sorted(
@@ -384,11 +385,11 @@ def smoke_packaged_worker(app_path: Path) -> None:
         )
         job_id = str(uuid4())
         request = {
-            "protocol_version": 1,
+            "protocol_version": WORKER_PROTOCOL_VERSION,
             "type": "job.start",
             "job_id": job_id,
             "operation": "inspect_source",
-            "source": {"path": str(source_path)},
+            "source": {"kind": "direct_file", "path": str(source_path)},
         }
         completed = subprocess.run(
             [str(worker_path)],
@@ -428,8 +429,8 @@ def validate_smoke_events(events: list[object], job_id: str) -> None:
     typed_events = [cast(Mapping[str, Any], event) for event in events]
     if [event.get("sequence") for event in typed_events] != list(range(len(typed_events))):
         raise ValueError("Worker smoke event sequence was not contiguous.")
-    if any(event.get("protocol_version") != 1 for event in typed_events):
-        raise ValueError("Worker smoke protocol version did not match v1.")
+    if any(event.get("protocol_version") != WORKER_PROTOCOL_VERSION for event in typed_events):
+        raise ValueError(f"Worker smoke protocol version did not match v{WORKER_PROTOCOL_VERSION}.")
     if any(event.get("job_id") != job_id for event in typed_events):
         raise ValueError("Worker smoke returned an event for another job.")
     event_types = [event.get("type") for event in typed_events]
