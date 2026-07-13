@@ -47,7 +47,7 @@ It uses ad-hoc signing by default. Set `BD_TO_AVP_NATIVE_SIGN_IDENTITY` or pass
 The package command always produces the side-by-side preview identity
 `com.shinycomputers.bd-to-avp.native-preview` with marketing version `0.3.0`
 and preview-local build number `2`. This build is publicly identified as
-`v0.3.0 Beta 1`; it cannot overwrite the production app.
+`v0.3.0-beta.1`; it cannot overwrite the production app.
 
 The auxiliary Python launcher is signed with the same direct-distribution
 entitlements already required by the Briefcase launcher: unsigned executable
@@ -122,8 +122,8 @@ the production app, targets Apple Silicon macOS 26 or later, and is published
 only as a GitHub prerelease. It does not mutate Sparkle Pages, either appcast
 channel, GitHub latest, or PyPI. Release identity is derived from committed
 native version, semantic prerelease, and monotonically increasing build
-metadata. Version `0.3.0` Beta 1 uses tag `v0.3.0-beta.1`, title
-`v0.3.0 Beta 1 — Native UI Preview`, and preview-local build `2`. Repeated runs
+metadata. Version `0.3.0` Beta 1 uses `v0.3.0-beta.1` for both tag and title,
+with preview-local build `2`. Repeated runs
 may resume only a matching draft with byte-identical assets, and fail closed
 after publication. Published tags and assets remain immutable even if the
 human-readable title or notes need a metadata-only correction.

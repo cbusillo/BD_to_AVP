@@ -79,8 +79,7 @@ document it as an external dependency with preflight behavior.
   Native UI prereleases are published by their own protected-main workflow with
   an explicit semantic prerelease identity while retaining a monotonically
   increasing native build number. Historical build `1` keeps its immutable tag
-  `native-ui-preview-1` and is identified as `v0.3.0 Alpha 1 — Native UI
-  Preview`. Build `2` is `v0.3.0 Beta 1 — Native UI Preview` with tag
+  `native-ui-preview-1` and is identified as `v0.3.0-alpha.1`. Build `2` is
   `v0.3.0-beta.1`. The lane uses a dedicated macOS 27/Xcode 27 release runner to
   build a macOS 26-targeted app, then verifies the notarized DMG on a macOS 26
   runner before publication. Its exact two-asset allowlist is the notarized DMG

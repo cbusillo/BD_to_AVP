@@ -73,24 +73,24 @@ def create_preview_release_metadata(
         raise NativePreviewReleaseError("Native preview short version must contain three numeric components.")
     if re.fullmatch(r"[1-9]\d*", build_version) is None:
         raise NativePreviewReleaseError("Native preview build version must be a positive integer.")
-    prerelease_match = re.fullmatch(
-        rf"{re.escape(short_version)}-(alpha|beta|rc)\.([1-9]\d*)",
-        prerelease_version,
-    )
-    if prerelease_match is None:
+    if (
+        re.fullmatch(
+            rf"{re.escape(short_version)}-(alpha|beta|rc)\.([1-9]\d*)",
+            prerelease_version,
+        )
+        is None
+    ):
         raise NativePreviewReleaseError(
             "Native preview prerelease version must match the short version followed by -alpha.N, -beta.N, or -rc.N."
         )
 
-    phase, sequence = prerelease_match.groups()
-    phase_label = {"alpha": "Alpha", "beta": "Beta", "rc": "RC"}[phase]
     file_stem = product_name.replace(" ", "-")
     return NativePreviewReleaseMetadata(
         app_name=app_name,
         build_version=build_version,
         dmg_name=f"{file_stem}-{prerelease_version}.dmg",
         prerelease_version=prerelease_version,
-        release_name=f"v{short_version} {phase_label} {sequence} — Native UI Preview",
+        release_name=f"v{prerelease_version}",
         release_tag=f"v{prerelease_version}",
         short_version=short_version,
     )
