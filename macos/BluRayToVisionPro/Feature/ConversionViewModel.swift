@@ -102,7 +102,70 @@ final class ConversionViewModel: ObservableObject {
         }
     }
 
-    func stopInspection() {
+    func startConversion(draft: ConversionDraft) {
+        guard !hasActiveWorker else {
+            return
+        }
+        guard let selectedSource = source,
+              selectedSource == draft.source,
+              state.sourceURL == selectedSource.url,
+              state.result != nil
+        else {
+            state.failTransport(
+                message: "Analyze the selected source before starting conversion.",
+                retryable: false
+            )
+            return
+        }
+        guard draft.source.kind.supportsConversion,
+              Self.supportedExtensions.contains(draft.source.url.pathExtension.lowercased()),
+              FileManager.default.fileExists(atPath: draft.source.url.path)
+        else {
+            state.failTransport(
+                message: "Conversion requires an existing MKV, MTS, or M2TS source.",
+                retryable: false
+            )
+            return
+        }
+        guard draft.outputLength == .fullMovie else {
+            state.failTransport(
+                message: "Short sample conversion is not available yet. Choose Full Movie.",
+                retryable: false
+            )
+            return
+        }
+
+        let job = WorkerJobSpec(draft: draft)
+        do {
+            try state.begin(jobID: job.jobID, operationKind: .conversion)
+            pendingTerminalEvent = nil
+            diagnosticLog = ""
+            let client = try clientFactory()
+            self.client = client
+            runTask = Task { [weak self] in
+                guard let self else {
+                    return
+                }
+                do {
+                    let runResult = try await client.run(job: job) { [weak self] event in
+                        guard let self else {
+                            return
+                        }
+                        try await self.receive(event)
+                    }
+                    self.finish(runResult)
+                } catch {
+                    self.fail(error)
+                }
+            }
+        } catch {
+            state.failTransport(message: error.localizedDescription)
+            client = nil
+            runTask = nil
+        }
+    }
+
+    func stopActiveWorker() {
         guard hasActiveWorker else {
             return
         }
@@ -166,16 +229,17 @@ final class ConversionViewModel: ObservableObject {
             pendingTerminalEvent = event
             return
         }
+        if event.type == .log || event.type == .warning, let message = event.payload.message {
+            appendDiagnostic(message)
+        }
         var nextState = state
         try nextState.receive(event)
         state = nextState
     }
 
     private func finish(_ result: WorkerRunResult) {
-        diagnosticLog = result.diagnostics
-        if state.phase == .stopping {
-            state.completeStop()
-        } else if let pendingTerminalEvent {
+        appendDiagnostic(result.diagnostics)
+        if let pendingTerminalEvent {
             do {
                 var nextState = state
                 try nextState.receive(pendingTerminalEvent)
@@ -186,9 +250,13 @@ final class ConversionViewModel: ObservableObject {
                     details: result.diagnostics.isEmpty ? nil : result.diagnostics
                 )
             }
+        } else if state.phase == .stopping {
+            state.completeStop()
         } else {
             state.failTransport(
-                message: "The source analysis ended before results were available.",
+                message: state.operationKind == .inspection
+                    ? "The source analysis ended before results were available."
+                    : "The conversion ended before an output was available.",
                 details: result.diagnostics.isEmpty ? nil : result.diagnostics
             )
         }
@@ -199,7 +267,7 @@ final class ConversionViewModel: ObservableObject {
 
     private func fail(_ error: Error) {
         let clientError = error as? WorkerClientError
-        diagnosticLog = clientError?.technicalDetails ?? ""
+        appendDiagnostic(clientError?.technicalDetails ?? "")
         if state.phase == .stopping {
             state.completeStop()
         } else {
@@ -211,5 +279,17 @@ final class ConversionViewModel: ObservableObject {
         pendingTerminalEvent = nil
         client = nil
         runTask = nil
+    }
+
+    private func appendDiagnostic(_ message: String) {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return
+        }
+        if diagnosticLog.isEmpty {
+            diagnosticLog = trimmed
+        } else {
+            diagnosticLog += "\n\(trimmed)"
+        }
     }
 }

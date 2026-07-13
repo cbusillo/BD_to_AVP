@@ -86,11 +86,12 @@ def prepare_output_folder_for_source(disc_name: str) -> Path:
     return output_path
 
 
-def move_file_to_output_root_folder(muxed_output_path: Path) -> None:
+def move_file_to_output_root_folder(muxed_output_path: Path) -> Path:
     final_path = config.output_root_path / muxed_output_path.name
     muxed_output_path.replace(final_path)
     if not config.keep_files:
         remove_output_folder_if_safe(muxed_output_path.parent)
+    return final_path
 
 
 @contextmanager

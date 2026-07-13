@@ -1,5 +1,27 @@
 import Foundation
 
+struct ConversionResult: Decodable, Equatable {
+    let outputPath: String
+    let durationSeconds: Double?
+    let sizeBytes: Int64?
+
+    var outputURL: URL {
+        URL(fileURLWithPath: outputPath)
+    }
+
+    init(outputPath: String, durationSeconds: Double? = nil, sizeBytes: Int64? = nil) {
+        self.outputPath = outputPath
+        self.durationSeconds = durationSeconds
+        self.sizeBytes = sizeBytes
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case outputPath = "output_path"
+        case durationSeconds = "duration_seconds"
+        case sizeBytes = "size_bytes"
+    }
+}
+
 enum WorkerEventType: String, Decodable, Equatable {
     case workerReady = "worker.ready"
     case jobStarted = "job.started"
@@ -33,11 +55,13 @@ struct WorkerDecision: Decodable, Equatable {
     let identifier: String
     let prompt: String
     let choices: [String]
+    let details: String?
 
     enum CodingKeys: String, CodingKey {
         case identifier = "id"
         case prompt
         case choices
+        case details
     }
 }
 
@@ -50,6 +74,7 @@ struct WorkerEventPayload: Decodable, Equatable {
     let elapsedSeconds: Int?
     let level: String?
     let result: SourceInspection?
+    let conversionResult: ConversionResult?
     let error: WorkerFailure?
     let decision: WorkerDecision?
 
@@ -62,6 +87,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         elapsedSeconds: Int? = nil,
         level: String? = nil,
         result: SourceInspection? = nil,
+        conversionResult: ConversionResult? = nil,
         error: WorkerFailure? = nil,
         decision: WorkerDecision? = nil
     ) {
@@ -73,6 +99,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         self.elapsedSeconds = elapsedSeconds
         self.level = level
         self.result = result
+        self.conversionResult = conversionResult
         self.error = error
         self.decision = decision
     }
@@ -86,6 +113,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         case elapsedSeconds = "elapsed_seconds"
         case level
         case result
+        case conversionResult = "conversion_result"
         case error
         case decision
     }

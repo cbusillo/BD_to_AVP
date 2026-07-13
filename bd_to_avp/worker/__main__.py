@@ -9,18 +9,20 @@ from contextlib import redirect_stdout
 from typing import Callable, TextIO
 
 from bd_to_avp.modules.config import config
-from bd_to_avp.worker.operations import WorkerOperationError, run_operation
+from bd_to_avp.worker.operations import WorkerDecisionRequired, WorkerOperationError, run_operation
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
     MAX_REQUEST_BYTES,
     ZERO_JOB_ID,
     JobSpec,
+    WorkerActivityReporter,
     WorkerEventEmitter,
     WorkerEventType,
     WorkerProtocolError,
+    bounded_detail,
 )
 
-OperationRunner = Callable[[JobSpec, WorkerProcessOwner], dict[str, object]]
+OperationRunner = Callable[[JobSpec, WorkerProcessOwner, WorkerActivityReporter], dict[str, object]]
 
 
 def run_worker(
@@ -56,27 +58,27 @@ def run_worker(
             },
         )
         emitter.emit(WorkerEventType.JOB_STARTED, {"operation": job.operation.value})
-        emitter.emit(
-            WorkerEventType.STAGE_STARTED,
-            {"stage": "inspect_source", "message": "Reading video metadata"},
-        )
+        activity = WorkerActivityReporter(emitter)
+        if job.operation.value == "inspect_source":
+            activity.stage_started("inspect_source", "Reading video metadata")
 
         heartbeat_stop = threading.Event()
         heartbeat_thread = threading.Thread(
             target=_emit_heartbeats,
-            args=(emitter, owner, heartbeat_stop, heartbeat_interval),
+            args=(emitter, activity, owner, heartbeat_stop, heartbeat_interval),
             daemon=True,
         )
         heartbeat_thread.start()
         try:
             with redirect_stdout(diagnostic_stream):
-                result = operation_runner(job, owner)
+                result = operation_runner(job, owner, activity)
         finally:
             heartbeat_stop.set()
             heartbeat_thread.join(timeout=max(heartbeat_interval * 2, 0.2))
 
         owner.check_cancelled()
-        emitter.emit(WorkerEventType.JOB_COMPLETED, {"result": result})
+        result_key = "conversion_result" if job.operation.value == "convert_source" else "result"
+        emitter.emit(WorkerEventType.JOB_COMPLETED, {result_key: result})
         return 0
     except WorkerProtocolError as error:
         emitter = emitter or WorkerEventEmitter(output_stream, error.job_id or ZERO_JOB_ID)
@@ -87,16 +89,27 @@ def run_worker(
         if emitter is not None and not emitter.terminal_emitted:
             emitter.emit(
                 WorkerEventType.JOB_CANCELLED,
-                {"message": "Source inspection cancelled."},
+                {"message": "Worker job cancelled."},
             )
         return 130
+    except WorkerDecisionRequired as error:
+        if emitter is not None and not emitter.terminal_emitted:
+            decision: dict[str, object] = {
+                "id": error.code,
+                "prompt": error.message,
+                "choices": list(error.choices),
+            }
+            if error.details:
+                decision["details"] = bounded_detail(error.details)
+            emitter.emit(WorkerEventType.JOB_DECISION_REQUIRED, {"decision": decision})
+        return 3
     except WorkerOperationError as error:
         if owner.cancellation_event.is_set():
             owner.terminate_descendants()
             if emitter is not None and not emitter.terminal_emitted:
                 emitter.emit(
                     WorkerEventType.JOB_CANCELLED,
-                    {"message": "Source inspection cancelled."},
+                    {"message": "Worker job cancelled."},
                 )
             return 130
         if emitter is not None and not emitter.terminal_emitted:
@@ -122,6 +135,7 @@ def run_worker(
 
 def _emit_heartbeats(
     emitter: WorkerEventEmitter,
+    activity: WorkerActivityReporter,
     owner: WorkerProcessOwner,
     stop_event: threading.Event,
     interval: float,
@@ -130,13 +144,13 @@ def _emit_heartbeats(
     while not stop_event.wait(interval):
         if owner.cancellation_event.is_set() or emitter.terminal_emitted:
             return
-        emitter.emit(
-            WorkerEventType.HEARTBEAT,
-            {
-                "stage": "inspect_source",
-                "elapsed_seconds": max(0, int(time.monotonic() - started_at)),
-            },
-        )
+        try:
+            emitter.emit(
+                WorkerEventType.HEARTBEAT,
+                activity.heartbeat_payload(int(time.monotonic() - started_at)),
+            )
+        except RuntimeError:
+            return
 
 
 def main() -> None:

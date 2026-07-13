@@ -8,6 +8,8 @@ or update it.
 - Choose a physical disc, disc image, Blu-ray folder, MKV, source folder, or
   MTS/M2TS transport stream.
 - Inspect MKV, MTS, and M2TS source metadata through the bundled engine.
+- Convert an inspected MKV, MTS, or M2TS source to a completed MV-HEVC `.mov`
+  through the bundled engine, with native progress, cancellation, and results.
 - Review the Video, Audio & Subtitles, and Files & Recovery controls.
 - Create, duplicate, edit, import, export, and delete named encoding profiles.
 - Open Settings with `Command-,`, resize the window, and scroll through the
@@ -17,8 +19,12 @@ or update it.
 
 ## Important Limits
 
-- **Start Processing is intentionally unavailable.** Keep the production app
-  installed for real conversions.
+- **Start Processing currently supports MKV, MTS, and M2TS files only.** Keep
+  the production app installed for physical discs, disc images, Blu-ray
+  folders, source-folder batches, and recovery decisions that require a second
+  interactive step.
+- Native conversion currently creates the full movie. Short sample outputs are
+  not yet available.
 - This preview has no automatic updater. Future preview builds must be
   downloaded manually.
 - Live playback of a file while it is still being generated is not supported.
