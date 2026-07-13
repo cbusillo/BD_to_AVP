@@ -320,6 +320,171 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testMakeMKVDecisionStartsFreshStageTwoRecoveryJob() async throws {
+        let inspectionDone = expectation(description: "inspection done")
+        let firstConversion = expectation(description: "first conversion received")
+        let recoveryConversion = expectation(description: "recovery conversion received")
+        var conversionJobs: [WorkerJobSpec] = []
+        let decision = WorkerDecision(
+            identifier: "mkv_creation_decision_required",
+            prompt: "MakeMKV reported errors.",
+            choices: ["retry_continue_on_error", "cancel"],
+            details: "Continue only if the created MKV is usable."
+        )
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { job in
+                conversionJobs.append(job)
+                if conversionJobs.count == 1 {
+                    firstConversion.fulfill()
+                } else {
+                    recoveryConversion.fulfill()
+                }
+            },
+            recoveryDecision: decision
+        )
+        let viewModel = ConversionViewModel { worker }
+
+        try await withTemporarySource { sourceURL in
+            viewModel.selectSource(sourceURL)
+            await fulfillment(of: [inspectionDone], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+            let draft = ConversionDraft(
+                source: try XCTUnwrap(viewModel.source),
+                sourceDetails: viewModel.state.result,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: URL(fileURLWithPath: "/Movies"),
+                outputLength: .fullMovie,
+                samplePosition: .beginning,
+                options: ConversionOptions()
+            )
+
+            viewModel.startConversion(draft: draft)
+            await fulfillment(of: [firstConversion], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+
+            XCTAssertEqual(viewModel.state.phase, .decisionRequired)
+            XCTAssertEqual(viewModel.state.recoveryDecision, decision)
+            XCTAssertTrue(viewModel.resolveRecoveryChoice(.retryContinueOnError))
+            await fulfillment(of: [recoveryConversion], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+
+            XCTAssertEqual(conversionJobs.count, 2)
+            XCTAssertNotEqual(conversionJobs[0].jobID, conversionJobs[1].jobID)
+            XCTAssertEqual(conversionJobs[1].job?.startStage, ConversionStage.extractMVCAndAudio.rawValue)
+            XCTAssertTrue(conversionJobs[1].job?.continueOnError == true)
+            XCTAssertFalse(conversionJobs[1].job?.keepFiles == true)
+            XCTAssertEqual(draft.options.job.startStage, .createMKV)
+            XCTAssertFalse(draft.options.job.continueOnError)
+            XCTAssertEqual(viewModel.state.phase, .completed)
+        }
+    }
+
+    @MainActor
+    func testSubtitleDecisionStartsFreshStageThreeRecoveryWithoutSubtitles() async throws {
+        let inspectionDone = expectation(description: "inspection done")
+        let firstConversion = expectation(description: "first conversion received")
+        let recoveryConversion = expectation(description: "recovery conversion received")
+        var conversionJobs: [WorkerJobSpec] = []
+        let decision = WorkerDecision(
+            identifier: "subtitle_decision_required",
+            prompt: "Subtitle extraction needs attention.",
+            choices: ["retry_without_subtitles", "cancel"],
+            details: "Continue without subtitles."
+        )
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { job in
+                conversionJobs.append(job)
+                if conversionJobs.count == 1 {
+                    firstConversion.fulfill()
+                } else {
+                    recoveryConversion.fulfill()
+                }
+            },
+            recoveryDecision: decision
+        )
+        let viewModel = ConversionViewModel { worker }
+
+        try await withTemporarySource { sourceURL in
+            viewModel.selectSource(sourceURL)
+            await fulfillment(of: [inspectionDone], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+            let draft = ConversionDraft(
+                source: try XCTUnwrap(viewModel.source),
+                sourceDetails: viewModel.state.result,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: URL(fileURLWithPath: "/Movies"),
+                outputLength: .fullMovie,
+                samplePosition: .beginning,
+                options: ConversionOptions()
+            )
+
+            viewModel.startConversion(draft: draft)
+            await fulfillment(of: [firstConversion], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+
+            XCTAssertTrue(viewModel.resolveRecoveryChoice(.retryWithoutSubtitles))
+            await fulfillment(of: [recoveryConversion], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+
+            XCTAssertEqual(conversionJobs[1].job?.startStage, ConversionStage.extractSubtitles.rawValue)
+            XCTAssertTrue(conversionJobs[1].encoding?.skipSubtitles == true)
+            XCTAssertTrue(draft.options.encoding.includeSubtitles)
+            XCTAssertEqual(viewModel.state.phase, .completed)
+        }
+    }
+
+    @MainActor
+    func testCancellingRecoveryStartsNoAdditionalWorker() async throws {
+        let inspectionDone = expectation(description: "inspection done")
+        let conversionStarted = expectation(description: "conversion received")
+        var conversionCount = 0
+        let decision = WorkerDecision(
+            identifier: "subtitle_decision_required",
+            prompt: "Subtitle extraction needs attention.",
+            choices: ["retry_without_subtitles", "cancel"],
+            details: nil
+        )
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { _ in
+                conversionCount += 1
+                conversionStarted.fulfill()
+            },
+            recoveryDecision: decision
+        )
+        let viewModel = ConversionViewModel { worker }
+
+        try await withTemporarySource { sourceURL in
+            viewModel.selectSource(sourceURL)
+            await fulfillment(of: [inspectionDone], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+            viewModel.startConversion(
+                draft: ConversionDraft(
+                    source: try XCTUnwrap(viewModel.source),
+                    sourceDetails: viewModel.state.result,
+                    profile: BuiltInProfile.balanced.profile,
+                    destinationURL: URL(fileURLWithPath: "/Movies"),
+                    outputLength: .fullMovie,
+                    samplePosition: .beginning,
+                    options: ConversionOptions()
+                )
+            )
+            await fulfillment(of: [conversionStarted], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+
+            XCTAssertFalse(viewModel.canSelectSource)
+            XCTAssertTrue(viewModel.resolveRecoveryChoice(.cancel))
+
+            XCTAssertEqual(conversionCount, 1)
+            XCTAssertEqual(viewModel.state.phase, .failed)
+            XCTAssertNil(viewModel.state.recoveryDecision)
+            XCTAssertTrue(viewModel.canSelectSource)
+        }
+    }
+
+    @MainActor
     func testStartConversionStartsWorkerWithConvertSourceJobSpec() async throws {
         let inspectionDone = expectation(description: "inspection done")
         let conversionStarted = expectation(description: "conversion started")
@@ -475,6 +640,7 @@ private final class TwoPhaseWorkerClient: WorkerProcessRunning, @unchecked Senda
     private var callCount = 0
     private var conversionCancellationContinuation: CheckedContinuation<Void, Never>?
     private var conversionCancellationRequested = false
+    private var pendingRecoveryDecision: WorkerDecision?
 
     var onInspectionComplete: (() -> Void)?
     var onConversionJobReceived: ((WorkerJobSpec) -> Void)?
@@ -483,18 +649,25 @@ private final class TwoPhaseWorkerClient: WorkerProcessRunning, @unchecked Senda
     init(
         onInspectionComplete: (() -> Void)? = nil,
         onConversionJobReceived: ((WorkerJobSpec) -> Void)? = nil,
-        waitsForConversionCancellation: Bool = false
+        waitsForConversionCancellation: Bool = false,
+        recoveryDecision: WorkerDecision? = nil
     ) {
         self.onInspectionComplete = onInspectionComplete
         self.onConversionJobReceived = onConversionJobReceived
         self.waitsForConversionCancellation = waitsForConversionCancellation
+        pendingRecoveryDecision = recoveryDecision
     }
 
     func run(job: WorkerJobSpec, onEvent: @escaping (WorkerEvent) async throws -> Void) async throws -> WorkerRunResult {
         let isConversion: Bool
+        let recoveryDecision: WorkerDecision?
         lock.lock()
         callCount += 1
         isConversion = callCount > 1
+        recoveryDecision = isConversion ? pendingRecoveryDecision : nil
+        if isConversion {
+            pendingRecoveryDecision = nil
+        }
         lock.unlock()
 
         let ready = WorkerEvent(
@@ -508,6 +681,17 @@ private final class TwoPhaseWorkerClient: WorkerProcessRunning, @unchecked Senda
         if isConversion {
             onConversionJobReceived?(job)
             try await onEvent(ready)
+            if let recoveryDecision {
+                let decisionRequired = WorkerEvent(
+                    protocolVersion: WorkerJobSpec.protocolVersion,
+                    type: .jobDecisionRequired,
+                    jobID: job.jobID,
+                    sequence: 1,
+                    payload: WorkerEventPayload(decision: recoveryDecision)
+                )
+                try await onEvent(decisionRequired)
+                return WorkerRunResult(terminalEvent: decisionRequired, exitStatus: 3, diagnostics: "")
+            }
             if waitsForConversionCancellation {
                 await waitForConversionCancellation()
                 let cancelled = WorkerEvent(

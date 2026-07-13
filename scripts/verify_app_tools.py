@@ -14,6 +14,7 @@ CORE_TOOLS = {
 }
 GUI_RUNTIME_TOOLS = {
     "edge264_test": ["--help"],
+    "fx-upscale": ["--help"],
     "spatial-media-kit-tool": ["--help"],
 }
 REQUIRED_TOOLS = CORE_TOOLS | GUI_RUNTIME_TOOLS
@@ -26,6 +27,7 @@ def run(command: list[str | Path]) -> subprocess.CompletedProcess[str]:
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        timeout=30,
     )
 
 

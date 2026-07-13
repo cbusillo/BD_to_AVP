@@ -18,11 +18,11 @@ struct SourceWorkspaceView: View {
     let openDiscImage: () -> Void
     let openBluRayFolder: () -> Void
     let openMKV: () -> Void
-    let openSourceFolder: () -> Void
     let importTransportStream: () -> Void
     let changeSource: () -> Void
     let chooseDestination: () -> Void
     let retryAnalysis: () -> Void
+    let resolveRecoveryChoice: (WorkerRecoveryChoice) -> Void
 
     var body: some View {
         ScrollView {
@@ -72,6 +72,9 @@ struct SourceWorkspaceView: View {
                     .font(.callout)
                     .foregroundStyle(makeMKVAvailable ? Color.green : Color.orange)
                     Spacer()
+                    if !makeMKVAvailable, let downloadURL = DiscSourceDetector.makeMKVDownloadURL {
+                        Link("Download MakeMKV…", destination: downloadURL)
+                    }
                     Button("Refresh Drives", action: refreshDiscs)
                 }
 
@@ -111,15 +114,12 @@ struct SourceWorkspaceView: View {
                 Text("Other Sources")
                     .font(.headline)
 
-                Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 8) {
-                    GridRow {
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
                         sourceButton("Open Disc Image…", systemImage: "opticaldiscdrive", action: openDiscImage)
                         sourceButton("Open Blu-ray Folder…", systemImage: "folder.badge.gearshape", action: openBluRayFolder)
                     }
-                    GridRow {
-                        sourceButton("Open 3D MKV…", systemImage: "film.stack", action: openMKV)
-                        sourceButton("Open Source Folder…", systemImage: "folder.stack", action: openSourceFolder)
-                    }
+                    sourceButton("Open 3D MKV…", systemImage: "film.stack", action: openMKV)
                 }
 
                 Button("Import MTS or M2TS transport stream…", action: importTransportStream)
@@ -165,6 +165,7 @@ struct SourceWorkspaceView: View {
 
                     Spacer()
                     Button("Change…", action: changeSource)
+                        .disabled(state.phase.isRunning || state.phase == .decisionRequired)
                 }
 
                 if source.kind.isSecondaryImport {
@@ -192,6 +193,9 @@ struct SourceWorkspaceView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                } else if state.phase == .decisionRequired, let decision = state.recoveryDecision {
+                    Divider()
+                    recoveryDecisionSection(decision)
                 } else if state.phase == .failed {
                     Divider()
                     Label(
@@ -210,6 +214,11 @@ struct SourceWorkspaceView: View {
                     }
                     if state.operationKind == .inspection, state.failureRetryable {
                         Button("Analyze Again", action: retryAnalysis)
+                    }
+                    if state.failureCode == "makemkv_missing",
+                       let downloadURL = DiscSourceDetector.makeMKVDownloadURL
+                    {
+                        Link("Download MakeMKV…", destination: downloadURL)
                     }
                 } else if let result = state.result {
                     Divider()
@@ -266,6 +275,7 @@ struct SourceWorkspaceView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Button("Choose…", action: chooseDestination)
+                            .disabled(outputControlsLocked)
                     }
                 }
 
@@ -278,6 +288,7 @@ struct SourceWorkspaceView: View {
                         }
                         .labelsHidden()
                         .frame(width: 170)
+                        .disabled(outputControlsLocked)
                     } else {
                         Text("Full Movie")
                             .foregroundStyle(.secondary)
@@ -293,6 +304,7 @@ struct SourceWorkspaceView: View {
                         }
                         .labelsHidden()
                         .frame(width: 130)
+                        .disabled(outputControlsLocked)
                     }
                 }
 
@@ -386,6 +398,47 @@ struct SourceWorkspaceView: View {
         return options.encoding.keepExtraLanguages
             ? "\(options.encoding.language.name) preferred; keep others"
             : "\(options.encoding.language.name) only"
+    }
+
+    private var outputControlsLocked: Bool {
+        state.phase.isRunning || state.phase == .decisionRequired
+    }
+
+    private func recoveryDecisionSection(_ decision: WorkerDecision) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(decision.prompt, systemImage: "arrow.clockwise.circle.fill")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.orange)
+            if let details = decision.details, !details.isEmpty {
+                Text(details)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            HStack(spacing: 8) {
+                ForEach(decision.supportedChoices) { choice in
+                    recoveryButton(choice)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func recoveryButton(_ choice: WorkerRecoveryChoice) -> some View {
+        switch choice {
+        case .cancel:
+            Button(choice.title, role: .cancel) {
+                resolveRecoveryChoice(choice)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint(choice.accessibilityHint)
+        case .retryContinueOnError, .retryWithoutSubtitles:
+            Button(choice.title) {
+                resolveRecoveryChoice(choice)
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityHint(choice.accessibilityHint)
+        }
     }
 
     private func sourceButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {

@@ -7,13 +7,18 @@ Vendored binary source:
 - Project: GPAC / MP4Box
 - Version: 26.02.0
 - Source tag: https://github.com/gpac/gpac/tree/v26.02.0
+- Source commit: 118e60a905878e56dc4f9c5b309143c5f447c702
 - Platform: macOS arm64 static executable
-- Executable SHA256: eb63ed3f3c73eadc61f9158961114a614c208cd5929f1abb7d13da3a679cfedf
+- Minimum macOS version: 14.0
+- Deterministic install prefix: `/opt/bd-to-avp/gpac`
+- Build toolchain: Xcode 27.0 (27A5194q), Apple clang 21.0.0
+- Executable SHA256: 61ddca2713e5de02798820e9e295edc959d09a8b15a30dcacc3d9c14df627a6a
 
-The vendored build is a static MP4Box executable built from GPAC source with
-Homebrew hidden from the build environment and external codec, image, network,
-and SSL libraries disabled. The resulting executable links only to macOS system
-libraries (`/usr/lib/libz.1.dylib` and `/usr/lib/libSystem.B.dylib`).
+The vendored build is a static MP4Box executable targeting macOS 14.0, built
+from GPAC source with Homebrew hidden from the build environment and external
+codec, image, network, and SSL libraries disabled. The resulting executable
+links only to macOS system libraries (`/usr/lib/libz.1.dylib` and
+`/usr/lib/libSystem.B.dylib`).
 
 MP4Box / GPAC is distributed under LGPL-2.1-or-later. BD_to_AVP invokes MP4Box
 as a separate command-line executable. Downstream redistributors must preserve
@@ -30,6 +35,7 @@ GPAC source and license information:
 - GNU LGPL v2.1 text: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt
 
 The build script is `scripts/build_mp4box_macos.py`. It reads
-`vendor/mp4box-macos-arm64.toml`, checks out the pinned GPAC tag, builds MP4Box,
-verifies arm64/system-only linkage, and installs the executable into
-`bd_to_avp/bin`.
+`vendor/mp4box-macos-arm64.toml`, verifies the pinned GPAC commit and tag from a
+clean checkout, builds MP4Box, verifies arm64/system-only linkage, and installs the executable into
+`bd_to_avp/bin`. It also verifies the pinned minimum macOS version before
+accepting the binary.

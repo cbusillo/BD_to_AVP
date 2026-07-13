@@ -145,6 +145,7 @@ struct ConversionSource: Equatable {
 
 enum DiscSourceDetector {
     private static let makeMKVPath = "/Applications/MakeMKV.app/Contents/MacOS/makemkvcon"
+    static let makeMKVDownloadURL = URL(string: "https://www.makemkv.com/download/")
 
     static var makeMKVAvailable: Bool {
         FileManager.default.isExecutableFile(atPath: makeMKVPath)

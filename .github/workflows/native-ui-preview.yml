@@ -153,7 +153,7 @@ jobs:
           command -v xcodegen >/dev/null
           test "$(xcodegen --version)" = "Version: $XCODEGEN_VERSION"
           if [ -n "${BD_TO_AVP_NATIVE_DEPLOYMENT_TARGET_OVERRIDE:-}" ]; then
-            echo "Release builds must not override the macOS 27 deployment target." >&2
+            echo "Release builds must not override the macOS 26 deployment target." >&2
             exit 1
           fi
 
@@ -333,11 +333,55 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  compatibility:
+    name: Verify notarized package on macOS 26
+    needs:
+      - package
+    runs-on: macos-26
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout released commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Download verified preview package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: native-preview-package
+          path: release-package
+
+      - name: Run the packaged worker on macOS 26
+        env:
+          EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
+          EXPECTED_DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(sw_vers -productVersion | cut -d. -f1)" = "26"
+          DMG_PATH="release-package/$EXPECTED_DMG_NAME"
+          test "$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')" = "$EXPECTED_DMG_SHA256"
+          python -m scripts.native_preview_release verify-dmg \
+            --dmg "$DMG_PATH" \
+            --verify-signatures \
+            --verify-distribution \
+            --smoke-app \
+            --smoke-tools \
+            --smoke-worker
+
   publish:
     name: Publish immutable opt-in prerelease
     needs:
       - prepare
       - package
+      - compatibility
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:

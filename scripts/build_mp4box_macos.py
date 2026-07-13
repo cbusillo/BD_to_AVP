@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -42,10 +43,13 @@ class BuildManifest:
     version: str
     repo_url: str
     tag: str
+    source_commit: str
     license_mode: str
     binary: str
     binary_sha256: str
     build: str
+    install_prefix: str
+    minimum_macos: str
     configure_flags: list[str]
     validation: ValidationConfig
 
@@ -60,10 +64,13 @@ def load_manifest(manifest_path: Path = DEFAULT_MANIFEST_PATH) -> BuildManifest:
         version=require_string(data, "version"),
         repo_url=require_string(data, "repo_url"),
         tag=require_string(data, "tag"),
+        source_commit=require_string(data, "source_commit"),
         license_mode=require_string(data, "license_mode"),
         binary=require_string(data, "binary"),
         binary_sha256=require_string(data, "binary_sha256"),
         build=require_string(data, "build"),
+        install_prefix=require_string(data, "install_prefix"),
+        minimum_macos=require_string(data, "minimum_macos"),
         configure_flags=require_string_list(data, "configure_flags"),
         validation=ValidationConfig(
             required_file_substring=require_string(validation, "required_file_substring"),
@@ -101,12 +108,14 @@ def run(command: list[str | Path], *, cwd: Path | None = None, env: dict[str, st
     return completed.stdout
 
 
-def build_env() -> dict[str, str]:
+def build_env(minimum_macos: str | None = None) -> dict[str, str]:
     env = os.environ.copy()
     env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
     env["CC"] = "/usr/bin/clang"
     env["CXX"] = "/usr/bin/clang++"
     env["PKG_CONFIG"] = "/usr/bin/false"
+    if minimum_macos is not None:
+        env["MACOSX_DEPLOYMENT_TARGET"] = minimum_macos
     return env
 
 
@@ -124,21 +133,31 @@ def clone_or_update_source(source_dir: Path, manifest: BuildManifest, *, refresh
         shutil.rmtree(source_dir)
     if not source_dir.exists():
         run(["git", "clone", "--depth", "1", "--branch", manifest.tag, manifest.repo_url, source_dir])
-        return
 
+    origin_url = run(["git", "remote", "get-url", "origin"], cwd=source_dir).strip()
+    if origin_url != manifest.repo_url:
+        raise BuildFailure(f"MP4Box source origin mismatch: expected {manifest.repo_url}, found {origin_url}")
+    if run(["git", "status", "--porcelain"], cwd=source_dir).strip():
+        raise BuildFailure("MP4Box source checkout is dirty; rerun with --refresh.")
     try:
-        run(["git", "rev-parse", "--verify", f"{manifest.tag}^{{commit}}"], cwd=source_dir)
+        run(["git", "rev-parse", "--verify", f"{manifest.source_commit}^{{commit}}"], cwd=source_dir)
     except subprocess.CalledProcessError:
         run(["git", "fetch", "--depth", "1", "origin", "tag", manifest.tag], cwd=source_dir)
-    run(["git", "checkout", manifest.tag], cwd=source_dir)
+    tag_commit = run(["git", "rev-parse", f"{manifest.tag}^{{commit}}"], cwd=source_dir).strip()
+    if tag_commit != manifest.source_commit:
+        raise BuildFailure(f"MP4Box tag {manifest.tag} resolves to {tag_commit}, expected {manifest.source_commit}.")
+    run(["git", "checkout", "--detach", manifest.source_commit], cwd=source_dir)
+    head_commit = run(["git", "rev-parse", "HEAD"], cwd=source_dir).strip()
+    if head_commit != manifest.source_commit:
+        raise BuildFailure(f"MP4Box source checkout is at {head_commit}, expected {manifest.source_commit}.")
 
 
-def build_mp4box(source_dir: Path, install_dir: Path, manifest: BuildManifest) -> Path:
-    env = build_env()
+def build_mp4box(source_dir: Path, manifest: BuildManifest) -> Path:
+    env = build_env(manifest.minimum_macos)
     if (source_dir / "Makefile").exists():
         run(["make", "distclean"], cwd=source_dir, env=env)
     run(
-        ["./configure", f"--prefix={install_dir}", *manifest.configure_flags],
+        ["./configure", f"--prefix={manifest.install_prefix}", *manifest.configure_flags],
         cwd=source_dir,
         env=env,
     )
@@ -151,7 +170,8 @@ def build_mp4box(source_dir: Path, install_dir: Path, manifest: BuildManifest) -
     return mp4box_path
 
 
-def verify_macos_binary(binary_path: Path, validation: ValidationConfig) -> None:
+def verify_macos_binary(binary_path: Path, manifest: BuildManifest) -> None:
+    validation = manifest.validation
     file_output = run(["file", binary_path])
     if validation.required_file_substring not in file_output:
         raise BuildFailure(f"MP4Box is not an arm64 Mach-O executable:\n{file_output}")
@@ -166,9 +186,17 @@ def verify_macos_binary(binary_path: Path, validation: ValidationConfig) -> None
     if unexpected_links:
         raise BuildFailure("MP4Box links to unexpected libraries:\n" + "\n".join(unexpected_links))
 
+    build_version = run(["vtool", "-show-build", binary_path])
+    if re.search(rf"^\s*minos\s+{re.escape(manifest.minimum_macos)}\s*$", build_version, re.MULTILINE) is None:
+        raise BuildFailure(f"MP4Box minimum macOS version is not {manifest.minimum_macos}:\n{build_version}")
+
     version_output = run([binary_path, "-version"], env=build_env())
     if validation.required_version_substring not in version_output:
         raise BuildFailure(f"MP4Box version probe did not look valid:\n{version_output}")
+    if f"--prefix={manifest.install_prefix}" not in version_output:
+        raise BuildFailure(f"MP4Box does not report the deterministic install prefix:\n{version_output}")
+    if str(REPO_ROOT) in version_output:
+        raise BuildFailure(f"MP4Box embeds the development checkout path:\n{version_output}")
 
 
 def verify_binary_checksum(binary_path: Path, expected_sha256: str) -> None:
@@ -194,13 +222,12 @@ def main() -> int:
     args = parser.parse_args()
 
     source_dir = args.build_root / "gpac-src"
-    install_dir = args.build_root / "install"
     try:
         verify_build_host()
         manifest = load_manifest(args.manifest)
         clone_or_update_source(source_dir, manifest, refresh=args.refresh)
-        mp4box_path = build_mp4box(source_dir, install_dir, manifest)
-        verify_macos_binary(mp4box_path, manifest.validation)
+        mp4box_path = build_mp4box(source_dir, manifest)
+        verify_macos_binary(mp4box_path, manifest)
         output_path = install_binary(mp4box_path, args.output_dir)
         verify_binary_checksum(output_path, manifest.binary_sha256)
         print(f"Built MP4Box {manifest.tag}: {output_path} ({manifest.binary_sha256})")

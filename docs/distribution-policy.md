@@ -80,8 +80,9 @@ document it as an external dependency with preflight behavior.
   version-first title and tag derived from the committed, monotonically
   increasing native build number. Version `0.3.0` build `1` uses title
   `v0.3.0 (Build 1) — Native UI Preview` and tag `native-ui-preview-1`. The lane
-  uses a dedicated macOS 27/Xcode 27 release runner and an exact two-asset
-  allowlist: the notarized DMG and `SHA256SUMS`.
+  uses a dedicated macOS 27/Xcode 27 release runner to build a macOS 26-targeted
+  app, then verifies the notarized DMG on a macOS 26 runner before publication.
+  Its exact two-asset allowlist is the notarized DMG and `SHA256SUMS`.
 - PKG artifact policy is tracked in #118. Until that issue decides otherwise,
   PKG output is not the normal-user release path.
 - Homebrew distribution for CLI users is tracked in #119.

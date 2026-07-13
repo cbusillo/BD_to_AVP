@@ -64,6 +64,7 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertEqual(state.phase, .failed)
         XCTAssertEqual(state.failureMessage, "Could not inspect source.")
         XCTAssertEqual(state.failureDetails, "bad stream")
+        XCTAssertEqual(state.failureCode, "probe_failed")
         XCTAssertFalse(state.failureRetryable)
     }
 
@@ -191,10 +192,43 @@ final class WorkerLifecycleTests: XCTestCase {
 
         try state.receive(event(.jobDecisionRequired, sequence: 0, payload: .init(decision: decision)))
 
-        XCTAssertEqual(state.phase, .failed)
+        XCTAssertEqual(state.phase, .decisionRequired)
         XCTAssertEqual(state.failureMessage, "Subtitle extraction needs attention.")
         XCTAssertEqual(state.failureDetails, "Disable subtitle extraction to retry.")
+        XCTAssertEqual(state.failureCode, "subtitle_decision_required")
         XCTAssertTrue(state.failureRetryable)
+        XCTAssertEqual(state.recoveryDecision, decision)
+        XCTAssertTrue(state.phase.isTerminal)
+    }
+
+    func testCancellingRecoveryLeavesActionableFailureWithoutDecision() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID, operationKind: .conversion)
+        let decision = WorkerDecision(
+            identifier: "mkv_creation_decision_required",
+            prompt: "MakeMKV needs attention.",
+            choices: ["retry_continue_on_error", "cancel"],
+            details: "Continue only when the MKV is usable."
+        )
+        try state.receive(event(.jobDecisionRequired, sequence: 0, payload: .init(decision: decision)))
+
+        state.cancelRecoveryDecision()
+
+        XCTAssertEqual(state.phase, .failed)
+        XCTAssertNil(state.recoveryDecision)
+        XCTAssertFalse(state.failureRetryable)
+        XCTAssertEqual(state.failureMessage, "MakeMKV needs attention.")
+    }
+
+    func testDecisionEventRequiresDecisionPayload() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID, operationKind: .conversion)
+
+        XCTAssertThrowsError(try state.receive(event(.jobDecisionRequired, sequence: 0))) { error in
+            XCTAssertEqual(error as? WorkerLifecycleError, .missingPayload(event: .jobDecisionRequired))
+        }
     }
 
     func testDecodesAndAppliesSharedPythonConversionCompletionFixture() throws {

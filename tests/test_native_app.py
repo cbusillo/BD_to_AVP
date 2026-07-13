@@ -24,11 +24,13 @@ from scripts.native_app import (
     REPO_ROOT,
     SCHEME,
     native_build_settings,
+    minimum_macos_versions,
     parse_args,
     sign_package,
     smoke_packaged_worker,
     validate_smoke_events,
     verify_native_binary_paths,
+    verify_mach_o_minimum_system_versions,
     verify_package_paths,
     verify_product_identity,
     verify_product_source_copy,
@@ -46,8 +48,8 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertEqual(NATIVE_EXECUTABLE_NAME, NATIVE_PRODUCT_NAME)
         self.assertEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp.native-preview")
         self.assertEqual(NATIVE_SHORT_VERSION, "0.3.0")
-        self.assertEqual(NATIVE_BUILD_VERSION, "1")
-        self.assertEqual(NATIVE_MINIMUM_SYSTEM_VERSION, "27.0")
+        self.assertEqual(NATIVE_BUILD_VERSION, "2")
+        self.assertEqual(NATIVE_MINIMUM_SYSTEM_VERSION, "26.0")
 
     def test_uses_one_native_settings_scene_and_release_grade_source_groups(self) -> None:
         project_spec = (MACOS_ROOT / "project.yml").read_text(encoding="utf-8")
@@ -67,6 +69,8 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn("openWindow(id: AppWindowID.settings)", app_source)
         self.assertIn(".windowResizability(.contentMinSize)", app_source)
         self.assertEqual(target_settings["base"]["CURRENT_PROJECT_VERSION"], NATIVE_BUILD_VERSION)
+        self.assertEqual(project["options"]["deploymentTarget"]["macOS"], NATIVE_MINIMUM_SYSTEM_VERSION)
+        self.assertEqual(project["settings"]["base"]["MACOSX_DEPLOYMENT_TARGET"], NATIVE_MINIMUM_SYSTEM_VERSION)
         self.assertEqual(preview_settings["MARKETING_VERSION"], NATIVE_SHORT_VERSION)
         self.assertEqual(preview_settings["PRODUCT_BUNDLE_IDENTIFIER"], NATIVE_BUNDLE_IDENTIFIER)
         self.assertEqual(preview_settings["PRODUCT_NAME"], NATIVE_PRODUCT_NAME)
@@ -86,6 +90,8 @@ class NativeAppPackagingTests(unittest.TestCase):
 
         self.assertIn("Convert a 3D Blu-ray Disc", source_view)
         self.assertIn("Import MTS or M2TS transport stream", source_view)
+        self.assertIn(".disabled(outputControlsLocked)", source_view)
+        self.assertIn("state.phase.isRunning || state.phase == .decisionRequired", source_view)
         self.assertLess(
             source_view.index("Convert a 3D Blu-ray Disc"),
             source_view.index("Import MTS or M2TS transport stream"),
@@ -142,6 +148,63 @@ class NativeAppPackagingTests(unittest.TestCase):
                 "Debug",
                 {"BD_TO_AVP_NATIVE_DEPLOYMENT_TARGET_OVERRIDE": "latest"},
             )
+
+    def test_reads_minimum_versions_from_mach_o_build_commands(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="""
+Load command 2
+      cmd LC_BUILD_VERSION
+ platform MACOS
+    minos 11.0
+Load command 3
+      cmd LC_BUILD_VERSION
+ platform MACOS
+    minos 26.0
+""",
+            stderr="",
+        )
+
+        with patch("scripts.native_app.subprocess.run", return_value=completed):
+            self.assertEqual(minimum_macos_versions(Path("/tmp/tool")), {"11.0", "26.0"})
+
+    def test_rejects_packaged_mach_o_requiring_newer_macos(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app_path = Path(temporary_directory) / NATIVE_APP_NAME
+            native_executable = app_path / "Contents" / "MacOS" / NATIVE_EXECUTABLE_NAME
+            newer_library = app_path / "Contents" / "Frameworks" / "Newer.dylib"
+            native_executable.parent.mkdir(parents=True)
+            newer_library.parent.mkdir(parents=True)
+            native_executable.write_bytes(b"\xcf\xfa\xed\xfe")
+            newer_library.write_bytes(b"\xcf\xfa\xed\xfe")
+
+            def versions(path: Path) -> set[str]:
+                return {"27.0"} if path == newer_library else {NATIVE_MINIMUM_SYSTEM_VERSION}
+
+            with (
+                patch("scripts.native_app.minimum_macos_versions", side_effect=versions),
+                self.assertRaisesRegex(RuntimeError, "requires a newer macOS version"),
+            ):
+                verify_mach_o_minimum_system_versions(app_path, native_executable)
+
+    def test_ignores_static_archives_when_validating_packaged_mach_o(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app_path = Path(temporary_directory) / NATIVE_APP_NAME
+            native_executable = app_path / "Contents" / "MacOS" / NATIVE_EXECUTABLE_NAME
+            static_archive = app_path / "Contents" / "Frameworks" / "libstub.a"
+            native_executable.parent.mkdir(parents=True)
+            static_archive.parent.mkdir(parents=True)
+            native_executable.write_bytes(b"\xcf\xfa\xed\xfe")
+            static_archive.write_bytes(b"\xca\xfe\xba\xbe")
+
+            with patch(
+                "scripts.native_app.minimum_macos_versions",
+                return_value={NATIVE_MINIMUM_SYSTEM_VERSION},
+            ) as versions:
+                verify_mach_o_minimum_system_versions(app_path, native_executable)
+
+            versions.assert_called_once_with(native_executable)
 
     def test_package_accepts_an_explicit_signing_keychain(self) -> None:
         args = parse_args(

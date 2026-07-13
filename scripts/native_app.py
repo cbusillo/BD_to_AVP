@@ -22,8 +22,8 @@ NATIVE_PROJECT_NAME = "BluRayToVisionPro"
 NATIVE_PRODUCT_NAME = "3D Blu-ray to Vision Pro Native Preview"
 NATIVE_BUNDLE_IDENTIFIER = "com.shinycomputers.bd-to-avp.native-preview"
 NATIVE_SHORT_VERSION = "0.3.0"
-NATIVE_BUILD_VERSION = "1"
-NATIVE_MINIMUM_SYSTEM_VERSION = "27.0"
+NATIVE_BUILD_VERSION = "2"
+NATIVE_MINIMUM_SYSTEM_VERSION = "26.0"
 NATIVE_EXECUTABLE_NAME = NATIVE_PRODUCT_NAME
 PROJECT_PATH = MACOS_ROOT / f"{NATIVE_PROJECT_NAME}.xcodeproj"
 SCHEME = NATIVE_PROJECT_NAME
@@ -215,6 +215,7 @@ def verify_layout(app_path: Path) -> None:
     for executable in (native_executable, worker_executable, ffprobe_executable):
         if executable_architectures(executable) != {"arm64"}:
             raise RuntimeError(f"Packaged executable must be arm64-only: {executable}")
+    verify_mach_o_minimum_system_versions(app_path, native_executable)
     verify_native_binary_paths(native_executable)
     verify_package_paths(app_path)
 
@@ -277,6 +278,51 @@ def executable_architectures(path: Path) -> set[str]:
         text=True,
     )
     return set(completed.stdout.split())
+
+
+def minimum_macos_versions(path: Path) -> set[str]:
+    completed = subprocess.run(
+        ["vtool", "-show-build", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    versions = set(re.findall(r"^\s*minos\s+(\d+(?:\.\d+){1,2})\s*$", completed.stdout, re.MULTILINE))
+    if not versions:
+        raise RuntimeError(f"Packaged Mach-O does not declare a minimum macOS version: {path}")
+    return versions
+
+
+def verify_mach_o_minimum_system_versions(app_path: Path, native_executable: Path) -> None:
+    expected_version = normalized_version(NATIVE_MINIMUM_SYSTEM_VERSION)
+    native_versions = minimum_macos_versions(native_executable)
+    if {normalized_version(version) for version in native_versions} != {expected_version}:
+        found = ", ".join(sorted(native_versions))
+        raise RuntimeError(
+            f"Native executable must target macOS {NATIVE_MINIMUM_SYSTEM_VERSION}; found {found}: {native_executable}"
+        )
+
+    incompatible: list[str] = []
+    for path in sorted(app_path.rglob("*")):
+        if path == native_executable or path.suffix in {".a", ".o"} or not is_mach_o(path):
+            continue
+        versions = minimum_macos_versions(path)
+        newer_versions = sorted(version for version in versions if normalized_version(version) > expected_version)
+        if newer_versions:
+            incompatible.append(f"{path.relative_to(app_path)}: {', '.join(newer_versions)}")
+    if incompatible:
+        raise RuntimeError(
+            "Packaged Mach-O requires a newer macOS version than "
+            f"{NATIVE_MINIMUM_SYSTEM_VERSION}:\n" + "\n".join(incompatible)
+        )
+
+
+def normalized_version(version: str) -> tuple[int, int, int]:
+    if re.fullmatch(r"\d+(?:\.\d+){1,2}", version) is None:
+        raise ValueError(f"Invalid macOS version: {version!r}")
+    components = [int(component) for component in version.split(".")]
+    components.extend([0] * (3 - len(components)))
+    return components[0], components[1], components[2]
 
 
 def verify_native_binary_paths(native_executable: Path) -> None:

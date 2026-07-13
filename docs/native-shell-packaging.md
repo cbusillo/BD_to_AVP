@@ -46,7 +46,7 @@ It uses ad-hoc signing by default. Set `BD_TO_AVP_NATIVE_SIGN_IDENTITY` or pass
 
 The package command always produces the side-by-side preview identity
 `com.shinycomputers.bd-to-avp.native-preview` with marketing version `0.3.0`
-and preview-local build number `1`. It cannot overwrite the production app.
+and preview-local build number `2`. It cannot overwrite the production app.
 
 The auxiliary Python launcher is signed with the same direct-distribution
 entitlements already required by the Briefcase launcher: unsigned executable
@@ -63,7 +63,8 @@ Intel Mac cannot launch a shell whose processing runtime is incompatible.
 This slice proves that the native executable and embedded Python launcher can
 coexist in one directly signed app and that the packaged worker can execute the
 real FFprobe-backed source inspection path without a repo checkout or system
-Python.
+Python. Worker decisions for a partial MakeMKV result or unusable subtitle
+output are surfaced in SwiftUI and launch fresh immutable recovery jobs.
 
 Release assembly removes the development checkout path from `Info.plist` and
 marks the bundled worker as required. A packaged app with a missing worker fails
@@ -88,37 +89,40 @@ DMG, staples and Gatekeeper-validates the result, repeats the packaged-worker
 smoke from the mounted DMG, attests the artifact, and publishes only the DMG and
 `SHA256SUMS` as a GitHub prerelease.
 
-The native shell targets macOS 27. Review and release builds use the Xcode 27 SDK
-without a compatibility deployment path for older macOS releases.
+The native shell supports Apple Silicon Macs running macOS 26 or later. Review
+and release builds may use the Xcode 27 SDK, but the committed deployment target
+and packaged `LSMinimumSystemVersion` remain macOS 26.
 
-GitHub-hosted runners do not yet provide Xcode 27. Required CI therefore pins
-the `macos-26` runner and overrides the deployment target to macOS 26 only for
-the native test invocation. This is a compile/test
-compatibility gate, not a supported deployment target: local review packages and
-all eventual release artifacts continue to build with Xcode 27 for macOS 27.
+Required CI runs the native test host on the `macos-26` runner using the same
+committed macOS 26 deployment target as release packaging. The release workflow
+also downloads the final notarized DMG onto a separate macOS 26 runner, verifies
+its signatures and minimum-version metadata, launches the Swift app through a
+bounded startup smoke, probes every bundled conversion tool, and runs the
+packaged worker before publication.
 
 The preview release job therefore requires an ephemeral Apple Silicon
 self-hosted runner labeled `bd-to-avp-release`, running macOS 27 with Xcode 27
-and XcodeGen 2.45.4 already installed. The protected-main workflow never applies the
-CI deployment-target override. The runner is release infrastructure, not a
-general pull-request runner, and should be registered only for the bounded
-dispatch then removed after the job exits.
+and XcodeGen 2.45.4 already installed. The protected-main workflow never applies
+the deployment-target override; it uses the committed macOS 26 target. The
+runner is release infrastructure, not a general pull-request runner, and should
+be registered only for the bounded dispatch then removed after the job exits.
 
 ## Release Placement
 
 The native shell does not yet replace the current `0.2.x` Briefcase/Sparkle
 release line. Native Start Processing supports inspected Blu-ray folders, ISO,
-physical disc, MKV, MTS, and M2TS sources; batch, interactive recovery, and the
-native updater path still need release-level completion before promotion through
-the normal Release Candidates appcast.
+physical disc, MKV, MTS, and M2TS sources, including the worker's MakeMKV and
+subtitle recovery choices. Batch and the native updater path still need
+release-level completion before promotion through the normal Release Candidates
+appcast.
 
 The preview uses a separate product name and bundle identifier, installs beside
-the production app, targets Apple Silicon macOS 27, and is published only as a
-GitHub prerelease. It does not mutate Sparkle Pages, either appcast channel,
-GitHub latest, or PyPI. Release identity is derived from the committed native
-version and monotonically increasing build number. Version `0.3.0` build `1`
-uses tag `native-ui-preview-1` and title
-`v0.3.0 (Build 1) — Native UI Preview`. Repeated runs may resume only a matching
+the production app, targets Apple Silicon macOS 26 or later, and is published
+only as a GitHub prerelease. It does not mutate Sparkle Pages, either appcast
+channel, GitHub latest, or PyPI. Release identity is derived from the committed native
+version and monotonically increasing build number. Version `0.3.0` build `2`
+uses tag `native-ui-preview-2` and title
+`v0.3.0 (Build 2) — Native UI Preview`. Repeated runs may resume only a matching
 draft with byte-identical assets, and fail closed after publication. Published
 tags and assets remain immutable even if the human-readable title or notes need
 a metadata-only correction.

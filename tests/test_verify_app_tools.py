@@ -23,6 +23,7 @@ class VerifyAppToolsTests(unittest.TestCase):
                 "ffmpeg",
                 "ffprobe",
                 "edge264_test",
+                "fx-upscale",
                 "MP4Box",
                 "spatial-media-kit-tool",
             },
