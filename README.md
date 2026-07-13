@@ -232,10 +232,10 @@ Big thanks to:
 - [steverice][steverice] for [h264-tools][ldecod]
 - Thibault Raffaillac, Celticom/TVLabs, and Jens Duttke for [edge264-mvc][edge264-mvc], used by the bundled native MVC
   splitter. The BSD license notice is included in `bd_to_avp/resources/notices/edge264-mvc-LICENSE_BSD.txt`. The
-  bundled build applies `scripts/patches/edge264-mvc-stream-input.patch` so direct mode can consume Annex B MVC from
-  stdin without materializing an intermediate `.h264` file; `scripts/build_edge264_macos.py` reproduces the binary.
-  `bd_to_avp/resources/notices/edge264-mvc-build.json` is the source of truth for the upstream revision, downstream
-  patch, deployment target, and reproducible binary checksum.
+  pinned upstream revision directly supports Annex B MVC input from stdin and FIFOs, nonzero failure exits, and
+  bounded no-progress recovery. `scripts/build_edge264_macos.py` reproduces the binary, and
+  `bd_to_avp/resources/notices/edge264-mvc-build.json` is the source of truth for the upstream revision, deployment
+  target, linkage, and reproducible binary checksum.
 
 [MakeMKV]: https://www.makemkv.com/
 
