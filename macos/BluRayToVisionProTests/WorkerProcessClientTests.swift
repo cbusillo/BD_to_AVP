@@ -7,8 +7,8 @@ final class WorkerProcessClientTests: XCTestCase {
 
     func testDecodesEventsFromWorkerProcess() async throws {
         let client = fixtureClient(body: """
-        print(json.dumps({"protocol_version": 1, "type": "worker.ready", "job_id": job_id, "sequence": 0, "payload": {"worker_version": "test", "process_group_id": os.getpid()}}), flush=True)
-        print(json.dumps({"protocol_version": 1, "type": "job.completed", "job_id": job_id, "sequence": 1, "payload": {"result": {"name": "movie", "resolution": "1920x1080", "frame_rate": "24/1", "interlaced": False, "size_bytes": 10}}}), flush=True)
+        print(json.dumps({"protocol_version": 2, "type": "worker.ready", "job_id": job_id, "sequence": 0, "payload": {"worker_version": "test", "process_group_id": os.getpid()}}), flush=True)
+        print(json.dumps({"protocol_version": 2, "type": "job.completed", "job_id": job_id, "sequence": 1, "payload": {"result": {"name": "movie", "resolution": "1920x1080", "frame_rate": "24/1", "interlaced": False, "size_bytes": 10}}}), flush=True)
         """)
         let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
         var events: [WorkerEvent] = []
@@ -52,7 +52,7 @@ final class WorkerProcessClientTests: XCTestCase {
 
     func testRejectsTerminalEventBeforeWorkerReady() async throws {
         let client = fixtureClient(body: """
-        print(json.dumps({"protocol_version": 1, "type": "job.completed", "job_id": job_id, "sequence": 0, "payload": {"result": {"name": "movie", "resolution": "1920x1080", "frame_rate": "24/1", "interlaced": False, "size_bytes": 10}}}), flush=True)
+        print(json.dumps({"protocol_version": 2, "type": "job.completed", "job_id": job_id, "sequence": 0, "payload": {"result": {"name": "movie", "resolution": "1920x1080", "frame_rate": "24/1", "interlaced": False, "size_bytes": 10}}}), flush=True)
         """)
         let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
 
@@ -68,7 +68,7 @@ final class WorkerProcessClientTests: XCTestCase {
 
     func testRejectsWorkerReadyWithoutOwnedProcessGroup() async throws {
         let client = fixtureClient(body: """
-        print(json.dumps({"protocol_version": 1, "type": "worker.ready", "job_id": job_id, "sequence": 0, "payload": {}}), flush=True)
+        print(json.dumps({"protocol_version": 2, "type": "worker.ready", "job_id": job_id, "sequence": 0, "payload": {}}), flush=True)
         """)
         let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
 
@@ -85,7 +85,7 @@ final class WorkerProcessClientTests: XCTestCase {
     func testCancellationReapsWorkerAfterTerminalEvent() async throws {
         let client = fixtureClient(body: """
         \(readyEvent())
-        print(json.dumps({"protocol_version": 1, "type": "job.completed", "job_id": job_id, "sequence": 1, "payload": {"result": {"name": "movie", "resolution": "1920x1080", "frame_rate": "24/1", "interlaced": False, "size_bytes": 10}}}), flush=True)
+        print(json.dumps({"protocol_version": 2, "type": "job.completed", "job_id": job_id, "sequence": 1, "payload": {"result": {"name": "movie", "resolution": "1920x1080", "frame_rate": "24/1", "interlaced": False, "size_bytes": 10}}}), flush=True)
         time.sleep(30)
         """)
         let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
@@ -122,7 +122,7 @@ final class WorkerProcessClientTests: XCTestCase {
 
     private func readyEvent() -> String {
         """
-        print(json.dumps({"protocol_version": 1, "type": "worker.ready", "job_id": job_id, "sequence": 0, "payload": {"worker_version": "test", "process_group_id": os.getpid()}}), flush=True)
+        print(json.dumps({"protocol_version": 2, "type": "worker.ready", "job_id": job_id, "sequence": 0, "payload": {"worker_version": "test", "process_group_id": os.getpid()}}), flush=True)
         """
     }
 
