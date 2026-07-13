@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    static func isStartupSmoke(arguments: [String]) -> Bool {
+    nonisolated static func isStartupSmoke(arguments: [String]) -> Bool {
         arguments.contains(startupSmokeArgument)
     }
 
