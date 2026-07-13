@@ -24,7 +24,8 @@ dependencies = [
     "opencv-python==5.0.0.93",
     "psutil>=5.9.8,<8",
     "pyobjc-framework-vision>=11.0,<13",
-    "pyside6>=6.7.1,<7",
+    # PySide6 6.10+ includes macOS binaries that require macOS 15.
+    "pyside6>=6.7.1,<6.10",
     "pysrt>=1.1.2,<2",
     "trakit>=0.2.2,<0.3",
     "wakepy>=0.9.1,<1.1",
@@ -91,7 +92,8 @@ requires = [
     "opencv-python==5.0.0.93",
     "psutil>=5.9.8,<8",
     "pyobjc-framework-vision>=11.0,<13",
-    "pyside6>=6.7.1,<7",
+    # PySide6 6.10+ includes macOS binaries that require macOS 15.
+    "pyside6>=6.7.1,<6.10",
     "pysrt>=1.1.2,<2",
     "trakit>=0.2.2,<0.3",
     "wakepy>=0.9.1,<1.1",
@@ -99,6 +101,7 @@ requires = [
 
 [tool.briefcase.app.bd-to-avp.macOS]
 universal_build = false
+min_os_version = "14.0"
 
 [tool.briefcase.app.bd-to-avp.macOS.info]
 CFBundleVersion = "146"

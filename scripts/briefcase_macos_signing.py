@@ -6,7 +6,7 @@ import importlib
 from pathlib import Path
 from typing import Any
 
-EXPECTED_BRIEFCASE_VERSION = "0.4.3"
+EXPECTED_BRIEFCASE_VERSION = "0.4.4"
 SPARKLE_FRAMEWORK_NAME = "Sparkle.framework"
 
 

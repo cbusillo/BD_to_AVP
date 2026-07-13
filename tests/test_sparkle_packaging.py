@@ -180,9 +180,29 @@ class BriefcaseSigningTests(unittest.TestCase):
         self.assertFalse(briefcase_macos_signing.is_sparkle_target(other_path, app_path))
 
     def test_signing_patch_rejects_unexpected_briefcase_version(self) -> None:
-        with patch.object(briefcase_macos_signing.briefcase, "__version__", "0.4.4"):
-            with self.assertRaisesRegex(RuntimeError, "requires Briefcase 0.4.3"):
+        with patch.object(briefcase_macos_signing.briefcase, "__version__", "0.0.0"):
+            with self.assertRaises(RuntimeError) as error:
                 briefcase_macos_signing.install_patch()
+        self.assertIn(
+            f"requires Briefcase {briefcase_macos_signing.EXPECTED_BRIEFCASE_VERSION}",
+            str(error.exception),
+        )
+
+    def test_signing_patch_installs_for_expected_briefcase_version(self) -> None:
+        original_sign_app = briefcase_macos_signing.macOSSigningMixin.sign_app
+        self.addCleanup(
+            setattr,
+            briefcase_macos_signing.macOSSigningMixin,
+            "sign_app",
+            original_sign_app,
+        )
+
+        briefcase_macos_signing.install_patch()
+
+        self.assertIs(
+            briefcase_macos_signing.macOSSigningMixin.sign_app,
+            briefcase_macos_signing.sign_app_with_xpc,
+        )
 
     def test_sign_app_uses_inside_out_order_and_no_host_entitlements_for_sparkle(self) -> None:
         app_path = Path("/tmp/App.app")

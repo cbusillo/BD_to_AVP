@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import plistlib
 import subprocess
 from pathlib import Path
+
+from scripts.native_app import is_mach_o, minimum_macos_versions, normalized_version
 
 
 APP_PATH = Path("build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app")
@@ -44,6 +47,29 @@ def verify_tool(tool_path: Path, probe_args: list[str]) -> None:
             raise RuntimeError(f"Bundled {tool_path.name} still links to {forbidden_path}:\n{linked_libraries}")
 
 
+def verify_mach_o_minimum_versions(app_path: Path) -> None:
+    with (app_path / "Contents" / "Info.plist").open("rb") as handle:
+        info = plistlib.load(handle)
+    minimum_system_version = info.get("LSMinimumSystemVersion")
+    if not isinstance(minimum_system_version, str) or not minimum_system_version.strip():
+        raise RuntimeError("App Info.plist must define LSMinimumSystemVersion.")
+    minimum_system_version = minimum_system_version.strip()
+    expected_version = normalized_version(minimum_system_version)
+    incompatible: list[str] = []
+    for path in sorted(app_path.rglob("*")):
+        if not path.is_file() or path.suffix in {".a", ".o"} or not is_mach_o(path):
+            continue
+        newer_versions = sorted(
+            version for version in minimum_macos_versions(path) if normalized_version(version) > expected_version
+        )
+        if newer_versions:
+            incompatible.append(f"{path.relative_to(app_path)}: {', '.join(newer_versions)}")
+    if incompatible:
+        raise RuntimeError(
+            f"Packaged Mach-O requires a newer macOS version than {minimum_system_version}:\n" + "\n".join(incompatible)
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify app-local command-line tools in the Briefcase app bundle.")
     parser.add_argument("--app-path", type=Path, default=APP_PATH)
@@ -54,6 +80,7 @@ def main() -> None:
     tools = CORE_TOOLS if args.profile == "core" else REQUIRED_TOOLS
     for tool_name, probe_args in tools.items():
         verify_tool(tool_dir / tool_name, probe_args)
+    verify_mach_o_minimum_versions(args.app_path)
     print(f"Verified app-local tools in {tool_dir}")
 
 
