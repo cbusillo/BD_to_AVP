@@ -2,7 +2,7 @@ import AppKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-    static let startupSmokeArgument = "--startup-smoke"
+    nonisolated static let startupSmokeArgument = "--startup-smoke"
 
     weak var viewModel: ConversionViewModel?
     private weak var managedWindow: NSWindow?
