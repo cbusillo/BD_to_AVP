@@ -151,6 +151,36 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("Draft release did not become visible through the API", str(workflow))
         self.assertIn('[ "$TOTAL_ASSET_COUNT" = "3" ]', str(jobs["verify-draft"]))
 
+    def test_release_notes_are_frozen_embedded_and_reverified(self) -> None:
+        workflow = load_workflow("briefcase.yml")
+        jobs = workflow["jobs"]
+        create_draft = jobs["create-draft"]
+        publish_appcast = jobs["publish-appcast"]
+        verify_draft = jobs["verify-draft"]
+        publish_release = jobs["publish-release"]
+
+        self.assertIn("release_notes_sha256", create_draft["outputs"])
+        self.assertIn("release-notes-source", str(create_draft))
+        self.assertIn("jq -j", str(create_draft))
+        self.assertIn("draft-release-notes.md", str(create_draft))
+        self.assertIn("APPCAST_ASSET_COUNT", str(create_draft))
+        self.assertIn("at most one appcast asset", str(create_draft))
+
+        self.assertIn("release-notes-source", str(publish_appcast))
+        self.assertIn("Draft release notes artifact digest mismatch", str(publish_appcast))
+        self.assertIn("--release-notes-file", str(publish_appcast))
+        self.assertIn("--full-release-notes-url", str(publish_appcast))
+        self.assertNotIn("--release-notes-url", str(publish_appcast))
+
+        self.assertIn("Draft release notes changed after appcast construction", str(verify_draft))
+        self.assertIn("--release-notes-file verified-assets/release-notes.md", str(verify_draft))
+        self.assertIn("--full-release-notes-url", str(verify_draft))
+
+        self.assertIn("verify_release_notes_body", str(publish_release))
+        self.assertIn("Release notes changed after appcast verification", str(publish_release))
+        self.assertIn("--rawfile body release-notes.md", str(publish_release))
+        self.assertIn("body: $body", str(publish_release))
+
     def test_release_package_provenance_is_attested_and_verified(self) -> None:
         workflow = load_workflow("briefcase.yml")
         attest = workflow["jobs"]["attest-package"]

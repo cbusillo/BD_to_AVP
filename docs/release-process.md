@@ -62,27 +62,37 @@ The workflow performs these ordered boundaries:
    exact name, byte size, SHA-256, and `SHA256SUMS` entry, then publish GitHub
    artifact attestations for the verified package before release creation.
 4. Create a draft GitHub Release targeting only `github.sha`, retain its release
-   ID for authenticated inspection, and transfer draft assets through release
-   and asset IDs rather than runner-dependent tag lookup. Asset overwrite stays
+   ID for authenticated inspection, freeze the exact UTF-8 release body into a
+   digest-bound workflow artifact, and transfer draft assets through release and
+   asset IDs rather than runner-dependent tag lookup. Asset overwrite stays
    disabled by default.
 5. In the main-only `sparkle-release` environment, download the verified
-   package workflow artifact without a write-capable repository token, verify
-   its exact identity and distribution signatures, load the active durable
-   `appcast.xml` selected by Pages state, sign the DMG, verify the EdDSA
-   signature, and build the cumulative snapshot.
+   package and release-note workflow artifacts without a write-capable
+   repository token, verify their exact identities, load the active durable
+   `appcast.xml` selected by Pages state, sign the DMG, and build the cumulative
+   snapshot. New items embed the frozen body as
+   `<description sparkle:format="markdown">` and retain the GitHub Release page
+   as their full-notes link; historical tag-page items remain valid.
 6. Upload `appcast.xml` to the draft, re-download the DMG, checksum, and appcast,
    and repeat the exact digest, size, notarization, Gatekeeper, bundle-version,
-   appcast-item, and exact-main-commit GitHub provenance checks.
+   embedded-release-note, appcast-item, and exact-main-commit GitHub provenance
+   checks.
 7. Publish the verified draft only if it still targets the current `main` HEAD.
-   Stable releases then publish separately built Python distributions through
-   PyPI Trusted Publishing with PEP 740 attestations; RC releases never publish
-   to PyPI.
+   The release body is hashed again immediately before and after publication so
+   edits cannot silently diverge from the updater notes. Stable releases then
+   publish separately built Python distributions through PyPI Trusted
+   Publishing with PEP 740 attestations; RC releases never publish to PyPI.
 8. Deploy the durable `appcast.xml` release asset to GitHub Pages. A deployment
    failure can be retried without rebuilding, retagging, or re-signing.
 
 For Stable releases, PyPI publication and Sparkle Pages deployment are
 independent post-publication jobs. Either channel can be retried without
 rebuilding or changing the published GitHub Release.
+
+Release bodies are also the updater's native Markdown source. Keep the opening
+paragraph useful as the version summary and prefer headings, lists, links,
+emphasis, block quotes, and code. Avoid relying on GitHub-only tables, images,
+or embedded HTML for information required in the Sparkle dialog.
 
 ### Native UI Preview
 
@@ -108,10 +118,10 @@ tags and assets are immutable; maintainers may correct the human-readable title
 or notes without replacing artifacts or changing the target commit.
 
 The cumulative `appcast.xml` attached to every published GitHub Release is the
-recovery source of truth. Pages also publishes `appcast-state.json`, which binds
-the live feed to one durable release snapshot or records that updates are
-disabled. GitHub Pages is a deployment target, not the only copy of feed
-history.
+recovery source of truth, including the publication-time Markdown shown in the
+native updater. Pages also publishes `appcast-state.json`, which binds the live
+feed to one durable release snapshot or records that updates are disabled.
+GitHub Pages is a deployment target, not the only copy of feed history.
 
 ## Retry, Restore, and Disable
 
@@ -121,6 +131,10 @@ again. A matching draft and its byte-identical assets resume safely; a
 conflicting draft or tag fails closed. Never replace a published DMG or appcast
 asset. If the Pages job fails after publication, rerun the failed job or dispatch
 `Manage Sparkle Pages` from `main` with `deploy` and the release tag.
+
+The draft release body becomes immutable for that run once the appcast is
+constructed. Editing it afterward causes verification and publication to fail
+closed because the embedded Markdown no longer matches the recorded digest.
 
 Drafts are never deleted automatically because they preserve exact-commit
 diagnostic and retry evidence. If a newer immutable release supersedes a failed

@@ -18,6 +18,9 @@ SPARKLE_NAMESPACE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 DC_NAMESPACE = "http://purl.org/dc/elements/1.1/"
 REPOSITORY_PATH = "/cbusillo/BD_to_AVP"
 SPARKLE = f"{{{SPARKLE_NAMESPACE}}}"
+MAX_RELEASE_NOTES_BYTES = 128 * 1024
+FULL_RELEASE_LINK_LABEL = "View the complete release and downloads on GitHub"
+INVALID_XML_CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
 SHORT_VERSION_PATTERN = re.compile(
     r"^(?P<major>0|[1-9][0-9]*)\."
     r"(?P<minor>0|[1-9][0-9]*)\."
@@ -40,7 +43,8 @@ class AppcastItem:
     download_url: str
     length: int
     signature: str
-    release_notes_url: str
+    release_notes_markdown: str
+    full_release_notes_url: str
     minimum_system_version: str
     published_at: datetime
 
@@ -164,6 +168,70 @@ def _validate_signature(value: str) -> None:
         raise AppcastError("sparkle:edSignature must decode to a 64-byte Ed25519 signature.")
 
 
+def read_release_notes(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise AppcastError(f"Unable to read UTF-8 release notes {path}: {error}") from error
+
+
+def render_release_notes(markdown: str, full_release_notes_url: str) -> str:
+    _validate_release_url(full_release_notes_url, "Full release notes URL", download=False)
+    normalized = markdown.replace("\r\n", "\n").replace("\r", "\n").rstrip()
+    if not normalized.strip():
+        raise AppcastError("Release notes Markdown must not be empty.")
+    if INVALID_XML_CONTROL_CHARACTERS.search(normalized):
+        raise AppcastError("Release notes Markdown contains a character that is invalid in XML 1.0.")
+    rendered = f"{normalized}\n\n[{FULL_RELEASE_LINK_LABEL}]({full_release_notes_url})"
+    if len(rendered.encode("utf-8")) > MAX_RELEASE_NOTES_BYTES:
+        raise AppcastError(f"Release notes Markdown must not exceed {MAX_RELEASE_NOTES_BYTES} UTF-8 bytes.")
+    return rendered
+
+
+def _validate_item_release_notes(item: ET.Element, download_tag: str) -> None:
+    descriptions = item.findall("description")
+    release_notes_links = item.findall(f"{SPARKLE}releaseNotesLink")
+    full_release_notes_links = item.findall(f"{SPARKLE}fullReleaseNotesLink")
+    if descriptions:
+        if len(descriptions) != 1:
+            raise AppcastError("Embedded release notes require exactly one description element.")
+        if release_notes_links:
+            raise AppcastError("Embedded release notes must not also use sparkle:releaseNotesLink.")
+        if len(full_release_notes_links) != 1:
+            raise AppcastError("Embedded release notes require exactly one sparkle:fullReleaseNotesLink.")
+        description = descriptions[0]
+        if description.get(f"{SPARKLE}format") != "markdown":
+            raise AppcastError('Embedded release notes require description sparkle:format="markdown".')
+        full_release_notes_url = (full_release_notes_links[0].text or "").strip()
+        release_notes_tag, _ = _validate_release_url(
+            full_release_notes_url,
+            "Full release notes URL",
+            download=False,
+        )
+        if release_notes_tag != download_tag:
+            raise AppcastError("Full release notes and enclosure URLs must use the same release tag.")
+        rendered_notes = render_release_notes(
+            (description.text or "").rsplit(f"\n\n[{FULL_RELEASE_LINK_LABEL}]", maxsplit=1)[0],
+            full_release_notes_url,
+        )
+        if description.text != rendered_notes:
+            raise AppcastError("Embedded release notes must use the canonical Markdown footer.")
+        if _text(item, "link") != full_release_notes_url:
+            raise AppcastError("Appcast item link must match sparkle:fullReleaseNotesLink.")
+        return
+
+    if len(release_notes_links) != 1:
+        raise AppcastError("Legacy appcast items require exactly one sparkle:releaseNotesLink.")
+    if full_release_notes_links:
+        raise AppcastError("Legacy appcast items must not use sparkle:fullReleaseNotesLink.")
+    release_notes_url = (release_notes_links[0].text or "").strip()
+    release_notes_tag, _ = _validate_release_url(release_notes_url, "Release notes URL", download=False)
+    if release_notes_tag != download_tag:
+        raise AppcastError("Release notes and enclosure URLs must use the same release tag.")
+    if _text(item, "link") != release_notes_url:
+        raise AppcastError("Appcast item link must match sparkle:releaseNotesLink.")
+
+
 def validate_appcast_channel(channel: ET.Element) -> None:
     if channel.find("title") is None or channel.find("description") is None:
         raise AppcastError("Appcast channel requires title and description elements.")
@@ -199,14 +267,9 @@ def validate_appcast_channel(channel: ET.Element) -> None:
         signature = enclosure.get(f"{SPARKLE}edSignature", "")
         _validate_signature(signature)
 
-        release_notes_url = _text(item, f"{SPARKLE}releaseNotesLink")
-        release_notes_tag, _ = _validate_release_url(release_notes_url, "Release notes URL", download=False)
-        if release_notes_tag != download_tag:
-            raise AppcastError("Release notes and enclosure URLs must use the same release tag.")
         if download_tag != f"v{short_version}":
             raise AppcastError("Appcast URLs must use the tag derived from sparkle:shortVersionString.")
-        if _text(item, "link") != release_notes_url:
-            raise AppcastError("Appcast item link must match sparkle:releaseNotesLink.")
+        _validate_item_release_notes(item, download_tag)
         minimum_system_version = _text(item, f"{SPARKLE}minimumSystemVersion")
         if not minimum_system_version:
             raise AppcastError("Every appcast item requires sparkle:minimumSystemVersion.")
@@ -260,6 +323,8 @@ def verify_release_item(
     short_version: str,
     download_url: str,
     length: int,
+    release_notes_markdown: str,
+    full_release_notes_url: str,
 ) -> None:
     validate_appcast(feed_path)
     _, channel = load_appcast(feed_path)
@@ -276,6 +341,14 @@ def verify_release_item(
         raise AppcastError(f"Appcast enclosure URL for {short_version} does not match the release asset.")
     if enclosure.get("length") != str(length):
         raise AppcastError(f"Appcast enclosure length for {short_version} does not match the release asset.")
+    description = item.find("description")
+    if description is None:
+        raise AppcastError(f"Appcast item for {short_version} is missing embedded release notes.")
+    expected_release_notes = render_release_notes(release_notes_markdown, full_release_notes_url)
+    if description.get(f"{SPARKLE}format") != "markdown" or description.text != expected_release_notes:
+        raise AppcastError(f"Appcast release notes for {short_version} do not match the draft release body.")
+    if _text(item, f"{SPARKLE}fullReleaseNotesLink") != full_release_notes_url:
+        raise AppcastError(f"Appcast full release notes URL for {short_version} does not match the release page.")
 
 
 def append_item(feed_path: Path, output_path: Path, item: AppcastItem) -> None:
@@ -286,9 +359,13 @@ def append_item(feed_path: Path, output_path: Path, item: AppcastItem) -> None:
     if item.channel != expected_channel:
         raise AppcastError("Sparkle channel and short version disagree.")
     download_tag, _ = _validate_release_url(item.download_url, "Enclosure URL", download=True)
-    release_notes_tag, _ = _validate_release_url(item.release_notes_url, "Release notes URL", download=False)
+    release_notes_tag, _ = _validate_release_url(
+        item.full_release_notes_url,
+        "Full release notes URL",
+        download=False,
+    )
     if release_notes_tag != download_tag:
-        raise AppcastError("Release notes and enclosure URLs must use the same release tag.")
+        raise AppcastError("Full release notes and enclosure URLs must use the same release tag.")
     if download_tag != f"v{item.short_version}":
         raise AppcastError("Appcast URLs must use the tag derived from sparkle:shortVersionString.")
     _validate_signature(item.signature)
@@ -298,12 +375,14 @@ def append_item(feed_path: Path, output_path: Path, item: AppcastItem) -> None:
     tree, channel = load_appcast(feed_path)
     item_element = ET.Element("item")
     ET.SubElement(item_element, "title").text = f"Version {item.short_version}"
-    ET.SubElement(item_element, "link").text = item.release_notes_url
+    ET.SubElement(item_element, "link").text = item.full_release_notes_url
+    description = ET.SubElement(item_element, "description", {f"{SPARKLE}format": "markdown"})
+    description.text = render_release_notes(item.release_notes_markdown, item.full_release_notes_url)
     ET.SubElement(item_element, f"{SPARKLE}version").text = item.build_version
     ET.SubElement(item_element, f"{SPARKLE}shortVersionString").text = item.short_version
     if item.channel:
         ET.SubElement(item_element, f"{SPARKLE}channel").text = item.channel
-    ET.SubElement(item_element, f"{SPARKLE}releaseNotesLink").text = item.release_notes_url
+    ET.SubElement(item_element, f"{SPARKLE}fullReleaseNotesLink").text = item.full_release_notes_url
     ET.SubElement(item_element, "pubDate").text = format_datetime(item.published_at.astimezone(timezone.utc))
     ET.SubElement(
         item_element,
@@ -345,7 +424,8 @@ def main() -> int:
     add.add_argument("--download-url", required=True)
     add.add_argument("--length", type=int, required=True)
     add.add_argument("--signature", required=True)
-    add.add_argument("--release-notes-url", required=True)
+    add.add_argument("--release-notes-file", type=Path, required=True)
+    add.add_argument("--full-release-notes-url", required=True)
     add.add_argument("--minimum-system-version", required=True)
     add.add_argument("--published-at", help="RFC 3339 publication time; defaults to now in UTC.")
 
@@ -380,6 +460,8 @@ def main() -> int:
     verify_release.add_argument("--short-version", required=True)
     verify_release.add_argument("--download-url", required=True)
     verify_release.add_argument("--length", type=int, required=True)
+    verify_release.add_argument("--release-notes-file", type=Path, required=True)
+    verify_release.add_argument("--full-release-notes-url", required=True)
 
     args = parser.parse_args()
     if args.command == "validate":
@@ -399,6 +481,8 @@ def main() -> int:
             short_version=args.short_version,
             download_url=args.download_url,
             length=args.length,
+            release_notes_markdown=read_release_notes(args.release_notes_file),
+            full_release_notes_url=args.full_release_notes_url,
         )
     else:
         published_at = datetime.fromisoformat(args.published_at) if args.published_at else datetime.now(timezone.utc)
@@ -414,7 +498,8 @@ def main() -> int:
                 download_url=args.download_url,
                 length=args.length,
                 signature=args.signature,
-                release_notes_url=args.release_notes_url,
+                release_notes_markdown=read_release_notes(args.release_notes_file),
+                full_release_notes_url=args.full_release_notes_url,
                 minimum_system_version=args.minimum_system_version,
                 published_at=published_at,
             ),

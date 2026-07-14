@@ -49,7 +49,7 @@ Sparkle, although the current single-target SPM build embeds the dormant signed
 framework. The native Release plist matches the Briefcase updater policy, but
 its current version/build identity is not eligible for production publication.
 Signed installed-app upgrades, Stable/RC feed behavior, permission prompting,
-and rendered release notes remain release-cycle validation for #192 and #197.
+and final rendered-note appearance remain release-cycle validation for #197.
 
 Briefcase writes the direct-distribution metadata and repository build counter,
 and the repo-owned signing extension adds nested `.xpc` bundles to Briefcase's
@@ -57,6 +57,10 @@ inside-out signing pass. The manual main-only release workflow validates the
 final notarized DMG, creates a draft release, signs it with the protected
 environment key, attaches a cumulative appcast snapshot, re-downloads and
 verifies every asset, publishes the draft, and deploys that durable snapshot.
+Each new appcast item embeds the digest-bound draft release body as Markdown, so
+Sparkle uses its adaptive native text view without loading GitHub page chrome or
+making a second release-note request. A full-release link remains available for
+downloads and extended context, and historical external-link items remain valid.
 The live feed remains empty until the first enabled release is published. See
 [release-process.md](release-process.md) for the operator sequence.
 
@@ -214,9 +218,11 @@ The appcast publication path must:
    `sign_update --ed-key-file -`, without modifying the DMG;
 6. add only a full-DMG enclosure and never generate delta elements;
 7. set each new enclosure to its exact tag-qualified GitHub Release asset URL;
-8. attach the cumulative `appcast.xml` snapshot to the draft release;
-9. re-download and verify the DMG, checksum, and appcast assets; and
-10. publish the draft before deploying its durable appcast asset atomically to
+8. embed the exact digest-bound draft body as Markdown with a tag-qualified
+   `sparkle:fullReleaseNotesLink`, capped at 128 KiB per item;
+9. attach the cumulative `appcast.xml` snapshot to the draft release;
+10. re-download and verify the DMG, checksum, appcast, and embedded notes; and
+11. publish the draft before deploying its durable appcast asset atomically to
     GitHub Pages.
 
 Release publication rejects an existing tag or short version, disables release

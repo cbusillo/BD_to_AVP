@@ -562,6 +562,7 @@ jobs:
     outputs:
       release_created_at: ${{ steps.draft_release.outputs.release_created_at }}
       release_id: ${{ steps.draft_release.outputs.release_id }}
+      release_notes_sha256: ${{ steps.draft_release.outputs.release_notes_sha256 }}
     steps:
       - name: Download verified release package
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -747,14 +748,19 @@ jobs:
             CHECKSUM_ASSET_COUNT=$(jq \
               '[.assets[] | select(.name == "SHA256SUMS")] | length' \
               <<< "$RELEASE_JSON")
+            APPCAST_ASSET_COUNT=$(jq \
+              '[.assets[] | select(.name == "appcast.xml")] | length' \
+              <<< "$RELEASE_JSON")
             TOTAL_ASSET_COUNT=$(jq '.assets | length' <<< "$RELEASE_JSON")
+            EXPECTED_TOTAL_ASSET_COUNT=$((2 + APPCAST_ASSET_COUNT))
             if [ "$DMG_ASSET_COUNT" = "1" ] \
               && [ "$CHECKSUM_ASSET_COUNT" = "1" ] \
-              && [ "$TOTAL_ASSET_COUNT" = "2" ]; then
+              && { [ "$APPCAST_ASSET_COUNT" = "0" ] || [ "$APPCAST_ASSET_COUNT" = "1" ]; } \
+              && [ "$TOTAL_ASSET_COUNT" = "$EXPECTED_TOTAL_ASSET_COUNT" ]; then
               break
             fi
             if [ "$attempt" -eq 12 ]; then
-              echo "Draft package assets did not become visible through the API." >&2
+              echo "Draft must contain one DMG, checksum, and at most one appcast asset." >&2
               exit 1
             fi
             sleep 2
@@ -775,8 +781,24 @@ jobs:
             echo "A prerelease cannot be marked latest." >&2
             exit 1
           fi
-          echo "release_created_at=$(jq -r .created_at <<< "$RELEASE_JSON")" >> "$GITHUB_OUTPUT"
-          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+          if ! jq -e '.body | type == "string" and test("\\S")' <<< "$RELEASE_JSON" >/dev/null; then
+            echo "Draft release notes must contain a version-specific summary." >&2
+            exit 1
+          fi
+          jq -j '.body' <<< "$RELEASE_JSON" > draft-release-notes.md
+          {
+            echo "release_created_at=$(jq -r .created_at <<< "$RELEASE_JSON")"
+            echo "release_id=$RELEASE_ID"
+            echo "release_notes_sha256=$(sha256sum draft-release-notes.md | awk '{print $1}')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable draft release notes
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-notes-source
+          path: draft-release-notes.md
+          if-no-files-found: error
+          retention-days: 7
 
   publish-appcast:
     name: Build signed cumulative appcast snapshot
@@ -809,6 +831,12 @@ jobs:
         with:
           name: release-package
           path: release-assets
+
+      - name: Download immutable draft release notes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-notes-source
+          path: release-notes-source
 
       - name: Verify transferred release DMG
         id: release_asset
@@ -856,6 +884,22 @@ jobs:
             echo "asset_size=$EXPECTED_DMG_SIZE"
             echo "created_at=$RELEASE_CREATED_AT"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Verify immutable draft release notes
+        env:
+          EXPECTED_RELEASE_NOTES_SHA256: ${{ needs.create-draft.outputs.release_notes_sha256 }}
+        run: |
+          set -euo pipefail
+          RELEASE_NOTES_FILE=release-notes-source/draft-release-notes.md
+          if [ ! -f "$RELEASE_NOTES_FILE" ]; then
+            echo "Immutable draft release notes artifact is missing." >&2
+            exit 1
+          fi
+          if [ "$(shasum -a 256 "$RELEASE_NOTES_FILE" | awk '{print $1}')" \
+            != "$EXPECTED_RELEASE_NOTES_SHA256" ]; then
+            echo "Draft release notes artifact digest mismatch." >&2
+            exit 1
+          fi
 
       - name: Inspect draft DMG
         id: bundle
@@ -923,6 +967,7 @@ jobs:
           MINIMUM_SYSTEM_VERSION: ${{ steps.bundle.outputs.minimum_system_version }}
           RELEASE_CREATED_AT: ${{ steps.release_asset.outputs.created_at }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          RELEASE_NOTES_FILE: release-notes-source/draft-release-notes.md
           SHORT_VERSION: ${{ steps.bundle.outputs.short_version }}
           SPARKLE_EDDSA_PRIVATE_KEY: ${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}
         run: |
@@ -946,7 +991,8 @@ jobs:
             --download-url "$ASSET_URL" \
             --length "$ASSET_SIZE" \
             --signature "$SIGNATURE" \
-            --release-notes-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG" \
+            --release-notes-file "$RELEASE_NOTES_FILE" \
+            --full-release-notes-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG" \
             --minimum-system-version "$MINIMUM_SYSTEM_VERSION" \
             --published-at "$RELEASE_CREATED_AT"
           python scripts/sparkle_appcast.py validate-snapshot \
@@ -1059,6 +1105,7 @@ jobs:
           EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
           EXPECTED_DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
           EXPECTED_DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
+          EXPECTED_RELEASE_NOTES_SHA256: ${{ needs.create-draft.outputs.release_notes_sha256 }}
           EXPECTED_SHORT_VERSION: ${{ needs.prepare.outputs.package_version }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
@@ -1095,6 +1142,16 @@ jobs:
           fi
           if [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ]; then
             echo "Draft target changed after creation." >&2
+            exit 1
+          fi
+          if ! jq -e '.body | type == "string" and test("\\S")' <<< "$RELEASE_JSON" >/dev/null; then
+            echo "Draft release notes became empty before final verification." >&2
+            exit 1
+          fi
+          jq -j '.body' <<< "$RELEASE_JSON" > verified-assets/release-notes.md
+          if [ "$(shasum -a 256 verified-assets/release-notes.md | awk '{print $1}')" \
+            != "$EXPECTED_RELEASE_NOTES_SHA256" ]; then
+            echo "Draft release notes changed after appcast construction." >&2
             exit 1
           fi
           ASSET_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$EXPECTED_DMG_NAME"
@@ -1170,7 +1227,9 @@ jobs:
             --build-version "$EXPECTED_BUILD_VERSION" \
             --short-version "$EXPECTED_SHORT_VERSION" \
             --download-url "$ASSET_URL" \
-            --length "$ASSET_SIZE"
+            --length "$ASSET_SIZE" \
+            --release-notes-file verified-assets/release-notes.md \
+            --full-release-notes-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
 
   publish-release:
     name: Publish verified GitHub Release
@@ -1201,6 +1260,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MAKE_LATEST: ${{ needs.prepare.outputs.make_latest }}
           PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          EXPECTED_RELEASE_NOTES_SHA256: ${{ needs.create-draft.outputs.release_notes_sha256 }}
           RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
           RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
@@ -1214,7 +1274,21 @@ jobs:
               exit 1
               ;;
           esac
+          verify_release_notes_body() {
+            local release_json="$1"
+            if ! jq -e '.body | type == "string" and test("\\S")' <<< "$release_json" >/dev/null; then
+              echo "Release notes became empty before publication." >&2
+              exit 1
+            fi
+            jq -j '.body' <<< "$release_json" > release-notes.md
+            if [ "$(sha256sum release-notes.md | awk '{print $1}')" \
+              != "$EXPECTED_RELEASE_NOTES_SHA256" ]; then
+              echo "Release notes changed after appcast verification." >&2
+              exit 1
+            fi
+          }
           RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+          verify_release_notes_body "$RELEASE_JSON"
           if [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ]; then
             echo "Release target no longer matches github.sha." >&2
             exit 1
@@ -1226,9 +1300,11 @@ jobs:
               exit 1
             fi
             jq -n \
+              --rawfile body release-notes.md \
               --argjson prerelease "$PRERELEASE" \
               --arg make_latest "$MAKE_LATEST" \
               '{
+                body: $body,
                 draft: false,
                 prerelease: $prerelease,
                 make_latest: $make_latest
@@ -1237,6 +1313,7 @@ jobs:
               "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
               --input publish-release.json >/dev/null
             RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+            verify_release_notes_body "$RELEASE_JSON"
           fi
 
           if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "false" ]; then
