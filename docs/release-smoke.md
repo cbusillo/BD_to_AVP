@@ -206,20 +206,24 @@ integration described in [sparkle-updates.md](sparkle-updates.md).
 3. Select Release Candidates, run `Check for Updates…`, and confirm Sparkle's
    standard update UI selects the RC item.
 4. Inspect the selected appcast item and confirm its `sparkle:version`,
-   `sparkle:shortVersionString`, release-notes content or URL, enclosure URL, and
-   enclosure length match the candidate and published GitHub Release DMG, and
-   that its `sparkle:edSignature` is present and non-empty.
-5. Confirm Sparkle's update UI displays the candidate version and release notes
-   from that same appcast item.
-6. Install the update, relaunch, and confirm the displayed and packaged versions
+   `sparkle:shortVersionString`, Markdown `description`,
+   `sparkle:fullReleaseNotesLink`, enclosure URL, and enclosure length match the
+   candidate, digest-bound draft body, and published GitHub Release DMG, and that
+   its `sparkle:edSignature` is present and non-empty.
+5. Confirm Sparkle's update UI begins at the candidate summary, contains no
+   GitHub page chrome, adapts to light and dark appearance, and opens issue, PR,
+   comparison, and full-release links in the default browser.
+6. Block GitHub Release page access after the appcast is fetched and confirm the
+   embedded notes remain useful rather than becoming blank or an error page.
+7. Install the update, relaunch, and confirm the displayed and packaged versions
    match the candidate.
-7. Publish or stage a newer unchanneled production item and confirm the
+8. Publish or stage a newer unchanneled production item and confirm the
    Release Candidates client selects it without changing its preference.
-8. Repeat with an unavailable feed and an intentionally invalid test signature;
+9. Repeat with an unavailable feed and an intentionally invalid test signature;
    the installed app must remain unchanged.
-9. Start media processing and confirm installation/relaunch is postponed until
+10. Start media processing and confirm installation/relaunch is postponed until
    processing is idle.
-10. Verify the manual GitHub Releases download remains usable as the recovery
+11. Verify the manual GitHub Releases download remains usable as the recovery
     path.
 
 ## Follow-Up Routing

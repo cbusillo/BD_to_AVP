@@ -39,7 +39,8 @@ def item(build: str, short_version: str, channel: str | None) -> sparkle_appcast
         download_url=f"https://github.com/cbusillo/BD_to_AVP/releases/download/{tag}/BD_to_AVP-{short_version}.dmg",
         length=12345,
         signature=SIGNATURE,
-        release_notes_url=f"https://github.com/cbusillo/BD_to_AVP/releases/tag/{tag}",
+        release_notes_markdown=f"Version {short_version} improves conversion reliability.",
+        full_release_notes_url=f"https://github.com/cbusillo/BD_to_AVP/releases/tag/{tag}",
         minimum_system_version="11.0",
         published_at=datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc),
     )
@@ -66,6 +67,17 @@ class SparkleAppcastTests(unittest.TestCase):
         )
         self.assertEqual(items[0].findtext(f"{sparkle_appcast.SPARKLE}channel"), "rc")
         self.assertIsNone(items[1].find(f"{sparkle_appcast.SPARKLE}channel"))
+        description = items[0].find("description")
+        if description is None:
+            self.fail("RC appcast item is missing embedded release notes")
+        self.assertEqual(description.get(f"{sparkle_appcast.SPARKLE}format"), "markdown")
+        self.assertIn("Version 0.2.144rc1 improves conversion reliability.", description.text or "")
+        self.assertIn(sparkle_appcast.FULL_RELEASE_LINK_LABEL, description.text or "")
+        self.assertIsNone(items[0].find(f"{sparkle_appcast.SPARKLE}releaseNotesLink"))
+        self.assertEqual(
+            items[0].findtext(f"{sparkle_appcast.SPARKLE}fullReleaseNotesLink"),
+            "https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.2.144rc1",
+        )
         enclosure = items[0].find("enclosure")
         if enclosure is None:
             self.fail("RC appcast item is missing its enclosure")
@@ -191,7 +203,7 @@ class SparkleAppcastTests(unittest.TestCase):
         invalid_item = sparkle_appcast.AppcastItem(
             **{
                 **item("144", "0.2.143", None).__dict__,
-                "release_notes_url": "https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.2.142",
+                "full_release_notes_url": "https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.2.142",
             }
         )
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -206,7 +218,7 @@ class SparkleAppcastTests(unittest.TestCase):
             **{
                 **item("144", "0.2.143", None).__dict__,
                 "download_url": "https://github.com/cbusillo/BD_to_AVP/releases/download/v0.2.142/app.dmg",
-                "release_notes_url": "https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.2.142",
+                "full_release_notes_url": "https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.2.142",
             }
         )
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -259,6 +271,8 @@ class SparkleAppcastTests(unittest.TestCase):
                 short_version=expected.short_version,
                 download_url=expected.download_url,
                 length=expected.length,
+                release_notes_markdown=expected.release_notes_markdown,
+                full_release_notes_url=expected.full_release_notes_url,
             )
 
     def test_rejects_release_item_asset_mismatch(self) -> None:
@@ -277,6 +291,83 @@ class SparkleAppcastTests(unittest.TestCase):
                     short_version=expected.short_version,
                     download_url=expected.download_url,
                     length=expected.length + 1,
+                    release_notes_markdown=expected.release_notes_markdown,
+                    full_release_notes_url=expected.full_release_notes_url,
+                )
+
+    def test_preserves_legacy_release_note_links_in_cumulative_feed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            empty_feed = root / "empty.xml"
+            stable_feed = root / "stable.xml"
+            rc_feed = root / "rc.xml"
+            make_empty_feed(empty_feed)
+            sparkle_appcast.append_item(empty_feed, stable_feed, item("144", "0.2.143", None))
+
+            tree = ET.parse(stable_feed)
+            appcast_item = tree.getroot().find("channel/item")
+            if appcast_item is None:
+                self.fail("Test appcast is missing its item")
+            description = appcast_item.find("description")
+            full_release_notes_link = appcast_item.find(f"{sparkle_appcast.SPARKLE}fullReleaseNotesLink")
+            if description is None or full_release_notes_link is None:
+                self.fail("Test appcast is missing embedded release-note metadata")
+            release_url = full_release_notes_link.text
+            appcast_item.remove(description)
+            appcast_item.remove(full_release_notes_link)
+            ET.SubElement(appcast_item, f"{sparkle_appcast.SPARKLE}releaseNotesLink").text = release_url
+            tree.write(stable_feed, encoding="utf-8", xml_declaration=True)
+
+            sparkle_appcast.validate_appcast(stable_feed)
+            sparkle_appcast.append_item(stable_feed, rc_feed, item("145", "0.2.144rc1", "rc"))
+            sparkle_appcast.validate_appcast(rc_feed)
+
+    def test_rejects_ambiguous_embedded_and_external_release_notes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            empty_feed = root / "empty.xml"
+            feed = root / "appcast.xml"
+            make_empty_feed(empty_feed)
+            sparkle_appcast.append_item(empty_feed, feed, item("144", "0.2.143", None))
+            tree = ET.parse(feed)
+            appcast_item = tree.getroot().find("channel/item")
+            if appcast_item is None:
+                self.fail("Test appcast is missing its item")
+            ET.SubElement(appcast_item, f"{sparkle_appcast.SPARKLE}releaseNotesLink").text = appcast_item.findtext(
+                f"{sparkle_appcast.SPARKLE}fullReleaseNotesLink"
+            )
+            tree.write(feed, encoding="utf-8", xml_declaration=True)
+
+            with self.assertRaisesRegex(sparkle_appcast.AppcastError, "must not also use"):
+                sparkle_appcast.validate_appcast(feed)
+
+    def test_rejects_invalid_or_oversized_embedded_markdown(self) -> None:
+        release_url = "https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.2.143"
+        with self.assertRaisesRegex(sparkle_appcast.AppcastError, "must not be empty"):
+            sparkle_appcast.render_release_notes(" \n", release_url)
+        with self.assertRaisesRegex(sparkle_appcast.AppcastError, "invalid in XML"):
+            sparkle_appcast.render_release_notes("bad\x00notes", release_url)
+        with self.assertRaisesRegex(sparkle_appcast.AppcastError, "must not exceed"):
+            sparkle_appcast.render_release_notes("x" * sparkle_appcast.MAX_RELEASE_NOTES_BYTES, release_url)
+
+    def test_verify_release_rejects_changed_draft_body(self) -> None:
+        expected = item("144", "0.2.143", None)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            empty_feed = root / "empty.xml"
+            feed = root / "appcast.xml"
+            make_empty_feed(empty_feed)
+            sparkle_appcast.append_item(empty_feed, feed, expected)
+
+            with self.assertRaisesRegex(sparkle_appcast.AppcastError, "do not match the draft release body"):
+                sparkle_appcast.verify_release_item(
+                    feed,
+                    build_version=expected.build_version,
+                    short_version=expected.short_version,
+                    download_url=expected.download_url,
+                    length=expected.length,
+                    release_notes_markdown="Changed after appcast construction.",
+                    full_release_notes_url=expected.full_release_notes_url,
                 )
 
     def test_validates_empty_emergency_feed(self) -> None:
