@@ -299,10 +299,10 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
                     throw WorkerStreamError.duplicateWorkerReady
                 }
                 expectedSequence += 1
-                try await onEvent(event)
                 if event.type.isTerminal {
                     terminalEvent = event
                 }
+                try await onEvent(event)
             }
         }
         try framer.finish()
