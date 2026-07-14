@@ -371,7 +371,9 @@ def is_mach_o(path: Path) -> bool:
 
 
 def sign_package(app_path: Path, identity: str, keychain: str | None = None) -> None:
-    sign_options = ["codesign", "--force", "--sign", identity, "--options", "runtime"]
+    sign_options = ["codesign", "--force", "--sign", identity]
+    if identity != "-":
+        sign_options.extend(["--options", "runtime"])
     if keychain:
         sign_options.extend(["--keychain", keychain])
     sign_options.append("--timestamp=none" if identity == "-" else "--timestamp")
@@ -402,6 +404,12 @@ def sign_package(app_path: Path, identity: str, keychain: str | None = None) -> 
 
 def verify_codesign(app_path: Path) -> None:
     run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app_path)])
+
+
+def smoke_packaged_native_app(app_path: Path) -> None:
+    app_path = app_path.resolve()
+    native_executable = app_path / "Contents" / "MacOS" / NATIVE_EXECUTABLE_NAME
+    run([str(native_executable), "--startup-smoke"], cwd=app_path)
 
 
 def smoke_packaged_worker(app_path: Path) -> None:
@@ -503,6 +511,7 @@ def package(identity: str, keychain: str | None = None) -> None:
     xcodebuild("build", NATIVE_PACKAGE_CONFIGURATION)
     app_path = assemble_package()
     sign_package(app_path, identity, keychain)
+    smoke_packaged_native_app(app_path)
     smoke_packaged_worker(app_path)
     verify_codesign(app_path)
     print(app_path)

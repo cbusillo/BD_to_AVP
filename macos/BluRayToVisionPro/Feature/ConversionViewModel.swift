@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 @MainActor
-final class ConversionViewModel: ObservableObject {
+final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     typealias ClientFactory = () throws -> any WorkerProcessRunning
 
     @Published private(set) var source: ConversionSource?
@@ -14,6 +14,7 @@ final class ConversionViewModel: ObservableObject {
     private var runTask: Task<Void, Never>?
     private var pendingTerminalEvent: WorkerEvent?
     private var lastConversionDraft: ConversionDraft?
+    private var actionsWaitingForIdle: [() -> Void] = []
 
     init(clientFactory: @escaping ClientFactory = {
         WorkerProcessClient(configuration: try WorkerLaunchConfiguration.automatic())
@@ -100,8 +101,7 @@ final class ConversionViewModel: ObservableObject {
             }
         } catch {
             state.failTransport(message: error.localizedDescription)
-            client = nil
-            runTask = nil
+            clearActiveWorker()
         }
     }
 
@@ -172,8 +172,7 @@ final class ConversionViewModel: ObservableObject {
             }
         } catch {
             state.failTransport(message: error.localizedDescription)
-            client = nil
-            runTask = nil
+            clearActiveWorker()
         }
     }
 
@@ -252,6 +251,14 @@ final class ConversionViewModel: ObservableObject {
         await task.value
     }
 
+    func postponeInstallUntilIdle(_ installHandler: @escaping () -> Void) -> Bool {
+        guard hasActiveWorker else {
+            return false
+        }
+        actionsWaitingForIdle.append(installHandler)
+        return true
+    }
+
     func restartInspection() {
         guard canRetry else {
             return
@@ -324,8 +331,7 @@ final class ConversionViewModel: ObservableObject {
             )
         }
         pendingTerminalEvent = nil
-        client = nil
-        runTask = nil
+        clearActiveWorker()
     }
 
     private func fail(_ error: Error) {
@@ -340,8 +346,17 @@ final class ConversionViewModel: ObservableObject {
             )
         }
         pendingTerminalEvent = nil
+        clearActiveWorker()
+    }
+
+    private func clearActiveWorker() {
         client = nil
         runTask = nil
+        let actions = actionsWaitingForIdle
+        actionsWaitingForIdle.removeAll()
+        for action in actions {
+            action()
+        }
     }
 
     private func appendDiagnostic(_ message: String) {

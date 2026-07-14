@@ -3,7 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var profileStore: ProfileStore
-    let capabilities: AppCapabilities
+    @ObservedObject var updater: UpdateController
 
     var body: some View {
         TabView {
@@ -13,7 +13,7 @@ struct SettingsView: View {
             ProfilesSettingsPane(settings: settings, profileStore: profileStore)
                 .tabItem { Label("Profiles", systemImage: "slider.horizontal.3") }
 
-            UpdatesSettingsPane(settings: settings, capabilities: capabilities)
+            UpdatesSettingsPane(updater: updater)
                 .tabItem { Label("Updates", systemImage: "arrow.triangle.2.circlepath") }
 
             AdvancedSettingsPane(settings: settings)
@@ -618,10 +618,7 @@ private struct ProfileEditorSheet: View {
 }
 
 private struct UpdatesSettingsPane: View {
-    @ObservedObject var settings: AppSettings
-    let capabilities: AppCapabilities
-
-    private let releasesURL = URL(string: "https://github.com/cbusillo/BD_to_AVP/releases")!
+    @ObservedObject var updater: UpdateController
 
     var body: some View {
         Form {
@@ -631,25 +628,32 @@ private struct UpdatesSettingsPane: View {
             )
 
             Section("Update Preferences") {
-                Toggle("Automatically check for updates", isOn: $settings.automaticallyChecksForUpdates)
-                    .disabled(!capabilities.automaticUpdateChecksAvailable)
+                Toggle("Automatically check for updates", isOn: $updater.automaticallyChecksForUpdates)
+                    .disabled(!updater.supportsAutomaticChecks)
 
-                Picker("Update channel", selection: $settings.updateChannel) {
+                Picker("Update channel", selection: $updater.updateChannel) {
                     ForEach(UpdateChannelPreference.allCases) { channel in
                         Text(channel.name).tag(channel)
                     }
                 }
-                .disabled(!capabilities.automaticUpdateChecksAvailable)
+                .disabled(!updater.supportsChannels)
 
-                if !capabilities.automaticUpdateChecksAvailable {
-                    Label(capabilities.automaticUpdatesUnavailableReason, systemImage: "info.circle")
+                if !updater.supportsAutomaticChecks {
+                    Label(updater.unavailableReason, systemImage: "info.circle")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
             }
 
             Section {
-                Link("View Available Releases…", destination: releasesURL)
+                Button(updater.updateActionTitle) {
+                    updater.performUpdateAction()
+                }
+                .disabled(!updater.canPerformUpdateAction)
+
+                if updater.mode == .sparkle {
+                    Link("View All Releases…", destination: UpdateController.releasesURL)
+                }
             }
         }
         .formStyle(.grouped)

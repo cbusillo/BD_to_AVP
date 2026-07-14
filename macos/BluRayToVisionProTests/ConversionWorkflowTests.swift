@@ -112,7 +112,6 @@ final class ConversionWorkflowTests: XCTestCase {
 
     func testCurrentCapabilitiesStayHonest() {
         XCTAssertTrue(AppCapabilities.current.conversionAvailable)
-        XCTAssertFalse(AppCapabilities.current.automaticUpdateChecksAvailable)
         XCTAssertEqual(
             AppCapabilities.current.conversionUnavailableReason,
             "Conversion requires a Blu-ray disc, Blu-ray folder, ISO, MKV, MTS, or M2TS source."

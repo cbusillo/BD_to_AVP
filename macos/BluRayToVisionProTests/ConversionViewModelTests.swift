@@ -5,6 +5,44 @@ import XCTest
 
 final class ConversionViewModelTests: XCTestCase {
     @MainActor
+    func testUpdateInstallRelaunchWaitsForActiveWorker() async throws {
+        let terminalDelivered = expectation(description: "terminal delivered")
+        let worker = ControlledWorkerClient(terminalDelivered: terminalDelivered)
+        let viewModel = ConversionViewModel { worker }
+        var installCount = 0
+
+        try await withTemporarySource { sourceURL in
+            viewModel.selectSource(sourceURL)
+            await fulfillment(of: [terminalDelivered], timeout: 2)
+
+            XCTAssertTrue(
+                viewModel.postponeInstallUntilIdle {
+                    installCount += 1
+                }
+            )
+            XCTAssertEqual(installCount, 0)
+
+            await viewModel.stopForQuit()
+
+            XCTAssertEqual(installCount, 1)
+            XCTAssertFalse(viewModel.hasActiveWorker)
+        }
+    }
+
+    @MainActor
+    func testUpdateInstallRelaunchDoesNotPostponeWhileIdle() {
+        let viewModel = ConversionViewModel()
+        var installCount = 0
+
+        XCTAssertFalse(
+            viewModel.postponeInstallUntilIdle {
+                installCount += 1
+            }
+        )
+        XCTAssertEqual(installCount, 0)
+    }
+
+    @MainActor
     func testTerminalCompletionWinsIfStopIsRequestedBeforeProcessExit() async throws {
         let terminalDelivered = expectation(description: "terminal delivered")
         let worker = ControlledWorkerClient(terminalDelivered: terminalDelivered)
