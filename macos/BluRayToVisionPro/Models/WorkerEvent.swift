@@ -22,6 +22,34 @@ struct ConversionResult: Decodable, Equatable {
     }
 }
 
+struct PreviewArtifact: Decodable, Equatable {
+    let sourcePath: String
+    let destinationPath: String
+    let outputPath: String
+    let sizeBytes: Int64
+    let parentJobID: UUID
+    let position: String
+    let startSeconds: Double
+    let durationSeconds: Double
+    let sourceDurationSeconds: Double
+
+    var outputURL: URL {
+        URL(fileURLWithPath: outputPath)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case sourcePath = "source_path"
+        case destinationPath = "destination_path"
+        case outputPath = "output_path"
+        case sizeBytes = "size_bytes"
+        case parentJobID = "parent_job_id"
+        case position
+        case startSeconds = "start_seconds"
+        case durationSeconds = "duration_seconds"
+        case sourceDurationSeconds = "source_duration_seconds"
+    }
+}
+
 enum WorkerEventType: String, Decodable, Equatable {
     case workerReady = "worker.ready"
     case jobStarted = "job.started"
@@ -29,6 +57,7 @@ enum WorkerEventType: String, Decodable, Equatable {
     case heartbeat
     case log
     case warning
+    case artifactReady = "artifact.ready"
     case jobCompleted = "job.completed"
     case jobFailed = "job.failed"
     case jobCancelled = "job.cancelled"
@@ -123,6 +152,8 @@ struct WorkerEventPayload: Decodable, Equatable {
     let level: String?
     let result: SourceInspection?
     let conversionResult: ConversionResult?
+    let artifact: PreviewArtifact?
+    let previewResult: PreviewArtifact?
     let error: WorkerFailure?
     let decision: WorkerDecision?
 
@@ -136,6 +167,8 @@ struct WorkerEventPayload: Decodable, Equatable {
         level: String? = nil,
         result: SourceInspection? = nil,
         conversionResult: ConversionResult? = nil,
+        artifact: PreviewArtifact? = nil,
+        previewResult: PreviewArtifact? = nil,
         error: WorkerFailure? = nil,
         decision: WorkerDecision? = nil
     ) {
@@ -148,6 +181,8 @@ struct WorkerEventPayload: Decodable, Equatable {
         self.level = level
         self.result = result
         self.conversionResult = conversionResult
+        self.artifact = artifact
+        self.previewResult = previewResult
         self.error = error
         self.decision = decision
     }
@@ -162,6 +197,8 @@ struct WorkerEventPayload: Decodable, Equatable {
         case level
         case result
         case conversionResult = "conversion_result"
+        case artifact
+        case previewResult = "preview_result"
         case error
         case decision
     }

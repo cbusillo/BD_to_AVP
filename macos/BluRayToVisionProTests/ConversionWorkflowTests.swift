@@ -18,8 +18,6 @@ final class ConversionWorkflowTests: XCTestCase {
             ),
             profile: BuiltInProfile.balanced.profile,
             destinationURL: URL(fileURLWithPath: "/Movies", isDirectory: true),
-            outputLength: .fullMovie,
-            samplePosition: .beginning,
             options: ConversionOptions(encoding: BuiltInProfile.balanced.options)
         )
 
@@ -143,10 +141,27 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertNotNil(spec.job)
     }
 
-    func testConversionJobSpecAlwaysSendsFullMovie() {
-        let draft = makeDraft(kind: .transportStream, extension: "m2ts", outputLength: .threeMinutes)
-        let spec = WorkerJobSpec(draft: draft)
-        XCTAssertEqual(spec.job?.outputLength, "full_movie")
+    func testPreviewJobSpecIsIndependentFromFullConversion() throws {
+        let conversion = makeDraft(kind: .transportStream, extension: "m2ts")
+        let preview = try XCTUnwrap(
+            PreviewDraft(
+                parentJobID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
+                conversion: conversion,
+                outputLength: .threeMinutes,
+                samplePosition: .middle
+            )
+        )
+        let previewSpec = WorkerJobSpec(
+            previewDraft: preview,
+            destinationURL: URL(fileURLWithPath: "/tmp/preview", isDirectory: true)
+        )
+        let conversionSpec = WorkerJobSpec(draft: conversion)
+
+        XCTAssertEqual(previewSpec.operation, "preview_source")
+        XCTAssertEqual(previewSpec.preview?.durationSeconds, 180)
+        XCTAssertEqual(previewSpec.preview?.position, "middle")
+        XCTAssertEqual(conversionSpec.operation, "convert_source")
+        XCTAssertNil(conversionSpec.preview)
     }
 
     func testConversionJobSpecEncodesSourceAndDestination() {
@@ -157,8 +172,6 @@ final class ConversionWorkflowTests: XCTestCase {
             sourceDetails: nil,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: destination,
-            outputLength: .fullMovie,
-            samplePosition: .beginning,
             options: ConversionOptions()
         )
         let spec = WorkerJobSpec(draft: draft)
@@ -173,8 +186,6 @@ final class ConversionWorkflowTests: XCTestCase {
             sourceDetails: nil,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: URL(fileURLWithPath: "/Movies", isDirectory: true),
-            outputLength: .fullMovie,
-            samplePosition: .beginning,
             options: ConversionOptions()
         )
 
@@ -206,8 +217,6 @@ final class ConversionWorkflowTests: XCTestCase {
             sourceDetails: nil,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
-            outputLength: .fullMovie,
-            samplePosition: .beginning,
             options: ConversionOptions(job: jobOptions)
         )
 
@@ -227,8 +236,6 @@ final class ConversionWorkflowTests: XCTestCase {
             sourceDetails: nil,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: URL(fileURLWithPath: "/Movies"),
-            outputLength: .fullMovie,
-            samplePosition: .beginning,
             options: ConversionOptions(encoding: encoding)
         )
         let spec = WorkerJobSpec(draft: draft)
@@ -250,8 +257,6 @@ final class ConversionWorkflowTests: XCTestCase {
             sourceDetails: nil,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: URL(fileURLWithPath: "/Movies"),
-            outputLength: .fullMovie,
-            samplePosition: .beginning,
             options: ConversionOptions(job: job)
         )
         let spec = WorkerJobSpec(draft: draft)
@@ -351,13 +356,13 @@ final class ConversionWorkflowTests: XCTestCase {
         let source = try XCTUnwrap(json["source"] as? [String: Any])
 
         XCTAssertEqual(json["operation"] as? String, "convert_source")
-        XCTAssertEqual(json["protocol_version"] as? Int, 2)
+        XCTAssertEqual(json["protocol_version"] as? Int, 3)
         XCTAssertEqual(source["kind"] as? String, "direct_file")
         XCTAssertEqual((json["destination"] as? [String: Any])?["path"] as? String, "/Movies")
         XCTAssertEqual(encoding["mv_hevc_quality"] as? Int, 75)
         XCTAssertEqual(encoding["language_code"] as? String, "eng")
         XCTAssertEqual(job["start_stage"] as? Int, 1)
-        XCTAssertEqual(job["output_length"] as? String, "full_movie")
+        XCTAssertNil(job["output_length"])
         XCTAssertNil(json["conversion_settings"])
     }
 
@@ -367,8 +372,6 @@ final class ConversionWorkflowTests: XCTestCase {
             sourceDetails: nil,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
-            outputLength: .fullMovie,
-            samplePosition: .beginning,
             options: ConversionOptions()
         )
         let spec = WorkerJobSpec(
@@ -380,7 +383,42 @@ final class ConversionWorkflowTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/native_worker_convert_v2.json")
+            .appendingPathComponent("tests/fixtures/native_worker_convert_v3.json")
+        let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? NSDictionary
+
+        XCTAssertEqual(encoded, fixture)
+    }
+
+    func testPreviewJobSpecMatchesSharedPythonFixture() throws {
+        let conversion = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/movie.mkv")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            options: ConversionOptions()
+        )
+        let preview = try XCTUnwrap(
+            PreviewDraft(
+                parentJobID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
+                conversion: conversion,
+                outputLength: .oneMinute,
+                samplePosition: .middle
+            )
+        )
+        let spec = WorkerJobSpec(
+            previewDraft: preview,
+            destinationURL: URL(
+                fileURLWithPath: "/tmp/previews/22222222-2222-4222-8222-222222222222",
+                isDirectory: true
+            ),
+            jobID: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
+        )
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("tests/fixtures/native_worker_preview_v3.json")
         let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
@@ -396,8 +434,6 @@ final class ConversionWorkflowTests: XCTestCase {
             sourceDetails: nil,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
-            outputLength: .fullMovie,
-            samplePosition: .beginning,
             options: ConversionOptions()
         )
         let spec = WorkerJobSpec(
@@ -409,7 +445,7 @@ final class ConversionWorkflowTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/native_worker_convert_physical_disc_v2.json")
+            .appendingPathComponent("tests/fixtures/native_worker_convert_physical_disc_v3.json")
         let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
@@ -417,16 +453,13 @@ final class ConversionWorkflowTests: XCTestCase {
 
     private func makeDraft(
         kind: ConversionSourceKind,
-        extension ext: String,
-        outputLength: OutputLength = .fullMovie
+        extension ext: String
     ) -> ConversionDraft {
         ConversionDraft(
             source: ConversionSource(kind: kind, url: URL(fileURLWithPath: "/src/movie.\(ext)")),
             sourceDetails: nil,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: URL(fileURLWithPath: "/Movies", isDirectory: true),
-            outputLength: outputLength,
-            samplePosition: .beginning,
             options: ConversionOptions()
         )
     }

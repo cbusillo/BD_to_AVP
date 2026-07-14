@@ -76,7 +76,7 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn("capabilities: capabilities", app_source)
         self.assertIn("updater: updater", app_source)
         self.assertIn("UpdateCommands(updater: updater)", app_source)
-        self.assertIn("UpdateController(installPostponer: viewModel)", app_source)
+        self.assertIn("UpdateController(installPostponer: workCoordinator)", app_source)
         self.assertIn("CommandGroup(replacing: .appSettings)", app_source)
         self.assertIn("CommandGroup(after: .help)", app_source)
         self.assertIn('Picker("Update Channel"', app_source)

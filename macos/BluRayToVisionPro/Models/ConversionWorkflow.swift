@@ -97,12 +97,29 @@ enum OutputLength: String, CaseIterable, Identifiable {
             "Create a shorter file to review before committing to the full conversion."
         }
     }
+
+    var durationSeconds: Int? {
+        switch self {
+        case .fullMovie:
+            nil
+        case .oneMinute:
+            60
+        case .threeMinutes:
+            180
+        case .fiveMinutes:
+            300
+        }
+    }
+
+    static var previewCases: [OutputLength] {
+        allCases.filter { $0 != .fullMovie }
+    }
 }
 
 enum SamplePosition: String, CaseIterable, Identifiable {
     case beginning
     case middle
-    case ending
+    case ending = "end"
 
     var id: String { rawValue }
 
@@ -136,8 +153,6 @@ struct ConversionDraft: Equatable {
     let sourceDetails: SourceInspection?
     let profile: EncodingProfile
     let destinationURL: URL
-    let outputLength: OutputLength
-    let samplePosition: SamplePosition
     let options: ConversionOptions
 
     var proposedOutputURL: URL {
@@ -169,8 +184,6 @@ struct ConversionDraft: Equatable {
             sourceDetails: sourceDetails,
             profile: profile,
             destinationURL: destinationURL,
-            outputLength: outputLength,
-            samplePosition: samplePosition,
             options: retryOptions
         )
     }
@@ -181,5 +194,31 @@ struct ConversionDraft: Equatable {
             return URL(fileURLWithPath: inspectedName).deletingPathExtension().lastPathComponent
         }
         return source.proposedOutputStem
+    }
+}
+
+struct PreviewDraft: Equatable {
+    let parentJobID: UUID
+    let conversion: ConversionDraft
+    let outputLength: OutputLength
+    let samplePosition: SamplePosition
+
+    init?(
+        parentJobID: UUID = UUID(),
+        conversion: ConversionDraft,
+        outputLength: OutputLength,
+        samplePosition: SamplePosition
+    ) {
+        guard outputLength.durationSeconds != nil else {
+            return nil
+        }
+        self.parentJobID = parentJobID
+        self.conversion = conversion
+        self.outputLength = outputLength
+        self.samplePosition = samplePosition
+    }
+
+    var durationSeconds: Int {
+        outputLength.durationSeconds ?? 0
     }
 }

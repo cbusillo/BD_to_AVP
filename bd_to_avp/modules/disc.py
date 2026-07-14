@@ -22,6 +22,7 @@ class DiscInfo:
     color_depth: int = 8
     main_title_number: int = 0
     is_interlaced: bool = False
+    duration_seconds: float = 0
 
 
 @dataclass
@@ -76,7 +77,8 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
         filename = source_path.stem
         disc_info = DiscInfo(name=filename)
 
-        streams = ffmpeg.probe(source_path.as_posix(), cmd=config.FFPROBE_PATH.as_posix()).get("streams", [])
+        probe = ffmpeg.probe(source_path.as_posix(), cmd=config.FFPROBE_PATH.as_posix())
+        streams = probe.get("streams", [])
         ffmpeg_probe_output = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
         if ffmpeg_probe_output is None:
             raise ValueError("No video stream found in source metadata.")
@@ -86,6 +88,9 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
             disc_info.frame_rate = ffmpeg_probe_output.get("avg_frame_rate")
         if ffmpeg_probe_output.get("field_order") not in {None, "progressive", "unknown"}:
             disc_info.is_interlaced = True
+        duration = probe.get("format", {}).get("duration") or ffmpeg_probe_output.get("duration")
+        if duration is not None:
+            disc_info.duration_seconds = float(duration)
         return disc_info
 
     source = get_makemkv_source()
@@ -108,6 +113,7 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
         raise ValueError("No MVC video found in disc info.")
 
     longest_mvc_title = max(mvc_titles, key=lambda x: x.duration)
+    disc_info.duration_seconds = float(longest_mvc_title.duration)
     disc_info.main_title_number = longest_mvc_title.index
     disc_info.resolution = longest_mvc_title.resolution or disc_info.resolution
     disc_info.frame_rate = longest_mvc_title.frame_rate or disc_info.frame_rate

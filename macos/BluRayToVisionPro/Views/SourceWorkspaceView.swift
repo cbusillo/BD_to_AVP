@@ -8,10 +8,7 @@ struct SourceWorkspaceView: View {
     let profile: EncodingProfile
     let options: ConversionOptions
     let profileModified: Bool
-    let outputOptionsAvailable: Bool
     @Binding var destinationURL: URL
-    @Binding var outputLength: OutputLength
-    @Binding var samplePosition: SamplePosition
     let plannedOutputURL: URL?
     let refreshDiscs: () -> Void
     let useDisc: (ConversionSource) -> Void
@@ -239,6 +236,10 @@ struct SourceWorkspaceView: View {
                                 SourceFact(label: "Scan", value: result.scanDescription)
                                 SourceFact(label: "Size", value: result.formattedSize)
                             }
+                            GridRow {
+                                SourceFact(label: "Duration", value: result.formattedDuration)
+                                Color.clear
+                            }
                         }
                     }
                 } else if source.kind.isDiscWorkflow {
@@ -280,32 +281,8 @@ struct SourceWorkspaceView: View {
                 }
 
                 LabeledContent("Output") {
-                    if outputOptionsAvailable {
-                        Picker("Output", selection: $outputLength) {
-                            ForEach(OutputLength.allCases) { length in
-                                Text(length.name).tag(length)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(width: 170)
-                        .disabled(outputControlsLocked)
-                    } else {
-                        Text("Full Movie")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if outputOptionsAvailable, outputLength != .fullMovie {
-                    LabeledContent("Sample from") {
-                        Picker("Sample position", selection: $samplePosition) {
-                            ForEach(SamplePosition.allCases) { position in
-                                Text(position.name).tag(position)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(width: 130)
-                        .disabled(outputControlsLocked)
-                    }
+                    Text("Full Movie")
+                        .foregroundStyle(.secondary)
                 }
 
                 if let plannedOutputURL {

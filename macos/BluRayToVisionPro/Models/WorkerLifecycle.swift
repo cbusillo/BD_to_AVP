@@ -133,6 +133,8 @@ struct WorkerLifecycleState: Equatable {
             activityMessage = event.payload.message
         case .warning:
             warningMessage = event.payload.message ?? "The operation reported a warning."
+        case .artifactReady:
+            activityMessage = "Preview artifact is ready."
         case .jobCompleted:
             switch operationKind {
             case .inspection:

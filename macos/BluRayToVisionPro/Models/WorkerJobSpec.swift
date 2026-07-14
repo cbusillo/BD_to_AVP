@@ -1,7 +1,7 @@
 import Foundation
 
 struct WorkerJobSpec: Encodable, Equatable {
-    static let protocolVersion = 2
+    static let protocolVersion = 3
 
     struct Source: Encodable, Equatable {
         enum Kind: String, Encodable {
@@ -89,7 +89,6 @@ struct WorkerJobSpec: Encodable, Equatable {
         let softwareEncoder: Bool
         let outputCommands: Bool
         let keepAwake: Bool
-        let outputLength: String
 
         enum CodingKeys: String, CodingKey {
             case startStage = "start_stage"
@@ -100,7 +99,18 @@ struct WorkerJobSpec: Encodable, Equatable {
             case softwareEncoder = "software_encoder"
             case outputCommands = "output_commands"
             case keepAwake = "keep_awake"
-            case outputLength = "output_length"
+        }
+    }
+
+    struct Preview: Encodable, Equatable {
+        let parentJobID: UUID
+        let position: String
+        let durationSeconds: Int
+
+        enum CodingKeys: String, CodingKey {
+            case parentJobID = "parent_job_id"
+            case position
+            case durationSeconds = "duration_seconds"
         }
     }
 
@@ -112,6 +122,7 @@ struct WorkerJobSpec: Encodable, Equatable {
     let destination: Destination?
     let encoding: Encoding?
     let job: Job?
+    let preview: Preview?
 
     init(source: ConversionSource, jobID: UUID = UUID()) {
         protocolVersion = Self.protocolVersion
@@ -122,6 +133,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         destination = nil
         encoding = nil
         job = nil
+        preview = nil
     }
 
     init(sourceURL: URL, jobID: UUID = UUID()) {
@@ -133,6 +145,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         destination = nil
         encoding = nil
         job = nil
+        preview = nil
     }
 
     init(draft: ConversionDraft, jobID: UUID = UUID()) {
@@ -143,36 +156,40 @@ struct WorkerJobSpec: Encodable, Equatable {
         source = Source(source: draft.source)
         destination = Destination(path: draft.destinationURL.path)
 
-        let encodingOptions = draft.options.encoding
-        encoding = Encoding(
-            transcodeAudio: encodingOptions.audioHandling == .transcodeAAC,
-            audioBitrate: encodingOptions.audioBitrate,
-            leftRightBitrate: encodingOptions.leftRightBitrate,
-            linkQuality: encodingOptions.linkQuality,
-            mvHEVCQuality: encodingOptions.hevcQuality,
-            upscaleQuality: encodingOptions.upscaleQuality,
-            fieldOfView: encodingOptions.fieldOfView,
-            frameRate: encodingOptions.frameRateOverride,
-            resolution: encodingOptions.resolutionOverride,
-            skipSubtitles: !encodingOptions.includeSubtitles,
-            cropBlackBars: encodingOptions.cropBlackBars,
-            swapEyes: encodingOptions.swapEyes,
-            fxUpscale: encodingOptions.upscaleEnabled,
-            languageCode: encodingOptions.language.rawValue,
-            removeExtraLanguages: !encodingOptions.keepExtraLanguages
-        )
+        encoding = Self.encoding(from: draft.options.encoding)
+        job = Self.conversionJob(from: draft)
+        preview = nil
+    }
 
-        let jobOptions = draft.options.job
+    init(
+        previewDraft: PreviewDraft,
+        destinationURL: URL,
+        jobID: UUID = UUID()
+    ) {
+        let conversion = previewDraft.conversion
+        protocolVersion = Self.protocolVersion
+        type = "job.start"
+        self.jobID = jobID
+        operation = "preview_source"
+        source = Source(source: conversion.source)
+        destination = Destination(path: destinationURL.path)
+        encoding = Self.encoding(from: conversion.options.encoding)
+
+        let jobOptions = conversion.options.job
         job = Job(
-            startStage: jobOptions.startStage.rawValue,
-            keepFiles: jobOptions.keepStageFiles,
-            overwrite: jobOptions.overwriteExisting,
-            removeOriginal: draft.source.kind == .physicalDisc ? false : jobOptions.removeOriginalAfterSuccess,
-            continueOnError: jobOptions.continueOnError,
+            startStage: 1,
+            keepFiles: false,
+            overwrite: true,
+            removeOriginal: false,
+            continueOnError: false,
             softwareEncoder: jobOptions.softwareEncoder,
             outputCommands: jobOptions.outputCommands,
-            keepAwake: jobOptions.keepAwake,
-            outputLength: "full_movie"
+            keepAwake: jobOptions.keepAwake
+        )
+        preview = Preview(
+            parentJobID: previewDraft.parentJobID,
+            position: previewDraft.samplePosition.rawValue,
+            durationSeconds: previewDraft.durationSeconds
         )
     }
 
@@ -186,6 +203,41 @@ struct WorkerJobSpec: Encodable, Equatable {
         try container.encodeIfPresent(destination, forKey: .destination)
         try container.encodeIfPresent(encoding, forKey: .encoding)
         try container.encodeIfPresent(job, forKey: .job)
+        try container.encodeIfPresent(preview, forKey: .preview)
+    }
+
+    private static func encoding(from options: EncodingOptions) -> Encoding {
+        Encoding(
+            transcodeAudio: options.audioHandling == .transcodeAAC,
+            audioBitrate: options.audioBitrate,
+            leftRightBitrate: options.leftRightBitrate,
+            linkQuality: options.linkQuality,
+            mvHEVCQuality: options.hevcQuality,
+            upscaleQuality: options.upscaleQuality,
+            fieldOfView: options.fieldOfView,
+            frameRate: options.frameRateOverride,
+            resolution: options.resolutionOverride,
+            skipSubtitles: !options.includeSubtitles,
+            cropBlackBars: options.cropBlackBars,
+            swapEyes: options.swapEyes,
+            fxUpscale: options.upscaleEnabled,
+            languageCode: options.language.rawValue,
+            removeExtraLanguages: !options.keepExtraLanguages
+        )
+    }
+
+    private static func conversionJob(from draft: ConversionDraft) -> Job {
+        let options = draft.options.job
+        return Job(
+            startStage: options.startStage.rawValue,
+            keepFiles: options.keepStageFiles,
+            overwrite: options.overwriteExisting,
+            removeOriginal: draft.source.kind == .physicalDisc ? false : options.removeOriginalAfterSuccess,
+            continueOnError: options.continueOnError,
+            softwareEncoder: options.softwareEncoder,
+            outputCommands: options.outputCommands,
+            keepAwake: options.keepAwake
+        )
     }
 
     enum CodingKeys: String, CodingKey {
@@ -197,5 +249,6 @@ struct WorkerJobSpec: Encodable, Equatable {
         case destination
         case encoding
         case job
+        case preview
     }
 }

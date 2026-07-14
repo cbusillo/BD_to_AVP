@@ -15,6 +15,7 @@ from bd_to_avp import preflight
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.disc import get_disc_and_mvc_video_info, MKVCreationError
 from bd_to_avp.modules.file import path_is_relative_to
+from bd_to_avp.modules.preview import PreviewRange, resolve_preview_range
 from bd_to_avp.modules.process import ProcessingCancelled, start_process
 from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
@@ -57,6 +58,7 @@ CONFIG_SNAPSHOT_FIELDS = (
     "language_code",
     "remove_extra_languages",
     "keep_awake",
+    "preview_range",
 )
 
 
@@ -90,6 +92,10 @@ def run_operation(
         if activity is None:
             raise WorkerOperationError("internal_error", "Conversion requires an activity reporter.")
         return convert_source(job, owner, activity)
+    if job.operation is WorkerOperation.PREVIEW_SOURCE:
+        if activity is None:
+            raise WorkerOperationError("internal_error", "Preview requires an activity reporter.")
+        return preview_source(job, owner, activity)
     raise WorkerOperationError("unsupported_operation", f"Unsupported worker operation: {job.operation.value}.")
 
 
@@ -153,12 +159,63 @@ def inspect_source(source: JobSource, owner: WorkerProcessOwner) -> dict[str, ob
         "frame_rate": disc_info.frame_rate,
         "interlaced": disc_info.is_interlaced,
     }
+    if disc_info.duration_seconds > 0:
+        result["duration_seconds"] = disc_info.duration_seconds
     if source_path.is_file():
         result["size_bytes"] = source_path.stat().st_size
     return result
 
 
 def convert_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActivityReporter) -> dict[str, object]:
+    return _convert_source(job, owner, activity)
+
+
+def preview_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActivityReporter) -> dict[str, object]:
+    preview = job.preview
+    if preview is None:
+        raise WorkerOperationError("invalid_request", "Preview requests require preview options.")
+
+    inspection = inspect_source(job.source, owner)
+    try:
+        duration_value = inspection["duration_seconds"]
+        if isinstance(duration_value, bool) or not isinstance(duration_value, (int, float)):
+            raise TypeError("Source duration must be numeric.")
+        preview_range = resolve_preview_range(
+            float(duration_value),
+            preview.duration_seconds,
+            preview.position.value,
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise WorkerOperationError(
+            "preview_range_unavailable",
+            "The selected preview range could not be resolved from the source duration.",
+            str(error),
+        ) from error
+
+    result = _convert_source(
+        job,
+        owner,
+        activity,
+        preview_range=preview_range,
+        allow_recovery=False,
+    )
+    artifact = {
+        **result,
+        "parent_job_id": preview.parent_job_id,
+        "position": preview.position.value,
+    }
+    activity.artifact_ready(artifact)
+    return artifact
+
+
+def _convert_source(
+    job: JobSpec,
+    owner: WorkerProcessOwner,
+    activity: WorkerActivityReporter,
+    *,
+    preview_range: PreviewRange | None = None,
+    allow_recovery: bool = True,
+) -> dict[str, object]:
     source_path = validate_source(job.source)
     destination = job.destination
     encoding = job.encoding
@@ -176,7 +233,8 @@ def convert_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActi
         )
 
     owner.check_cancelled()
-    with configured_conversion(job, source_path):
+    resolved_preview_range = preview_range
+    with configured_conversion(job, source_path, preview_range=preview_range):
         try:
             activity.stage_started("configure", "Preparing conversion settings")
             config.configure_tool_environment()
@@ -185,12 +243,19 @@ def convert_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActi
                 cancellation_event=owner.cancellation_event,
                 activity=activity,
             )
+            resolved_preview_range = config.preview_range
             owner.check_cancelled()
         except ProcessingCancelled as error:
             raise WorkerCancelled("The conversion was cancelled.") from error
         except MKVCreationError as error:
             if owner.cancellation_event.is_set():
                 raise WorkerCancelled("The conversion was cancelled.") from error
+            if not allow_recovery:
+                raise WorkerOperationError(
+                    "preview_source_preparation_failed",
+                    "MakeMKV could not prepare the selected preview source.",
+                    str(error),
+                ) from error
             raise WorkerDecisionRequired(
                 "mkv_creation_decision_required",
                 "MakeMKV reported errors while creating the intermediate MKV.",
@@ -201,6 +266,12 @@ def convert_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActi
         except SRTCreationError as error:
             if owner.cancellation_event.is_set():
                 raise WorkerCancelled("The conversion was cancelled.") from error
+            if not allow_recovery:
+                raise WorkerOperationError(
+                    "preview_subtitle_failed",
+                    "Subtitle extraction failed while preparing the preview.",
+                    str(error),
+                ) from error
             raise WorkerDecisionRequired(
                 "subtitle_decision_required",
                 "Subtitle extraction did not produce usable subtitle files.",
@@ -248,12 +319,21 @@ def convert_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActi
             "The conversion finished without producing the expected output file.",
         )
     activity.log("Conversion output ready", stage="move_files", output_path=final_output_path.as_posix())
-    return {
+    result: dict[str, object] = {
         "source_path": source_path.as_posix(),
         "destination_path": destination.path.as_posix(),
         "output_path": final_output_path.as_posix(),
         "size_bytes": final_output_path.stat().st_size,
     }
+    if resolved_preview_range is not None:
+        result.update(
+            {
+                "start_seconds": resolved_preview_range.start_seconds,
+                "duration_seconds": resolved_preview_range.duration_seconds,
+                "source_duration_seconds": resolved_preview_range.source_duration_seconds,
+            }
+        )
+    return result
 
 
 @contextmanager
@@ -273,7 +353,12 @@ def configured_source(source: JobSource, source_path: Path) -> Iterator[None]:
 
 
 @contextmanager
-def configured_conversion(job: JobSpec, source_path: Path) -> Iterator[None]:
+def configured_conversion(
+    job: JobSpec,
+    source_path: Path,
+    *,
+    preview_range: PreviewRange | None = None,
+) -> Iterator[None]:
     assert job.destination is not None
     assert job.encoding is not None
     assert job.job is not None
@@ -307,6 +392,7 @@ def configured_conversion(job: JobSpec, source_path: Path) -> Iterator[None]:
         config.language_code = job.encoding.language_code
         config.remove_extra_languages = job.encoding.remove_extra_languages
         config.keep_awake = job.job.keep_awake
+        config.preview_range = preview_range
         yield
     finally:
         for field, value in config_snapshot.items():

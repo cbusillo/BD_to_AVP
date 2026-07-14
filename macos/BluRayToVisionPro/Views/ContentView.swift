@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var viewModel: ConversionViewModel
+    @ObservedObject var previewViewModel: PreviewViewModel
     @ObservedObject var settings: AppSettings
     @ObservedObject var profileStore: ProfileStore
     let capabilities: AppCapabilities
@@ -10,7 +11,7 @@ struct ContentView: View {
     @State private var selectedProfileID: String
     @State private var options: ConversionOptions
     @State private var destinationURL: URL
-    @State private var outputLength = OutputLength.fullMovie
+    @State private var outputLength = OutputLength.oneMinute
     @State private var samplePosition = SamplePosition.beginning
     @State private var selectedTab = ConversionSetupTab.video
     @State private var insertedDiscs: [ConversionSource] = []
@@ -20,14 +21,18 @@ struct ContentView: View {
     @State private var newProfileName = ""
     @State private var profileErrorMessage: String?
     @State private var preserveEncodingOnNextProfileChange = false
+    @State private var isShowingPreview = false
+    @State private var pendingReviewedPreview: PreviewDraft?
 
     init(
         viewModel: ConversionViewModel,
+        previewViewModel: PreviewViewModel,
         settings: AppSettings,
         profileStore: ProfileStore,
         capabilities: AppCapabilities
     ) {
         _viewModel = ObservedObject(wrappedValue: viewModel)
+        _previewViewModel = ObservedObject(wrappedValue: previewViewModel)
         _settings = ObservedObject(wrappedValue: settings)
         _profileStore = ObservedObject(wrappedValue: profileStore)
         self.capabilities = capabilities
@@ -54,10 +59,7 @@ struct ContentView: View {
                     profile: selectedProfile,
                     options: options,
                     profileModified: profileModified,
-                    outputOptionsAvailable: false,
                     destinationURL: $destinationURL,
-                    outputLength: $outputLength,
-                    samplePosition: $samplePosition,
                     plannedOutputURL: draft?.proposedOutputURL,
                     refreshDiscs: refreshDiscs,
                     useDisc: selectSource,
@@ -81,7 +83,9 @@ struct ContentView: View {
                     profiles: profileStore.profiles,
                     selectedProfile: selectedProfile,
                     profileModified: profileModified,
-                    isLocked: viewModel.hasActiveWorker || viewModel.state.phase == .decisionRequired,
+                    isLocked: viewModel.hasActiveWorker
+                        || previewViewModel.hasActiveWorker
+                        || viewModel.state.phase == .decisionRequired,
                     sourceKind: viewModel.source?.kind,
                     saveSelectedProfile: saveSelectedProfile,
                     saveAsNewProfile: beginSaveAsNewProfile,
@@ -192,6 +196,20 @@ struct ContentView: View {
                 saveAsNewProfile()
             }
         }
+        .sheet(isPresented: $isShowingPreview, onDismiss: previewDidDismiss) {
+            if let draft {
+                PreviewSheet(
+                    viewModel: previewViewModel,
+                    conversionDraft: draft,
+                    outputLength: $outputLength,
+                    samplePosition: $samplePosition,
+                    startFullConversion: { reviewedDraft in
+                        pendingReviewedPreview = reviewedDraft
+                        isShowingPreview = false
+                    }
+                )
+            }
+        }
         .alert(
             "Profile Could Not Be Saved",
             isPresented: Binding(
@@ -255,7 +273,7 @@ struct ContentView: View {
             Label(viewModel.source == nil ? "Choose Source" : "Change Source", systemImage: "opticaldiscdrive")
         }
         .help("Choose a physical disc, disc image, Blu-ray folder, MKV, or transport stream")
-        .disabled(!viewModel.canSelectSource)
+        .disabled(!canSelectSource)
     }
 
     private var statusFooter: some View {
@@ -300,12 +318,19 @@ struct ContentView: View {
                 Button("Stop", role: .destructive, action: viewModel.stopActiveWorker)
                     .keyboardShortcut("p", modifiers: .command)
             } else if viewModel.source == nil || !conversionCanStart {
-                Button("Start Processing") {}
+                Button("Start Full Conversion") {}
                     .buttonStyle(.bordered)
                     .disabled(true)
                     .help(viewModel.source == nil ? "Choose a source before processing." : conversionUnavailableReason)
             } else {
-                Button("Start Processing") {
+                Button("Preview…") {
+                    isShowingPreview = true
+                }
+                .buttonStyle(.bordered)
+                .disabled(!previewCanStart)
+                .help(previewUnavailableReason)
+
+                Button("Start Full Conversion") {
                     if let draft {
                         viewModel.startConversion(draft: draft)
                     }
@@ -340,8 +365,6 @@ struct ContentView: View {
             sourceDetails: viewModel.state.result,
             profile: selectedProfile,
             destinationURL: destinationURL,
-            outputLength: outputLength,
-            samplePosition: samplePosition,
             options: options
         )
     }
@@ -410,6 +433,35 @@ struct ContentView: View {
             && viewModel.source?.kind.supportsConversion == true
             && viewModel.state.result != nil
             && viewModel.state.phase != .decisionRequired
+            && !previewViewModel.hasActiveWorker
+    }
+
+    private var previewCanStart: Bool {
+        guard conversionCanStart else {
+            return false
+        }
+        switch viewModel.source?.kind {
+        case .discImage, .matroska, .transportStream:
+            return true
+        case .physicalDisc, .bluRayFolder, .sourceFolder, .none:
+            return false
+        }
+    }
+
+    private var previewUnavailableReason: String {
+        if previewCanStart {
+            return "Create a representative preview with the current resolved settings."
+        }
+        switch viewModel.source?.kind {
+        case .physicalDisc, .bluRayFolder:
+            return "The first preview slice supports MKV, MTS, M2TS, and ISO sources."
+        default:
+            return conversionUnavailableReason
+        }
+    }
+
+    private var canSelectSource: Bool {
+        viewModel.canSelectSource && !previewViewModel.hasActiveWorker
     }
 
     private var conversionUnavailableReason: String {
@@ -498,7 +550,7 @@ struct ContentView: View {
     }
 
     private func selectSource(_ source: ConversionSource) {
-        guard viewModel.canSelectSource else {
+        guard canSelectSource else {
             return
         }
         if source.kind == .physicalDisc {
@@ -508,7 +560,7 @@ struct ContentView: View {
     }
 
     private func chooseExistingSource() {
-        guard viewModel.canSelectSource,
+        guard canSelectSource,
               let sourceURL = SourcePicker.chooseExistingSource(),
               let source = ConversionSource.infer(from: sourceURL),
               source.kind.supportsMetadataInspection
@@ -519,14 +571,14 @@ struct ContentView: View {
     }
 
     private func chooseFile(_ kind: ConversionSourceKind) {
-        guard viewModel.canSelectSource, let source = SourcePicker.chooseFile(kind: kind) else {
+        guard canSelectSource, let source = SourcePicker.chooseFile(kind: kind) else {
             return
         }
         selectSource(source)
     }
 
     private func chooseFolder(_ kind: ConversionSourceKind) {
-        guard viewModel.canSelectSource, let source = SourcePicker.chooseFolder(kind: kind) else {
+        guard canSelectSource, let source = SourcePicker.chooseFolder(kind: kind) else {
             return
         }
         selectSource(source)
@@ -539,7 +591,7 @@ struct ContentView: View {
     }
 
     private func acceptDrop(_ urls: [URL], _ location: CGPoint) -> Bool {
-        guard viewModel.canSelectSource,
+        guard canSelectSource,
               let url = urls.first,
               let source = ConversionSource.infer(from: url),
               source.kind.supportsMetadataInspection
@@ -548,6 +600,18 @@ struct ContentView: View {
         }
         selectSource(source)
         return true
+    }
+
+    private func previewDidDismiss() {
+        previewViewModel.discardPreview()
+        guard let reviewedPreview = pendingReviewedPreview else {
+            return
+        }
+        pendingReviewedPreview = nil
+        viewModel.startConversion(
+            draft: reviewedPreview.conversion,
+            jobID: reviewedPreview.parentJobID
+        )
     }
 }
 

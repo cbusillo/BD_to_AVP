@@ -7,9 +7,12 @@ import sys
 from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import ClassVar, Iterable
+from typing import TYPE_CHECKING, ClassVar, Iterable
 
 from bd_to_avp.modules.util import get_pyproject_data
+
+if TYPE_CHECKING:
+    from bd_to_avp.modules.preview import PreviewRange
 
 
 SCRIPT_PATH = Path(__file__).parent.parent
@@ -213,6 +216,7 @@ class Config:
         self.language_code = "eng"
         self.remove_extra_languages = False
         self.keep_awake = True
+        self.preview_range: PreviewRange | None = None
         self.smoke_apple_vision_ocr = False
 
     def configure_tool_environment(self) -> None:

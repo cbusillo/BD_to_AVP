@@ -17,7 +17,13 @@ from bd_to_avp.modules.config import config
 from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
 from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.worker.__main__ import run_worker
-from bd_to_avp.worker.operations import WorkerDecisionRequired, WorkerOperationError, convert_source, inspect_source
+from bd_to_avp.worker.operations import (
+    WorkerDecisionRequired,
+    WorkerOperationError,
+    convert_source,
+    inspect_source,
+    preview_source,
+)
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
     JobSource,
@@ -29,6 +35,8 @@ from bd_to_avp.worker.protocol import (
     JobSpec,
     WorkerEventEmitter,
     WorkerEventType,
+    WorkerOperation,
+    PreviewPosition,
     WorkerProtocolError,
     WorkerSourceKind,
 )
@@ -94,8 +102,27 @@ def conversion_request_line(
             "software_encoder": False,
             "output_commands": False,
             "keep_awake": False,
-            "output_length": "full_movie",
         },
+    }
+    request.update(overrides)
+    return json.dumps(request) + "\n"
+
+
+def preview_request_line(
+    source_path: Path,
+    destination_path: Path,
+    *,
+    position: str = "middle",
+    duration_seconds: int = 60,
+    **overrides: object,
+) -> str:
+    request = json.loads(conversion_request_line(source_path, destination_path))
+    request["operation"] = "preview_source"
+    request["job"]["overwrite"] = True
+    request["preview"] = {
+        "parent_job_id": str(uuid4()),
+        "position": position,
+        "duration_seconds": duration_seconds,
     }
     request.update(overrides)
     return json.dumps(request) + "\n"
@@ -134,10 +161,9 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.destination.path if job.destination else None, destination_path)
         self.assertTrue(job.encoding.transcode_audio if job.encoding else False)
         self.assertEqual(job.job.start_stage if job.job else None, 1)
-        self.assertEqual(job.job.output_length if job.job else None, "full_movie")
 
     def test_parses_shared_swift_conversion_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v2.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v3.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -148,13 +174,22 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.encoding.mv_hevc_quality if job.encoding else None, 75)
 
     def test_parses_shared_swift_physical_disc_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v2.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v3.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
         self.assertEqual(job.source.kind, WorkerSourceKind.PHYSICAL_DISC)
         self.assertEqual(job.source.path, Path("/dev/disk9"))
         self.assertFalse(job.job.remove_original if job.job else True)
+
+    def test_parses_shared_swift_preview_fixture(self) -> None:
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v3.json"
+
+        job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(job.operation, WorkerOperation.PREVIEW_SOURCE)
+        self.assertEqual(job.preview.position if job.preview else None, PreviewPosition.MIDDLE)
+        self.assertEqual(job.preview.duration_seconds if job.preview else None, 60)
 
     def test_rejects_remove_original_for_physical_disc(self) -> None:
         request = json.loads(
@@ -172,14 +207,43 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(context.exception.code, "invalid_job_options")
         self.assertIn("physical discs", context.exception.message)
 
-    def test_rejects_sample_conversion_request(self) -> None:
-        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
-        request["job"]["output_length"] = "three_minutes"
+    def test_parses_preview_child_job(self) -> None:
+        request = preview_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output"))
+
+        job = JobSpec.from_json_line(request)
+
+        self.assertEqual(job.operation.value, "preview_source")
+        self.assertEqual(job.preview.position if job.preview else None, PreviewPosition.MIDDLE)
+        self.assertEqual(job.preview.duration_seconds if job.preview else None, 60)
+
+    def test_rejects_preview_that_can_modify_source(self) -> None:
+        request = json.loads(preview_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["job"]["remove_original"] = True
 
         with self.assertRaises(WorkerProtocolError) as context:
             JobSpec.from_json_line(json.dumps(request) + "\n")
 
-        self.assertEqual(context.exception.code, "invalid_job_options")
+        self.assertEqual(context.exception.code, "invalid_preview_options")
+
+    def test_rejects_preview_for_bluray_folder(self) -> None:
+        request = preview_request_line(
+            Path("/tmp/Disc"),
+            Path("/tmp/output"),
+            source={"kind": "blu_ray_folder", "path": "/tmp/Disc"},
+        )
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(request)
+
+        self.assertEqual(context.exception.code, "invalid_preview_source")
+
+    def test_rejects_preview_with_unknown_position(self) -> None:
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(
+                preview_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output"), position="credits")
+            )
+
+        self.assertEqual(context.exception.code, "invalid_preview_options")
 
     def test_accepts_zero_field_of_view_used_by_existing_ui(self) -> None:
         request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
@@ -398,10 +462,40 @@ class WorkerRuntimeTests(unittest.TestCase):
                 }
             },
         )
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v2.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v3.json"
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
 
         self.assertEqual(decoded_events(output)[-1], fixture)
+
+    def test_preview_emits_artifact_before_completion(self) -> None:
+        source_path = Path("/tmp/movie.mkv")
+        destination_path = Path("/tmp/previews/job")
+
+        def operation(
+            _job: JobSpec,
+            _owner: WorkerProcessOwner,
+            activity: WorkerActivityReporter,
+        ) -> dict[str, object]:
+            artifact = {
+                "output_path": str(destination_path / "movie_AVP.mov"),
+                "duration_seconds": 60,
+            }
+            activity.artifact_ready(artifact)
+            return artifact
+
+        exit_code = run_worker(
+            io.StringIO(preview_request_line(source_path, destination_path)),
+            output := io.StringIO(),
+            io.StringIO(),
+            establish_session=False,
+            operation_runner=operation,
+        )
+
+        events = decoded_events(output)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(events[-2]["type"], "artifact.ready")
+        self.assertEqual(events[-1]["type"], "job.completed")
+        self.assertEqual(events[-1]["payload"]["preview_result"]["duration_seconds"], 60)
 
     def test_oversized_error_details_are_truncated_and_terminal(self) -> None:
         source_path = Path("/tmp/movie.m2ts")
@@ -496,7 +590,8 @@ class SourceInspectionTests(unittest.TestCase):
                     "#!/bin/sh\n"
                     'printf \'%s\\n\' \'{"streams":[{"codec_type":"audio"},'
                     '{"codec_type":"video","width":1920,"height":1080,'
-                    '"avg_frame_rate":"24000/1001","field_order":"progressive"}]}\'\n'
+                    '"avg_frame_rate":"24000/1001","field_order":"progressive"}],'
+                    '"format":{"duration":"7200.0"}}\'\n'
                 )
                 fake_ffprobe.chmod(fake_ffprobe.stat().st_mode | stat.S_IXUSR)
 
@@ -511,6 +606,7 @@ class SourceInspectionTests(unittest.TestCase):
                 self.assertEqual(result["frame_rate"], "24000/1001")
                 self.assertFalse(result["interlaced"])
                 self.assertEqual(result["size_bytes"], 5)
+                self.assertEqual(result["duration_seconds"], 7200)
 
     def test_rejects_unsupported_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -541,6 +637,7 @@ class SourceInspectionTests(unittest.TestCase):
                         name="Feature 3D",
                         resolution="1920x1080",
                         frame_rate="24000/1001",
+                        duration_seconds=7200,
                     ),
                 ),
             ):
@@ -553,6 +650,7 @@ class SourceInspectionTests(unittest.TestCase):
             self.assertEqual(result["resolution"], "1920x1080")
             self.assertEqual(result["frame_rate"], "24000/1001")
             self.assertEqual(result["size_bytes"], 4)
+            self.assertEqual(result["duration_seconds"], 7200)
 
     def test_iso_inspection_requires_makemkv(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -703,6 +801,41 @@ class SourceInspectionTests(unittest.TestCase):
 
 
 class SourceConversionTests(unittest.TestCase):
+    def test_preview_uses_resolved_range_and_emits_owned_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.mkv"
+            source_path.write_bytes(b"source")
+            destination_path = temporary_path / "preview"
+            final_path = destination_path / "movie_AVP.mov"
+            final_path.parent.mkdir()
+            final_path.write_bytes(b"final")
+            job = JobSpec.from_json_line(preview_request_line(source_path, destination_path))
+            output = io.StringIO()
+            activity = WorkerActivityReporter(WorkerEventEmitter(output, job.job_id))
+            observed: dict[str, object] = {}
+
+            def process_each(*_args: object, **_kwargs: object) -> Path:
+                observed["preview_range"] = config.preview_range
+                return final_path
+
+            with (
+                patch(
+                    "bd_to_avp.worker.operations.inspect_source",
+                    return_value={"duration_seconds": 7200.0},
+                ),
+                patch.object(config, "configure_tool_environment"),
+                patch("bd_to_avp.modules.process.process_each", side_effect=process_each),
+            ):
+                result = preview_source(job, WorkerProcessOwner(), activity)
+
+            preview_range = observed["preview_range"]
+            self.assertEqual(preview_range.start_seconds, 3570)
+            self.assertEqual(preview_range.duration_seconds, 60)
+            self.assertEqual(result["output_path"], final_path.as_posix())
+            self.assertEqual(result["parent_job_id"], job.preview.parent_job_id if job.preview else None)
+            self.assertEqual(decoded_events(output)[-1]["type"], "artifact.ready")
+
     def test_physical_disc_conversion_uses_unowned_device_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
