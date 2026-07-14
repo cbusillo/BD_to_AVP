@@ -120,20 +120,15 @@ enum SamplePosition: String, CaseIterable, Identifiable {
 
 struct AppCapabilities: Equatable {
     let conversionAvailable: Bool
-    let automaticUpdateChecksAvailable: Bool
 
     static let current = AppCapabilities(
-        conversionAvailable: true,
-        automaticUpdateChecksAvailable: false
+        conversionAvailable: true
     )
 
     var conversionUnavailableReason: String {
         "Conversion requires a Blu-ray disc, Blu-ray folder, ISO, MKV, MTS, or M2TS source."
     }
 
-    var automaticUpdatesUnavailableReason: String {
-        "Automatic update checks aren’t available in this version."
-    }
 }
 
 struct ConversionDraft: Equatable {

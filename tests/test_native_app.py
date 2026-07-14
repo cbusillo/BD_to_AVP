@@ -3,6 +3,7 @@ import json
 import plistlib
 import subprocess
 import tempfile
+import tomllib
 import unittest
 
 from contextlib import chdir
@@ -27,6 +28,7 @@ from scripts.native_app import (
     minimum_macos_versions,
     parse_args,
     sign_package,
+    smoke_packaged_native_app,
     smoke_packaged_worker,
     validate_smoke_events,
     verify_native_binary_paths,
@@ -56,6 +58,13 @@ class NativeAppPackagingTests(unittest.TestCase):
         project = yaml.load(project_spec, Loader=yaml.BaseLoader)
         target_settings = project["targets"]["BluRayToVisionPro"]["settings"]
         preview_settings = target_settings["configs"]["Preview"]
+        release_settings = target_settings["configs"]["Release"]
+        sparkle_manifest = tomllib.loads((REPO_ROOT / "vendor" / "sparkle-macos.toml").read_text(encoding="utf-8"))
+        briefcase_info = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["briefcase"][
+            "app"
+        ]["bd-to-avp"]["macOS"]["info"]
+        preview_info = plistlib.loads((MACOS_ROOT / "BluRayToVisionPro" / "Info.plist").read_bytes())
+        release_info = plistlib.loads((MACOS_ROOT / "BluRayToVisionPro" / "Info-Release.plist").read_bytes())
         app_source = (MACOS_ROOT / "BluRayToVisionPro" / "App" / "BluRayToVisionProApp.swift").read_text(
             encoding="utf-8"
         )
@@ -65,7 +74,12 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn("SettingsView(", app_source)
         self.assertIn("profileStore: profileStore", app_source)
         self.assertIn("capabilities: capabilities", app_source)
+        self.assertIn("updater: updater", app_source)
+        self.assertIn("UpdateCommands(updater: updater)", app_source)
+        self.assertIn("UpdateController(installPostponer: viewModel)", app_source)
         self.assertIn("CommandGroup(replacing: .appSettings)", app_source)
+        self.assertIn("CommandGroup(after: .help)", app_source)
+        self.assertIn('Picker("Update Channel"', app_source)
         self.assertIn("openWindow(id: AppWindowID.settings)", app_source)
         self.assertIn(".windowResizability(.contentMinSize)", app_source)
         self.assertEqual(target_settings["base"]["CURRENT_PROJECT_VERSION"], NATIVE_BUILD_VERSION)
@@ -75,6 +89,21 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertEqual(preview_settings["PRODUCT_BUNDLE_IDENTIFIER"], NATIVE_BUNDLE_IDENTIFIER)
         self.assertEqual(preview_settings["PRODUCT_NAME"], NATIVE_PRODUCT_NAME)
         self.assertIn("Preview: release", project_spec)
+        self.assertEqual(project["packages"]["Sparkle"]["exactVersion"], sparkle_manifest["version"])
+        self.assertIn({"package": "Sparkle"}, project["targets"]["BluRayToVisionPro"]["dependencies"])
+        update_keys = {
+            "BDToAVPDistributionChannel",
+            "SUAllowsAutomaticUpdates",
+            "SUFeedURL",
+            "SUPublicEDKey",
+            "SUVerifyUpdateBeforeExtraction",
+        }
+        for key in update_keys:
+            self.assertNotIn(key, preview_info)
+            self.assertEqual(release_info[key], briefcase_info[key])
+        self.assertEqual(preview_info, {key: value for key, value in release_info.items() if key not in update_keys})
+        self.assertEqual(release_settings["INFOPLIST_FILE"], "BluRayToVisionPro/Info-Release.plist")
+        self.assertNotIn("SUEnableAutomaticChecks", release_info)
 
     def test_native_ui_keeps_discs_primary_and_original_job_controls_visible(self) -> None:
         source_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "SourceWorkspaceView.swift").read_text(
@@ -240,6 +269,27 @@ Load command 3
         for command in signing_commands:
             self.assertIn("--keychain", command)
             self.assertIn("/tmp/release.keychain-db", command)
+            self.assertIn("--options", command)
+            self.assertIn("runtime", command)
+            self.assertIn("--timestamp", command)
+
+    def test_ad_hoc_package_signing_omits_hardened_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app_path = Path(temporary_directory) / NATIVE_APP_NAME
+            (app_path / "Contents" / "MacOS").mkdir(parents=True)
+            with patch("scripts.native_app.run") as run_mock:
+                sign_package(app_path, "-")
+
+        signing_commands = [
+            call.args[0]
+            for call in run_mock.call_args_list
+            if call.args[0][0] == "codesign" and "--sign" in call.args[0]
+        ]
+        self.assertGreaterEqual(len(signing_commands), 2)
+        for command in signing_commands:
+            self.assertNotIn("--options", command)
+            self.assertNotIn("runtime", command)
+            self.assertIn("--timestamp=none", command)
 
     def test_product_copy_has_no_internal_labels(self) -> None:
         verify_product_source_copy()
@@ -427,6 +477,24 @@ Load command 3
                 [str(resolved_app_path / "Contents" / "MacOS" / "BluRayToVisionProEngine")],
             )
             self.assertEqual(run_mock.call_args.kwargs["cwd"], resolved_app_path)
+
+    def test_native_startup_smoke_uses_the_signed_packaged_app(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            relative_app_path = Path("package") / NATIVE_APP_NAME
+            absolute_app_path = temporary_path / relative_app_path
+            absolute_app_path.mkdir(parents=True)
+            resolved_app_path = absolute_app_path.resolve()
+            with chdir(temporary_path), patch("scripts.native_app.run") as run_mock:
+                smoke_packaged_native_app(relative_app_path)
+
+        run_mock.assert_called_once_with(
+            [
+                str(resolved_app_path / "Contents" / "MacOS" / NATIVE_EXECUTABLE_NAME),
+                "--startup-smoke",
+            ],
+            cwd=resolved_app_path,
+        )
 
     def test_rejects_wrong_job_or_result(self) -> None:
         events: list[object] = [

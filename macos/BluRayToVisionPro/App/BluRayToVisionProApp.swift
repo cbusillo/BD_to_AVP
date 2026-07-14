@@ -7,11 +7,18 @@ enum AppWindowID {
 @main
 struct BluRayToVisionProApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var viewModel = ConversionViewModel()
+    @StateObject private var viewModel: ConversionViewModel
+    @StateObject private var updater: UpdateController
     @StateObject private var settings = AppSettings()
     @StateObject private var profileStore = ProfileStore()
 
     private let capabilities = AppCapabilities.current
+
+    init() {
+        let viewModel = ConversionViewModel()
+        _viewModel = StateObject(wrappedValue: viewModel)
+        _updater = StateObject(wrappedValue: UpdateController(installPostponer: viewModel))
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -28,7 +35,7 @@ struct BluRayToVisionProApp: App {
                     }
                 )
                 .onAppear {
-                    settings.normalize(for: capabilities)
+                    updater.startIfNeeded()
                     settings.selectedProfileID = profileStore.normalizedProfileID(settings.selectedProfileID)
                     appDelegate.viewModel = viewModel
                 }
@@ -38,6 +45,7 @@ struct BluRayToVisionProApp: App {
         .windowToolbarStyle(.unified)
         .commands {
             SettingsWindowCommands()
+            UpdateCommands(updater: updater)
 
             CommandGroup(replacing: .newItem) {
                 Button("Add Source…") {
@@ -52,7 +60,7 @@ struct BluRayToVisionProApp: App {
             SettingsView(
                 settings: settings,
                 profileStore: profileStore,
-                capabilities: capabilities
+                updater: updater
             )
         }
         .defaultSize(width: 900, height: 680)
@@ -68,6 +76,29 @@ struct BluRayToVisionProApp: App {
             return
         }
         viewModel.selectSource(sourceURL)
+    }
+}
+
+private struct UpdateCommands: Commands {
+    @ObservedObject var updater: UpdateController
+
+    var body: some Commands {
+        CommandGroup(after: .help) {
+            Divider()
+
+            Button(updater.updateActionTitle) {
+                updater.performUpdateAction()
+            }
+            .disabled(!updater.canPerformUpdateAction)
+
+            if updater.supportsChannels {
+                Picker("Update Channel", selection: $updater.updateChannel) {
+                    ForEach(UpdateChannelPreference.allCases) { channel in
+                        Text(channel.name).tag(channel)
+                    }
+                }
+            }
+        }
     }
 }
 

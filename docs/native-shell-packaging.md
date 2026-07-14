@@ -90,6 +90,18 @@ DMG, staples and Gatekeeper-validates the result, repeats the packaged-worker
 smoke from the mounted DMG, attests the artifact, and publishes only the DMG and
 `SHA256SUMS` as a GitHub prerelease.
 
+The native Xcode project exact-pins Sparkle 2.9.4 through Swift Package Manager
+so the future direct Release target compiles against the same updater version as
+the production Briefcase app. Debug and Preview use the ordinary `Info.plist`,
+which contains no distribution channel, appcast URL, or public key. Their shared
+update controller therefore stays in manual-download mode and never initializes
+Sparkle. The single app target still embeds the dormant framework in Preview;
+the package signer already treats its nested framework, app, and XPC bundles as
+inside-out signing targets. `Info-Release.plist` contains the policy-checked
+direct metadata, but that unsigned Release build is compile evidence only until
+the native RC packaging and installed-app update smoke are completed under
+#192 and #197.
+
 The native shell supports Apple Silicon Macs running macOS 26 or later. Review
 and release builds may use the Xcode 27 SDK, but the committed deployment target
 and packaged `LSMinimumSystemVersion` remain macOS 26.

@@ -1,21 +1,5 @@
 import Foundation
 
-enum UpdateChannelPreference: String, CaseIterable, Identifiable {
-    case stable
-    case releaseCandidate
-
-    var id: String { rawValue }
-
-    var name: String {
-        switch self {
-        case .stable:
-            "Stable"
-        case .releaseCandidate:
-            "Release Candidates"
-        }
-    }
-}
-
 @MainActor
 final class AppSettings: ObservableObject {
     private enum Key {
@@ -24,8 +8,6 @@ final class AppSettings: ObservableObject {
         static let revealOutput = "native.revealOutput"
         static let playSound = "native.playSound"
         static let keepAwake = "native.keepAwake"
-        static let automaticUpdates = "native.automaticUpdates"
-        static let updateChannel = "native.updateChannel"
         static let showTechnicalDetails = "native.showTechnicalDetails"
         static let keepIntermediateFiles = "native.keepIntermediateFiles"
         static let useSoftwareEncoder = "native.useSoftwareEncoder"
@@ -54,14 +36,6 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(keepAwake, forKey: Key.keepAwake) }
     }
 
-    @Published var automaticallyChecksForUpdates: Bool {
-        didSet { defaults.set(automaticallyChecksForUpdates, forKey: Key.automaticUpdates) }
-    }
-
-    @Published var updateChannel: UpdateChannelPreference {
-        didSet { defaults.set(updateChannel.rawValue, forKey: Key.updateChannel) }
-    }
-
     @Published var showTechnicalDetails: Bool {
         didSet { defaults.set(showTechnicalDetails, forKey: Key.showTechnicalDetails) }
     }
@@ -88,10 +62,6 @@ final class AppSettings: ObservableObject {
         revealOutput = defaults.object(forKey: Key.revealOutput) as? Bool ?? true
         playSound = defaults.object(forKey: Key.playSound) as? Bool ?? true
         keepAwake = defaults.object(forKey: Key.keepAwake) as? Bool ?? true
-        automaticallyChecksForUpdates = defaults.object(forKey: Key.automaticUpdates) as? Bool ?? true
-        updateChannel = UpdateChannelPreference(
-            rawValue: defaults.string(forKey: Key.updateChannel) ?? UpdateChannelPreference.stable.rawValue
-        ) ?? .stable
         showTechnicalDetails = defaults.object(forKey: Key.showTechnicalDetails) as? Bool ?? false
         keepIntermediateFiles = defaults.object(forKey: Key.keepIntermediateFiles) as? Bool ?? false
         useSoftwareEncoder = defaults.object(forKey: Key.useSoftwareEncoder) as? Bool ?? false
@@ -101,12 +71,6 @@ final class AppSettings: ObservableObject {
         showTechnicalDetails = false
         keepIntermediateFiles = false
         useSoftwareEncoder = false
-    }
-
-    func normalize(for capabilities: AppCapabilities) {
-        if !capabilities.automaticUpdateChecksAvailable {
-            automaticallyChecksForUpdates = false
-        }
     }
 
     func resetDestination() {

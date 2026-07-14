@@ -11,6 +11,11 @@ configs:
   Preview: release
   Release: release
 
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.9.4
+
 settings:
   base:
     CLANG_ENABLE_MODULES: YES
@@ -25,6 +30,8 @@ targets:
       - path: BluRayToVisionPro
       - path: ../bd_to_avp/resources/app_icon.icns
         buildPhase: resources
+    dependencies:
+      - package: Sparkle
     settings:
       base:
         CODE_SIGN_STYLE: Automatic
@@ -60,6 +67,7 @@ targets:
           DEAD_CODE_STRIPPING: YES
           DEPLOYMENT_POSTPROCESSING: YES
           ENABLE_CODE_COVERAGE: NO
+          INFOPLIST_FILE: BluRayToVisionPro/Info-Release.plist
           ONLY_ACTIVE_ARCH: NO
           OTHER_SWIFT_FLAGS: $(inherited) -file-prefix-map $(SRCROOT)/BluRayToVisionPro=/Sources -debug-prefix-map $(SRCROOT)/BluRayToVisionPro=/Sources -coverage-prefix-map $(SRCROOT)/BluRayToVisionPro=/Sources
           SWIFT_SERIALIZE_DEBUGGING_OPTIONS: NO

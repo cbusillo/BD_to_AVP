@@ -34,6 +34,23 @@ synchronous PyGithub About-dialog checker, and exposes Sparkle's standard
 `Check for Updates…` action. Source/development builds retain only a manual
 GitHub Releases link and never initialize Sparkle.
 
+The native SwiftUI project now exact-pins the same Sparkle 2.9.4 package. A
+single observable update controller owns Sparkle's automatic-check preference,
+the shared `BDToAVPUpdateChannel` Stable/`rc` selection, check availability,
+Settings controls, and Help commands. It starts Sparkle only when the bundle has
+the complete direct-distribution policy: `direct` channel, HTTPS feed, public
+key, automatic installation disabled, extraction verification enabled, and no
+forced `SUEnableAutomaticChecks` value. Missing or invalid metadata fails closed
+to the GitHub Releases fallback. Sparkle relaunch is postponed while the native
+conversion worker is active and resumes after the worker becomes idle.
+
+Native Debug and Preview builds omit all update metadata and do not initialize
+Sparkle, although the current single-target SPM build embeds the dormant signed
+framework. The native Release plist matches the Briefcase updater policy, but
+its current version/build identity is not eligible for production publication.
+Signed installed-app upgrades, Stable/RC feed behavior, permission prompting,
+and rendered release notes remain release-cycle validation for #192 and #197.
+
 Briefcase writes the direct-distribution metadata and repository build counter,
 and the repo-owned signing extension adds nested `.xpc` bundles to Briefcase's
 inside-out signing pass. The manual main-only release workflow validates the
