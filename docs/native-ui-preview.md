@@ -37,8 +37,8 @@ does not replace or update it.
 - MakeMKV remains an external dependency for physical discs, Blu-ray folders,
   and disc images. The source workspace links to the official download page when
   MakeMKV is missing.
-- Beta 1 supports Apple Silicon and macOS 26 or later. macOS 25 and earlier are
-  not supported.
+- Beta 1 supports Apple Silicon and macOS 26 or later. Earlier macOS releases
+  are not supported.
 
 Please report interface feedback in issue #202, including the source workflow,
 window size, appearance, and any controls or terminology that were unclear.
