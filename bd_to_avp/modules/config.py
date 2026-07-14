@@ -7,12 +7,10 @@ import sys
 from enum import Enum, auto
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Iterable
+from typing import ClassVar, Iterable
 
+from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.modules.util import get_pyproject_data
-
-if TYPE_CHECKING:
-    from bd_to_avp.modules.preview import PreviewRange
 
 
 SCRIPT_PATH = Path(__file__).parent.parent

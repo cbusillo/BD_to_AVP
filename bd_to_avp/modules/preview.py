@@ -7,13 +7,7 @@ import ffmpeg
 
 from bd_to_avp.modules.command import run_command
 from bd_to_avp.modules.config import config
-
-
-@dataclass(frozen=True)
-class PreviewRange:
-    start_seconds: float
-    duration_seconds: float
-    source_duration_seconds: float
+from bd_to_avp.modules.preview_range import PreviewRange
 
 
 @dataclass(frozen=True)

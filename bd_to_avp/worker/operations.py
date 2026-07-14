@@ -233,7 +233,6 @@ def _convert_source(
         )
 
     owner.check_cancelled()
-    resolved_preview_range = preview_range
     with configured_conversion(job, source_path, preview_range=preview_range):
         try:
             activity.stage_started("configure", "Preparing conversion settings")
