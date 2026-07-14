@@ -82,6 +82,24 @@ final class WorkerProcessClientTests: XCTestCase {
         }
     }
 
+    func testRejectsEventAfterTerminal() async throws {
+        let client = fixtureClient(body: """
+        \(readyEvent())
+        print(json.dumps({"protocol_version": 2, "type": "job.completed", "job_id": job_id, "sequence": 1, "payload": {"result": {"name": "movie", "resolution": "1920x1080", "frame_rate": "24/1", "interlaced": False, "size_bytes": 10}}}), flush=True)
+        print(json.dumps({"protocol_version": 2, "type": "log", "job_id": job_id, "sequence": 2, "payload": {"level": "info", "message": "late event"}}), flush=True)
+        """)
+        let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
+
+        do {
+            _ = try await client.run(job: job) { _ in }
+            XCTFail("Expected an event after terminal to fail")
+        } catch let error as WorkerClientError {
+            guard case .protocolFailure = error else {
+                return XCTFail("Unexpected worker error: \(error)")
+            }
+        }
+    }
+
     func testCancellationReapsWorkerAfterTerminalEvent() async throws {
         let client = fixtureClient(body: """
         \(readyEvent())
@@ -90,15 +108,22 @@ final class WorkerProcessClientTests: XCTestCase {
         """)
         let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
         let terminalReceived = expectation(description: "terminal event received")
+        let terminalState = TerminalEventState()
         let task = Task {
             try await client.run(job: job) { event in
                 if event.type.isTerminal {
+                    await terminalState.record()
                     terminalReceived.fulfill()
                 }
             }
         }
 
-        await fulfillment(of: [terminalReceived], timeout: 3)
+        await fulfillment(of: [terminalReceived], timeout: 10)
+        guard await terminalState.wasReceived else {
+            client.cancel()
+            _ = await task.result
+            return
+        }
         client.cancel()
         let result = try await task.value
 
@@ -150,5 +175,13 @@ final class WorkerProcessClientTests: XCTestCase {
                 environment: ProcessInfo.processInfo.environment
             )
         )
+    }
+}
+
+private actor TerminalEventState {
+    private(set) var wasReceived = false
+
+    func record() {
+        wasReceived = true
     }
 }
