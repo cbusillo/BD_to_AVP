@@ -29,6 +29,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var artifactLease: PreviewArtifactLease?
     @Published private(set) var reviewedDraft: PreviewDraft?
     @Published private(set) var elapsedSeconds = 0
+    @Published private(set) var progress: WorkerProgress?
 
     private let clientFactory: ClientFactory
     private let cache: PreviewCache
@@ -85,6 +86,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         reviewedDraft = nil
         pendingTerminalEvent = nil
         elapsedSeconds = 0
+        progress = nil
 
         let jobID = UUID()
         do {
@@ -127,6 +129,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         }
         phase = .stopping
         stageMessage = "Stopping Preview"
+        progress = nil
         client?.cancel()
     }
 
@@ -176,6 +179,9 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
             pendingTerminalEvent = event
             return
         }
+        guard phase != .stopping else {
+            return
+        }
 
         switch event.type {
         case .workerReady, .jobStarted:
@@ -183,6 +189,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
             stageMessage = "Preparing Preview"
         case .stageStarted:
             let stage = event.payload.stage ?? ""
+            progress = event.payload.progress?.normalized
             if Self.encodingStages.contains(stage) {
                 phase = .encoding
                 stageMessage = event.payload.message ?? "Encoding Preview"
@@ -193,6 +200,9 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         case .heartbeat:
             elapsedSeconds = event.payload.elapsedSeconds ?? elapsedSeconds
             activityMessage = event.payload.message
+            if let incomingProgress = event.payload.progress {
+                progress = incomingProgress.normalized
+            }
         case .log, .warning:
             if let message = event.payload.message {
                 activityMessage = message
@@ -226,6 +236,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         phase = .ready
         stageMessage = "Ready to Play"
         activityMessage = nil
+        progress = nil
     }
 
     private func finish(_ result: WorkerRunResult) {
@@ -305,6 +316,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         activeDraft = nil
         activeDirectoryURL = nil
         pendingTerminalEvent = nil
+        progress = nil
 
         let actions = actionsWaitingForIdle
         actionsWaitingForIdle.removeAll()

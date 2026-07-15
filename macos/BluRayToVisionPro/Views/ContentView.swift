@@ -330,10 +330,15 @@ struct ContentView: View {
             .accessibilityLabel(statusAccessibilityLabel)
 
             if viewModel.hasActiveWorker {
-                ProgressView()
-                    .controlSize(.small)
+                WorkerProgressGauge(progress: viewModel.state.progress, width: 64)
                     .padding(.leading, 4)
-                    .accessibilityHidden(true)
+
+                if let progress = viewModel.state.progress {
+                    Text(progress.compactText)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
 
                 if let elapsedText = viewModel.state.elapsedText {
                     Label("Elapsed \(elapsedText)", systemImage: "clock")
@@ -480,13 +485,16 @@ struct ContentView: View {
             return "Choose how to continue"
         }
         if viewModel.state.phase == .failed {
+            if let completedCount = viewModel.completedBatchResults?.count, completedCount > 0 {
+                return "\(completedCount) conversion\(completedCount == 1 ? "" : "s") completed before the queue stopped"
+            }
             return "Source needs attention"
         }
         if viewModel.state.phase == .cancelled {
             if let completedCount = viewModel.completedBatchResults?.count, completedCount > 0 {
                 return "\(completedCount) conversion\(completedCount == 1 ? "" : "s") completed before the queue stopped"
             }
-            return "Conversion queue cancelled"
+            return viewModel.queueItems.isEmpty ? "Conversion cancelled" : "Conversion queue cancelled"
         }
         if viewModel.state.conversionResult != nil {
             if let results = viewModel.completedBatchResults {
@@ -525,6 +533,9 @@ struct ContentView: View {
         }
         if let elapsedText = viewModel.state.elapsedText, viewModel.hasActiveWorker {
             components.append("Elapsed time \(elapsedText)")
+        }
+        if let progress = viewModel.state.progress, viewModel.hasActiveWorker {
+            components.append(progress.accessibilityValue)
         }
         return components.joined(separator: ". ")
     }

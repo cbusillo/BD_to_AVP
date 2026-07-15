@@ -42,10 +42,12 @@ final class PreviewViewModelTests: XCTestCase {
     func testCancelledPreviewRemovesPartialWorkspace() async throws {
         try await withTemporaryPreviewEnvironment { sourceURL, cache in
             let started = expectation(description: "preview started")
+            let delayedEvents = expectation(description: "delayed cancellation events delivered")
             let cancelled = expectation(description: "preview cancelled")
             let worker = PreviewWorkerClient(
                 waitsForCancellation: true,
                 onStarted: { started.fulfill() },
+                onCancellationEventsDelivered: { delayedEvents.fulfill() },
                 onCompleted: { cancelled.fulfill() }
             )
             let viewModel = PreviewViewModel(clientFactory: { worker }, cache: cache)
@@ -54,12 +56,20 @@ final class PreviewViewModelTests: XCTestCase {
             viewModel.startPreview(previewDraft)
             await fulfillment(of: [started], timeout: 2)
             let destinationURL = try XCTUnwrap(worker.receivedJob?.destination.map { URL(fileURLWithPath: $0.path) })
+            XCTAssertEqual(viewModel.progress, WorkerProgress(currentStage: 9, totalStages: 13, stageFraction: 0.5))
 
             viewModel.stopActiveWorker()
+
+            await fulfillment(of: [delayedEvents], timeout: 2)
+            XCTAssertEqual(viewModel.phase, .stopping)
+            XCTAssertEqual(viewModel.stageMessage, "Stopping Preview")
+            XCTAssertNil(viewModel.progress)
+            worker.resumeAfterDelayedCancellationEvents()
 
             await fulfillment(of: [cancelled], timeout: 2)
             while viewModel.hasActiveWorker { await Task.yield() }
             XCTAssertEqual(viewModel.phase, .idle)
+            XCTAssertNil(viewModel.progress)
             XCTAssertFalse(FileManager.default.fileExists(atPath: destinationURL.path))
             XCTAssertNil(viewModel.artifactLease)
         }
@@ -178,19 +188,24 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
     private let lock = NSLock()
     private let waitsForCancellation: Bool
     private let onStarted: (() -> Void)?
+    private let onCancellationEventsDelivered: (() -> Void)?
     private let onCompleted: (() -> Void)?
     private var cancellationContinuation: CheckedContinuation<Void, Never>?
     private var cancellationRequested = false
+    private var delayedEventsContinuation: CheckedContinuation<Void, Never>?
+    private var delayedEventsResumeRequested = false
 
     private(set) var receivedJob: WorkerJobSpec?
 
     init(
         waitsForCancellation: Bool = false,
         onStarted: (() -> Void)? = nil,
+        onCancellationEventsDelivered: (() -> Void)? = nil,
         onCompleted: (() -> Void)? = nil
     ) {
         self.waitsForCancellation = waitsForCancellation
         self.onStarted = onStarted
+        self.onCancellationEventsDelivered = onCancellationEventsDelivered
         self.onCompleted = onCompleted
     }
 
@@ -213,7 +228,11 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
             type: .stageStarted,
             jobID: job.jobID,
             sequence: 1,
-            payload: WorkerEventPayload(stage: "create_left_right_files", message: "Encoding Preview")
+            payload: WorkerEventPayload(
+                stage: "create_left_right_files",
+                message: "Encoding Preview",
+                progress: WorkerProgress(currentStage: 9, totalStages: 13, stageFraction: nil)
+            )
         )
         try await onEvent(stage)
 
@@ -222,7 +241,11 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
             type: .heartbeat,
             jobID: job.jobID,
             sequence: 2,
-            payload: WorkerEventPayload(message: "Encoding both eyes", elapsedSeconds: 65)
+            payload: WorkerEventPayload(
+                message: "Encoding both eyes",
+                elapsedSeconds: 65,
+                progress: WorkerProgress(currentStage: 9, totalStages: 13, stageFraction: 0.5)
+            )
         )
         try await onEvent(heartbeat)
         onStarted?()
@@ -234,11 +257,38 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
 
         if waitsForCancellation {
             await waitForCancellation()
+            let delayedStage = WorkerEvent(
+                protocolVersion: WorkerJobSpec.protocolVersion,
+                type: .stageStarted,
+                jobID: job.jobID,
+                sequence: 3,
+                payload: WorkerEventPayload(
+                    stage: "combine_to_mv_hevc",
+                    message: "Combining stereo video into MV-HEVC",
+                    progress: WorkerProgress(currentStage: 10, totalStages: 13, stageFraction: nil)
+                )
+            )
+            try await onEvent(delayedStage)
+            let delayedHeartbeat = WorkerEvent(
+                protocolVersion: WorkerJobSpec.protocolVersion,
+                type: .heartbeat,
+                jobID: job.jobID,
+                sequence: 4,
+                payload: WorkerEventPayload(
+                    elapsedSeconds: 66,
+                    progress: WorkerProgress(currentStage: 10, totalStages: 13, stageFraction: 0.2)
+                )
+            )
+            try await onEvent(delayedHeartbeat)
+            if onCancellationEventsDelivered != nil {
+                onCancellationEventsDelivered?()
+                await waitForDelayedCancellationEventsResume()
+            }
             let cancelled = WorkerEvent(
                 protocolVersion: WorkerJobSpec.protocolVersion,
                 type: .jobCancelled,
                 jobID: job.jobID,
-                sequence: 3,
+                sequence: 5,
                 payload: WorkerEventPayload(message: "Preview stopped.")
             )
             try await onEvent(cancelled)
@@ -290,6 +340,18 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
         continuation?.resume()
     }
 
+    func resumeAfterDelayedCancellationEvents() {
+        let continuation: CheckedContinuation<Void, Never>?
+        lock.lock()
+        continuation = delayedEventsContinuation
+        delayedEventsContinuation = nil
+        if continuation == nil {
+            delayedEventsResumeRequested = true
+        }
+        lock.unlock()
+        continuation?.resume()
+    }
+
     private func waitForCancellation() async {
         await withCheckedContinuation { continuation in
             lock.lock()
@@ -300,6 +362,20 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
             }
             cancellationContinuation = continuation
             lock.unlock()
+        }
+    }
+
+    private func waitForDelayedCancellationEventsResume() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if delayedEventsResumeRequested {
+                delayedEventsResumeRequested = false
+                lock.unlock()
+                continuation.resume()
+            } else {
+                delayedEventsContinuation = continuation
+                lock.unlock()
+            }
         }
     }
 }

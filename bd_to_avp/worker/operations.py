@@ -16,7 +16,7 @@ from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.disc import DiscTitleSelectionError, get_disc_and_mvc_video_info, MKVCreationError
 from bd_to_avp.modules.file import path_is_relative_to
 from bd_to_avp.modules.preview import PreviewRange, resolve_preview_range
-from bd_to_avp.modules.process import ProcessingCancelled, start_process
+from bd_to_avp.modules.process import ProcessingCancelled, conversion_stage_plan, start_process
 from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
@@ -257,6 +257,7 @@ def _convert_source(
     owner.check_cancelled()
     with configured_conversion(job, source_path, preview_range=preview_range):
         try:
+            activity.set_stage_plan(conversion_stage_plan())
             activity.stage_started("configure", "Preparing conversion settings")
             config.configure_tool_environment()
             activity.log("Tool environment configured", stage="configure")

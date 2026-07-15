@@ -14,6 +14,8 @@ from bd_to_avp.modules.util import formatted_time_elapsed
 
 
 SpinnerUpdate = Callable[[str], object]
+LineHandler = Callable[[str], object]
+PROCESS_TERMINATION_TIMEOUT_SECONDS = 5.0
 
 
 def get_spinner_update_func() -> SpinnerUpdate | None:
@@ -87,7 +89,13 @@ def normalize_command_elements(command: list[Any]) -> list[str | Path | bytes]:
     return [str(item) if not isinstance(item, (str, bytes, Path)) else item for item in command if item is not None]
 
 
-def run_command(commands: list[Any], command_name: str = "", env: dict[str, str] | None = None) -> str:
+def run_command(
+    commands: list[Any],
+    command_name: str = "",
+    env: dict[str, str] | None = None,
+    *,
+    line_handler: LineHandler | None = None,
+) -> str:
     commands = normalize_command_elements(commands)
     if not command_name:
         command_name = str(commands[0])
@@ -116,6 +124,8 @@ def run_command(commands: list[Any], command_name: str = "", env: dict[str, str]
             if not line:
                 break
             output_lines.append(line)
+            if line_handler:
+                line_handler(line.rstrip("\r\n"))
 
         process.wait()
         if process.returncode != 0:
@@ -125,13 +135,31 @@ def run_command(commands: list[Any], command_name: str = "", env: dict[str, str]
     except KeyboardInterrupt:
         print("\nCommand interrupted.")
         if process:
-            process.terminate()
+            terminate_and_wait(process)
+        raise
+    except BaseException:
+        if process:
+            terminate_and_wait(process)
         raise
 
     finally:
         spinner.stop(spinner_update_func)
         spinner_thread.join()
     return "".join(output_lines)
+
+
+def terminate_and_wait(
+    process: subprocess.Popen,
+    timeout: float = PROCESS_TERMINATION_TIMEOUT_SECONDS,
+) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
 
 
 def run_ffmpeg_print_errors(stream_spec: Any, message: str, quiet: bool = True, **kwargs) -> None:

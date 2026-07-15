@@ -123,6 +123,62 @@ struct WorkerDecision: Decodable, Equatable {
     }
 }
 
+struct WorkerProgress: Decodable, Equatable {
+    let currentStage: Int
+    let totalStages: Int
+    let stageFraction: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case currentStage = "current_stage"
+        case totalStages = "total_stages"
+        case stageFraction = "stage_fraction"
+    }
+
+    var normalized: WorkerProgress? {
+        guard totalStages > 0, currentStage > 0, currentStage <= totalStages else {
+            return nil
+        }
+        let normalizedFraction = stageFraction.map { min(1, max(0, $0)) }
+        return WorkerProgress(
+            currentStage: currentStage,
+            totalStages: totalStages,
+            stageFraction: normalizedFraction
+        )
+    }
+
+    var stagePositionText: String {
+        "Stage \(currentStage) of \(totalStages)"
+    }
+
+    var percentageText: String? {
+        guard let stageFraction else {
+            return nil
+        }
+        return "\(Int((stageFraction * 100).rounded()))%"
+    }
+
+    var detailText: String {
+        guard let percentageText else {
+            return stagePositionText
+        }
+        return "\(percentageText) of current stage · \(stagePositionText)"
+    }
+
+    var compactText: String {
+        guard let percentageText else {
+            return "Stage \(currentStage)/\(totalStages)"
+        }
+        return "Stage \(currentStage)/\(totalStages) · \(percentageText) of stage"
+    }
+
+    var accessibilityValue: String {
+        guard let percentageText else {
+            return stagePositionText
+        }
+        return "\(stagePositionText), \(percentageText) of current stage"
+    }
+}
+
 enum WorkerRecoveryChoice: String, Identifiable, Equatable {
     case retryContinueOnError = "retry_continue_on_error"
     case retryWithoutSubtitles = "retry_without_subtitles"
@@ -178,6 +234,7 @@ struct WorkerEventPayload: Decodable, Equatable {
     let stage: String?
     let message: String?
     let elapsedSeconds: Int?
+    let progress: WorkerProgress?
     let level: String?
     let result: SourceInspection?
     let conversionResult: ConversionResult?
@@ -193,6 +250,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         stage: String? = nil,
         message: String? = nil,
         elapsedSeconds: Int? = nil,
+        progress: WorkerProgress? = nil,
         level: String? = nil,
         result: SourceInspection? = nil,
         conversionResult: ConversionResult? = nil,
@@ -207,6 +265,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         self.stage = stage
         self.message = message
         self.elapsedSeconds = elapsedSeconds
+        self.progress = progress
         self.level = level
         self.result = result
         self.conversionResult = conversionResult
@@ -223,6 +282,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         case stage
         case message
         case elapsedSeconds = "elapsed_seconds"
+        case progress
         case level
         case result
         case conversionResult = "conversion_result"

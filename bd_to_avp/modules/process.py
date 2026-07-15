@@ -43,7 +43,13 @@ class BatchProcessingError(Exception):
 
 
 class ActivityReporter(Protocol):
+    def set_stage_plan(self, stages: tuple[str, ...]) -> None:
+        raise NotImplementedError
+
     def stage_started(self, stage: str, message: str) -> None:
+        raise NotImplementedError
+
+    def stage_progress(self, completed_units: float, total_units: float) -> None:
         raise NotImplementedError
 
     def log(self, message: str, *, stage: str | None = None, **fields: object) -> None:
@@ -67,6 +73,40 @@ def find_batch_sources(source_folder_path: Path) -> tuple[Path, ...]:
             key=lambda source: source.as_posix().casefold(),
         )
     )
+
+
+def conversion_stage_plan() -> tuple[str, ...]:
+    stages = [
+        "configure",
+        "preflight",
+        "inspect_source",
+    ]
+    if config.start_stage.value <= Stage.CREATE_MKV.value:
+        stages.append("create_mkv")
+    if config.preview_range is not None:
+        stages.append("prepare_preview_range")
+    stages.extend(
+        [
+            "probe_color",
+            "detect_crop",
+        ]
+    )
+    if config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
+        stages.append("extract_mvc_and_audio")
+    if not config.skip_subtitles and config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
+        stages.append("extract_subtitles")
+    if config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
+        stages.append("create_left_right_files")
+    if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
+        stages.append("combine_to_mv_hevc")
+    if config.fx_upscale and config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
+        stages.append("upscale_video")
+    if config.transcode_audio and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
+        stages.append("transcode_audio")
+    if config.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
+        stages.append("create_final_file")
+    stages.append("move_files")
+    return tuple(stages)
 
 
 def process(
@@ -164,16 +204,21 @@ def process_each(
 
     print(f"Using temporary folder: {os.environ['TMPDIR']}")
     if activity:
-        activity.log("Temporary workspace ready", stage="preflight", path=os.environ["TMPDIR"])
+        activity.log("Temporary workspace ready", stage="inspect_source", path=os.environ["TMPDIR"])
 
     completed_path = config.output_root_path / f"{disc_info.name}{config.FINAL_FILE_TAG}.mov"
     if not config.overwrite and file_exists_normalized(completed_path):
         raise FileExistsError(f"Output file already exists for {disc_info.name}. Use --overwrite to replace.")
 
     raise_if_cancelled(cancellation_event)
-    if activity:
+    if activity and config.start_stage.value <= Stage.CREATE_MKV.value:
         activity.stage_started("create_mkv", "Preparing source video")
-    mkv_output_path = create_mkv_file(output_folder, disc_info, config.language_code)
+    mkv_output_path = create_mkv_file(
+        output_folder,
+        disc_info,
+        config.language_code,
+        progress_callback=activity.stage_progress if activity else None,
+    )
     if config.preview_range is not None:
         raise_if_cancelled(cancellation_event)
         if activity:
@@ -196,34 +241,34 @@ def process_each(
     )
     crop_params = detect_crop_parameters(mkv_output_path, start_seconds=crop_start_seconds)
     raise_if_cancelled(cancellation_event)
-    if activity:
+    if activity and config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
         activity.stage_started("extract_mvc_and_audio", "Extracting MVC video and audio")
     audio_output_path, video_output_path = create_mvc_and_audio(disc_info.name, mkv_output_path, output_folder)
     raise_if_cancelled(cancellation_event)
-    if activity:
+    if activity and not config.skip_subtitles and config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
         activity.stage_started("extract_subtitles", "Extracting subtitles")
     create_srt_from_mkv(mkv_output_path, output_folder)
     raise_if_cancelled(cancellation_event)
-    if activity:
+    if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
         activity.stage_started("create_left_right_files", "Creating left and right eye video")
     left_output_path, right_output_path = create_left_right_files(
         disc_info, output_folder, video_output_path, crop_params
     )
     raise_if_cancelled(cancellation_event)
-    if activity:
+    if activity and config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
         activity.stage_started("combine_to_mv_hevc", "Combining stereo video into MV-HEVC")
     mv_hevc_path = create_mv_hevc_file(left_output_path, right_output_path, output_folder, disc_info)
     raise_if_cancelled(cancellation_event)
-    if activity and config.fx_upscale:
+    if activity and config.fx_upscale and config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
         activity.stage_started("upscale_video", "Upscaling video")
     mv_hevc_path = create_upscaled_file(mv_hevc_path)
 
     raise_if_cancelled(cancellation_event)
-    if activity:
+    if activity and config.transcode_audio and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
         activity.stage_started("transcode_audio", "Preparing audio")
     audio_output_path = create_transcoded_audio_file(audio_output_path, output_folder)
     raise_if_cancelled(cancellation_event)
-    if activity:
+    if activity and config.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
         activity.stage_started("create_final_file", "Muxing final spatial video")
     muxed_output_path = create_muxed_file(
         audio_output_path,

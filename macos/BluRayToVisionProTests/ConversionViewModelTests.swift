@@ -290,8 +290,6 @@ final class ConversionViewModelTests: XCTestCase {
             sourceDetails: viewModel.state.result,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: directoryURL.appendingPathComponent("Output", isDirectory: true),
-            outputLength: .fullMovie,
-            samplePosition: .beginning,
             options: ConversionOptions()
         )
         viewModel.startConversion(draft: draft)
@@ -334,8 +332,6 @@ final class ConversionViewModelTests: XCTestCase {
             sourceDetails: viewModel.state.result,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: FileManager.default.temporaryDirectory,
-            outputLength: .fullMovie,
-            samplePosition: .beginning,
             options: ConversionOptions()
         )
         viewModel.startConversion(draft: draft)
@@ -370,8 +366,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: volumeURL.appendingPathComponent("Output", isDirectory: true),
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
         )
@@ -432,8 +426,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: FileManager.default.temporaryDirectory,
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
         )
@@ -479,8 +471,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: URL(fileURLWithPath: "/Movies"),
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
 
@@ -540,8 +530,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: URL(fileURLWithPath: "/Movies"),
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
 
@@ -591,8 +579,6 @@ final class ConversionViewModelTests: XCTestCase {
                     sourceDetails: viewModel.state.result,
                     profile: BuiltInProfile.balanced.profile,
                     destinationURL: URL(fileURLWithPath: "/Movies"),
-                    outputLength: .fullMovie,
-                    samplePosition: .beginning,
                     options: ConversionOptions()
                 )
             )
@@ -647,8 +633,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: URL(fileURLWithPath: "/Movies"),
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
             viewModel.startConversion(draft: draft)
@@ -658,6 +642,37 @@ final class ConversionViewModelTests: XCTestCase {
             XCTAssertEqual(viewModel.state.operationKind, .conversion)
             XCTAssertEqual(viewModel.state.phase, .completed)
             XCTAssertEqual(viewModel.state.conversionResult?.outputPath, "/Movies/movie_AVP.mov")
+        }
+    }
+
+    @MainActor
+    func testSingleDraftQueueUsesSingleConversionPath() async throws {
+        let inspectionDone = expectation(description: "inspection done")
+        let conversionStarted = expectation(description: "conversion started")
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { _ in conversionStarted.fulfill() }
+        )
+        let viewModel = ConversionViewModel { worker }
+
+        try await withTemporarySource { sourceURL in
+            viewModel.selectSource(sourceURL)
+            await fulfillment(of: [inspectionDone], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+
+            let draft = ConversionDraft(
+                source: try XCTUnwrap(viewModel.source),
+                sourceDetails: viewModel.state.result,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: URL(fileURLWithPath: "/Movies"),
+                options: ConversionOptions()
+            )
+            viewModel.startConversionQueue(drafts: [draft])
+
+            await fulfillment(of: [conversionStarted], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+            XCTAssertTrue(viewModel.queueItems.isEmpty)
+            XCTAssertEqual(viewModel.state.phase, .completed)
         }
     }
 
@@ -682,8 +697,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: URL(fileURLWithPath: "/Movies"),
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
             viewModel.startConversion(draft: draft)
@@ -714,8 +727,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: URL(fileURLWithPath: "/Movies"),
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
 
@@ -751,8 +762,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: URL(fileURLWithPath: "/Movies"),
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
 
@@ -1072,26 +1081,6 @@ final class ConversionViewModelTests: XCTestCase {
         _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8))
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         try await operation(sourceURL)
-    }
-}
-
-private extension ConversionDraft {
-    init(
-        source: ConversionSource,
-        sourceDetails: SourceInspection?,
-        profile: EncodingProfile,
-        destinationURL: URL,
-        outputLength: OutputLength,
-        samplePosition: SamplePosition,
-        options: ConversionOptions
-    ) {
-        self.init(
-            source: source,
-            sourceDetails: sourceDetails,
-            profile: profile,
-            destinationURL: destinationURL,
-            options: options
-        )
     }
 }
 

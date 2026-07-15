@@ -128,7 +128,15 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     func startConversionQueue(drafts: [ConversionDraft]) {
-        guard !hasActiveWorker, !hasQueuedWork, state.phase != .decisionRequired, drafts.count > 1 else {
+        guard !hasActiveWorker,
+              !hasQueuedWork,
+              state.phase != .decisionRequired,
+              let firstDraft = drafts.first
+        else {
+            return
+        }
+        if drafts.count == 1 {
+            startConversion(draft: firstDraft)
             return
         }
         let normalizedDrafts = drafts.enumerated().map { index, draft in

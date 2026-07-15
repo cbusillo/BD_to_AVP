@@ -2,6 +2,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import ffmpeg
 
@@ -49,6 +50,21 @@ class TitleInfo:
     has_mvc: bool = False
     resolution: str | None = None
     frame_rate: str | None = None
+
+
+ProgressCallback = Callable[[float, float], object]
+MAKEMKV_PROGRESS_PATTERN = re.compile(r"^PRGV:(\d+),(\d+),(\d+)$")
+
+
+def parse_makemkv_progress(line: str) -> tuple[int, int] | None:
+    match = MAKEMKV_PROGRESS_PATTERN.match(line.strip())
+    if match is None:
+        return None
+    total_progress = int(match.group(2))
+    maximum_progress = int(match.group(3))
+    if maximum_progress <= 0:
+        return None
+    return min(max(total_progress, 0), maximum_progress), maximum_progress
 
 
 def parse_makemkv_output(output: str) -> tuple[str, list[TitleInfo]]:
@@ -197,22 +213,37 @@ def get_disc_and_mvc_video_info(selected_title_id: str | None = None) -> DiscInf
     )
 
 
-def rip_disc_to_mkv(output_folder: Path, disc_info: DiscInfo, language_code: str) -> None:
+def rip_disc_to_mkv(
+    output_folder: Path,
+    disc_info: DiscInfo,
+    language_code: str,
+    progress_callback: ProgressCallback | None = None,
+) -> None:
     custom_profile_path = output_folder / "custom_profile.mmcp.xml"
     create_custom_makemkv_profile(custom_profile_path, language_code)
 
     source = get_makemkv_source()
     command = [
         config.MAKEMKVCON_PATH,
+        "--robot",
         f"--profile={custom_profile_path}",
         "--minlength=0",
+        "--progress=-same",
         "--noscan" if makemkv_source_supports_noscan(source) else None,
         "mkv",
         source,
         disc_info.main_title_number,
         output_folder,
     ]
-    mkv_output = run_command(command, "Rip disc to MKV file.")
+
+    def report_progress(line: str) -> None:
+        if progress_callback is None:
+            return
+        progress = parse_makemkv_progress(line)
+        if progress is not None:
+            progress_callback(*progress)
+
+    mkv_output = run_command(command, "Rip disc to MKV file.", line_handler=report_progress)
     if config.continue_on_error or all(error not in mkv_output for error in config.MKV_ERROR_CODES):
         return
     filtered_output = filter_lines_from_output(mkv_output, config.MKV_ERROR_FILTERS)
@@ -257,7 +288,12 @@ def create_custom_makemkv_profile(custom_profile_path: Path, language_code: str)
     print(f"Custom MakeMKV profile created at {custom_profile_path}")
 
 
-def create_mkv_file(output_folder: Path, disc_info: DiscInfo, language_code: str) -> Path:
+def create_mkv_file(
+    output_folder: Path,
+    disc_info: DiscInfo,
+    language_code: str,
+    progress_callback: ProgressCallback | None = None,
+) -> Path:
     if config.source_path and config.source_path.suffix.lower() in [*config.MTS_EXTENSIONS, ".mkv"]:
         if not config.source_path.is_file():
             raise FileNotFoundError(f"Source file not found: {config.source_path}")
@@ -272,7 +308,7 @@ def create_mkv_file(output_folder: Path, disc_info: DiscInfo, language_code: str
             return mkv_file
 
     if config.start_stage.value <= Stage.CREATE_MKV.value:
-        rip_disc_to_mkv(output_folder, disc_info, language_code)
+        rip_disc_to_mkv(output_folder, disc_info, language_code, progress_callback)
 
     if mkv_file := find_largest_file_with_extensions(output_folder, [".mkv"]):
         return mkv_file

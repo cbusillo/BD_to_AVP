@@ -188,8 +188,7 @@ struct SourceWorkspaceView: View {
                 if state.phase.isRunning {
                     Divider()
                     HStack(spacing: 10) {
-                        ProgressView()
-                            .controlSize(.small)
+                        WorkerProgressGauge(progress: state.progress, width: 84)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(state.operationKind == .inspection ? "Reading source details…" : "Converting video…")
                                 .fontWeight(.medium)
@@ -199,6 +198,11 @@ struct SourceWorkspaceView: View {
                             )
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            if let progress = state.progress {
+                                Text(progress.detailText)
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 } else if state.phase == .decisionRequired, let decision = state.recoveryDecision {

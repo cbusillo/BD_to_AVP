@@ -13,8 +13,9 @@ from typing import Any
 from unittest.mock import patch
 from uuid import uuid4
 
-from bd_to_avp.modules.config import config
+from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.disc import DiscInfo, DiscTitleInfo, MKVCreationError
+from bd_to_avp.modules.process import process_each
 from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.worker.__main__ import run_worker
 from bd_to_avp.worker.operations import (
@@ -412,6 +413,54 @@ class WorkerEventEmitterTests(unittest.TestCase):
         events = decoded_events(output)
         self.assertEqual([event["sequence"] for event in events], [0, 1])
         self.assertEqual(events[-1]["type"], "job.failed")
+
+
+class WorkerActivityReporterTests(unittest.TestCase):
+    def test_stage_plan_emits_shared_progress_fixture(self) -> None:
+        output = io.StringIO()
+        job_id = "11111111-1111-4111-8111-111111111111"
+        activity = WorkerActivityReporter(WorkerEventEmitter(output, job_id))
+        activity.set_stage_plan(("configure", "create_mkv"))
+
+        activity.stage_started("configure", "Preparing conversion settings")
+
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v4.json"
+        expected = json.loads(fixture_path.read_text())
+        self.assertEqual(decoded_events(output), [expected])
+
+    def test_heartbeat_carries_current_stage_fraction(self) -> None:
+        output = io.StringIO()
+        activity = WorkerActivityReporter(WorkerEventEmitter(output, str(uuid4())))
+        activity.set_stage_plan(("configure", "create_mkv"))
+        activity.stage_started("configure", "Preparing conversion settings")
+        activity.stage_progress(25, 100)
+
+        payload = activity.heartbeat_payload(12)
+
+        self.assertEqual(payload["elapsed_seconds"], 12)
+        self.assertEqual(
+            payload["progress"],
+            {"current_stage": 1, "total_stages": 2, "stage_fraction": 0.25},
+        )
+
+        activity.emit_heartbeat(13)
+        events = decoded_events(output)
+        self.assertEqual([event["type"] for event in events], ["stage.started", "heartbeat"])
+        self.assertEqual(events[-1]["payload"]["progress"], payload["progress"])
+
+    def test_new_stage_resets_fraction_and_plan_mismatch_disables_progress(self) -> None:
+        output = io.StringIO()
+        activity = WorkerActivityReporter(WorkerEventEmitter(output, str(uuid4())))
+        activity.set_stage_plan(("configure", "create_mkv"))
+        activity.stage_started("configure", "Preparing conversion settings")
+        activity.stage_progress(120, 100)
+        activity.stage_started("create_mkv", "Preparing source video")
+        activity.stage_started("unexpected", "Unexpected stage")
+
+        events = decoded_events(output)
+        self.assertEqual(events[1]["payload"]["progress"], {"current_stage": 2, "total_stages": 2})
+        self.assertNotIn("progress", events[2]["payload"])
+        self.assertNotIn("progress", activity.heartbeat_payload(13))
 
 
 class WorkerRuntimeTests(unittest.TestCase):
@@ -949,6 +998,82 @@ class SourceConversionTests(unittest.TestCase):
             self.assertEqual(result["output_path"], final_path.as_posix())
             self.assertEqual(result["parent_job_id"], job.preview.parent_job_id if job.preview else None)
             self.assertEqual(decoded_events(output)[-1]["type"], "artifact.ready")
+
+    def test_iso_preview_preserves_selected_title_id_through_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.iso"
+            source_path.write_bytes(b"disc")
+            destination_path = temporary_path / "preview"
+            final_path = destination_path / "movie_AVP.mov"
+            final_path.parent.mkdir()
+            final_path.write_bytes(b"final")
+            job = JobSpec.from_json_line(preview_request_line(source_path, destination_path))
+            output = io.StringIO()
+            activity = WorkerActivityReporter(WorkerEventEmitter(output, job.job_id))
+            observed: dict[str, object] = {}
+
+            def process_each(*_args: object, **kwargs: object) -> Path:
+                observed["selected_title_id"] = kwargs.get("selected_title_id")
+                return final_path
+
+            with (
+                patch(
+                    "bd_to_avp.worker.operations.inspect_source",
+                    return_value={"duration_seconds": 7200.0},
+                ),
+                patch.object(config, "configure_tool_environment"),
+                patch("bd_to_avp.modules.process.process_each", side_effect=process_each),
+            ):
+                result = preview_source(job, WorkerProcessOwner(), activity)
+
+            self.assertEqual(job.source.title_id, "makemkv:0")
+            self.assertEqual(observed["selected_title_id"], "makemkv:0")
+            self.assertEqual(result["title_id"], "makemkv:0")
+            artifact = decoded_events(output)[-1]
+            self.assertEqual(artifact["type"], "artifact.ready")
+            self.assertEqual(artifact["payload"]["artifact"]["title_id"], "makemkv:0")
+
+    def test_process_each_bridges_makemkv_progress_to_worker_heartbeat(self) -> None:
+        class StopAfterProgress(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.iso"
+            source_path.write_bytes(b"disc")
+            output = io.StringIO()
+            activity = WorkerActivityReporter(WorkerEventEmitter(output, str(uuid4())))
+            activity.set_stage_plan(["preflight", "inspect_source", "create_mkv"])
+
+            def create_mkv_file(
+                _output_folder: Path,
+                _disc_info: DiscInfo,
+                _language_code: str,
+                progress_callback: object | None = None,
+            ) -> Path:
+                self.assertTrue(callable(progress_callback))
+                progress_callback(50, 100)
+                raise StopAfterProgress
+
+            with (
+                patch.object(config, "source_path", source_path),
+                patch.object(config, "source_str", None),
+                patch.object(config, "output_root_path", temporary_path / "output"),
+                patch.object(config, "overwrite", True),
+                patch.object(config, "start_stage", Stage.CREATE_MKV),
+                patch.object(config, "preview_range", None),
+                patch("bd_to_avp.modules.process.preflight.verify_runtime_ready"),
+                patch("bd_to_avp.modules.process.get_disc_and_mvc_video_info", return_value=DiscInfo(name="Movie")),
+                patch("bd_to_avp.modules.process.create_mkv_file", side_effect=create_mkv_file),
+                self.assertRaises(StopAfterProgress),
+            ):
+                process_each(activity=activity, selected_title_id="makemkv:0")
+
+            activity.emit_heartbeat(1)
+            heartbeat = decoded_events(output)[-1]
+            self.assertEqual(heartbeat["type"], "heartbeat")
+            self.assertEqual(heartbeat["payload"]["progress"]["stage_fraction"], 0.5)
 
     def test_physical_disc_conversion_uses_unowned_device_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

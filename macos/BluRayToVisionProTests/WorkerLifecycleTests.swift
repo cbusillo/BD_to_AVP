@@ -46,6 +46,90 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertEqual(ElapsedTimeText.format(seconds: 3_661), "1:01:01")
     }
 
+    func testStageProgressUpdatesAndResetsWithLifecycle() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID, operationKind: .conversion)
+        let stageProgress = WorkerProgress(currentStage: 4, totalStages: 13, stageFraction: nil)
+        try state.receive(
+            event(
+                .stageStarted,
+                sequence: 0,
+                payload: .init(stage: "create_mkv", message: "Preparing source video", progress: stageProgress)
+            )
+        )
+        let heartbeatProgress = WorkerProgress(currentStage: 4, totalStages: 13, stageFraction: 0.42)
+        try state.receive(
+            event(
+                .heartbeat,
+                sequence: 1,
+                payload: .init(elapsedSeconds: 30, progress: heartbeatProgress)
+            )
+        )
+
+        XCTAssertEqual(state.progress, heartbeatProgress)
+        XCTAssertEqual(state.progress?.detailText, "42% of current stage · Stage 4 of 13")
+        XCTAssertEqual(state.progress?.compactText, "Stage 4/13 · 42% of stage")
+
+        state.requestStop()
+
+        XCTAssertNil(state.progress)
+
+        try state.receive(
+            event(
+                .stageStarted,
+                sequence: 2,
+                payload: .init(
+                    stage: "extract_mvc_and_audio",
+                    message: "Extracting MVC video and audio",
+                    progress: WorkerProgress(currentStage: 5, totalStages: 13, stageFraction: 0.1)
+                )
+            )
+        )
+        try state.receive(
+            event(
+                .heartbeat,
+                sequence: 3,
+                payload: .init(
+                    elapsedSeconds: 31,
+                    progress: WorkerProgress(currentStage: 5, totalStages: 13, stageFraction: 0.2)
+                )
+            )
+        )
+
+        XCTAssertEqual(state.phase, .stopping)
+        XCTAssertEqual(state.stageMessage, "Stopping safely")
+        XCTAssertNil(state.progress)
+    }
+
+    func testSharedPythonProgressFixtureDecodes() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("tests/fixtures/native_worker_stage_started_progress_v4.json")
+
+        let event = try JSONDecoder().decode(WorkerEvent.self, from: Data(contentsOf: fixtureURL))
+
+        XCTAssertEqual(event.payload.progress, WorkerProgress(currentStage: 1, totalStages: 2, stageFraction: nil))
+    }
+
+    func testInvalidProgressFallsBackToIndeterminate() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID, operationKind: .conversion)
+
+        try state.receive(
+            event(
+                .stageStarted,
+                sequence: 0,
+                payload: .init(progress: WorkerProgress(currentStage: 0, totalStages: 13, stageFraction: 0.5))
+            )
+        )
+
+        XCTAssertNil(state.progress)
+    }
+
     func testCancellationTransitionsThroughStoppingAndCancelled() throws {
         var state = WorkerLifecycleState()
         state.selectSource(sourceURL)

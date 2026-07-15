@@ -148,13 +148,17 @@ struct PreviewSheet: View {
                         }
                         Spacer()
                         if viewModel.hasActiveWorker {
+                            WorkerProgressGauge(progress: viewModel.progress, width: 76)
+                            if let progress = viewModel.progress {
+                                Text(progress.compactText)
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
                             if let elapsedText = viewModel.elapsedText {
                                 Label("Elapsed \(elapsedText)", systemImage: "clock")
                                     .font(.caption.monospacedDigit())
                                     .foregroundStyle(.secondary)
                             }
-                            ProgressView()
-                                .controlSize(.small)
                         }
                     }
                     .accessibilityElement(children: .ignore)
@@ -261,6 +265,9 @@ struct PreviewSheet: View {
         }
         if let elapsedText = viewModel.elapsedText, viewModel.hasActiveWorker {
             components.append("Elapsed time \(elapsedText)")
+        }
+        if let progress = viewModel.progress, viewModel.hasActiveWorker {
+            components.append(progress.accessibilityValue)
         }
         return components.joined(separator: ". ")
     }

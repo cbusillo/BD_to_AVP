@@ -148,10 +148,7 @@ def _emit_heartbeats(
         if owner.cancellation_event.is_set() or emitter.terminal_emitted:
             return
         try:
-            emitter.emit(
-                WorkerEventType.HEARTBEAT,
-                activity.heartbeat_payload(int(time.monotonic() - started_at)),
-            )
+            activity.emit_heartbeat(int(time.monotonic() - started_at))
         except RuntimeError:
             return
 

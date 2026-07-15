@@ -96,6 +96,30 @@ The app accepts artifacts only inside the preview job's owned cache directory.
 That directory remains leased while AVPlayer uses the file, is removed when the
 preview is discarded, and is pruned after 24 hours if abandoned.
 
+## Progress Hints
+
+Conversion and preview jobs may add an optional `payload.progress` object to
+`stage.started` and `heartbeat` events:
+
+```json
+{
+  "current_stage": 4,
+  "total_stages": 13,
+  "stage_fraction": 0.42
+}
+```
+
+`current_stage` and `total_stages` describe the exact stages the current job
+will execute after applying its restart stage and optional features. The
+optional `stage_fraction` is a zero-to-one fraction reported by the tool running
+the current stage; it is not overall conversion completion or an ETA. Workers
+omit `stage_fraction` when the tool has no trustworthy denominator, while the
+heartbeat and elapsed time continue to indicate activity.
+
+The progress object is an additive optional v3 field. Existing v3 decoders may
+ignore it, and newer decoders must preserve the indeterminate fallback when it
+is absent or invalid.
+
 ## Compatibility
 
 Mixed v1, v2, and v3 processes fail before media inspection or destination
