@@ -76,6 +76,7 @@ struct WorkerLifecycleState: Equatable {
     private(set) var activityMessage: String?
     private(set) var warningMessage: String?
     private(set) var elapsedSeconds = 0
+    private(set) var progress: WorkerProgress?
     private(set) var result: SourceInspection?
     private(set) var conversionResult: ConversionResult?
     private(set) var failureMessage: String?
@@ -126,6 +127,10 @@ struct WorkerLifecycleState: Equatable {
         }
         lastSequence = event.sequence
 
+        if phase == .stopping, !event.type.isTerminal {
+            return
+        }
+
         switch event.type {
         case .workerReady:
             if phase != .stopping {
@@ -138,16 +143,16 @@ struct WorkerLifecycleState: Equatable {
             }
             stageMessage = operationKind == .inspection ? "Reading video details" : "Starting conversion"
         case .stageStarted:
-            if phase != .stopping {
-                phase = .processing
-            }
+            phase = .processing
             stageMessage = event.payload.message ?? event.payload.stage ?? "Processing"
+            progress = event.payload.progress?.normalized
         case .heartbeat:
-            if phase != .stopping {
-                phase = .processing
-            }
+            phase = .processing
             elapsedSeconds = event.payload.elapsedSeconds ?? elapsedSeconds
             activityMessage = event.payload.message
+            if let incomingProgress = event.payload.progress {
+                progress = incomingProgress.normalized
+            }
         case .log:
             activityMessage = event.payload.message
         case .warning:
@@ -169,6 +174,7 @@ struct WorkerLifecycleState: Equatable {
                 conversionResult = convResult
                 stageMessage = "Conversion complete"
             }
+            progress = nil
             phase = .completed
         case .jobFailed:
             guard let failure = event.payload.error else {
@@ -178,9 +184,11 @@ struct WorkerLifecycleState: Equatable {
             failureDetails = failure.details
             failureCode = failure.code
             failureRetryable = failure.retryable
+            progress = nil
             phase = .failed
         case .jobCancelled:
             activityMessage = event.payload.message ?? (operationKind == .inspection ? "Analysis stopped." : "Conversion stopped.")
+            progress = nil
             phase = .cancelled
         case .jobDecisionRequired:
             guard let decision = event.payload.decision else {
@@ -191,6 +199,7 @@ struct WorkerLifecycleState: Equatable {
             failureDetails = decision.details ?? "Choose how this conversion should continue."
             failureCode = decision.identifier
             failureRetryable = true
+            progress = nil
             phase = .decisionRequired
         }
     }
@@ -201,6 +210,7 @@ struct WorkerLifecycleState: Equatable {
         }
         phase = .stopping
         stageMessage = "Stopping safely"
+        progress = nil
     }
 
     mutating func failTransport(message: String, details: String? = nil, retryable: Bool = true) {
@@ -209,11 +219,13 @@ struct WorkerLifecycleState: Equatable {
         failureCode = nil
         failureRetryable = retryable
         recoveryDecision = nil
+        progress = nil
         phase = .failed
     }
 
     mutating func completeStop() {
         activityMessage = operationKind == .inspection ? "Inspection stopped." : "Conversion stopped."
+        progress = nil
         phase = .cancelled
     }
 
@@ -248,6 +260,7 @@ struct WorkerLifecycleState: Equatable {
         activityMessage = nil
         warningMessage = nil
         elapsedSeconds = 0
+        progress = nil
         result = nil
         conversionResult = nil
         failureMessage = nil

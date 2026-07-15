@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Mapping, TextIO
+from typing import Any, Mapping, Sequence, TextIO
 from uuid import UUID
 
 PROTOCOL_VERSION = 3
@@ -526,36 +527,88 @@ class WorkerActivityReporter:
     def __init__(self, emitter: "WorkerEventEmitter") -> None:
         self._emitter = emitter
         self._current_stage: str | None = None
+        self._stage_plan: tuple[str, ...] = ()
+        self._stage_index: int | None = None
+        self._stage_fraction: float | None = None
         self._lock = threading.Lock()
 
-    @property
-    def current_stage(self) -> str | None:
+    def set_stage_plan(self, stages: Sequence[str]) -> None:
+        stage_plan = tuple(stage for stage in stages if stage)
         with self._lock:
-            return self._current_stage
+            self._stage_plan = stage_plan
+            self._stage_index = None
+            self._stage_fraction = None
 
     def stage_started(self, stage: str, message: str) -> None:
         with self._lock:
             self._current_stage = stage
-        self._emitter.emit(WorkerEventType.STAGE_STARTED, {"stage": stage, "message": message})
+            self._stage_fraction = None
+            next_stage_index = 0 if self._stage_index is None else self._stage_index + 1
+            if next_stage_index < len(self._stage_plan) and self._stage_plan[next_stage_index] == stage:
+                self._stage_index = next_stage_index
+            else:
+                self._stage_plan = ()
+                self._stage_index = None
+            progress = self._progress_payload_locked()
+            payload: dict[str, Any] = {"stage": stage, "message": message}
+            if progress is not None:
+                payload["progress"] = progress
+            self._emitter.emit(WorkerEventType.STAGE_STARTED, payload)
+
+    def stage_progress(self, completed_units: float, total_units: float) -> None:
+        if not math.isfinite(completed_units) or not math.isfinite(total_units) or total_units <= 0:
+            return
+        fraction = min(1.0, max(0.0, completed_units / total_units))
+        with self._lock:
+            if self._stage_index is not None:
+                self._stage_fraction = fraction
 
     def log(self, message: str, *, stage: str | None = None, **fields: Any) -> None:
-        payload: dict[str, Any] = {"message": message, **fields}
-        payload["stage"] = stage or self.current_stage
-        self._emitter.emit(WorkerEventType.LOG, payload)
+        with self._lock:
+            payload: dict[str, Any] = {"message": message, **fields}
+            payload["stage"] = stage or self._current_stage
+            self._emitter.emit(WorkerEventType.LOG, payload)
 
     def warning(self, message: str, *, stage: str | None = None, **fields: Any) -> None:
-        payload: dict[str, Any] = {"message": message, **fields}
-        payload["stage"] = stage or self.current_stage
-        self._emitter.emit(WorkerEventType.WARNING, payload)
+        with self._lock:
+            payload: dict[str, Any] = {"message": message, **fields}
+            payload["stage"] = stage or self._current_stage
+            self._emitter.emit(WorkerEventType.WARNING, payload)
 
     def artifact_ready(self, artifact: Mapping[str, Any]) -> None:
         self._emitter.emit(WorkerEventType.ARTIFACT_READY, {"artifact": dict(artifact)})
 
     def heartbeat_payload(self, elapsed_seconds: int) -> dict[str, Any]:
-        return {
-            "stage": self.current_stage,
+        with self._lock:
+            return self._heartbeat_payload_locked(elapsed_seconds)
+
+    def emit_heartbeat(self, elapsed_seconds: int) -> None:
+        with self._lock:
+            self._emitter.emit(
+                WorkerEventType.HEARTBEAT,
+                self._heartbeat_payload_locked(elapsed_seconds),
+            )
+
+    def _heartbeat_payload_locked(self, elapsed_seconds: int) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "stage": self._current_stage,
             "elapsed_seconds": max(0, elapsed_seconds),
         }
+        progress = self._progress_payload_locked()
+        if progress is not None:
+            payload["progress"] = progress
+        return payload
+
+    def _progress_payload_locked(self) -> dict[str, Any] | None:
+        if self._stage_index is None or not self._stage_plan:
+            return None
+        progress: dict[str, Any] = {
+            "current_stage": self._stage_index + 1,
+            "total_stages": len(self._stage_plan),
+        }
+        if self._stage_fraction is not None:
+            progress["stage_fraction"] = self._stage_fraction
+        return progress
 
 
 class WorkerEventEmitter:

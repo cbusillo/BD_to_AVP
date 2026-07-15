@@ -354,6 +354,54 @@ class WorkerEventEmitterTests(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "job.failed")
 
 
+class WorkerActivityReporterTests(unittest.TestCase):
+    def test_stage_plan_emits_shared_progress_fixture(self) -> None:
+        output = io.StringIO()
+        job_id = "11111111-1111-4111-8111-111111111111"
+        activity = WorkerActivityReporter(WorkerEventEmitter(output, job_id))
+        activity.set_stage_plan(("configure", "create_mkv"))
+
+        activity.stage_started("configure", "Preparing conversion settings")
+
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v3.json"
+        expected = json.loads(fixture_path.read_text())
+        self.assertEqual(decoded_events(output), [expected])
+
+    def test_heartbeat_carries_current_stage_fraction(self) -> None:
+        output = io.StringIO()
+        activity = WorkerActivityReporter(WorkerEventEmitter(output, str(uuid4())))
+        activity.set_stage_plan(("configure", "create_mkv"))
+        activity.stage_started("configure", "Preparing conversion settings")
+        activity.stage_progress(25, 100)
+
+        payload = activity.heartbeat_payload(12)
+
+        self.assertEqual(payload["elapsed_seconds"], 12)
+        self.assertEqual(
+            payload["progress"],
+            {"current_stage": 1, "total_stages": 2, "stage_fraction": 0.25},
+        )
+
+        activity.emit_heartbeat(13)
+        events = decoded_events(output)
+        self.assertEqual([event["type"] for event in events], ["stage.started", "heartbeat"])
+        self.assertEqual(events[-1]["payload"]["progress"], payload["progress"])
+
+    def test_new_stage_resets_fraction_and_plan_mismatch_disables_progress(self) -> None:
+        output = io.StringIO()
+        activity = WorkerActivityReporter(WorkerEventEmitter(output, str(uuid4())))
+        activity.set_stage_plan(("configure", "create_mkv"))
+        activity.stage_started("configure", "Preparing conversion settings")
+        activity.stage_progress(120, 100)
+        activity.stage_started("create_mkv", "Preparing source video")
+        activity.stage_started("unexpected", "Unexpected stage")
+
+        events = decoded_events(output)
+        self.assertEqual(events[1]["payload"]["progress"], {"current_stage": 2, "total_stages": 2})
+        self.assertNotIn("progress", events[2]["payload"])
+        self.assertNotIn("progress", activity.heartbeat_payload(13))
+
+
 class WorkerRuntimeTests(unittest.TestCase):
     def test_success_emits_structured_terminal_event_and_redirects_prints(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
