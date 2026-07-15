@@ -14,7 +14,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from bd_to_avp.modules.config import config
-from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
+from bd_to_avp.modules.disc import DiscInfo, DiscTitleInfo, MKVCreationError
 from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.worker.__main__ import run_worker
 from bd_to_avp.worker.operations import (
@@ -69,12 +69,16 @@ def conversion_request_line(
     source_kind: str | None = None,
     **overrides: object,
 ) -> str:
+    resolved_source_kind = source_kind or source_kind_for_path(source_path)
+    source: dict[str, object] = {"kind": resolved_source_kind, "path": str(source_path)}
+    if resolved_source_kind != WorkerSourceKind.DIRECT_FILE.value:
+        source["title_id"] = "makemkv:0"
     request: dict[str, object] = {
         "protocol_version": PROTOCOL_VERSION,
         "type": "job.start",
         "job_id": str(uuid4()),
         "operation": "convert_source",
-        "source": {"kind": source_kind or source_kind_for_path(source_path), "path": str(source_path)},
+        "source": source,
         "destination": {"path": str(destination_path)},
         "encoding": {
             "transcode_audio": True,
@@ -162,8 +166,63 @@ class JobSpecTests(unittest.TestCase):
         self.assertTrue(job.encoding.transcode_audio if job.encoding else False)
         self.assertEqual(job.job.start_stage if job.job else None, 1)
 
+    def test_parses_opaque_title_id_for_disc_conversion(self) -> None:
+        source_path = Path("/tmp/movie.iso")
+        destination_path = Path("/tmp/output")
+        request = json.loads(conversion_request_line(source_path, destination_path))
+        request["source"]["title_id"] = "provider:playlist-01005"
+
+        job = JobSpec.from_json_line(json.dumps(request))
+
+        self.assertEqual(job.source.title_id, "provider:playlist-01005")
+
+    def test_requires_title_id_for_disc_conversion(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.iso"), Path("/tmp/output")))
+        request["source"].pop("title_id")
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request))
+
+        self.assertEqual(context.exception.code, "invalid_title_selection")
+
+    def test_rejects_title_id_for_direct_file(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["source"]["title_id"] = "makemkv:0"
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request))
+
+        self.assertEqual(context.exception.code, "invalid_title_selection")
+
+    def test_rejects_null_title_id_for_direct_file(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["source"]["title_id"] = None
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request))
+
+        self.assertEqual(context.exception.code, "invalid_title_selection")
+
+    def test_rejects_title_id_for_inspection(self) -> None:
+        request = json.loads(request_line(Path("/tmp/movie.iso")))
+        request["source"]["title_id"] = "makemkv:0"
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request))
+
+        self.assertEqual(context.exception.code, "invalid_source")
+
+    def test_rejects_null_title_id_for_inspection(self) -> None:
+        request = json.loads(request_line(Path("/tmp/movie.iso")))
+        request["source"]["title_id"] = None
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request))
+
+        self.assertEqual(context.exception.code, "invalid_source")
+
     def test_parses_shared_swift_conversion_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v3.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v4.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -174,16 +233,17 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.encoding.mv_hevc_quality if job.encoding else None, 75)
 
     def test_parses_shared_swift_physical_disc_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v3.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v4.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
         self.assertEqual(job.source.kind, WorkerSourceKind.PHYSICAL_DISC)
         self.assertEqual(job.source.path, Path("/dev/disk9"))
+        self.assertEqual(job.source.title_id, "makemkv:0")
         self.assertFalse(job.job.remove_original if job.job else True)
 
     def test_parses_shared_swift_preview_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v3.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v4.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -462,7 +522,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 }
             },
         )
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v3.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v4.json"
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
 
         self.assertEqual(decoded_events(output)[-1], fixture)
@@ -638,6 +698,28 @@ class SourceInspectionTests(unittest.TestCase):
                         resolution="1920x1080",
                         frame_rate="24000/1001",
                         duration_seconds=7200,
+                        titles=(
+                            DiscTitleInfo(
+                                id="makemkv:0",
+                                title_number=0,
+                                name="Main Movie",
+                                output_name="Feature 3D",
+                                duration_seconds=7200,
+                                resolution="1920x1080",
+                                frame_rate="24000/1001",
+                                main_feature=True,
+                            ),
+                            DiscTitleInfo(
+                                id="makemkv:2",
+                                title_number=2,
+                                name="3D Video 1",
+                                output_name="Feature 3D - 3D Video 1",
+                                duration_seconds=600,
+                                resolution="1920x1080",
+                                frame_rate="24000/1001",
+                                main_feature=False,
+                            ),
+                        ),
                     ),
                 ),
             ):
@@ -650,6 +732,9 @@ class SourceInspectionTests(unittest.TestCase):
             self.assertEqual(result["resolution"], "1920x1080")
             self.assertEqual(result["frame_rate"], "24000/1001")
             self.assertEqual(result["size_bytes"], 4)
+            self.assertEqual(len(result["titles"]), 2)
+            self.assertEqual(result["titles"][0]["id"], "makemkv:0")
+            self.assertTrue(result["titles"][0]["main_feature"])
             self.assertEqual(result["duration_seconds"], 7200)
 
     def test_iso_inspection_requires_makemkv(self) -> None:
@@ -667,6 +752,35 @@ class SourceInspectionTests(unittest.TestCase):
                 )
 
             self.assertEqual(context.exception.code, "makemkv_missing")
+            self.assertTrue(context.exception.retryable)
+
+    def test_iso_inspection_preserves_makemkv_byte_output_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.iso"
+            source_path.touch()
+            fake_makemkv = temporary_path / "makemkvcon"
+            fake_makemkv.touch()
+
+            with (
+                patch.object(config, "MAKEMKVCON_PATH", fake_makemkv),
+                patch(
+                    "bd_to_avp.worker.operations.get_disc_and_mvc_video_info",
+                    side_effect=subprocess.CalledProcessError(
+                        returncode=1,
+                        cmd=[fake_makemkv],
+                        output=b"Disc metadata could not be read.\n",
+                    ),
+                ),
+                self.assertRaises(WorkerOperationError) as context,
+            ):
+                inspect_source(
+                    JobSource(kind=WorkerSourceKind.DISC_IMAGE, path=source_path),
+                    WorkerProcessOwner(),
+                )
+
+            self.assertEqual(context.exception.code, "disc_inspection_failed")
+            self.assertEqual(context.exception.details, "Disc metadata could not be read.\n")
             self.assertTrue(context.exception.retryable)
 
     def test_inspects_physical_disc_through_device_source(self) -> None:
@@ -934,7 +1048,10 @@ class SourceConversionTests(unittest.TestCase):
                 result = convert_source(job, WorkerProcessOwner(), activity)
 
             self.assertEqual(result["output_path"], final_path.as_posix())
+            self.assertEqual(result["title_id"], "makemkv:0")
             process_each_mock.assert_called_once()
+            self.assertIs(process_each_mock.call_args.kwargs["activity"], activity)
+            self.assertEqual(process_each_mock.call_args.kwargs["selected_title_id"], "makemkv:0")
 
     def test_iso_makemkv_failure_requests_recovery_decision(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

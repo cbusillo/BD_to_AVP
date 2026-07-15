@@ -30,7 +30,66 @@ class DiscStageArtifactTests(unittest.TestCase):
         self.assertEqual(result.name, "Feature 3D")
         self.assertEqual(result.main_title_number, 0)
         self.assertEqual(result.duration_seconds, 2700)
+        self.assertEqual(result.titles[0].id, "makemkv:0")
+        self.assertTrue(result.titles[0].main_feature)
+        self.assertIn("--minlength=0", run_command.call_args.args[0])
         self.assertIn("iso:/Movies/Feature.iso", run_command.call_args.args[0])
+
+    def test_disc_info_exposes_all_mvc_titles_and_selects_requested_video(self) -> None:
+        makemkv_output = "\n".join(
+            [
+                'CINFO:2,0,"Feature 3D"',
+                'TINFO:4,9,0,"1:40:00"',
+                'TINFO:2,9,0,"0:12:00"',
+                'TINFO:7,9,0,"0:05:00"',
+                'SINFO:2,1,6,0,"Mpeg4-MVC-3D"',
+                'SINFO:4,1,6,0,"Mpeg4-MVC-3D"',
+                'SINFO:7,1,6,0,"Mpeg4-AVC"',
+                'SINFO:2,1,19,0,"1920x1080"',
+                'SINFO:2,1,21,0,"24000/1001"',
+            ]
+        )
+        with (
+            patch.object(disc.config, "source_path", Path("/Movies/Feature.iso")),
+            patch.object(disc.config, "source_str", None),
+            patch.object(disc.config, "IMAGE_EXTENSIONS", [".iso"]),
+            patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
+            patch.object(disc, "run_command", return_value=makemkv_output),
+        ):
+            result = disc.get_disc_and_mvc_video_info("makemkv:2")
+
+        self.assertEqual([title.id for title in result.titles], ["makemkv:4", "makemkv:2"])
+        self.assertEqual(result.main_title_number, 2)
+        self.assertEqual(result.name, "Feature 3D - 3D Video 1")
+        self.assertEqual(result.duration_seconds, 720)
+        self.assertEqual(result.resolution, "1920x1080")
+
+    def test_disc_info_rejects_stale_title_selection(self) -> None:
+        titles = disc.build_disc_title_catalog(
+            "Feature 3D",
+            [disc.TitleInfo(index=0, duration=120, has_mvc=True)],
+        )
+
+        with self.assertRaises(disc.DiscTitleSelectionError):
+            disc.select_disc_title(titles, "makemkv:9")
+
+    def test_disc_info_maps_missing_mvc_catalog_to_stale_title_selection(self) -> None:
+        makemkv_output = "\n".join(
+            [
+                'CINFO:2,0,"Replacement Disc"',
+                'TINFO:0,9,0,"0:10:00"',
+                'SINFO:0,1,6,0,"Mpeg4-AVC"',
+            ]
+        )
+        with (
+            patch.object(disc.config, "source_path", Path("/Movies/Replacement.iso")),
+            patch.object(disc.config, "source_str", None),
+            patch.object(disc.config, "IMAGE_EXTENSIONS", [".iso"]),
+            patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
+            patch.object(disc, "run_command", return_value=makemkv_output),
+            self.assertRaises(disc.DiscTitleSelectionError),
+        ):
+            disc.get_disc_and_mvc_video_info("makemkv:0")
 
     def test_selected_bluray_folder_overrides_stale_disc_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -69,6 +128,7 @@ class DiscStageArtifactTests(unittest.TestCase):
                 [
                     Path("/Applications/MakeMKV/makemkvcon"),
                     "--robot",
+                    "--minlength=0",
                     "--noscan",
                     "info",
                     f"file:{source_path}",
@@ -102,11 +162,28 @@ class DiscStageArtifactTests(unittest.TestCase):
             [
                 Path("/Applications/MakeMKV/makemkvcon"),
                 "--robot",
+                "--minlength=0",
                 None,
                 "info",
                 "dev:/dev/disk9",
             ],
         )
+
+    def test_disc_rip_disables_makemkv_minimum_title_length(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_folder = Path(temp_dir)
+            with (
+                patch.object(disc.config, "source_path", Path("/Movies/Feature.iso")),
+                patch.object(disc.config, "source_str", None),
+                patch.object(disc.config, "IMAGE_EXTENSIONS", [".iso"]),
+                patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
+                patch.object(disc, "run_command", return_value="") as run_command,
+            ):
+                disc.rip_disc_to_mkv(output_folder, disc.DiscInfo(main_title_number=2), "eng")
+
+        command = run_command.call_args.args[0]
+        self.assertIn("--minlength=0", command)
+        self.assertIn(2, command)
 
     def test_keep_files_copies_mkv_source_to_output_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

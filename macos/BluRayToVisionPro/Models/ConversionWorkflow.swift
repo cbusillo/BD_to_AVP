@@ -154,6 +154,23 @@ struct ConversionDraft: Equatable {
     let profile: EncodingProfile
     let destinationURL: URL
     let options: ConversionOptions
+    let selectedTitle: SourceTitle?
+
+    init(
+        source: ConversionSource,
+        sourceDetails: SourceInspection?,
+        profile: EncodingProfile,
+        destinationURL: URL,
+        options: ConversionOptions,
+        selectedTitle: SourceTitle? = nil
+    ) {
+        self.source = source
+        self.sourceDetails = sourceDetails
+        self.profile = profile
+        self.destinationURL = destinationURL
+        self.options = options
+        self.selectedTitle = selectedTitle
+    }
 
     var proposedOutputURL: URL {
         destinationURL.appendingPathComponent("\(outputStem)_AVP.mov")
@@ -184,11 +201,15 @@ struct ConversionDraft: Equatable {
             sourceDetails: sourceDetails,
             profile: profile,
             destinationURL: destinationURL,
-            options: retryOptions
+            options: retryOptions,
+            selectedTitle: selectedTitle
         )
     }
 
     private var outputStem: String {
+        if let selectedTitle {
+            return selectedTitle.outputName
+        }
         let inspectedName = sourceDetails?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !inspectedName.isEmpty {
             return URL(fileURLWithPath: inspectedName).deletingPathExtension().lastPathComponent

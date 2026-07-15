@@ -13,7 +13,7 @@ import ffmpeg
 
 from bd_to_avp import preflight
 from bd_to_avp.modules.config import Stage, config
-from bd_to_avp.modules.disc import get_disc_and_mvc_video_info, MKVCreationError
+from bd_to_avp.modules.disc import DiscTitleSelectionError, get_disc_and_mvc_video_info, MKVCreationError
 from bd_to_avp.modules.file import path_is_relative_to
 from bd_to_avp.modules.preview import PreviewRange, resolve_preview_range
 from bd_to_avp.modules.process import ProcessingCancelled, start_process
@@ -121,7 +121,11 @@ def inspect_source(source: JobSource, owner: WorkerProcessOwner) -> dict[str, ob
     owner.check_cancelled()
     try:
         with configured_source(source, source_path):
-            disc_info = get_disc_and_mvc_video_info()
+            disc_info = (
+                get_disc_and_mvc_video_info(source.title_id)
+                if source.title_id is not None
+                else get_disc_and_mvc_video_info()
+            )
     except ffmpeg.Error as error:
         if owner.cancellation_event.is_set():
             raise WorkerCancelled("The source inspection was cancelled.") from error
@@ -130,7 +134,11 @@ def inspect_source(source: JobSource, owner: WorkerProcessOwner) -> dict[str, ob
     except subprocess.CalledProcessError as error:
         if owner.cancellation_event.is_set():
             raise WorkerCancelled("The source inspection was cancelled.") from error
-        details = error.output if isinstance(error.output, str) else None
+        details: str | None
+        if isinstance(error.output, bytes):
+            details = error.output.decode("utf-8", errors="replace")
+        else:
+            details = error.output if isinstance(error.output, str) else None
         message = (
             "MakeMKV could not read the selected Blu-ray disc. Confirm it is inserted, "
             "wait for the drive to finish spinning up, and try again."
@@ -143,6 +151,8 @@ def inspect_source(source: JobSource, owner: WorkerProcessOwner) -> dict[str, ob
             details,
             retryable=True,
         ) from error
+    except DiscTitleSelectionError as error:
+        raise WorkerOperationError("title_unavailable", str(error), retryable=True) from error
     except (OSError, KeyError, TypeError, ValueError) as error:
         if owner.cancellation_event.is_set():
             raise WorkerCancelled("The source inspection was cancelled.") from error
@@ -161,6 +171,18 @@ def inspect_source(source: JobSource, owner: WorkerProcessOwner) -> dict[str, ob
     }
     if disc_info.duration_seconds > 0:
         result["duration_seconds"] = disc_info.duration_seconds
+    result["titles"] = [
+        {
+            "id": title.id,
+            "name": title.name,
+            "output_name": title.output_name,
+            "duration_seconds": title.duration_seconds,
+            "resolution": title.resolution,
+            "frame_rate": title.frame_rate,
+            "main_feature": title.main_feature,
+        }
+        for title in disc_info.titles
+    ]
     if source_path.is_file():
         result["size_bytes"] = source_path.stat().st_size
     return result
@@ -241,6 +263,7 @@ def _convert_source(
             final_output_path = start_process(
                 cancellation_event=owner.cancellation_event,
                 activity=activity,
+                selected_title_id=job.source.title_id,
             )
             resolved_preview_range = config.preview_range
             owner.check_cancelled()
@@ -303,6 +326,8 @@ def _convert_source(
                 "A conversion helper failed.",
                 details,
             ) from error
+        except DiscTitleSelectionError as error:
+            raise WorkerOperationError("title_unavailable", str(error), retryable=True) from error
         except (OSError, RuntimeError, ValueError) as error:
             if owner.cancellation_event.is_set():
                 raise WorkerCancelled("The conversion was cancelled.") from error
@@ -324,6 +349,8 @@ def _convert_source(
         "output_path": final_output_path.as_posix(),
         "size_bytes": final_output_path.stat().st_size,
     }
+    if job.source.title_id is not None:
+        result["title_id"] = job.source.title_id
     if resolved_preview_range is not None:
         result.update(
             {

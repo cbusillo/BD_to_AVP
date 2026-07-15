@@ -35,7 +35,7 @@ struct BluRayToVisionProApp: App {
                 profileStore: profileStore,
                 capabilities: capabilities
             )
-                .frame(minWidth: 980, minHeight: 680)
+                .frame(minWidth: 1_080, minHeight: 680)
                 .background(
                     WindowAccessor { window in
                         appDelegate.attach(window: window, workCoordinator: workCoordinator)
@@ -47,7 +47,7 @@ struct BluRayToVisionProApp: App {
                     appDelegate.workCoordinator = workCoordinator
                 }
         }
-        .defaultSize(width: 1_120, height: 760)
+        .defaultSize(width: 1_120, height: 820)
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unified)
         .commands {

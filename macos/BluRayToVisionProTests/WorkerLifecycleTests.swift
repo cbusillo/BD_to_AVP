@@ -242,7 +242,7 @@ final class WorkerLifecycleTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/native_worker_conversion_completed_v3.json")
+            .appendingPathComponent("tests/fixtures/native_worker_conversion_completed_v4.json")
         let completed = try JSONDecoder().decode(WorkerEvent.self, from: Data(contentsOf: fixtureURL))
         let fixtureJobID = try XCTUnwrap(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
         var state = WorkerLifecycleState()
