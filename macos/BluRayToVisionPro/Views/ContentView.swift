@@ -293,12 +293,20 @@ struct ContentView: View {
                 }
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Status: \(statusText)")
+            .accessibilityLabel(statusAccessibilityLabel)
 
             if viewModel.hasActiveWorker {
                 ProgressView()
                     .controlSize(.small)
                     .padding(.leading, 4)
+                    .accessibilityHidden(true)
+
+                if let elapsedText = viewModel.state.elapsedText {
+                    Label("Elapsed \(elapsedText)", systemImage: "clock")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
             }
 
             Spacer()
@@ -341,7 +349,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(.regularMaterial)
+        .background { StructuralChromeBackground() }
     }
 
     private var selectedProfile: EncodingProfile {
@@ -396,6 +404,17 @@ struct ContentView: View {
             return "Batch folder conversion is not available"
         }
         return "Conversion settings ready"
+    }
+
+    private var statusAccessibilityLabel: String {
+        var components = ["Status: \(statusText)"]
+        if let secondaryStatusText {
+            components.append(secondaryStatusText)
+        }
+        if let elapsedText = viewModel.state.elapsedText, viewModel.hasActiveWorker {
+            components.append("Elapsed time \(elapsedText)")
+        }
+        return components.joined(separator: ". ")
     }
 
     private var secondaryStatusText: String? {

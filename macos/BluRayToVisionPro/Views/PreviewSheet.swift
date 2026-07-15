@@ -39,6 +39,7 @@ struct PreviewSheet: View {
                 .foregroundStyle(.tint)
                 .frame(width: 46, height: 46)
                 .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("Representative Conversion Preview")
@@ -147,10 +148,17 @@ struct PreviewSheet: View {
                         }
                         Spacer()
                         if viewModel.hasActiveWorker {
+                            if let elapsedText = viewModel.elapsedText {
+                                Label("Elapsed \(elapsedText)", systemImage: "clock")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
                             ProgressView()
                                 .controlSize(.small)
                         }
                     }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(statusAccessibilityLabel)
 
                     if !viewModel.diagnosticLog.isEmpty, viewModel.phase == .failed {
                         DisclosureGroup("Technical Details") {
@@ -194,7 +202,7 @@ struct PreviewSheet: View {
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 14)
-        .background(.regularMaterial)
+        .background { StructuralChromeBackground() }
     }
 
     private var statusIcon: some View {
@@ -203,6 +211,7 @@ struct PreviewSheet: View {
             .foregroundStyle(statusColor)
             .frame(width: 38, height: 38)
             .background(statusColor.opacity(0.12), in: Circle())
+            .accessibilityHidden(true)
     }
 
     private var statusSystemImage: String {
@@ -243,6 +252,17 @@ struct PreviewSheet: View {
             ?? (viewModel.phase == .idle
                 ? "Choose a representative range, then generate a finalized spatial-video sample."
                 : nil)
+    }
+
+    private var statusAccessibilityLabel: String {
+        var components = [viewModel.stageMessage]
+        if let statusDetail {
+            components.append(statusDetail)
+        }
+        if let elapsedText = viewModel.elapsedText, viewModel.hasActiveWorker {
+            components.append("Elapsed time \(elapsedText)")
+        }
+        return components.joined(separator: ". ")
     }
 
     private func generatePreview() {
@@ -292,6 +312,8 @@ private struct PreviewPlayerView: View {
                     .frame(minHeight: 300)
                     .background(.black, in: RoundedRectangle(cornerRadius: 8))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .accessibilityLabel("Conversion preview video")
+                    .accessibilityHint("Use the playback controls to play, pause, seek, and choose available audio or subtitles.")
 
                 HStack(spacing: 12) {
                     Label(rangeDescription, systemImage: "timeline.selection")

@@ -17,7 +17,7 @@ does not replace or update it.
   or subtitle extraction cannot continue. Recovery creates a new one-off job
   without changing the selected profile or visible conversion defaults.
 - Review the Video, Audio & Subtitles, and Files & Recovery controls.
-- Create, duplicate, edit, import, export, and delete named encoding profiles.
+- Create, duplicate, edit, reorder, choose a default, and delete named encoding profiles.
 - Open Settings with `Command-,`, resize the window, and scroll through the
   complete Profiles detail pane.
 - Exercise light and dark appearance, keyboard navigation, and window

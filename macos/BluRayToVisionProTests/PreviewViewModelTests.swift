@@ -18,6 +18,8 @@ final class PreviewViewModelTests: XCTestCase {
             var playerLease: PreviewArtifactLease? = try XCTUnwrap(viewModel.artifactLease)
             XCTAssertEqual(viewModel.phase, .ready)
             XCTAssertEqual(viewModel.reviewedDraft, previewDraft)
+            XCTAssertEqual(viewModel.elapsedSeconds, 65)
+            XCTAssertEqual(viewModel.elapsedText, "1:05")
             XCTAssertEqual(worker.receivedJob?.operation, "preview_source")
             XCTAssertEqual(worker.receivedJob?.preview?.parentJobID, previewDraft.parentJobID)
             XCTAssertEqual(
@@ -214,6 +216,15 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
             payload: WorkerEventPayload(stage: "create_left_right_files", message: "Encoding Preview")
         )
         try await onEvent(stage)
+
+        let heartbeat = WorkerEvent(
+            protocolVersion: WorkerJobSpec.protocolVersion,
+            type: .heartbeat,
+            jobID: job.jobID,
+            sequence: 2,
+            payload: WorkerEventPayload(message: "Encoding both eyes", elapsedSeconds: 65)
+        )
+        try await onEvent(heartbeat)
         onStarted?()
 
         let destinationURL = URL(fileURLWithPath: job.destination!.path, isDirectory: true)
@@ -227,7 +238,7 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
                 protocolVersion: WorkerJobSpec.protocolVersion,
                 type: .jobCancelled,
                 jobID: job.jobID,
-                sequence: 2,
+                sequence: 3,
                 payload: WorkerEventPayload(message: "Preview stopped.")
             )
             try await onEvent(cancelled)
@@ -252,7 +263,7 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
             protocolVersion: WorkerJobSpec.protocolVersion,
             type: .artifactReady,
             jobID: job.jobID,
-            sequence: 2,
+            sequence: 3,
             payload: WorkerEventPayload(artifact: artifact)
         )
         try await onEvent(artifactReady)
@@ -261,7 +272,7 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
             protocolVersion: WorkerJobSpec.protocolVersion,
             type: .jobCompleted,
             jobID: job.jobID,
-            sequence: 3,
+            sequence: 4,
             payload: WorkerEventPayload(previewResult: artifact)
         )
         try await onEvent(completed)

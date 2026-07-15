@@ -25,6 +25,21 @@ enum WorkerOperationKind: Equatable {
     case conversion
 }
 
+enum ElapsedTimeText {
+    static func format(seconds: Int) -> String? {
+        guard seconds > 0 else {
+            return nil
+        }
+        let hours = seconds / 3_600
+        let minutes = (seconds % 3_600) / 60
+        let remainingSeconds = seconds % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, remainingSeconds)
+        }
+        return String(format: "%d:%02d", minutes, remainingSeconds)
+    }
+}
+
 enum WorkerLifecycleError: Error, LocalizedError, Equatable {
     case noSource
     case protocolMismatch(received: Int)
@@ -68,6 +83,10 @@ struct WorkerLifecycleState: Equatable {
     private(set) var failureCode: String?
     private(set) var failureRetryable = false
     private(set) var recoveryDecision: WorkerDecision?
+
+    var elapsedText: String? {
+        ElapsedTimeText.format(seconds: elapsedSeconds)
+    }
 
     mutating func selectSource(_ sourceURL: URL) {
         self.sourceURL = sourceURL
