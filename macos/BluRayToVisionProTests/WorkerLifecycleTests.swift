@@ -40,6 +40,12 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertEqual(state.result, result)
     }
 
+    func testElapsedTimeTextFormatsMinuteAndHourDurations() {
+        XCTAssertNil(ElapsedTimeText.format(seconds: 0))
+        XCTAssertEqual(ElapsedTimeText.format(seconds: 65), "1:05")
+        XCTAssertEqual(ElapsedTimeText.format(seconds: 3_661), "1:01:01")
+    }
+
     func testCancellationTransitionsThroughStoppingAndCancelled() throws {
         var state = WorkerLifecycleState()
         state.selectSource(sourceURL)

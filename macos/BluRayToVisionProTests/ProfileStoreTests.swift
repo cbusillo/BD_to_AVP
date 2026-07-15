@@ -80,6 +80,43 @@ final class ProfileStoreTests: XCTestCase {
 
         XCTAssertFalse(store.customProfiles.contains { $0.id == firstID })
         XCTAssertEqual(store.profile(withID: firstID).id, BuiltInProfile.balanced.id)
+        XCTAssertEqual(store.normalizedProfileID(firstID), BuiltInProfile.balanced.id)
+    }
+
+    @MainActor
+    func testCustomProfileOrderAndIdentifiersPersistAfterMove() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        var identifiers = [
+            UUID(uuidString: "9A853D24-A398-4801-B537-801C6B7AA566")!,
+            UUID(uuidString: "E27A632D-C9F0-424D-85B0-77E153AE1DA8")!,
+            UUID(uuidString: "842B69CD-EB21-4779-B4A9-7A411180AA43")!,
+        ].makeIterator()
+        let store = ProfileStore(fileURL: fileURL, idGenerator: { identifiers.next()! })
+        let firstID = try store.createProfile(name: "First", options: EncodingOptions())
+        let secondID = try store.createProfile(name: "Second", options: EncodingOptions())
+        let thirdID = try store.createProfile(name: "Third", options: EncodingOptions())
+
+        try store.moveCustomProfiles(fromOffsets: IndexSet(integer: 0), toOffset: 3)
+
+        let restoredStore = ProfileStore(fileURL: fileURL)
+        XCTAssertEqual(restoredStore.customProfiles.map(\.id), [secondID, thirdID, firstID])
+        XCTAssertEqual(restoredStore.customProfiles.map(\.name), ["Second", "Third", "First"])
+    }
+
+    @MainActor
+    func testDuplicateNamesAdvancePastExistingCopies() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        let store = ProfileStore(fileURL: fileURL)
+        _ = try store.createProfile(name: "Balanced Copy", options: EncodingOptions())
+        _ = try store.createProfile(name: "Balanced Copy 2", options: EncodingOptions())
+
+        let identifier = try store.duplicateProfile(BuiltInProfile.balanced.id)
+
+        XCTAssertEqual(store.profile(withID: identifier).name, "Balanced Copy 3")
     }
 
     @MainActor

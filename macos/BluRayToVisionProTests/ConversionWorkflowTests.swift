@@ -180,6 +180,55 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(spec.destination?.path, "/Movies")
     }
 
+    func testCustomProfileResolvesConcreteValuesWithoutOwningJobContext() throws {
+        let encoding = EncodingOptions(
+            hevcQuality: 92,
+            leftRightBitrate: 44,
+            upscaleEnabled: true,
+            upscaleQuality: 88,
+            linkQuality: false,
+            fieldOfView: 105,
+            frameRateOverride: "24000/1001",
+            resolutionOverride: "3840x2160",
+            cropBlackBars: true,
+            swapEyes: true,
+            audioHandling: .transcodeAAC,
+            audioBitrate: 512,
+            language: .japanese,
+            includeSubtitles: false,
+            keepExtraLanguages: false
+        )
+        let profile = EncodingProfile(
+            id: "custom.11111111-1111-4111-8111-111111111111",
+            name: "Cinema",
+            options: encoding,
+            kind: .custom,
+            systemImage: "slider.horizontal.3"
+        )
+        var job = JobOptions()
+        job.keepStageFiles = true
+        job.overwriteExisting = true
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/Sources/Feature.mkv")),
+            sourceDetails: nil,
+            profile: profile,
+            destinationURL: URL(fileURLWithPath: "/Movies", isDirectory: true),
+            options: ConversionOptions(encoding: encoding, job: job)
+        )
+
+        let spec = WorkerJobSpec(draft: draft)
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? [String: Any]
+
+        XCTAssertEqual(spec.source.path, "/Sources/Feature.mkv")
+        XCTAssertEqual(spec.destination?.path, "/Movies")
+        XCTAssertEqual(spec.encoding?.mvHEVCQuality, 92)
+        XCTAssertEqual(spec.encoding?.audioBitrate, 512)
+        XCTAssertTrue(spec.job?.keepFiles == true)
+        XCTAssertTrue(spec.job?.overwrite == true)
+        XCTAssertNil(json?["profile"])
+        XCTAssertNil(json?["profile_id"])
+    }
+
     func testBluRayFolderJobSpecUsesExplicitFolderKind() {
         let draft = ConversionDraft(
             source: ConversionSource(kind: .bluRayFolder, url: URL(fileURLWithPath: "/src/Disc")),

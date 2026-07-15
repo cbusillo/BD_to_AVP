@@ -48,3 +48,6 @@ contract.
 The native application targets Apple Silicon macOS 26 or later while remaining
 buildable with the Xcode 27 SDK. Packaged release validation rejects a native
 binary, embedded engine, or bundled Mach-O that requires a newer system.
+
+See [Native UI Acceptance](../docs/native-ui-acceptance.md) for the current
+profile, appearance, accessibility, window-size, and native screenshot evidence.

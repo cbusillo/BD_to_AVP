@@ -28,6 +28,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var diagnosticLog = ""
     @Published private(set) var artifactLease: PreviewArtifactLease?
     @Published private(set) var reviewedDraft: PreviewDraft?
+    @Published private(set) var elapsedSeconds = 0
 
     private let clientFactory: ClientFactory
     private let cache: PreviewCache
@@ -57,6 +58,10 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         !hasActiveWorker
     }
 
+    var elapsedText: String? {
+        ElapsedTimeText.format(seconds: elapsedSeconds)
+    }
+
     func startPreview(_ draft: PreviewDraft) {
         guard !hasActiveWorker else {
             return
@@ -79,6 +84,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         activityMessage = nil
         reviewedDraft = nil
         pendingTerminalEvent = nil
+        elapsedSeconds = 0
 
         let jobID = UUID()
         do {
@@ -185,6 +191,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
                 stageMessage = event.payload.message ?? "Preparing Preview"
             }
         case .heartbeat:
+            elapsedSeconds = event.payload.elapsedSeconds ?? elapsedSeconds
             activityMessage = event.payload.message
         case .log, .warning:
             if let message = event.payload.message {
