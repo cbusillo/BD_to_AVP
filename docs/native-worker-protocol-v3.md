@@ -1,5 +1,8 @@
 # Native Worker Protocol v3
 
+> Historical protocol. Current title-aware behavior is documented in
+> [Native Worker Protocol v4](native-worker-protocol-v4.md).
+
 Protocol v3 adds immutable conversion-preview child jobs while preserving the
 single-request, single-process JSON Lines transport from v2. The native app and
 bundled Python worker ship atomically and both require version 3.

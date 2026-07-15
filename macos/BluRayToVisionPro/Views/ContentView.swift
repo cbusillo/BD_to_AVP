@@ -23,6 +23,8 @@ struct ContentView: View {
     @State private var preserveEncodingOnNextProfileChange = false
     @State private var isShowingPreview = false
     @State private var pendingReviewedPreview: PreviewDraft?
+    @State private var titleSelection = DiscTitleSelection.main
+    @State private var isShowingTitleChooser = false
 
     init(
         viewModel: ConversionViewModel,
@@ -59,8 +61,12 @@ struct ContentView: View {
                     profile: selectedProfile,
                     options: options,
                     profileModified: profileModified,
+                    titleSelection: titleSelection,
+                    titleSelectionSummary: titleSelectionSummary,
+                    selectedVideoCount: selectedVideoCount,
+                    queueItems: visibleQueueItems,
                     destinationURL: $destinationURL,
-                    plannedOutputURL: draft?.proposedOutputURL,
+                    plannedOutputURLs: plannedOutputURLs,
                     refreshDiscs: refreshDiscs,
                     useDisc: selectSource,
                     openDiscImage: { chooseFile(.discImage) },
@@ -72,7 +78,10 @@ struct ContentView: View {
                     retryAnalysis: viewModel.restartInspection,
                     resolveRecoveryChoice: { choice in
                         _ = viewModel.resolveRecoveryChoice(choice)
-                    }
+                    },
+                    selectMainTitle: { titleSelection = .main },
+                    selectAllTitles: { titleSelection = .all },
+                    chooseTitles: { isShowingTitleChooser = true }
                 )
                 .frame(minWidth: 350, idealWidth: 390, maxWidth: 450)
 
@@ -84,6 +93,7 @@ struct ContentView: View {
                     selectedProfile: selectedProfile,
                     profileModified: profileModified,
                     isLocked: viewModel.hasActiveWorker
+                        || viewModel.hasQueuedWork
                         || previewViewModel.hasActiveWorker
                         || viewModel.state.phase == .decisionRequired,
                     sourceKind: viewModel.source?.kind,
@@ -165,7 +175,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: viewModel.state.conversionResult) { _, result in
-            guard let result else {
+            guard let result, viewModel.queueItems.count <= 1 else {
                 return
             }
             if settings.revealOutput {
@@ -174,6 +184,20 @@ struct ContentView: View {
             if settings.playSound {
                 NSSound(named: "Glass")?.play()
             }
+        }
+        .onChange(of: viewModel.completedBatchResults) { _, results in
+            guard let results, !results.isEmpty else {
+                return
+            }
+            if settings.revealOutput {
+                NSWorkspace.shared.activateFileViewerSelecting(results.map(\.outputURL))
+            }
+            if settings.playSound {
+                NSSound(named: "Glass")?.play()
+            }
+        }
+        .onChange(of: viewModel.state.result?.titles) { _, _ in
+            titleSelection = .main
         }
         .onChange(of: profileStore.customProfiles) { previousProfiles, currentProfiles in
             let normalizedIdentifier = profileStore.normalizedProfileID(selectedProfileID)
@@ -208,6 +232,16 @@ struct ContentView: View {
                         isShowingPreview = false
                     }
                 )
+            }
+        }
+        .sheet(isPresented: $isShowingTitleChooser) {
+            if let inspection = viewModel.state.result, inspection.titles.count > 1 {
+                TitleChooserSheet(
+                    titles: inspection.titles,
+                    selectedIDs: Set(selectedTitles.map(\.id))
+                ) { selectedIDs in
+                    titleSelection = .custom(selectedIDs)
+                }
             }
         }
         .alert(
@@ -331,7 +365,7 @@ struct ContentView: View {
                 Button("Stop", role: .destructive, action: viewModel.stopActiveWorker)
                     .keyboardShortcut("p", modifiers: .command)
             } else if viewModel.source == nil || !conversionCanStart {
-                Button("Start Full Conversion") {}
+                Button(startButtonTitle) {}
                     .buttonStyle(.bordered)
                     .disabled(true)
                     .help(viewModel.source == nil ? "Choose a source before processing." : conversionUnavailableReason)
@@ -343,10 +377,8 @@ struct ContentView: View {
                 .disabled(!previewCanStart)
                 .help(previewUnavailableReason)
 
-                Button("Start Full Conversion") {
-                    if let draft {
-                        viewModel.startConversion(draft: draft)
-                    }
+                Button(startButtonTitle) {
+                    startSelectedConversions()
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut("p", modifiers: .command)
@@ -369,37 +401,120 @@ struct ContentView: View {
         Self.jobOptions(from: settings)
     }
 
-    private var draft: ConversionDraft? {
-        guard let source = viewModel.source else {
-            return nil
+    private var selectedTitles: [SourceTitle] {
+        guard let inspection = viewModel.state.result else {
+            return []
         }
-        return ConversionDraft(
-            source: source,
-            sourceDetails: viewModel.state.result,
-            profile: selectedProfile,
-            destinationURL: destinationURL,
-            options: options
-        )
+        return titleSelection.resolvedTitles(in: inspection)
+    }
+
+    private var conversionDrafts: [ConversionDraft] {
+        guard let source = viewModel.source, let inspection = viewModel.state.result else {
+            return []
+        }
+        if source.kind.isDiscWorkflow {
+            return selectedTitles.map { title in
+                ConversionDraft(
+                    source: source,
+                    sourceDetails: inspection,
+                    profile: selectedProfile,
+                    destinationURL: destinationURL,
+                    options: options,
+                    selectedTitle: title
+                )
+            }
+        }
+        return [
+            ConversionDraft(
+                source: source,
+                sourceDetails: inspection,
+                profile: selectedProfile,
+                destinationURL: destinationURL,
+                options: options
+            )
+        ]
+    }
+
+    private var draft: ConversionDraft? {
+        conversionDrafts.count == 1 ? conversionDrafts[0] : nil
+    }
+
+    private var plannedOutputURLs: [URL] {
+        conversionDrafts.map(\.proposedOutputURL)
+    }
+
+    private var selectedVideoCount: Int {
+        conversionDrafts.count
+    }
+
+    private var visibleQueueItems: [ConversionQueueItem] {
+        guard viewModel.queueItems.isEmpty, conversionDrafts.count > 1 else {
+            return viewModel.queueItems
+        }
+        return conversionDrafts.map { ConversionQueueItem(draft: $0) }
+    }
+
+    private var titleSelectionSummary: String {
+        switch titleSelection {
+        case .main:
+            return "Main Movie"
+        case .all:
+            return "All \(selectedTitles.count) Videos"
+        case .custom:
+            if selectedTitles.count == 1 {
+                return selectedTitles[0].name
+            }
+            return "\(selectedTitles.count) Selected Videos"
+        }
+    }
+
+    private var startButtonTitle: String {
+        selectedVideoCount > 1 ? "Convert \(selectedVideoCount) Videos" : "Start Full Conversion"
     }
 
     private var statusText: String {
         if viewModel.hasActiveWorker {
-            return viewModel.state.stageMessage
+            let stage = viewModel.state.stageMessage
                 ?? (viewModel.state.operationKind == .inspection ? "Reading source details" : "Converting video")
+            if let queuePosition {
+                return "Video \(queuePosition.current) of \(queuePosition.total): \(stage)"
+            }
+            return stage
         }
         if viewModel.state.phase == .decisionRequired {
             return "Choose how to continue"
         }
         if viewModel.state.phase == .failed {
+            if let completedCount = viewModel.completedBatchResults?.count, completedCount > 0 {
+                return "\(completedCount) conversion\(completedCount == 1 ? "" : "s") completed before the queue stopped"
+            }
             return "Source needs attention"
         }
+        if viewModel.state.phase == .cancelled {
+            if let completedCount = viewModel.completedBatchResults?.count, completedCount > 0 {
+                return "\(completedCount) conversion\(completedCount == 1 ? "" : "s") completed before the queue stopped"
+            }
+            return viewModel.queueItems.isEmpty ? "Conversion cancelled" : "Conversion queue cancelled"
+        }
         if viewModel.state.conversionResult != nil {
+            if let results = viewModel.completedBatchResults {
+                let allCompleted = !viewModel.queueItems.isEmpty && viewModel.queueItems.allSatisfy { item in
+                    if case .completed = item.status { return true }
+                    return false
+                }
+                return allCompleted
+                    ? "All \(results.count) conversions complete"
+                    : "\(results.count) conversion\(results.count == 1 ? "" : "s") completed before the queue stopped"
+            }
             return "Conversion complete"
         }
         guard let source = viewModel.source else {
             return "Insert a 3D Blu-ray disc or choose another source"
         }
         if viewModel.state.result != nil {
+            if selectedVideoCount > 1 {
+                return "\(selectedVideoCount) 3D videos ready to convert"
+            }
             return "Source analyzed and conversion settings ready"
         }
         if source.kind.isDiscWorkflow {
@@ -427,8 +542,12 @@ struct ContentView: View {
 
     private var secondaryStatusText: String? {
         if viewModel.hasActiveWorker {
-            return viewModel.state.activityMessage
+            let activity = viewModel.state.activityMessage
                 ?? (viewModel.state.operationKind == .inspection ? "Inspecting video streams" : "Processing video")
+            if let activeQueueItem {
+                return "\(activeQueueItem.displayName) — \(activity)"
+            }
+            return activity
         }
         guard viewModel.source != nil else {
             return DiscSourceDetector.makeMKVAvailable ? "MakeMKV is ready for physical discs" : "MakeMKV is required for physical discs"
@@ -438,6 +557,9 @@ struct ContentView: View {
         }
         if let outputPath = viewModel.state.conversionResult?.outputPath {
             return outputPath
+        }
+        if plannedOutputURLs.count > 1 {
+            return "\(plannedOutputURLs.count) files in \(destinationURL.path)"
         }
         return draft?.proposedOutputURL.path
     }
@@ -459,12 +581,17 @@ struct ContentView: View {
         capabilities.conversionAvailable
             && viewModel.source?.kind.supportsConversion == true
             && viewModel.state.result != nil
+            && !conversionDrafts.isEmpty
             && viewModel.state.phase != .decisionRequired
+            && viewModel.state.failureCode != "title_unavailable"
             && !previewViewModel.hasActiveWorker
     }
 
     private var previewCanStart: Bool {
         guard conversionCanStart else {
+            return false
+        }
+        guard selectedVideoCount == 1 else {
             return false
         }
         switch viewModel.source?.kind {
@@ -478,6 +605,9 @@ struct ContentView: View {
     private var previewUnavailableReason: String {
         if previewCanStart {
             return "Create a representative preview with the current resolved settings."
+        }
+        if selectedVideoCount > 1 {
+            return "Choose one 3D video to create a preview."
         }
         switch viewModel.source?.kind {
         case .physicalDisc, .bluRayFolder:
@@ -497,6 +627,9 @@ struct ContentView: View {
         }
         if viewModel.state.phase == .decisionRequired {
             return "Choose a recovery option before starting another conversion."
+        }
+        if viewModel.state.failureCode == "title_unavailable" {
+            return "Analyze the source again before converting another video."
         }
         switch viewModel.source?.kind {
         case .sourceFolder:
@@ -583,6 +716,7 @@ struct ContentView: View {
         if source.kind == .physicalDisc {
             options.job.removeOriginalAfterSuccess = false
         }
+        titleSelection = .main
         viewModel.selectSource(source)
     }
 
@@ -639,6 +773,33 @@ struct ContentView: View {
             draft: reviewedPreview.conversion,
             jobID: reviewedPreview.parentJobID
         )
+    }
+
+    private var activeQueueItem: ConversionQueueItem? {
+        viewModel.queueItems.first { item in
+            if case .processing = item.status { return true }
+            return false
+        }
+    }
+
+    private var queuePosition: (current: Int, total: Int)? {
+        guard let activeQueueItem,
+              let index = viewModel.queueItems.firstIndex(where: { $0.id == activeQueueItem.id })
+        else {
+            return nil
+        }
+        return (index + 1, viewModel.queueItems.count)
+    }
+
+    private func startSelectedConversions() {
+        guard !conversionDrafts.isEmpty else {
+            return
+        }
+        if conversionDrafts.count == 1 {
+            viewModel.startConversion(draft: conversionDrafts[0])
+        } else {
+            viewModel.startConversionQueue(drafts: conversionDrafts)
+        }
     }
 }
 

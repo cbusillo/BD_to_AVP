@@ -4,21 +4,24 @@ struct ConversionResult: Decodable, Equatable {
     let outputPath: String
     let durationSeconds: Double?
     let sizeBytes: Int64?
+    let titleID: String?
 
     var outputURL: URL {
         URL(fileURLWithPath: outputPath)
     }
 
-    init(outputPath: String, durationSeconds: Double? = nil, sizeBytes: Int64? = nil) {
+    init(outputPath: String, durationSeconds: Double? = nil, sizeBytes: Int64? = nil, titleID: String? = nil) {
         self.outputPath = outputPath
         self.durationSeconds = durationSeconds
         self.sizeBytes = sizeBytes
+        self.titleID = titleID
     }
 
     enum CodingKeys: String, CodingKey {
         case outputPath = "output_path"
         case durationSeconds = "duration_seconds"
         case sizeBytes = "size_bytes"
+        case titleID = "title_id"
     }
 }
 
@@ -32,6 +35,31 @@ struct PreviewArtifact: Decodable, Equatable {
     let startSeconds: Double
     let durationSeconds: Double
     let sourceDurationSeconds: Double
+    let titleID: String?
+
+    init(
+        sourcePath: String,
+        destinationPath: String,
+        outputPath: String,
+        sizeBytes: Int64,
+        parentJobID: UUID,
+        position: String,
+        startSeconds: Double,
+        durationSeconds: Double,
+        sourceDurationSeconds: Double,
+        titleID: String? = nil
+    ) {
+        self.sourcePath = sourcePath
+        self.destinationPath = destinationPath
+        self.outputPath = outputPath
+        self.sizeBytes = sizeBytes
+        self.parentJobID = parentJobID
+        self.position = position
+        self.startSeconds = startSeconds
+        self.durationSeconds = durationSeconds
+        self.sourceDurationSeconds = sourceDurationSeconds
+        self.titleID = titleID
+    }
 
     var outputURL: URL {
         URL(fileURLWithPath: outputPath)
@@ -47,6 +75,7 @@ struct PreviewArtifact: Decodable, Equatable {
         case startSeconds = "start_seconds"
         case durationSeconds = "duration_seconds"
         case sourceDurationSeconds = "source_duration_seconds"
+        case titleID = "title_id"
     }
 }
 

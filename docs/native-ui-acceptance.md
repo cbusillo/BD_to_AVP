@@ -26,7 +26,7 @@ here until the native app replaces that release line.
 | Accessibility display modes | Pass | Reduce Transparency and Increase Contrast were enabled together for the main-window review and restored afterward. |
 | Keyboard and menus | Pass | The standard About, Services, Hide, and Quit items are present; `Command-,` opens the reusable Settings window; sheets retain default and cancel shortcuts. |
 | Accessibility semantics | Pass | The Settings accessibility tree exposes named profile controls and navigation tabs. Preview decoration is hidden from assistive technology, the status row has one meaningful label, and the player has an explicit label and hint. |
-| Window sizing | Pass | The main window was reviewed at 1120×760. Profiles remained readable and scrollable at the configured 820-point minimum width. |
+| Window sizing | Pass | The main window was reviewed at its 1120×820 default size and at the configured 1080-point minimum width. The full title, both workspaces, and primary actions remain visible; the source workspace scrolls vertically when multi-title details exceed the available height. |
 | Long-running status | Pass | Conversion and preview heartbeats now expose elapsed time while remaining indeterminate when no trustworthy progress denominator exists. |
 
 ## Screenshots

@@ -11,7 +11,7 @@ final class AppWorkCoordinator: UpdateInstallPostponing {
     }
 
     var hasActiveWorker: Bool {
-        conversion.hasActiveWorker || preview.hasActiveWorker
+        conversion.hasPendingWork || preview.hasActiveWorker
     }
 
     func stopForQuit() async {
@@ -24,7 +24,7 @@ final class AppWorkCoordinator: UpdateInstallPostponing {
         let activePostponers: [any UpdateInstallPostponing] = [conversion, preview].filter { postponer in
             switch postponer {
             case let conversion as ConversionViewModel:
-                conversion.hasActiveWorker
+                conversion.hasPendingWork
             case let preview as PreviewViewModel:
                 preview.hasActiveWorker
             default:
