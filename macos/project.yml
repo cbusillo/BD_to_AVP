@@ -5,6 +5,7 @@ options:
   defaultConfig: Debug
   deploymentTarget:
     macOS: "26.0"
+    visionOS: "26.0"
 
 configs:
   Debug: debug
@@ -86,6 +87,47 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.tests
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/3D Blu-ray to Vision Pro Native Preview.app/Contents/MacOS/3D Blu-ray to Vision Pro Native Preview
 
+  SpatialPlaybackProbe:
+    type: application
+    platform: auto
+    supportedDestinations: [visionOS]
+    deploymentTarget:
+      visionOS: "26.0"
+    sources:
+      - path: SpatialPlaybackProbe
+    settings:
+      base:
+        CODE_SIGN_STYLE: Automatic
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: SpatialPlaybackProbe/Info.plist
+        MARKETING_VERSION: 0.1.0
+        PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.spatial-playback-probe
+        PRODUCT_MODULE_NAME: SpatialPlaybackProbe
+        PRODUCT_NAME: BD to AVP Spatial Playback
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "7"
+        XROS_DEPLOYMENT_TARGET: "26.0"
+
+  SpatialPlaybackProbeUITests:
+    type: bundle.ui-testing
+    platform: auto
+    supportedDestinations: [visionOS]
+    deploymentTarget:
+      visionOS: "26.0"
+    sources:
+      - path: SpatialPlaybackProbeUITests
+    dependencies:
+      - target: SpatialPlaybackProbe
+    settings:
+      base:
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.spatial-playback-probe.ui-tests
+        TARGETED_DEVICE_FAMILY: "7"
+        TEST_TARGET_NAME: SpatialPlaybackProbe
+        XROS_DEPLOYMENT_TARGET: "26.0"
+
 schemes:
   BluRayToVisionPro:
     build:
@@ -96,3 +138,13 @@ schemes:
       gatherCoverageData: true
       targets:
         - BluRayToVisionProTests
+
+  SpatialPlaybackProbe:
+    build:
+      targets:
+        SpatialPlaybackProbe: all
+    run:
+      config: Debug
+    test:
+      targets:
+        - SpatialPlaybackProbeUITests
