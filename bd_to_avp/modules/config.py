@@ -9,6 +9,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import ClassVar, Iterable
 
+from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.modules.util import get_pyproject_data
 
 
@@ -213,6 +214,7 @@ class Config:
         self.language_code = "eng"
         self.remove_extra_languages = False
         self.keep_awake = True
+        self.preview_range: PreviewRange | None = None
         self.smoke_apple_vision_ocr = False
 
     def configure_tool_environment(self) -> None:

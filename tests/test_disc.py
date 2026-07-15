@@ -29,6 +29,7 @@ class DiscStageArtifactTests(unittest.TestCase):
 
         self.assertEqual(result.name, "Feature 3D")
         self.assertEqual(result.main_title_number, 0)
+        self.assertEqual(result.duration_seconds, 2700)
         self.assertIn("iso:/Movies/Feature.iso", run_command.call_args.args[0])
 
     def test_selected_bluray_folder_overrides_stale_disc_source(self) -> None:

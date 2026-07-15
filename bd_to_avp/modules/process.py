@@ -19,6 +19,7 @@ from bd_to_avp.modules.file import (
     remove_output_folder_if_safe,
     remove_folder_if_exists,
 )
+from bd_to_avp.modules.preview import create_bounded_preview_source
 from bd_to_avp.modules.sub import create_srt_from_mkv, SRTCreationError
 from bd_to_avp.modules.video import (
     create_left_right_files,
@@ -160,6 +161,16 @@ def process_each(cancellation_event: Event | None = None, activity: ActivityRepo
     if activity:
         activity.stage_started("create_mkv", "Preparing source video")
     mkv_output_path = create_mkv_file(output_folder, disc_info, config.language_code)
+    if config.preview_range is not None:
+        raise_if_cancelled(cancellation_event)
+        if activity:
+            activity.stage_started("prepare_preview_range", "Preparing selected preview range")
+        mkv_output_path, aligned_preview_range = create_bounded_preview_source(
+            mkv_output_path,
+            output_folder,
+            config.preview_range,
+        )
+        config.preview_range = aligned_preview_range
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("probe_color", "Reading video color depth")
@@ -167,7 +178,10 @@ def process_each(cancellation_event: Event | None = None, activity: ActivityRepo
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("detect_crop", "Checking frame crop parameters")
-    crop_params = detect_crop_parameters(mkv_output_path)
+    crop_start_seconds = (
+        min(600, max(0, int(config.preview_range.duration_seconds / 2))) if config.preview_range is not None else 600
+    )
+    crop_params = detect_crop_parameters(mkv_output_path, start_seconds=crop_start_seconds)
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("extract_mvc_and_audio", "Extracting MVC video and audio")

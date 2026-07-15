@@ -8,22 +8,29 @@ enum AppWindowID {
 struct BluRayToVisionProApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var viewModel: ConversionViewModel
+    @StateObject private var previewViewModel: PreviewViewModel
     @StateObject private var updater: UpdateController
     @StateObject private var settings = AppSettings()
     @StateObject private var profileStore = ProfileStore()
 
     private let capabilities = AppCapabilities.current
+    private let workCoordinator: AppWorkCoordinator
 
     init() {
         let viewModel = ConversionViewModel()
+        let previewViewModel = PreviewViewModel()
+        let workCoordinator = AppWorkCoordinator(conversion: viewModel, preview: previewViewModel)
         _viewModel = StateObject(wrappedValue: viewModel)
-        _updater = StateObject(wrappedValue: UpdateController(installPostponer: viewModel))
+        _previewViewModel = StateObject(wrappedValue: previewViewModel)
+        _updater = StateObject(wrappedValue: UpdateController(installPostponer: workCoordinator))
+        self.workCoordinator = workCoordinator
     }
 
     var body: some Scene {
         WindowGroup {
             ContentView(
                 viewModel: viewModel,
+                previewViewModel: previewViewModel,
                 settings: settings,
                 profileStore: profileStore,
                 capabilities: capabilities
@@ -31,13 +38,13 @@ struct BluRayToVisionProApp: App {
                 .frame(minWidth: 980, minHeight: 680)
                 .background(
                     WindowAccessor { window in
-                        appDelegate.attach(window: window, viewModel: viewModel)
+                        appDelegate.attach(window: window, workCoordinator: workCoordinator)
                     }
                 )
                 .onAppear {
                     updater.startIfNeeded()
                     settings.selectedProfileID = profileStore.normalizedProfileID(settings.selectedProfileID)
-                    appDelegate.viewModel = viewModel
+                    appDelegate.workCoordinator = workCoordinator
                 }
         }
         .defaultSize(width: 1_120, height: 760)
@@ -52,7 +59,7 @@ struct BluRayToVisionProApp: App {
                     chooseSource()
                 }
                 .keyboardShortcut("o")
-                .disabled(!viewModel.canSelectSource)
+                .disabled(!viewModel.canSelectSource || previewViewModel.hasActiveWorker)
             }
         }
 
@@ -69,7 +76,7 @@ struct BluRayToVisionProApp: App {
 
     @MainActor
     private func chooseSource() {
-        guard viewModel.canSelectSource else {
+        guard viewModel.canSelectSource, !previewViewModel.hasActiveWorker else {
             return
         }
         guard let sourceURL = SourcePicker.chooseExistingSource() else {

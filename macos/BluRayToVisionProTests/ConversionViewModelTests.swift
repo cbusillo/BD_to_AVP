@@ -532,7 +532,7 @@ final class ConversionViewModelTests: XCTestCase {
                 XCTAssertEqual(spec.operation, "convert_source")
                 XCTAssertNotNil(spec.destination)
                 XCTAssertNotNil(spec.encoding)
-                XCTAssertEqual(spec.job?.outputLength, "full_movie")
+                XCTAssertNil(spec.preview)
                 conversionStarted.fulfill()
             }
         )
@@ -630,11 +630,18 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testStartConversionRejectsSampleOutput() async throws {
+    func testStartConversionUsesSuppliedParentJobID() async throws {
         let inspectionDone = expectation(description: "inspection done")
-        let viewModel = ConversionViewModel {
-            TwoPhaseWorkerClient(onInspectionComplete: { inspectionDone.fulfill() })
-        }
+        let conversionStarted = expectation(description: "conversion started")
+        let expectedJobID = UUID()
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { spec in
+                XCTAssertEqual(spec.jobID, expectedJobID)
+                conversionStarted.fulfill()
+            }
+        )
+        let viewModel = ConversionViewModel { worker }
 
         try await withTemporarySource { sourceURL in
             viewModel.selectSource(sourceURL)
@@ -646,19 +653,16 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: URL(fileURLWithPath: "/Movies"),
-                outputLength: .oneMinute,
+                outputLength: .fullMovie,
                 samplePosition: .beginning,
                 options: ConversionOptions()
             )
 
-            viewModel.startConversion(draft: draft)
+            viewModel.startConversion(draft: draft, jobID: expectedJobID)
 
-            XCTAssertFalse(viewModel.hasActiveWorker)
-            XCTAssertEqual(viewModel.state.phase, .failed)
-            XCTAssertEqual(
-                viewModel.state.failureMessage,
-                "Short sample conversion is not available yet. Choose Full Movie."
-            )
+            await fulfillment(of: [conversionStarted], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+            XCTAssertEqual(viewModel.state.phase, .completed)
         }
     }
 
@@ -670,6 +674,26 @@ final class ConversionViewModelTests: XCTestCase {
         _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8))
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         try await operation(sourceURL)
+    }
+}
+
+private extension ConversionDraft {
+    init(
+        source: ConversionSource,
+        sourceDetails: SourceInspection?,
+        profile: EncodingProfile,
+        destinationURL: URL,
+        outputLength: OutputLength,
+        samplePosition: SamplePosition,
+        options: ConversionOptions
+    ) {
+        self.init(
+            source: source,
+            sourceDetails: sourceDetails,
+            profile: profile,
+            destinationURL: destinationURL,
+            options: options
+        )
     }
 }
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping, TextIO
 from uuid import UUID
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_DETAIL_BYTES = 64 * 1024
@@ -28,6 +28,7 @@ def bounded_detail(value: str) -> str:
 class WorkerOperation(StrEnum):
     INSPECT_SOURCE = "inspect_source"
     CONVERT_SOURCE = "convert_source"
+    PREVIEW_SOURCE = "preview_source"
 
 
 class WorkerSourceKind(StrEnum):
@@ -44,6 +45,7 @@ class WorkerEventType(StrEnum):
     HEARTBEAT = "heartbeat"
     LOG = "log"
     WARNING = "warning"
+    ARTIFACT_READY = "artifact.ready"
     JOB_COMPLETED = "job.completed"
     JOB_FAILED = "job.failed"
     JOB_CANCELLED = "job.cancelled"
@@ -107,7 +109,19 @@ class JobOptions:
     software_encoder: bool
     output_commands: bool
     keep_awake: bool
-    output_length: str
+
+
+class PreviewPosition(StrEnum):
+    BEGINNING = "beginning"
+    MIDDLE = "middle"
+    END = "end"
+
+
+@dataclass(frozen=True)
+class PreviewOptions:
+    parent_job_id: str
+    position: PreviewPosition
+    duration_seconds: int
 
 
 @dataclass(frozen=True)
@@ -119,6 +133,7 @@ class JobSpec:
     destination: JobDestination | None = None
     encoding: EncodingOptions | None = None
     job: JobOptions | None = None
+    preview: PreviewOptions | None = None
 
     @classmethod
     def from_json_line(cls, line: str) -> "JobSpec":
@@ -174,6 +189,7 @@ class JobSpec:
         operation_keys = {
             WorkerOperation.INSPECT_SOURCE: base_keys,
             WorkerOperation.CONVERT_SOURCE: base_keys | {"destination", "encoding", "job"},
+            WorkerOperation.PREVIEW_SOURCE: base_keys | {"destination", "encoding", "job", "preview"},
         }[operation]
         cls._reject_unknown_keys(raw, operation_keys, "request", job_id)
 
@@ -212,16 +228,41 @@ class JobSpec:
         destination: JobDestination | None = None
         encoding: EncodingOptions | None = None
         job_options: JobOptions | None = None
-        if operation is WorkerOperation.CONVERT_SOURCE:
+        preview_options: PreviewOptions | None = None
+        if operation in {WorkerOperation.CONVERT_SOURCE, WorkerOperation.PREVIEW_SOURCE}:
             destination = JobDestination(
                 path=cls._parse_destination(raw.get("destination"), job_id),
             )
             encoding = cls._parse_encoding(raw.get("encoding"), job_id)
             job_options = cls._parse_job_options(raw.get("job"), job_id)
+            assert job_options is not None
+        if operation is WorkerOperation.CONVERT_SOURCE:
+            assert job_options is not None
             if source_kind is WorkerSourceKind.PHYSICAL_DISC and job_options.remove_original:
                 raise WorkerProtocolError(
                     "invalid_job_options",
                     "job.remove_original must be false for physical discs.",
+                    job_id=job_id,
+                )
+        elif operation is WorkerOperation.PREVIEW_SOURCE:
+            assert job_options is not None
+            preview_options = cls._parse_preview_options(raw.get("preview"), job_id)
+            if source_kind not in {WorkerSourceKind.DIRECT_FILE, WorkerSourceKind.DISC_IMAGE}:
+                raise WorkerProtocolError(
+                    "invalid_preview_source",
+                    "Preview currently supports MKV, MTS, M2TS, and ISO sources.",
+                    job_id=job_id,
+                )
+            if job_options.start_stage != 1 or job_options.keep_files or not job_options.overwrite:
+                raise WorkerProtocolError(
+                    "invalid_preview_options",
+                    "Preview jobs must start at stage 1, disable keep_files, and enable overwrite.",
+                    job_id=job_id,
+                )
+            if job_options.remove_original or job_options.continue_on_error:
+                raise WorkerProtocolError(
+                    "invalid_preview_options",
+                    "Preview jobs cannot remove the source or continue from partial output.",
                     job_id=job_id,
                 )
 
@@ -233,6 +274,7 @@ class JobSpec:
             destination=destination,
             encoding=encoding,
             job=job_options,
+            preview=preview_options,
         )
 
     @staticmethod
@@ -334,16 +376,8 @@ class JobSpec:
             "software_encoder",
             "output_commands",
             "keep_awake",
-            "output_length",
         }
         cls._require_exact_keys(value, required_keys, "job", job_id)
-        output_length = cls._parse_string(value, "output_length", "job", job_id)
-        if output_length != "full_movie":
-            raise WorkerProtocolError(
-                "invalid_job_options",
-                "job.output_length must be 'full_movie'.",
-                job_id=job_id,
-            )
         return JobOptions(
             start_stage=cls._parse_int(value, "start_stage", "job", job_id, minimum=1, maximum=9),
             keep_files=cls._parse_bool(value, "keep_files", "job", job_id),
@@ -353,7 +387,57 @@ class JobSpec:
             software_encoder=cls._parse_bool(value, "software_encoder", "job", job_id),
             output_commands=cls._parse_bool(value, "output_commands", "job", job_id),
             keep_awake=cls._parse_bool(value, "keep_awake", "job", job_id),
-            output_length=output_length,
+        )
+
+    @classmethod
+    def _parse_preview_options(cls, value: Any, job_id: str) -> PreviewOptions:
+        if not isinstance(value, Mapping):
+            raise WorkerProtocolError(
+                "invalid_preview_options",
+                "The preview request must contain preview options.",
+                job_id=job_id,
+            )
+        cls._require_exact_keys(
+            value,
+            {"parent_job_id", "position", "duration_seconds"},
+            "preview",
+            job_id,
+        )
+        raw_parent_job_id = cls._parse_string(value, "parent_job_id", "preview", job_id)
+        try:
+            parent_job_id = str(UUID(raw_parent_job_id))
+        except ValueError as error:
+            raise WorkerProtocolError(
+                "invalid_preview_options",
+                "preview.parent_job_id must be a UUID.",
+                job_id=job_id,
+            ) from error
+        if parent_job_id == job_id:
+            raise WorkerProtocolError(
+                "invalid_preview_options",
+                "preview.parent_job_id must differ from the preview job_id.",
+                job_id=job_id,
+            )
+        raw_position = cls._parse_string(value, "position", "preview", job_id)
+        try:
+            position = PreviewPosition(raw_position)
+        except ValueError as error:
+            raise WorkerProtocolError(
+                "invalid_preview_options",
+                f"Unsupported preview position: {raw_position!r}.",
+                job_id=job_id,
+            ) from error
+        return PreviewOptions(
+            parent_job_id=parent_job_id,
+            position=position,
+            duration_seconds=cls._parse_int(
+                value,
+                "duration_seconds",
+                "preview",
+                job_id,
+                minimum=1,
+                maximum=300,
+            ),
         )
 
     @classmethod
@@ -463,6 +547,9 @@ class WorkerActivityReporter:
         payload: dict[str, Any] = {"message": message, **fields}
         payload["stage"] = stage or self.current_stage
         self._emitter.emit(WorkerEventType.WARNING, payload)
+
+    def artifact_ready(self, artifact: Mapping[str, Any]) -> None:
+        self._emitter.emit(WorkerEventType.ARTIFACT_READY, {"artifact": dict(artifact)})
 
     def heartbeat_payload(self, elapsed_seconds: int) -> dict[str, Any]:
         return {

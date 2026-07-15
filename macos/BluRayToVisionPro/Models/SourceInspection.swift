@@ -6,6 +6,23 @@ struct SourceInspection: Codable, Equatable {
     let frameRate: String
     let interlaced: Bool
     let sizeBytes: Int64?
+    let durationSeconds: Double?
+
+    init(
+        name: String,
+        resolution: String,
+        frameRate: String,
+        interlaced: Bool,
+        sizeBytes: Int64? = nil,
+        durationSeconds: Double? = nil
+    ) {
+        self.name = name
+        self.resolution = resolution
+        self.frameRate = frameRate
+        self.interlaced = interlaced
+        self.sizeBytes = sizeBytes
+        self.durationSeconds = durationSeconds
+    }
 
     enum CodingKeys: String, CodingKey {
         case name
@@ -13,6 +30,7 @@ struct SourceInspection: Codable, Equatable {
         case frameRate = "frame_rate"
         case interlaced
         case sizeBytes = "size_bytes"
+        case durationSeconds = "duration_seconds"
     }
 
     var formattedSize: String {
@@ -24,5 +42,14 @@ struct SourceInspection: Codable, Equatable {
 
     var scanDescription: String {
         interlaced ? "Interlaced" : "Progressive"
+    }
+
+    var formattedDuration: String {
+        guard let durationSeconds, durationSeconds > 0 else {
+            return "Not reported"
+        }
+        return Duration.seconds(durationSeconds).formatted(
+            .time(pattern: .hourMinuteSecond(padHourToLength: 2))
+        )
     }
 }

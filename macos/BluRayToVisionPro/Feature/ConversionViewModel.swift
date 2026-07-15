@@ -105,7 +105,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
     }
 
-    func startConversion(draft: ConversionDraft) {
+    func startConversion(draft: ConversionDraft, jobID: UUID = UUID()) {
         guard !hasActiveWorker else {
             return
         }
@@ -138,15 +138,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             )
             return
         }
-        guard draft.outputLength == .fullMovie else {
-            state.failTransport(
-                message: "Short sample conversion is not available yet. Choose Full Movie.",
-                retryable: false
-            )
-            return
-        }
-
-        let job = WorkerJobSpec(draft: draft)
+        let job = WorkerJobSpec(draft: draft, jobID: jobID)
         do {
             try state.begin(jobID: job.jobID, operationKind: .conversion)
             lastConversionDraft = draft

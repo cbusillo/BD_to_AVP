@@ -4,7 +4,7 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     nonisolated static let startupSmokeArgument = "--startup-smoke"
 
-    weak var viewModel: ConversionViewModel?
+    weak var workCoordinator: AppWorkCoordinator?
     private weak var managedWindow: NSWindow?
     private var originalWindowDelegate: NSWindowDelegate?
     private var allowManagedWindowClose = false
@@ -24,8 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         arguments.contains(startupSmokeArgument)
     }
 
-    func attach(window: NSWindow, viewModel: ConversionViewModel) {
-        self.viewModel = viewModel
+    func attach(window: NSWindow, workCoordinator: AppWorkCoordinator) {
+        self.workCoordinator = workCoordinator
         guard managedWindow !== window else {
             return
         }
@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if allowManagedWindowClose || !(viewModel?.hasActiveWorker ?? false) {
+        if allowManagedWindowClose || !(workCoordinator?.hasActiveWorker ?? false) {
             return originalWindowDelegate?.windowShouldClose?(sender) ?? true
         }
         if isStoppingForWindowClose {
@@ -46,13 +46,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         let alert = stopAlert(action: "close this window", buttonTitle: "Stop and Close")
-        guard alert.runModal() == .alertFirstButtonReturn, let viewModel else {
+        guard alert.runModal() == .alertFirstButtonReturn, let workCoordinator else {
             return false
         }
 
         isStoppingForWindowClose = true
         Task {
-            await viewModel.stopForQuit()
+            await workCoordinator.stopForQuit()
             allowManagedWindowClose = true
             sender.performClose(nil)
         }
@@ -67,7 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if isStoppingForTermination {
             return .terminateLater
         }
-        guard let viewModel, viewModel.hasActiveWorker else {
+        guard let workCoordinator, workCoordinator.hasActiveWorker else {
             return .terminateNow
         }
 
@@ -79,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         isStoppingForTermination = true
         Task {
-            await viewModel.stopForQuit()
+            await workCoordinator.stopForQuit()
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater

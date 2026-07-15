@@ -77,7 +77,10 @@ def run_worker(
             heartbeat_thread.join(timeout=max(heartbeat_interval * 2, 0.2))
 
         owner.check_cancelled()
-        result_key = "conversion_result" if job.operation.value == "convert_source" else "result"
+        result_key = {
+            "convert_source": "conversion_result",
+            "preview_source": "preview_result",
+        }.get(job.operation.value, "result")
         emitter.emit(WorkerEventType.JOB_COMPLETED, {result_key: result})
         return 0
     except WorkerProtocolError as error:

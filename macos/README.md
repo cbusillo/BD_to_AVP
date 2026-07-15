@@ -38,6 +38,13 @@ for dyld library validation; Developer ID packages retain Hardened Runtime. The
 package gate launches the signed native host with `--startup-smoke`, smokes the
 embedded conversion worker, and then performs strict deep signature validation.
 
+The app and engine use native worker protocol v3. MKV, MTS, M2TS, and ISO
+sources can create an isolated beginning, middle, or end preview child job with
+the current resolved profile. The finalized result is leased from the preview
+cache while the embedded AVPlayer is open and removed when the preview closes.
+See `docs/native-worker-protocol-v3.md` for the request, event, and ownership
+contract.
+
 The native application targets Apple Silicon macOS 26 or later while remaining
 buildable with the Xcode 27 SDK. Packaged release validation rejects a native
 binary, embedded engine, or bundled Mach-O that requires a newer system.
