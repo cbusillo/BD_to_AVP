@@ -16,6 +16,77 @@ from bd_to_avp.modules.file import (
 
 
 class ProcessPreflightTests(unittest.TestCase):
+    def test_conversion_stage_plan_tracks_optional_work(self) -> None:
+        with (
+            patch.object(process.config, "preview_range", None),
+            patch.object(process.config, "skip_subtitles", False),
+            patch.object(process.config, "fx_upscale", False),
+            patch.object(process.config, "transcode_audio", True),
+            patch.object(process.config, "start_stage", Stage.CREATE_MKV),
+        ):
+            default_plan = process.conversion_stage_plan()
+
+        self.assertEqual(
+            default_plan,
+            (
+                "configure",
+                "preflight",
+                "inspect_source",
+                "create_mkv",
+                "probe_color",
+                "detect_crop",
+                "extract_mvc_and_audio",
+                "extract_subtitles",
+                "create_left_right_files",
+                "combine_to_mv_hevc",
+                "transcode_audio",
+                "create_final_file",
+                "move_files",
+            ),
+        )
+
+        with (
+            patch.object(process.config, "preview_range", Mock()),
+            patch.object(process.config, "skip_subtitles", True),
+            patch.object(process.config, "fx_upscale", True),
+            patch.object(process.config, "transcode_audio", False),
+            patch.object(process.config, "start_stage", Stage.CREATE_MKV),
+        ):
+            optional_plan = process.conversion_stage_plan()
+
+        self.assertIn("prepare_preview_range", optional_plan)
+        self.assertIn("upscale_video", optional_plan)
+        self.assertNotIn("extract_subtitles", optional_plan)
+        self.assertNotIn("transcode_audio", optional_plan)
+
+    def test_conversion_stage_plan_excludes_completed_recovery_stages(self) -> None:
+        with (
+            patch.object(process.config, "preview_range", None),
+            patch.object(process.config, "skip_subtitles", False),
+            patch.object(process.config, "fx_upscale", False),
+            patch.object(process.config, "transcode_audio", True),
+            patch.object(process.config, "start_stage", Stage.EXTRACT_MVC_AND_AUDIO),
+        ):
+            mkv_recovery_plan = process.conversion_stage_plan()
+
+        self.assertNotIn("create_mkv", mkv_recovery_plan)
+        self.assertIn("extract_mvc_and_audio", mkv_recovery_plan)
+        self.assertIn("extract_subtitles", mkv_recovery_plan)
+
+        with (
+            patch.object(process.config, "preview_range", None),
+            patch.object(process.config, "skip_subtitles", True),
+            patch.object(process.config, "fx_upscale", False),
+            patch.object(process.config, "transcode_audio", True),
+            patch.object(process.config, "start_stage", Stage.EXTRACT_SUBTITLES),
+        ):
+            subtitle_recovery_plan = process.conversion_stage_plan()
+
+        self.assertNotIn("create_mkv", subtitle_recovery_plan)
+        self.assertNotIn("extract_mvc_and_audio", subtitle_recovery_plan)
+        self.assertNotIn("extract_subtitles", subtitle_recovery_plan)
+        self.assertIn("create_left_right_files", subtitle_recovery_plan)
+
     def test_batch_processing_aborts_on_dependency_preflight_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             source_folder = Path(temp_dir)

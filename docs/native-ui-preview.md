@@ -13,6 +13,9 @@ does not replace or update it.
 - Convert an inspected physical disc, Blu-ray folder, ISO, MKV, MTS, or M2TS source to a
   completed MV-HEVC `.mov` through the bundled engine, with native progress,
   cancellation, and results.
+- During conversion and preview generation, confirm the app reports the current
+  workflow stage and total stage count. MakeMKV source preparation also shows a
+  determinate percentage from MakeMKV's own progress feed.
 - Exercise the native recovery card if MakeMKV leaves a usable intermediate MKV
   or subtitle extraction cannot continue. Recovery creates a new one-off job
   without changing the selected profile or visible conversion defaults.
@@ -30,6 +33,10 @@ does not replace or update it.
   preview and remains available only in the production app.
 - Native conversion currently creates the full movie. Short sample outputs are
   not yet available.
+- Stages without a trustworthy tool-reported denominator remain indeterminate.
+  The activity heartbeat and elapsed time continue to show that those stages are
+  running; the app does not infer an ETA from elapsed time or treat each stage as
+  equal-duration work.
 - This beta has no automatic updater. Future prerelease builds must be
   downloaded manually.
 - Live playback of a file while it is still being generated is not supported.

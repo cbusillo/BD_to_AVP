@@ -8,6 +8,48 @@ from bd_to_avp.modules.config import Stage
 
 
 class DiscStageArtifactTests(unittest.TestCase):
+    def test_makemkv_progress_uses_total_and_clamps_to_maximum(self) -> None:
+        self.assertEqual(disc.parse_makemkv_progress("PRGV:5,25,100"), (25, 100))
+        self.assertEqual(disc.parse_makemkv_progress("PRGV:5,125,100"), (100, 100))
+        self.assertIsNone(disc.parse_makemkv_progress("PRGV:5,25,0"))
+        self.assertIsNone(disc.parse_makemkv_progress("MSG:1005,0,1,Finished"))
+
+    def test_rip_requests_progress_and_reports_robot_updates(self) -> None:
+        progress_updates: list[tuple[float, float]] = []
+
+        def run_command(
+            command: list[object],
+            _name: str,
+            *,
+            line_handler: object,
+        ) -> str:
+            assert callable(line_handler)
+            line_handler("PRGV:5,25,100")
+            line_handler("MSG:1005,0,1,Finished")
+            line_handler("PRGV:5,100,100")
+            self.assertIn("--robot", command)
+            self.assertIn("--progress=-same", command)
+            return ""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_folder = Path(temp_dir)
+            with (
+                patch.object(disc.config, "source_path", Path("/Movies/Feature.iso")),
+                patch.object(disc.config, "source_str", None),
+                patch.object(disc.config, "IMAGE_EXTENSIONS", [".iso"]),
+                patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
+                patch.object(disc, "create_custom_makemkv_profile"),
+                patch.object(disc, "run_command", side_effect=run_command),
+            ):
+                disc.rip_disc_to_mkv(
+                    output_folder,
+                    disc.DiscInfo(name="Feature", main_title_number=0),
+                    "eng",
+                    lambda completed, total: progress_updates.append((completed, total)),
+                )
+
+        self.assertEqual(progress_updates, [(25, 100), (100, 100)])
+
     def test_disc_info_uses_iso_source_prefix_for_image(self) -> None:
         makemkv_output = "\n".join(
             [
