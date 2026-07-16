@@ -25,7 +25,7 @@ class MediaLanguage:
 
 
 def _load_catalog() -> tuple[MediaLanguage, ...]:
-    catalog_path = files("bd_to_avp.resources").joinpath(CATALOG_RESOURCE)
+    catalog_path = files("bd_to_avp").joinpath("resources", CATALOG_RESOURCE)
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
     if catalog.get("schema_version") != 1 or not isinstance(catalog.get("languages"), list):
         raise RuntimeError("The bundled ISO 639 language catalog is invalid.")

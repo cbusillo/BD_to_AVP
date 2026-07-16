@@ -3,6 +3,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from babelfish import Language
+
 from bd_to_avp.modules.config import Config
 from bd_to_avp.modules.languages import (
     LANGUAGES,
@@ -22,6 +24,11 @@ class LanguageCatalogTests(unittest.TestCase):
         self.assertEqual(len(LANGUAGES), 414)
         self.assertEqual(len({language.code for language in LANGUAGES}), len(LANGUAGES))
         self.assertEqual(DEFAULT_OUTPUT.read_text(encoding="utf-8"), render_catalog())
+
+    def test_every_catalog_language_adapts_to_babelfish(self) -> None:
+        for language in LANGUAGES:
+            with self.subTest(code=language.code):
+                self.assertEqual(Language.fromalpha3t(language.code).alpha3t, language.code)
 
     def test_normalizes_alpha2_bibliographic_and_terminologic_codes(self) -> None:
         expected = {

@@ -206,6 +206,7 @@ def verify_layout(app_path: Path) -> None:
         worker_executable,
         app_path / "Contents" / "Frameworks" / "Python.framework" / "Python",
         app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "worker" / "__main__.py",
+        app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "resources" / "iso639_languages.json",
         app_path / "Contents" / "Resources" / "app_packages",
         app_path / "Contents" / "Resources" / "app_icon.icns",
         ffprobe_executable,
