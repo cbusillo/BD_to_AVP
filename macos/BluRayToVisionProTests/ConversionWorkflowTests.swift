@@ -142,6 +142,13 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(SubtitleLanguage.french.rawValue, "fre")
     }
 
+    func testPCMHandlingIsDescribedTruthfullyWithoutChangingItsStoredValue() {
+        XCTAssertEqual(AudioHandling.preserve.rawValue, "preserve")
+        XCTAssertEqual(AudioHandling.preserve.title, "Uncompressed PCM")
+        XCTAssertTrue(EncodingOptions().compactSummary.contains("uncompressed PCM audio"))
+        XCTAssertTrue(BuiltInProfile.balanced.summary.contains("uncompressed PCM audio"))
+    }
+
     func testSourceInferencePreservesProductHierarchy() throws {
         try withTemporaryDirectory { directoryURL in
             let imageURL = directoryURL.appendingPathComponent("Feature.iso")
