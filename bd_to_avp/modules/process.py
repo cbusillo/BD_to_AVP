@@ -79,11 +79,10 @@ def find_batch_sources(source_folder_path: Path) -> tuple[Path, ...]:
 
 
 def conversion_stage_plan() -> tuple[str, ...]:
-    stages = [
-        "configure",
-        "preflight",
-        "inspect_source",
-    ]
+    stages = ["configure"]
+    if config.start_stage is Stage.MOVE_FILES:
+        return (*stages, "move_files")
+    stages.extend(["preflight", "inspect_source"])
     if config.start_stage.value <= Stage.CREATE_MKV.value:
         stages.append("create_mkv")
     if config.preview_range is not None:
@@ -186,6 +185,19 @@ def process_each(
 ) -> Path:
     raise_if_cancelled(cancellation_event)
     print(f"\nProcessing {config.source_path or config.source_str}")
+    if config.start_stage is Stage.MOVE_FILES:
+        muxed_output_path = completed_mux_path_for_move()
+        completed_path = config.output_root_path / muxed_output_path.name
+        if not config.overwrite and file_exists_normalized(completed_path):
+            raise FileExistsError(
+                f"Output file already exists for {muxed_output_path.stem}. Use --overwrite to replace."
+            )
+        return move_completed_conversion(
+            muxed_output_path,
+            config.output_root_path / "temp_files",
+            cancellation_event,
+            activity,
+        )
     if activity:
         activity.stage_started("preflight", "Checking required conversion tools")
     preflight.verify_runtime_ready()
@@ -212,10 +224,6 @@ def process_each(
     completed_path = config.output_root_path / f"{disc_info.name}{config.FINAL_FILE_TAG}.mov"
     if not config.overwrite and file_exists_normalized(completed_path):
         raise FileExistsError(f"Output file already exists for {disc_info.name}. Use --overwrite to replace.")
-
-    if config.start_stage is Stage.MOVE_FILES:
-        muxed_output_path = output_folder / f"{disc_info.name}{config.FINAL_FILE_TAG}.mov"
-        return move_completed_conversion(muxed_output_path, tmp_folder, cancellation_event, activity)
 
     raise_if_cancelled(cancellation_event)
     if activity and config.start_stage.value <= Stage.CREATE_MKV.value:
@@ -288,6 +296,34 @@ def process_each(
     )
 
     return move_completed_conversion(muxed_output_path, tmp_folder, cancellation_event, activity)
+
+
+def completed_mux_path_for_move() -> Path:
+    output_root = config.output_root_path
+    source_path = config.source_path
+    if source_path is not None:
+        source_name = source_path.stem
+        source_candidate = output_root / source_name / f"{source_name}{config.FINAL_FILE_TAG}.mov"
+        if source_candidate.is_file():
+            return source_candidate
+
+    candidates = sorted(
+        candidate
+        for output_folder in output_root.iterdir()
+        if output_folder.is_dir()
+        for candidate in [output_folder / f"{output_folder.name}{config.FINAL_FILE_TAG}.mov"]
+        if candidate.is_file()
+    )
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise FileNotFoundError(f"No completed movie is ready to move under {output_root}.")
+
+    candidate_names = ", ".join(candidate.relative_to(output_root).as_posix() for candidate in candidates)
+    raise RuntimeError(
+        "Multiple completed movies are ready to move. Select the matching direct-file source or isolate its output "
+        f"folder before resuming: {candidate_names}"
+    )
 
 
 def move_completed_conversion(

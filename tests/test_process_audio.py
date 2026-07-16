@@ -14,11 +14,10 @@ class ProcessAudioWiringTests(unittest.TestCase):
     def test_move_files_resume_skips_prior_processing_stages(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            source_path = temp_path / "source.mkv"
+            source_path = temp_path / "missing-source.iso"
             output_folder = temp_path / "Movie"
             muxed_path = output_folder / "Movie_AVP.mov"
             final_path = temp_path / "Movie_AVP.mov"
-            source_path.write_bytes(b"source")
             output_folder.mkdir()
             muxed_path.write_bytes(b"final")
 
@@ -29,25 +28,64 @@ class ProcessAudioWiringTests(unittest.TestCase):
                 stack.enter_context(patch.object(process.config, "keep_files", False))
                 stack.enter_context(patch.object(process.config, "start_stage", Stage.MOVE_FILES))
                 stack.enter_context(patch.object(process.config, "remove_original", False))
-                stack.enter_context(patch.object(process.preflight, "verify_runtime_ready"))
-                stack.enter_context(
-                    patch.object(process, "get_disc_and_mvc_video_info", return_value=DiscInfo(name="Movie"))
-                )
-                stack.enter_context(
-                    patch.object(process, "prepare_output_folder_for_source", return_value=output_folder)
-                )
-                stack.enter_context(patch.object(process, "file_exists_normalized", return_value=False))
+                preflight = stack.enter_context(patch.object(process.preflight, "verify_runtime_ready"))
+                inspect_source = stack.enter_context(patch.object(process, "get_disc_and_mvc_video_info"))
+                prepare_output = stack.enter_context(patch.object(process, "prepare_output_folder_for_source"))
                 create_mkv = stack.enter_context(patch.object(process, "create_mkv_file"))
-                move_file = stack.enter_context(
-                    patch.object(process, "move_file_to_output_root_folder", return_value=final_path)
-                )
-                stack.enter_context(patch.object(process, "remove_output_folder_if_safe"))
 
                 result = process.process_each()
 
             self.assertEqual(result, final_path)
+            self.assertEqual(final_path.read_bytes(), b"final")
+            self.assertFalse(output_folder.exists())
+            preflight.assert_not_called()
+            inspect_source.assert_not_called()
+            prepare_output.assert_not_called()
             create_mkv.assert_not_called()
-            move_file.assert_called_once_with(muxed_path)
+
+    def test_move_files_resume_selects_matching_direct_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            selected_folder = temp_path / "Selected"
+            other_folder = temp_path / "Other"
+            selected_folder.mkdir()
+            other_folder.mkdir()
+            (selected_folder / "Selected_AVP.mov").write_bytes(b"selected")
+            (other_folder / "Other_AVP.mov").write_bytes(b"other")
+
+            with (
+                patch.object(process.config, "source_path", temp_path / "Selected.mkv"),
+                patch.object(process.config, "output_root_path", temp_path),
+                patch.object(process.config, "overwrite", True),
+                patch.object(process.config, "keep_files", False),
+                patch.object(process.config, "start_stage", Stage.MOVE_FILES),
+                patch.object(process.config, "remove_original", False),
+            ):
+                result = process.process_each()
+
+            self.assertEqual(result, temp_path / "Selected_AVP.mov")
+            self.assertEqual(result.read_bytes(), b"selected")
+            self.assertTrue((other_folder / "Other_AVP.mov").exists())
+
+    def test_move_files_resume_rejects_ambiguous_completed_movies(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            for name in ("First", "Second"):
+                output_folder = temp_path / name
+                output_folder.mkdir()
+                (output_folder / f"{name}_AVP.mov").write_bytes(name.encode())
+
+            with (
+                patch.object(process.config, "source_path", temp_path / "unavailable.iso"),
+                patch.object(process.config, "output_root_path", temp_path),
+                patch.object(process.config, "start_stage", Stage.MOVE_FILES),
+                self.assertRaisesRegex(RuntimeError, "Multiple completed movies are ready to move"),
+            ):
+                process.process_each()
+
+    def test_move_files_stage_plan_is_filesystem_only(self) -> None:
+        with patch.object(process.config, "start_stage", Stage.MOVE_FILES):
+            self.assertEqual(process.conversion_stage_plan(), ("configure", "move_files"))
 
     def test_direct_audio_source_is_replaced_by_aac_and_removed_after_success(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

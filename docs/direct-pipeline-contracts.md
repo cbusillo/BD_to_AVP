@@ -174,7 +174,10 @@ already exist when restarting after `EXTRACT_MVC_AND_AUDIO`.
 without replaying source inspection, audio preparation, or muxing. Owned source,
 audio, and video artifacts remain available until that move succeeds; default
 cleanup then removes the completed output folder. A failed move therefore keeps
-all inputs needed for another final-mux or move attempt.
+all inputs needed for another final-mux or move attempt. Direct-file resumes use
+the source stem to select the matching completed movie. If multiple other
+completed movies are present, isolate the intended output folder before
+resuming rather than guessing which artifact to move.
 
 ## Risky Boundaries
 
