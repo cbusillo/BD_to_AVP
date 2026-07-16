@@ -69,7 +69,7 @@ include = [
 ]
 
 [tool.briefcase]
-project_name = "3D Blu-ray to Vision pro"
+project_name = "3D Blu-ray to Vision Pro"
 bundle = "com.shinycomputers"
 architectures = ["arm64"]
 icon = "bd_to_avp/resources/app_icon"
