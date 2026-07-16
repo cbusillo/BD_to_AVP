@@ -79,11 +79,10 @@ def find_batch_sources(source_folder_path: Path) -> tuple[Path, ...]:
 
 
 def conversion_stage_plan() -> tuple[str, ...]:
-    stages = [
-        "configure",
-        "preflight",
-        "inspect_source",
-    ]
+    stages = ["configure"]
+    if config.start_stage is Stage.MOVE_FILES:
+        return (*stages, "move_files")
+    stages.extend(["preflight", "inspect_source"])
     if config.start_stage.value <= Stage.CREATE_MKV.value:
         stages.append("create_mkv")
     if config.preview_range is not None:
@@ -104,7 +103,7 @@ def conversion_stage_plan() -> tuple[str, ...]:
         stages.append("combine_to_mv_hevc")
     if config.fx_upscale and config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
         stages.append("upscale_video")
-    if config.transcode_audio and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
+    if config.audio_mode.prepares_m4a and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
         stages.append("transcode_audio")
     if config.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
         stages.append("create_final_file")
@@ -186,6 +185,19 @@ def process_each(
 ) -> Path:
     raise_if_cancelled(cancellation_event)
     print(f"\nProcessing {config.source_path or config.source_str}")
+    if config.start_stage is Stage.MOVE_FILES:
+        muxed_output_path = completed_mux_path_for_move()
+        completed_path = config.output_root_path / muxed_output_path.name
+        if not config.overwrite and file_exists_normalized(completed_path):
+            raise FileExistsError(
+                f"Output file already exists for {muxed_output_path.stem}. Use --overwrite to replace."
+            )
+        return move_completed_conversion(
+            muxed_output_path,
+            config.output_root_path / "temp_files",
+            cancellation_event,
+            activity,
+        )
     if activity:
         activity.stage_started("preflight", "Checking required conversion tools")
     preflight.verify_runtime_ready()
@@ -270,9 +282,9 @@ def process_each(
     mv_hevc_path = create_upscaled_file(mv_hevc_path)
 
     raise_if_cancelled(cancellation_event)
-    if activity and config.transcode_audio and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
-        activity.stage_started("transcode_audio", "Preparing audio")
-    audio_output_path = create_transcoded_audio_file(audio_output_path, output_folder)
+    if activity and config.audio_mode.prepares_m4a and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
+        activity.stage_started("transcode_audio", "Prepare Audio")
+    audio_output_path = create_transcoded_audio_file(audio_output_path, output_folder, activity)
     raise_if_cancelled(cancellation_event)
     if activity and config.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
         activity.stage_started("create_final_file", "Muxing final spatial video")
@@ -282,6 +294,44 @@ def process_each(
         output_folder,
         disc_info.name,
     )
+
+    return move_completed_conversion(muxed_output_path, tmp_folder, cancellation_event, activity)
+
+
+def completed_mux_path_for_move() -> Path:
+    output_root = config.output_root_path
+    source_path = config.source_path
+    if source_path is not None:
+        source_name = source_path.stem
+        source_candidate = output_root / source_name / f"{source_name}{config.FINAL_FILE_TAG}.mov"
+        if source_candidate.is_file():
+            return source_candidate
+
+    candidates = sorted(
+        candidate
+        for output_folder in output_root.iterdir()
+        if output_folder.is_dir()
+        for candidate in [output_folder / f"{output_folder.name}{config.FINAL_FILE_TAG}.mov"]
+        if candidate.is_file()
+    )
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise FileNotFoundError(f"No completed movie is ready to move under {output_root}.")
+
+    candidate_names = ", ".join(candidate.relative_to(output_root).as_posix() for candidate in candidates)
+    raise RuntimeError(
+        "Multiple completed movies are ready to move. Select the matching direct-file source or isolate its output "
+        f"folder before resuming: {candidate_names}"
+    )
+
+
+def move_completed_conversion(
+    muxed_output_path: Path,
+    tmp_folder: Path,
+    cancellation_event: Event | None,
+    activity: ActivityReporter | None,
+) -> Path:
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("move_files", "Moving completed video")

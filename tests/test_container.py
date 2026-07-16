@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -5,6 +6,7 @@ from unittest.mock import patch
 import ffmpeg
 
 from bd_to_avp.modules import container
+from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import Stage
 
 
@@ -22,7 +24,7 @@ class AudioExtractionTests(unittest.TestCase):
 
     def test_direct_pipeline_skips_intermediate_video_and_pcm(self) -> None:
         with (
-            patch.object(container.config, "transcode_audio", True),
+            patch.object(container.config, "audio_mode", AudioMode.CONVERT_AAC),
             patch.object(container.config, "keep_files", False),
             patch.object(container.config, "start_stage", Stage.CREATE_MKV),
             patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
@@ -33,24 +35,24 @@ class AudioExtractionTests(unittest.TestCase):
         self.assertEqual(video_path, Path("source.mkv"))
         run_ffmpeg.assert_not_called()
 
-    def test_keep_files_preserves_mvc_and_pcm_boundaries(self) -> None:
+    def test_keep_files_preserves_mvc_without_changing_aac_policy(self) -> None:
         with (
-            patch.object(container.config, "transcode_audio", True),
+            patch.object(container.config, "audio_mode", AudioMode.CONVERT_AAC),
             patch.object(container.config, "keep_files", True),
             patch.object(container.config, "start_stage", Stage.CREATE_MKV),
             patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
         ):
             audio_path, video_path = container.create_mvc_and_audio("Movie", Path("source.mkv"), Path("output"))
 
-        command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
-        self.assertEqual(audio_path, Path("output/Movie_audio_PCM.mov"))
+        self.assertEqual(audio_path, Path("source.mkv"))
         self.assertEqual(video_path, Path("output/Movie_mvc.h264"))
-        self.assertIn("pcm_s24le", command)
+        command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
+        self.assertNotIn("pcm_s24le", command)
         self.assertIn("file:output/Movie_mvc.h264", command)
 
-    def test_direct_mode_without_audio_transcode_preserves_pcm_boundary(self) -> None:
+    def test_pcm_mode_preserves_pcm_boundary(self) -> None:
         with (
-            patch.object(container.config, "transcode_audio", False),
+            patch.object(container.config, "audio_mode", AudioMode.PCM),
             patch.object(container.config, "keep_files", False),
             patch.object(container.config, "start_stage", Stage.CREATE_MKV),
             patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
@@ -65,6 +67,52 @@ class AudioExtractionTests(unittest.TestCase):
 
 
 class MuxCommandTests(unittest.TestCase):
+    def test_final_mux_retains_inputs_until_completed_file_moves(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_folder = Path(temp_dir) / "Movie"
+            output_folder.mkdir()
+            mv_hevc_path = output_folder / "movie_MV-HEVC.mov"
+            audio_path = output_folder / "movie_audio.m4a"
+            mv_hevc_path.write_bytes(b"video")
+            audio_path.write_bytes(b"audio")
+
+            with (
+                patch.object(container.config, "keep_files", False),
+                patch.object(container.config, "start_stage", Stage.CREATE_MKV),
+                patch.object(container, "mux_video_audio_subs") as mux,
+            ):
+                result = container.create_muxed_file(audio_path, mv_hevc_path, output_folder, "Movie")
+
+            self.assertEqual(result, output_folder / "Movie_AVP.mov")
+            mux.assert_called_once_with(
+                mv_hevc_path,
+                audio_path,
+                output_folder / "Movie_AVP.mov",
+                output_folder,
+            )
+            self.assertTrue(mv_hevc_path.exists())
+            self.assertTrue(audio_path.exists())
+
+    def test_final_mux_failure_retains_inputs_for_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_folder = Path(temp_dir) / "Movie"
+            output_folder.mkdir()
+            mv_hevc_path = output_folder / "movie_MV-HEVC.mov"
+            audio_path = output_folder / "movie_audio.m4a"
+            mv_hevc_path.write_bytes(b"video")
+            audio_path.write_bytes(b"audio")
+
+            with (
+                patch.object(container.config, "keep_files", False),
+                patch.object(container.config, "start_stage", Stage.CREATE_MKV),
+                patch.object(container, "mux_video_audio_subs", side_effect=RuntimeError("mux failed")),
+                self.assertRaisesRegex(RuntimeError, "mux failed"),
+            ):
+                container.create_muxed_file(audio_path, mv_hevc_path, output_folder, "Movie")
+
+            self.assertTrue(mv_hevc_path.exists())
+            self.assertTrue(audio_path.exists())
+
     def test_final_mux_forces_video_sync_samples_for_quicktime_seeking(self) -> None:
         with (
             patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
@@ -112,6 +160,70 @@ class MuxCommandTests(unittest.TestCase):
         command = run_command.call_args.args[0]
         self.assertIn("Movie_audio_AAC.m4a#1:lang=eng:group=1:alternate_group=1", command)
         self.assertIn("Movie_audio_AAC.m4a#2:lang=fra:group=1:alternate_group=1:disable", command)
+
+    def test_final_mux_preserves_audio_title_and_default_disposition(self) -> None:
+        with (
+            patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+            patch.object(
+                container,
+                "get_audio_stream_data",
+                return_value=[
+                    {
+                        "index": 0,
+                        "tags": {"language": "eng", "title": "Commentary"},
+                        "channel_layout": "stereo",
+                        "disposition": {"default": 0},
+                    },
+                    {
+                        "index": 1,
+                        "tags": {"language": "jpn", "title": "Main Japanese"},
+                        "channel_layout": "5.1",
+                        "disposition": {"default": 1},
+                    },
+                ],
+            ),
+            patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
+            patch.object(container, "run_command") as run_command,
+        ):
+            container.mux_video_audio_subs(
+                Path("movie_MV-HEVC.mov"),
+                Path("Movie_audio_AAC.m4a"),
+                Path("movie_AVP.mov"),
+                Path("."),
+            )
+
+        command = run_command.call_args.args[0]
+        self.assertIn("Movie_audio_AAC.m4a#1:lang=eng:group=1:alternate_group=1:disable", command)
+        self.assertIn("2:type=name:str='Commentary'", command)
+        self.assertIn("Movie_audio_AAC.m4a#2:lang=jpn:group=1:alternate_group=1:enabled", command)
+        self.assertIn("3:type=name:str='Main Japanese'", command)
+
+    def test_final_mux_uses_m4a_name_tag_as_audio_title(self) -> None:
+        with (
+            patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+            patch.object(
+                container,
+                "get_audio_stream_data",
+                return_value=[
+                    {
+                        "index": 0,
+                        "tags": {"language": "eng", "name": "Director Commentary"},
+                        "channel_layout": "stereo",
+                    }
+                ],
+            ),
+            patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
+            patch.object(container, "run_command") as run_command,
+        ):
+            container.mux_video_audio_subs(
+                Path("movie_MV-HEVC.mov"),
+                Path("Movie_audio_AAC.m4a"),
+                Path("movie_AVP.mov"),
+                Path("."),
+            )
+
+        command = run_command.call_args.args[0]
+        self.assertIn("2:type=name:str='Director Commentary'", command)
 
     def test_final_mux_normalizes_bibliographic_audio_language(self) -> None:
         with (

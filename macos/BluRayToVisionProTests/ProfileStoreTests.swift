@@ -33,7 +33,7 @@ final class ProfileStoreTests: XCTestCase {
             resolutionOverride: "3840x2160",
             cropBlackBars: true,
             swapEyes: true,
-            audioHandling: .transcodeAAC,
+            audioHandling: .convertAAC,
             audioBitrate: 512,
             subtitles: SubtitlePolicy(mode: .off, preferredLanguage: .japanese)
         )
@@ -45,6 +45,54 @@ final class ProfileStoreTests: XCTestCase {
         XCTAssertEqual(profileID, "custom.\(identifier.uuidString.lowercased())")
         XCTAssertEqual(restoredStore.profile(withID: profileID).name, "Cinema")
         XCTAssertEqual(restoredStore.profile(withID: profileID).options, options)
+    }
+
+    @MainActor
+    func testVersionTwoProfilesKeepAllAudioHandlingRawValuesWithoutMigration() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        let document: [String: Any] = [
+            "version": 2,
+            "profiles": [
+                [
+                    "id": "A4CC523E-72FA-4F36-A38D-1FB0D6A84742",
+                    "name": "PCM",
+                    "options": try optionsJSON(audioHandlingRawValue: "preserve"),
+                ],
+                [
+                    "id": "6C02DFB0-2B6A-4F6D-9335-3703487FB9D7",
+                    "name": "AAC",
+                    "options": try optionsJSON(audioHandlingRawValue: "transcodeAAC"),
+                ],
+                [
+                    "id": "9B58E388-CB38-46ED-ADE4-F690F6A40D81",
+                    "name": "Automatic",
+                    "options": try optionsJSON(audioHandlingRawValue: "automatic"),
+                ],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]).write(to: fileURL)
+
+        let store = ProfileStore(fileURL: fileURL)
+
+        XCTAssertNil(store.loadErrorMessage)
+        XCTAssertEqual(store.customProfiles.map(\.options.audioHandling), [.pcm, .convertAAC, .automatic])
+        for profile in store.customProfiles {
+            try store.updateProfile(profile.id, name: profile.name, options: profile.options)
+        }
+
+        let persistedDocument = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
+        )
+        XCTAssertEqual(persistedDocument["version"] as? Int, 2)
+        let persistedProfiles = try XCTUnwrap(persistedDocument["profiles"] as? [[String: Any]])
+        let persistedRawValues = try persistedProfiles.map { profile in
+            let options = try XCTUnwrap(profile["options"] as? [String: Any])
+            return try XCTUnwrap(options["audioHandling"] as? String)
+        }
+        XCTAssertEqual(persistedRawValues, ["preserve", "transcodeAAC", "automatic"])
     }
 
     @MainActor
@@ -106,7 +154,7 @@ final class ProfileStoreTests: XCTestCase {
         XCTAssertEqual(migratedOptions.resolutionOverride, "3840x2160")
         XCTAssertTrue(migratedOptions.cropBlackBars)
         XCTAssertTrue(migratedOptions.swapEyes)
-        XCTAssertEqual(migratedOptions.audioHandling, .transcodeAAC)
+        XCTAssertEqual(migratedOptions.audioHandling, .convertAAC)
         XCTAssertEqual(migratedOptions.audioBitrate, 512)
 
         let migratedJSON = try XCTUnwrap(
@@ -324,6 +372,14 @@ final class ProfileStoreTests: XCTestCase {
 
     private func legacyDocument(profiles: [[String: Any]]) throws -> Data {
         try JSONSerialization.data(withJSONObject: ["version": 1, "profiles": profiles], options: [.sortedKeys])
+    }
+
+    private func optionsJSON(audioHandlingRawValue: String) throws -> [String: Any] {
+        var options = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(EncodingOptions())) as? [String: Any]
+        )
+        options["audioHandling"] = audioHandlingRawValue
+        return options
     }
 
     private func legacyProfile(

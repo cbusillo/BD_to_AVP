@@ -76,6 +76,32 @@ final class PreviewViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPrepareAudioStageUsesEncodingPhaseAndDisplayName() async throws {
+        try await withTemporaryPreviewEnvironment { sourceURL, cache in
+            let started = expectation(description: "prepare audio stage started")
+            let cancelled = expectation(description: "prepare audio preview cancelled")
+            let worker = PreviewWorkerClient(
+                initialStage: "transcode_audio",
+                initialStageMessage: "Prepare Audio",
+                waitsForCancellation: true,
+                onStarted: { started.fulfill() },
+                onCompleted: { cancelled.fulfill() }
+            )
+            let viewModel = PreviewViewModel(clientFactory: { worker }, cache: cache)
+            let previewDraft = try XCTUnwrap(makePreviewDraft(sourceURL: sourceURL))
+
+            viewModel.startPreview(previewDraft)
+
+            await fulfillment(of: [started], timeout: 2)
+            XCTAssertEqual(viewModel.phase, .encoding)
+            XCTAssertEqual(viewModel.stageMessage, "Prepare Audio")
+
+            viewModel.stopActiveWorker()
+            await fulfillment(of: [cancelled], timeout: 2)
+        }
+    }
+
+    @MainActor
     func testPreviewSnapshotDoesNotChangeWithEditableOptions() throws {
         let sourceURL = URL(fileURLWithPath: "/tmp/movie.mkv")
         var options = ConversionOptions()
@@ -186,6 +212,8 @@ final class PreviewCacheTests: XCTestCase {
 
 private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendable {
     private let lock = NSLock()
+    private let initialStage: String
+    private let initialStageMessage: String
     private let waitsForCancellation: Bool
     private let onStarted: (() -> Void)?
     private let onCancellationEventsDelivered: (() -> Void)?
@@ -198,11 +226,15 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
     private(set) var receivedJob: WorkerJobSpec?
 
     init(
+        initialStage: String = "create_left_right_files",
+        initialStageMessage: String = "Encoding Preview",
         waitsForCancellation: Bool = false,
         onStarted: (() -> Void)? = nil,
         onCancellationEventsDelivered: (() -> Void)? = nil,
         onCompleted: (() -> Void)? = nil
     ) {
+        self.initialStage = initialStage
+        self.initialStageMessage = initialStageMessage
         self.waitsForCancellation = waitsForCancellation
         self.onStarted = onStarted
         self.onCancellationEventsDelivered = onCancellationEventsDelivered
@@ -229,8 +261,8 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
             jobID: job.jobID,
             sequence: 1,
             payload: WorkerEventPayload(
-                stage: "create_left_right_files",
-                message: "Encoding Preview",
+                stage: initialStage,
+                message: initialStageMessage,
                 progress: WorkerProgress(currentStage: 9, totalStages: 13, stageFraction: nil)
             )
         )

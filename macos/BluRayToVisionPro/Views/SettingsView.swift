@@ -450,8 +450,8 @@ private struct ProfileEncodingSummaryView: View {
         var items = [
             ProfileSummaryItem(title: "Audio handling", value: options.audioHandling.title),
         ]
-        if options.audioHandling == .transcodeAAC {
-            items.append(ProfileSummaryItem(title: "AAC bitrate", value: "\(options.audioBitrate) kbps"))
+        if let bitrateLabel = options.audioHandling.bitrateLabel {
+            items.append(ProfileSummaryItem(title: bitrateLabel, value: "\(options.audioBitrate) kbps"))
         }
         return items
     }

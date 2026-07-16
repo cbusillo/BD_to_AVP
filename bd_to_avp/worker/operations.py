@@ -37,7 +37,7 @@ CONFIG_SNAPSHOT_FIELDS = (
     "source_folder_path",
     "output_root_path",
     "overwrite",
-    "transcode_audio",
+    "audio_mode",
     "audio_bitrate",
     "left_right_bitrate",
     "link_quality",
@@ -398,8 +398,8 @@ def configured_conversion(
         config.source_folder_path = None
         config.output_root_path = job.destination.path
         config.overwrite = job.job.overwrite
-        config.transcode_audio = job.encoding.transcode_audio
-        config.audio_bitrate = job.encoding.audio_bitrate
+        config.audio_mode = job.encoding.audio.mode
+        config.audio_bitrate = job.encoding.audio.bitrate
         config.left_right_bitrate = job.encoding.left_right_bitrate
         config.link_quality = job.encoding.link_quality
         config.mv_hevc_quality = job.encoding.mv_hevc_quality

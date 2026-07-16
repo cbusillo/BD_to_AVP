@@ -128,12 +128,14 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - `--fx-upscale`: Upscale video to 4K resolution using fx-upscale (disabled by default).
 - `--remove-original`: Remove the original source after processing completes successfully.
 - `--overwrite`: Overwrite existing output file.
-- `--keep-files`: Use durable stage boundaries and keep the source copy, extracted MVC, PCM audio, and later
-  intermediates. Without this option, BD_to_AVP automatically uses the minimum-materialization pipeline. An explicit
-  `--remove-original` still removes the selected source after a successful conversion.
+- `--keep-files`: Use durable stage boundaries and keep retained intermediates. This affects retention only; it does
+  not change the selected audio policy. An explicit `--remove-original` still removes the selected source after a
+  successful conversion.
 - `--output-root-folder`: Output folder path. Defaults to the current directory.
-- `--transcode-audio`: Enable audio transcoding to AAC (disabled by default).
-- `--audio-bitrate`: Audio bitrate for transcoding in kb/s do not include unit (default: "384").
+- `--audio-mode`: Audio handling mode: `automatic`, `convert_aac`, or `pcm` (default: `pcm`). Automatic copies
+  qualified AAC audio to an owned M4A, and converts the whole selected set to AAC if any selected stream is unqualified.
+- `--transcode-audio`: Legacy alias for `--audio-mode convert_aac`.
+- `--audio-bitrate`: Audio bitrate for AAC conversion in kb/s do not include unit (default: "384").
 - `--left-right-bitrate`: Bitrate for left and right views in Mb/s do not include unit (default: "20").
 - `--mv-hevc-quality`: Quality factor for MV-HEVC encoding (default: "75").
 - `--fov`: Horizontal field of view for MV-HEVC (default: "90").
@@ -159,7 +161,7 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - CREATE_LEFT_RIGHT_FILES
 - UPSCALE_VIDEO
 - COMBINE_TO_MV_HEVC
-- TRANSCODE_AUDIO
+- TRANSCODE_AUDIO (Prepare Audio)
 - CREATE_FINAL_FILE
 - MOVE_FILES
 

@@ -94,10 +94,14 @@ struct EncodingOptionsEditor: View {
                             Text(handling.title).tag(handling)
                         }
                     }
-                    .pickerStyle(.segmented)
 
-                    if options.audioHandling == .transcodeAAC {
-                        LabeledContent("AAC bitrate") {
+                    Text(options.audioHandling.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let bitrateLabel = options.audioHandling.bitrateLabel {
+                        LabeledContent(bitrateLabel) {
                             Stepper(value: $options.audioBitrate, in: 128 ... 1_000, step: 32) {
                                 Text("\(options.audioBitrate) kbps")
                                     .monospacedDigit()

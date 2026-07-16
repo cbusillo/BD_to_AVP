@@ -578,6 +578,9 @@ struct ContentView: View {
     }
 
     private var secondaryStatusText: String? {
+        if let warningMessage = viewModel.state.warningMessage {
+            return "Warning: \(warningMessage)"
+        }
         if let batchQueue = viewModel.batchQueue {
             if batchQueue.isRunning {
                 return viewModel.state.stageMessage
@@ -624,6 +627,9 @@ struct ContentView: View {
             if batchQueue.failedCount > 0 {
                 return .red
             }
+            if viewModel.state.warningMessage != nil {
+                return .orange
+            }
             if batchQueue.stoppedCount > 0 || batchQueue.notStartedCount > 0 {
                 return .orange
             }
@@ -637,6 +643,9 @@ struct ContentView: View {
         }
         if viewModel.state.phase == .failed {
             return .red
+        }
+        if viewModel.state.warningMessage != nil {
+            return .orange
         }
         return viewModel.source == nil ? .secondary : .green
     }

@@ -102,14 +102,11 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertNil(state.progress)
     }
 
-    func testSharedPythonProgressFixtureDecodes() throws {
-        let fixtureURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/native_worker_stage_started_progress_v5.json")
-
-        let event = try JSONDecoder().decode(WorkerEvent.self, from: Data(contentsOf: fixtureURL))
+    func testSharedV6ProgressFixtureDecodes() throws {
+        let event = try JSONDecoder().decode(
+            WorkerEvent.self,
+            from: sharedFixtureData(named: "native_worker_stage_started_progress_v6.json")
+        )
 
         XCTAssertEqual(event.payload.progress, WorkerProgress(currentStage: 1, totalStages: 2, stageFraction: nil))
     }
@@ -128,6 +125,27 @@ final class WorkerLifecycleTests: XCTestCase {
         )
 
         XCTAssertNil(state.progress)
+    }
+
+    func testStructuredAudioFallbackWarningExposesCodecsAndActualAction() throws {
+        let event = try JSONDecoder().decode(
+            WorkerEvent.self,
+            from: sharedFixtureData(named: "native_worker_audio_fallback_warning_v6.json")
+        )
+
+        XCTAssertEqual(event.payload.warningCode, "audio_automatic_fallback_to_aac")
+        XCTAssertEqual(event.payload.sourceCodecs, ["aac", "ac3"])
+        XCTAssertEqual(event.payload.audioAction, "convert_aac")
+
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: event.jobID, operationKind: .conversion)
+        try state.receive(event)
+
+        XCTAssertEqual(
+            state.warningMessage,
+            "Automatic audio selected AAC conversion because one or more selected tracks are not qualified AAC."
+        )
     }
 
     func testCancellationTransitionsThroughStoppingAndCancelled() throws {
@@ -321,13 +339,11 @@ final class WorkerLifecycleTests: XCTestCase {
         }
     }
 
-    func testDecodesAndAppliesSharedPythonConversionCompletionFixture() throws {
-        let fixtureURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/native_worker_conversion_completed_v5.json")
-        let completed = try JSONDecoder().decode(WorkerEvent.self, from: Data(contentsOf: fixtureURL))
+    func testDecodesAndAppliesSharedV6ConversionCompletionFixture() throws {
+        let completed = try JSONDecoder().decode(
+            WorkerEvent.self,
+            from: sharedFixtureData(named: "native_worker_conversion_completed_v6.json")
+        )
         let fixtureJobID = try XCTUnwrap(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
         var state = WorkerLifecycleState()
         state.selectSource(sourceURL)
@@ -367,6 +383,18 @@ final class WorkerLifecycleTests: XCTestCase {
             jobID: jobID ?? self.jobID,
             sequence: sequence,
             payload: payload
+        )
+    }
+
+    private func sharedFixtureData(named name: String) throws -> Data {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("tests/fixtures/\(name)")
+        return try XCTUnwrap(
+            FileManager.default.contents(atPath: fixtureURL.path),
+            "Required shared worker fixture is missing: \(name)"
         )
     }
 }

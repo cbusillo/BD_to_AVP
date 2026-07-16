@@ -9,6 +9,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import ClassVar, Iterable
 
+from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.modules.languages import LanguageCodeError, normalize_language_code
 from bd_to_avp.modules.util import get_pyproject_data
@@ -81,7 +82,7 @@ class Stage(Enum):
             "CREATE_LEFT_RIGHT_FILES": "Create Left Right Files",
             "UPSCALE_VIDEO": "Upscale Video",
             "COMBINE_TO_MV_HEVC": "Combine to MV HEVC",
-            "TRANSCODE_AUDIO": "Transcode Audio",
+            "TRANSCODE_AUDIO": "Prepare Audio",
             "CREATE_FINAL_FILE": "Create Final File",
             "MOVE_FILES": "Move Files",
         }[self.name]
@@ -193,7 +194,7 @@ class Config:
         self.source_folder_path: Path | None = None
         self.output_root_path = Path.home() / "Movies"
         self.overwrite = False
-        self.transcode_audio = False
+        self.audio_mode = AudioMode.PCM
         self.audio_bitrate = 384
         self.left_right_bitrate = 20
         self.link_quality = True
@@ -217,6 +218,14 @@ class Config:
         self.keep_awake = True
         self.preview_range: PreviewRange | None = None
         self.smoke_apple_vision_ocr = False
+
+    @property
+    def transcode_audio(self) -> bool:
+        return self.audio_mode is AudioMode.CONVERT_AAC
+
+    @transcode_audio.setter
+    def transcode_audio(self, value: bool) -> None:
+        self.audio_mode = AudioMode.CONVERT_AAC if value else AudioMode.PCM
 
     def configure_tool_environment(self) -> None:
         configured_dirs = [
@@ -258,6 +267,7 @@ class Config:
             config_parser.add_section("Paths")
         if not config_parser.has_section("Options"):
             config_parser.add_section("Options")
+        config_parser.remove_option("Options", "transcode_audio")
 
         for key, value in self.__dict__.items():
             if key == "app":
@@ -288,6 +298,10 @@ class Config:
                     setattr(self, key, Path(value))
 
         if config_parser.has_section("Options"):
+            if config_parser.has_option("Options", "transcode_audio") and not config_parser.has_option(
+                "Options", "audio_mode"
+            ):
+                self.transcode_audio = config_parser.getboolean("Options", "transcode_audio")
             for key, _value in config_parser.items("Options"):
                 if key in self.__dict__:
                     attribute_type = type(getattr(self, key))
@@ -298,6 +312,8 @@ class Config:
                     elif attribute_type is Stage:
                         stage_value = config_parser.get("Options", key).split(" - ")[0]
                         setattr(self, key, Stage.get_stage(int(stage_value)))
+                    elif attribute_type is AudioMode:
+                        setattr(self, key, AudioMode(config_parser.get("Options", key)))
                     else:
                         value = config_parser.get("Options", key)
                         if key == "language_code":
@@ -347,7 +363,12 @@ class Config:
         parser.add_argument(
             "--transcode-audio",
             action="store_true",
-            help="Transcode audio to AAC format.",
+            help="Legacy alias for --audio-mode convert_aac.",
+        )
+        parser.add_argument(
+            "--audio-mode",
+            choices=[mode.value for mode in AudioMode],
+            help="Audio handling mode: automatic, convert_aac, or pcm.",
         )
         parser.add_argument(
             "--audio-bitrate",
@@ -473,6 +494,10 @@ class Config:
                 self.language_code = normalize_language_code(args.language_code)
             except LanguageCodeError as error:
                 parser.error(str(error))
+        if args.audio_mode:
+            self.audio_mode = AudioMode(args.audio_mode)
+        elif args.transcode_audio:
+            self.audio_mode = AudioMode.CONVERT_AAC
 
 
 config = Config()
@@ -486,8 +511,12 @@ def is_direct_pipeline_source_reused() -> bool:
     )
 
 
+def is_audio_m4a_preparation_enabled() -> bool:
+    return config.audio_mode.prepares_m4a
+
+
 def is_direct_audio_transcode_enabled() -> bool:
-    return bool(config.transcode_audio and not config.keep_files)
+    return config.audio_mode is AudioMode.CONVERT_AAC and not config.keep_files
 
 
 def is_direct_mvc_stream_enabled() -> bool:

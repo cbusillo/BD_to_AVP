@@ -123,6 +123,48 @@ struct WorkerDecision: Decodable, Equatable {
     }
 }
 
+struct WorkerWarning: Decodable, Equatable {
+    let code: String?
+    let sourceCodecs: [String]?
+    let action: String?
+
+    init(code: String? = nil, sourceCodecs: [String]? = nil, action: String? = nil) {
+        self.code = code
+        self.sourceCodecs = sourceCodecs
+        self.action = action
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let code = try container.decodeIfPresent(String.self, forKey: .code) {
+            self.code = code
+        } else {
+            self.code = try container.decodeIfPresent(String.self, forKey: .warningCode)
+        }
+        sourceCodecs = try container.decodeIfPresent([String].self, forKey: .sourceCodecs)
+        if let action = try container.decodeIfPresent(String.self, forKey: .action) {
+            self.action = action
+        } else if let action = try container.decodeIfPresent(String.self, forKey: .actualAction) {
+            self.action = action
+        } else {
+            self.action = try container.decodeIfPresent(String.self, forKey: .audioAction)
+        }
+    }
+
+    var isEmpty: Bool {
+        code == nil && sourceCodecs == nil && action == nil
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case code
+        case warningCode = "warning_code"
+        case sourceCodecs = "source_codecs"
+        case action
+        case actualAction = "actual_action"
+        case audioAction = "audio_action"
+    }
+}
+
 struct WorkerProgress: Decodable, Equatable {
     let currentStage: Int
     let totalStages: Int
@@ -236,6 +278,7 @@ struct WorkerEventPayload: Decodable, Equatable {
     let elapsedSeconds: Int?
     let progress: WorkerProgress?
     let level: String?
+    let warning: WorkerWarning?
     let result: SourceInspection?
     let conversionResult: ConversionResult?
     let artifact: PreviewArtifact?
@@ -252,6 +295,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         elapsedSeconds: Int? = nil,
         progress: WorkerProgress? = nil,
         level: String? = nil,
+        warning: WorkerWarning? = nil,
         result: SourceInspection? = nil,
         conversionResult: ConversionResult? = nil,
         artifact: PreviewArtifact? = nil,
@@ -267,6 +311,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         self.elapsedSeconds = elapsedSeconds
         self.progress = progress
         self.level = level
+        self.warning = warning
         self.result = result
         self.conversionResult = conversionResult
         self.artifact = artifact
@@ -274,6 +319,34 @@ struct WorkerEventPayload: Decodable, Equatable {
         self.error = error
         self.decision = decision
     }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        workerVersion = try container.decodeIfPresent(String.self, forKey: .workerVersion)
+        processGroupID = try container.decodeIfPresent(Int32.self, forKey: .processGroupID)
+        operation = try container.decodeIfPresent(String.self, forKey: .operation)
+        stage = try container.decodeIfPresent(String.self, forKey: .stage)
+        message = try container.decodeIfPresent(String.self, forKey: .message)
+        elapsedSeconds = try container.decodeIfPresent(Int.self, forKey: .elapsedSeconds)
+        progress = try container.decodeIfPresent(WorkerProgress.self, forKey: .progress)
+        level = try container.decodeIfPresent(String.self, forKey: .level)
+        if let nestedWarning = try container.decodeIfPresent(WorkerWarning.self, forKey: .warning) {
+            warning = nestedWarning
+        } else {
+            let flatWarning = try WorkerWarning(from: decoder)
+            warning = flatWarning.isEmpty ? nil : flatWarning
+        }
+        result = try container.decodeIfPresent(SourceInspection.self, forKey: .result)
+        conversionResult = try container.decodeIfPresent(ConversionResult.self, forKey: .conversionResult)
+        artifact = try container.decodeIfPresent(PreviewArtifact.self, forKey: .artifact)
+        previewResult = try container.decodeIfPresent(PreviewArtifact.self, forKey: .previewResult)
+        error = try container.decodeIfPresent(WorkerFailure.self, forKey: .error)
+        decision = try container.decodeIfPresent(WorkerDecision.self, forKey: .decision)
+    }
+
+    var warningCode: String? { warning?.code }
+    var sourceCodecs: [String]? { warning?.sourceCodecs }
+    var audioAction: String? { warning?.action }
 
     enum CodingKeys: String, CodingKey {
         case workerVersion = "worker_version"
@@ -284,6 +357,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         case elapsedSeconds = "elapsed_seconds"
         case progress
         case level
+        case warning
         case result
         case conversionResult = "conversion_result"
         case artifact

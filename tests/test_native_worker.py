@@ -14,6 +14,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from bd_to_avp.modules.config import Stage, config
+from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.disc import DiscInfo, DiscTitleInfo, MKVCreationError
 from bd_to_avp.modules.process import process_each
 from bd_to_avp.modules.sub import SRTCreationError
@@ -83,8 +84,7 @@ def conversion_request_line(
         "source": source,
         "destination": {"path": str(destination_path)},
         "encoding": {
-            "transcode_audio": True,
-            "audio_bitrate": 384,
+            "audio": {"mode": "convert_aac", "bitrate": 384},
             "left_right_bitrate": 20,
             "link_quality": True,
             "mv_hevc_quality": 75,
@@ -166,7 +166,8 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.operation.value, "convert_source")
         self.assertEqual(job.source.path, source_path)
         self.assertEqual(job.destination.path if job.destination else None, destination_path)
-        self.assertTrue(job.encoding.transcode_audio if job.encoding else False)
+        self.assertEqual(job.encoding.audio.mode if job.encoding else None, AudioMode.CONVERT_AAC)
+        self.assertEqual(job.encoding.audio.bitrate if job.encoding else None, 384)
         self.assertEqual(job.encoding.subtitles.mode.value if job.encoding else None, "preferred_plus_others")
         self.assertEqual(job.encoding.subtitles.preferred_language if job.encoding else None, "eng")
         self.assertEqual(job.job.start_stage if job.job else None, 1)
@@ -227,7 +228,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(context.exception.code, "invalid_source")
 
     def test_parses_shared_swift_conversion_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v5.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v6.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -238,7 +239,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.encoding.mv_hevc_quality if job.encoding else None, 75)
 
     def test_parses_shared_swift_physical_disc_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v5.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v6.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -248,7 +249,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertFalse(job.job.remove_original if job.job else True)
 
     def test_parses_shared_swift_preview_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v5.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v6.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -332,6 +333,34 @@ class JobSpecTests(unittest.TestCase):
             JobSpec.from_json_line(json.dumps(request) + "\n")
 
         self.assertEqual(context.exception.code, "invalid_request")
+
+    def test_rejects_legacy_audio_fields_in_protocol_v6(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["transcode_audio"] = False
+        request["encoding"]["audio_bitrate"] = 384
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request) + "\n")
+
+        self.assertEqual(context.exception.code, "invalid_request")
+
+    def test_rejects_unknown_audio_mode(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["audio"]["mode"] = "keep_original"
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request) + "\n")
+
+        self.assertEqual(context.exception.code, "invalid_encoding_options")
+
+    def test_rejects_unknown_nested_audio_field_with_stable_error_code(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["audio"]["surprise"] = True
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request) + "\n")
+
+        self.assertEqual(context.exception.code, "invalid_encoding_options")
 
     def test_normalizes_subtitle_language_aliases(self) -> None:
         request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
@@ -505,6 +534,35 @@ class WorkerEventEmitterTests(unittest.TestCase):
 
 
 class WorkerActivityReporterTests(unittest.TestCase):
+    def test_warning_emits_shared_automatic_fallback_fixture(self) -> None:
+        output = io.StringIO()
+        job_id = "11111111-1111-4111-8111-111111111111"
+        activity = WorkerActivityReporter(WorkerEventEmitter(output, job_id))
+
+        activity.warning(
+            "Automatic audio selected AAC conversion because one or more selected tracks are not qualified AAC.",
+            stage="transcode_audio",
+            code="audio_automatic_fallback_to_aac",
+            audio_mode="automatic",
+            action="convert_aac",
+            source_codecs=["aac", "ac3"],
+            unqualified_streams=[
+                {
+                    "index": 1,
+                    "codec": "ac3",
+                    "profile": None,
+                    "sample_rate": 48_000,
+                    "channels": 6,
+                    "channel_layout": "5.1(side)",
+                    "reason": "codec_not_allowed",
+                }
+            ],
+        )
+
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_fallback_warning_v6.json"
+        expected = json.loads(fixture_path.read_text())
+        self.assertEqual(decoded_events(output), [expected])
+
     def test_stage_plan_emits_shared_progress_fixture(self) -> None:
         output = io.StringIO()
         job_id = "11111111-1111-4111-8111-111111111111"
@@ -513,7 +571,7 @@ class WorkerActivityReporterTests(unittest.TestCase):
 
         activity.stage_started("configure", "Preparing conversion settings")
 
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v5.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v6.json"
         expected = json.loads(fixture_path.read_text())
         self.assertEqual(decoded_events(output), [expected])
 
@@ -660,7 +718,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 }
             },
         )
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v5.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v6.json"
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
 
         self.assertEqual(decoded_events(output)[-1], fixture)
@@ -1333,7 +1391,7 @@ class SourceConversionTests(unittest.TestCase):
             activity = WorkerActivityReporter(emitter)
             previous_source_path = config.source_path
             previous_output_root_path = config.output_root_path
-            previous_transcode_audio = config.transcode_audio
+            previous_audio_mode = config.audio_mode
             previous_remove_original = config.remove_original
             previous_environment = {
                 key: os.environ.get(key) for key in ("PATH", "FFMPEG_BINARY", "FFPROBE_BINARY", "TMPDIR")
@@ -1360,7 +1418,7 @@ class SourceConversionTests(unittest.TestCase):
             process_each_mock.assert_called_once()
             self.assertEqual(config.source_path, previous_source_path)
             self.assertEqual(config.output_root_path, previous_output_root_path)
-            self.assertEqual(config.transcode_audio, previous_transcode_audio)
+            self.assertEqual(config.audio_mode, previous_audio_mode)
             self.assertEqual(config.remove_original, previous_remove_original)
             for key, value in previous_environment.items():
                 self.assertEqual(os.environ.get(key), value)
@@ -1377,8 +1435,7 @@ class SourceConversionTests(unittest.TestCase):
             request = json.loads(conversion_request_line(source_path, destination_path))
             request["encoding"].update(
                 {
-                    "transcode_audio": False,
-                    "audio_bitrate": 512,
+                    "audio": {"mode": "pcm", "bitrate": 512},
                     "left_right_bitrate": 42,
                     "mv_hevc_quality": 88,
                     "upscale_quality": 66,
@@ -1416,7 +1473,7 @@ class SourceConversionTests(unittest.TestCase):
                     {
                         "source_path": config.source_path,
                         "output_root_path": config.output_root_path,
-                        "transcode_audio": config.transcode_audio,
+                        "audio_mode": config.audio_mode,
                         "audio_bitrate": config.audio_bitrate,
                         "left_right_bitrate": config.left_right_bitrate,
                         "mv_hevc_quality": config.mv_hevc_quality,
@@ -1451,7 +1508,7 @@ class SourceConversionTests(unittest.TestCase):
 
             self.assertEqual(observed["source_path"], source_path)
             self.assertEqual(observed["output_root_path"], destination_path)
-            self.assertFalse(observed["transcode_audio"])
+            self.assertEqual(observed["audio_mode"], AudioMode.PCM)
             self.assertEqual(observed["audio_bitrate"], 512)
             self.assertEqual(observed["left_right_bitrate"], 42)
             self.assertEqual(observed["mv_hevc_quality"], 88)

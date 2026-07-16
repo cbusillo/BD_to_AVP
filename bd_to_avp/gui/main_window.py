@@ -27,12 +27,21 @@ from bd_to_avp.gui.dialog import AboutDialog
 from bd_to_avp.gui.processing import ProcessingController, ProcessingRequest
 from bd_to_avp.gui.updater import UpdateChannel, UpdaterManager
 from bd_to_avp.gui.widget import FileFolderPicker, LabeledComboBox, LabeledLineEdit, LabeledSpinBox
+from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
 from bd_to_avp.modules.languages import language_code_for_name, language_name
 from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.modules.util import formatted_time_elapsed, format_timestamp, get_common_language_options
 from bd_to_avp.modules.command import Spinner
+
+
+AUDIO_MODE_LABELS = {
+    AudioMode.AUTOMATIC: "Automatic",
+    AudioMode.CONVERT_AAC: "Convert to AAC",
+    AudioMode.PCM: "Uncompressed PCM",
+}
+AUDIO_MODE_BY_LABEL = {label: mode for mode, label in AUDIO_MODE_LABELS.items()}
 
 
 # noinspection PyAttributeOutsideInit
@@ -85,7 +94,7 @@ class MainWindow(QMainWindow):
         self.create_processing_output(main_widget)
         self.create_status_bar(main_layout)
 
-        self.toggle_transcode()
+        self.toggle_audio_bitrate()
         self.toggle_upscale()
         self.toggle_read_from_disc()
 
@@ -189,9 +198,16 @@ class MainWindow(QMainWindow):
         )
         self.remove_original_checkbox = self.create_checkbox("Remove Original After Success", config.remove_original)
         self.overwrite_checkbox = self.create_checkbox("Overwrite", config.overwrite)
-        self.transcode_audio_checkbox = self.create_checkbox(
-            "Transcode Audio", config.transcode_audio, self.toggle_transcode
+        self.audio_mode_combobox = LabeledComboBox(
+            "Audio Handling",
+            list(AUDIO_MODE_BY_LABEL),
+            AUDIO_MODE_LABELS[config.audio_mode],
         )
+        self.audio_mode_combobox.setToolTip(
+            "Automatic copies qualified AAC audio and converts other audio to AAC. "
+            "Uncompressed PCM preserves the current lossless decode behavior."
+        )
+        self.audio_mode_combobox.combobox.currentIndexChanged.connect(self.toggle_audio_bitrate)
         self.continue_on_error = self.create_checkbox("Continue Processing On Error", config.continue_on_error)
         self.skip_subtitles_checkbox = self.create_checkbox("Skip Subtitles", config.skip_subtitles)
         self.remove_extra_languages_checkbox = self.create_checkbox(
@@ -206,7 +222,7 @@ class MainWindow(QMainWindow):
         config_layout.addWidget(self.fx_upscale_checkbox)
         config_layout.addWidget(self.remove_original_checkbox)
         config_layout.addWidget(self.overwrite_checkbox)
-        config_layout.addWidget(self.transcode_audio_checkbox)
+        config_layout.addWidget(self.audio_mode_combobox)
         config_layout.addWidget(self.continue_on_error)
         config_layout.addWidget(self.skip_subtitles_checkbox)
         config_layout.addWidget(self.remove_extra_languages_checkbox)
@@ -436,7 +452,8 @@ class MainWindow(QMainWindow):
         self.fx_upscale_checkbox.setChecked(config.fx_upscale)
         self.remove_original_checkbox.setChecked(config.remove_original)
         self.overwrite_checkbox.setChecked(config.overwrite)
-        self.transcode_audio_checkbox.setChecked(config.transcode_audio)
+        self.audio_mode_combobox.set_current_text(AUDIO_MODE_LABELS[config.audio_mode])
+        self.toggle_audio_bitrate()
         self.continue_on_error.setChecked(config.continue_on_error)
         self.skip_subtitles_checkbox.setChecked(config.skip_subtitles)
         self.start_stage_combobox.set_current_text(str(config.start_stage))
@@ -552,7 +569,7 @@ class MainWindow(QMainWindow):
         config.fx_upscale = self.fx_upscale_checkbox.isChecked()
         config.remove_original = self.remove_original_checkbox.isChecked()
         config.overwrite = self.overwrite_checkbox.isChecked()
-        config.transcode_audio = self.transcode_audio_checkbox.isChecked()
+        config.audio_mode = AUDIO_MODE_BY_LABEL[self.audio_mode_combobox.current_text()]
         selected_stage = int(self.start_stage_combobox.current_text().split(" - ")[0])
         config.continue_on_error = self.continue_on_error.isChecked()
         config.skip_subtitles = self.skip_subtitles_checkbox.isChecked()
@@ -621,5 +638,6 @@ class MainWindow(QMainWindow):
             check_box.stateChanged.connect(onchange_function)
         return check_box
 
-    def toggle_transcode(self) -> None:
-        self.audio_bitrate_spinbox.setVisible(self.transcode_audio_checkbox.isChecked())
+    def toggle_audio_bitrate(self) -> None:
+        mode = AUDIO_MODE_BY_LABEL[self.audio_mode_combobox.current_text()]
+        self.audio_bitrate_spinbox.setVisible(mode.prepares_m4a)
