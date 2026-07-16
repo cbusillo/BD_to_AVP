@@ -168,6 +168,7 @@ private struct LanguagePickerPopover: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(language.displayName)
         .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(language.code == selection.code ? .isSelected : [])
         .accessibilityAction {
             select(language)
         }

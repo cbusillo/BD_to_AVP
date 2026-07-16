@@ -159,6 +159,33 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testVersionOneProfileWithUnsupportedLanguageIsPreservedAsCorrupt() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        let legacyData = try legacyDocument(
+            profiles: [
+                legacyProfile(
+                    id: "A4CC523E-72FA-4F36-A38D-1FB0D6A84742",
+                    name: "Unsupported Language",
+                    language: "xyz",
+                    includeSubtitles: true,
+                    keepExtraLanguages: false
+                )
+            ]
+        )
+        try legacyData.write(to: fileURL)
+
+        let store = ProfileStore(fileURL: fileURL)
+
+        XCTAssertTrue(store.customProfiles.isEmpty)
+        XCTAssertNotNil(store.loadErrorMessage)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+        XCTAssertEqual(try Data(contentsOf: fileURL.appendingPathExtension("corrupt")), legacyData)
+    }
+
+    @MainActor
     func testDuplicateUpdateAndDeleteLifecycle() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }

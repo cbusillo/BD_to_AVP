@@ -33,7 +33,7 @@ final class LanguageCatalogTests: XCTestCase {
     func testSearchFindsDutchByNameAndEveryCode() {
         let catalog = LanguageCatalog.shared
 
-        for query in ["Dutch", "nl", "nld", "dut"] {
+        for query in ["Dutch", "dutch", "nl", "nld", "dut"] {
             XCTAssertEqual(catalog.search(query).first?.code, "nld", query)
         }
         XCTAssertTrue(catalog.search("not-a-language").isEmpty)
