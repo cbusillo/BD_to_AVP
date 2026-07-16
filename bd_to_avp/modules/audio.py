@@ -256,9 +256,13 @@ def qualify_audio_stream(stream: dict[str, Any]) -> AudioStreamQualification:
 def parse_optional_int(value: object) -> int | None:
     if isinstance(value, bool):
         return None
+    if isinstance(value, int):
+        return value
+    if not isinstance(value, str):
+        return None
     try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
+        return int(value)
+    except ValueError:
         return None
 
 
