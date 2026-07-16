@@ -20,7 +20,7 @@ struct LanguagePickerField: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .accessibilityLabel("Preferred language: \(selection.displayName)")
+            .accessibilityLabel(selection.displayName)
             .accessibilityHint("Opens a searchable list of languages")
             .popover(isPresented: $isPresented, arrowEdge: .trailing) {
                 LanguagePickerPopover(selection: $selection, isPresented: $isPresented)
