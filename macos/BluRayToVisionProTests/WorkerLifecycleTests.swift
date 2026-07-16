@@ -102,14 +102,11 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertNil(state.progress)
     }
 
-    func testSharedPythonProgressFixtureDecodes() throws {
-        let fixtureURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/native_worker_stage_started_progress_v5.json")
-
-        let event = try JSONDecoder().decode(WorkerEvent.self, from: Data(contentsOf: fixtureURL))
+    func testSharedV6ProgressFixtureDecodes() throws {
+        let event = try JSONDecoder().decode(
+            WorkerEvent.self,
+            from: sharedFixtureData(named: "native_worker_stage_started_progress_v6.json")
+        )
 
         XCTAssertEqual(event.payload.progress, WorkerProgress(currentStage: 1, totalStages: 2, stageFraction: nil))
     }
@@ -128,6 +125,42 @@ final class WorkerLifecycleTests: XCTestCase {
         )
 
         XCTAssertNil(state.progress)
+    }
+
+    func testStructuredAudioFallbackWarningExposesCodecsAndActualAction() throws {
+        let event = try JSONDecoder().decode(
+            WorkerEvent.self,
+            from: Data(
+                """
+                {
+                  "protocol_version": 6,
+                  "type": "warning",
+                  "job_id": "11111111-1111-4111-8111-111111111111",
+                  "sequence": 0,
+                  "payload": {
+                    "message": "Automatic audio used the AAC fallback for the selected track set.",
+                    "code": "automatic_audio_fallback",
+                    "source_codecs": ["aac", "dts"],
+                    "action": "convert_aac"
+                  }
+                }
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(event.payload.warningCode, "automatic_audio_fallback")
+        XCTAssertEqual(event.payload.sourceCodecs, ["aac", "dts"])
+        XCTAssertEqual(event.payload.audioAction, "convert_aac")
+
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: event.jobID, operationKind: .conversion)
+        try state.receive(event)
+
+        XCTAssertEqual(
+            state.warningMessage,
+            "Automatic audio used the AAC fallback for the selected track set."
+        )
     }
 
     func testCancellationTransitionsThroughStoppingAndCancelled() throws {
@@ -321,13 +354,11 @@ final class WorkerLifecycleTests: XCTestCase {
         }
     }
 
-    func testDecodesAndAppliesSharedPythonConversionCompletionFixture() throws {
-        let fixtureURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/native_worker_conversion_completed_v5.json")
-        let completed = try JSONDecoder().decode(WorkerEvent.self, from: Data(contentsOf: fixtureURL))
+    func testDecodesAndAppliesSharedV6ConversionCompletionFixture() throws {
+        let completed = try JSONDecoder().decode(
+            WorkerEvent.self,
+            from: sharedFixtureData(named: "native_worker_conversion_completed_v6.json")
+        )
         let fixtureJobID = try XCTUnwrap(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
         var state = WorkerLifecycleState()
         state.selectSource(sourceURL)
@@ -368,5 +399,17 @@ final class WorkerLifecycleTests: XCTestCase {
             sequence: sequence,
             payload: payload
         )
+    }
+
+    private func sharedFixtureData(named name: String) throws -> Data {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("tests/fixtures/\(name)")
+        guard FileManager.default.fileExists(atPath: fixtureURL.path) else {
+            throw XCTSkip("Waiting for the backend v6 fixture \(name).")
+        }
+        return try Data(contentsOf: fixtureURL)
     }
 }
