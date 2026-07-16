@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence, TextIO
 from uuid import UUID
 
+from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.languages import LanguageCodeError, normalize_language_code
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_DETAIL_BYTES = 64 * 1024
@@ -91,6 +92,12 @@ class JobDestination:
 
 
 @dataclass(frozen=True)
+class AudioOptions:
+    mode: AudioMode
+    bitrate: int
+
+
+@dataclass(frozen=True)
 class SubtitleOptions:
     mode: SubtitleMode
     preferred_language: str | None
@@ -98,8 +105,7 @@ class SubtitleOptions:
 
 @dataclass(frozen=True)
 class EncodingOptions:
-    transcode_audio: bool
-    audio_bitrate: int
+    audio: AudioOptions
     left_right_bitrate: int
     link_quality: bool
     mv_hevc_quality: int
@@ -381,8 +387,7 @@ class JobSpec:
                 job_id=job_id,
             )
         required_keys = {
-            "transcode_audio",
-            "audio_bitrate",
+            "audio",
             "left_right_bitrate",
             "link_quality",
             "mv_hevc_quality",
@@ -397,8 +402,7 @@ class JobSpec:
         }
         cls._require_exact_keys(value, required_keys, "encoding", job_id)
         return EncodingOptions(
-            transcode_audio=cls._parse_bool(value, "transcode_audio", "encoding", job_id),
-            audio_bitrate=cls._parse_int(value, "audio_bitrate", "encoding", job_id, minimum=1, maximum=4096),
+            audio=cls._parse_audio_options(value.get("audio"), job_id),
             left_right_bitrate=cls._parse_int(value, "left_right_bitrate", "encoding", job_id, minimum=1, maximum=500),
             link_quality=cls._parse_bool(value, "link_quality", "encoding", job_id),
             mv_hevc_quality=cls._parse_int(value, "mv_hevc_quality", "encoding", job_id, minimum=0, maximum=100),
@@ -410,6 +414,51 @@ class JobSpec:
             swap_eyes=cls._parse_bool(value, "swap_eyes", "encoding", job_id),
             fx_upscale=cls._parse_bool(value, "fx_upscale", "encoding", job_id),
             subtitles=cls._parse_subtitle_options(value.get("subtitles"), job_id),
+        )
+
+    @classmethod
+    def _parse_audio_options(cls, value: Any, job_id: str) -> AudioOptions:
+        if not isinstance(value, Mapping):
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "encoding.audio must be an object.",
+                job_id=job_id,
+            )
+        cls._require_exact_keys(
+            value,
+            {"mode", "bitrate"},
+            "encoding.audio",
+            job_id,
+            error_code="invalid_encoding_options",
+        )
+
+        raw_mode = value.get("mode")
+        if not isinstance(raw_mode, str):
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "encoding.audio.mode must be a string.",
+                job_id=job_id,
+            )
+        try:
+            mode = AudioMode(raw_mode)
+        except ValueError as error:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                f"Unsupported audio mode: {raw_mode!r}.",
+                job_id=job_id,
+            ) from error
+
+        return AudioOptions(
+            mode=mode,
+            bitrate=cls._parse_int(
+                value,
+                "bitrate",
+                "encoding.audio",
+                job_id,
+                minimum=1,
+                maximum=4096,
+                error_code="invalid_encoding_options",
+            ),
         )
 
     @classmethod
@@ -609,17 +658,18 @@ class JobSpec:
         *,
         minimum: int,
         maximum: int,
+        error_code: str | None = None,
     ) -> int:
         field_value = value.get(key)
         if not isinstance(field_value, int) or isinstance(field_value, bool):
             raise WorkerProtocolError(
-                f"invalid_{label}_options",
+                error_code or f"invalid_{label}_options",
                 f"{label}.{key} must be an integer.",
                 job_id=job_id,
             )
         if not minimum <= field_value <= maximum:
             raise WorkerProtocolError(
-                f"invalid_{label}_options",
+                error_code or f"invalid_{label}_options",
                 f"{label}.{key} must be between {minimum} and {maximum}.",
                 job_id=job_id,
             )

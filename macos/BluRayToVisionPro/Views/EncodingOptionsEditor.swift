@@ -94,7 +94,6 @@ struct EncodingOptionsEditor: View {
                             Text(handling.title).tag(handling)
                         }
                     }
-                    .pickerStyle(.segmented)
 
                     Text(options.audioHandling.detail)
                         .font(.caption)

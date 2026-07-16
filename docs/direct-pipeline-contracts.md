@@ -58,15 +58,21 @@ named restartable file.
 - Restart/debug value: high. External and built-in upscale workflows need this
   boundary.
 
-### `TRANSCODE_AUDIO`
+### `TRANSCODE_AUDIO` / Prepare Audio
 
-- Input: source container in default AAC mode or PCM audio movie with
-  `--keep-files`.
-- Output: `<folder>_audio_AAC.m4a` when enabled. The MPEG-4 audio container
-  preserves AAC decoder configuration when MP4Box imports the tracks into the
-  final spatial movie.
+- Input: source container for `automatic` and `convert_aac`; generated PCM audio
+  movie for `pcm`.
+- Output: `<folder>_audio_AAC.m4a` for `automatic` and `convert_aac`. The MPEG-4
+  audio container is an owned artifact and preserves AAC decoder configuration
+  when MP4Box imports the tracks into the final spatial movie. `pcm` keeps the
+  existing generated `<folder>_audio_PCM.mov` behavior.
+- `automatic` remuxes/copies the selected audio set only when every selected
+  stream is qualified AAC with a supported profile, sample rate, and channel
+  layout. If any selected stream is unqualified, including
+  AC-3 or E-AC-3, the whole selected set is converted to AAC and the worker
+  emits a structured warning.
 - Older builds wrote `<folder>_audio_AAC.mov`. A resume directory containing
-  only that legacy artifact must restart from `TRANSCODE_AUDIO` so the app can
+  only that legacy artifact must restart from Prepare Audio so the app can
   regenerate a compatible M4A instead of attempting an unsafe final mux.
 - Restart/debug value: medium. This is the final mux input and useful for audio
   debugging.
@@ -151,16 +157,16 @@ boundary during processing and are retained after completion with
 
 ### Extracted Audio To Transcoded Audio
 
-When AAC transcoding is enabled without `--keep-files`, the
-`TRANSCODE_AUDIO` stage reads audio from the MKV/MTS/M2TS source and writes the
-final AAC M4A directly. MVC video uses the same source container through the
-direct splitter pipeline.
+When `automatic` or `convert_aac` is selected, the Prepare Audio stage reads
+audio from the MKV/MTS/M2TS source and writes the final owned M4A directly. MVC
+video uses the same source container through the direct splitter pipeline.
 
 The final mux still needs a seekable audio file, so the AAC M4A remains
-materialized. Durable mode and `--keep-files` retain the existing PCM boundary,
-and direct-mode resumes at `TRANSCODE_AUDIO` can recreate AAC from the source.
-As with durable resumes, video artifacts from earlier stages must already exist
-when restarting after `EXTRACT_MVC_AND_AUDIO`.
+materialized. `--keep-files` controls retention only and does not change the
+selected audio policy. Direct-mode resumes at Prepare Audio can recreate AAC
+from the source; resumes at the final mux require the owned prepared M4A to
+already exist. As with durable resumes, video artifacts from earlier stages must
+already exist when restarting after `EXTRACT_MVC_AND_AUDIO`.
 
 ### Final Move
 

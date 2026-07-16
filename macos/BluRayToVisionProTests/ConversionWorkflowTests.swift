@@ -768,12 +768,14 @@ final class ConversionWorkflowTests: XCTestCase {
     }
 
     func testConversionJobSpecMatchesSharedV6WorkerFixture() throws {
+        var options = ConversionOptions()
+        options.encoding.audioHandling = .automatic
         let draft = ConversionDraft(
             source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/movie.mkv")),
             sourceDetails: nil,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
-            options: ConversionOptions()
+            options: options
         )
         let spec = WorkerJobSpec(
             draft: draft,
@@ -813,12 +815,14 @@ final class ConversionWorkflowTests: XCTestCase {
     }
 
     func testPreviewJobSpecMatchesSharedV6WorkerFixture() throws {
+        var options = ConversionOptions()
+        options.encoding.audioHandling = .automatic
         let conversion = ConversionDraft(
             source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/movie.mkv")),
             sourceDetails: nil,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
-            options: ConversionOptions()
+            options: options
         )
         let preview = try XCTUnwrap(
             PreviewDraft(
@@ -845,6 +849,8 @@ final class ConversionWorkflowTests: XCTestCase {
     }
 
     func testPhysicalDiscJobSpecMatchesSharedV6WorkerFixture() throws {
+        var options = ConversionOptions()
+        options.encoding.audioHandling = .automatic
         let draft = ConversionDraft(
             source: ConversionSource(
                 kind: .physicalDisc,
@@ -854,7 +860,7 @@ final class ConversionWorkflowTests: XCTestCase {
             sourceDetails: nil,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
-            options: ConversionOptions(),
+            options: options,
             selectedTitle: SourceTitle(
                 id: "makemkv:0",
                 name: "Main Movie",

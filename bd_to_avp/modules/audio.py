@@ -1,9 +1,45 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Protocol
 
 import ffmpeg
 
-from bd_to_avp.modules.config import Stage, config, is_direct_audio_transcode_enabled
+from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.command import run_ffmpeg_print_errors
+from bd_to_avp.modules.config import Stage, config
+from bd_to_avp.modules.container import get_audio_stream_data
+
+
+class AudioActivityReporter(Protocol):
+    def warning(self, message: str, *, stage: str | None = None, **fields: object) -> None:
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class AudioStreamQualification:
+    index: int
+    codec_name: str
+    profile: str | None
+    qualified: bool
+    reason: str | None = None
+    sample_rate: int | None = None
+    channels: int | None = None
+    channel_layout: str | None = None
+
+
+AAC_COPY_CODECS = frozenset({"aac"})
+EXPLICITLY_UNQUALIFIED_CODECS = frozenset({"ac3", "eac3", "ac-3", "e-ac-3"})
+AAC_COPY_PROFILES = frozenset({"lc", "he-aac", "he-aacv2", "mpeg-4 aac lc", "aac lc"})
+AAC_COPY_SAMPLE_RATES = frozenset({44_100, 48_000})
+AAC_COPY_LAYOUT_CHANNELS = {
+    "mono": 1,
+    "stereo": 2,
+    "5.1": 6,
+    "5.1(side)": 6,
+    "7.1": 8,
+}
 
 
 def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int, audio_selector: str = "a") -> None:
@@ -13,34 +49,269 @@ def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int,
         str(f"file:{transcoded_audio_path}"),
         acodec="aac",
         audio_bitrate=f"{bitrate}k",
+        map_metadata=0,
     )
     run_ffmpeg_print_errors(audio_transcoded, f"transcode audio to {bitrate}kbps", overwrite_output=True)
 
 
-def create_transcoded_audio_file(original_audio_path: Path, output_folder: Path) -> Path:
-    transcoded_audio_path = output_folder / f"{output_folder.stem}_audio_AAC.m4a"
-    legacy_transcoded_audio_path = output_folder / f"{output_folder.stem}_audio_AAC.mov"
-    direct_audio_transcode = is_direct_audio_transcode_enabled()
+def copy_audio(input_path: Path, copied_audio_path: Path) -> None:
+    audio_input = ffmpeg.input(str(input_path))
+    copied_audio = ffmpeg.output(
+        audio_input["a"],
+        str(f"file:{copied_audio_path}"),
+        acodec="copy",
+        map_metadata=0,
+    )
+    run_ffmpeg_print_errors(copied_audio, "copy AAC audio tracks", overwrite_output=True)
 
-    if config.transcode_audio and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
-        temporary_audio_path = transcoded_audio_path.with_suffix(".part.m4a")
+
+def create_prepared_audio_file(
+    original_audio_path: Path,
+    output_folder: Path,
+    activity: AudioActivityReporter | None = None,
+) -> Path:
+    mode = config.audio_mode
+    if mode is AudioMode.PCM:
+        return original_audio_path
+
+    prepared_audio_path = output_folder / f"{output_folder.stem}_audio_AAC.m4a"
+    legacy_transcoded_audio_path = output_folder / f"{output_folder.stem}_audio_AAC.mov"
+    should_prepare = config.start_stage.value <= Stage.TRANSCODE_AUDIO.value
+
+    if should_prepare:
+        temporary_audio_path = prepared_audio_path.with_suffix(".part.m4a")
         try:
-            transcode_audio(original_audio_path, temporary_audio_path, config.audio_bitrate)
-            temporary_audio_path.replace(transcoded_audio_path)
+            if mode is AudioMode.AUTOMATIC:
+                qualifications = qualify_selected_audio_streams(original_audio_path)
+                if qualifications and all(qualification.qualified for qualification in qualifications):
+                    copy_audio(original_audio_path, temporary_audio_path)
+                else:
+                    emit_automatic_fallback_warning(qualifications, activity)
+                    transcode_audio(original_audio_path, temporary_audio_path, config.audio_bitrate)
+            else:
+                transcode_audio(original_audio_path, temporary_audio_path, config.audio_bitrate)
+            temporary_audio_path.replace(prepared_audio_path)
         finally:
             temporary_audio_path.unlink(missing_ok=True)
 
-        if not config.keep_files and not direct_audio_transcode:
+        if not config.keep_files and original_audio_path != config.source_path:
             original_audio_path.unlink(missing_ok=True)
-        return transcoded_audio_path
+        return prepared_audio_path
 
-    if config.transcode_audio and transcoded_audio_path.exists():
-        return transcoded_audio_path
-    if config.transcode_audio and legacy_transcoded_audio_path.exists():
+    if prepared_audio_path.exists():
+        return prepared_audio_path
+    if legacy_transcoded_audio_path.exists():
         raise FileNotFoundError(
-            "Legacy AAC audio artifact found. Restart from Transcode Audio to regenerate a compatible M4A file: "
+            "Legacy AAC audio artifact found. Restart from Prepare Audio to regenerate a compatible M4A file: "
             f"{legacy_transcoded_audio_path}"
         )
-    if direct_audio_transcode and config.transcode_audio:
-        raise FileNotFoundError(f"Direct AAC audio artifact not found: {transcoded_audio_path}")
-    return original_audio_path
+    raise FileNotFoundError(f"Prepared audio artifact not found: {prepared_audio_path}")
+
+
+def create_transcoded_audio_file(
+    original_audio_path: Path,
+    output_folder: Path,
+    activity: AudioActivityReporter | None = None,
+) -> Path:
+    return create_prepared_audio_file(original_audio_path, output_folder, activity)
+
+
+def qualify_selected_audio_streams(input_path: Path) -> list[AudioStreamQualification]:
+    return [qualify_audio_stream(stream) for stream in get_audio_stream_data(input_path)]
+
+
+def qualify_audio_stream(stream: dict[str, Any]) -> AudioStreamQualification:
+    codec_name = str(stream.get("codec_name") or "").strip().lower()
+    profile = stream.get("profile")
+    normalized_profile = str(profile).strip().lower() if profile is not None else None
+    index = parse_optional_int(stream.get("index"))
+    sample_rate = parse_optional_int(stream.get("sample_rate"))
+    channels = parse_optional_int(stream.get("channels"))
+    raw_channel_layout = stream.get("channel_layout")
+    channel_layout = str(raw_channel_layout).strip().lower() if raw_channel_layout is not None else None
+    stream_index = index if index is not None else -1
+
+    if codec_name in EXPLICITLY_UNQUALIFIED_CODECS:
+        return audio_qualification_result(
+            stream_index,
+            codec_name,
+            normalized_profile,
+            sample_rate,
+            channels,
+            channel_layout,
+            False,
+            "codec_not_allowed",
+        )
+    if codec_name not in AAC_COPY_CODECS:
+        return audio_qualification_result(
+            stream_index,
+            codec_name or "unknown",
+            normalized_profile,
+            sample_rate,
+            channels,
+            channel_layout,
+            False,
+            "codec_not_aac",
+        )
+    if normalized_profile is None:
+        return audio_qualification_result(
+            stream_index,
+            codec_name,
+            None,
+            sample_rate,
+            channels,
+            channel_layout,
+            False,
+            "aac_profile_missing",
+        )
+    if normalized_profile not in AAC_COPY_PROFILES:
+        return audio_qualification_result(
+            stream_index,
+            codec_name,
+            normalized_profile,
+            sample_rate,
+            channels,
+            channel_layout,
+            False,
+            "aac_profile_not_qualified",
+        )
+    if sample_rate is None:
+        return audio_qualification_result(
+            stream_index,
+            codec_name,
+            normalized_profile,
+            None,
+            channels,
+            channel_layout,
+            False,
+            "sample_rate_missing",
+        )
+    if sample_rate not in AAC_COPY_SAMPLE_RATES:
+        return audio_qualification_result(
+            stream_index,
+            codec_name,
+            normalized_profile,
+            sample_rate,
+            channels,
+            channel_layout,
+            False,
+            "sample_rate_not_qualified",
+        )
+    if channels is None:
+        return audio_qualification_result(
+            stream_index,
+            codec_name,
+            normalized_profile,
+            sample_rate,
+            None,
+            channel_layout,
+            False,
+            "channel_count_missing",
+        )
+    if channel_layout is None or not channel_layout:
+        return audio_qualification_result(
+            stream_index,
+            codec_name,
+            normalized_profile,
+            sample_rate,
+            channels,
+            None,
+            False,
+            "channel_layout_missing",
+        )
+    expected_channels = AAC_COPY_LAYOUT_CHANNELS.get(channel_layout)
+    if expected_channels is None:
+        return audio_qualification_result(
+            stream_index,
+            codec_name,
+            normalized_profile,
+            sample_rate,
+            channels,
+            channel_layout,
+            False,
+            "channel_layout_not_qualified",
+        )
+    if channels != expected_channels:
+        return audio_qualification_result(
+            stream_index,
+            codec_name,
+            normalized_profile,
+            sample_rate,
+            channels,
+            channel_layout,
+            False,
+            "channel_layout_mismatch",
+        )
+    return audio_qualification_result(
+        stream_index,
+        codec_name,
+        normalized_profile,
+        sample_rate,
+        channels,
+        channel_layout,
+        True,
+    )
+
+
+def parse_optional_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def audio_qualification_result(
+    index: int,
+    codec_name: str,
+    profile: str | None,
+    sample_rate: int | None,
+    channels: int | None,
+    channel_layout: str | None,
+    qualified: bool,
+    reason: str | None = None,
+) -> AudioStreamQualification:
+    return AudioStreamQualification(
+        index=index,
+        codec_name=codec_name,
+        profile=profile,
+        qualified=qualified,
+        reason=reason,
+        sample_rate=sample_rate,
+        channels=channels,
+        channel_layout=channel_layout,
+    )
+
+
+def emit_automatic_fallback_warning(
+    qualifications: list[AudioStreamQualification],
+    activity: AudioActivityReporter | None,
+) -> None:
+    codecs = [qualification.codec_name for qualification in qualifications]
+    unqualified = [qualification for qualification in qualifications if not qualification.qualified]
+    message = "Automatic audio selected AAC conversion because one or more selected tracks are not qualified AAC."
+    if activity is None:
+        print(message)
+        return
+
+    activity.warning(
+        message,
+        stage="transcode_audio",
+        code="audio_automatic_fallback_to_aac",
+        audio_mode=AudioMode.AUTOMATIC.value,
+        action="convert_aac",
+        source_codecs=codecs,
+        unqualified_streams=[
+            {
+                "index": qualification.index,
+                "codec": qualification.codec_name,
+                "profile": qualification.profile,
+                "sample_rate": qualification.sample_rate,
+                "channels": qualification.channels,
+                "channel_layout": qualification.channel_layout,
+                "reason": qualification.reason,
+            }
+            for qualification in unqualified
+        ],
+    )

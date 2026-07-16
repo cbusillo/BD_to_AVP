@@ -81,7 +81,7 @@ final class PreviewViewModelTests: XCTestCase {
             let started = expectation(description: "prepare audio stage started")
             let cancelled = expectation(description: "prepare audio preview cancelled")
             let worker = PreviewWorkerClient(
-                initialStage: "prepare_audio",
+                initialStage: "transcode_audio",
                 initialStageMessage: "Prepare Audio",
                 waitsForCancellation: true,
                 onStarted: { started.fulfill() },
