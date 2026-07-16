@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from dataclasses import dataclass
 from importlib.resources import files
@@ -8,6 +9,7 @@ from typing import Final
 
 CATALOG_RESOURCE: Final = "iso639_languages.json"
 UNDETERMINED_LANGUAGE_CODE: Final = "und"
+LANGUAGE_TAG_PATTERN: Final = re.compile(r"^[a-z]{2,3}(?:[-_](?:[a-z]{2}|[a-z]{4}|[0-9]{3})){0,2}$")
 
 
 class LanguageCodeError(ValueError):
@@ -61,6 +63,8 @@ def normalize_language_code(value: object, *, allow_undetermined: bool = False) 
         raise LanguageCodeError("Language codes must be strings.")
 
     candidate = value.strip().casefold()
+    if not LANGUAGE_TAG_PATTERN.fullmatch(candidate):
+        raise LanguageCodeError(f"Unsupported language code: {value!r}.")
     if candidate == UNDETERMINED_LANGUAGE_CODE:
         if allow_undetermined:
             return UNDETERMINED_LANGUAGE_CODE

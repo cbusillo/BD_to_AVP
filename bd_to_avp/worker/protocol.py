@@ -420,7 +420,13 @@ class JobSpec:
                 "encoding.subtitles must be an object.",
                 job_id=job_id,
             )
-        cls._require_exact_keys(value, {"mode", "preferred_language"}, "encoding.subtitles", job_id)
+        cls._require_exact_keys(
+            value,
+            {"mode", "preferred_language"},
+            "encoding.subtitles",
+            job_id,
+            error_code="invalid_encoding_options",
+        )
 
         raw_mode = cls._parse_string(value, "mode", "encoding.subtitles", job_id)
         try:
@@ -546,16 +552,18 @@ class JobSpec:
         expected_keys: set[str],
         label: str,
         job_id: str,
+        *,
+        error_code: str | None = None,
     ) -> None:
         missing_keys = expected_keys - set(value.keys())
         if missing_keys:
             missing = ", ".join(sorted(missing_keys))
             raise WorkerProtocolError(
-                f"invalid_{label}_options" if label in {"encoding", "job"} else f"invalid_{label}",
+                error_code or (f"invalid_{label}_options" if label in {"encoding", "job"} else f"invalid_{label}"),
                 f"The {label} object is missing required field(s): {missing}.",
                 job_id=job_id,
             )
-        cls._reject_unknown_keys(value, expected_keys, label, job_id)
+        cls._reject_unknown_keys(value, expected_keys, label, job_id, error_code=error_code)
 
     @staticmethod
     def _reject_unknown_keys(
@@ -563,12 +571,14 @@ class JobSpec:
         expected_keys: set[str],
         label: str,
         job_id: str,
+        *,
+        error_code: str | None = None,
     ) -> None:
         unknown_keys = set(value.keys()) - expected_keys
         if unknown_keys:
             unknown = ", ".join(sorted(str(key) for key in unknown_keys))
             raise WorkerProtocolError(
-                "invalid_request",
+                error_code or "invalid_request",
                 f"The {label} object contains unsupported field(s): {unknown}.",
                 job_id=job_id,
             )

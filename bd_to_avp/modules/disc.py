@@ -9,7 +9,6 @@ import ffmpeg
 from bd_to_avp.modules.config import config, is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.file import find_largest_file_with_extensions, sanitize_filename
 from bd_to_avp.modules.command import run_command
-from bd_to_avp.modules.languages import language_bibliographic
 
 
 class MKVCreationError(Exception):
@@ -217,11 +216,10 @@ def get_disc_and_mvc_video_info(selected_title_id: str | None = None) -> DiscInf
 def rip_disc_to_mkv(
     output_folder: Path,
     disc_info: DiscInfo,
-    language_code: str,
     progress_callback: ProgressCallback | None = None,
 ) -> None:
     custom_profile_path = output_folder / "custom_profile.mmcp.xml"
-    create_custom_makemkv_profile(custom_profile_path, language_code)
+    create_custom_makemkv_profile(custom_profile_path)
 
     source = get_makemkv_source()
     command = [
@@ -277,13 +275,11 @@ def filter_lines_from_output(output: str, filter_strings: list[str]) -> str:
     return filtered_output
 
 
-def create_custom_makemkv_profile(custom_profile_path: Path, language_code: str) -> None:
+def create_custom_makemkv_profile(custom_profile_path: Path) -> None:
     template_profile_path = Path(__file__).parent.parent / "resources" / "makemkv.xml"
     if not template_profile_path.exists():
         raise FileNotFoundError(f"Custom MakeMKV profile not found at {template_profile_path}")
-    custom_profile_content = template_profile_path.read_text().format(
-        language_code=language_bibliographic(language_code)
-    )
+    custom_profile_content = template_profile_path.read_text()
 
     custom_profile_path.write_text(custom_profile_content)
     print(f"Custom MakeMKV profile created at {custom_profile_path}")
@@ -292,7 +288,6 @@ def create_custom_makemkv_profile(custom_profile_path: Path, language_code: str)
 def create_mkv_file(
     output_folder: Path,
     disc_info: DiscInfo,
-    language_code: str,
     progress_callback: ProgressCallback | None = None,
 ) -> Path:
     if config.source_path and config.source_path.suffix.lower() in [*config.MTS_EXTENSIONS, ".mkv"]:
@@ -309,7 +304,7 @@ def create_mkv_file(
             return mkv_file
 
     if config.start_stage.value <= Stage.CREATE_MKV.value:
-        rip_disc_to_mkv(output_folder, disc_info, language_code, progress_callback)
+        rip_disc_to_mkv(output_folder, disc_info, progress_callback)
 
     if mkv_file := find_largest_file_with_extensions(output_folder, [".mkv"]):
         return mkv_file

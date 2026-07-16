@@ -380,6 +380,35 @@ class JobSpecTests(unittest.TestCase):
 
         self.assertEqual(context.exception.code, "invalid_encoding_options")
 
+    def test_rejects_missing_nested_subtitle_fields_with_stable_error_code(self) -> None:
+        for missing_field in ("mode", "preferred_language"):
+            with self.subTest(missing_field=missing_field):
+                request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+                del request["encoding"]["subtitles"][missing_field]
+
+                with self.assertRaises(WorkerProtocolError) as context:
+                    JobSpec.from_json_line(json.dumps(request) + "\n")
+
+                self.assertEqual(context.exception.code, "invalid_encoding_options")
+
+    def test_rejects_unknown_nested_subtitle_field_with_stable_error_code(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["subtitles"]["surprise"] = True
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request) + "\n")
+
+        self.assertEqual(context.exception.code, "invalid_encoding_options")
+
+    def test_rejects_legacy_subtitle_fields_in_protocol_v5(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["skip_subtitles"] = False
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request) + "\n")
+
+        self.assertEqual(context.exception.code, "invalid_request")
+
     def test_rejects_missing_conversion_options(self) -> None:
         request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
         del request["job"]["overwrite"]
@@ -1111,7 +1140,6 @@ class SourceConversionTests(unittest.TestCase):
             def create_mkv_file(
                 _output_folder: Path,
                 _disc_info: DiscInfo,
-                _language_code: str,
                 progress_callback: object | None = None,
             ) -> Path:
                 self.assertTrue(callable(progress_callback))

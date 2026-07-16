@@ -157,6 +157,28 @@ class MuxCommandTests(unittest.TestCase):
         self.assertIn("Movie_audio_AAC.m4a#1:lang=und:group=1:alternate_group=1", command)
         self.assertIn("2:type=name:str='Unknown stereo Audio'", command)
 
+    def test_final_mux_uses_unknown_when_audio_language_is_missing(self) -> None:
+        with (
+            patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+            patch.object(
+                container,
+                "get_audio_stream_data",
+                return_value=[{"index": 0, "channel_layout": "stereo"}],
+            ),
+            patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
+            patch.object(container, "run_command") as run_command,
+        ):
+            container.mux_video_audio_subs(
+                Path("movie_MV-HEVC.mov"),
+                Path("Movie_audio_AAC.m4a"),
+                Path("movie_AVP.mov"),
+                Path("."),
+            )
+
+        command = run_command.call_args.args[0]
+        self.assertIn("Movie_audio_AAC.m4a#1:lang=und:group=1:alternate_group=1", command)
+        self.assertIn("2:type=name:str='Unknown stereo Audio'", command)
+
     def test_final_mux_marks_forced_subtitles_for_quicktime(self) -> None:
         with (
             patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),

@@ -1,5 +1,5 @@
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -23,16 +23,27 @@ class SRTCreationError(Exception):
     pass
 
 
-def create_srt_from_mkv(mkv_path: Path, output_path: Path | None = None) -> None:
+SubtitleWarningHandler = Callable[[str], None]
+
+
+def create_srt_from_mkv(
+    mkv_path: Path,
+    output_path: Path | None = None,
+    warning_handler: SubtitleWarningHandler | None = None,
+) -> None:
     output_path = output_path or mkv_path.parent
     if config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
         if config.skip_subtitles:
             cleanup_existing_subtitle_files(output_path)
             return None
-        extract_subtitle_to_srt(mkv_path, output_path)
+        extract_subtitle_to_srt(mkv_path, output_path, warning_handler)
 
 
-def extract_subtitle_to_srt(mkv_path: Path, output_path: Path | None = None) -> None:
+def extract_subtitle_to_srt(
+    mkv_path: Path,
+    output_path: Path | None = None,
+    warning_handler: SubtitleWarningHandler | None = None,
+) -> None:
     output_path = output_path or mkv_path.parent
     cleanup_existing_subtitle_files(output_path)
 
@@ -41,7 +52,10 @@ def extract_subtitle_to_srt(mkv_path: Path, output_path: Path | None = None) -> 
     subtitle_tracks = get_languages_in_mkv(mkv_path)
 
     if not subtitle_tracks:
-        print("No PGS subtitle tracks found in source; continuing without subtitles.")
+        message = "No PGS subtitle tracks found in source; continuing without subtitles."
+        print(message)
+        if warning_handler:
+            warning_handler(message)
         return None
 
     sub_options = subtitle_rip_options()
@@ -58,10 +72,13 @@ def extract_subtitle_to_srt(mkv_path: Path, output_path: Path | None = None) -> 
 
             if config.remove_extra_languages and not selected_subtitle_tracks:
                 preferred_language = normalize_language_code(config.language_code)
-                print(
+                message = (
                     "No PGS subtitle tracks matched the preferred language "
                     f"{language_name(preferred_language)} ({preferred_language}); continuing without subtitles."
                 )
+                print(message)
+                if warning_handler:
+                    warning_handler(message)
                 return None
 
             pgsrip.rip(mkv_file, sub_options)

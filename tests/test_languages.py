@@ -1,5 +1,9 @@
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
+from bd_to_avp.modules.config import Config
 from bd_to_avp.modules.languages import (
     LANGUAGES,
     LanguageCodeError,
@@ -41,6 +45,12 @@ class LanguageCatalogTests(unittest.TestCase):
         self.assertEqual(normalize_language_code("pt-BR"), "por")
         self.assertEqual(normalize_language_code("zh_Hant"), "zho")
 
+    def test_rejects_malformed_language_suffixes(self) -> None:
+        for supplied in ("en-", "en-not", "en-not a tag", "eng-💥", "fr-123456", "zh__Hant"):
+            with self.subTest(supplied=supplied):
+                with self.assertRaises(LanguageCodeError):
+                    normalize_language_code(supplied)
+
     def test_rejects_invalid_or_non_selectable_codes(self) -> None:
         for supplied in (None, "", "und", "mul", "mis", "zxx", "xyz", "ééé"):
             with self.subTest(supplied=supplied):
@@ -59,6 +69,31 @@ class LanguageCatalogTests(unittest.TestCase):
         self.assertIsNone(language_alpha2("ace"))
         self.assertEqual(language_bibliographic("deu"), "ger")
         self.assertEqual(language_code_for_name("Dutch"), "nld")
+
+
+class ConfigLanguageTests(unittest.TestCase):
+    def test_config_file_normalizes_legacy_language_alias(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.config.Path.home", return_value=Path(temp_dir)),
+        ):
+            loaded_config = Config()
+            loaded_config.app.config_file.write_text("[Options]\nlanguage_code = dut\n", encoding="utf-8")
+
+            loaded_config.load_config_from_file()
+
+        self.assertEqual(loaded_config.language_code, "nld")
+
+    def test_config_file_rejects_invalid_language_before_processing(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.config.Path.home", return_value=Path(temp_dir)),
+        ):
+            loaded_config = Config()
+            loaded_config.app.config_file.write_text("[Options]\nlanguage_code = xyz\n", encoding="utf-8")
+
+            with self.assertRaises(LanguageCodeError):
+                loaded_config.load_config_from_file()
 
 
 if __name__ == "__main__":

@@ -299,7 +299,10 @@ class Config:
                         stage_value = config_parser.get("Options", key).split(" - ")[0]
                         setattr(self, key, Stage.get_stage(int(stage_value)))
                     else:
-                        setattr(self, key, config_parser.get("Options", key))
+                        value = config_parser.get("Options", key)
+                        if key == "language_code":
+                            value = normalize_language_code(value)
+                        setattr(self, key, value)
 
     def parse_args(self) -> None:
         parser = argparse.ArgumentParser(
