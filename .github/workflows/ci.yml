@@ -39,6 +39,12 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --all-groups --python 3.12
 
+      - name: Install direct SSIF prototype dependencies
+        run: brew install libbluray libudfread pkgconf
+
+      - name: Build direct SSIF prototype
+        run: uv run python scripts/build_ssif_probe_macos.py
+
       - name: Validate committed release metadata
         run: uv run python scripts/release.py validate
 

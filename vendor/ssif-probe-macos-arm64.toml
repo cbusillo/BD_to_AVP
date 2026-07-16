@@ -1,0 +1,18 @@
+schema_version = 1
+platform = "macOS arm64"
+minimum_macos = "14.0"
+linkage = "dynamic-development-only"
+
+[libbluray]
+version = "1.4.1"
+pkg_config = "libbluray"
+source_url = "https://download.videolan.org/videolan/libbluray/1.4.1/libbluray-1.4.1.tar.xz"
+source_sha256 = "76b5dc40097f28dca4ebb009c98ed51321b2927453f75cc72cf74acd09b9f449"
+license = "LGPL-2.1-or-later"
+
+[libudfread]
+version = "1.2.0"
+pkg_config = "libudfread"
+source_url = "https://download.videolan.org/videolan/libudfread/libudfread-1.2.0.tar.xz"
+source_sha256 = "bb477cbd4cfbfc7787d9d05b71ee5e70430f5cfebf1297497f7e83547958050f"
+license = "LGPL-2.1-or-later"
