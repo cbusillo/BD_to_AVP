@@ -94,8 +94,6 @@ def create_prepared_audio_file(
         finally:
             temporary_audio_path.unlink(missing_ok=True)
 
-        if not config.keep_files and original_audio_path != config.source_path:
-            original_audio_path.unlink(missing_ok=True)
         return prepared_audio_path
 
     if prepared_audio_path.exists():

@@ -55,7 +55,9 @@ Final muxing receives an owned prepared audio artifact for `automatic` and
 `convert_aac`; it never receives a user-owned source container. The mux keeps
 audio track order and normalizes language metadata, and it preserves source
 track titles and default disposition when the current FFmpeg probe data and
-MP4Box import options expose them.
+MP4Box import options expose them. Owned mux inputs remain available until the
+completed movie moves successfully, so final-mux and move-stage retries do not
+lose their recovery artifacts.
 
 ## Fallback Warning
 

@@ -213,6 +213,10 @@ def process_each(
     if not config.overwrite and file_exists_normalized(completed_path):
         raise FileExistsError(f"Output file already exists for {disc_info.name}. Use --overwrite to replace.")
 
+    if config.start_stage is Stage.MOVE_FILES:
+        muxed_output_path = output_folder / f"{disc_info.name}{config.FINAL_FILE_TAG}.mov"
+        return move_completed_conversion(muxed_output_path, tmp_folder, cancellation_event, activity)
+
     raise_if_cancelled(cancellation_event)
     if activity and config.start_stage.value <= Stage.CREATE_MKV.value:
         activity.stage_started("create_mkv", "Preparing source video")
@@ -282,6 +286,16 @@ def process_each(
         output_folder,
         disc_info.name,
     )
+
+    return move_completed_conversion(muxed_output_path, tmp_folder, cancellation_event, activity)
+
+
+def move_completed_conversion(
+    muxed_output_path: Path,
+    tmp_folder: Path,
+    cancellation_event: Event | None,
+    activity: ActivityReporter | None,
+) -> Path:
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("move_files", "Moving completed video")

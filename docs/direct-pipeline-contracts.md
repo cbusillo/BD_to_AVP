@@ -170,8 +170,11 @@ already exist when restarting after `EXTRACT_MVC_AND_AUDIO`.
 
 ### Final Move
 
-`MOVE_FILES` can stay as a filesystem operation. There is little value in making
-it direct because it does not create a large intermediate by itself.
+`MOVE_FILES` is a filesystem-only resume boundary. It moves the completed movie
+without replaying source inspection, audio preparation, or muxing. Owned source,
+audio, and video artifacts remain available until that move succeeds; default
+cleanup then removes the completed output folder. A failed move therefore keeps
+all inputs needed for another final-mux or move attempt.
 
 ## Risky Boundaries
 
@@ -218,14 +221,14 @@ when `--keep-files` is enabled.
 ### MV-HEVC File
 
 The MV-HEVC intermediate is the input to optional upscaling and final MP4Box
-muxing. Default mode removes it after the final mux; `--keep-files` retains it
-for Apple playback debugging and staged resumes.
+muxing. Default mode removes it after the completed movie moves successfully;
+`--keep-files` retains it for Apple playback debugging and staged resumes.
 
 ### Subtitle Files
 
 `.srt` files are named final-mux inputs. Default mode removes the completed
-output folder after muxing; `--keep-files` retains subtitles for debugging and
-resume workflows.
+output folder after the final move succeeds; `--keep-files` retains subtitles
+for debugging and resume workflows.
 
 ## Benchmark Evidence
 

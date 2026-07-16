@@ -44,10 +44,6 @@ def create_muxed_file(
     muxed_path = output_folder / f"{disc_name}{config.FINAL_FILE_TAG}.mov"
     if config.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
         mux_video_audio_subs(mv_hevc_path, audio_path, muxed_path, output_folder)
-
-    if not config.keep_files:
-        mv_hevc_path.unlink(missing_ok=True)
-        audio_path.unlink(missing_ok=True)
     return muxed_path
 
 
@@ -93,7 +89,8 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
         index = stream["index"] + 1
         language_code, audio_language_name = normalize_track_language(stream.get("tags", {}).get("language"))
         channel_layout = stream.get("channel_layout", "unknown")
-        title = stream.get("tags", {}).get("title")
+        tags = stream.get("tags", {})
+        title = tags.get("title") or tags.get("name")
         default_disposition = int(stream.get("disposition", {}).get("default", 0) or 0) == 1
 
         audio_track_options = f":lang={language_code}:group=1:alternate_group=1"

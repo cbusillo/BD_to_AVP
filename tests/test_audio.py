@@ -161,6 +161,31 @@ class AudioPreparationTests(unittest.TestCase):
             copy.assert_called_once()
             transcode.assert_not_called()
 
+    def test_prepared_audio_retains_owned_source_until_final_move(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_path = temp_path / "source.iso"
+            output_folder = temp_path / "Movie"
+            owned_mkv_path = output_folder / "Movie.mkv"
+            source_path.write_bytes(b"disc-image")
+            output_folder.mkdir()
+            owned_mkv_path.write_bytes(b"owned-mkv")
+
+            def copy_audio(_input_path: Path, output_path: Path) -> None:
+                output_path.write_bytes(b"copied-aac")
+
+            with (
+                patch.object(audio.config, "audio_mode", AudioMode.AUTOMATIC),
+                patch.object(audio.config, "keep_files", False),
+                patch.object(audio.config, "source_path", source_path),
+                patch.object(audio.config, "start_stage", Stage.CREATE_MKV),
+                patch.object(audio, "qualify_selected_audio_streams", return_value=[audio_qualification()]),
+                patch.object(audio, "copy_audio", side_effect=copy_audio),
+            ):
+                audio.create_prepared_audio_file(owned_mkv_path, output_folder)
+
+            self.assertTrue(owned_mkv_path.exists())
+
     def test_pcm_returns_existing_generated_pcm(self) -> None:
         original_audio_path = Path("Movie_audio_PCM.mov")
         with (
