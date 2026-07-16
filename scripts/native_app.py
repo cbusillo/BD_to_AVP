@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
+from bd_to_avp.worker.protocol import PROTOCOL_VERSION
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MACOS_ROOT = REPO_ROOT / "macos"
 PROJECT_SPEC = MACOS_ROOT / "project.yml"
@@ -35,7 +37,7 @@ BRIEFCASE_APP = REPO_ROOT / "build" / "bd-to-avp" / "macos" / "app" / "3D Blu-ra
 PACKAGE_ROOT = MACOS_ROOT / "build" / "package"
 PACKAGED_APP = PACKAGE_ROOT / NATIVE_APP_NAME
 WORKER_EXECUTABLE_NAME = "BluRayToVisionProEngine"
-WORKER_PROTOCOL_VERSION = 4
+WORKER_PROTOCOL_VERSION = PROTOCOL_VERSION
 WORKER_ENTITLEMENTS = MACOS_ROOT / "BluRayToVisionPro" / "Worker.entitlements"
 DEPLOYMENT_TARGET_OVERRIDE_ENV = "BD_TO_AVP_NATIVE_DEPLOYMENT_TARGET_OVERRIDE"
 USER_INTERFACE_SOURCE_FILES = sorted(

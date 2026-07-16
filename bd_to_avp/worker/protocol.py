@@ -428,7 +428,13 @@ class JobSpec:
             error_code="invalid_encoding_options",
         )
 
-        raw_mode = cls._parse_string(value, "mode", "encoding.subtitles", job_id)
+        raw_mode = value.get("mode")
+        if not isinstance(raw_mode, str):
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "encoding.subtitles.mode must be a string.",
+                job_id=job_id,
+            )
         try:
             mode = SubtitleMode(raw_mode)
         except ValueError as error:

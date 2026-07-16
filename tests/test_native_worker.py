@@ -380,6 +380,15 @@ class JobSpecTests(unittest.TestCase):
 
         self.assertEqual(context.exception.code, "invalid_encoding_options")
 
+    def test_rejects_wrong_type_subtitle_mode_with_stable_error_code(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["subtitles"]["mode"] = 1
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request) + "\n")
+
+        self.assertEqual(context.exception.code, "invalid_encoding_options")
+
     def test_rejects_missing_nested_subtitle_fields_with_stable_error_code(self) -> None:
         for missing_field in ("mode", "preferred_language"):
             with self.subTest(missing_field=missing_field):
