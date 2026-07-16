@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from bd_to_avp import preflight
 from bd_to_avp.modules import process
+from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.disc import MKVCreationError
 from bd_to_avp.modules.file import (
@@ -21,7 +22,7 @@ class ProcessPreflightTests(unittest.TestCase):
             patch.object(process.config, "preview_range", None),
             patch.object(process.config, "skip_subtitles", False),
             patch.object(process.config, "fx_upscale", False),
-            patch.object(process.config, "transcode_audio", True),
+            patch.object(process.config, "audio_mode", AudioMode.CONVERT_AAC),
             patch.object(process.config, "start_stage", Stage.CREATE_MKV),
         ):
             default_plan = process.conversion_stage_plan()
@@ -49,7 +50,7 @@ class ProcessPreflightTests(unittest.TestCase):
             patch.object(process.config, "preview_range", Mock()),
             patch.object(process.config, "skip_subtitles", True),
             patch.object(process.config, "fx_upscale", True),
-            patch.object(process.config, "transcode_audio", False),
+            patch.object(process.config, "audio_mode", AudioMode.PCM),
             patch.object(process.config, "start_stage", Stage.CREATE_MKV),
         ):
             optional_plan = process.conversion_stage_plan()
@@ -64,7 +65,7 @@ class ProcessPreflightTests(unittest.TestCase):
             patch.object(process.config, "preview_range", None),
             patch.object(process.config, "skip_subtitles", False),
             patch.object(process.config, "fx_upscale", False),
-            patch.object(process.config, "transcode_audio", True),
+            patch.object(process.config, "audio_mode", AudioMode.AUTOMATIC),
             patch.object(process.config, "start_stage", Stage.EXTRACT_MVC_AND_AUDIO),
         ):
             mkv_recovery_plan = process.conversion_stage_plan()
@@ -77,7 +78,7 @@ class ProcessPreflightTests(unittest.TestCase):
             patch.object(process.config, "preview_range", None),
             patch.object(process.config, "skip_subtitles", True),
             patch.object(process.config, "fx_upscale", False),
-            patch.object(process.config, "transcode_audio", True),
+            patch.object(process.config, "audio_mode", AudioMode.CONVERT_AAC),
             patch.object(process.config, "start_stage", Stage.EXTRACT_SUBTITLES),
         ):
             subtitle_recovery_plan = process.conversion_stage_plan()

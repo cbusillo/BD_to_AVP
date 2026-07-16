@@ -1,5 +1,8 @@
 # Native Worker Protocol v5
 
+> Historical protocol. Current audio-mode behavior is documented in
+> [Native Worker Protocol v6](native-worker-protocol-v6.md).
+
 Protocol v5 replaces the three legacy subtitle fields with one explicit,
 backend-neutral subtitle policy. The native app and bundled Python worker ship
 atomically and both require version 5.

@@ -3,6 +3,8 @@ import unittest
 from unittest.mock import patch
 
 from bd_to_avp import __main__
+from bd_to_avp.modules.audio_mode import AudioMode
+from bd_to_avp.modules.config import Config
 
 
 class MainSmokeTests(unittest.TestCase):
@@ -18,6 +20,31 @@ class MainSmokeTests(unittest.TestCase):
         load_frameworks.assert_called_once()
         start_process.assert_not_called()
         print_mock.assert_called_once_with("Apple Vision OCR import smoke passed")
+
+    def test_legacy_transcode_audio_cli_maps_to_convert_aac_mode(self) -> None:
+        config = Config()
+
+        with patch.object(
+            sys,
+            "argv",
+            ["bd-to-avp", "--source", "/tmp/movie.mkv", "--transcode-audio"],
+        ):
+            config.parse_args()
+
+        self.assertEqual(config.audio_mode, AudioMode.CONVERT_AAC)
+
+    def test_audio_mode_cli_selects_pcm_without_legacy_boolean(self) -> None:
+        config = Config()
+
+        with patch.object(
+            sys,
+            "argv",
+            ["bd-to-avp", "--source", "/tmp/movie.mkv", "--audio-mode", "pcm"],
+        ):
+            config.parse_args()
+
+        self.assertEqual(config.audio_mode, AudioMode.PCM)
+        self.assertFalse(config.transcode_audio)
 
 
 if __name__ == "__main__":

@@ -104,7 +104,7 @@ def conversion_stage_plan() -> tuple[str, ...]:
         stages.append("combine_to_mv_hevc")
     if config.fx_upscale and config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
         stages.append("upscale_video")
-    if config.transcode_audio and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
+    if config.audio_mode.prepares_m4a and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
         stages.append("transcode_audio")
     if config.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
         stages.append("create_final_file")
@@ -270,9 +270,9 @@ def process_each(
     mv_hevc_path = create_upscaled_file(mv_hevc_path)
 
     raise_if_cancelled(cancellation_event)
-    if activity and config.transcode_audio and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
-        activity.stage_started("transcode_audio", "Preparing audio")
-    audio_output_path = create_transcoded_audio_file(audio_output_path, output_folder)
+    if activity and config.audio_mode.prepares_m4a and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
+        activity.stage_started("transcode_audio", "Prepare Audio")
+    audio_output_path = create_transcoded_audio_file(audio_output_path, output_folder, activity)
     raise_if_cancelled(cancellation_event)
     if activity and config.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
         activity.stage_started("create_final_file", "Muxing final spatial video")

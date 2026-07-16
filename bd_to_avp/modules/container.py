@@ -6,7 +6,7 @@ import ffmpeg
 from bd_to_avp.modules.config import (
     Stage,
     config,
-    is_direct_audio_transcode_enabled,
+    is_audio_m4a_preparation_enabled,
     is_direct_mvc_stream_enabled,
 )
 from bd_to_avp.modules.command import run_command, run_ffmpeg_print_errors
@@ -58,18 +58,18 @@ def create_mvc_and_audio(
 ) -> tuple[Path, Path]:
     video_output_path = output_folder / f"{disc_name}_mvc.h264"
     audio_output_path = output_folder / f"{disc_name}_audio_PCM.mov"
-    direct_audio_transcode = is_direct_audio_transcode_enabled()
+    m4a_audio_preparation = is_audio_m4a_preparation_enabled()
     direct_mvc_stream = is_direct_mvc_stream_enabled()
 
     if config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
         extract_mvc_and_audio(
             mkv_output_path,
             None if direct_mvc_stream else video_output_path,
-            None if direct_audio_transcode else audio_output_path,
+            None if m4a_audio_preparation else audio_output_path,
         )
 
     return (
-        mkv_output_path if direct_audio_transcode else audio_output_path,
+        mkv_output_path if m4a_audio_preparation else audio_output_path,
         mkv_output_path if direct_mvc_stream else video_output_path,
     )
 
@@ -90,17 +90,22 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
         index = stream["index"] + 1
         language_code, audio_language_name = normalize_track_language(stream.get("tags", {}).get("language"))
         channel_layout = stream.get("channel_layout", "unknown")
+        title = stream.get("tags", {}).get("title")
+        default_disposition = int(stream.get("disposition", {}).get("default", 0) or 0) == 1
 
         audio_track_options = f":lang={language_code}:group=1:alternate_group=1"
 
-        if index > 1:
+        if not default_disposition and index > 1:
             audio_track_options += ":disable"
+        if default_disposition:
+            audio_track_options += ":enabled"
+        track_name = title if isinstance(title, str) and title else f"{audio_language_name} {channel_layout} Audio"
 
         command += [
             "-add",
             f"{audio_path}#{index}{audio_track_options}",
             "-udta",
-            f"{output_track_index}:type=name:str='{audio_language_name} {channel_layout} Audio'",
+            f"{output_track_index}:type=name:str='{track_name}'",
         ]
         output_track_index += 1
 
