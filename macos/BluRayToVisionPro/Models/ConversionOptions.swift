@@ -20,17 +20,53 @@ enum ConversionSetupTab: String, CaseIterable, Identifiable {
 }
 
 enum AudioHandling: String, CaseIterable, Codable, Identifiable {
-    case preserve
-    case transcodeAAC
+    case automatic
+    case convertAAC = "transcodeAAC"
+    case pcm = "preserve"
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .preserve:
+        case .automatic:
+            "Automatic"
+        case .convertAAC:
+            "Convert to AAC"
+        case .pcm:
             "Uncompressed PCM"
-        case .transcodeAAC:
-            "Transcode to AAC"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .automatic:
+            "Copies the selected audio set only when every track is qualified AAC; otherwise converts the entire set to AAC."
+        case .convertAAC:
+            "Converts the entire selected audio set to AAC."
+        case .pcm:
+            "Decodes the selected audio set to uncompressed PCM."
+        }
+    }
+
+    var bitrateLabel: String? {
+        switch self {
+        case .automatic:
+            "AAC fallback bitrate"
+        case .convertAAC:
+            "AAC bitrate"
+        case .pcm:
+            nil
+        }
+    }
+
+    func compactSummary(bitrate: Int) -> String {
+        switch self {
+        case .automatic:
+            "automatic audio (AAC fallback \(bitrate) kbps)"
+        case .convertAAC:
+            "AAC \(bitrate) kbps"
+        case .pcm:
+            "uncompressed PCM audio"
         }
     }
 }
@@ -98,7 +134,7 @@ enum ConversionStage: Int, CaseIterable, Codable, Identifiable {
         case .upscaleVideo:
             "6 — Upscale Video"
         case .transcodeAudio:
-            "7 — Transcode Audio"
+            "7 — Prepare Audio"
         case .createFinalFile:
             "8 — Create Final File"
         case .moveFiles:
@@ -119,13 +155,13 @@ struct EncodingOptions: Codable, Equatable {
     var cropBlackBars = false
     var swapEyes = false
 
-    var audioHandling = AudioHandling.preserve
+    var audioHandling = AudioHandling.pcm
     var audioBitrate = 384
     var subtitles = SubtitlePolicy()
 
     var compactSummary: String {
         let resolution = upscaleEnabled ? "2× upscale" : "source resolution"
-        let audio = audioHandling == .preserve ? "uncompressed PCM audio" : "AAC \(audioBitrate) kbps"
+        let audio = audioHandling.compactSummary(bitrate: audioBitrate)
         return "HEVC \(hevcQuality) · \(leftRightBitrate) Mbps eyes · \(resolution) · \(audio)"
     }
 }

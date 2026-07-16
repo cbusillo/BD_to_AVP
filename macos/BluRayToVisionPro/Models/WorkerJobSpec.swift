@@ -1,7 +1,7 @@
 import Foundation
 
 struct WorkerJobSpec: Encodable, Equatable {
-    static let protocolVersion = 5
+    static let protocolVersion = 6
 
     struct Source: Encodable, Equatable {
         enum Kind: String, Encodable {
@@ -54,6 +54,17 @@ struct WorkerJobSpec: Encodable, Equatable {
     }
 
     struct Encoding: Encodable, Equatable {
+        struct Audio: Encodable, Equatable {
+            enum Mode: String, Encodable, Equatable {
+                case automatic
+                case convertAAC = "convert_aac"
+                case pcm
+            }
+
+            let mode: Mode
+            let bitrate: Int
+        }
+
         struct Subtitles: Encodable, Equatable {
             let mode: SubtitleMode
             let preferredLanguage: String?
@@ -74,8 +85,7 @@ struct WorkerJobSpec: Encodable, Equatable {
             }
         }
 
-        let transcodeAudio: Bool
-        let audioBitrate: Int
+        let audio: Audio
         let leftRightBitrate: Int
         let linkQuality: Bool
         let mvHEVCQuality: Int
@@ -89,8 +99,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         let subtitles: Subtitles
 
         enum CodingKeys: String, CodingKey {
-            case transcodeAudio = "transcode_audio"
-            case audioBitrate = "audio_bitrate"
+            case audio
             case leftRightBitrate = "left_right_bitrate"
             case linkQuality = "link_quality"
             case mvHEVCQuality = "mv_hevc_quality"
@@ -233,8 +242,10 @@ struct WorkerJobSpec: Encodable, Equatable {
 
     private static func encoding(from options: EncodingOptions) -> Encoding {
         Encoding(
-            transcodeAudio: options.audioHandling == .transcodeAAC,
-            audioBitrate: options.audioBitrate,
+            audio: Encoding.Audio(
+                mode: audioMode(from: options.audioHandling),
+                bitrate: options.audioBitrate
+            ),
             leftRightBitrate: options.leftRightBitrate,
             linkQuality: options.linkQuality,
             mvHEVCQuality: options.hevcQuality,
@@ -247,6 +258,17 @@ struct WorkerJobSpec: Encodable, Equatable {
             fxUpscale: options.upscaleEnabled,
             subtitles: subtitleOptions(from: options)
         )
+    }
+
+    private static func audioMode(from handling: AudioHandling) -> Encoding.Audio.Mode {
+        switch handling {
+        case .automatic:
+            .automatic
+        case .convertAAC:
+            .convertAAC
+        case .pcm:
+            .pcm
+        }
     }
 
     private static func subtitleOptions(from options: EncodingOptions) -> Encoding.Subtitles {

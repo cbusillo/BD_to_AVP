@@ -349,7 +349,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         "create_left_right_files",
         "combine_to_mv_hevc",
         "upscale_video",
-        "transcode_audio",
+        "prepare_audio",
         "create_final_file",
         "move_files",
     ]
