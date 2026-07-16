@@ -3,6 +3,8 @@ import SwiftUI
 struct SourceWorkspaceView: View {
     let source: ConversionSource?
     let state: WorkerLifecycleState
+    let batchQueue: SourceFolderQueueState?
+    let isBatchRunning: Bool
     let insertedDiscs: [ConversionSource]
     let makeMKVAvailable: Bool
     let profile: EncodingProfile
@@ -18,12 +20,14 @@ struct SourceWorkspaceView: View {
     let useDisc: (ConversionSource) -> Void
     let openDiscImage: () -> Void
     let openBluRayFolder: () -> Void
+    let openSourceFolder: () -> Void
     let openMKV: () -> Void
     let importTransportStream: () -> Void
     let changeSource: () -> Void
     let chooseDestination: () -> Void
     let retryAnalysis: () -> Void
     let resolveRecoveryChoice: (WorkerRecoveryChoice) -> Void
+    let retryBatchItem: (UUID, WorkerRecoveryChoice?) -> Void
     let selectMainTitle: () -> Void
     let selectAllTitles: () -> Void
     let chooseTitles: () -> Void
@@ -127,7 +131,10 @@ struct SourceWorkspaceView: View {
                         sourceButton("Open Disc Image…", systemImage: "opticaldiscdrive", action: openDiscImage)
                         sourceButton("Open Blu-ray Folder…", systemImage: "folder.badge.gearshape", action: openBluRayFolder)
                     }
-                    sourceButton("Open 3D MKV…", systemImage: "film.stack", action: openMKV)
+                    HStack(spacing: 8) {
+                        sourceButton("Open 3D MKV…", systemImage: "film.stack", action: openMKV)
+                        sourceButton("Open Source Folder…", systemImage: "folder.stack", action: openSourceFolder)
+                    }
                 }
 
                 Button("Import MTS or M2TS transport stream…", action: importTransportStream)
@@ -173,7 +180,7 @@ struct SourceWorkspaceView: View {
 
                     Spacer()
                     Button("Change…", action: changeSource)
-                        .disabled(state.phase.isRunning || state.phase == .decisionRequired)
+                        .disabled(isBatchRunning || state.phase.isRunning || state.phase == .decisionRequired)
                 }
 
                 if source.kind.isSecondaryImport {
@@ -185,7 +192,10 @@ struct SourceWorkspaceView: View {
                     .foregroundStyle(.secondary)
                 }
 
-                if state.phase.isRunning {
+                if source.kind == .sourceFolder {
+                    Divider()
+                    batchQueueSection
+                } else if state.phase.isRunning {
                     Divider()
                     HStack(spacing: 10) {
                         WorkerProgressGauge(progress: state.progress, width: 84)
@@ -279,17 +289,158 @@ struct SourceWorkspaceView: View {
                         Text("Verified before processing starts")
                             .foregroundStyle(.secondary)
                     }
-                } else if source.kind == .sourceFolder {
-                    Divider()
-                    Label("Supported sources in this folder will be processed in sequence.", systemImage: "list.bullet.rectangle")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
                 }
             }
             .padding(4)
         } label: {
             Label("Source", systemImage: "externaldrive")
                 .font(.headline)
+        }
+    }
+
+    @ViewBuilder
+    private var batchQueueSection: some View {
+        if let batchQueue {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Label(batchQueue.summaryText, systemImage: "list.bullet.rectangle")
+                        .font(.callout.weight(.medium))
+                    Spacer()
+                    if !batchQueue.items.isEmpty {
+                        Text(batchQueue.countsText)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if batchQueue.items.isEmpty {
+                    Label(
+                        "No ISO, MKV, MTS, or M2TS sources were found in this folder.",
+                        systemImage: "folder.badge.questionmark"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(batchQueue.items) { item in
+                            batchQueueRow(item, queue: batchQueue)
+                            if item.id != batchQueue.items.last?.id {
+                                Divider()
+                            }
+                        }
+                    }
+                    .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        } else {
+            Label("Choose a source folder to build a conversion queue.", systemImage: "folder.stack")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func batchQueueRow(
+        _ item: SourceFolderQueueItem,
+        queue: SourceFolderQueueState
+    ) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: item.status.systemImage)
+                .foregroundStyle(batchStatusColor(item.status))
+                .frame(width: 18)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.source.displayName)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                Text(batchItemDetail(item, queue: queue))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                if queue.activeItemID == item.id, let progress = state.progress {
+                    Text(progress.detailText)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            if item.canRetry, !queue.isRunning {
+                batchRetryControl(item)
+            } else {
+                Text(item.status.title)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(batchStatusColor(item.status))
+                    .accessibilityLabel(item.status.title)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func batchRetryControl(_ item: SourceFolderQueueItem) -> some View {
+        let recoveryChoices = item.recoveryDecision?.supportedChoices.filter { $0 != .cancel } ?? []
+        if item.recoveryDecision == nil {
+            Button("Retry") {
+                retryBatchItem(item.id, nil)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .accessibilityLabel("Retry \(item.source.displayName)")
+        } else if !recoveryChoices.isEmpty {
+            Menu("Retry…") {
+                ForEach(recoveryChoices) { choice in
+                    Button(choice.title) {
+                        retryBatchItem(item.id, choice)
+                    }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityLabel("Retry \(item.source.displayName)")
+        } else {
+            Text("Needs Attention")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.orange)
+        }
+    }
+
+    private func batchItemDetail(
+        _ item: SourceFolderQueueItem,
+        queue: SourceFolderQueueState
+    ) -> String {
+        if queue.activeItemID == item.id {
+            return state.stageMessage
+                ?? (item.status == .inspecting ? "Reading source details" : "Processing video")
+        }
+        if let failureMessage = item.failureMessage {
+            return failureMessage
+        }
+        if let outputPath = item.conversionResult?.outputPath {
+            return outputPath
+        }
+        guard FileManager.default.fileExists(atPath: item.source.url.path) else {
+            return "Source no longer available"
+        }
+        return item.source.url.deletingLastPathComponent().path
+    }
+
+    private func batchStatusColor(_ status: SourceFolderQueueItemStatus) -> Color {
+        switch status {
+        case .completed:
+            .green
+        case .failed:
+            .red
+        case .stopping, .stopped:
+            .orange
+        case .inspecting, .converting:
+            .blue
+        case .pending, .notStarted:
+            .secondary
         }
     }
 
@@ -308,7 +459,7 @@ struct SourceWorkspaceView: View {
                 }
 
                 LabeledContent("Output") {
-                    Text(selectedVideoCount > 1 ? "\(selectedVideoCount) full videos" : "Full Movie")
+                    Text(outputSummary)
                         .foregroundStyle(.secondary)
                 }
 
@@ -422,7 +573,15 @@ struct SourceWorkspaceView: View {
     }
 
     private var outputControlsLocked: Bool {
-        state.phase.isRunning || state.phase == .decisionRequired
+        isBatchRunning || state.phase.isRunning || state.phase == .decisionRequired
+    }
+
+    private var outputSummary: String {
+        if source?.kind == .sourceFolder {
+            let sourceCount = batchQueue?.totalCount ?? 0
+            return "\(sourceCount) queued source\(sourceCount == 1 ? "" : "s")"
+        }
+        return selectedVideoCount > 1 ? "\(selectedVideoCount) full videos" : "Full Movie"
     }
 
     private func titleSelectionSection(_ result: SourceInspection) -> some View {
@@ -692,8 +851,10 @@ private struct PipelineStep: View {
             Text(title)
                 .font(.caption2.weight(.medium))
                 .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity)
+        .help(title)
         .accessibilityElement(children: .combine)
     }
 }

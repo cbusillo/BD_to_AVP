@@ -61,6 +61,9 @@ enum SourcePicker {
             alert.runModal()
             return nil
         }
+        if kind == .sourceFolder {
+            return ConversionSource.infer(from: url)
+        }
         return ConversionSource(kind: kind, url: url)
     }
 

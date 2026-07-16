@@ -55,6 +55,10 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         runTask != nil
     }
 
+    var hasActiveWork: Bool {
+        hasActiveWorker
+    }
+
     var canStart: Bool {
         !hasActiveWorker
     }
