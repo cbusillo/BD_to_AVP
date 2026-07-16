@@ -120,6 +120,12 @@ into the per-title output folder and the durable stage contract applies. If the
 selected source is already that retained copy, `--remove-original` explicitly
 removes it while leaving the other durable stage artifacts intact.
 
+The development-only [direct SSIF prototype](direct-ssif-prototype.md) explores
+an unencrypted/decrypted Blu-ray source boundary without changing this
+production contract. MakeMKV remains the supported disc materialization path
+until the prototype satisfies its replay, multi-consumer, packaging, and
+fallback promotion gates.
+
 ## Supported Direct Boundaries
 
 ### Source Reuse For Existing MKV/MTS/M2TS Inputs
