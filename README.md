@@ -103,7 +103,10 @@ As long as you provide no arguments, the GUI will open.
 The GUI locks configuration load/save actions while a job is active so each
 run uses the settings captured at startup. Choosing **Stop Processing**
 requests a cooperative stop and keeps the button in a stopping state until the
-worker exits. For source-folder jobs, accepted MKV or subtitle error
+worker exits. When a disc, ISO, or Blu-ray folder contains multiple MVC titles,
+the native GUI can convert the main movie, every detected 3D video, or a custom
+selection. Multi-title selections run serially and preserve completed outputs
+if a later video needs attention. For source-folder jobs, accepted MKV or subtitle error
 continuations resume the failed source and then continue through the original
 batch queue.
 

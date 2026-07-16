@@ -1,6 +1,35 @@
 import Foundation
 
-enum ConversionQueueItemStatus: String, Equatable {
+enum ConversionQueueItemStatus: Equatable {
+    case waiting
+    case processing
+    case attention(String)
+    case completed(ConversionResult)
+    case failed(String)
+    case cancelled
+}
+
+struct ConversionQueueItem: Identifiable, Equatable {
+    let id: UUID
+    let draft: ConversionDraft
+    var status: ConversionQueueItemStatus
+
+    init(id: UUID = UUID(), draft: ConversionDraft, status: ConversionQueueItemStatus = .waiting) {
+        self.id = id
+        self.draft = draft
+        self.status = status
+    }
+
+    var displayName: String {
+        draft.selectedTitle?.name ?? draft.source.displayName
+    }
+
+    var plannedOutputURL: URL {
+        draft.proposedOutputURL
+    }
+}
+
+enum SourceFolderQueueItemStatus: String, Equatable {
     case pending
     case inspecting
     case converting
@@ -53,11 +82,11 @@ enum ConversionQueueItemStatus: String, Equatable {
     }
 }
 
-struct ConversionQueueItem: Identifiable, Equatable {
+struct SourceFolderQueueItem: Identifiable, Equatable {
     let id: UUID
     let source: ConversionSource
     var draft: ConversionDraft?
-    var status: ConversionQueueItemStatus
+    var status: SourceFolderQueueItemStatus
     var inspection: SourceInspection?
     var conversionResult: ConversionResult?
     var failureMessage: String?
@@ -85,9 +114,9 @@ struct ConversionQueueItem: Identifiable, Equatable {
     }
 }
 
-struct ConversionQueueState: Equatable {
+struct SourceFolderQueueState: Equatable {
     let folderSource: ConversionSource
-    var items: [ConversionQueueItem]
+    var items: [SourceFolderQueueItem]
     var activeItemID: UUID?
     var stopRequested: Bool
     var hasStarted: Bool
@@ -95,14 +124,14 @@ struct ConversionQueueState: Equatable {
 
     init(folderSource: ConversionSource, sources: [ConversionSource]) {
         self.folderSource = folderSource
-        items = sources.map { ConversionQueueItem(source: $0) }
+        items = sources.map { SourceFolderQueueItem(source: $0) }
         activeItemID = nil
         stopRequested = false
         hasStarted = false
         completionID = nil
     }
 
-    var activeItem: ConversionQueueItem? {
+    var activeItem: SourceFolderQueueItem? {
         guard let activeItemID else {
             return nil
         }

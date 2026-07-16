@@ -3,15 +3,19 @@ import SwiftUI
 struct SourceWorkspaceView: View {
     let source: ConversionSource?
     let state: WorkerLifecycleState
-    let batchQueue: ConversionQueueState?
+    let batchQueue: SourceFolderQueueState?
     let isBatchRunning: Bool
     let insertedDiscs: [ConversionSource]
     let makeMKVAvailable: Bool
     let profile: EncodingProfile
     let options: ConversionOptions
     let profileModified: Bool
+    let titleSelection: DiscTitleSelection
+    let titleSelectionSummary: String
+    let selectedVideoCount: Int
+    let queueItems: [ConversionQueueItem]
     @Binding var destinationURL: URL
-    let plannedOutputURL: URL?
+    let plannedOutputURLs: [URL]
     let refreshDiscs: () -> Void
     let useDisc: (ConversionSource) -> Void
     let openDiscImage: () -> Void
@@ -24,6 +28,9 @@ struct SourceWorkspaceView: View {
     let retryAnalysis: () -> Void
     let resolveRecoveryChoice: (WorkerRecoveryChoice) -> Void
     let retryBatchItem: (UUID, WorkerRecoveryChoice?) -> Void
+    let selectMainTitle: () -> Void
+    let selectAllTitles: () -> Void
+    let chooseTitles: () -> Void
 
     var body: some View {
         ScrollView {
@@ -32,6 +39,10 @@ struct SourceWorkspaceView: View {
                     selectedSourceSection(source)
                 } else {
                     discFirstSourceSection
+                }
+
+                if queueItems.count > 1 {
+                    ConversionQueueSection(items: queueItems)
                 }
 
                 outputSection
@@ -223,7 +234,9 @@ struct SourceWorkspaceView: View {
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
-                    if state.operationKind == .inspection, state.failureRetryable {
+                    if state.failureRetryable,
+                       state.operationKind == .inspection || state.failureCode == "title_unavailable"
+                    {
                         Button("Analyze Again", action: retryAnalysis)
                     }
                     if state.failureCode == "makemkv_missing",
@@ -254,6 +267,16 @@ struct SourceWorkspaceView: View {
                                 SourceFact(label: "Duration", value: result.formattedDuration)
                                 Color.clear
                             }
+                        }
+                    }
+                    if result.titles.count > 1 {
+                        Divider()
+                        titleSelectionSection(result)
+                    } else if let mainTitle = result.mainTitle {
+                        Divider()
+                        LabeledContent("3D video") {
+                            Text("\(mainTitle.name) · \(mainTitle.formattedDuration)")
+                                .foregroundStyle(.secondary)
                         }
                     }
                 } else if source.kind.isDiscWorkflow {
@@ -318,8 +341,8 @@ struct SourceWorkspaceView: View {
     }
 
     private func batchQueueRow(
-        _ item: ConversionQueueItem,
-        queue: ConversionQueueState
+        _ item: SourceFolderQueueItem,
+        queue: SourceFolderQueueState
     ) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: item.status.systemImage)
@@ -351,7 +374,7 @@ struct SourceWorkspaceView: View {
                 Text(item.status.title)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(batchStatusColor(item.status))
-                    .accessibilityLabel("\(item.source.displayName), \(item.status.title)")
+                    .accessibilityLabel(item.status.title)
             }
         }
         .padding(.horizontal, 10)
@@ -359,7 +382,7 @@ struct SourceWorkspaceView: View {
     }
 
     @ViewBuilder
-    private func batchRetryControl(_ item: ConversionQueueItem) -> some View {
+    private func batchRetryControl(_ item: SourceFolderQueueItem) -> some View {
         let recoveryChoices = item.recoveryDecision?.supportedChoices.filter { $0 != .cancel } ?? []
         if item.recoveryDecision == nil {
             Button("Retry") {
@@ -387,8 +410,8 @@ struct SourceWorkspaceView: View {
     }
 
     private func batchItemDetail(
-        _ item: ConversionQueueItem,
-        queue: ConversionQueueState
+        _ item: SourceFolderQueueItem,
+        queue: SourceFolderQueueState
     ) -> String {
         if queue.activeItemID == item.id {
             return state.stageMessage
@@ -400,10 +423,13 @@ struct SourceWorkspaceView: View {
         if let outputPath = item.conversionResult?.outputPath {
             return outputPath
         }
+        guard FileManager.default.fileExists(atPath: item.source.url.path) else {
+            return "Source no longer available"
+        }
         return item.source.url.deletingLastPathComponent().path
     }
 
-    private func batchStatusColor(_ status: ConversionQueueItemStatus) -> Color {
+    private func batchStatusColor(_ status: SourceFolderQueueItemStatus) -> Color {
         switch status {
         case .completed:
             .green
@@ -433,11 +459,11 @@ struct SourceWorkspaceView: View {
                 }
 
                 LabeledContent("Output") {
-                    Text("Full Movie")
+                    Text(outputSummary)
                         .foregroundStyle(.secondary)
                 }
 
-                if let plannedOutputURL {
+                if plannedOutputURLs.count == 1, let plannedOutputURL = plannedOutputURLs.first {
                     Divider()
                     LabeledContent("Planned file") {
                         Text(plannedOutputURL.lastPathComponent)
@@ -447,6 +473,17 @@ struct SourceWorkspaceView: View {
                             .truncationMode(.middle)
                             .textSelection(.enabled)
                     }
+                } else if plannedOutputURLs.count > 1 {
+                    Divider()
+                    LabeledContent("Planned files") {
+                        Text("\(plannedOutputURLs.count) files")
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("\(plannedOutputURLs[0].lastPathComponent) and \(plannedOutputURLs.count - 1) more")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
             }
             .padding(4)
@@ -481,6 +518,12 @@ struct SourceWorkspaceView: View {
                 LabeledContent("Start stage") {
                     Text(options.job.startStage.title)
                         .foregroundStyle(.secondary)
+                }
+                if selectedVideoCount > 1 {
+                    LabeledContent("3D videos") {
+                        Text(titleSelectionSummary)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .padding(4)
@@ -533,6 +576,58 @@ struct SourceWorkspaceView: View {
         isBatchRunning || state.phase.isRunning || state.phase == .decisionRequired
     }
 
+    private var outputSummary: String {
+        if source?.kind == .sourceFolder {
+            let sourceCount = batchQueue?.totalCount ?? 0
+            return "\(sourceCount) queued source\(sourceCount == 1 ? "" : "s")"
+        }
+        return selectedVideoCount > 1 ? "\(selectedVideoCount) full videos" : "Full Movie"
+    }
+
+    private func titleSelectionSection(_ result: SourceInspection) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LabeledContent("Convert") {
+                Menu {
+                    Button(action: selectMainTitle) {
+                        selectionOption("Main Movie", selected: titleSelection.isMain)
+                    }
+                    Button(action: selectAllTitles) {
+                        selectionOption(
+                            "All Detected 3D Videos (\(result.titles.count))",
+                            selected: titleSelection.isAll
+                        )
+                    }
+                    Divider()
+                    Button(action: chooseTitles) {
+                        selectionOption("Choose Videos…", selected: titleSelection.isCustom)
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(titleSelectionSummary)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2.weight(.semibold))
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .disabled(outputControlsLocked)
+                .accessibilityLabel("3D videos to convert: \(titleSelectionSummary)")
+            }
+            Text("\(result.titles.count) compatible 3D videos detected. Multiple selections are converted one at a time.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private func selectionOption(_ title: String, selected: Bool) -> some View {
+        if selected {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
+        }
+    }
+
     private func recoveryDecisionSection(_ decision: WorkerDecision) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(decision.prompt, systemImage: "arrow.clockwise.circle.fill")
@@ -579,6 +674,154 @@ struct SourceWorkspaceView: View {
     }
 }
 
+private struct ConversionQueueSection: View {
+    let items: [ConversionQueueItem]
+    @State private var isExpanded = false
+
+    var body: some View {
+        GroupBox {
+            DisclosureGroup(isExpanded: $isExpanded) {
+                VStack(spacing: 0) {
+                    ForEach(items.indices, id: \.self) { index in
+                        let item = items[index]
+                        HStack(spacing: 9) {
+                            statusIcon(item.status)
+                                .frame(width: 18)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.displayName)
+                                    .font(.callout.weight(.medium))
+                                    .lineLimit(1)
+                                Text(outputText(item))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer()
+                            Text(statusText(item.status))
+                                .font(.caption)
+                                .foregroundStyle(statusColor(item.status))
+                        }
+                        .padding(.vertical, 7)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("\(item.displayName), \(statusText(item.status))")
+                        if index < items.index(before: items.endIndex) {
+                            Divider()
+                        }
+                    }
+                }
+                .padding(.top, 6)
+            } label: {
+                HStack {
+                    Text(queueSummary)
+                        .font(.callout.weight(.medium))
+                    Spacer()
+                    Text("\(completedCount)/\(items.count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(4)
+        } label: {
+            Label("Conversion Queue", systemImage: "list.number")
+                .font(.headline)
+        }
+    }
+
+    private var completedCount: Int {
+        items.count { item in
+            if case .completed = item.status { return true }
+            return false
+        }
+    }
+
+    private var queueSummary: String {
+        if items.allSatisfy({ if case .completed = $0.status { return true }; return false }) {
+            return "All videos complete"
+        }
+        if items.contains(where: { if case .attention = $0.status { return true }; return false }) {
+            return "Queue needs a decision"
+        }
+        if items.contains(where: { if case .failed = $0.status { return true }; return false }) {
+            return "Queue stopped"
+        }
+        if items.contains(where: { if case .cancelled = $0.status { return true }; return false }) {
+            return completedCount > 0
+                ? "Queue stopped after \(completedCount) complete"
+                : "Queue cancelled"
+        }
+        if items.allSatisfy({ if case .waiting = $0.status { return true }; return false }) {
+            return "\(items.count) videos ready"
+        }
+        return "Converting \(items.count) videos"
+    }
+
+    @ViewBuilder
+    private func statusIcon(_ status: ConversionQueueItemStatus) -> some View {
+        switch status {
+        case .waiting:
+            Image(systemName: "clock")
+                .foregroundStyle(.secondary)
+        case .processing:
+            ProgressView()
+                .controlSize(.mini)
+        case .attention:
+            Image(systemName: "exclamationmark.circle.fill")
+                .foregroundStyle(.orange)
+        case .completed:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .failed:
+            Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(.red)
+        case .cancelled:
+            Image(systemName: "minus.circle")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func statusText(_ status: ConversionQueueItemStatus) -> String {
+        switch status {
+        case .waiting:
+            "Waiting"
+        case .processing:
+            "Converting"
+        case .attention:
+            "Decision needed"
+        case .completed:
+            "Complete"
+        case .failed:
+            "Failed"
+        case .cancelled:
+            "Cancelled"
+        }
+    }
+
+    private func statusColor(_ status: ConversionQueueItemStatus) -> Color {
+        switch status {
+        case .attention:
+            .orange
+        case .failed:
+            .red
+        case .completed:
+            .green
+        default:
+            .secondary
+        }
+    }
+
+    private func outputText(_ item: ConversionQueueItem) -> String {
+        switch item.status {
+        case .completed(let result):
+            result.outputURL.lastPathComponent
+        case .attention(let message), .failed(let message):
+            message
+        default:
+            item.plannedOutputURL.lastPathComponent
+        }
+    }
+}
+
 private struct SourceFact: View {
     let label: String
     let value: String
@@ -608,8 +851,10 @@ private struct PipelineStep: View {
             Text(title)
                 .font(.caption2.weight(.medium))
                 .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity)
+        .help(title)
         .accessibilityElement(children: .combine)
     }
 }

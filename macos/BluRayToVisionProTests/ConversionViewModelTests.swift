@@ -137,13 +137,33 @@ final class ConversionViewModelTests: XCTestCase {
     func testStartConversionStartsWorkerForInspectedISO() async throws {
         let inspectionDone = expectation(description: "inspection done")
         let conversionStarted = expectation(description: "conversion started")
+        let title = SourceTitle(
+            id: "makemkv:0",
+            name: "Main Movie",
+            outputName: "Feature",
+            durationSeconds: 7_200,
+            resolution: "1920x1080",
+            frameRate: "24000/1001",
+            mainFeature: true
+        )
+        let inspection = SourceInspection(
+            name: "Feature",
+            resolution: "1920x1080",
+            frameRate: "24000/1001",
+            interlaced: false,
+            sizeBytes: 10,
+            durationSeconds: 7_200,
+            titles: [title]
+        )
         let worker = TwoPhaseWorkerClient(
             onInspectionComplete: { inspectionDone.fulfill() },
             onConversionJobReceived: { spec in
                 XCTAssertEqual(URL(fileURLWithPath: spec.source.path).pathExtension, "iso")
                 XCTAssertEqual(spec.operation, "convert_source")
+                XCTAssertEqual(spec.source.titleID, title.id)
                 conversionStarted.fulfill()
-            }
+            },
+            inspectionResult: inspection
         )
         let viewModel = ConversionViewModel { worker }
         let directoryURL = FileManager.default.temporaryDirectory
@@ -162,15 +182,82 @@ final class ConversionViewModelTests: XCTestCase {
             sourceDetails: viewModel.state.result,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: URL(fileURLWithPath: "/Movies"),
-            outputLength: .fullMovie,
-            samplePosition: .beginning,
-            options: ConversionOptions()
+            options: ConversionOptions(),
+            selectedTitle: title
         )
         viewModel.startConversion(draft: draft)
 
         await fulfillment(of: [conversionStarted], timeout: 2)
         while viewModel.hasActiveWorker { await Task.yield() }
         XCTAssertEqual(viewModel.state.phase, .completed)
+    }
+
+    @MainActor
+    func testUnavailableDiscTitleCanBeReanalyzedBeforeRetry() async throws {
+        let inspectionDone = expectation(description: "inspection done")
+        inspectionDone.expectedFulfillmentCount = 2
+        let conversionFailed = expectation(description: "conversion failed")
+        let title = SourceTitle(
+            id: "makemkv:0",
+            name: "Main Movie",
+            outputName: "Feature",
+            durationSeconds: 7_200,
+            resolution: "1920x1080",
+            frameRate: "24000/1001",
+            mainFeature: true
+        )
+        let inspection = SourceInspection(
+            name: "Feature",
+            resolution: "1920x1080",
+            frameRate: "24000/1001",
+            interlaced: false,
+            titles: [title]
+        )
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { _ in conversionFailed.fulfill() },
+            failureOnConversionNumber: 1,
+            conversionFailure: WorkerFailure(
+                code: "title_unavailable",
+                message: "The selected 3D video is no longer available.",
+                details: nil,
+                retryable: true
+            ),
+            inspectionResult: inspection
+        )
+        let viewModel = ConversionViewModel { worker }
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let imageURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: imageURL.path, contents: Data("disc".utf8))
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let source = ConversionSource(kind: .discImage, url: imageURL)
+
+        viewModel.selectSource(source)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        viewModel.startConversion(
+            draft: ConversionDraft(
+                source: source,
+                sourceDetails: inspection,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: directoryURL,
+                options: ConversionOptions(),
+                selectedTitle: title
+            )
+        )
+        await fulfillment(of: [conversionFailed], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+
+        XCTAssertEqual(viewModel.state.failureCode, "title_unavailable")
+        XCTAssertTrue(viewModel.canRetry)
+        viewModel.restartInspection()
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+
+        XCTAssertEqual(viewModel.state.phase, .completed)
+        XCTAssertNil(viewModel.state.failureCode)
+        XCTAssertEqual(viewModel.state.result?.titles, [title])
     }
 
     @MainActor
@@ -203,8 +290,6 @@ final class ConversionViewModelTests: XCTestCase {
             sourceDetails: viewModel.state.result,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: directoryURL.appendingPathComponent("Output", isDirectory: true),
-            outputLength: .fullMovie,
-            samplePosition: .beginning,
             options: ConversionOptions()
         )
         viewModel.startConversion(draft: draft)
@@ -247,8 +332,6 @@ final class ConversionViewModelTests: XCTestCase {
             sourceDetails: viewModel.state.result,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: FileManager.default.temporaryDirectory,
-            outputLength: .fullMovie,
-            samplePosition: .beginning,
             options: ConversionOptions()
         )
         viewModel.startConversion(draft: draft)
@@ -283,8 +366,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: volumeURL.appendingPathComponent("Output", isDirectory: true),
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
         )
@@ -345,8 +426,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: FileManager.default.temporaryDirectory,
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
         )
@@ -392,8 +471,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: URL(fileURLWithPath: "/Movies"),
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
 
@@ -453,8 +530,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: URL(fileURLWithPath: "/Movies"),
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
 
@@ -504,8 +579,6 @@ final class ConversionViewModelTests: XCTestCase {
                     sourceDetails: viewModel.state.result,
                     profile: BuiltInProfile.balanced.profile,
                     destinationURL: URL(fileURLWithPath: "/Movies"),
-                    outputLength: .fullMovie,
-                    samplePosition: .beginning,
                     options: ConversionOptions()
                 )
             )
@@ -513,7 +586,18 @@ final class ConversionViewModelTests: XCTestCase {
             while viewModel.hasActiveWorker { await Task.yield() }
 
             XCTAssertFalse(viewModel.canSelectSource)
+            let previewViewModel = PreviewViewModel(
+                clientFactory: { worker },
+                cache: PreviewCache(
+                    rootURL: sourceURL.deletingLastPathComponent().appendingPathComponent("Previews", isDirectory: true)
+                )
+            )
+            let coordinator = AppWorkCoordinator(conversion: viewModel, preview: previewViewModel)
+            XCTAssertTrue(coordinator.hasActiveWorker)
+            let deferredUpdateRan = expectation(description: "deferred update ran")
+            XCTAssertTrue(coordinator.postponeInstallUntilIdle { deferredUpdateRan.fulfill() })
             XCTAssertTrue(viewModel.resolveRecoveryChoice(.cancel))
+            await fulfillment(of: [deferredUpdateRan], timeout: 2)
 
             XCTAssertEqual(conversionCount, 1)
             XCTAssertEqual(viewModel.state.phase, .failed)
@@ -549,8 +633,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: URL(fileURLWithPath: "/Movies"),
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
             viewModel.startConversion(draft: draft)
@@ -560,6 +642,37 @@ final class ConversionViewModelTests: XCTestCase {
             XCTAssertEqual(viewModel.state.operationKind, .conversion)
             XCTAssertEqual(viewModel.state.phase, .completed)
             XCTAssertEqual(viewModel.state.conversionResult?.outputPath, "/Movies/movie_AVP.mov")
+        }
+    }
+
+    @MainActor
+    func testSingleDraftQueueUsesSingleConversionPath() async throws {
+        let inspectionDone = expectation(description: "inspection done")
+        let conversionStarted = expectation(description: "conversion started")
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { _ in conversionStarted.fulfill() }
+        )
+        let viewModel = ConversionViewModel { worker }
+
+        try await withTemporarySource { sourceURL in
+            viewModel.selectSource(sourceURL)
+            await fulfillment(of: [inspectionDone], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+
+            let draft = ConversionDraft(
+                source: try XCTUnwrap(viewModel.source),
+                sourceDetails: viewModel.state.result,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: URL(fileURLWithPath: "/Movies"),
+                options: ConversionOptions()
+            )
+            viewModel.startConversionQueue(drafts: [draft])
+
+            await fulfillment(of: [conversionStarted], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+            XCTAssertTrue(viewModel.queueItems.isEmpty)
+            XCTAssertEqual(viewModel.state.phase, .completed)
         }
     }
 
@@ -584,8 +697,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: URL(fileURLWithPath: "/Movies"),
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
             viewModel.startConversion(draft: draft)
@@ -616,8 +727,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: URL(fileURLWithPath: "/Movies"),
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
 
@@ -653,8 +762,6 @@ final class ConversionViewModelTests: XCTestCase {
                 sourceDetails: viewModel.state.result,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: URL(fileURLWithPath: "/Movies"),
-                outputLength: .fullMovie,
-                samplePosition: .beginning,
                 options: ConversionOptions()
             )
 
@@ -882,6 +989,155 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testBatchISOUsesInspectedMainTitleAndPreservesMultiTitleSource() async throws {
+        try await withTemporaryBatchSources(["Feature.iso"]) { folderURL, sourceURLs, destinationURL in
+            let mainTitle = SourceTitle(
+                id: "makemkv:0",
+                name: "Main Movie",
+                outputName: "Feature",
+                durationSeconds: 7_200,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: true
+            )
+            let extraTitle = SourceTitle(
+                id: "makemkv:2",
+                name: "3D Video 1",
+                outputName: "Feature - 3D Video 1",
+                durationSeconds: 600,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: false
+            )
+            let inspection = SourceInspection(
+                name: "Feature",
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                interlaced: false,
+                titles: [mainTitle, extraTitle]
+            )
+            let scenario = BatchWorkerScenario(
+                inspectionResults: [sourceURLs[0].path: [inspection]]
+            )
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+            var options = ConversionOptions()
+            options.job.removeOriginalAfterSuccess = true
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: options
+            )
+            await waitForBatchCompletion(viewModel)
+
+            let queue = try XCTUnwrap(viewModel.batchQueue)
+            let conversionRecord = try XCTUnwrap(
+                scenario.records.first(where: { $0.operation == "convert_source" })
+            )
+            XCTAssertEqual(queue.items.map(\.status), [.completed])
+            XCTAssertEqual(queue.items[0].draft?.selectedTitle, mainTitle)
+            XCTAssertEqual(conversionRecord.titleID, mainTitle.id)
+            XCTAssertEqual(conversionRecord.removeOriginal, false)
+        }
+    }
+
+    @MainActor
+    func testBatchISOWithoutTitlesFailsItemAndContinues() async throws {
+        try await withTemporaryBatchSources(["Feature.iso", "next.mkv"]) { folderURL, sourceURLs, destinationURL in
+            let emptyInspection = SourceInspection(
+                name: "Feature",
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                interlaced: false
+            )
+            let scenario = BatchWorkerScenario(
+                inspectionResults: [sourceURLs[0].path: [emptyInspection]]
+            )
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+
+            let queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.failed, .completed])
+            XCTAssertTrue(queue.items[0].canRetry)
+            XCTAssertEqual(queue.items[0].failureMessage, "No convertible 3D title was found in this source.")
+            XCTAssertEqual(
+                scenario.records.map { "\($0.operation):\(URL(fileURLWithPath: $0.sourcePath).lastPathComponent)" },
+                [
+                    "inspect_source:Feature.iso",
+                    "inspect_source:next.mkv",
+                    "convert_source:next.mkv",
+                ]
+            )
+        }
+    }
+
+    @MainActor
+    func testBatchISORetryUsesFreshlyInspectedTitleID() async throws {
+        try await withTemporaryBatchSources(["Feature.iso"]) { folderURL, sourceURLs, destinationURL in
+            let originalTitle = SourceTitle(
+                id: "makemkv:0",
+                name: "Main Movie",
+                outputName: "Feature",
+                durationSeconds: 7_200,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: true
+            )
+            let refreshedTitle = SourceTitle(
+                id: "makemkv:3",
+                name: "Main Movie",
+                outputName: "Feature",
+                durationSeconds: 7_200,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: true
+            )
+            let inspectionResults = [originalTitle, refreshedTitle].map { title in
+                SourceInspection(
+                    name: "Feature",
+                    resolution: "1920x1080",
+                    frameRate: "24000/1001",
+                    interlaced: false,
+                    titles: [title]
+                )
+            }
+            let sourcePath = sourceURLs[0].path
+            let scenario = BatchWorkerScenario(
+                failConversionOnceFor: [sourcePath],
+                inspectionResults: [sourcePath: inspectionResults]
+            )
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+
+            var queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.failed])
+            viewModel.retryBatchItem(queue.items[0].id)
+            await waitForBatchCompletion(viewModel)
+
+            queue = try XCTUnwrap(viewModel.batchQueue)
+            let conversionRecords = scenario.records.filter { $0.operation == "convert_source" }
+            XCTAssertEqual(queue.items.map(\.status), [.completed])
+            XCTAssertEqual(conversionRecords.map(\.titleID), [originalTitle.id, refreshedTitle.id])
+            XCTAssertEqual(scenario.records.filter { $0.operation == "inspect_source" }.count, 2)
+        }
+    }
+
+    @MainActor
     func testBatchFactoryFailuresAdvanceWithoutRecursiveWorkerLaunches() async throws {
         let sourceNames = (0..<40).map { String(format: "source-%03d.mkv", $0) }
         try await withTemporaryBatchSources(sourceNames) { folderURL, _, destinationURL in
@@ -983,7 +1239,7 @@ final class ConversionViewModelTests: XCTestCase {
     @MainActor
     private func waitForBatchStatus(
         _ viewModel: ConversionViewModel,
-        status: ConversionQueueItemStatus
+        status: SourceFolderQueueItemStatus
     ) async {
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline {
@@ -1014,6 +1270,306 @@ final class ConversionViewModelTests: XCTestCase {
         try await operation(directoryURL, sourceURLs, destinationURL)
     }
 
+    @MainActor
+    func testMultiTitleQueueRunsSeriallyAndPreservesSourceUntilFinalJob() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let inspectionDone = expectation(description: "inspection done")
+        let conversionsDone = expectation(description: "queued conversions done")
+        conversionsDone.expectedFulfillmentCount = 2
+        var conversionJobs: [WorkerJobSpec] = []
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { job in
+                conversionJobs.append(job)
+                conversionsDone.fulfill()
+            }
+        )
+        let viewModel = ConversionViewModel { worker }
+        let source = ConversionSource(kind: .discImage, url: sourceURL)
+
+        viewModel.selectSource(source)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+
+        var options = ConversionOptions()
+        options.job.removeOriginalAfterSuccess = true
+        let titles = [
+            SourceTitle(
+                id: "makemkv:0",
+                name: "Main Movie",
+                outputName: "Feature",
+                durationSeconds: 7_200,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: true
+            ),
+            SourceTitle(
+                id: "makemkv:2",
+                name: "3D Video 1",
+                outputName: "Feature - 3D Video 1",
+                durationSeconds: 600,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: false
+            ),
+        ]
+        let inspection = SourceInspection(
+            name: "Feature",
+            resolution: "1920x1080",
+            frameRate: "24000/1001",
+            interlaced: false,
+            titles: titles
+        )
+        let drafts = titles.map { title in
+            ConversionDraft(
+                source: source,
+                sourceDetails: inspection,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: directoryURL,
+                options: options,
+                selectedTitle: title
+            )
+        }
+
+        viewModel.startConversionQueue(drafts: drafts)
+
+        await fulfillment(of: [conversionsDone], timeout: 2)
+        while viewModel.hasActiveWorker || viewModel.hasQueuedWork { await Task.yield() }
+
+        XCTAssertEqual(conversionJobs.map(\.source.titleID), ["makemkv:0", "makemkv:2"])
+        XCTAssertFalse(try XCTUnwrap(conversionJobs.first?.job).removeOriginal)
+        XCTAssertTrue(try XCTUnwrap(conversionJobs.last?.job).removeOriginal)
+        XCTAssertEqual(viewModel.completedBatchResults?.count, 2)
+        XCTAssertTrue(
+            viewModel.queueItems.allSatisfy { item in
+                if case .completed = item.status { return true }
+                return false
+            }
+        )
+    }
+
+    @MainActor
+    func testMultiTitleQueuePublishesPartialResultsAfterLaterFailure() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let inspectionDone = expectation(description: "inspection done")
+        let conversionsDone = expectation(description: "queued conversions attempted")
+        conversionsDone.expectedFulfillmentCount = 2
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { _ in conversionsDone.fulfill() },
+            failureOnConversionNumber: 2
+        )
+        let viewModel = ConversionViewModel { worker }
+        let source = ConversionSource(kind: .discImage, url: sourceURL)
+
+        viewModel.selectSource(source)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+
+        let titles = [
+            SourceTitle(
+                id: "makemkv:0",
+                name: "Main Movie",
+                outputName: "Feature",
+                durationSeconds: 7_200,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: true
+            ),
+            SourceTitle(
+                id: "makemkv:2",
+                name: "3D Video 1",
+                outputName: "Feature - 3D Video 1",
+                durationSeconds: 600,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: false
+            ),
+        ]
+        let inspection = SourceInspection(
+            name: "Feature",
+            resolution: "1920x1080",
+            frameRate: "24000/1001",
+            interlaced: false,
+            titles: titles
+        )
+        let drafts = titles.map { title in
+            ConversionDraft(
+                source: source,
+                sourceDetails: inspection,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: directoryURL,
+                options: ConversionOptions(),
+                selectedTitle: title
+            )
+        }
+
+        viewModel.startConversionQueue(drafts: drafts)
+
+        await fulfillment(of: [conversionsDone], timeout: 2)
+        while viewModel.hasActiveWorker || viewModel.hasQueuedWork { await Task.yield() }
+
+        XCTAssertEqual(viewModel.state.phase, .failed)
+        XCTAssertEqual(viewModel.completedBatchResults?.count, 1)
+        if case .completed = viewModel.queueItems[0].status {} else {
+            XCTFail("The first queued conversion should remain completed.")
+        }
+        if case .failed = viewModel.queueItems[1].status {} else {
+            XCTFail("The second queued conversion should be marked failed.")
+        }
+    }
+
+    @MainActor
+    func testQueuedRecoveryRestartFailureClearsQueueAndRunsDeferredUpdate() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let inspectionDone = expectation(description: "inspection done")
+        let conversionStarted = expectation(description: "conversion started")
+        let decision = WorkerDecision(
+            identifier: "mkv_creation_decision_required",
+            prompt: "Choose how to continue.",
+            choices: ["retry_continue_on_error", "cancel"],
+            details: nil
+        )
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { _ in conversionStarted.fulfill() },
+            recoveryDecision: decision
+        )
+        let viewModel = ConversionViewModel { worker }
+        let source = ConversionSource(kind: .discImage, url: sourceURL)
+
+        viewModel.selectSource(source)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        viewModel.startConversionQueue(drafts: makeDiscQueueDrafts(source: source, destinationURL: directoryURL))
+        await fulfillment(of: [conversionStarted], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+
+        XCTAssertEqual(viewModel.state.phase, .decisionRequired)
+        XCTAssertTrue(viewModel.hasQueuedWork)
+        let previewViewModel = PreviewViewModel(
+            clientFactory: { worker },
+            cache: PreviewCache(rootURL: directoryURL.appendingPathComponent("Previews", isDirectory: true))
+        )
+        let coordinator = AppWorkCoordinator(conversion: viewModel, preview: previewViewModel)
+        XCTAssertTrue(coordinator.hasActiveWorker)
+        let deferredUpdateRan = expectation(description: "deferred update ran")
+        XCTAssertTrue(coordinator.postponeInstallUntilIdle { deferredUpdateRan.fulfill() })
+
+        try FileManager.default.removeItem(at: sourceURL)
+        XCTAssertFalse(viewModel.resolveRecoveryChoice(.retryContinueOnError))
+        await fulfillment(of: [deferredUpdateRan], timeout: 2)
+
+        XCTAssertEqual(viewModel.state.phase, .failed)
+        XCTAssertFalse(viewModel.hasQueuedWork)
+        XCTAssertTrue(viewModel.canSelectSource)
+        if case .failed = viewModel.queueItems[0].status {} else {
+            XCTFail("The active queue item should be marked failed.")
+        }
+        if case .cancelled = viewModel.queueItems[1].status {} else {
+            XCTFail("The pending queue item should be marked cancelled.")
+        }
+    }
+
+    @MainActor
+    func testClearingDecisionPausedQueueRunsDeferredActions() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let inspectionDone = expectation(description: "inspection done")
+        let conversionStarted = expectation(description: "conversion started")
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { _ in conversionStarted.fulfill() },
+            recoveryDecision: WorkerDecision(
+                identifier: "mkv_creation_decision_required",
+                prompt: "Choose how to continue.",
+                choices: ["retry_continue_on_error", "cancel"],
+                details: nil
+            )
+        )
+        let viewModel = ConversionViewModel { worker }
+        let source = ConversionSource(kind: .discImage, url: sourceURL)
+
+        viewModel.selectSource(source)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        viewModel.startConversionQueue(drafts: makeDiscQueueDrafts(source: source, destinationURL: directoryURL))
+        await fulfillment(of: [conversionStarted], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+
+        let deferredActionRan = expectation(description: "deferred action ran")
+        XCTAssertTrue(viewModel.postponeInstallUntilIdle { deferredActionRan.fulfill() })
+        viewModel.clearSource()
+        await fulfillment(of: [deferredActionRan], timeout: 2)
+
+        XCTAssertNil(viewModel.source)
+        XCTAssertFalse(viewModel.hasQueuedWork)
+        XCTAssertTrue(viewModel.queueItems.isEmpty)
+    }
+
+    private func makeDiscQueueDrafts(source: ConversionSource, destinationURL: URL) -> [ConversionDraft] {
+        let titles = [
+            SourceTitle(
+                id: "makemkv:0",
+                name: "Main Movie",
+                outputName: "Feature",
+                durationSeconds: 7_200,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: true
+            ),
+            SourceTitle(
+                id: "makemkv:2",
+                name: "3D Video 1",
+                outputName: "Feature - 3D Video 1",
+                durationSeconds: 600,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: false
+            ),
+        ]
+        let inspection = SourceInspection(
+            name: "Feature",
+            resolution: "1920x1080",
+            frameRate: "24000/1001",
+            interlaced: false,
+            titles: titles
+        )
+        return titles.map { title in
+            ConversionDraft(
+                source: source,
+                sourceDetails: inspection,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions(),
+                selectedTitle: title
+            )
+        }
+    }
+
     private func withTemporarySource(_ operation: @MainActor (URL) async throws -> Void) async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1025,32 +1581,15 @@ final class ConversionViewModelTests: XCTestCase {
     }
 }
 
-private extension ConversionDraft {
-    init(
-        source: ConversionSource,
-        sourceDetails: SourceInspection?,
-        profile: EncodingProfile,
-        destinationURL: URL,
-        outputLength: OutputLength,
-        samplePosition: SamplePosition,
-        options: ConversionOptions
-    ) {
-        self.init(
-            source: source,
-            sourceDetails: sourceDetails,
-            profile: profile,
-            destinationURL: destinationURL,
-            options: options
-        )
-    }
-}
-
 private final class TwoPhaseWorkerClient: WorkerProcessRunning, @unchecked Sendable {
     private let lock = NSLock()
-    private var callCount = 0
     private var conversionCancellationContinuation: CheckedContinuation<Void, Never>?
     private var conversionCancellationRequested = false
     private var pendingRecoveryDecision: WorkerDecision?
+    private var conversionCount = 0
+    private let inspectionResult: SourceInspection
+    private let failureOnConversionNumber: Int?
+    private let conversionFailure: WorkerFailure
 
     var onInspectionComplete: (() -> Void)?
     var onConversionJobReceived: ((WorkerJobSpec) -> Void)?
@@ -1060,20 +1599,41 @@ private final class TwoPhaseWorkerClient: WorkerProcessRunning, @unchecked Senda
         onInspectionComplete: (() -> Void)? = nil,
         onConversionJobReceived: ((WorkerJobSpec) -> Void)? = nil,
         waitsForConversionCancellation: Bool = false,
-        recoveryDecision: WorkerDecision? = nil
+        recoveryDecision: WorkerDecision? = nil,
+        failureOnConversionNumber: Int? = nil,
+        conversionFailure: WorkerFailure = WorkerFailure(
+            code: "conversion_failed",
+            message: "The queued conversion failed.",
+            details: nil,
+            retryable: false
+        ),
+        inspectionResult: SourceInspection = SourceInspection(
+            name: "movie",
+            resolution: "1920x1080",
+            frameRate: "24/1",
+            interlaced: false,
+            sizeBytes: 10
+        )
     ) {
         self.onInspectionComplete = onInspectionComplete
         self.onConversionJobReceived = onConversionJobReceived
         self.waitsForConversionCancellation = waitsForConversionCancellation
         pendingRecoveryDecision = recoveryDecision
+        self.failureOnConversionNumber = failureOnConversionNumber
+        self.conversionFailure = conversionFailure
+        self.inspectionResult = inspectionResult
     }
 
     func run(job: WorkerJobSpec, onEvent: @escaping (WorkerEvent) async throws -> Void) async throws -> WorkerRunResult {
         let isConversion: Bool
+        let conversionNumber: Int
         let recoveryDecision: WorkerDecision?
         lock.lock()
-        callCount += 1
-        isConversion = callCount > 1
+        isConversion = job.operation == "convert_source"
+        if isConversion {
+            conversionCount += 1
+        }
+        conversionNumber = conversionCount
         recoveryDecision = isConversion ? pendingRecoveryDecision : nil
         if isConversion {
             pendingRecoveryDecision = nil
@@ -1091,6 +1651,17 @@ private final class TwoPhaseWorkerClient: WorkerProcessRunning, @unchecked Senda
         if isConversion {
             onConversionJobReceived?(job)
             try await onEvent(ready)
+            if conversionNumber == failureOnConversionNumber {
+                let failed = WorkerEvent(
+                    protocolVersion: WorkerJobSpec.protocolVersion,
+                    type: .jobFailed,
+                    jobID: job.jobID,
+                    sequence: 1,
+                    payload: WorkerEventPayload(error: conversionFailure)
+                )
+                try await onEvent(failed)
+                return WorkerRunResult(terminalEvent: failed, exitStatus: 1, diagnostics: "")
+            }
             if let recoveryDecision {
                 let decisionRequired = WorkerEvent(
                     protocolVersion: WorkerJobSpec.protocolVersion,
@@ -1127,13 +1698,12 @@ private final class TwoPhaseWorkerClient: WorkerProcessRunning, @unchecked Senda
             try await onEvent(completed)
             return WorkerRunResult(terminalEvent: completed, exitStatus: 0, diagnostics: "")
         } else {
-            let result = SourceInspection(name: "movie", resolution: "1920x1080", frameRate: "24/1", interlaced: false, sizeBytes: 10)
             let completed = WorkerEvent(
                 protocolVersion: WorkerJobSpec.protocolVersion,
                 type: .jobCompleted,
                 jobID: job.jobID,
                 sequence: 1,
-                payload: WorkerEventPayload(result: result)
+                payload: WorkerEventPayload(result: inspectionResult)
             )
             try await onEvent(ready)
             try await onEvent(completed)
@@ -1237,6 +1807,8 @@ private final class ControlledWorkerClient: WorkerProcessRunning, @unchecked Sen
 private struct BatchJobRecord: Equatable {
     let operation: String
     let sourcePath: String
+    let titleID: String?
+    let removeOriginal: Bool?
     let startStage: Int?
     let continueOnError: Bool?
 }
@@ -1262,6 +1834,7 @@ private final class BatchWorkerScenario: @unchecked Sendable {
     private var remainingDecisions: [String: WorkerDecision]
     private let cancellationPaths: Set<String>
     private let inspectionNames: [String: String]
+    private var inspectionResults: [String: [SourceInspection]]
     private var storedRecords: [BatchJobRecord] = []
     private var storedClientCount = 0
     private var activeCount = 0
@@ -1272,13 +1845,15 @@ private final class BatchWorkerScenario: @unchecked Sendable {
         failConversionOnceFor: Set<String> = [],
         decisionConversionOnceFor: [String: WorkerDecision] = [:],
         holdConversionForCancellation: Set<String> = [],
-        inspectionNames: [String: String] = [:]
+        inspectionNames: [String: String] = [:],
+        inspectionResults: [String: [SourceInspection]] = [:]
     ) {
         remainingInspectionFailures = failInspectionOnceFor
         remainingFailures = failConversionOnceFor
         remainingDecisions = decisionConversionOnceFor
         cancellationPaths = holdConversionForCancellation
         self.inspectionNames = inspectionNames
+        self.inspectionResults = inspectionResults
     }
 
     var records: [BatchJobRecord] {
@@ -1308,6 +1883,8 @@ private final class BatchWorkerScenario: @unchecked Sendable {
                 BatchJobRecord(
                     operation: job.operation,
                     sourcePath: job.source.path,
+                    titleID: job.source.titleID,
+                    removeOriginal: job.job?.removeOriginal,
                     startStage: job.job?.startStage,
                     continueOnError: job.job?.continueOnError
                 )
@@ -1334,10 +1911,21 @@ private final class BatchWorkerScenario: @unchecked Sendable {
         }
     }
 
-    func inspectionName(for sourcePath: String) -> String {
+    func inspectionResult(for sourcePath: String) -> SourceInspection {
         lock.withLock {
-            inspectionNames[sourcePath]
-                ?? URL(fileURLWithPath: sourcePath).deletingPathExtension().lastPathComponent
+            if var results = inspectionResults[sourcePath], !results.isEmpty {
+                let result = results.removeFirst()
+                inspectionResults[sourcePath] = results
+                return result
+            }
+            return SourceInspection(
+                name: inspectionNames[sourcePath]
+                    ?? URL(fileURLWithPath: sourcePath).deletingPathExtension().lastPathComponent,
+                resolution: "1920x1080",
+                frameRate: "24/1",
+                interlaced: false,
+                sizeBytes: 10
+            )
         }
     }
 
@@ -1400,13 +1988,7 @@ private final class BatchWorkerClient: WorkerProcessRunning, @unchecked Sendable
                     jobID: job.jobID,
                     sequence: 1,
                     payload: WorkerEventPayload(
-                        result: SourceInspection(
-                            name: scenario.inspectionName(for: job.source.path),
-                            resolution: "1920x1080",
-                            frameRate: "24/1",
-                            interlaced: false,
-                            sizeBytes: 10
-                        )
+                        result: scenario.inspectionResult(for: job.source.path)
                     )
                 )
                 exitStatus = 0

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence, TextIO
 from uuid import UUID
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_DETAIL_BYTES = 64 * 1024
@@ -74,6 +74,7 @@ class WorkerProtocolError(ValueError):
 class JobSource:
     kind: WorkerSourceKind
     path: Path
+    title_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -201,7 +202,16 @@ class JobSpec:
                 "The request must contain a source kind and path.",
                 job_id=job_id,
             )
-        cls._require_exact_keys(source, {"kind", "path"}, "source", job_id)
+        required_source_keys = {"kind", "path"}
+        missing_source_keys = required_source_keys - set(source.keys())
+        if missing_source_keys:
+            missing = ", ".join(sorted(missing_source_keys))
+            raise WorkerProtocolError(
+                "invalid_source",
+                f"The source object is missing required field(s): {missing}.",
+                job_id=job_id,
+            )
+        cls._reject_unknown_keys(source, required_source_keys | {"title_id"}, "source", job_id)
         raw_source_kind = source.get("kind")
         if not isinstance(raw_source_kind, str):
             raise WorkerProtocolError(
@@ -225,6 +235,29 @@ class JobSpec:
                 job_id=job_id,
             )
         source_path = cls._parse_absolute_path(raw_source_path, "source", job_id)
+        has_title_id = "title_id" in source
+        title_id = cls._parse_optional_title_id(source.get("title_id"), job_id)
+        if operation is WorkerOperation.INSPECT_SOURCE and has_title_id:
+            raise WorkerProtocolError(
+                "invalid_source",
+                "Inspection requests cannot select a source title.",
+                job_id=job_id,
+            )
+        if source_kind is WorkerSourceKind.DIRECT_FILE and has_title_id:
+            raise WorkerProtocolError(
+                "invalid_title_selection",
+                "Direct-file sources cannot select a disc title.",
+                job_id=job_id,
+            )
+        title_selection_required = (
+            operation is WorkerOperation.CONVERT_SOURCE and source_kind is not WorkerSourceKind.DIRECT_FILE
+        ) or (operation is WorkerOperation.PREVIEW_SOURCE and source_kind is WorkerSourceKind.DISC_IMAGE)
+        if title_selection_required and title_id is None:
+            raise WorkerProtocolError(
+                "invalid_title_selection",
+                "Disc conversion requests must select a title returned by source inspection.",
+                job_id=job_id,
+            )
 
         destination: JobDestination | None = None
         encoding: EncodingOptions | None = None
@@ -271,7 +304,7 @@ class JobSpec:
             protocol_version=protocol_version,
             job_id=job_id,
             operation=operation,
-            source=JobSource(kind=source_kind, path=source_path),
+            source=JobSource(kind=source_kind, path=source_path, title_id=title_id),
             destination=destination,
             encoding=encoding,
             job=job_options,
@@ -308,6 +341,24 @@ class JobSpec:
                 job_id=job_id,
             )
         return path
+
+    @staticmethod
+    def _parse_optional_title_id(value: Any, job_id: str) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise WorkerProtocolError(
+                "invalid_source",
+                "source.title_id must be a string.",
+                job_id=job_id,
+            )
+        if not value or len(value) > 128 or any(ord(character) < 32 for character in value):
+            raise WorkerProtocolError(
+                "invalid_source",
+                "source.title_id must be a non-empty identifier of at most 128 characters.",
+                job_id=job_id,
+            )
+        return value
 
     @classmethod
     def _parse_encoding(cls, value: Any, job_id: str) -> EncodingOptions:

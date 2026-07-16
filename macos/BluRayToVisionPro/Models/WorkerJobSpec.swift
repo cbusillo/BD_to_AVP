@@ -1,7 +1,7 @@
 import Foundation
 
 struct WorkerJobSpec: Encodable, Equatable {
-    static let protocolVersion = 3
+    static let protocolVersion = 4
 
     struct Source: Encodable, Equatable {
         enum Kind: String, Encodable {
@@ -13,8 +13,9 @@ struct WorkerJobSpec: Encodable, Equatable {
 
         let kind: Kind
         let path: String
+        let titleID: String?
 
-        init(source: ConversionSource) {
+        init(source: ConversionSource, titleID: String? = nil) {
             switch source.kind {
             case .physicalDisc:
                 kind = .physicalDisc
@@ -28,6 +29,7 @@ struct WorkerJobSpec: Encodable, Equatable {
                 preconditionFailure("Unsupported worker source kind: \(source.kind)")
             }
             path = source.workerSourcePath
+            self.titleID = titleID
         }
 
         init(fileURL: URL) {
@@ -37,6 +39,13 @@ struct WorkerJobSpec: Encodable, Equatable {
                 kind = fileURL.pathExtension.lowercased() == "iso" ? .discImage : .directFile
             }
             path = fileURL.path
+            titleID = nil
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case kind
+            case path
+            case titleID = "title_id"
         }
     }
 
@@ -153,7 +162,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         type = "job.start"
         self.jobID = jobID
         operation = "convert_source"
-        source = Source(source: draft.source)
+        source = Source(source: draft.source, titleID: Self.titleID(for: draft))
         destination = Destination(path: draft.destinationURL.path)
 
         encoding = Self.encoding(from: draft.options.encoding)
@@ -171,7 +180,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         type = "job.start"
         self.jobID = jobID
         operation = "preview_source"
-        source = Source(source: conversion.source)
+        source = Source(source: conversion.source, titleID: Self.titleID(for: conversion))
         destination = Destination(path: destinationURL.path)
         encoding = Self.encoding(from: conversion.options.encoding)
 
@@ -238,6 +247,13 @@ struct WorkerJobSpec: Encodable, Equatable {
             outputCommands: options.outputCommands,
             keepAwake: options.keepAwake
         )
+    }
+
+    private static func titleID(for draft: ConversionDraft) -> String? {
+        guard draft.source.kind.isDiscWorkflow else {
+            return nil
+        }
+        return draft.selectedTitle?.id ?? draft.sourceDetails?.mainTitle?.id
     }
 
     enum CodingKeys: String, CodingKey {

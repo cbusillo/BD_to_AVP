@@ -113,6 +113,7 @@ def process(
     gui_start_stage: Stage,
     cancellation_event: Event | None = None,
     *,
+    selected_title_id: str | None = None,
     resume_source_path: Path | None = None,
     batch_start_stage: Stage | None = None,
     batch_sources: tuple[Path, ...] | None = None,
@@ -160,14 +161,26 @@ def process(
             raise FileNotFoundError(f"Could not resume batch source: {resume_source_path}")
 
     else:
-        final_output_path = (
-            process_each(cancellation_event, activity=activity) if activity else process_each(cancellation_event)
-        )
+        if selected_title_id is None:
+            final_output_path = (
+                process_each(cancellation_event, activity=activity) if activity else process_each(cancellation_event)
+            )
+        else:
+            final_output_path = (
+                process_each(cancellation_event, activity=activity, selected_title_id=selected_title_id)
+                if activity
+                else process_each(cancellation_event, selected_title_id=selected_title_id)
+            )
 
     return final_output_path
 
 
-def process_each(cancellation_event: Event | None = None, activity: ActivityReporter | None = None) -> Path:
+def process_each(
+    cancellation_event: Event | None = None,
+    activity: ActivityReporter | None = None,
+    *,
+    selected_title_id: str | None = None,
+) -> Path:
     raise_if_cancelled(cancellation_event)
     print(f"\nProcessing {config.source_path or config.source_str}")
     if activity:
@@ -176,7 +189,7 @@ def process_each(cancellation_event: Event | None = None, activity: ActivityRepo
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("inspect_source", "Reading video metadata")
-    disc_info = get_disc_and_mvc_video_info()
+    disc_info = get_disc_and_mvc_video_info(selected_title_id)
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.log("Source metadata loaded", stage="inspect_source", name=disc_info.name)
@@ -297,6 +310,7 @@ def start_process(
     gui_start_stage: Stage | None = None,
     cancellation_event: Event | None = None,
     *,
+    selected_title_id: str | None = None,
     resume_source_path: Path | None = None,
     batch_start_stage: Stage | None = None,
     batch_sources: tuple[Path, ...] | None = None,
@@ -308,6 +322,7 @@ def start_process(
             return process(
                 gui_start_stage,
                 cancellation_event,
+                selected_title_id=selected_title_id,
                 resume_source_path=resume_source_path,
                 batch_start_stage=batch_start_stage,
                 batch_sources=batch_sources,
@@ -316,6 +331,7 @@ def start_process(
     return process(
         gui_start_stage,
         cancellation_event,
+        selected_title_id=selected_title_id,
         resume_source_path=resume_source_path,
         batch_start_stage=batch_start_stage,
         batch_sources=batch_sources,

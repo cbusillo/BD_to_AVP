@@ -15,6 +15,22 @@ class MKVCreationError(Exception):
     pass
 
 
+class DiscTitleSelectionError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class DiscTitleInfo:
+    id: str
+    title_number: int
+    name: str
+    output_name: str
+    duration_seconds: float
+    resolution: str
+    frame_rate: str
+    main_feature: bool
+
+
 @dataclass
 class DiscInfo:
     name: str = "Unknown"
@@ -24,6 +40,7 @@ class DiscInfo:
     main_title_number: int = 0
     is_interlaced: bool = False
     duration_seconds: float = 0
+    titles: tuple[DiscTitleInfo, ...] = ()
 
 
 @dataclass
@@ -71,7 +88,13 @@ def parse_makemkv_output(output: str) -> tuple[str, list[TitleInfo]]:
             if duration_match and current_title is not None:
                 h, m, s = map(int, duration_match.group(1).split(":"))
                 titles[current_title].duration = h * 3600 + m * 60 + s
-        elif line.startswith("SINFO:") and current_title is not None:
+        elif line.startswith("SINFO:"):
+            stream_title_match = re.match(r"SINFO:(\d+),", line)
+            if not stream_title_match:
+                continue
+            current_title = int(stream_title_match.group(1))
+            if current_title not in titles:
+                titles[current_title] = TitleInfo(index=current_title)
             if any(term in line.lower() for term in ["mvc-3d", "mpeg4-mvc", "mvc video", "mvc high", "mpeg4 mvc"]):
                 titles[current_title].has_mvc = True
             resolution_match = re.search(r"SINFO:\d+,1,19,0,\"(\d+x\d+)\"", line)
@@ -84,7 +107,55 @@ def parse_makemkv_output(output: str) -> tuple[str, list[TitleInfo]]:
     return disc_name, list(titles.values())
 
 
-def get_disc_and_mvc_video_info() -> DiscInfo:
+def build_disc_title_catalog(disc_name: str, titles: list[TitleInfo]) -> tuple[DiscTitleInfo, ...]:
+    mvc_titles = [title for title in titles if title.has_mvc]
+    if not mvc_titles:
+        raise ValueError("No MVC video found in disc info.")
+
+    main_title = max(mvc_titles, key=lambda title: (title.duration, -title.index))
+    ordered_titles = [
+        main_title,
+        *sorted(
+            (title for title in mvc_titles if title.index != main_title.index),
+            key=lambda title: (-title.duration, title.index),
+        ),
+    ]
+
+    catalog: list[DiscTitleInfo] = []
+    extra_number = 1
+    for title in ordered_titles:
+        is_main = title.index == main_title.index
+        display_name = "Main Movie" if is_main else f"3D Video {extra_number}"
+        output_name = disc_name if is_main else sanitize_filename(f"{disc_name} - {display_name}")
+        frame_rate = title.frame_rate or DiscInfo.frame_rate
+        if "/" in frame_rate:
+            frame_rate = frame_rate.split(" ")[0]
+        catalog.append(
+            DiscTitleInfo(
+                id=f"makemkv:{title.index}",
+                title_number=title.index,
+                name=display_name,
+                output_name=output_name,
+                duration_seconds=float(title.duration),
+                resolution=title.resolution or DiscInfo.resolution,
+                frame_rate=frame_rate,
+                main_feature=is_main,
+            )
+        )
+        if not is_main:
+            extra_number += 1
+    return tuple(catalog)
+
+
+def select_disc_title(titles: tuple[DiscTitleInfo, ...], title_id: str | None) -> DiscTitleInfo:
+    if title_id is None:
+        return next(title for title in titles if title.main_feature)
+    if selected_title := next((title for title in titles if title.id == title_id), None):
+        return selected_title
+    raise DiscTitleSelectionError("The selected 3D video is no longer available. Analyze the source again.")
+
+
+def get_disc_and_mvc_video_info(selected_title_id: str | None = None) -> DiscInfo:
     source_path = config.source_path
     source = source_path.as_posix() if source_path else config.source_str
     if not source:
@@ -114,29 +185,32 @@ def get_disc_and_mvc_video_info() -> DiscInfo:
     command = [
         config.MAKEMKVCON_PATH,
         "--robot",
+        "--minlength=0",
         "--noscan" if makemkv_source_supports_noscan(source) else None,
         "info",
         source,
     ]
     output = run_command(command, "Get disc and MVC video properties")
 
-    disc_name, titles = parse_makemkv_output(output)
+    disc_name, raw_titles = parse_makemkv_output(output)
+    try:
+        titles = build_disc_title_catalog(disc_name, raw_titles)
+    except ValueError as error:
+        if selected_title_id is not None:
+            raise DiscTitleSelectionError(
+                "The selected 3D video is no longer available. Analyze the source again."
+            ) from error
+        raise
+    selected_title = select_disc_title(titles, selected_title_id)
 
-    disc_info = DiscInfo(name=disc_name)
-
-    mvc_titles = [title for title in titles if title.has_mvc]
-    if not mvc_titles:
-        raise ValueError("No MVC video found in disc info.")
-
-    longest_mvc_title = max(mvc_titles, key=lambda x: x.duration)
-    disc_info.duration_seconds = float(longest_mvc_title.duration)
-    disc_info.main_title_number = longest_mvc_title.index
-    disc_info.resolution = longest_mvc_title.resolution or disc_info.resolution
-    disc_info.frame_rate = longest_mvc_title.frame_rate or disc_info.frame_rate
-    if "/" in disc_info.frame_rate:
-        disc_info.frame_rate = disc_info.frame_rate.split(" ")[0]
-
-    return disc_info
+    return DiscInfo(
+        name=selected_title.output_name,
+        frame_rate=selected_title.frame_rate,
+        resolution=selected_title.resolution,
+        main_title_number=selected_title.title_number,
+        duration_seconds=selected_title.duration_seconds,
+        titles=titles,
+    )
 
 
 def rip_disc_to_mkv(
@@ -153,6 +227,7 @@ def rip_disc_to_mkv(
         config.MAKEMKVCON_PATH,
         "--robot",
         f"--profile={custom_profile_path}",
+        "--minlength=0",
         "--progress=-same",
         "--noscan" if makemkv_source_supports_noscan(source) else None,
         "mkv",

@@ -45,6 +45,90 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(draft.proposedOutputURL.path, "/Movies/Movie.Part1_AVP.mov")
     }
 
+    func testDraftUsesSelectedTitleOutputName() {
+        let title = SourceTitle(
+            id: "makemkv:2",
+            name: "3D Video 1",
+            outputName: "Feature - 3D Video 1",
+            durationSeconds: 600,
+            resolution: "1920x1080",
+            frameRate: "24000/1001",
+            mainFeature: false
+        )
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .discImage, url: URL(fileURLWithPath: "/Sources/Feature.iso")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/Movies", isDirectory: true),
+            options: ConversionOptions(),
+            selectedTitle: title
+        )
+
+        XCTAssertEqual(draft.proposedOutputURL.path, "/Movies/Feature - 3D Video 1_AVP.mov")
+    }
+
+    func testWithSourceDetailsPreservesSelectedTitle() {
+        let title = SourceTitle(
+            id: "makemkv:2",
+            name: "3D Video 1",
+            outputName: "Feature - 3D Video 1",
+            durationSeconds: 600,
+            resolution: "1920x1080",
+            frameRate: "24000/1001",
+            mainFeature: false
+        )
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .discImage, url: URL(fileURLWithPath: "/Sources/Feature.iso")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/Movies", isDirectory: true),
+            options: ConversionOptions(),
+            selectedTitle: title
+        )
+
+        let inspectedDraft = draft.withSourceDetails(
+            SourceInspection(
+                name: "Feature",
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                interlaced: false
+            )
+        )
+
+        XCTAssertEqual(inspectedDraft.selectedTitle, title)
+        XCTAssertEqual(inspectedDraft.proposedOutputURL.path, "/Movies/Feature - 3D Video 1_AVP.mov")
+    }
+
+    func testSourceInspectionDecodesDetectedTitles() throws {
+        let data = Data(
+            """
+            {
+              "name": "Feature",
+              "resolution": "1920x1080",
+              "frame_rate": "24000/1001",
+              "interlaced": false,
+              "titles": [
+                {
+                  "id": "makemkv:0",
+                  "name": "Main Movie",
+                  "output_name": "Feature",
+                  "duration_seconds": 7200,
+                  "resolution": "1920x1080",
+                  "frame_rate": "24000/1001",
+                  "main_feature": true
+                }
+              ]
+            }
+            """.utf8
+        )
+
+        let inspection = try JSONDecoder().decode(SourceInspection.self, from: data)
+
+        XCTAssertEqual(inspection.titles.count, 1)
+        XCTAssertEqual(inspection.mainTitle?.id, "makemkv:0")
+        XCTAssertEqual(DiscTitleSelection.main.resolvedTitles(in: inspection), inspection.titles)
+    }
+
     func testProfilesHaveStableUniqueIdentifiers() {
         let profiles = BuiltInProfile.allCases.map(\.profile)
         let identifiers = profiles.map(\.id)
@@ -141,7 +225,7 @@ final class ConversionWorkflowTests: XCTestCase {
     func testSourceFolderDiscoveryExplainsEmptyFolderThroughEmptyQueue() throws {
         try withTemporaryDirectory { directoryURL in
             let folderSource = try XCTUnwrap(ConversionSource.infer(from: directoryURL))
-            let queue = ConversionQueueState(
+            let queue = SourceFolderQueueState(
                 folderSource: folderSource,
                 sources: SourceFolderDiscovery.discoverSources(in: directoryURL)
             )
@@ -158,7 +242,7 @@ final class ConversionWorkflowTests: XCTestCase {
             _ = FileManager.default.createFile(atPath: firstURL.path, contents: Data())
             _ = FileManager.default.createFile(atPath: secondURL.path, contents: Data())
             let folderSource = try XCTUnwrap(ConversionSource.infer(from: directoryURL))
-            var queue = ConversionQueueState(
+            var queue = SourceFolderQueueState(
                 folderSource: folderSource,
                 sources: SourceFolderDiscovery.discoverSources(in: directoryURL)
             )
@@ -540,7 +624,7 @@ final class ConversionWorkflowTests: XCTestCase {
         let source = try XCTUnwrap(json["source"] as? [String: Any])
 
         XCTAssertEqual(json["operation"] as? String, "convert_source")
-        XCTAssertEqual(json["protocol_version"] as? Int, 3)
+        XCTAssertEqual(json["protocol_version"] as? Int, 4)
         XCTAssertEqual(source["kind"] as? String, "direct_file")
         XCTAssertEqual((json["destination"] as? [String: Any])?["path"] as? String, "/Movies")
         XCTAssertEqual(encoding["mv_hevc_quality"] as? Int, 75)
@@ -567,10 +651,35 @@ final class ConversionWorkflowTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/native_worker_convert_v3.json")
+            .appendingPathComponent("tests/fixtures/native_worker_convert_v4.json")
         let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
+    }
+
+    func testDiscJobSpecEncodesSelectedOpaqueTitleID() throws {
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .discImage, url: URL(fileURLWithPath: "/tmp/movie.iso")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            options: ConversionOptions(),
+            selectedTitle: SourceTitle(
+                id: "provider:playlist-01005",
+                name: "Main Movie",
+                outputName: "Movie",
+                durationSeconds: 7_200,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: true
+            )
+        )
+
+        let data = try JSONEncoder().encode(WorkerJobSpec(draft: draft))
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let source = try XCTUnwrap(json["source"] as? [String: Any])
+
+        XCTAssertEqual(source["title_id"] as? String, "provider:playlist-01005")
     }
 
     func testPreviewJobSpecMatchesSharedPythonFixture() throws {
@@ -602,7 +711,7 @@ final class ConversionWorkflowTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/native_worker_preview_v3.json")
+            .appendingPathComponent("tests/fixtures/native_worker_preview_v4.json")
         let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
@@ -618,7 +727,16 @@ final class ConversionWorkflowTests: XCTestCase {
             sourceDetails: nil,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
-            options: ConversionOptions()
+            options: ConversionOptions(),
+            selectedTitle: SourceTitle(
+                id: "makemkv:0",
+                name: "Main Movie",
+                outputName: "Feature",
+                durationSeconds: 7_200,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: true
+            )
         )
         let spec = WorkerJobSpec(
             draft: draft,
@@ -629,7 +747,7 @@ final class ConversionWorkflowTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/native_worker_convert_physical_disc_v3.json")
+            .appendingPathComponent("tests/fixtures/native_worker_convert_physical_disc_v4.json")
         let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
