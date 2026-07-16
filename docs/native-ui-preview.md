@@ -6,8 +6,8 @@ does not replace or update it.
 
 - Launch the new SwiftUI workspace on an Apple Silicon Mac running macOS 26 or
   later.
-- Choose a physical disc, ISO disc image, Blu-ray folder, MKV, or MTS/M2TS
-  transport stream.
+- Choose a physical disc, ISO disc image, Blu-ray folder, MKV, MTS/M2TS
+  transport stream, or a source folder containing several supported files.
 - Inspect physical-disc, Blu-ray-folder, ISO, MKV, MTS, and M2TS source metadata
   through the bundled engine.
 - Convert an inspected physical disc, Blu-ray folder, ISO, MKV, MTS, or M2TS source to a
@@ -19,6 +19,9 @@ does not replace or update it.
 - Exercise the native recovery card if MakeMKV leaves a usable intermediate MKV
   or subtitle extraction cannot continue. Recovery creates a new one-off job
   without changing the selected profile or visible conversion defaults.
+- Select a source folder and review its contextual queue. Confirm supported files
+  are processed one at a time, failures remain visible and retryable, and Stop
+  marks the active and not-yet-started items clearly.
 - Review the Video, Audio & Subtitles, and Files & Recovery controls.
 - Create, duplicate, edit, reorder, choose a default, and delete named encoding profiles.
 - Open Settings with `Command-,`, resize the window, and scroll through the
@@ -28,9 +31,9 @@ does not replace or update it.
 
 ## Important Limits
 
-- **Start Processing supports one physical disc, Blu-ray folder, ISO, MKV, MTS,
-  or M2TS source at a time.** Source-folder batch conversion is hidden in this
-  preview and remains available only in the production app.
+- Source-folder queues run sequentially and are not restored after the app quits.
+  Parallel workers, queue reordering, and persistent queue history are not part
+  of this preview.
 - Native conversion currently creates the full movie. Short sample outputs are
   not yet available.
 - Stages without a trustworthy tool-reported denominator remain indeterminate.
