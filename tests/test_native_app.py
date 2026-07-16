@@ -124,6 +124,9 @@ class NativeAppPackagingTests(unittest.TestCase):
         )
         conversion_ui = setup_view + encoding_editor + language_picker
 
+        self.assertIn(".accessibilityLabel(selection.displayName)", language_picker)
+        self.assertNotIn('.accessibilityLabel("Preferred language:', language_picker)
+
         self.assertIn("Convert a 3D Blu-ray Disc", source_view)
         self.assertIn("Import MTS or M2TS transport stream", source_view)
         self.assertIn(".disabled(outputControlsLocked)", source_view)
