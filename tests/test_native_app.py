@@ -119,7 +119,10 @@ class NativeAppPackagingTests(unittest.TestCase):
         encoding_editor = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "EncodingOptionsEditor.swift").read_text(
             encoding="utf-8"
         )
-        conversion_ui = setup_view + encoding_editor
+        language_picker = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "LanguagePickerField.swift").read_text(
+            encoding="utf-8"
+        )
+        conversion_ui = setup_view + encoding_editor + language_picker
 
         self.assertIn("Convert a 3D Blu-ray Disc", source_view)
         self.assertIn("Import MTS or M2TS transport stream", source_view)
@@ -136,6 +139,7 @@ class NativeAppPackagingTests(unittest.TestCase):
             "Crop black bars",
             "Swap left and right eyes",
             "Audio handling",
+            "Subtitle handling",
             "Preferred language",
             "Start stage",
             "Keep durable stage files",

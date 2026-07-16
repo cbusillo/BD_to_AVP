@@ -202,7 +202,7 @@ struct ConversionDraft: Equatable {
             retryOptions.job.continueOnError = true
         case ("subtitle_decision_required", .retryWithoutSubtitles):
             retryOptions.job.startStage = .extractSubtitles
-            retryOptions.encoding.includeSubtitles = false
+            retryOptions.encoding.subtitles.mode = .off
         default:
             return nil
         }

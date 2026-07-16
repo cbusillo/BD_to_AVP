@@ -108,25 +108,22 @@ struct EncodingOptionsEditor: View {
                 }
 
                 Section("Subtitles and Languages") {
-                    Picker("Preferred language", selection: $options.language) {
-                        ForEach(SubtitleLanguage.allCases) { language in
-                            Text(language.name).tag(language)
+                    Picker("Subtitle handling", selection: $options.subtitles.mode) {
+                        ForEach(SubtitleMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
                         }
                     }
+                    .pickerStyle(.segmented)
 
-                    Toggle("Include subtitles", isOn: $options.includeSubtitles)
-                    Toggle("Keep extra languages", isOn: $options.keepExtraLanguages)
-                        .disabled(!options.includeSubtitles)
+                    if options.subtitles.mode != .off {
+                        LanguagePickerField(selection: $options.subtitles.preferredLanguage)
+                    }
 
-                    if options.includeSubtitles {
-                        Text(
-                            options.keepExtraLanguages
-                                ? "The preferred language is prioritized while other available tracks are retained."
-                                : "Only the preferred language is retained when the disc contains multiple tracks."
-                        )
+                    Text(
+                        "\(options.subtitles.mode.detail) Source audio tracks are preserved independently of subtitle choices."
+                    )
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    }
                 }
             }
         }

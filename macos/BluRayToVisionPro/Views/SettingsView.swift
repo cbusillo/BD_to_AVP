@@ -432,9 +432,11 @@ private struct ProfileEncodingSummaryView: View {
                     ProfileSummarySection(
                         title: "Subtitles and Languages",
                         items: [
-                            ProfileSummaryItem(title: "Preferred language", value: options.language.name),
-                            ProfileSummaryItem(title: "Include subtitles", value: enabledText(options.includeSubtitles)),
-                            ProfileSummaryItem(title: "Keep extra languages", value: enabledText(options.keepExtraLanguages)),
+                            ProfileSummaryItem(title: "Subtitle handling", value: options.subtitles.mode.title),
+                            ProfileSummaryItem(
+                                title: "Preferred language",
+                                value: options.subtitles.preferredLanguage.displayName
+                            ),
                         ]
                     )
                 }

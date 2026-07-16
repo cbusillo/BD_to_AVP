@@ -564,12 +564,13 @@ struct SourceWorkspaceView: View {
     }
 
     private var subtitleSummary: String {
-        guard options.encoding.includeSubtitles else {
+        guard options.encoding.subtitles.mode != .off else {
             return "Skipped"
         }
-        return options.encoding.keepExtraLanguages
-            ? "\(options.encoding.language.name) preferred; keep others"
-            : "\(options.encoding.language.name) only"
+        let languageName = options.encoding.subtitles.preferredLanguage.name
+        return options.encoding.subtitles.mode == .preferredPlusOthers
+            ? "\(languageName) preferred; keep others"
+            : "\(languageName) only"
     }
 
     private var outputControlsLocked: Bool {

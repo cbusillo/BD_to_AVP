@@ -544,7 +544,7 @@ final class ConversionViewModelTests: XCTestCase {
             XCTAssertEqual(conversionJobs[1].job?.startStage, ConversionStage.extractSubtitles.rawValue)
             XCTAssertEqual(conversionJobs[1].encoding?.subtitles.mode, .off)
             XCTAssertNil(conversionJobs[1].encoding?.subtitles.preferredLanguage)
-            XCTAssertTrue(draft.options.encoding.includeSubtitles)
+            XCTAssertEqual(draft.options.encoding.subtitles.mode, .preferredPlusOthers)
             XCTAssertEqual(viewModel.state.phase, .completed)
         }
     }
