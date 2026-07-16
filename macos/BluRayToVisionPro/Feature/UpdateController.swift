@@ -129,6 +129,7 @@ struct UpdateEnvironment: Equatable {
 
 @MainActor
 protocol UpdateInstallPostponing: AnyObject {
+    var hasActiveWork: Bool { get }
     func postponeInstallUntilIdle(_ installHandler: @escaping () -> Void) -> Bool
 }
 

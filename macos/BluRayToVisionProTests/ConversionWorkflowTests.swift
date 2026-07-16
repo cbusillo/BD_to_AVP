@@ -24,6 +24,27 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(draft.proposedOutputURL.path, "/Movies/Feature_AVP.mov")
     }
 
+    func testDraftPreservesDotsInExtensionlessInspectedName() {
+        let draft = ConversionDraft(
+            source: ConversionSource(
+                kind: .matroska,
+                url: URL(fileURLWithPath: "/Sources/Movie.Part1.mkv")
+            ),
+            sourceDetails: SourceInspection(
+                name: "Movie.Part1",
+                resolution: "1920x1080",
+                frameRate: "24/1",
+                interlaced: false,
+                sizeBytes: 10
+            ),
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/Movies", isDirectory: true),
+            options: ConversionOptions()
+        )
+
+        XCTAssertEqual(draft.proposedOutputURL.path, "/Movies/Movie.Part1_AVP.mov")
+    }
+
     func testProfilesHaveStableUniqueIdentifiers() {
         let profiles = BuiltInProfile.allCases.map(\.profile)
         let identifiers = profiles.map(\.id)
@@ -52,6 +73,120 @@ final class ConversionWorkflowTests: XCTestCase {
             XCTAssertNil(ConversionSource.infer(from: unsupportedImageURL))
             XCTAssertEqual(ConversionSource.infer(from: mkvURL)?.kind, .matroska)
             XCTAssertEqual(ConversionSource.infer(from: streamURL)?.kind, .transportStream)
+        }
+    }
+
+    func testSourceFolderDiscoveryIsRecursiveDeterministicAndSkipsUnsupportedTrees() throws {
+        try withTemporaryDirectory { directoryURL in
+            let nestedURL = directoryURL.appendingPathComponent("Nested", isDirectory: true)
+            let hiddenURL = directoryURL.appendingPathComponent(".Hidden", isDirectory: true)
+            let packageURL = directoryURL.appendingPathComponent("Archive.app", isDirectory: true)
+            let bdmvStreamURL = directoryURL
+                .appendingPathComponent("Disc", isDirectory: true)
+                .appendingPathComponent("BDMV", isDirectory: true)
+                .appendingPathComponent("STREAM", isDirectory: true)
+            try FileManager.default.createDirectory(at: nestedURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: hiddenURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: bdmvStreamURL, withIntermediateDirectories: true)
+
+            let expectedURLs = [
+                directoryURL.appendingPathComponent("B.mkv"),
+                nestedURL.appendingPathComponent("a.ISO"),
+                nestedURL.appendingPathComponent("clip.M2TS"),
+            ]
+            for url in expectedURLs {
+                _ = FileManager.default.createFile(atPath: url.path, contents: Data())
+            }
+            _ = FileManager.default.createFile(
+                atPath: directoryURL.appendingPathComponent("unsupported.mp4").path,
+                contents: Data()
+            )
+            _ = FileManager.default.createFile(
+                atPath: hiddenURL.appendingPathComponent("hidden.mkv").path,
+                contents: Data()
+            )
+            _ = FileManager.default.createFile(
+                atPath: packageURL.appendingPathComponent("packaged.mkv").path,
+                contents: Data()
+            )
+            _ = FileManager.default.createFile(
+                atPath: bdmvStreamURL.appendingPathComponent("00001.m2ts").path,
+                contents: Data()
+            )
+            try FileManager.default.createSymbolicLink(
+                at: directoryURL.appendingPathComponent("Linked Folder", isDirectory: true),
+                withDestinationURL: hiddenURL
+            )
+            try FileManager.default.createSymbolicLink(
+                at: directoryURL.appendingPathComponent("Linked File.mkv"),
+                withDestinationURL: hiddenURL.appendingPathComponent("hidden.mkv")
+            )
+
+            let folderSource = try XCTUnwrap(ConversionSource.infer(from: directoryURL))
+            let firstDiscovery = SourceFolderDiscovery.discoverSources(in: directoryURL)
+            let secondDiscovery = SourceFolderDiscovery.discoverSources(in: directoryURL)
+
+            XCTAssertEqual(folderSource.kind, .sourceFolder)
+            XCTAssertEqual(firstDiscovery.map(\.url), expectedURLs.sorted {
+                let firstKey = $0.standardizedFileURL.path.lowercased()
+                let secondKey = $1.standardizedFileURL.path.lowercased()
+                return firstKey == secondKey ? $0.path < $1.path : firstKey < secondKey
+            })
+            XCTAssertEqual(firstDiscovery, secondDiscovery)
+            XCTAssertEqual(firstDiscovery.map(\.kind), [.matroska, .discImage, .transportStream])
+        }
+    }
+
+    func testSourceFolderDiscoveryExplainsEmptyFolderThroughEmptyQueue() throws {
+        try withTemporaryDirectory { directoryURL in
+            let folderSource = try XCTUnwrap(ConversionSource.infer(from: directoryURL))
+            let queue = ConversionQueueState(
+                folderSource: folderSource,
+                sources: SourceFolderDiscovery.discoverSources(in: directoryURL)
+            )
+
+            XCTAssertTrue(queue.items.isEmpty)
+            XCTAssertEqual(queue.summaryText, "No supported sources")
+        }
+    }
+
+    func testBatchPreparationSnapshotsProfileDestinationAndOptionsPerItem() throws {
+        try withTemporaryDirectory { directoryURL in
+            let firstURL = directoryURL.appendingPathComponent("First.mkv")
+            let secondURL = directoryURL.appendingPathComponent("Second.m2ts")
+            _ = FileManager.default.createFile(atPath: firstURL.path, contents: Data())
+            _ = FileManager.default.createFile(atPath: secondURL.path, contents: Data())
+            let folderSource = try XCTUnwrap(ConversionSource.infer(from: directoryURL))
+            var queue = ConversionQueueState(
+                folderSource: folderSource,
+                sources: SourceFolderDiscovery.discoverSources(in: directoryURL)
+            )
+            var profile = BuiltInProfile.balanced.profile
+            var options = ConversionOptions()
+            options.encoding.hevcQuality = 81
+            options.job.keepStageFiles = true
+            let destinationURL = directoryURL.appendingPathComponent("Output", isDirectory: true)
+
+            queue.prepareForRun(
+                profile: profile,
+                destinationURL: destinationURL,
+                options: options
+            )
+            profile.name = "Changed Later"
+            options.encoding.hevcQuality = 12
+            options.job.keepStageFiles = false
+
+            XCTAssertEqual(queue.items.count, 2)
+            for item in queue.items {
+                let draft = try XCTUnwrap(item.draft)
+                XCTAssertEqual(draft.profile.name, "Balanced")
+                XCTAssertEqual(draft.destinationURL, destinationURL)
+                XCTAssertEqual(draft.options.encoding.hevcQuality, 81)
+                XCTAssertTrue(draft.options.job.keepStageFiles)
+            }
+            XCTAssertEqual(profile.name, "Changed Later")
+            XCTAssertEqual(options.encoding.hevcQuality, 12)
         }
     }
 

@@ -54,6 +54,8 @@ struct ContentView: View {
                 SourceWorkspaceView(
                     source: viewModel.source,
                     state: viewModel.state,
+                    batchQueue: viewModel.batchQueue,
+                    isBatchRunning: viewModel.isBatchRunning,
                     insertedDiscs: insertedDiscs,
                     makeMKVAvailable: DiscSourceDetector.makeMKVAvailable,
                     profile: selectedProfile,
@@ -65,6 +67,7 @@ struct ContentView: View {
                     useDisc: selectSource,
                     openDiscImage: { chooseFile(.discImage) },
                     openBluRayFolder: { chooseFolder(.bluRayFolder) },
+                    openSourceFolder: { chooseFolder(.sourceFolder) },
                     openMKV: { chooseFile(.matroska) },
                     importTransportStream: { chooseFile(.transportStream) },
                     changeSource: chooseExistingSource,
@@ -72,6 +75,9 @@ struct ContentView: View {
                     retryAnalysis: viewModel.restartInspection,
                     resolveRecoveryChoice: { choice in
                         _ = viewModel.resolveRecoveryChoice(choice)
+                    },
+                    retryBatchItem: { itemID, choice in
+                        viewModel.retryBatchItem(itemID, recoveryChoice: choice)
                     }
                 )
                 .frame(minWidth: 350, idealWidth: 390, maxWidth: 450)
@@ -83,7 +89,7 @@ struct ContentView: View {
                     profiles: profileStore.profiles,
                     selectedProfile: selectedProfile,
                     profileModified: profileModified,
-                    isLocked: viewModel.hasActiveWorker
+                    isLocked: viewModel.hasActiveWork
                         || previewViewModel.hasActiveWorker
                         || viewModel.state.phase == .decisionRequired,
                     sourceKind: viewModel.source?.kind,
@@ -160,18 +166,29 @@ struct ContentView: View {
             }
         }
         .onChange(of: defaultJobOptions) { _, newValue in
-            if viewModel.source == nil, !viewModel.hasActiveWorker {
+            if viewModel.source == nil, !viewModel.hasActiveWork {
                 options.job = newValue
             }
         }
         .onChange(of: viewModel.state.conversionResult) { _, result in
-            guard let result else {
+            guard viewModel.batchQueue == nil, let result else {
                 return
             }
             if settings.revealOutput {
                 NSWorkspace.shared.activateFileViewerSelecting([result.outputURL])
             }
             if settings.playSound {
+                NSSound(named: "Glass")?.play()
+            }
+        }
+        .onChange(of: viewModel.batchQueue?.completionID) { _, completionID in
+            guard completionID != nil, let queue = viewModel.batchQueue else {
+                return
+            }
+            if settings.revealOutput, !queue.completedOutputURLs.isEmpty {
+                NSWorkspace.shared.activateFileViewerSelecting(queue.completedOutputURLs)
+            }
+            if settings.playSound, !queue.stopRequested, queue.completedCount > 0 {
                 NSSound(named: "Glass")?.play()
             }
         }
@@ -184,7 +201,7 @@ struct ContentView: View {
             }
             guard let previousProfile = previousProfiles.first(where: { $0.id == selectedProfileID }),
                   let currentProfile = currentProfiles.first(where: { $0.id == selectedProfileID }),
-                  !viewModel.hasActiveWorker,
+                  !viewModel.hasActiveWork,
                   options.encoding == previousProfile.options
             else {
                 return
@@ -235,7 +252,7 @@ struct ContentView: View {
                     Label("Refresh Disc", systemImage: "arrow.clockwise")
                 }
                 .help("Refresh inserted 3D Blu-ray discs")
-                .disabled(viewModel.hasActiveWorker)
+                .disabled(viewModel.hasActiveWork)
             }
         }
     }
@@ -258,6 +275,7 @@ struct ContentView: View {
             Divider()
             Button("Open Disc Image…") { chooseFile(.discImage) }
             Button("Open Blu-ray Folder…") { chooseFolder(.bluRayFolder) }
+            Button("Open Source Folder…") { chooseFolder(.sourceFolder) }
             Button("Open 3D MKV…") { chooseFile(.matroska) }
 
             Divider()
@@ -272,7 +290,7 @@ struct ContentView: View {
         } label: {
             Label(viewModel.source == nil ? "Choose Source" : "Change Source", systemImage: "opticaldiscdrive")
         }
-        .help("Choose a physical disc, disc image, Blu-ray folder, MKV, or transport stream")
+        .help("Choose a physical disc, disc image, Blu-ray folder, source folder, MKV, or transport stream")
         .disabled(!canSelectSource)
     }
 
@@ -327,9 +345,21 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(isShowingActivity ? "Hide activity details" : "Show activity details")
 
-            if viewModel.hasActiveWorker {
+            if viewModel.hasActiveWork {
                 Button("Stop", role: .destructive, action: viewModel.stopActiveWorker)
                     .keyboardShortcut("p", modifiers: .command)
+            } else if isBatchSource {
+                Button("Start Batch Conversion") {
+                    viewModel.startBatchConversion(
+                        profile: selectedProfile,
+                        destinationURL: destinationURL,
+                        options: options
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut("p", modifiers: .command)
+                .disabled(!conversionCanStart)
+                .help(conversionCanStart ? "Convert the queued sources sequentially." : conversionUnavailableReason)
             } else if viewModel.source == nil || !conversionCanStart {
                 Button("Start Full Conversion") {}
                     .buttonStyle(.bordered)
@@ -370,7 +400,7 @@ struct ContentView: View {
     }
 
     private var draft: ConversionDraft? {
-        guard let source = viewModel.source else {
+        guard let source = viewModel.source, source.kind != .sourceFolder else {
             return nil
         }
         return ConversionDraft(
@@ -383,6 +413,9 @@ struct ContentView: View {
     }
 
     private var statusText: String {
+        if let batchQueue = viewModel.batchQueue {
+            return batchQueue.summaryText
+        }
         if viewModel.hasActiveWorker {
             return viewModel.state.stageMessage
                 ?? (viewModel.state.operationKind == .inspection ? "Reading source details" : "Converting video")
@@ -405,9 +438,6 @@ struct ContentView: View {
         if source.kind.isDiscWorkflow {
             return "Disc workflow ready"
         }
-        if source.kind == .sourceFolder {
-            return "Batch folder conversion is not available"
-        }
         return "Conversion settings ready"
     }
 
@@ -426,6 +456,21 @@ struct ContentView: View {
     }
 
     private var secondaryStatusText: String? {
+        if let batchQueue = viewModel.batchQueue {
+            if batchQueue.isRunning {
+                return viewModel.state.stageMessage
+                    ?? (viewModel.state.operationKind == .inspection ? "Reading source details" : "Processing video")
+            }
+            if batchQueue.items.isEmpty {
+                return "Choose a folder containing ISO, MKV, MTS, or M2TS sources."
+            }
+            if batchQueue.isFinished {
+                return batchQueue.failedCount > 0
+                    ? "Review failed items below or retry them individually."
+                    : destinationURL.path
+            }
+            return "Ready to convert sequentially to \(destinationURL.path)"
+        }
         if viewModel.hasActiveWorker {
             return viewModel.state.activityMessage
                 ?? (viewModel.state.operationKind == .inspection ? "Inspecting video streams" : "Processing video")
@@ -443,6 +488,18 @@ struct ContentView: View {
     }
 
     private var statusColor: Color {
+        if let batchQueue = viewModel.batchQueue {
+            if batchQueue.isRunning {
+                return .blue
+            }
+            if batchQueue.failedCount > 0 {
+                return .red
+            }
+            if batchQueue.stoppedCount > 0 || batchQueue.notStartedCount > 0 {
+                return .orange
+            }
+            return batchQueue.items.isEmpty ? .secondary : .green
+        }
         if viewModel.hasActiveWorker {
             return .blue
         }
@@ -456,11 +513,19 @@ struct ContentView: View {
     }
 
     private var conversionCanStart: Bool {
-        capabilities.conversionAvailable
-            && viewModel.source?.kind.supportsConversion == true
+        guard capabilities.conversionAvailable,
+              !viewModel.hasActiveWork,
+              !previewViewModel.hasActiveWorker,
+              viewModel.state.phase != .decisionRequired
+        else {
+            return false
+        }
+        if isBatchSource {
+            return viewModel.batchQueue?.items.isEmpty == false
+                && !viewModel.isBatchRunning
+        }
+        return viewModel.source?.kind.supportsConversion == true
             && viewModel.state.result != nil
-            && viewModel.state.phase != .decisionRequired
-            && !previewViewModel.hasActiveWorker
     }
 
     private var previewCanStart: Bool {
@@ -491,6 +556,10 @@ struct ContentView: View {
         viewModel.canSelectSource && !previewViewModel.hasActiveWorker
     }
 
+    private var isBatchSource: Bool {
+        viewModel.source?.kind == .sourceFolder
+    }
+
     private var conversionUnavailableReason: String {
         guard capabilities.conversionAvailable else {
             return capabilities.conversionUnavailableReason
@@ -500,7 +569,9 @@ struct ContentView: View {
         }
         switch viewModel.source?.kind {
         case .sourceFolder:
-            return "Batch folder conversion is not yet available."
+            return viewModel.batchQueue?.items.isEmpty == false
+                ? "The batch is already active."
+                : "No supported ISO, MKV, MTS, or M2TS sources were found in this folder."
         case .physicalDisc, .discImage, .bluRayFolder, .matroska, .transportStream:
             return viewModel.state.result == nil
                 ? "Source analysis must complete before conversion can start."
@@ -559,7 +630,7 @@ struct ContentView: View {
     private func refreshDiscs() {
         let refreshedDiscs = DiscSourceDetector.insertedDiscs()
         insertedDiscs = refreshedDiscs
-        guard !viewModel.hasActiveWorker,
+        guard !viewModel.hasActiveWork,
               let selectedSource = viewModel.source,
               selectedSource.kind == .physicalDisc,
               !refreshedDiscs.contains(where: { $0.workerSourcePath == selectedSource.workerSourcePath })
@@ -589,8 +660,7 @@ struct ContentView: View {
     private func chooseExistingSource() {
         guard canSelectSource,
               let sourceURL = SourcePicker.chooseExistingSource(),
-              let source = ConversionSource.infer(from: sourceURL),
-              source.kind.supportsMetadataInspection
+              let source = ConversionSource.infer(from: sourceURL)
         else {
             return
         }
@@ -620,8 +690,7 @@ struct ContentView: View {
     private func acceptDrop(_ urls: [URL], _ location: CGPoint) -> Bool {
         guard canSelectSource,
               let url = urls.first,
-              let source = ConversionSource.infer(from: url),
-              source.kind.supportsMetadataInspection
+              let source = ConversionSource.infer(from: url)
         else {
             return false
         }

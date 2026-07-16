@@ -666,6 +666,354 @@ final class ConversionViewModelTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testBatchConversionRunsOneInspectionAndConversionPerSourceSequentially() async throws {
+        try await withTemporaryBatchSources(["B.mkv", "a.m2ts"]) { folderURL, _, destinationURL in
+            let scenario = BatchWorkerScenario()
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+
+            viewModel.selectSource(folderURL)
+
+            XCTAssertFalse(viewModel.hasActiveWork)
+            XCTAssertEqual(viewModel.batchQueue?.items.map(\.source.displayName), ["a.m2ts", "B.mkv"])
+            XCTAssertEqual(scenario.clientCount, 0)
+
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+
+            let queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.completed, .completed])
+            XCTAssertEqual(queue.completedCount, 2)
+            XCTAssertEqual(queue.summaryText, "2 of 2 completed")
+            XCTAssertEqual(scenario.clientCount, 4)
+            XCTAssertEqual(scenario.maximumActiveCount, 1)
+            XCTAssertEqual(
+                scenario.records.map { "\($0.operation):\(URL(fileURLWithPath: $0.sourcePath).lastPathComponent)" },
+                [
+                    "inspect_source:a.m2ts",
+                    "convert_source:a.m2ts",
+                    "inspect_source:B.mkv",
+                    "convert_source:B.mkv",
+                ]
+            )
+        }
+    }
+
+    @MainActor
+    func testBatchFailureContinuesAndExplicitRetryUsesStoredDraft() async throws {
+        try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, sourceURLs, destinationURL in
+            var options = ConversionOptions()
+            options.encoding.hevcQuality = 83
+            let firstPath = sourceURLs[0].path
+            let scenario = BatchWorkerScenario(failConversionOnceFor: [firstPath])
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.originalResolution.profile,
+                destinationURL: destinationURL,
+                options: options
+            )
+            await waitForBatchCompletion(viewModel)
+
+            var queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.failed, .completed])
+            XCTAssertEqual(queue.failedCount, 1)
+            XCTAssertEqual(queue.completedCount, 1)
+            XCTAssertEqual(queue.items[0].failureMessage, "Synthetic conversion failure")
+            XCTAssertEqual(scenario.maximumActiveCount, 1)
+
+            let failedItemID = queue.items[0].id
+            viewModel.retryBatchItem(failedItemID)
+            await waitForBatchCompletion(viewModel)
+
+            queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.completed, .completed])
+            XCTAssertEqual(queue.items[0].draft?.profile.id, BuiltInProfile.originalResolution.id)
+            XCTAssertEqual(queue.items[0].draft?.destinationURL, destinationURL)
+            XCTAssertEqual(queue.items[0].draft?.options.encoding.hevcQuality, 83)
+            XCTAssertEqual(
+                scenario.records.filter { $0.sourcePath == firstPath }.map(\.operation),
+                ["inspect_source", "convert_source", "inspect_source", "convert_source"]
+            )
+        }
+    }
+
+    @MainActor
+    func testBatchInspectionFailureContinuesAndRetryRestartsInspection() async throws {
+        try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, sourceURLs, destinationURL in
+            let firstPath = sourceURLs[0].path
+            let scenario = BatchWorkerScenario(failInspectionOnceFor: [firstPath])
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+
+            var queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.failed, .completed])
+            XCTAssertEqual(queue.items[0].failureMessage, "Synthetic inspection failure")
+
+            viewModel.retryBatchItem(queue.items[0].id)
+            await waitForBatchCompletion(viewModel)
+
+            queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.completed, .completed])
+            XCTAssertEqual(
+                scenario.records.filter { $0.sourcePath == firstPath }.map(\.operation),
+                ["inspect_source", "inspect_source", "convert_source"]
+            )
+        }
+    }
+
+    @MainActor
+    func testBatchRecoveryChoiceRetriesFromStoredDecisionDraft() async throws {
+        try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, sourceURLs, destinationURL in
+            let firstPath = sourceURLs[0].path
+            let decision = WorkerDecision(
+                identifier: "mkv_creation_decision_required",
+                prompt: "MakeMKV needs attention.",
+                choices: ["retry_continue_on_error", "cancel"],
+                details: "A usable MKV was created."
+            )
+            let scenario = BatchWorkerScenario(decisionConversionOnceFor: [firstPath: decision])
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+
+            var queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.failed, .completed])
+            XCTAssertEqual(queue.items[0].recoveryDecision, decision)
+            XCTAssertTrue(queue.items[0].canRetry)
+
+            viewModel.retryBatchItem(
+                queue.items[0].id,
+                recoveryChoice: .retryContinueOnError
+            )
+            await waitForBatchCompletion(viewModel)
+
+            queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.completed, .completed])
+            let conversionRecords = scenario.records.filter {
+                $0.sourcePath == firstPath && $0.operation == "convert_source"
+            }
+            XCTAssertEqual(conversionRecords.count, 2)
+            XCTAssertEqual(conversionRecords.last?.startStage, ConversionStage.extractMVCAndAudio.rawValue)
+            XCTAssertEqual(conversionRecords.last?.continueOnError, true)
+        }
+    }
+
+    @MainActor
+    func testBatchFailsLaterItemWhenInspectionCreatesOutputNameCollision() async throws {
+        try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, sourceURLs, destinationURL in
+            let inspectionNames = Dictionary(uniqueKeysWithValues: sourceURLs.map { ($0.path, "Feature") })
+            let scenario = BatchWorkerScenario(inspectionNames: inspectionNames)
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+
+            let queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.completed, .failed])
+            XCTAssertFalse(queue.items[1].canRetry)
+            XCTAssertEqual(
+                queue.items[1].failureMessage,
+                "Another queued source resolves to the same output file."
+            )
+            XCTAssertEqual(scenario.records.map(\.operation), [
+                "inspect_source",
+                "convert_source",
+                "inspect_source",
+            ])
+        }
+    }
+
+    @MainActor
+    func testBatchAllowsDistinctDottedInspectionNames() async throws {
+        try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, sourceURLs, destinationURL in
+            let scenario = BatchWorkerScenario(
+                inspectionNames: [
+                    sourceURLs[0].path: "Feature.Part1",
+                    sourceURLs[1].path: "Feature.Part2",
+                ]
+            )
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+
+            let queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.completed, .completed])
+            XCTAssertEqual(queue.items.map { $0.draft?.proposedOutputURL.lastPathComponent }, [
+                "Feature.Part1_AVP.mov",
+                "Feature.Part2_AVP.mov",
+            ])
+            XCTAssertEqual(scenario.records.map(\.operation), [
+                "inspect_source",
+                "convert_source",
+                "inspect_source",
+                "convert_source",
+            ])
+        }
+    }
+
+    @MainActor
+    func testBatchFactoryFailuresAdvanceWithoutRecursiveWorkerLaunches() async throws {
+        let sourceNames = (0..<40).map { String(format: "source-%03d.mkv", $0) }
+        try await withTemporaryBatchSources(sourceNames) { folderURL, _, destinationURL in
+            let viewModel = ConversionViewModel { throw BatchFactoryError() }
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+
+            let queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.failedCount, sourceNames.count)
+            XCTAssertTrue(queue.items.allSatisfy { $0.status == .failed })
+            XCTAssertTrue(queue.items.allSatisfy(\.canRetry))
+        }
+    }
+
+    @MainActor
+    func testDeferredFactoryFailureCanBeStoppedBeforeNextItemLaunches() async throws {
+        try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, _, destinationURL in
+            var factoryCalls = 0
+            let viewModel = ConversionViewModel {
+                factoryCalls += 1
+                throw BatchFactoryError()
+            }
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+
+            XCTAssertFalse(viewModel.hasActiveWorker)
+            XCTAssertTrue(viewModel.hasActiveWork)
+            viewModel.stopActiveWorker()
+            await viewModel.stopForQuit()
+
+            let queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.stopped, .notStarted])
+            XCTAssertEqual(factoryCalls, 1)
+            XCTAssertFalse(viewModel.hasActiveWork)
+        }
+    }
+
+    @MainActor
+    func testStoppingBatchStopsActiveItemAndLeavesRemainingItemsNotStarted() async throws {
+        try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, sourceURLs, destinationURL in
+            let firstPath = sourceURLs[0].path
+            let scenario = BatchWorkerScenario(holdConversionForCancellation: [firstPath])
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchStatus(viewModel, status: .converting)
+
+            var installCount = 0
+            XCTAssertTrue(
+                viewModel.postponeInstallUntilIdle {
+                    installCount += 1
+                }
+            )
+
+            viewModel.stopActiveWorker()
+            XCTAssertEqual(viewModel.batchQueue?.items.map(\.status), [.stopping, .notStarted])
+            await waitForBatchCompletion(viewModel)
+
+            let queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.stopped, .notStarted])
+            XCTAssertTrue(queue.stopRequested)
+            XCTAssertEqual(queue.completedCount, 0)
+            XCTAssertEqual(queue.stoppedCount, 1)
+            XCTAssertEqual(queue.notStartedCount, 1)
+            XCTAssertEqual(scenario.records.map(\.operation), ["inspect_source", "convert_source"])
+            XCTAssertEqual(scenario.maximumActiveCount, 1)
+            XCTAssertEqual(installCount, 1)
+        }
+    }
+
+    @MainActor
+    private func waitForBatchCompletion(_ viewModel: ConversionViewModel) async {
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            if viewModel.batchQueue?.completionID != nil, !viewModel.hasActiveWork {
+                return
+            }
+            await Task.yield()
+        }
+        XCTFail("Timed out waiting for the batch to finish")
+    }
+
+    @MainActor
+    private func waitForBatchStatus(
+        _ viewModel: ConversionViewModel,
+        status: ConversionQueueItemStatus
+    ) async {
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            if viewModel.batchQueue?.activeItem?.status == status {
+                return
+            }
+            await Task.yield()
+        }
+        XCTFail("Timed out waiting for batch status \(status)")
+    }
+
+    private func withTemporaryBatchSources(
+        _ names: [String],
+        operation: @MainActor (URL, [URL], URL) async throws -> Void
+    ) async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let sourceURLs = names.map { directoryURL.appendingPathComponent($0) }.sorted {
+            $0.path.lowercased() < $1.path.lowercased()
+        }
+        for sourceURL in sourceURLs {
+            _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8))
+        }
+        let destinationURL = directoryURL.appendingPathComponent("Output", isDirectory: true)
+        try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try await operation(directoryURL, sourceURLs, destinationURL)
+    }
+
     private func withTemporarySource(_ operation: @MainActor (URL) async throws -> Void) async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -882,6 +1230,274 @@ private final class ControlledWorkerClient: WorkerProcessRunning, @unchecked Sen
             }
             cancellationContinuation = continuation
             lock.unlock()
+        }
+    }
+}
+
+private struct BatchJobRecord: Equatable {
+    let operation: String
+    let sourcePath: String
+    let startStage: Int?
+    let continueOnError: Bool?
+}
+
+private struct BatchFactoryError: LocalizedError {
+    var errorDescription: String? {
+        "Synthetic worker launch failure"
+    }
+}
+
+private enum BatchWorkerBehavior: Equatable {
+    case succeed
+    case failInspection
+    case failConversion
+    case decision(WorkerDecision)
+    case waitForCancellation
+}
+
+private final class BatchWorkerScenario: @unchecked Sendable {
+    private let lock = NSLock()
+    private var remainingInspectionFailures: Set<String>
+    private var remainingFailures: Set<String>
+    private var remainingDecisions: [String: WorkerDecision]
+    private let cancellationPaths: Set<String>
+    private let inspectionNames: [String: String]
+    private var storedRecords: [BatchJobRecord] = []
+    private var storedClientCount = 0
+    private var activeCount = 0
+    private var storedMaximumActiveCount = 0
+
+    init(
+        failInspectionOnceFor: Set<String> = [],
+        failConversionOnceFor: Set<String> = [],
+        decisionConversionOnceFor: [String: WorkerDecision] = [:],
+        holdConversionForCancellation: Set<String> = [],
+        inspectionNames: [String: String] = [:]
+    ) {
+        remainingInspectionFailures = failInspectionOnceFor
+        remainingFailures = failConversionOnceFor
+        remainingDecisions = decisionConversionOnceFor
+        cancellationPaths = holdConversionForCancellation
+        self.inspectionNames = inspectionNames
+    }
+
+    var records: [BatchJobRecord] {
+        lock.withLock { storedRecords }
+    }
+
+    var clientCount: Int {
+        lock.withLock { storedClientCount }
+    }
+
+    var maximumActiveCount: Int {
+        lock.withLock { storedMaximumActiveCount }
+    }
+
+    func makeClient() -> any WorkerProcessRunning {
+        lock.withLock {
+            storedClientCount += 1
+        }
+        return BatchWorkerClient(scenario: self)
+    }
+
+    func begin(_ job: WorkerJobSpec) -> BatchWorkerBehavior {
+        lock.withLock {
+            activeCount += 1
+            storedMaximumActiveCount = max(storedMaximumActiveCount, activeCount)
+            storedRecords.append(
+                BatchJobRecord(
+                    operation: job.operation,
+                    sourcePath: job.source.path,
+                    startStage: job.job?.startStage,
+                    continueOnError: job.job?.continueOnError
+                )
+            )
+
+            if job.operation == "inspect_source" {
+                return remainingInspectionFailures.remove(job.source.path) == nil
+                    ? .succeed
+                    : .failInspection
+            }
+            guard job.operation == "convert_source" else {
+                return .succeed
+            }
+            if cancellationPaths.contains(job.source.path) {
+                return .waitForCancellation
+            }
+            if let decision = remainingDecisions.removeValue(forKey: job.source.path) {
+                return .decision(decision)
+            }
+            if remainingFailures.remove(job.source.path) != nil {
+                return .failConversion
+            }
+            return .succeed
+        }
+    }
+
+    func inspectionName(for sourcePath: String) -> String {
+        lock.withLock {
+            inspectionNames[sourcePath]
+                ?? URL(fileURLWithPath: sourcePath).deletingPathExtension().lastPathComponent
+        }
+    }
+
+    func end() {
+        lock.withLock {
+            activeCount -= 1
+        }
+    }
+}
+
+private final class BatchWorkerClient: WorkerProcessRunning, @unchecked Sendable {
+    private let scenario: BatchWorkerScenario
+    private let lock = NSLock()
+    private var cancellationContinuation: CheckedContinuation<Void, Never>?
+    private var cancellationRequested = false
+
+    init(scenario: BatchWorkerScenario) {
+        self.scenario = scenario
+    }
+
+    func run(
+        job: WorkerJobSpec,
+        onEvent: @escaping (WorkerEvent) async throws -> Void
+    ) async throws -> WorkerRunResult {
+        let behavior = scenario.begin(job)
+        defer { scenario.end() }
+
+        let ready = WorkerEvent(
+            protocolVersion: WorkerJobSpec.protocolVersion,
+            type: .workerReady,
+            jobID: job.jobID,
+            sequence: 0,
+            payload: WorkerEventPayload(workerVersion: "batch-test", processGroupID: 1)
+        )
+        try await onEvent(ready)
+
+        let terminalEvent: WorkerEvent
+        let exitStatus: Int32
+        if job.operation == "inspect_source" {
+            if behavior == .failInspection {
+                terminalEvent = WorkerEvent(
+                    protocolVersion: WorkerJobSpec.protocolVersion,
+                    type: .jobFailed,
+                    jobID: job.jobID,
+                    sequence: 1,
+                    payload: WorkerEventPayload(
+                        error: WorkerFailure(
+                            code: "synthetic_inspection_failure",
+                            message: "Synthetic inspection failure",
+                            details: "Test inspection failure for \(job.source.path)",
+                            retryable: true
+                        )
+                    )
+                )
+                exitStatus = 2
+            } else {
+                terminalEvent = WorkerEvent(
+                    protocolVersion: WorkerJobSpec.protocolVersion,
+                    type: .jobCompleted,
+                    jobID: job.jobID,
+                    sequence: 1,
+                    payload: WorkerEventPayload(
+                        result: SourceInspection(
+                            name: scenario.inspectionName(for: job.source.path),
+                            resolution: "1920x1080",
+                            frameRate: "24/1",
+                            interlaced: false,
+                            sizeBytes: 10
+                        )
+                    )
+                )
+                exitStatus = 0
+            }
+        } else {
+            switch behavior {
+            case .succeed:
+                let destinationPath = job.destination?.path ?? "/Movies"
+                let outputStem = URL(fileURLWithPath: job.source.path)
+                    .deletingPathExtension()
+                    .lastPathComponent
+                terminalEvent = WorkerEvent(
+                    protocolVersion: WorkerJobSpec.protocolVersion,
+                    type: .jobCompleted,
+                    jobID: job.jobID,
+                    sequence: 1,
+                    payload: WorkerEventPayload(
+                        conversionResult: ConversionResult(
+                            outputPath: URL(fileURLWithPath: destinationPath, isDirectory: true)
+                                .appendingPathComponent("\(outputStem)_AVP.mov")
+                                .path
+                        )
+                    )
+                )
+                exitStatus = 0
+            case .failConversion:
+                terminalEvent = WorkerEvent(
+                    protocolVersion: WorkerJobSpec.protocolVersion,
+                    type: .jobFailed,
+                    jobID: job.jobID,
+                    sequence: 1,
+                    payload: WorkerEventPayload(
+                        error: WorkerFailure(
+                            code: "synthetic_failure",
+                            message: "Synthetic conversion failure",
+                            details: "Test failure for \(job.source.path)",
+                            retryable: true
+                        )
+                    )
+                )
+                exitStatus = 2
+            case .failInspection:
+                preconditionFailure("Inspection failures cannot occur during conversion")
+            case let .decision(decision):
+                terminalEvent = WorkerEvent(
+                    protocolVersion: WorkerJobSpec.protocolVersion,
+                    type: .jobDecisionRequired,
+                    jobID: job.jobID,
+                    sequence: 1,
+                    payload: WorkerEventPayload(decision: decision)
+                )
+                exitStatus = 3
+            case .waitForCancellation:
+                await waitForCancellation()
+                terminalEvent = WorkerEvent(
+                    protocolVersion: WorkerJobSpec.protocolVersion,
+                    type: .jobCancelled,
+                    jobID: job.jobID,
+                    sequence: 1,
+                    payload: WorkerEventPayload(message: "Conversion stopped.")
+                )
+                exitStatus = SIGTERM
+            }
+        }
+
+        try await onEvent(terminalEvent)
+        return WorkerRunResult(terminalEvent: terminalEvent, exitStatus: exitStatus, diagnostics: "")
+    }
+
+    func cancel() {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            cancellationRequested = true
+            let continuation = cancellationContinuation
+            cancellationContinuation = nil
+            return continuation
+        }
+        continuation?.resume()
+    }
+
+    private func waitForCancellation() async {
+        await withCheckedContinuation { continuation in
+            let shouldResume = lock.withLock { () -> Bool in
+                if cancellationRequested {
+                    return true
+                }
+                cancellationContinuation = continuation
+                return false
+            }
+            if shouldResume {
+                continuation.resume()
+            }
         }
     }
 }

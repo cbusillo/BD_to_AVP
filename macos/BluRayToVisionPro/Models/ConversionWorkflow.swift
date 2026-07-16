@@ -159,6 +159,16 @@ struct ConversionDraft: Equatable {
         destinationURL.appendingPathComponent("\(outputStem)_AVP.mov")
     }
 
+    func withSourceDetails(_ sourceDetails: SourceInspection?) -> ConversionDraft {
+        ConversionDraft(
+            source: source,
+            sourceDetails: sourceDetails,
+            profile: profile,
+            destinationURL: destinationURL,
+            options: options
+        )
+    }
+
     func retrying(
         decision: WorkerDecision,
         choice: WorkerRecoveryChoice
@@ -191,7 +201,14 @@ struct ConversionDraft: Equatable {
     private var outputStem: String {
         let inspectedName = sourceDetails?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !inspectedName.isEmpty {
-            return URL(fileURLWithPath: inspectedName).deletingPathExtension().lastPathComponent
+            let inspectedURL = URL(fileURLWithPath: inspectedName)
+            let sourceExtension = source.url.pathExtension
+            if !sourceExtension.isEmpty,
+               inspectedURL.pathExtension.caseInsensitiveCompare(sourceExtension) == .orderedSame
+            {
+                return inspectedURL.deletingPathExtension().lastPathComponent
+            }
+            return inspectedURL.lastPathComponent
         }
         return source.proposedOutputStem
     }
