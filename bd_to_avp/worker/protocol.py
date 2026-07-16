@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence, TextIO
 from uuid import UUID
 
-PROTOCOL_VERSION = 4
+from bd_to_avp.modules.languages import LanguageCodeError, normalize_language_code
+
+PROTOCOL_VERSION = 5
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_DETAIL_BYTES = 64 * 1024
@@ -37,6 +39,12 @@ class WorkerSourceKind(StrEnum):
     DISC_IMAGE = "disc_image"
     BLU_RAY_FOLDER = "blu_ray_folder"
     PHYSICAL_DISC = "physical_disc"
+
+
+class SubtitleMode(StrEnum):
+    OFF = "off"
+    PREFERRED_ONLY = "preferred_only"
+    PREFERRED_PLUS_OTHERS = "preferred_plus_others"
 
 
 class WorkerEventType(StrEnum):
@@ -83,6 +91,12 @@ class JobDestination:
 
 
 @dataclass(frozen=True)
+class SubtitleOptions:
+    mode: SubtitleMode
+    preferred_language: str | None
+
+
+@dataclass(frozen=True)
 class EncodingOptions:
     transcode_audio: bool
     audio_bitrate: int
@@ -93,12 +107,10 @@ class EncodingOptions:
     fov: int
     frame_rate: str
     resolution: str
-    skip_subtitles: bool
     crop_black_bars: bool
     swap_eyes: bool
     fx_upscale: bool
-    language_code: str
-    remove_extra_languages: bool
+    subtitles: SubtitleOptions
 
 
 @dataclass(frozen=True)
@@ -378,21 +390,12 @@ class JobSpec:
             "fov",
             "frame_rate",
             "resolution",
-            "skip_subtitles",
             "crop_black_bars",
             "swap_eyes",
             "fx_upscale",
-            "language_code",
-            "remove_extra_languages",
+            "subtitles",
         }
         cls._require_exact_keys(value, required_keys, "encoding", job_id)
-        language_code = cls._parse_string(value, "language_code", "encoding", job_id)
-        if len(language_code) != 3 or not language_code.isalpha() or language_code != language_code.lower():
-            raise WorkerProtocolError(
-                "invalid_encoding_options",
-                "encoding.language_code must be a lowercase ISO 639-2 code.",
-                job_id=job_id,
-            )
         return EncodingOptions(
             transcode_audio=cls._parse_bool(value, "transcode_audio", "encoding", job_id),
             audio_bitrate=cls._parse_int(value, "audio_bitrate", "encoding", job_id, minimum=1, maximum=4096),
@@ -403,13 +406,57 @@ class JobSpec:
             fov=cls._parse_int(value, "fov", "encoding", job_id, minimum=0, maximum=360),
             frame_rate=cls._parse_string(value, "frame_rate", "encoding", job_id),
             resolution=cls._parse_string(value, "resolution", "encoding", job_id),
-            skip_subtitles=cls._parse_bool(value, "skip_subtitles", "encoding", job_id),
             crop_black_bars=cls._parse_bool(value, "crop_black_bars", "encoding", job_id),
             swap_eyes=cls._parse_bool(value, "swap_eyes", "encoding", job_id),
             fx_upscale=cls._parse_bool(value, "fx_upscale", "encoding", job_id),
-            language_code=language_code,
-            remove_extra_languages=cls._parse_bool(value, "remove_extra_languages", "encoding", job_id),
+            subtitles=cls._parse_subtitle_options(value.get("subtitles"), job_id),
         )
+
+    @classmethod
+    def _parse_subtitle_options(cls, value: Any, job_id: str) -> SubtitleOptions:
+        if not isinstance(value, Mapping):
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "encoding.subtitles must be an object.",
+                job_id=job_id,
+            )
+        cls._require_exact_keys(value, {"mode", "preferred_language"}, "encoding.subtitles", job_id)
+
+        raw_mode = cls._parse_string(value, "mode", "encoding.subtitles", job_id)
+        try:
+            mode = SubtitleMode(raw_mode)
+        except ValueError as error:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                f"Unsupported subtitle mode: {raw_mode!r}.",
+                job_id=job_id,
+            ) from error
+
+        raw_language = value.get("preferred_language")
+        if mode is SubtitleMode.OFF:
+            if raw_language is not None:
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    "encoding.subtitles.preferred_language must be null when subtitles are off.",
+                    job_id=job_id,
+                )
+            return SubtitleOptions(mode=mode, preferred_language=None)
+
+        if not isinstance(raw_language, str):
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "encoding.subtitles.preferred_language must be a language code.",
+                job_id=job_id,
+            )
+        try:
+            preferred_language = normalize_language_code(raw_language)
+        except LanguageCodeError as error:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                str(error),
+                job_id=job_id,
+            ) from error
+        return SubtitleOptions(mode=mode, preferred_language=preferred_language)
 
     @classmethod
     def _parse_job_options(cls, value: Any, job_id: str) -> JobOptions:

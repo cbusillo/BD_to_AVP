@@ -9,6 +9,17 @@ from bd_to_avp.modules.config import Stage
 
 
 class AudioExtractionTests(unittest.TestCase):
+    def test_subtitle_filter_does_not_limit_extracted_audio_tracks(self) -> None:
+        with (
+            patch.object(container.config, "remove_extra_languages", True),
+            patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
+        ):
+            container.extract_mvc_and_audio(Path("source.mkv"), None, Path("audio.mov"))
+
+        command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
+        self.assertIn("0:a", command)
+        self.assertNotIn("0:a:0", command)
+
     def test_direct_pipeline_skips_intermediate_video_and_pcm(self) -> None:
         with (
             patch.object(container.config, "transcode_audio", True),
@@ -176,6 +187,27 @@ class MuxCommandTests(unittest.TestCase):
         self.assertIn("3:type=name:str='English Forced Subtitles'", command)
         self.assertIn("movie.en.srt#1:hdlr=sbtl:lang=eng:group=2:name=English Subtitles:tx3g", command)
         self.assertIn("4:type=name:str='English Subtitles'", command)
+
+    def test_final_mux_supports_alpha3_only_subtitle_filenames(self) -> None:
+        with (
+            patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+            patch.object(container, "get_audio_stream_data", return_value=[]),
+            patch.object(
+                container,
+                "sorted_files_by_creation_filtered_on_suffix",
+                return_value=[Path("movie.ace.srt")],
+            ),
+            patch.object(container, "run_command") as run_command,
+        ):
+            container.mux_video_audio_subs(
+                Path("movie_MV-HEVC.mov"),
+                Path("audio_PCM.mov"),
+                Path("movie_AVP.mov"),
+                Path("."),
+            )
+
+        command = run_command.call_args.args[0]
+        self.assertIn("movie.ace.srt#1:hdlr=sbtl:lang=ace:group=2:name=Achinese Subtitles:tx3g", command)
 
 
 if __name__ == "__main__":

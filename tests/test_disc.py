@@ -8,6 +8,18 @@ from bd_to_avp.modules.config import Stage
 
 
 class DiscStageArtifactTests(unittest.TestCase):
+    def test_custom_profile_preserves_all_tracks_and_uses_makemkv_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(disc.config, "remove_extra_languages", True):
+            profile_path = Path(temp_dir) / "custom_profile.mmcp.xml"
+
+            disc.create_custom_makemkv_profile(profile_path, "deu")
+
+            profile = profile_path.read_text(encoding="utf-8")
+
+        self.assertIn("+sel:all", profile)
+        self.assertIn("+sel:ger", profile)
+        self.assertNotIn("-sel:all", profile)
+
     def test_makemkv_progress_uses_total_and_clamps_to_maximum(self) -> None:
         self.assertEqual(disc.parse_makemkv_progress("PRGV:5,25,100"), (25, 100))
         self.assertEqual(disc.parse_makemkv_progress("PRGV:5,125,100"), (100, 100))

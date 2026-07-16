@@ -21,6 +21,7 @@ from bd_to_avp.worker.__main__ import run_worker
 from bd_to_avp.worker.operations import (
     WorkerDecisionRequired,
     WorkerOperationError,
+    configured_conversion,
     convert_source,
     inspect_source,
     preview_source,
@@ -91,12 +92,13 @@ def conversion_request_line(
             "fov": 90,
             "frame_rate": "",
             "resolution": "",
-            "skip_subtitles": False,
             "crop_black_bars": False,
             "swap_eyes": False,
             "fx_upscale": False,
-            "language_code": "eng",
-            "remove_extra_languages": False,
+            "subtitles": {
+                "mode": "preferred_plus_others",
+                "preferred_language": "eng",
+            },
         },
         "job": {
             "start_stage": 1,
@@ -165,6 +167,8 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.source.path, source_path)
         self.assertEqual(job.destination.path if job.destination else None, destination_path)
         self.assertTrue(job.encoding.transcode_audio if job.encoding else False)
+        self.assertEqual(job.encoding.subtitles.mode.value if job.encoding else None, "preferred_plus_others")
+        self.assertEqual(job.encoding.subtitles.preferred_language if job.encoding else None, "eng")
         self.assertEqual(job.job.start_stage if job.job else None, 1)
 
     def test_parses_opaque_title_id_for_disc_conversion(self) -> None:
@@ -223,7 +227,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(context.exception.code, "invalid_source")
 
     def test_parses_shared_swift_conversion_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v4.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v5.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -234,7 +238,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.encoding.mv_hevc_quality if job.encoding else None, 75)
 
     def test_parses_shared_swift_physical_disc_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v4.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v5.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -244,7 +248,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertFalse(job.job.remove_original if job.job else True)
 
     def test_parses_shared_swift_preview_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v4.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v5.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -328,6 +332,53 @@ class JobSpecTests(unittest.TestCase):
             JobSpec.from_json_line(json.dumps(request) + "\n")
 
         self.assertEqual(context.exception.code, "invalid_request")
+
+    def test_normalizes_subtitle_language_aliases(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["subtitles"] = {
+            "mode": "preferred_only",
+            "preferred_language": "dut",
+        }
+
+        job = JobSpec.from_json_line(json.dumps(request) + "\n")
+
+        self.assertEqual(job.encoding.subtitles.preferred_language if job.encoding else None, "nld")
+
+    def test_requires_null_language_when_subtitles_are_off(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["subtitles"] = {
+            "mode": "off",
+            "preferred_language": "eng",
+        }
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request) + "\n")
+
+        self.assertEqual(context.exception.code, "invalid_encoding_options")
+
+    def test_rejects_invalid_preferred_subtitle_language(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["subtitles"] = {
+            "mode": "preferred_only",
+            "preferred_language": "xyz",
+        }
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request) + "\n")
+
+        self.assertEqual(context.exception.code, "invalid_encoding_options")
+
+    def test_rejects_unknown_subtitle_mode(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["subtitles"] = {
+            "mode": "forced_only",
+            "preferred_language": "eng",
+        }
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request) + "\n")
+
+        self.assertEqual(context.exception.code, "invalid_encoding_options")
 
     def test_rejects_missing_conversion_options(self) -> None:
         request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
@@ -424,7 +475,7 @@ class WorkerActivityReporterTests(unittest.TestCase):
 
         activity.stage_started("configure", "Preparing conversion settings")
 
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v4.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v5.json"
         expected = json.loads(fixture_path.read_text())
         self.assertEqual(decoded_events(output), [expected])
 
@@ -571,7 +622,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 }
             },
         )
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v4.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v5.json"
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
 
         self.assertEqual(decoded_events(output)[-1], fixture)
@@ -964,6 +1015,17 @@ class SourceInspectionTests(unittest.TestCase):
 
 
 class SourceConversionTests(unittest.TestCase):
+    def test_subtitles_off_maps_to_legacy_engine_flags_without_audio_filtering(self) -> None:
+        source_path = Path("/tmp/movie.mkv")
+        request = json.loads(conversion_request_line(source_path, Path("/tmp/output")))
+        request["encoding"]["subtitles"] = {"mode": "off", "preferred_language": None}
+        job = JobSpec.from_json_line(json.dumps(request) + "\n")
+
+        with configured_conversion(job, source_path):
+            self.assertTrue(config.skip_subtitles)
+            self.assertEqual(config.language_code, "eng")
+            self.assertFalse(config.remove_extra_languages)
+
     def test_preview_uses_resolved_range_and_emits_owned_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
@@ -1286,12 +1348,13 @@ class SourceConversionTests(unittest.TestCase):
                     "fov": 110,
                     "frame_rate": "24000/1001",
                     "resolution": "1920x1080",
-                    "skip_subtitles": True,
                     "crop_black_bars": True,
                     "swap_eyes": True,
                     "fx_upscale": True,
-                    "language_code": "jpn",
-                    "remove_extra_languages": True,
+                    "subtitles": {
+                        "mode": "preferred_only",
+                        "preferred_language": "jpn",
+                    },
                 }
             )
             request["job"].update(
@@ -1359,7 +1422,7 @@ class SourceConversionTests(unittest.TestCase):
             self.assertEqual(observed["fov"], 110)
             self.assertEqual(observed["frame_rate"], "24000/1001")
             self.assertEqual(observed["resolution"], "1920x1080")
-            self.assertTrue(observed["skip_subtitles"])
+            self.assertFalse(observed["skip_subtitles"])
             self.assertTrue(observed["crop_black_bars"])
             self.assertTrue(observed["swap_eyes"])
             self.assertTrue(observed["fx_upscale"])

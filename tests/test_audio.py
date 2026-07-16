@@ -18,7 +18,7 @@ class DirectAudioTranscodeTests(unittest.TestCase):
             source_path.write_bytes(b"source")
             output_folder.mkdir()
 
-            def write_audio(_input_path: Path, output_path: Path, _bitrate: int, _selector: str) -> None:
+            def write_audio(_input_path: Path, output_path: Path, _bitrate: int) -> None:
                 output_path.write_bytes(b"aac")
 
             with (
@@ -38,9 +38,9 @@ class DirectAudioTranscodeTests(unittest.TestCase):
             self.assertFalse(temporary_path.exists())
             self.assertFalse((output_folder / "Movie_audio_PCM.mov").exists())
             self.assertTrue(source_path.exists())
-            transcode.assert_called_once_with(source_path, temporary_path, 384, "a")
+            transcode.assert_called_once_with(source_path, temporary_path, 384)
 
-    def test_direct_transcode_selects_first_audio_track_when_removing_languages(self) -> None:
+    def test_subtitle_language_filter_preserves_all_audio_tracks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             source_path = temp_path / "source.mkv"
@@ -48,7 +48,7 @@ class DirectAudioTranscodeTests(unittest.TestCase):
             source_path.write_bytes(b"source")
             output_folder.mkdir()
 
-            def write_audio(_input_path: Path, output_path: Path, _bitrate: int, _selector: str) -> None:
+            def write_audio(_input_path: Path, output_path: Path, _bitrate: int) -> None:
                 output_path.write_bytes(b"aac")
 
             with (
@@ -61,7 +61,7 @@ class DirectAudioTranscodeTests(unittest.TestCase):
             ):
                 audio.create_transcoded_audio_file(source_path, output_folder)
 
-            self.assertEqual(transcode.call_args.args[3], "a:0")
+            transcode.assert_called_once_with(source_path, output_folder / "Movie_audio_AAC.part.m4a", 384)
 
     def test_failed_direct_transcode_removes_partial_output_but_preserves_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -71,7 +71,7 @@ class DirectAudioTranscodeTests(unittest.TestCase):
             source_path.write_bytes(b"source")
             output_folder.mkdir()
 
-            def fail_after_partial_write(_input_path: Path, output_path: Path, _bitrate: int, _selector: str) -> None:
+            def fail_after_partial_write(_input_path: Path, output_path: Path, _bitrate: int) -> None:
                 output_path.write_bytes(b"partial")
                 raise RuntimeError("transcode failed")
 
@@ -96,7 +96,7 @@ class DirectAudioTranscodeTests(unittest.TestCase):
             pcm_path = output_folder / "Movie_audio_PCM.mov"
             pcm_path.write_bytes(b"pcm")
 
-            def write_audio(_input_path: Path, output_path: Path, _bitrate: int, _selector: str) -> None:
+            def write_audio(_input_path: Path, output_path: Path, _bitrate: int) -> None:
                 output_path.write_bytes(b"aac")
 
             with (
@@ -110,7 +110,7 @@ class DirectAudioTranscodeTests(unittest.TestCase):
 
             self.assertTrue(pcm_path.exists())
             self.assertEqual(transcode.call_args.args[0], pcm_path)
-            self.assertEqual(transcode.call_args.args[3], "a")
+            self.assertEqual(len(transcode.call_args.args), 3)
 
     def test_final_mux_resume_uses_existing_direct_aac(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

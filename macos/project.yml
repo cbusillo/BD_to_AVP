@@ -31,6 +31,8 @@ targets:
       - path: BluRayToVisionPro
       - path: ../bd_to_avp/resources/app_icon.icns
         buildPhase: resources
+      - path: ../bd_to_avp/resources/iso639_languages.json
+        buildPhase: resources
     dependencies:
       - package: Sparkle
     settings:

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import ClassVar, Iterable
 
 from bd_to_avp.modules.preview_range import PreviewRange
+from bd_to_avp.modules.languages import LanguageCodeError, normalize_language_code
 from bd_to_avp.modules.util import get_pyproject_data
 
 
@@ -432,7 +433,10 @@ class Config:
         )
         parser.add_argument(
             "--language-code",
-            help="Language for subtitle extraction.  Defaults to 'eng'.  Use the ISO 639-2 (three character) code",
+            help=(
+                "Preferred subtitle language. Defaults to 'eng'; accepts ISO 639 alpha-2, alpha-3/B, "
+                "or alpha-3/T codes."
+            ),
         )
         parser.add_argument(
             "--remove-extra-languages",
@@ -461,6 +465,11 @@ class Config:
             Path(args.output_root_folder).expanduser() if args.output_root_folder else self.output_root_path
         )
         self.skip_subtitles = args.skip_freaking_subtitles_because_I_dont_care
+        if args.language_code:
+            try:
+                self.language_code = normalize_language_code(args.language_code)
+            except LanguageCodeError as error:
+                parser.error(str(error))
 
 
 config = Config()

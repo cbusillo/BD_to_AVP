@@ -5,6 +5,8 @@ from pathlib import Path
 
 import humanize
 
+from bd_to_avp.modules.languages import LANGUAGES_BY_CODE
+
 
 def sorted_files_by_creation(path: Path) -> list[Path]:
     return sorted(Path(path).iterdir(), key=lambda f: f.stat().st_ctime)
@@ -41,19 +43,12 @@ def load_data_from_pyproject() -> dict | None:
 
 
 def get_common_language_options() -> list[str]:
-    common_languages = [
-        "English",
-        "Spanish",
-        "French",
-        "German",
-        "Chinese",
-        "Japanese",
-        "Portuguese",
-        "Russian",
-        "Italian",
-        "Korean",
+    common_codes = ("eng", "spa", "fra", "deu", "nld", "zho", "jpn", "por", "rus", "ita", "kor")
+    common_languages = [LANGUAGES_BY_CODE[code].name for code in common_codes]
+    common_language_names = set(common_languages)
+    return common_languages + [
+        language.name for language in LANGUAGES_BY_CODE.values() if language.name not in common_language_names
     ]
-    return common_languages
 
 
 def format_timestamp(timestamp: datetime) -> str:

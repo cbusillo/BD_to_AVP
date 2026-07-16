@@ -23,14 +23,13 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QGridLayout,
 )
-from babelfish import Language
-
 from bd_to_avp.gui.dialog import AboutDialog
 from bd_to_avp.gui.processing import ProcessingController, ProcessingRequest
 from bd_to_avp.gui.updater import UpdateChannel, UpdaterManager
 from bd_to_avp.gui.widget import FileFolderPicker, LabeledComboBox, LabeledLineEdit, LabeledSpinBox
 from bd_to_avp.modules.config import config, Stage
 from bd_to_avp.modules.disc import DiscInfo, MKVCreationError
+from bd_to_avp.modules.languages import language_code_for_name, language_name
 from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.modules.util import formatted_time_elapsed, format_timestamp, get_common_language_options
 from bd_to_avp.modules.command import Spinner
@@ -196,7 +195,7 @@ class MainWindow(QMainWindow):
         self.continue_on_error = self.create_checkbox("Continue Processing On Error", config.continue_on_error)
         self.skip_subtitles_checkbox = self.create_checkbox("Skip Subtitles", config.skip_subtitles)
         self.remove_extra_languages_checkbox = self.create_checkbox(
-            "Remove Extra Languages", config.remove_extra_languages
+            "Only Preferred Subtitle Language", config.remove_extra_languages
         )
 
         config_layout.addWidget(self.crop_black_bars_checkbox)
@@ -441,8 +440,7 @@ class MainWindow(QMainWindow):
         self.continue_on_error.setChecked(config.continue_on_error)
         self.skip_subtitles_checkbox.setChecked(config.skip_subtitles)
         self.start_stage_combobox.set_current_text(str(config.start_stage))
-        language_name = Language.fromalpha3b(config.language_code).name
-        self.language_combobox.set_current_text(language_name)
+        self.language_combobox.set_current_text(language_name(config.language_code))
         self.remove_extra_languages_checkbox.setChecked(config.remove_extra_languages)
         self.keep_awake_checkbox.setChecked(config.keep_awake)
 
@@ -559,7 +557,7 @@ class MainWindow(QMainWindow):
         config.continue_on_error = self.continue_on_error.isChecked()
         config.skip_subtitles = self.skip_subtitles_checkbox.isChecked()
         config.start_stage = Stage.get_stage(selected_stage)
-        config.language_code = Language.fromname(self.language_combobox.current_text()).alpha3b
+        config.language_code = language_code_for_name(self.language_combobox.current_text())
         config.remove_extra_languages = self.remove_extra_languages_checkbox.isChecked()
         config.keep_awake = self.keep_awake_checkbox.isChecked()
 

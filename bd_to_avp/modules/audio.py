@@ -24,9 +24,8 @@ def create_transcoded_audio_file(original_audio_path: Path, output_folder: Path)
 
     if config.transcode_audio and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
         temporary_audio_path = transcoded_audio_path.with_suffix(".part.m4a")
-        audio_selector = "a:0" if direct_audio_transcode and config.remove_extra_languages else "a"
         try:
-            transcode_audio(original_audio_path, temporary_audio_path, config.audio_bitrate, audio_selector)
+            transcode_audio(original_audio_path, temporary_audio_path, config.audio_bitrate)
             temporary_audio_path.replace(transcoded_audio_path)
         finally:
             temporary_audio_path.unlink(missing_ok=True)

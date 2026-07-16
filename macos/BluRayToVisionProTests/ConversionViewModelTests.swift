@@ -542,7 +542,8 @@ final class ConversionViewModelTests: XCTestCase {
             while viewModel.hasActiveWorker { await Task.yield() }
 
             XCTAssertEqual(conversionJobs[1].job?.startStage, ConversionStage.extractSubtitles.rawValue)
-            XCTAssertTrue(conversionJobs[1].encoding?.skipSubtitles == true)
+            XCTAssertEqual(conversionJobs[1].encoding?.subtitles.mode, .off)
+            XCTAssertNil(conversionJobs[1].encoding?.subtitles.preferredLanguage)
             XCTAssertTrue(draft.options.encoding.includeSubtitles)
             XCTAssertEqual(viewModel.state.phase, .completed)
         }

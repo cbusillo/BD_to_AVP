@@ -9,6 +9,7 @@ import ffmpeg
 from bd_to_avp.modules.config import config, is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.file import find_largest_file_with_extensions, sanitize_filename
 from bd_to_avp.modules.command import run_command
+from bd_to_avp.modules.languages import language_bibliographic
 
 
 class MKVCreationError(Exception):
@@ -280,9 +281,9 @@ def create_custom_makemkv_profile(custom_profile_path: Path, language_code: str)
     template_profile_path = Path(__file__).parent.parent / "resources" / "makemkv.xml"
     if not template_profile_path.exists():
         raise FileNotFoundError(f"Custom MakeMKV profile not found at {template_profile_path}")
-    custom_profile_content = template_profile_path.read_text().format(language_code=language_code)
-    if config.remove_extra_languages:
-        custom_profile_content = custom_profile_content.replace("+sel:all", "-sel:all")
+    custom_profile_content = template_profile_path.read_text().format(
+        language_code=language_bibliographic(language_code)
+    )
 
     custom_profile_path.write_text(custom_profile_content)
     print(f"Custom MakeMKV profile created at {custom_profile_path}")
