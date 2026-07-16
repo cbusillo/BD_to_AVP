@@ -28,7 +28,7 @@ enum AudioHandling: String, CaseIterable, Codable, Identifiable {
     var title: String {
         switch self {
         case .preserve:
-            "Preserve Original"
+            "Uncompressed PCM"
         case .transcodeAAC:
             "Transcode to AAC"
         }
@@ -122,7 +122,7 @@ struct EncodingOptions: Codable, Equatable {
 
     var compactSummary: String {
         let resolution = upscaleEnabled ? "2× upscale" : "source resolution"
-        let audio = audioHandling == .preserve ? "original audio" : "AAC \(audioBitrate) kbps"
+        let audio = audioHandling == .preserve ? "uncompressed PCM audio" : "AAC \(audioBitrate) kbps"
         return "HEVC \(hevcQuality) · \(leftRightBitrate) Mbps eyes · \(resolution) · \(audio)"
     }
 }
