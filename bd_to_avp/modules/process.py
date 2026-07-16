@@ -55,6 +55,9 @@ class ActivityReporter(Protocol):
     def log(self, message: str, *, stage: str | None = None, **fields: object) -> None:
         raise NotImplementedError
 
+    def warning(self, message: str, *, stage: str | None = None, **fields: object) -> None:
+        raise NotImplementedError
+
 
 def raise_if_cancelled(cancellation_event: Event | None) -> None:
     if cancellation_event is not None and cancellation_event.is_set():
@@ -216,7 +219,6 @@ def process_each(
     mkv_output_path = create_mkv_file(
         output_folder,
         disc_info,
-        config.language_code,
         progress_callback=activity.stage_progress if activity else None,
     )
     if config.preview_range is not None:
@@ -247,7 +249,11 @@ def process_each(
     raise_if_cancelled(cancellation_event)
     if activity and not config.skip_subtitles and config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
         activity.stage_started("extract_subtitles", "Extracting subtitles")
-    create_srt_from_mkv(mkv_output_path, output_folder)
+    create_srt_from_mkv(
+        mkv_output_path,
+        output_folder,
+        (lambda message: activity.warning(message, stage="extract_subtitles") if activity else None),
+    )
     raise_if_cancelled(cancellation_event)
     if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
         activity.stage_started("create_left_right_files", "Creating left and right eye video")

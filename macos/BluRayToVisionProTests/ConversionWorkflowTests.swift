@@ -631,11 +631,13 @@ final class ConversionWorkflowTests: XCTestCase {
         let source = try XCTUnwrap(json["source"] as? [String: Any])
 
         XCTAssertEqual(json["operation"] as? String, "convert_source")
-        XCTAssertEqual(json["protocol_version"] as? Int, 4)
+        XCTAssertEqual(json["protocol_version"] as? Int, 5)
         XCTAssertEqual(source["kind"] as? String, "direct_file")
         XCTAssertEqual((json["destination"] as? [String: Any])?["path"] as? String, "/Movies")
         XCTAssertEqual(encoding["mv_hevc_quality"] as? Int, 75)
-        XCTAssertEqual(encoding["language_code"] as? String, "eng")
+        let subtitles = try XCTUnwrap(encoding["subtitles"] as? [String: Any])
+        XCTAssertEqual(subtitles["mode"] as? String, "preferred_plus_others")
+        XCTAssertEqual(subtitles["preferred_language"] as? String, "eng")
         XCTAssertEqual(job["start_stage"] as? Int, 1)
         XCTAssertNil(job["output_length"])
         XCTAssertNil(json["conversion_settings"])
@@ -658,7 +660,7 @@ final class ConversionWorkflowTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/native_worker_convert_v4.json")
+            .appendingPathComponent("tests/fixtures/native_worker_convert_v5.json")
         let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
@@ -718,7 +720,7 @@ final class ConversionWorkflowTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/native_worker_preview_v4.json")
+            .appendingPathComponent("tests/fixtures/native_worker_preview_v5.json")
         let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
@@ -754,7 +756,7 @@ final class ConversionWorkflowTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/native_worker_convert_physical_disc_v4.json")
+            .appendingPathComponent("tests/fixtures/native_worker_convert_physical_disc_v5.json")
         let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)

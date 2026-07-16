@@ -2,7 +2,6 @@ from pathlib import Path
 from typing import Any
 
 import ffmpeg
-from babelfish import Error as BabelfishError, Language
 
 from bd_to_avp.modules.config import (
     Stage,
@@ -11,6 +10,7 @@ from bd_to_avp.modules.config import (
     is_direct_mvc_stream_enabled,
 )
 from bd_to_avp.modules.command import run_command, run_ffmpeg_print_errors
+from bd_to_avp.modules.languages import language_name, normalize_source_language
 from bd_to_avp.modules.util import sorted_files_by_creation_filtered_on_suffix
 
 
@@ -28,8 +28,7 @@ def extract_mvc_and_audio(
         )
 
     if audio_output_path:
-        audio_track = ":0" if config.remove_extra_languages else ""
-        output_streams.append(ffmpeg.output(stream[f"a{audio_track}"], f"file:{audio_output_path}", c="pcm_s24le"))
+        output_streams.append(ffmpeg.output(stream["a"], f"file:{audio_output_path}", c="pcm_s24le"))
 
     if output_streams:
         output_message = "ffmpeg to extract MVC video and audio from source"
@@ -89,7 +88,7 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
     output_track_index += 1
     for stream in audio_streams:
         index = stream["index"] + 1
-        language_code, language_name = normalize_track_language(stream.get("tags", {}).get("language"))
+        language_code, audio_language_name = normalize_track_language(stream.get("tags", {}).get("language"))
         channel_layout = stream.get("channel_layout", "unknown")
 
         audio_track_options = f":lang={language_code}:group=1:alternate_group=1"
@@ -101,25 +100,24 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
             "-add",
             f"{audio_path}#{index}{audio_track_options}",
             "-udta",
-            f"{output_track_index}:type=name:str='{language_name} {channel_layout} Audio'",
+            f"{output_track_index}:type=name:str='{audio_language_name} {channel_layout} Audio'",
         ]
         output_track_index += 1
 
     for sub_file in sorted_files_by_creation_filtered_on_suffix(output_folder, ".srt"):
-        language_code_alpha2 = sub_file.stem.split(".")[-1]
-        language_code_alpha3 = Language.fromalpha2(language_code_alpha2).alpha3
-        language_name = Language.fromalpha2(language_code_alpha2).name
+        language_code = normalize_source_language(sub_file.stem.split(".")[-1])
+        subtitle_language_name = language_name(language_code)
 
-        subtitle_options = f":hdlr=sbtl:lang={language_code_alpha3}:group=2:name={language_name} Subtitles:tx3g"
+        subtitle_options = f":hdlr=sbtl:lang={language_code}:group=2:name={subtitle_language_name} Subtitles:tx3g"
         if ".forced." in sub_file.stem:
             subtitle_options += ":txtflags=0xC0000000"
-            language_name += " Forced"
+            subtitle_language_name += " Forced"
 
         command += [
             "-add",
             f"{sub_file}#1{subtitle_options}",
             "-udta",
-            f"{output_track_index}:type=name:str='{language_name} Subtitles'",
+            f"{output_track_index}:type=name:str='{subtitle_language_name} Subtitles'",
         ]
         output_track_index += 1
 
@@ -128,17 +126,8 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
 
 
 def normalize_track_language(language_code: object) -> tuple[str, str]:
-    if not isinstance(language_code, str) or not language_code or language_code == "und":
-        return "und", "Unknown"
-
-    for resolver in (Language.fromietf, Language.fromalpha3b, Language.fromalpha3t, Language.fromalpha2):
-        try:
-            language = resolver(language_code)
-            return language.alpha3, language.name
-        except (AttributeError, BabelfishError, ValueError):
-            continue
-
-    return "und", "Unknown"
+    canonical_code = normalize_source_language(language_code)
+    return canonical_code, language_name(canonical_code)
 
 
 def get_audio_stream_data(file_path: Path) -> list[dict[str, Any]]:

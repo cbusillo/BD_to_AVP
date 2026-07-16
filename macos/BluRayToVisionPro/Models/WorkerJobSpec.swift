@@ -1,7 +1,7 @@
 import Foundation
 
 struct WorkerJobSpec: Encodable, Equatable {
-    static let protocolVersion = 4
+    static let protocolVersion = 5
 
     struct Source: Encodable, Equatable {
         enum Kind: String, Encodable {
@@ -54,6 +54,32 @@ struct WorkerJobSpec: Encodable, Equatable {
     }
 
     struct Encoding: Encodable, Equatable {
+        struct Subtitles: Encodable, Equatable {
+            enum Mode: String, Encodable {
+                case off
+                case preferredOnly = "preferred_only"
+                case preferredPlusOthers = "preferred_plus_others"
+            }
+
+            let mode: Mode
+            let preferredLanguage: String?
+
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(mode, forKey: .mode)
+                if let preferredLanguage {
+                    try container.encode(preferredLanguage, forKey: .preferredLanguage)
+                } else {
+                    try container.encodeNil(forKey: .preferredLanguage)
+                }
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case mode
+                case preferredLanguage = "preferred_language"
+            }
+        }
+
         let transcodeAudio: Bool
         let audioBitrate: Int
         let leftRightBitrate: Int
@@ -63,12 +89,10 @@ struct WorkerJobSpec: Encodable, Equatable {
         let fieldOfView: Int
         let frameRate: String
         let resolution: String
-        let skipSubtitles: Bool
         let cropBlackBars: Bool
         let swapEyes: Bool
         let fxUpscale: Bool
-        let languageCode: String
-        let removeExtraLanguages: Bool
+        let subtitles: Subtitles
 
         enum CodingKeys: String, CodingKey {
             case transcodeAudio = "transcode_audio"
@@ -80,12 +104,10 @@ struct WorkerJobSpec: Encodable, Equatable {
             case fieldOfView = "fov"
             case frameRate = "frame_rate"
             case resolution
-            case skipSubtitles = "skip_subtitles"
             case cropBlackBars = "crop_black_bars"
             case swapEyes = "swap_eyes"
             case fxUpscale = "fx_upscale"
-            case languageCode = "language_code"
-            case removeExtraLanguages = "remove_extra_languages"
+            case subtitles
         }
     }
 
@@ -226,12 +248,20 @@ struct WorkerJobSpec: Encodable, Equatable {
             fieldOfView: options.fieldOfView,
             frameRate: options.frameRateOverride,
             resolution: options.resolutionOverride,
-            skipSubtitles: !options.includeSubtitles,
             cropBlackBars: options.cropBlackBars,
             swapEyes: options.swapEyes,
             fxUpscale: options.upscaleEnabled,
-            languageCode: options.language.rawValue,
-            removeExtraLanguages: !options.keepExtraLanguages
+            subtitles: subtitleOptions(from: options)
+        )
+    }
+
+    private static func subtitleOptions(from options: EncodingOptions) -> Encoding.Subtitles {
+        guard options.includeSubtitles else {
+            return Encoding.Subtitles(mode: .off, preferredLanguage: nil)
+        }
+        return Encoding.Subtitles(
+            mode: options.keepExtraLanguages ? .preferredPlusOthers : .preferredOnly,
+            preferredLanguage: options.language.rawValue
         )
     }
 

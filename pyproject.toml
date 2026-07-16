@@ -66,6 +66,7 @@ include = [
     "README.md",
     "pyproject.toml",
     "scripts/build_edge264_macos.py",
+    "scripts/generate_language_catalog.py",
 ]
 
 [tool.briefcase]

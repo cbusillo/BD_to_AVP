@@ -102,6 +102,9 @@ class SubtitleLanguageTests(unittest.TestCase):
     def test_invalid_language_returns_none(self) -> None:
         self.assertIsNone(subtitle_language_alpha2("xxx"))
 
+    def test_bibliographic_alias_converts_to_alpha2(self) -> None:
+        self.assertEqual(subtitle_language_alpha2("dut"), "nl")
+
 
 class SubtitleRipOptionsTests(unittest.TestCase):
     def test_remove_extra_languages_limits_pgsrip_to_configured_language(self) -> None:
@@ -123,6 +126,26 @@ class SubtitleRipOptionsTests(unittest.TestCase):
             options = subtitle_rip_options()
 
         self.assertEqual(options.languages, set())
+
+    def test_bibliographic_alias_filters_with_canonical_language(self) -> None:
+        with (
+            patch.object(sub.config, "remove_extra_languages", True),
+            patch.object(sub.config, "language_code", "ger"),
+            patch.object(sub.config, "keep_files", False),
+        ):
+            options = subtitle_rip_options()
+
+        self.assertEqual({language.alpha3t for language in options.languages}, {"deu"})
+
+    def test_alpha3_only_language_filters_without_alpha2_code(self) -> None:
+        with (
+            patch.object(sub.config, "remove_extra_languages", True),
+            patch.object(sub.config, "language_code", "ace"),
+            patch.object(sub.config, "keep_files", False),
+        ):
+            options = subtitle_rip_options()
+
+        self.assertEqual({language.alpha3t for language in options.languages}, {"ace"})
 
 
 class SubtitleStreamDetectionTests(unittest.TestCase):
@@ -151,6 +174,55 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
 
         self.assertEqual(tracks, [{"index": 3, "language": "eng", "default": 0, "forced": 1}])
 
+    def test_language_detection_normalizes_bibliographic_metadata(self) -> None:
+        probe = {
+            "streams": [
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "hdmv_pgs_subtitle",
+                    "tags": {"language": "ger"},
+                    "disposition": {"default": 0, "forced": 0},
+                }
+            ]
+        }
+
+        with patch.object(sub.ffmpeg, "probe", return_value=probe):
+            tracks = get_languages_in_mkv(Path("movie.mkv"))
+
+        self.assertEqual(tracks, [{"index": 3, "language": "deu", "default": 0, "forced": 0}])
+
+    def test_missing_empty_and_unknown_language_tags_become_undetermined(self) -> None:
+        probe = {
+            "streams": [
+                {
+                    "index": 2,
+                    "codec_type": "subtitle",
+                    "codec_name": "hdmv_pgs_subtitle",
+                    "disposition": {"default": 0, "forced": 0},
+                },
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "hdmv_pgs_subtitle",
+                    "tags": {"language": ""},
+                    "disposition": {"default": 0, "forced": 0},
+                },
+                {
+                    "index": 4,
+                    "codec_type": "subtitle",
+                    "codec_name": "hdmv_pgs_subtitle",
+                    "tags": {"language": "xyz"},
+                    "disposition": {"default": 0, "forced": 0},
+                },
+            ]
+        }
+
+        with patch.object(sub.ffmpeg, "probe", return_value=probe):
+            tracks = get_languages_in_mkv(Path("movie.mkv"))
+
+        self.assertEqual([track["language"] for track in tracks or []], ["und", "und", "und"])
+
     def test_no_subtitle_tracks_continue_without_pgsrip(self) -> None:
         with (
             tempfile.TemporaryDirectory() as temp_dir,
@@ -164,6 +236,7 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
         rip.assert_not_called()
 
     def test_no_subtitle_tracks_remove_stale_srt_files(self) -> None:
+        warnings: list[str] = []
         with (
             tempfile.TemporaryDirectory() as temp_dir,
             patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=None),
@@ -175,10 +248,36 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
             stale_subtitle = output_path / "movie.en.srt"
             stale_subtitle.write_text("stale", encoding="utf-8")
 
-            extract_subtitle_to_srt(output_path / "movie.mkv")
+            extract_subtitle_to_srt(output_path / "movie.mkv", warning_handler=warnings.append)
 
         self.assertFalse(stale_subtitle.exists())
         rip.assert_not_called()
+        self.assertEqual(warnings, ["No PGS subtitle tracks found in source; continuing without subtitles."])
+
+    def test_missing_preferred_language_continues_without_subtitles(self) -> None:
+        warnings: list[str] = []
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
+            patch.object(sub.config, "skip_subtitles", False),
+            patch.object(sub.config, "remove_extra_languages", True),
+            patch.object(sub.config, "language_code", "dut"),
+            patch.object(sub.config, "continue_on_error", False),
+            patch("bd_to_avp.modules.sub.Mkv"),
+            patch("bd_to_avp.modules.sub.get_selected_subtitle_tracks", return_value=[]),
+            patch("bd_to_avp.modules.sub.pgsrip.rip") as rip,
+            patch("builtins.print") as output,
+        ):
+            extract_subtitle_to_srt(Path(temp_dir) / "movie.mkv", warning_handler=warnings.append)
+
+        rip.assert_not_called()
+        output.assert_any_call(
+            "No PGS subtitle tracks matched the preferred language Dutch (nld); continuing without subtitles."
+        )
+        self.assertEqual(
+            warnings,
+            ["No PGS subtitle tracks matched the preferred language Dutch (nld); continuing without subtitles."],
+        )
 
     def test_skip_subtitles_remove_stale_srt_files_when_stage_runs(self) -> None:
         with (

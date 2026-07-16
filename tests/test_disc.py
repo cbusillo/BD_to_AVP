@@ -8,6 +8,20 @@ from bd_to_avp.modules.config import Stage
 
 
 class DiscStageArtifactTests(unittest.TestCase):
+    def test_custom_profile_preserves_source_track_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(disc.config, "remove_extra_languages", True):
+            profile_path = Path(temp_dir) / "custom_profile.mmcp.xml"
+
+            disc.create_custom_makemkv_profile(profile_path)
+
+            profile = profile_path.read_text(encoding="utf-8")
+
+        self.assertIn("+sel:all", profile)
+        self.assertIn("+sel:mvcvideo", profile)
+        self.assertNotIn("{language_code}", profile)
+        self.assertNotIn("-5:", profile)
+        self.assertNotIn("-10:", profile)
+
     def test_makemkv_progress_uses_total_and_clamps_to_maximum(self) -> None:
         self.assertEqual(disc.parse_makemkv_progress("PRGV:5,25,100"), (25, 100))
         self.assertEqual(disc.parse_makemkv_progress("PRGV:5,125,100"), (100, 100))
@@ -44,7 +58,6 @@ class DiscStageArtifactTests(unittest.TestCase):
                 disc.rip_disc_to_mkv(
                     output_folder,
                     disc.DiscInfo(name="Feature", main_title_number=0),
-                    "eng",
                     lambda completed, total: progress_updates.append((completed, total)),
                 )
 
@@ -221,7 +234,7 @@ class DiscStageArtifactTests(unittest.TestCase):
                 patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
                 patch.object(disc, "run_command", return_value="") as run_command,
             ):
-                disc.rip_disc_to_mkv(output_folder, disc.DiscInfo(main_title_number=2), "eng")
+                disc.rip_disc_to_mkv(output_folder, disc.DiscInfo(main_title_number=2))
 
         command = run_command.call_args.args[0]
         self.assertIn("--minlength=0", command)
@@ -240,7 +253,7 @@ class DiscStageArtifactTests(unittest.TestCase):
                 patch.object(disc.config, "keep_files", True),
                 patch.object(disc.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
             ):
-                result = disc.create_mkv_file(output_folder, disc.DiscInfo(name="Movie"), "eng")
+                result = disc.create_mkv_file(output_folder, disc.DiscInfo(name="Movie"))
 
             copied_path = output_folder / source_path.name
             self.assertEqual(result, copied_path)
@@ -260,7 +273,7 @@ class DiscStageArtifactTests(unittest.TestCase):
                 patch.object(disc.config, "keep_files", False),
                 patch.object(disc.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
             ):
-                result = disc.create_mkv_file(output_folder, disc.DiscInfo(name="Movie"), "eng")
+                result = disc.create_mkv_file(output_folder, disc.DiscInfo(name="Movie"))
 
             self.assertEqual(result, source_path)
             self.assertFalse((output_folder / source_path.name).exists())
@@ -279,7 +292,7 @@ class DiscStageArtifactTests(unittest.TestCase):
                 patch.object(disc.config, "keep_files", False),
                 patch.object(disc.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
             ):
-                result = disc.create_mkv_file(output_folder, disc.DiscInfo(name="Movie"), "eng")
+                result = disc.create_mkv_file(output_folder, disc.DiscInfo(name="Movie"))
 
             self.assertEqual(result, source_path)
             self.assertFalse((output_folder / source_path.name).exists())
@@ -298,7 +311,7 @@ class DiscStageArtifactTests(unittest.TestCase):
                 patch.object(disc.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
                 self.assertRaisesRegex(FileNotFoundError, "Source file not found"),
             ):
-                disc.create_mkv_file(output_folder, disc.DiscInfo(name="Movie"), "eng")
+                disc.create_mkv_file(output_folder, disc.DiscInfo(name="Movie"))
 
     def test_keep_files_resume_uses_source_already_in_output_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -313,7 +326,7 @@ class DiscStageArtifactTests(unittest.TestCase):
                 patch.object(disc.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
                 patch.object(disc.shutil, "copy2") as copy_source,
             ):
-                result = disc.create_mkv_file(output_folder, disc.DiscInfo(name="Movie"), "eng")
+                result = disc.create_mkv_file(output_folder, disc.DiscInfo(name="Movie"))
 
             self.assertEqual(result, source_path)
             copy_source.assert_not_called()
@@ -336,7 +349,7 @@ class DiscStageArtifactTests(unittest.TestCase):
                 patch.object(disc.config, "MTS_EXTENSIONS", [".mts", ".m2ts"]),
                 patch.object(disc.shutil, "copy2") as copy_source,
             ):
-                result = disc.create_mkv_file(output_folder, disc.DiscInfo(name="Movie"), "eng")
+                result = disc.create_mkv_file(output_folder, disc.DiscInfo(name="Movie"))
 
             self.assertEqual(result, existing_copy)
             copy_source.assert_not_called()
@@ -353,7 +366,7 @@ class DiscStageArtifactTests(unittest.TestCase):
                 patch.object(disc.config, "start_stage", Stage.EXTRACT_MVC_AND_AUDIO),
                 patch.object(disc, "rip_disc_to_mkv") as rip_disc_to_mkv,
             ):
-                result = disc.create_mkv_file(output_folder, disc.DiscInfo(name="Movie"), "eng")
+                result = disc.create_mkv_file(output_folder, disc.DiscInfo(name="Movie"))
 
             self.assertEqual(result, existing_mkv)
             rip_disc_to_mkv.assert_not_called()

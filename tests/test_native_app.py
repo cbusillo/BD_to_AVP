@@ -10,6 +10,7 @@ from contextlib import chdir
 from pathlib import Path
 from unittest.mock import patch
 
+from bd_to_avp.worker.protocol import PROTOCOL_VERSION
 from scripts.native_app import (
     NATIVE_APP_NAME,
     NATIVE_BUNDLE_IDENTIFIER,
@@ -42,6 +43,9 @@ yaml = importlib.import_module("yaml")
 
 
 class NativeAppPackagingTests(unittest.TestCase):
+    def test_worker_smoke_uses_current_protocol_version(self) -> None:
+        self.assertEqual(WORKER_PROTOCOL_VERSION, PROTOCOL_VERSION)
+
     def test_uses_side_by_side_preview_identity(self) -> None:
         self.assertEqual(PROJECT_PATH.name, "BluRayToVisionPro.xcodeproj")
         self.assertEqual(SCHEME, "BluRayToVisionPro")

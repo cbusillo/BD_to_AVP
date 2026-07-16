@@ -22,6 +22,7 @@ from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
     JobSource,
     JobSpec,
+    SubtitleMode,
     WorkerActivityReporter,
     WorkerOperation,
     WorkerSourceKind,
@@ -410,14 +411,14 @@ def configured_conversion(
         config.start_stage = Stage.get_stage(job.job.start_stage)
         config.remove_original = False if job.source.kind is WorkerSourceKind.PHYSICAL_DISC else job.job.remove_original
         config.swap_eyes = job.encoding.swap_eyes
-        config.skip_subtitles = job.encoding.skip_subtitles
+        config.skip_subtitles = job.encoding.subtitles.mode is SubtitleMode.OFF
         config.crop_black_bars = job.encoding.crop_black_bars
         config.output_commands = job.job.output_commands
         config.software_encoder = job.job.software_encoder
         config.fx_upscale = job.encoding.fx_upscale
         config.continue_on_error = job.job.continue_on_error
-        config.language_code = job.encoding.language_code
-        config.remove_extra_languages = job.encoding.remove_extra_languages
+        config.language_code = job.encoding.subtitles.preferred_language or "eng"
+        config.remove_extra_languages = job.encoding.subtitles.mode is SubtitleMode.PREFERRED_ONLY
         config.keep_awake = job.job.keep_awake
         config.preview_range = preview_range
         yield
