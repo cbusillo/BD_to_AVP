@@ -115,10 +115,10 @@ class Config:
         def __init__(self) -> None:
             try:
                 project, briefcase = get_pyproject_data()
-                self.fullname = briefcase.get("project_name", "3D Blu-ray to Vision pro")
+                self.fullname = briefcase.get("project_name", "3D Blu-ray to Vision Pro")
                 self.shortname = project.get("name", "bd_to_avp")
             except FileNotFoundError:
-                self.fullname = "3D Blu-ray to Vision pro"
+                self.fullname = "3D Blu-ray to Vision Pro"
                 self.shortname = "bd_to_avp"
 
             self.config_path = Path.home() / "Library" / "Application Support" / self.shortname
