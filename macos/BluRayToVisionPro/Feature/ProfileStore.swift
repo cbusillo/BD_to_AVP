@@ -11,16 +11,21 @@ final class ProfileStore: ObservableObject {
     private let fileManager: FileManager
     private let fileURL: URL
     private let idGenerator: () -> UUID
+    private let dataWriter: (Data, URL) throws -> Void
     private var writesBlocked = false
 
     init(
         fileURL: URL? = nil,
         fileManager: FileManager = .default,
-        idGenerator: @escaping () -> UUID = UUID.init
+        idGenerator: @escaping () -> UUID = UUID.init,
+        dataWriter: @escaping (Data, URL) throws -> Void = { data, url in
+            try data.write(to: url, options: .atomic)
+        }
     ) {
         self.fileManager = fileManager
         self.fileURL = fileURL ?? Self.defaultFileURL(fileManager: fileManager)
         self.idGenerator = idGenerator
+        self.dataWriter = dataWriter
         loadProfiles()
     }
 
@@ -137,29 +142,33 @@ final class ProfileStore: ObservableObject {
         }
         do {
             let data = try Data(contentsOf: fileURL)
-            let document = try JSONDecoder().decode(ProfileDocument.self, from: data)
-            guard document.version == ProfileDocument.currentVersion else {
-                throw ProfileStoreError.unsupportedVersion(document.version)
+            let decoder = JSONDecoder()
+            let version = try decoder.decode(ProfileDocumentVersion.self, from: data).version
+            let storedProfiles: [StoredProfile]
+            let needsMigration: Bool
+            switch version {
+            case 1:
+                let legacyDocument = try decoder.decode(LegacyProfileDocumentV1.self, from: data)
+                storedProfiles = try legacyDocument.profiles.map { try $0.migrated() }
+                needsMigration = true
+            case ProfileDocument.currentVersion:
+                storedProfiles = try decoder.decode(ProfileDocument.self, from: data).profiles
+                needsMigration = false
+            default:
+                throw ProfileStoreError.unsupportedVersion(version)
             }
-            var identifiers = Set<String>()
-            var names = Set<String>()
-            customProfiles = try document.profiles.map { storedProfile in
-                let identifier = "custom.\(storedProfile.id.uuidString.lowercased())"
-                let normalizedName = storedProfile.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !normalizedName.isEmpty,
-                      identifiers.insert(identifier).inserted,
-                      names.insert(normalizedName.lowercased()).inserted
-                else {
-                    throw ProfileStoreError.invalidDocument
+            let loadedProfiles = try restoreProfiles(storedProfiles)
+            if needsMigration {
+                do {
+                    try persist(loadedProfiles)
+                } catch {
+                    writesBlocked = true
+                    customProfiles = loadedProfiles
+                    loadErrorMessage = "Custom profiles were loaded but could not be upgraded. Profile changes are disabled to protect the original library."
+                    return
                 }
-                return EncodingProfile(
-                    id: identifier,
-                    name: normalizedName,
-                    options: storedProfile.options,
-                    kind: .custom,
-                    systemImage: "slider.horizontal.3"
-                )
             }
+            customProfiles = loadedProfiles
         } catch {
             if let recoveryURL = preserveUnreadableFile() {
                 loadErrorMessage = "Custom profiles could not be loaded. The original library was preserved as \(recoveryURL.lastPathComponent)."
@@ -168,6 +177,28 @@ final class ProfileStore: ObservableObject {
                 loadErrorMessage = "Custom profiles could not be loaded or preserved. Profile changes are disabled to protect the original library."
             }
             customProfiles = []
+        }
+    }
+
+    private func restoreProfiles(_ storedProfiles: [StoredProfile]) throws -> [EncodingProfile] {
+        var identifiers = Set<String>()
+        var names = Set<String>()
+        return try storedProfiles.map { storedProfile in
+            let identifier = "custom.\(storedProfile.id.uuidString.lowercased())"
+            let normalizedName = storedProfile.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedName.isEmpty,
+                  identifiers.insert(identifier).inserted,
+                  names.insert(normalizedName.lowercased()).inserted
+            else {
+                throw ProfileStoreError.invalidDocument
+            }
+            return EncodingProfile(
+                id: identifier,
+                name: normalizedName,
+                options: storedProfile.options,
+                kind: .custom,
+                systemImage: "slider.horizontal.3"
+            )
         }
     }
 
@@ -189,7 +220,7 @@ final class ProfileStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(document)
-        try data.write(to: fileURL, options: .atomic)
+        try dataWriter(data, fileURL)
         loadErrorMessage = nil
     }
 
@@ -246,14 +277,79 @@ enum ProfileStoreError: LocalizedError, Equatable {
 }
 
 private struct ProfileDocument: Codable {
-    static let currentVersion = 1
+    static let currentVersion = 2
 
     let version: Int
     let profiles: [StoredProfile]
+}
+
+private struct ProfileDocumentVersion: Decodable {
+    let version: Int
 }
 
 private struct StoredProfile: Codable {
     let id: UUID
     let name: String
     let options: EncodingOptions
+}
+
+private struct LegacyProfileDocumentV1: Decodable {
+    let version: Int
+    let profiles: [LegacyStoredProfileV1]
+}
+
+private struct LegacyStoredProfileV1: Decodable {
+    let id: UUID
+    let name: String
+    let options: LegacyEncodingOptionsV1
+
+    func migrated() throws -> StoredProfile {
+        StoredProfile(id: id, name: name, options: try options.migrated())
+    }
+}
+
+private struct LegacyEncodingOptionsV1: Decodable {
+    let hevcQuality: Int
+    let leftRightBitrate: Int
+    let upscaleEnabled: Bool
+    let upscaleQuality: Int
+    let linkQuality: Bool
+    let fieldOfView: Int
+    let frameRateOverride: String
+    let resolutionOverride: String
+    let cropBlackBars: Bool
+    let swapEyes: Bool
+    let audioHandling: AudioHandling
+    let audioBitrate: Int
+    let language: String
+    let includeSubtitles: Bool
+    let keepExtraLanguages: Bool
+
+    func migrated() throws -> EncodingOptions {
+        guard let preferredLanguage = SubtitleLanguage(code: language) else {
+            throw ProfileStoreError.invalidDocument
+        }
+        let mode: SubtitleMode = if !includeSubtitles {
+            .off
+        } else if keepExtraLanguages {
+            .preferredPlusOthers
+        } else {
+            .preferredOnly
+        }
+        return EncodingOptions(
+            hevcQuality: hevcQuality,
+            leftRightBitrate: leftRightBitrate,
+            upscaleEnabled: upscaleEnabled,
+            upscaleQuality: upscaleQuality,
+            linkQuality: linkQuality,
+            fieldOfView: fieldOfView,
+            frameRateOverride: frameRateOverride,
+            resolutionOverride: resolutionOverride,
+            cropBlackBars: cropBlackBars,
+            swapEyes: swapEyes,
+            audioHandling: audioHandling,
+            audioBitrate: audioBitrate,
+            subtitles: SubtitlePolicy(mode: mode, preferredLanguage: preferredLanguage)
+        )
+    }
 }

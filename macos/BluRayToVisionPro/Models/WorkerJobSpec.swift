@@ -55,13 +55,7 @@ struct WorkerJobSpec: Encodable, Equatable {
 
     struct Encoding: Encodable, Equatable {
         struct Subtitles: Encodable, Equatable {
-            enum Mode: String, Encodable {
-                case off
-                case preferredOnly = "preferred_only"
-                case preferredPlusOthers = "preferred_plus_others"
-            }
-
-            let mode: Mode
+            let mode: SubtitleMode
             let preferredLanguage: String?
 
             func encode(to encoder: Encoder) throws {
@@ -256,12 +250,12 @@ struct WorkerJobSpec: Encodable, Equatable {
     }
 
     private static func subtitleOptions(from options: EncodingOptions) -> Encoding.Subtitles {
-        guard options.includeSubtitles else {
+        guard options.subtitles.mode != .off else {
             return Encoding.Subtitles(mode: .off, preferredLanguage: nil)
         }
         return Encoding.Subtitles(
-            mode: options.keepExtraLanguages ? .preferredPlusOthers : .preferredOnly,
-            preferredLanguage: options.language.rawValue
+            mode: options.subtitles.mode,
+            preferredLanguage: options.subtitles.preferredLanguage.code
         )
     }
 

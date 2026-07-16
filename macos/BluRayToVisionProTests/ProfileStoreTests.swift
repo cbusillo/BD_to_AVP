@@ -35,9 +35,7 @@ final class ProfileStoreTests: XCTestCase {
             swapEyes: true,
             audioHandling: .transcodeAAC,
             audioBitrate: 512,
-            language: .japanese,
-            includeSubtitles: false,
-            keepExtraLanguages: false
+            subtitles: SubtitlePolicy(mode: .off, preferredLanguage: .japanese)
         )
         let store = ProfileStore(fileURL: fileURL, idGenerator: { identifier })
 
@@ -47,6 +45,117 @@ final class ProfileStoreTests: XCTestCase {
         XCTAssertEqual(profileID, "custom.\(identifier.uuidString.lowercased())")
         XCTAssertEqual(restoredStore.profile(withID: profileID).name, "Cinema")
         XCTAssertEqual(restoredStore.profile(withID: profileID).options, options)
+    }
+
+    @MainActor
+    func testVersionOneProfilesMigrateAtomicallyToCanonicalVersionTwoData() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        let legacyData = try legacyDocument(
+            profiles: [
+                legacyProfile(
+                    id: "A4CC523E-72FA-4F36-A38D-1FB0D6A84742",
+                    name: "Dutch Off",
+                    language: "dut",
+                    includeSubtitles: false,
+                    keepExtraLanguages: false
+                ),
+                legacyProfile(
+                    id: "6C02DFB0-2B6A-4F6D-9335-3703487FB9D7",
+                    name: "French Only",
+                    language: "fre",
+                    includeSubtitles: true,
+                    keepExtraLanguages: false
+                ),
+                legacyProfile(
+                    id: "9B58E388-CB38-46ED-ADE4-F690F6A40D81",
+                    name: "German Plus",
+                    language: "ger",
+                    includeSubtitles: true,
+                    keepExtraLanguages: true
+                ),
+                legacyProfile(
+                    id: "E27A632D-C9F0-424D-85B0-77E153AE1DA8",
+                    name: "Chinese Plus",
+                    language: "chi",
+                    includeSubtitles: true,
+                    keepExtraLanguages: true
+                ),
+            ]
+        )
+        try legacyData.write(to: fileURL)
+
+        let store = ProfileStore(fileURL: fileURL)
+
+        XCTAssertNil(store.loadErrorMessage)
+        XCTAssertEqual(store.customProfiles.map(\.options.subtitles.preferredLanguage.code), ["nld", "fra", "deu", "zho"])
+        XCTAssertEqual(
+            store.customProfiles.map(\.options.subtitles.mode),
+            [.off, .preferredOnly, .preferredPlusOthers, .preferredPlusOthers]
+        )
+        let migratedOptions = try XCTUnwrap(store.customProfiles.first?.options)
+        XCTAssertEqual(migratedOptions.hevcQuality, 91)
+        XCTAssertEqual(migratedOptions.leftRightBitrate, 35)
+        XCTAssertTrue(migratedOptions.upscaleEnabled)
+        XCTAssertEqual(migratedOptions.upscaleQuality, 87)
+        XCTAssertFalse(migratedOptions.linkQuality)
+        XCTAssertEqual(migratedOptions.fieldOfView, 100)
+        XCTAssertEqual(migratedOptions.frameRateOverride, "24000/1001")
+        XCTAssertEqual(migratedOptions.resolutionOverride, "3840x2160")
+        XCTAssertTrue(migratedOptions.cropBlackBars)
+        XCTAssertTrue(migratedOptions.swapEyes)
+        XCTAssertEqual(migratedOptions.audioHandling, .transcodeAAC)
+        XCTAssertEqual(migratedOptions.audioBitrate, 512)
+
+        let migratedJSON = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
+        )
+        XCTAssertEqual(migratedJSON["version"] as? Int, 2)
+        let profiles = try XCTUnwrap(migratedJSON["profiles"] as? [[String: Any]])
+        let options = try XCTUnwrap(profiles.first?["options"] as? [String: Any])
+        let subtitles = try XCTUnwrap(options["subtitles"] as? [String: Any])
+        XCTAssertEqual(subtitles["mode"] as? String, "off")
+        XCTAssertEqual(subtitles["preferredLanguage"] as? String, "nld")
+        XCTAssertNil(options["language"])
+        XCTAssertNil(options["includeSubtitles"])
+        XCTAssertNil(options["keepExtraLanguages"])
+
+        let reopenedStore = ProfileStore(fileURL: fileURL)
+        XCTAssertEqual(reopenedStore.customProfiles, store.customProfiles)
+    }
+
+    @MainActor
+    func testMigrationWriteFailureKeepsValidVersionOneLibraryAndLoadsReadOnly() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        let legacyData = try legacyDocument(
+            profiles: [
+                legacyProfile(
+                    id: "A4CC523E-72FA-4F36-A38D-1FB0D6A84742",
+                    name: "Protected",
+                    language: "ger",
+                    includeSubtitles: true,
+                    keepExtraLanguages: false
+                )
+            ]
+        )
+        try legacyData.write(to: fileURL)
+
+        let store = ProfileStore(
+            fileURL: fileURL,
+            dataWriter: { _, _ in throw TestWriteError.failed }
+        )
+
+        XCTAssertEqual(store.customProfiles.first?.options.subtitles.preferredLanguage, .german)
+        XCTAssertEqual(try Data(contentsOf: fileURL), legacyData)
+        XCTAssertNotNil(store.loadErrorMessage)
+        XCTAssertThrowsError(try store.createProfile(name: "Blocked", options: EncodingOptions())) { error in
+            XCTAssertEqual(error as? ProfileStoreError, .recoveryRequired)
+        }
     }
 
     @MainActor
@@ -185,4 +294,42 @@ final class ProfileStoreTests: XCTestCase {
     private func temporaryProfileURL() -> URL {
         temporaryDirectoryURL().appendingPathComponent("profiles.json")
     }
+
+    private func legacyDocument(profiles: [[String: Any]]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: ["version": 1, "profiles": profiles], options: [.sortedKeys])
+    }
+
+    private func legacyProfile(
+        id: String,
+        name: String,
+        language: String,
+        includeSubtitles: Bool,
+        keepExtraLanguages: Bool
+    ) -> [String: Any] {
+        [
+            "id": id,
+            "name": name,
+            "options": [
+                "hevcQuality": 91,
+                "leftRightBitrate": 35,
+                "upscaleEnabled": true,
+                "upscaleQuality": 87,
+                "linkQuality": false,
+                "fieldOfView": 100,
+                "frameRateOverride": "24000/1001",
+                "resolutionOverride": "3840x2160",
+                "cropBlackBars": true,
+                "swapEyes": true,
+                "audioHandling": "transcodeAAC",
+                "audioBitrate": 512,
+                "language": language,
+                "includeSubtitles": includeSubtitles,
+                "keepExtraLanguages": keepExtraLanguages,
+            ],
+        ]
+    }
+}
+
+private enum TestWriteError: Error {
+    case failed
 }

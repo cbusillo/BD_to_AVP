@@ -35,34 +35,39 @@ enum AudioHandling: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-enum SubtitleLanguage: String, CaseIterable, Codable, Identifiable {
-    case english = "eng"
-    case spanish = "spa"
-    case french = "fre"
-    case german = "ger"
-    case chinese = "chi"
-    case japanese = "jpn"
-    case portuguese = "por"
-    case russian = "rus"
-    case italian = "ita"
-    case korean = "kor"
+enum SubtitleMode: String, CaseIterable, Codable, Identifiable {
+    case off
+    case preferredOnly = "preferred_only"
+    case preferredPlusOthers = "preferred_plus_others"
 
     var id: String { rawValue }
 
-    var name: String {
+    var title: String {
         switch self {
-        case .english: "English"
-        case .spanish: "Spanish"
-        case .french: "French"
-        case .german: "German"
-        case .chinese: "Chinese"
-        case .japanese: "Japanese"
-        case .portuguese: "Portuguese"
-        case .russian: "Russian"
-        case .italian: "Italian"
-        case .korean: "Korean"
+        case .off:
+            "Off"
+        case .preferredOnly:
+            "Preferred Only"
+        case .preferredPlusOthers:
+            "Preferred + Others"
         }
     }
+
+    var detail: String {
+        switch self {
+        case .off:
+            "No subtitle tracks will be extracted."
+        case .preferredOnly:
+            "Only the preferred language is retained when matching subtitles are available."
+        case .preferredPlusOthers:
+            "The preferred language is prioritized while other available subtitle tracks are retained."
+        }
+    }
+}
+
+struct SubtitlePolicy: Codable, Equatable {
+    var mode = SubtitleMode.preferredPlusOthers
+    var preferredLanguage = SubtitleLanguage.english
 }
 
 enum ConversionStage: Int, CaseIterable, Codable, Identifiable {
@@ -116,9 +121,7 @@ struct EncodingOptions: Codable, Equatable {
 
     var audioHandling = AudioHandling.preserve
     var audioBitrate = 384
-    var language = SubtitleLanguage.english
-    var includeSubtitles = true
-    var keepExtraLanguages = true
+    var subtitles = SubtitlePolicy()
 
     var compactSummary: String {
         let resolution = upscaleEnabled ? "2× upscale" : "source resolution"

@@ -139,7 +139,9 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(BuiltInProfile.originalResolution.options.hevcQuality, 85)
         XCTAssertEqual(ConversionStage.combineToMVHEVC.rawValue, 5)
         XCTAssertEqual(ConversionStage.upscaleVideo.rawValue, 6)
-        XCTAssertEqual(SubtitleLanguage.french.rawValue, "fre")
+        XCTAssertEqual(SubtitleLanguage.french.code, "fra")
+        XCTAssertEqual(SubtitleLanguage.german.code, "deu")
+        XCTAssertEqual(SubtitleLanguage.chinese.code, "zho")
     }
 
     func testPCMHandlingIsDescribedTruthfullyWithoutChangingItsStoredValue() {
@@ -420,9 +422,7 @@ final class ConversionWorkflowTests: XCTestCase {
             swapEyes: true,
             audioHandling: .transcodeAAC,
             audioBitrate: 512,
-            language: .japanese,
-            includeSubtitles: false,
-            keepExtraLanguages: false
+            subtitles: SubtitlePolicy(mode: .off, preferredLanguage: .japanese)
         )
         let profile = EncodingProfile(
             id: "custom.11111111-1111-4111-8111-111111111111",
@@ -574,9 +574,9 @@ final class ConversionWorkflowTests: XCTestCase {
             draft.retrying(decision: decision, choice: .retryWithoutSubtitles)
         )
 
-        XCTAssertTrue(draft.options.encoding.includeSubtitles)
+        XCTAssertEqual(draft.options.encoding.subtitles.mode, .preferredPlusOthers)
         XCTAssertEqual(retry.options.job.startStage, .extractSubtitles)
-        XCTAssertFalse(retry.options.encoding.includeSubtitles)
+        XCTAssertEqual(retry.options.encoding.subtitles.mode, .off)
         XCTAssertFalse(retry.options.job.continueOnError)
     }
 
@@ -641,6 +641,70 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(job["start_stage"] as? Int, 1)
         XCTAssertNil(job["output_length"])
         XCTAssertNil(json["conversion_settings"])
+    }
+
+    func testConversionJobSpecUsesCanonicalDutchAndNullsLanguageWhenOff() throws {
+        var options = ConversionOptions()
+        options.encoding.subtitles = SubtitlePolicy(mode: .preferredOnly, preferredLanguage: .dutch)
+        let source = ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/movie.mkv"))
+        let draft = ConversionDraft(
+            source: source,
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            options: options
+        )
+
+        var data = try JSONEncoder().encode(WorkerJobSpec(draft: draft))
+        var json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var encoding = try XCTUnwrap(json["encoding"] as? [String: Any])
+        var subtitles = try XCTUnwrap(encoding["subtitles"] as? [String: Any])
+        XCTAssertEqual(subtitles["mode"] as? String, "preferred_only")
+        XCTAssertEqual(subtitles["preferred_language"] as? String, "nld")
+        XCTAssertEqual(Set(subtitles.keys), ["mode", "preferred_language"])
+        XCTAssertNil(encoding["skip_subtitles"])
+        XCTAssertNil(encoding["language_code"])
+        XCTAssertNil(encoding["remove_extra_languages"])
+
+        options.encoding.subtitles.mode = .off
+        let offDraft = ConversionDraft(
+            source: source,
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            options: options
+        )
+        data = try JSONEncoder().encode(WorkerJobSpec(draft: offDraft))
+        json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        encoding = try XCTUnwrap(json["encoding"] as? [String: Any])
+        subtitles = try XCTUnwrap(encoding["subtitles"] as? [String: Any])
+        XCTAssertEqual(subtitles["mode"] as? String, "off")
+        XCTAssertTrue(subtitles["preferred_language"] is NSNull)
+    }
+
+    func testSubtitlePolicyDoesNotChangeAudioEncodingFields() throws {
+        var options = ConversionOptions()
+        options.encoding.audioHandling = .transcodeAAC
+        options.encoding.audioBitrate = 640
+        let source = ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/movie.mkv"))
+
+        func workerEncoding(for options: ConversionOptions) throws -> WorkerJobSpec.Encoding {
+            let draft = ConversionDraft(
+                source: source,
+                sourceDetails: nil,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+                options: options
+            )
+            return try XCTUnwrap(WorkerJobSpec(draft: draft).encoding)
+        }
+
+        let originalEncoding = try workerEncoding(for: options)
+        options.encoding.subtitles = SubtitlePolicy(mode: .off, preferredLanguage: .dutch)
+        let changedEncoding = try workerEncoding(for: options)
+
+        XCTAssertEqual(changedEncoding.transcodeAudio, originalEncoding.transcodeAudio)
+        XCTAssertEqual(changedEncoding.audioBitrate, originalEncoding.audioBitrate)
     }
 
     func testConversionJobSpecMatchesSharedPythonFixture() throws {
