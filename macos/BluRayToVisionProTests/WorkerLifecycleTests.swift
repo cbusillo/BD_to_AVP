@@ -130,26 +130,11 @@ final class WorkerLifecycleTests: XCTestCase {
     func testStructuredAudioFallbackWarningExposesCodecsAndActualAction() throws {
         let event = try JSONDecoder().decode(
             WorkerEvent.self,
-            from: Data(
-                """
-                {
-                  "protocol_version": 6,
-                  "type": "warning",
-                  "job_id": "11111111-1111-4111-8111-111111111111",
-                  "sequence": 0,
-                  "payload": {
-                    "message": "Automatic audio used the AAC fallback for the selected track set.",
-                    "code": "automatic_audio_fallback",
-                    "source_codecs": ["aac", "dts"],
-                    "action": "convert_aac"
-                  }
-                }
-                """.utf8
-            )
+            from: sharedFixtureData(named: "native_worker_audio_fallback_warning_v6.json")
         )
 
-        XCTAssertEqual(event.payload.warningCode, "automatic_audio_fallback")
-        XCTAssertEqual(event.payload.sourceCodecs, ["aac", "dts"])
+        XCTAssertEqual(event.payload.warningCode, "audio_automatic_fallback_to_aac")
+        XCTAssertEqual(event.payload.sourceCodecs, ["aac", "ac3"])
         XCTAssertEqual(event.payload.audioAction, "convert_aac")
 
         var state = WorkerLifecycleState()
@@ -159,7 +144,7 @@ final class WorkerLifecycleTests: XCTestCase {
 
         XCTAssertEqual(
             state.warningMessage,
-            "Automatic audio used the AAC fallback for the selected track set."
+            "Automatic audio selected AAC conversion because one or more selected tracks are not qualified AAC."
         )
     }
 
@@ -407,9 +392,9 @@ final class WorkerLifecycleTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("tests/fixtures/\(name)")
-        guard FileManager.default.fileExists(atPath: fixtureURL.path) else {
-            throw XCTSkip("Waiting for the backend v6 fixture \(name).")
-        }
-        return try Data(contentsOf: fixtureURL)
+        return try XCTUnwrap(
+            FileManager.default.contents(atPath: fixtureURL.path),
+            "Required shared worker fixture is missing: \(name)"
+        )
     }
 }

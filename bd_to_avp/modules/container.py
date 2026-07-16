@@ -76,6 +76,9 @@ def create_mvc_and_audio(
 
 def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path, output_folder: Path) -> None:
     audio_streams = get_audio_stream_data(audio_path)
+    has_declared_audio_default = any(
+        int(stream.get("disposition", {}).get("default", 0) or 0) == 1 for stream in audio_streams
+    )
     output_track_index = 1
     command = [
         config.MP4BOX_PATH,
@@ -86,7 +89,7 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
         f"{mv_hevc_path}:forcesync",
     ]
     output_track_index += 1
-    for stream in audio_streams:
+    for audio_position, stream in enumerate(audio_streams):
         index = stream["index"] + 1
         language_code, audio_language_name = normalize_track_language(stream.get("tags", {}).get("language"))
         channel_layout = stream.get("channel_layout", "unknown")
@@ -95,10 +98,10 @@ def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path,
 
         audio_track_options = f":lang={language_code}:group=1:alternate_group=1"
 
-        if not default_disposition and index > 1:
-            audio_track_options += ":disable"
         if default_disposition:
             audio_track_options += ":enabled"
+        elif has_declared_audio_default or audio_position > 0:
+            audio_track_options += ":disable"
         track_name = title if isinstance(title, str) and title else f"{audio_language_name} {channel_layout} Audio"
 
         command += [

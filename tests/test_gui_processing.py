@@ -24,6 +24,7 @@ from bd_to_avp.gui.processing import (
     ProcessingThread,
     ThreadScopedOutput,
 )
+from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.command import get_spinner_update_func
 from bd_to_avp.modules.disc import MKVCreationError
@@ -471,6 +472,31 @@ class MainWindowProcessingLifecycleTests(unittest.TestCase):
         self.assertEqual(self.window.process_button.text(), self.window.STOP_PROCESSING_TEXT)
         self.assertFalse(self.window.load_config_button.isEnabled())
         self.assertFalse(self.window.save_config_button.isEnabled())
+
+    def test_audio_mode_selector_round_trips_all_modes(self) -> None:
+        cases = [
+            (AudioMode.AUTOMATIC, "Automatic", True),
+            (AudioMode.CONVERT_AAC, "Convert to AAC", True),
+            (AudioMode.PCM, "Uncompressed PCM", False),
+        ]
+
+        for mode, label, bitrate_visible in cases:
+            with self.subTest(mode=mode):
+                self.window.audio_mode_combobox.set_current_text(label)
+                self.window.save_config()
+
+                self.assertEqual(config.audio_mode, mode)
+                self.assertEqual(self.window.audio_bitrate_spinbox.isHidden(), not bitrate_visible)
+
+    def test_loading_automatic_mode_does_not_flatten_to_pcm(self) -> None:
+        config.audio_mode = AudioMode.AUTOMATIC
+
+        with patch.object(config, "load_config_from_file"):
+            self.window.load_config_and_update_ui()
+        self.window.save_config()
+
+        self.assertEqual(self.window.audio_mode_combobox.current_text(), "Automatic")
+        self.assertEqual(config.audio_mode, AudioMode.AUTOMATIC)
 
     def test_continuation_requires_explicit_request(self) -> None:
         with self.assertRaisesRegex(ValueError, "continuation request"):

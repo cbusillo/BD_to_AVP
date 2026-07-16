@@ -90,9 +90,10 @@ Automatic whole-set fallback emits a structured warning similar to:
 
 The v6 `encoding` object has an exact schema. The v5
 `encoding.transcode_audio` and `encoding.audio_bitrate` fields are not accepted
-in worker protocol requests. Legacy Python CLI and Qt callers may still use the
-old `--transcode-audio` boolean surface; the Python backend maps it to
-`audio.mode = "convert_aac"` internally.
+in worker protocol requests. Legacy Python callers may still use the old
+`--transcode-audio` boolean surface; the backend maps it to
+`audio.mode = "convert_aac"` internally. The Qt desktop UI exposes the same
+three explicit modes as the native app.
 
 The stage identifier remains `transcode_audio` and the stage number remains 7
 for resume compatibility. User-facing stage text is now **Prepare Audio**.

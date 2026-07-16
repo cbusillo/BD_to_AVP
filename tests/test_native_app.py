@@ -169,6 +169,8 @@ class NativeAppPackagingTests(unittest.TestCase):
 
         content_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "ContentView.swift").read_text(encoding="utf-8")
         self.assertIn(".onChange(of: defaultJobOptions)", content_view)
+        self.assertIn("if let warningMessage = viewModel.state.warningMessage", content_view)
+        self.assertIn('return "Warning: \\(warningMessage)"', content_view)
 
     def test_native_build_settings_support_hosted_ci_deployment_override(self) -> None:
         settings = native_build_settings(

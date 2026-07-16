@@ -146,7 +146,7 @@ class MuxCommandTests(unittest.TestCase):
             )
 
         command = run_command.call_args.args[0]
-        self.assertIn("Movie_audio_AAC.m4a#1:lang=eng:group=1:alternate_group=1", command)
+        self.assertIn("Movie_audio_AAC.m4a#1:lang=eng:group=1:alternate_group=1:disable", command)
         self.assertIn("2:type=name:str='Commentary'", command)
         self.assertIn("Movie_audio_AAC.m4a#2:lang=jpn:group=1:alternate_group=1:enabled", command)
         self.assertIn("3:type=name:str='Main Japanese'", command)

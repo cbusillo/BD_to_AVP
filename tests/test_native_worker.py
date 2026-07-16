@@ -534,6 +534,35 @@ class WorkerEventEmitterTests(unittest.TestCase):
 
 
 class WorkerActivityReporterTests(unittest.TestCase):
+    def test_warning_emits_shared_automatic_fallback_fixture(self) -> None:
+        output = io.StringIO()
+        job_id = "11111111-1111-4111-8111-111111111111"
+        activity = WorkerActivityReporter(WorkerEventEmitter(output, job_id))
+
+        activity.warning(
+            "Automatic audio selected AAC conversion because one or more selected tracks are not qualified AAC.",
+            stage="transcode_audio",
+            code="audio_automatic_fallback_to_aac",
+            audio_mode="automatic",
+            action="convert_aac",
+            source_codecs=["aac", "ac3"],
+            unqualified_streams=[
+                {
+                    "index": 1,
+                    "codec": "ac3",
+                    "profile": None,
+                    "sample_rate": 48_000,
+                    "channels": 6,
+                    "channel_layout": "5.1(side)",
+                    "reason": "codec_not_allowed",
+                }
+            ],
+        )
+
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_fallback_warning_v6.json"
+        expected = json.loads(fixture_path.read_text())
+        self.assertEqual(decoded_events(output), [expected])
+
     def test_stage_plan_emits_shared_progress_fixture(self) -> None:
         output = io.StringIO()
         job_id = "11111111-1111-4111-8111-111111111111"

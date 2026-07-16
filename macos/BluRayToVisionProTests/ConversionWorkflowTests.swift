@@ -902,10 +902,10 @@ final class ConversionWorkflowTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("tests/fixtures/\(name)")
-        guard FileManager.default.fileExists(atPath: fixtureURL.path) else {
-            throw XCTSkip("Waiting for the backend v6 fixture \(name).")
-        }
-        return try Data(contentsOf: fixtureURL)
+        return try XCTUnwrap(
+            FileManager.default.contents(atPath: fixtureURL.path),
+            "Required shared worker fixture is missing: \(name)"
+        )
     }
 
     private func withTemporaryDirectory(_ operation: (URL) throws -> Void) throws {
