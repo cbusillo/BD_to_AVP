@@ -323,7 +323,14 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: Verify checkout identity
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved after signing approval." >&2
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -352,6 +359,11 @@ jobs:
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved immediately before certificate use." >&2
+            exit 1
+          fi
           KEYCHAIN_PATH="$(pwd)/build.keychain"
           security create-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           USER_KEYCHAINS=()
@@ -378,6 +390,12 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           TEAM_ID: ${{ secrets.TEAM_ID }}
         run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved immediately before notarization credential use." >&2
+            exit 1
+          fi
           NOTARY_PROFILE="briefcase-macOS-$TEAM_ID"
           xcrun notarytool store-credentials "$NOTARY_PROFILE" \
             --apple-id "$APPLE_ID" \
@@ -392,6 +410,11 @@ jobs:
           PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
         run: |
           set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved immediately before package signing." >&2
+            exit 1
+          fi
           security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$(pwd)/build.keychain"
           uv run python -m scripts.briefcase_app create
           uv run python -m scripts.briefcase_app build

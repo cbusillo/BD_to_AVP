@@ -142,6 +142,11 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved after preview signing approval." >&2
+            exit 1
+          fi
           test "$(uname -m)" = "arm64"
           test "$(sw_vers -productVersion | cut -d. -f1)" = "27"
           XCODE_VERSION=$(xcodebuild -version)
@@ -175,6 +180,11 @@ jobs:
           DEV_ID: ${{ secrets.DEV_ID }}
         run: |
           set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved immediately before preview certificate use." >&2
+            exit 1
+          fi
           case "$DEV_ID" in
             "Developer ID Application:"*) ;;
             *) echo "DEV_ID must name a Developer ID Application identity." >&2; exit 1 ;;
@@ -221,6 +231,11 @@ jobs:
           TEAM_ID: ${{ secrets.TEAM_ID }}
         run: |
           set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved immediately before preview notarization credential use." >&2
+            exit 1
+          fi
           NOTARY_PROFILE="native-ui-preview-$TEAM_ID-$GITHUB_RUN_ID"
           security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           xcrun notarytool store-credentials "$NOTARY_PROFILE" \
@@ -237,6 +252,11 @@ jobs:
           DEV_ID: ${{ secrets.DEV_ID }}
         run: |
           set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved immediately before preview package signing." >&2
+            exit 1
+          fi
           security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           APP_PATH="macos/build/package/$PREVIEW_APP_NAME"
           DMG_PATH="dist/$PREVIEW_DMG_NAME"

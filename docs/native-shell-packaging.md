@@ -126,9 +126,10 @@ The native shell does not yet replace the current `0.2.x` Briefcase/Sparkle
 release line. Native Start Processing supports inspected Blu-ray folders, ISO,
 physical disc, MKV, MTS, and M2TS sources, including the worker's MakeMKV and
 subtitle recovery choices. Contextual queues, bounded previews, and the native
-updater implementation are present; physical-disc, audio, and signed
-installed-app updater evidence still gate promotion through the normal Release
-Candidates appcast.
+updater implementation are present; physical-disc and signed installed-app
+updater evidence still gate promotion through the normal Release Candidates
+appcast. The physical Apple Vision Pro audio matrix is complete, and Automatic
+is the qualified default for new profiles.
 
 The preview uses a separate product name and bundle identifier, installs beside
 the production app, targets Apple Silicon macOS 26 or later, and is published
