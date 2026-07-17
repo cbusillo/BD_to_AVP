@@ -164,6 +164,8 @@ def create_spatial_video(work_directory: Path) -> Path:
             "--left-is-primary",
             "--horizontal-field-of-view",
             "90",
+            "--horizontal-disparity-adjustment",
+            "0",
             "--output-file",
             spatial_path,
         ]
@@ -621,6 +623,7 @@ def main() -> None:
             "frame_rate": FRAME_RATE,
             "left_is_primary": True,
             "horizontal_field_of_view": 90,
+            "horizontal_disparity_adjustment": 0,
         },
         "fixtures": entries,
     }

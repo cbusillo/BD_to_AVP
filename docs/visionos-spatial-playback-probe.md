@@ -64,7 +64,7 @@ The generator exercises the production audio preparation and final-mux functions
 - `03-Convert-AAC.mov`: E-AC-3 plus FLAC input that must convert both tracks to AAC.
 - `04-PCM.mov`: E-AC-3 plus FLAC input that must extract both tracks as 24-bit PCM.
 
-Each movie is 24 seconds long with a default English 5.1 track, a French alternate stereo track, selectable English subtitles, and a white flash synchronized to each channel beep. The generator fails unless codec, language, channel-layout, packet/sample integrity, warning, subtitle, and left/right MV-HEVC split checks pass. `manifest.json` records the machine-verifiable evidence, and `CHECKLIST.md` contains the headset operator gate.
+Each movie is 24 seconds long with a default English 5.1 track, a French alternate stereo track, selectable English subtitles, and a white flash synchronized to each channel beep. MV-HEVC generation writes an explicit neutral horizontal disparity adjustment so AVFoundation reports QuickTime stereo metadata instead of treating the file as stereo multiview alone. The generator fails unless codec, language, channel-layout, packet/sample integrity, warning, subtitle, and left/right MV-HEVC split checks pass. `manifest.json` records the machine-verifiable evidence, and `CHECKLIST.md` contains the headset operator gate.
 
 After installing the signed app, copy the matrix into its Documents container and place the first fixture at the autorun path:
 
