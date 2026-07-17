@@ -8,6 +8,7 @@ import ffmpeg
 from bd_to_avp.modules import container
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import Stage
+from bd_to_avp.modules.video_mode import VideoMode
 
 
 class AudioExtractionTests(unittest.TestCase):
@@ -79,6 +80,7 @@ class MuxCommandTests(unittest.TestCase):
             with (
                 patch.object(container.config, "keep_files", False),
                 patch.object(container.config, "start_stage", Stage.CREATE_MKV),
+                patch.object(container.config, "video_mode", VideoMode.MV_HEVC),
                 patch.object(container, "mux_video_audio_subs") as mux,
             ):
                 result = container.create_muxed_file(audio_path, mv_hevc_path, output_folder, "Movie")
@@ -105,6 +107,7 @@ class MuxCommandTests(unittest.TestCase):
             with (
                 patch.object(container.config, "keep_files", False),
                 patch.object(container.config, "start_stage", Stage.CREATE_MKV),
+                patch.object(container.config, "video_mode", VideoMode.MV_HEVC),
                 patch.object(container, "mux_video_audio_subs", side_effect=RuntimeError("mux failed")),
                 self.assertRaisesRegex(RuntimeError, "mux failed"),
             ):
@@ -116,6 +119,7 @@ class MuxCommandTests(unittest.TestCase):
     def test_final_mux_forces_video_sync_samples_for_quicktime_seeking(self) -> None:
         with (
             patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+            patch.object(container.config, "video_mode", VideoMode.MV_HEVC),
             patch.object(
                 container,
                 "get_audio_stream_data",
@@ -135,6 +139,24 @@ class MuxCommandTests(unittest.TestCase):
         self.assertEqual(command[:4], [Path("/tools/MP4Box"), "-new", "-add", "movie_MV-HEVC.mov:forcesync"])
         self.assertIn("audio_PCM.mov#1:lang=eng:group=1:alternate_group=1", command)
         self.assertEqual(command[-1], Path("movie_AVP.mov"))
+
+    def test_av1_final_mux_preserves_existing_sync_samples(self) -> None:
+        with (
+            patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+            patch.object(container.config, "video_mode", VideoMode.AV1_SBS),
+            patch.object(container, "get_audio_stream_data", return_value=[]),
+            patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
+            patch.object(container, "run_command") as run_command,
+        ):
+            container.mux_video_audio_subs(
+                Path("movie_AV1-Stereo.mp4"),
+                Path("audio_PCM.mov"),
+                Path("movie_AV1_Stereo.mov"),
+                Path("."),
+            )
+
+        command = run_command.call_args.args[0]
+        self.assertEqual(command[:4], [Path("/tools/MP4Box"), "-new", "-add", Path("movie_AV1-Stereo.mp4")])
 
     def test_final_mux_preserves_multiple_direct_aac_tracks(self) -> None:
         with (

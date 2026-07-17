@@ -12,8 +12,9 @@ from uuid import UUID
 
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.languages import LanguageCodeError, normalize_language_code
+from bd_to_avp.modules.video_mode import VideoMode
 
-PROTOCOL_VERSION = 6
+PROTOCOL_VERSION = 7
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_DETAIL_BYTES = 64 * 1024
@@ -106,6 +107,8 @@ class SubtitleOptions:
 @dataclass(frozen=True)
 class EncodingOptions:
     audio: AudioOptions
+    video_mode: VideoMode
+    av1_crf: int
     left_right_bitrate: int
     link_quality: bool
     mv_hevc_quality: int
@@ -388,6 +391,8 @@ class JobSpec:
             )
         required_keys = {
             "audio",
+            "video_mode",
+            "av1_crf",
             "left_right_bitrate",
             "link_quality",
             "mv_hevc_quality",
@@ -401,8 +406,10 @@ class JobSpec:
             "subtitles",
         }
         cls._require_exact_keys(value, required_keys, "encoding", job_id)
-        return EncodingOptions(
+        encoding = EncodingOptions(
             audio=cls._parse_audio_options(value.get("audio"), job_id),
+            video_mode=cls._parse_video_mode(value.get("video_mode"), job_id),
+            av1_crf=cls._parse_int(value, "av1_crf", "encoding", job_id, minimum=0, maximum=63),
             left_right_bitrate=cls._parse_int(value, "left_right_bitrate", "encoding", job_id, minimum=1, maximum=500),
             link_quality=cls._parse_bool(value, "link_quality", "encoding", job_id),
             mv_hevc_quality=cls._parse_int(value, "mv_hevc_quality", "encoding", job_id, minimum=0, maximum=100),
@@ -415,6 +422,36 @@ class JobSpec:
             fx_upscale=cls._parse_bool(value, "fx_upscale", "encoding", job_id),
             subtitles=cls._parse_subtitle_options(value.get("subtitles"), job_id),
         )
+        if encoding.video_mode is VideoMode.AV1_SBS and encoding.fx_upscale:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "AV1 stereo export does not support AI FX upscale.",
+                job_id=job_id,
+            )
+        if encoding.video_mode is VideoMode.AV1_SBS and encoding.resolution:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "AV1 stereo export always preserves full source resolution per eye.",
+                job_id=job_id,
+            )
+        return encoding
+
+    @staticmethod
+    def _parse_video_mode(value: Any, job_id: str) -> VideoMode:
+        if not isinstance(value, str):
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "encoding.video_mode must be a string.",
+                job_id=job_id,
+            )
+        try:
+            return VideoMode(value)
+        except ValueError as error:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                f"Unsupported encoding.video_mode: {value!r}.",
+                job_id=job_id,
+            ) from error
 
     @classmethod
     def _parse_audio_options(cls, value: Any, job_id: str) -> AudioOptions:

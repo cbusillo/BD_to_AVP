@@ -115,7 +115,13 @@ struct ConversionSetupView: View {
 
                 Toggle("Keep durable stage files", isOn: $options.job.keepStageFiles)
                 Toggle("Continue processing after recoverable errors", isOn: $options.job.continueOnError)
-                Toggle("Use software encoder", isOn: $options.job.softwareEncoder)
+                Toggle("Use software HEVC encoder", isOn: $options.job.softwareEncoder)
+                    .disabled(options.encoding.videoOutputMode == .av1Stereo)
+                    .help(
+                        options.encoding.videoOutputMode == .av1Stereo
+                            ? "AV1 output always uses the bundled software encoder."
+                            : "Use libx265 instead of the default VideoToolbox HEVC encoder."
+                    )
             }
 
             Section("Output Files") {

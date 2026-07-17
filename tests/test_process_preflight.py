@@ -9,6 +9,7 @@ from bd_to_avp.modules import process
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.disc import MKVCreationError
+from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.file import (
     move_file_to_output_root_folder,
     prepare_output_folder_for_source,
@@ -23,6 +24,7 @@ class ProcessPreflightTests(unittest.TestCase):
             patch.object(process.config, "skip_subtitles", False),
             patch.object(process.config, "fx_upscale", False),
             patch.object(process.config, "audio_mode", AudioMode.CONVERT_AAC),
+            patch.object(process.config, "video_mode", VideoMode.MV_HEVC),
             patch.object(process.config, "start_stage", Stage.CREATE_MKV),
         ):
             default_plan = process.conversion_stage_plan()
@@ -51,6 +53,7 @@ class ProcessPreflightTests(unittest.TestCase):
             patch.object(process.config, "skip_subtitles", True),
             patch.object(process.config, "fx_upscale", True),
             patch.object(process.config, "audio_mode", AudioMode.PCM),
+            patch.object(process.config, "video_mode", VideoMode.MV_HEVC),
             patch.object(process.config, "start_stage", Stage.CREATE_MKV),
         ):
             optional_plan = process.conversion_stage_plan()
@@ -60,12 +63,28 @@ class ProcessPreflightTests(unittest.TestCase):
         self.assertNotIn("extract_subtitles", optional_plan)
         self.assertNotIn("transcode_audio", optional_plan)
 
+        with (
+            patch.object(process.config, "preview_range", None),
+            patch.object(process.config, "skip_subtitles", False),
+            patch.object(process.config, "fx_upscale", False),
+            patch.object(process.config, "audio_mode", AudioMode.PCM),
+            patch.object(process.config, "video_mode", VideoMode.AV1_SBS),
+            patch.object(process.config, "start_stage", Stage.CREATE_MKV),
+        ):
+            av1_plan = process.conversion_stage_plan()
+
+        self.assertIn("encode_av1_stereo", av1_plan)
+        self.assertIn("finalize_av1_stereo", av1_plan)
+        self.assertNotIn("create_left_right_files", av1_plan)
+        self.assertNotIn("combine_to_mv_hevc", av1_plan)
+
     def test_conversion_stage_plan_excludes_completed_recovery_stages(self) -> None:
         with (
             patch.object(process.config, "preview_range", None),
             patch.object(process.config, "skip_subtitles", False),
             patch.object(process.config, "fx_upscale", False),
             patch.object(process.config, "audio_mode", AudioMode.AUTOMATIC),
+            patch.object(process.config, "video_mode", VideoMode.MV_HEVC),
             patch.object(process.config, "start_stage", Stage.EXTRACT_MVC_AND_AUDIO),
         ):
             mkv_recovery_plan = process.conversion_stage_plan()
@@ -79,6 +98,7 @@ class ProcessPreflightTests(unittest.TestCase):
             patch.object(process.config, "skip_subtitles", True),
             patch.object(process.config, "fx_upscale", False),
             patch.object(process.config, "audio_mode", AudioMode.CONVERT_AAC),
+            patch.object(process.config, "video_mode", VideoMode.MV_HEVC),
             patch.object(process.config, "start_stage", Stage.EXTRACT_SUBTITLES),
         ):
             subtitle_recovery_plan = process.conversion_stage_plan()

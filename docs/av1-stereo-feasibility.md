@@ -2,12 +2,14 @@
 
 ## Decision
 
-BD_to_AVP should not add an AV1 output mode for stereoscopic or Apple spatial
-video.
+BD_to_AVP should offer an opt-in, software-encoded AV1 stereo export while
+retaining MV-HEVC as the default native Apple spatial-video output.
 
-AV1 can encode a frame-packed side-by-side or over-under raster, and the
-packaged FFmpeg build already contains software AV1 encoders. That does not make
-AV1 an interoperable replacement for MVC or MV-HEVC:
+AV1 can encode a full-resolution side-by-side raster, and the packaged FFmpeg
+build contains `libsvtav1`, `libaom-av1`, and `librav1e`. Apple's codec-agnostic
+ISOBMFF metadata can identify the packed eyes on an `av01` track. This makes a
+distinct AV1 stereo export viable, but it does not make AV1 an interoperable
+replacement for MV-HEVC spatial delivery:
 
 - AV1 spatial layers and operating points describe generic scalable video, not
   left-eye and right-eye views.
@@ -16,15 +18,15 @@ AV1 an interoperable replacement for MVC or MV-HEVC:
   stereoscopic playback.
 - Apple's native multi-image encode and decode APIs are explicitly MV-HEVC
   APIs. Apple documents MV-HEVC as the spatial-video delivery path.
-- Apple file-format metadata can describe frame-packed stereo for codecs other
-  than MV-HEVC, but there is no documented Apple playback contract that makes
-  frame-packed AV1 a RealityKit spatial video.
+- Apple file-format metadata describes frame-packed stereo for codecs other
+  than MV-HEVC. The corrected probe is recognized by AVFoundation as stereo
+  video, but not as multiview-compressed or spatial video.
 - AV1 hardware support is fragmented across the Apple devices this project
   targets, and Apple exposes no VideoToolbox AV1 encoder in the macOS 27 SDK.
 
-MV-HEVC therefore remains the only supported 3D output. A flat-compatible AV1
-side-by-side file could be revisited as a separate non-spatial export only if a
-concrete user need justifies another format and its support burden.
+MV-HEVC therefore remains the native Apple spatial output. AV1 is a separate
+software stereo export for storage-conscious or custom-playback workflows; the
+UI and documentation must not describe it as MV-HEVC or native spatial video.
 
 ## Standards Evidence
 
@@ -47,17 +49,18 @@ The binding defines `av01`, `av1C`, one temporal unit per sample, and AV1 sample
 groups, but no eye-view selector or multiview track relationship comparable to
 MVC or MV-HEVC.
 
-### Apple metadata does not prove Apple spatial playback
+### Apple metadata defines packed stereo independently of the codec
 
-Apple's [Stereo Video ISOBMFF Extensions][apple-stereo-isobmff] define
-`StereoVideoInfoBox` (`svmi`). The box can identify frame-packed side-by-side or
-over-under video, and the specification allows the descriptors to be used with
-codecs other than MV-HEVC.
+Apple's [Stereo Video ISOBMFF Extensions][apple-stereo-isobmff] define a
+`VideoExtendedUsageBox` (`vexu`) that applies to visual sample entries without
+requiring MV-HEVC. For full side-by-side video, `vexu` contains:
+
+- `eyes/stri`, which declares that the track carries left and right eye views;
+- `pack/pkin`, whose `side` value declares side-by-side packing.
 
 That metadata describes how two pictures are packed. It does not define AV1
-view prediction, and Apple does not document AV1 as an input to
-`VideoPlayerComponent`'s stereo spatial presentation. Apple's supported
-conversion guidance instead converts side-by-side 3D into
+inter-view prediction or make the stream multiview-compressed. Apple's native
+spatial-video conversion guidance still produces
 [MV-HEVC spatial video][apple-sbs-to-mvhevc].
 
 The macOS 27 SDK reinforces the distinction:
@@ -107,11 +110,13 @@ The pinned runtime tools provide only part of a hypothetical AV1 path:
 - `spatial-media-kit-tool` accepts per-eye HEVC and produces MV-HEVC. It is not
   an AV1 multiview packager.
 
-Basic AV1 encoding would not require adding another shipped codec binary, but a
-product implementation would still require a new video-mode contract across
-the CLI, worker protocol, profiles, both UIs, restart stages, summaries, tests,
-and clean-machine release gates. That cost is not justified by a flat output
-that cannot replace native spatial playback.
+The implemented AV1 path adds no runtime dependency. The native splitter feeds
+one FFmpeg `libsvtav1` encode, FFmpeg's `av1_metadata` bitstream filter writes
+limited-range BT.709 matrix/primary/transfer signaling, MP4Box applies the
+deterministic `vexu/eyes/pack` patch, and the existing MP4Box final mux adds
+audio and subtitles to the completed MOV. The CLI, worker protocol, persisted
+profiles, native UI, restart stages, summaries, tests, and release gates all
+carry the explicit mode without changing the MV-HEVC default.
 
 ## Reproducible Probes
 
@@ -196,31 +201,51 @@ FFprobe reported `stereo_mode=left_right` and `Stereo 3D: side by side`.
 AVFoundation rejected the file with `AVFoundationErrorDomain -11828` because
 WebM is not a supported native media container in this path.
 
-### Apple `svmi` metadata on AV1
+### Apple `vexu/eyes/pack` metadata on AV1
 
-The AV1 side-by-side MP4 was copied and patched with this GPAC box patch:
+The corrected probe patched the AV1 side-by-side MP4 with the current Apple box
+structure:
 
 ```xml
 <?xml version="1.0"?>
 <GPACBOXES>
   <Box path="trak.mdia.minf.stbl.stsd.av01.av1C+" trackID="1">
-    <BS fcc="svmi"/>
-    <BS data="000000000002"/>
+    <BS fcc="vexu"/>
+    <BS data="00000015657965730000000D737472690000000003000000187061636B00000010706B696E0000000073696465"/>
   </Box>
 </GPACBOXES>
 ```
 
-The `svmi` payload selects frame-packed side-by-side video with the left view
-first and permits a monoscopic fallback. MP4Box preserved it as a 14-byte child
-of the `av01` sample entry. The trailing `+` in the patch path inserts `svmi`
-after `av1C`, making the two boxes siblings within the sample entry.
+MP4Box 26.02 created a 53-byte `vexu` sibling after `av1C`, containing a 21-byte
+`eyes` box with mandatory `stri` and a 24-byte `pack` box with mandatory
+`pkin=side`. A second MP4Box pass that added the video to the final MOV preserved
+the complete unknown box tree.
 
-AVFoundation still decoded and sought the movie as one 640x180 image. The
-format description preserved `svmi` in `SampleDescriptionExtensionAtoms`, but
-did not expose left-eye, right-eye, or view-packing format-description values in
-the tested macOS path. This does not prove what a future or device-specific
-RealityKit renderer could do; it proves only that a valid packed AV1 file plus
-metadata is not equivalent to the documented MV-HEVC spatial pipeline.
+On macOS 27, AVFoundation exposed `HasLeftStereoEyeView = 1`,
+`HasRightStereoEyeView = 1`, and `ViewPackingKind = SideBySide` on the AV1 format
+description. `AVAssetPlaybackAssistant` returned
+`AVAssetPlaybackConfigurationOptionStereoVideo`; the bare AV1 control returned
+no playback configuration options. It did not return
+`StereoMultiviewVideo` or `SpatialVideo`.
+
+This proves an Apple-recognized packed-stereo asset contract. It does not prove
+stereoscopic rendering on every Apple Vision Pro generation; that device
+qualification remains separate in issue #200.
+
+### Implemented production-path probe
+
+On July 17, 2026, the production command generator encoded a native-splitter
+Y4M stream with bundled FFmpeg 8.1.2 and SVT-AV1 3.1.2, wrote the AV1 MP4
+intermediate, applied the `vexu/eyes/pack` patch with bundled MP4Box 26.02, and
+imported the marked track plus AAC audio into the final MOV. Packaged FFprobe
+reported one `av01` video track and one `mp4a` audio track. Beginning, middle,
+and end frames decoded successfully.
+
+The finalized AV1 stream reports limited range and BT.709 matrix, primaries,
+and transfer characteristics. MP4Box's box dump shows `vexu` as a sibling of
+`av1C`, containing `eyes/stri` and `pack/pkin=side`. AVFoundation reports both
+eye views and `ViewPackingKind = SideBySide`; `AVAssetPlaybackAssistant`
+returns only `StereoVideo`, not `StereoMultiviewVideo` or `SpatialVideo`.
 
 ### MV-HEVC control
 
@@ -230,36 +255,68 @@ video sample entry contained `hvcC`, `lhvC`, `vexu/eyes`, and `hfov`, and
 contract exercised by `SpatialPlaybackProbe` and remains the acceptance
 baseline.
 
-The tiny synthetic output sizes and encode times are intentionally not used as
-a compression-quality comparison. The codecs used different rate-control
-modes, and synthetic two-second clips do not predict feature-film quality,
-storage, or thermals.
+### Bounded default comparison
+
+A bounded product-path comparison used the same two-second, 48-frame,
+1920x1080-per-eye `testsrc2` source with a 16-pixel horizontal disparity for
+the right eye and the same 128 kbps AAC audio. Timing excluded source
+generation and included video encoding, mode-specific stereo finalization, and
+the final audio mux. Quality was measured per eye after decoding against the
+generated source, then averaged.
+
+| Mode | Product settings | Pipeline time | Final MOV size | Mean PSNR | Mean SSIM | AVFoundation playback options |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| MV-HEVC | VideoToolbox HEVC, 20 Mbps per eye, merge quality 75 | 2.201 s | 4,005,130 bytes | 59.934823 dB | 0.999850 | `StereoVideo`, `StereoMultiviewVideo` |
+| AV1 stereo | `libsvtav1`, preset 9, CRF 32, full side-by-side | 1.529 s | 3,688,383 bytes | 41.393707 dB | 0.993237 | `StereoVideo` |
+
+This is a pipeline sanity check, not a quality-matched codec comparison. The
+MV-HEVC path uses a fixed per-eye bitrate while AV1 uses CRF, the source is a
+short synthetic stress pattern, and fixed setup/mux overhead dominates such a
+short run. The result cannot predict feature-film speed, size, thermals, or
+subjective quality. It does show that both completed defaults are decodable and
+that CRF 32 trades measurable quality for the storage-oriented AV1 mode.
+
+The same source was swept at preset 9 to validate the exposed CRF control:
+
+| CRF | Encoded AV1 bytes | Mean PSNR | Mean SSIM |
+| ---: | ---: | ---: | ---: |
+| 20 | 6,414,286 | 43.268265 dB | 0.996338 |
+| 24 | 5,704,307 | 42.900199 dB | 0.995748 |
+| 28 | 4,709,320 | 42.283759 dB | 0.994744 |
+| 30 | 4,226,448 | 41.908174 dB | 0.994129 |
+| 32 | 3,656,352 | 41.393707 dB | 0.993237 |
+
+CRF 32 remains the storage-conscious default; users can lower it when quality
+matters more than output size. The sweep is still synthetic and is not a
+feature-film recommendation by itself.
 
 ## Result Matrix
 
 | Representation | Tool result | Apple-framework result | Product meaning |
 | --- | --- | --- | --- |
-| One side-by-side `av01` MP4 track | Encodes and muxes | Playable and seekable as 640x180 | Flat packed video |
-| Side-by-side `av01` plus `svmi` | Generic box patch works | Raw box preserved; still decoded as one packed image | Unqualified, undocumented spatial behavior |
+| One side-by-side `av01` MP4 track | Encodes and muxes | Playable and seekable as 640x180; no stereo playback option | Unmarked packed video |
+| Side-by-side `av01` plus `vexu/eyes/pack` | Deterministic GPAC patch and final remux work | Left/right eyes and side-by-side packing recognized; `StereoVideo` option returned | Supported AV1 stereo asset, not spatial video |
 | Two independent `av01` MP4 tracks | Encodes and muxes | Two selectable tracks; default track decoded | Alternatives, not eye views |
 | AV1 WebM with `StereoMode` | Standards-based packed metadata works | AVFoundation cannot open the container | Non-Apple delivery only |
-| MV-HEVC MOV | Existing pipeline works | Native stereo capability and spatial metadata | Supported Apple spatial output |
+| MV-HEVC MOV | Existing pipeline works | Native stereo multiview and spatial metadata | Default Apple spatial output |
 
-## Revisit Conditions
+## Product Boundaries And Remaining Qualification
 
-Reconsider an AV1 3D mode only if all applicable conditions become true:
+The first AV1 mode is deliberately narrow:
 
-1. Apple documents AV1 multiview or frame-packed AV1 as a native
-   `VideoPlayerComponent` stereo/spatial input.
-2. The minimum supported Apple Vision Pro hardware has a qualified AV1 decode
-   path at the target resolution, frame rate, bit depth, and sustained thermal
-   load.
-3. AOM or Apple defines interoperable eye-view semantics and a production mux
-   path that the packaged tools can create and validate.
-4. AV1 encoding is fast enough for full feature films without adding an
-   unacceptable clean-machine dependency or support burden.
-5. A concrete use case needs AV1 rather than the existing MV-HEVC spatial movie
-   or a conventional side-by-side archival file.
+1. Software `libsvtav1` encoding with a fixed practical preset and explicit CRF.
+2. One full-resolution side-by-side `av01` track in MOV with Apple packed-stereo
+   metadata.
+3. No AI FX upscale in the initial AV1 path.
+4. No claim that AV1 is MV-HEVC, multiview-compressed, or Apple spatial video.
+5. MV-HEVC remains the default and retains the `_AVP.mov` filename; AV1 uses the
+   distinct `_AV1_Stereo.mov` suffix.
+
+Physical Apple Vision Pro testing should determine which device generations and
+renderers honor the recognized stereo contract at sustained feature-film
+resolution. Long-form compression, encode-time, thermal, file-size, and
+subjective-quality qualification remains separate from the bounded synthetic
+comparison above.
 
 [av1-spec]: https://aomediacodec.github.io/av1-spec/av1-spec.pdf
 [av1-isobmff]: https://aomediacodec.github.io/av1-isobmff/v1.3.0.html

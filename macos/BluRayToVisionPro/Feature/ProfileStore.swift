@@ -151,6 +151,10 @@ final class ProfileStore: ObservableObject {
                 let legacyDocument = try decoder.decode(LegacyProfileDocumentV1.self, from: data)
                 storedProfiles = try legacyDocument.profiles.map { try $0.migrated() }
                 needsMigration = true
+            case 2:
+                let legacyDocument = try decoder.decode(LegacyProfileDocumentV2.self, from: data)
+                storedProfiles = legacyDocument.profiles.map { $0.migrated() }
+                needsMigration = true
             case ProfileDocument.currentVersion:
                 storedProfiles = try decoder.decode(ProfileDocument.self, from: data).profiles
                 needsMigration = false
@@ -277,7 +281,7 @@ enum ProfileStoreError: LocalizedError, Equatable {
 }
 
 private struct ProfileDocument: Codable {
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     let version: Int
     let profiles: [StoredProfile]
@@ -291,6 +295,57 @@ private struct StoredProfile: Codable {
     let id: UUID
     let name: String
     let options: EncodingOptions
+}
+
+private struct LegacyProfileDocumentV2: Decodable {
+    let version: Int
+    let profiles: [LegacyStoredProfileV2]
+}
+
+private struct LegacyStoredProfileV2: Decodable {
+    let id: UUID
+    let name: String
+    let options: LegacyEncodingOptionsV2
+
+    func migrated() -> StoredProfile {
+        StoredProfile(id: id, name: name, options: options.migrated())
+    }
+}
+
+private struct LegacyEncodingOptionsV2: Decodable {
+    let hevcQuality: Int
+    let leftRightBitrate: Int
+    let upscaleEnabled: Bool
+    let upscaleQuality: Int
+    let linkQuality: Bool
+    let fieldOfView: Int
+    let frameRateOverride: String
+    let resolutionOverride: String
+    let cropBlackBars: Bool
+    let swapEyes: Bool
+    let audioHandling: AudioHandling
+    let audioBitrate: Int
+    let subtitles: SubtitlePolicy
+
+    func migrated() -> EncodingOptions {
+        EncodingOptions(
+            videoOutputMode: .mvHEVC,
+            av1CRF: 32,
+            hevcQuality: hevcQuality,
+            leftRightBitrate: leftRightBitrate,
+            upscaleEnabled: upscaleEnabled,
+            upscaleQuality: upscaleQuality,
+            linkQuality: linkQuality,
+            fieldOfView: fieldOfView,
+            frameRateOverride: frameRateOverride,
+            resolutionOverride: resolutionOverride,
+            cropBlackBars: cropBlackBars,
+            swapEyes: swapEyes,
+            audioHandling: audioHandling,
+            audioBitrate: audioBitrate,
+            subtitles: subtitles
+        )
+    }
 }
 
 private struct LegacyProfileDocumentV1: Decodable {

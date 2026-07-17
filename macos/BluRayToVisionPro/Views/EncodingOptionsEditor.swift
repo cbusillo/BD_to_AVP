@@ -32,41 +32,80 @@ struct EncodingOptionsEditor: View {
     private var videoForm: some View {
         Form {
             Group {
-                Section("Spatial Video Encoding") {
-                    EncodingQualitySliderRow(title: "HEVC quality", value: hevcQualityBinding)
-                    LabeledContent("Left / right bitrate") {
-                        Stepper(value: $options.leftRightBitrate, in: 1 ... 100) {
-                            Text("\(options.leftRightBitrate) Mbps")
-                                .monospacedDigit()
-                                .frame(width: 76, alignment: .trailing)
+                Section("Video Output") {
+                    Picker("Format", selection: $options.videoOutputMode) {
+                        ForEach(VideoOutputMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
                         }
                     }
-                    Toggle("AI FX upscale to 2× resolution", isOn: $options.upscaleEnabled)
+                    .onChange(of: options.videoOutputMode) { _, mode in
+                        if mode == .av1Stereo {
+                            options.upscaleEnabled = false
+                            options.resolutionOverride = ""
+                        }
+                    }
 
-                    if options.upscaleEnabled {
-                        EncodingQualitySliderRow(title: "Upscale quality", value: upscaleQualityBinding)
-                        Toggle("Link HEVC and upscale quality", isOn: $options.linkQuality)
-                            .onChange(of: options.linkQuality) { _, linked in
-                                if linked {
-                                    options.upscaleQuality = options.hevcQuality
-                                }
+                    Text(options.videoOutputMode.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if options.videoOutputMode == .mvHEVC {
+                        EncodingQualitySliderRow(title: "HEVC quality", value: hevcQualityBinding)
+                        LabeledContent("Left / right bitrate") {
+                            Stepper(value: $options.leftRightBitrate, in: 1 ... 100) {
+                                Text("\(options.leftRightBitrate) Mbps")
+                                    .monospacedDigit()
+                                    .frame(width: 76, alignment: .trailing)
                             }
+                        }
+                        Toggle("AI FX upscale to 2× resolution", isOn: $options.upscaleEnabled)
+
+                        if options.upscaleEnabled {
+                            EncodingQualitySliderRow(title: "Upscale quality", value: upscaleQualityBinding)
+                            Toggle("Link HEVC and upscale quality", isOn: $options.linkQuality)
+                                .onChange(of: options.linkQuality) { _, linked in
+                                    if linked {
+                                        options.upscaleQuality = options.hevcQuality
+                                    }
+                                }
+                        }
+                    } else {
+                        LabeledContent("AV1 quality") {
+                            Stepper(value: $options.av1CRF, in: 0 ... 63) {
+                                Text("CRF \(options.av1CRF)")
+                                    .monospacedDigit()
+                                    .frame(width: 74, alignment: .trailing)
+                            }
+                        }
+
+                        Text("Lower CRF values preserve more detail and create larger files. CRF 32 is the balanced default.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
                 Section("Picture") {
-                    LabeledContent("Field of view") {
-                        Stepper(value: $options.fieldOfView, in: 0 ... 360) {
-                            Text("\(options.fieldOfView)°")
-                                .monospacedDigit()
-                                .frame(width: 48, alignment: .trailing)
+                    if options.videoOutputMode == .mvHEVC {
+                        LabeledContent("Field of view") {
+                            Stepper(value: $options.fieldOfView, in: 0 ... 360) {
+                                Text("\(options.fieldOfView)°")
+                                    .monospacedDigit()
+                                    .frame(width: 48, alignment: .trailing)
+                            }
                         }
-                    }
 
-                    LabeledContent("Resolution override") {
-                        TextField("", text: $options.resolutionOverride, prompt: Text("Use source"))
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 170)
+                        LabeledContent("Resolution override") {
+                            TextField("", text: $options.resolutionOverride, prompt: Text("Use source"))
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 170)
+                        }
+                    } else {
+                        LabeledContent("Resolution") {
+                            Text("Full source resolution per eye")
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     LabeledContent("Frame-rate override") {

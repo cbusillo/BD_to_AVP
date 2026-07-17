@@ -13,6 +13,7 @@ from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.modules.languages import LanguageCodeError, normalize_language_code
 from bd_to_avp.modules.util import get_pyproject_data
+from bd_to_avp.modules.video_mode import VideoMode
 
 
 SCRIPT_PATH = Path(__file__).parent.parent
@@ -183,6 +184,8 @@ class Config:
     FX_UPSCALE_PATH = SCRIPT_PATH_BIN / "fx-upscale"
 
     FINAL_FILE_TAG = "_AVP"
+    AV1_FINAL_FILE_TAG = "_AV1_Stereo"
+    AV1_PRESET = 9
     IMAGE_EXTENSIONS: ClassVar[list[str]] = [".iso", ".img", ".bin"]
     MTS_EXTENSIONS: ClassVar[list[str]] = [".mts", ".m2ts"]
 
@@ -196,6 +199,8 @@ class Config:
         self.overwrite = False
         self.audio_mode = AudioMode.PCM
         self.audio_bitrate = 384
+        self.video_mode = VideoMode.MV_HEVC
+        self.av1_crf = 32
         self.left_right_bitrate = 20
         self.link_quality = True
         self.mv_hevc_quality = 75
@@ -314,6 +319,8 @@ class Config:
                         setattr(self, key, Stage.get_stage(int(stage_value)))
                     elif attribute_type is AudioMode:
                         setattr(self, key, AudioMode(config_parser.get("Options", key)))
+                    elif attribute_type is VideoMode:
+                        setattr(self, key, VideoMode(config_parser.get("Options", key)))
                     else:
                         value = config_parser.get("Options", key)
                         if key == "language_code":
@@ -380,6 +387,18 @@ class Config:
             "--skip-subtitles",
             action="store_true",
             help="Skip extracting subtitles from MKV.",
+        )
+        parser.add_argument(
+            "--video-mode",
+            choices=[mode.value for mode in VideoMode],
+            help="Video output mode: mv_hevc for native Apple spatial video or av1_sbs for software AV1 stereo.",
+        )
+        parser.add_argument(
+            "--av1-crf",
+            type=int,
+            choices=range(0, 64),
+            metavar="0-63",
+            help="SVT-AV1 constant-rate factor for AV1 stereo output. Lower values produce higher quality.",
         )
         parser.add_argument(
             "--left-right-bitrate",
@@ -498,6 +517,12 @@ class Config:
             self.audio_mode = AudioMode(args.audio_mode)
         elif args.transcode_audio:
             self.audio_mode = AudioMode.CONVERT_AAC
+        if args.video_mode:
+            self.video_mode = VideoMode(args.video_mode)
+
+    @property
+    def final_file_tag(self) -> str:
+        return self.AV1_FINAL_FILE_TAG if self.video_mode is VideoMode.AV1_SBS else self.FINAL_FILE_TAG
 
 
 config = Config()

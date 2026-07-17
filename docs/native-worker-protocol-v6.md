@@ -1,5 +1,8 @@
 # Native Worker Protocol v6
 
+> Historical protocol. The current contract is
+> [Native Worker Protocol v7](native-worker-protocol-v7.md).
+
 Protocol v6 replaces the flat audio fields with an exact nested audio policy.
 The native app and bundled Python worker ship atomically and both require
 version 6.

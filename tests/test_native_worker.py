@@ -18,6 +18,7 @@ from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.disc import DiscInfo, DiscTitleInfo, MKVCreationError
 from bd_to_avp.modules.process import process_each
 from bd_to_avp.modules.sub import SRTCreationError
+from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.worker.__main__ import run_worker
 from bd_to_avp.worker.operations import (
     WorkerDecisionRequired,
@@ -85,6 +86,8 @@ def conversion_request_line(
         "destination": {"path": str(destination_path)},
         "encoding": {
             "audio": {"mode": "convert_aac", "bitrate": 384},
+            "video_mode": "mv_hevc",
+            "av1_crf": 32,
             "left_right_bitrate": 20,
             "link_quality": True,
             "mv_hevc_quality": 75,
@@ -228,7 +231,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(context.exception.code, "invalid_source")
 
     def test_parses_shared_swift_conversion_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v6.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v7.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -237,9 +240,27 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.source.path, Path("/tmp/movie.mkv"))
         self.assertEqual(job.destination.path if job.destination else None, Path("/tmp/output"))
         self.assertEqual(job.encoding.mv_hevc_quality if job.encoding else None, 75)
+        self.assertEqual(job.encoding.video_mode if job.encoding else None, VideoMode.MV_HEVC)
+        self.assertEqual(job.encoding.av1_crf if job.encoding else None, 32)
+
+    def test_rejects_av1_export_with_fx_upscale(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["video_mode"] = "av1_sbs"
+        request["encoding"]["fx_upscale"] = True
+
+        with self.assertRaisesRegex(WorkerProtocolError, "does not support AI FX upscale"):
+            JobSpec.from_json_line(json.dumps(request))
+
+    def test_rejects_av1_export_with_resolution_override(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["video_mode"] = "av1_sbs"
+        request["encoding"]["resolution"] = "3840x2160"
+
+        with self.assertRaisesRegex(WorkerProtocolError, "full source resolution"):
+            JobSpec.from_json_line(json.dumps(request))
 
     def test_parses_shared_swift_physical_disc_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v6.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v7.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -249,7 +270,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertFalse(job.job.remove_original if job.job else True)
 
     def test_parses_shared_swift_preview_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v6.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v7.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -559,7 +580,7 @@ class WorkerActivityReporterTests(unittest.TestCase):
             ],
         )
 
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_fallback_warning_v6.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_fallback_warning_v7.json"
         expected = json.loads(fixture_path.read_text())
         self.assertEqual(decoded_events(output), [expected])
 
@@ -571,7 +592,7 @@ class WorkerActivityReporterTests(unittest.TestCase):
 
         activity.stage_started("configure", "Preparing conversion settings")
 
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v6.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v7.json"
         expected = json.loads(fixture_path.read_text())
         self.assertEqual(decoded_events(output), [expected])
 
@@ -718,7 +739,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 }
             },
         )
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v6.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v7.json"
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
 
         self.assertEqual(decoded_events(output)[-1], fixture)
@@ -1436,6 +1457,8 @@ class SourceConversionTests(unittest.TestCase):
             request["encoding"].update(
                 {
                     "audio": {"mode": "pcm", "bitrate": 512},
+                    "video_mode": "mv_hevc",
+                    "av1_crf": 27,
                     "left_right_bitrate": 42,
                     "mv_hevc_quality": 88,
                     "upscale_quality": 66,
@@ -1475,6 +1498,8 @@ class SourceConversionTests(unittest.TestCase):
                         "output_root_path": config.output_root_path,
                         "audio_mode": config.audio_mode,
                         "audio_bitrate": config.audio_bitrate,
+                        "video_mode": config.video_mode,
+                        "av1_crf": config.av1_crf,
                         "left_right_bitrate": config.left_right_bitrate,
                         "mv_hevc_quality": config.mv_hevc_quality,
                         "upscale_quality": config.upscale_quality,
@@ -1510,6 +1535,8 @@ class SourceConversionTests(unittest.TestCase):
             self.assertEqual(observed["output_root_path"], destination_path)
             self.assertEqual(observed["audio_mode"], AudioMode.PCM)
             self.assertEqual(observed["audio_bitrate"], 512)
+            self.assertEqual(observed["video_mode"], VideoMode.MV_HEVC)
+            self.assertEqual(observed["av1_crf"], 27)
             self.assertEqual(observed["left_right_bitrate"], 42)
             self.assertEqual(observed["mv_hevc_quality"], 88)
             self.assertEqual(observed["upscale_quality"], 66)

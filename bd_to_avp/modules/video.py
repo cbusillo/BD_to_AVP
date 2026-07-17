@@ -57,6 +57,9 @@ NATIVE_MVC_RETRY_SIGNALS = {
     signal.SIGILL,
     signal.SIGSEGV,
 }
+AV1_STEREO_VEXU_CONTENT_HEX = (
+    "00000015657965730000000D737472690000000003000000187061636B00000010706B696E0000000073696465"
+)
 
 
 def generate_native_mvc_splitter_command(video_input_path: Path, *, single_threaded: bool = False) -> list[str | Path]:
@@ -167,6 +170,57 @@ def generate_native_mvc_ffmpeg_command(
     return [arg if arg != "pipe:0" else "-" for arg in command]
 
 
+def generate_native_mvc_av1_command(
+    output_path: Path,
+    disc_info: DiscInfo,
+    crop_params: str,
+) -> list[str]:
+    if disc_info.color_depth != 8:
+        raise ValueError("Native MVC splitting currently supports 8-bit 4:2:0 Blu-ray MVC sources only.")
+
+    source_width, source_height = parse_resolution(config.resolution or disc_info.resolution)
+    stream = ffmpeg.input(
+        "pipe:0",
+        f="yuv4mpegpipe",
+        r=config.frame_rate or disc_info.frame_rate,
+    )
+    split_streams = ffmpeg.filter_multi_output(stream, "split", 2)
+    left_stream = ffmpeg.filter(split_streams[0], "crop", source_width, source_height, 0, 0)
+    right_stream = ffmpeg.filter(split_streams[1], "crop", source_width, source_height, source_width, 0)
+
+    if crop_params:
+        left_stream = ffmpeg.filter(left_stream, "crop", *crop_params.split(":"))
+        right_stream = ffmpeg.filter(right_stream, "crop", *crop_params.split(":"))
+
+    if disc_info.is_interlaced:
+        left_stream = ffmpeg.filter(left_stream, "bwdif")
+        right_stream = ffmpeg.filter(right_stream, "bwdif")
+
+    if config.swap_eyes:
+        left_stream, right_stream = right_stream, left_stream
+
+    packed_stream = ffmpeg.filter([left_stream, right_stream], "hstack", inputs=2)
+    output = ffmpeg.output(
+        packed_stream,
+        f"file:{output_path}",
+        **{
+            "vcodec": "libsvtav1",
+            "bsf:v": ("av1_metadata=color_primaries=1:transfer_characteristics=1:matrix_coefficients=1:color_range=tv"),
+            "crf": config.av1_crf,
+            "preset": config.AV1_PRESET,
+            "pix_fmt": "yuv420p",
+            "color_primaries": "bt709",
+            "color_trc": "bt709",
+            "colorspace": "bt709",
+            "color_range": "tv",
+            "r": config.frame_rate or disc_info.frame_rate,
+            "movflags": "+faststart",
+        },
+    )
+    command = ffmpeg.compile(output, cmd=config.FFMPEG_PATH.as_posix(), overwrite_output=True)
+    return [arg if arg != "pipe:0" else "-" for arg in command]
+
+
 def parse_resolution(resolution: str) -> tuple[int, int]:
     width, height = resolution.lower().split("x", 1)
     return int(width), int(height)
@@ -180,12 +234,33 @@ def split_mvc_to_stereo_native(
     crop_params: str,
 ) -> tuple[Path, Path]:
     ffmpeg_command = generate_native_mvc_ffmpeg_command(left_output_path, right_output_path, disc_info, crop_params)
+    run_native_mvc_encoding(video_input_path, (left_output_path, right_output_path), ffmpeg_command)
+    return left_output_path, right_output_path
+
+
+def encode_mvc_to_av1_sbs_native(
+    video_input_path: Path,
+    output_path: Path,
+    disc_info: DiscInfo,
+    crop_params: str,
+) -> Path:
+    ffmpeg_command = generate_native_mvc_av1_command(output_path, disc_info, crop_params)
+    run_native_mvc_encoding(video_input_path, (output_path,), ffmpeg_command)
+    return output_path
+
+
+def run_native_mvc_encoding(
+    video_input_path: Path,
+    output_paths: tuple[Path, ...],
+    ffmpeg_command: list[str],
+) -> None:
+    primary_output_path = output_paths[0]
     stream_from_container = should_stream_mvc_from_container(video_input_path)
     producer_command = generate_mvc_annex_b_stream_command(video_input_path) if stream_from_container else None
     native_input_path = Path("-") if stream_from_container else prepare_native_mvc_input(video_input_path)
-    splitter_log_path = left_output_path.with_suffix(".native_mvc.log")
-    ffmpeg_log_path = left_output_path.with_suffix(".native_ffmpeg.log")
-    producer_log_path = left_output_path.with_suffix(".mvc_extract.log")
+    splitter_log_path = primary_output_path.with_suffix(".native_mvc.log")
+    ffmpeg_log_path = primary_output_path.with_suffix(".native_ffmpeg.log")
+    producer_log_path = primary_output_path.with_suffix(".mvc_extract.log")
     try:
         skip_multithreaded_attempt = False
         if not stream_from_container and should_probe_native_multithread_splitter():
@@ -224,8 +299,8 @@ def split_mvc_to_stereo_native(
                 raise
 
             print("Native MVC splitter crashed; retrying once in single-threaded mode.")
-            left_output_path.unlink(missing_ok=True)
-            right_output_path.unlink(missing_ok=True)
+            for output_path in output_paths:
+                output_path.unlink(missing_ok=True)
             run_native_mvc_split_attempt(
                 native_input_path,
                 ffmpeg_command,
@@ -242,8 +317,6 @@ def split_mvc_to_stereo_native(
     finally:
         if not stream_from_container and native_input_path != video_input_path:
             native_input_path.unlink(missing_ok=True)
-
-    return left_output_path, right_output_path
 
 
 def native_multithread_splitter_probe_crashed(native_input_path: Path, splitter_log_path: Path) -> bool:
@@ -488,6 +561,52 @@ def split_mvc_to_stereo(
     raise RuntimeError(explain_native_mvc_unavailable(disc_info))
 
 
+def encode_mvc_to_av1_sbs(
+    video_input_path: Path,
+    output_path: Path,
+    disc_info: DiscInfo,
+    crop_params: str,
+) -> Path:
+    if can_use_native_mvc_splitter(disc_info):
+        result = encode_mvc_to_av1_sbs_native(video_input_path, output_path, disc_info, crop_params)
+        if not config.keep_files:
+            output_path.with_suffix(".native_ffmpeg.log").unlink(missing_ok=True)
+            output_path.with_suffix(".native_mvc.log").unlink(missing_ok=True)
+            output_path.with_suffix(".mvc_extract.log").unlink(missing_ok=True)
+            if not should_stream_mvc_from_container(video_input_path):
+                video_input_path.unlink(missing_ok=True)
+        return result
+
+    raise RuntimeError(explain_native_mvc_unavailable(disc_info))
+
+
+def av1_stereo_patch_xml() -> str:
+    return (
+        '<?xml version="1.0"?>\n'
+        "<GPACBOXES>\n"
+        '  <Box path="trak.mdia.minf.stbl.stsd.av01.av1C+" trackID="1">\n'
+        '    <BS fcc="vexu"/>\n'
+        f'    <BS data="{AV1_STEREO_VEXU_CONTENT_HEX}"/>\n'
+        "  </Box>\n"
+        "</GPACBOXES>\n"
+    )
+
+
+def add_av1_stereo_metadata(input_path: Path, output_path: Path) -> None:
+    output_path.unlink(missing_ok=True)
+    file_descriptor, patch_name = tempfile.mkstemp(prefix="bd-to-avp-av1-stereo-", suffix=".xml")
+    os.close(file_descriptor)
+    patch_path = Path(patch_name)
+    try:
+        patch_path.write_text(av1_stereo_patch_xml(), encoding="utf-8")
+        run_command(
+            [config.MP4BOX_PATH, "-patch", patch_path, input_path, "-out", output_path],
+            "add Apple stereo packing metadata to AV1 video.",
+        )
+    finally:
+        patch_path.unlink(missing_ok=True)
+
+
 def combine_to_mv_hevc(
     left_video_path: Path,
     right_video_path: Path,
@@ -612,6 +731,18 @@ def create_left_right_files(
     return left_eye_output_path, right_eye_output_path
 
 
+def create_av1_sbs_file(
+    disc_info: DiscInfo,
+    output_folder: Path,
+    mvc_video: Path,
+    crop_params: str,
+) -> Path:
+    output_path = output_folder / f"{disc_info.name}_AV1-SBS-unmarked.mp4"
+    if config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
+        encode_mvc_to_av1_sbs(mvc_video, output_path, disc_info, crop_params)
+    return output_path
+
+
 def get_video_color_depth(input_path: Path) -> int:
     try:
         probe = ffmpeg.probe(
@@ -642,6 +773,15 @@ def create_mv_hevc_file(
         left_video_path.unlink(missing_ok=True)
         right_video_path.unlink(missing_ok=True)
     return mv_hevc_path
+
+
+def create_av1_stereo_file(input_path: Path, output_folder: Path, disc_info: DiscInfo) -> Path:
+    output_path = output_folder / f"{disc_info.name}_AV1-Stereo.mp4"
+    if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
+        add_av1_stereo_metadata(input_path, output_path)
+    if not config.keep_files:
+        input_path.unlink(missing_ok=True)
+    return output_path
 
 
 def create_upscaled_file(input_path: Path) -> Path:

@@ -39,6 +39,8 @@ CONFIG_SNAPSHOT_FIELDS = (
     "overwrite",
     "audio_mode",
     "audio_bitrate",
+    "video_mode",
+    "av1_crf",
     "left_right_bitrate",
     "link_quality",
     "mv_hevc_quality",
@@ -400,6 +402,8 @@ def configured_conversion(
         config.overwrite = job.job.overwrite
         config.audio_mode = job.encoding.audio.mode
         config.audio_bitrate = job.encoding.audio.bitrate
+        config.video_mode = job.encoding.video_mode
+        config.av1_crf = job.encoding.av1_crf
         config.left_right_bitrate = job.encoding.left_right_bitrate
         config.link_quality = job.encoding.link_quality
         config.mv_hevc_quality = job.encoding.mv_hevc_quality

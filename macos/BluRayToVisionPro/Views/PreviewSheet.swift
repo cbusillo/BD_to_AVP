@@ -113,6 +113,18 @@ struct PreviewSheet: View {
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                        .gridCellColumns(2)
+                }
+
+                if conversionDraft.options.encoding.videoOutputMode == .av1Stereo {
+                    Divider()
+                        .gridCellColumns(2)
+                    Label(
+                        "AV1 previews contain a full side-by-side frame. Stereo presentation depends on the player and device.",
+                        systemImage: "rectangle.split.2x1"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     .gridCellColumns(2)
                 }
             }
@@ -254,7 +266,9 @@ struct PreviewSheet: View {
         viewModel.failureMessage
             ?? viewModel.activityMessage
             ?? (viewModel.phase == .idle
-                ? "Choose a representative range, then generate a finalized spatial-video sample."
+                ? conversionDraft.options.encoding.videoOutputMode == .av1Stereo
+                    ? "Choose a representative range, then generate a finalized side-by-side AV1 stereo sample."
+                    : "Choose a representative range, then generate a finalized spatial-video sample."
                 : nil)
     }
 

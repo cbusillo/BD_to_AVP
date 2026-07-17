@@ -45,6 +45,13 @@ def verify_tool(tool_path: Path, probe_args: list[str]) -> None:
     for forbidden_path in ["/opt/homebrew", "/usr/local"]:
         if forbidden_path in linked_libraries:
             raise RuntimeError(f"Bundled {tool_path.name} still links to {forbidden_path}:\n{linked_libraries}")
+    if tool_path.name == "ffmpeg":
+        encoders = run([tool_path, "-hide_banner", "-encoders"]).stdout
+        if "libsvtav1" not in encoders:
+            raise RuntimeError("Bundled FFmpeg does not expose the required libsvtav1 encoder.")
+        bitstream_filters = run([tool_path, "-hide_banner", "-bsfs"]).stdout
+        if "av1_metadata" not in bitstream_filters:
+            raise RuntimeError("Bundled FFmpeg does not expose the required av1_metadata bitstream filter.")
 
 
 def verify_mach_o_minimum_versions(app_path: Path) -> None:

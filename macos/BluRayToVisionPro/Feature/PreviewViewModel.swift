@@ -348,6 +348,8 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     private static let encodingStages: Set<String> = [
         "create_left_right_files",
         "combine_to_mv_hevc",
+        "encode_av1_stereo",
+        "finalize_av1_stereo",
         "upscale_video",
         "transcode_audio",
         "create_final_file",

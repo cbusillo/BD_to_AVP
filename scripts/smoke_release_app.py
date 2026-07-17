@@ -146,6 +146,14 @@ def verify_bundled_tool(
         output = getattr(error, "output", "") or ""
         raise SmokeFailure(f"Bundled tool did not run: {tool_path}\n{output.strip()}") from error
 
+    if tool_path.name == "ffmpeg":
+        encoders = run([tool_path, "-hide_banner", "-encoders"], env=clean_env).stdout
+        if "libsvtav1" not in encoders:
+            raise SmokeFailure("Bundled FFmpeg does not expose the required libsvtav1 encoder.")
+        bitstream_filters = run([tool_path, "-hide_banner", "-bsfs"], env=clean_env).stdout
+        if "av1_metadata" not in bitstream_filters:
+            raise SmokeFailure("Bundled FFmpeg does not expose the required av1_metadata bitstream filter.")
+
     if not check_links:
         return
 
