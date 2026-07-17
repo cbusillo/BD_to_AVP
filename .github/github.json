@@ -25,6 +25,9 @@
     "macos-signing": {
       "branches": ["main"],
       "requiredReview": true,
+      "reviewers": ["cbusillo"],
+      "preventSelfReview": true,
+      "canAdminsBypass": false,
       "secrets": [
         "APPLE_ID",
         "CERTIFICATE",
@@ -54,6 +57,27 @@
       "branches": ["main"],
       "requiredReview": false,
       "secrets": []
+    }
+  },
+  "releaseOperations": {
+    "watchCommand": "uv run python -m scripts.github_release_run watch",
+    "approveCommand": "uv run python -m scripts.github_release_run approve",
+    "approvalRequiredExitCode": 20,
+    "safetyErrorExitCode": 21,
+    "repository": "cbusillo/BD_to_AVP",
+    "approvalActor": "cbusillo",
+    "requiredBranch": "main",
+    "requiredEvent": "workflow_dispatch",
+    "approvalEnvironment": "macos-signing",
+    "workflows": {
+      "Release from protected main": {
+        "path": ".github/workflows/briefcase.yml",
+        "id": 101708423
+      },
+      "Publish Native UI Preview": {
+        "path": ".github/workflows/native-ui-preview.yml",
+        "id": 311846830
+      }
     }
   },
   "docs": {

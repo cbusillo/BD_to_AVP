@@ -46,6 +46,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_release_is_manual_only_and_packages_github_sha_from_main(self) -> None:
         workflow = load_workflow("briefcase.yml")
         prepare = workflow["jobs"]["prepare"]
+        package = workflow["jobs"]["package"]
 
         self.assertEqual(set(workflow["on"]), {"workflow_dispatch"})
         self.assertEqual(workflow["env"]["GH_REPO"], "${{ github.repository }}")
@@ -57,6 +58,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(checkout["with"]["persist-credentials"], "false")
         self.assertIn("refs/heads/main", str(prepare))
         self.assertIn("refs/remotes/origin/main", str(prepare))
+        self.assertIn("refs/remotes/origin/main", str(package))
+        self.assertIn("moved after signing approval", str(package))
+        self.assertGreaterEqual(str(package).count("refs/remotes/origin/main"), 4)
+        self.assertIn("moved immediately before certificate use", str(package))
+        self.assertIn("moved immediately before notarization credential use", str(package))
+        self.assertIn("moved immediately before package signing", str(package))
         self.assertIn("refs/tags/$RELEASE_TAG^{}", str(prepare))
         self.assertIn("jq -r .name", str(prepare))
         self.assertNotIn("refs/heads/release", str(workflow))

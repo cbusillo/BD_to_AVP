@@ -49,6 +49,48 @@ specific run. The branch-restricted `sparkle-release`, `pypi`, and
 but do not request additional reviews; their jobs run only after the preceding
 verification boundaries succeed.
 
+### Release Run Monitoring
+
+Do not use a generic Actions waiter as the sole release monitor. It can report a
+reviewer-gated job as merely `waiting`, which hides the only human authorization
+boundary protecting the Apple signing credentials. Record the dispatched run ID
+and exact protected-main SHA, then use the repository helper:
+
+```sh
+uv run python -m scripts.github_release_run watch \
+  --run-id "$RUN_ID" \
+  --workflow "Release from protected main" \
+  --head-sha "$MAIN_SHA"
+```
+
+The helper validates the repository, workflow, event, branch, and full commit
+SHA on every poll. It also checks that protected `main` has not moved. Exit code
+`20` emits an `approval_required` JSON event immediately after querying GitHub's
+pending deployments, including a fingerprint bound to the repository, run,
+exact workflow path and ID, run attempt, commit, actors, environment ID, and
+reviewer. The fingerprint is a non-secret identity checksum, not evidence of
+human authorization. Obtain explicit maintainer authorization in the active
+conversation, then approve through the guarded command rather than a raw API
+call:
+
+```sh
+uv run python -m scripts.github_release_run approve \
+  --run-id "$RUN_ID" \
+  --workflow "Release from protected main" \
+  --head-sha "$MAIN_SHA" \
+  --confirm-sha "$MAIN_SHA" \
+  --approval-fingerprint "$APPROVAL_FINGERPRINT" \
+  --comment "Approved after explicit release authorization for $MAIN_SHA."
+```
+
+Approval removes bot-token environment variables, verifies the active local
+GitHub login, requires that login to be the configured reviewer, rechecks the
+exact run and current `main`, and approves only the expected `macos-signing`
+deployment. Run the watcher again after approval and keep other pull requests
+unmerged until the release reaches a terminal state. Exit code `21` is a safety
+failure such as source movement or identity drift; stop or cancel the run rather
+than retrying blindly.
+
 The workflow performs these ordered boundaries:
 
 1. Prove `github.sha` is the current protected `main` HEAD and validate the
@@ -110,6 +152,11 @@ with macOS 27, Xcode 27, and XcodeGen 2.45.4. The builder uses the committed
 macOS 26 deployment target; publication is additionally gated by verification
 and packaged-worker execution on a separate macOS 26 runner.
 
+Use the same monitoring contract with workflow name
+`Publish Native UI Preview`. A preview run also requires `main` to remain fixed
+through publication, even though it never changes production appcasts, PyPI, or
+GitHub latest.
+
 The workflow uses the existing reviewed `macos-signing` environment to sign and
 notarize the side-by-side Preview bundle, creates and revalidates a DMG, and
 derives its semantic prerelease tag, version-first release title, app name, and
@@ -165,10 +212,11 @@ Keep the live repository settings aligned with these contracts:
 
 - `macos-signing` is limited to `main`, contains only the Apple certificate,
   identity, notarization, and keychain secrets, and is the sole environment
-  with a required maintainer review. The legacy `KEYCHAIN_PASSWORD` value is
-  the Apple app-specific password; the workflow generates a separate ephemeral
-  build keychain password for every run and derives Briefcase's notarization
-  profile name from `TEAM_ID`, so no `KEYCHAIN_NAME` secret is required.
+  with a required maintainer review. Self-review is prevented and administrators
+  cannot bypass the protection rule. The legacy `KEYCHAIN_PASSWORD` value is the
+  Apple app-specific password; the workflow generates a separate ephemeral build
+  keychain password for every run and derives Briefcase's notarization profile
+  name from `TEAM_ID`, so no `KEYCHAIN_NAME` secret is required.
 - `sparkle-release` is limited to `main`, contains only
   `SPARKLE_EDDSA_PRIVATE_KEY`, and has no separate required-review rule. The
   private key remains visible only to the read-only signing step.
