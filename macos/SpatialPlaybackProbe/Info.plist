@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>BD to AVP Spatial Playback</string>
+	<string>BD to AVP Playback Check</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -40,17 +40,7 @@
 		<key>UIApplicationPreferredDefaultSceneSessionRole</key>
 		<string>UIWindowSceneSessionRoleVolumetricApplication</string>
 		<key>UIApplicationSupportsMultipleScenes</key>
-		<true/>
-		<key>UISceneConfigurations</key>
-		<dict>
-			<key>UISceneSessionRoleImmersiveSpaceApplication</key>
-			<array>
-				<dict>
-					<key>UISceneInitialImmersionStyle</key>
-					<string>UIImmersionStyleMixed</string>
-				</dict>
-			</array>
-		</dict>
+		<false/>
 	</dict>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>

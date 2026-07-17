@@ -252,7 +252,7 @@ returns only `StereoVideo`, not `StereoMultiviewVideo` or `SpatialVideo`.
 `scripts/create_spatial_playback_fixture.sh` produced the control movie. Its
 video sample entry contained `hvcC`, `lhvC`, `vexu/eyes`, and `hfov`, and
 `VTIsStereoMVHEVCDecodeSupported()` returned true. That is the same native
-contract exercised by `SpatialPlaybackProbe` and remains the acceptance
+contract exercised by the BD to AVP Playback Check target and remains the acceptance
 baseline.
 
 ### Bounded default comparison
