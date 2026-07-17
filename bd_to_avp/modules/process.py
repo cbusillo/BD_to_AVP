@@ -21,7 +21,10 @@ from bd_to_avp.modules.file import (
 )
 from bd_to_avp.modules.preview import create_bounded_preview_source
 from bd_to_avp.modules.sub import create_srt_from_mkv, SRTCreationError
+from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video import (
+    create_av1_sbs_file,
+    create_av1_stereo_file,
     create_left_right_files,
     create_mv_hevc_file,
     detect_crop_parameters,
@@ -98,9 +101,9 @@ def conversion_stage_plan() -> tuple[str, ...]:
     if not config.skip_subtitles and config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
         stages.append("extract_subtitles")
     if config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
-        stages.append("create_left_right_files")
+        stages.append("encode_av1_stereo" if config.video_mode is VideoMode.AV1_SBS else "create_left_right_files")
     if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
-        stages.append("combine_to_mv_hevc")
+        stages.append("finalize_av1_stereo" if config.video_mode is VideoMode.AV1_SBS else "combine_to_mv_hevc")
     if config.fx_upscale and config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
         stages.append("upscale_video")
     if config.audio_mode.prepares_m4a and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
@@ -184,6 +187,10 @@ def process_each(
     selected_title_id: str | None = None,
 ) -> Path:
     raise_if_cancelled(cancellation_event)
+    if config.video_mode is VideoMode.AV1_SBS and config.fx_upscale:
+        raise ValueError("AV1 stereo export does not support AI FX upscale.")
+    if config.video_mode is VideoMode.AV1_SBS and config.resolution:
+        raise ValueError("AV1 stereo export always preserves full source resolution per eye.")
     print(f"\nProcessing {config.source_path or config.source_str}")
     if config.start_stage is Stage.MOVE_FILES:
         muxed_output_path = completed_mux_path_for_move()
@@ -221,7 +228,7 @@ def process_each(
     if activity:
         activity.log("Temporary workspace ready", stage="inspect_source", path=os.environ["TMPDIR"])
 
-    completed_path = config.output_root_path / f"{disc_info.name}{config.FINAL_FILE_TAG}.mov"
+    completed_path = config.output_root_path / f"{disc_info.name}{config.final_file_tag}.mov"
     if not config.overwrite and file_exists_normalized(completed_path):
         raise FileExistsError(f"Output file already exists for {disc_info.name}. Use --overwrite to replace.")
 
@@ -267,19 +274,28 @@ def process_each(
         (lambda message: activity.warning(message, stage="extract_subtitles") if activity else None),
     )
     raise_if_cancelled(cancellation_event)
-    if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
-        activity.stage_started("create_left_right_files", "Creating left and right eye video")
-    left_output_path, right_output_path = create_left_right_files(
-        disc_info, output_folder, video_output_path, crop_params
-    )
-    raise_if_cancelled(cancellation_event)
-    if activity and config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
-        activity.stage_started("combine_to_mv_hevc", "Combining stereo video into MV-HEVC")
-    mv_hevc_path = create_mv_hevc_file(left_output_path, right_output_path, output_folder, disc_info)
+    if config.video_mode is VideoMode.AV1_SBS:
+        if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
+            activity.stage_started("encode_av1_stereo", "Encoding side-by-side AV1 stereo video")
+        av1_sbs_path = create_av1_sbs_file(disc_info, output_folder, video_output_path, crop_params)
+        raise_if_cancelled(cancellation_event)
+        if activity and config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
+            activity.stage_started("finalize_av1_stereo", "Adding Apple stereo metadata to AV1 video")
+        video_path = create_av1_stereo_file(av1_sbs_path, output_folder, disc_info)
+    else:
+        if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
+            activity.stage_started("create_left_right_files", "Creating left and right eye video")
+        left_output_path, right_output_path = create_left_right_files(
+            disc_info, output_folder, video_output_path, crop_params
+        )
+        raise_if_cancelled(cancellation_event)
+        if activity and config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
+            activity.stage_started("combine_to_mv_hevc", "Combining stereo video into MV-HEVC")
+        video_path = create_mv_hevc_file(left_output_path, right_output_path, output_folder, disc_info)
     raise_if_cancelled(cancellation_event)
     if activity and config.fx_upscale and config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
         activity.stage_started("upscale_video", "Upscaling video")
-    mv_hevc_path = create_upscaled_file(mv_hevc_path)
+    video_path = create_upscaled_file(video_path)
 
     raise_if_cancelled(cancellation_event)
     if activity and config.audio_mode.prepares_m4a and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
@@ -287,10 +303,10 @@ def process_each(
     audio_output_path = create_transcoded_audio_file(audio_output_path, output_folder, activity)
     raise_if_cancelled(cancellation_event)
     if activity and config.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
-        activity.stage_started("create_final_file", "Muxing final spatial video")
+        activity.stage_started("create_final_file", "Muxing final stereo video")
     muxed_output_path = create_muxed_file(
         audio_output_path,
-        mv_hevc_path,
+        video_path,
         output_folder,
         disc_info.name,
     )
@@ -303,7 +319,7 @@ def completed_mux_path_for_move() -> Path:
     source_path = config.source_path
     if source_path is not None:
         source_name = source_path.stem
-        source_candidate = output_root / source_name / f"{source_name}{config.FINAL_FILE_TAG}.mov"
+        source_candidate = output_root / source_name / f"{source_name}{config.final_file_tag}.mov"
         if source_candidate.is_file():
             return source_candidate
 
@@ -311,7 +327,7 @@ def completed_mux_path_for_move() -> Path:
         candidate
         for output_folder in output_root.iterdir()
         if output_folder.is_dir()
-        for candidate in [output_folder / f"{output_folder.name}{config.FINAL_FILE_TAG}.mov"]
+        for candidate in [output_folder / f"{output_folder.name}{config.final_file_tag}.mov"]
         if candidate.is_file()
     )
     if len(candidates) == 1:

@@ -1,4 +1,5 @@
 import sys
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,6 +7,7 @@ from unittest.mock import patch
 
 from bd_to_avp import preflight
 from bd_to_avp.modules.config import Stage
+from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.vendor.pgsrip.ocr import OcrError
 
 
@@ -149,6 +151,67 @@ class DependencyPreflightTests(unittest.TestCase):
             required_paths = preflight.get_required_dependency_binaries_for_current_job()
 
         self.assertIn(preflight.config.MP4BOX_PATH, required_paths)
+
+    def test_av1_mode_requires_mp4box_but_not_spatial_media_tool(self) -> None:
+        with (
+            patch.object(preflight.config, "video_mode", VideoMode.AV1_SBS),
+            patch.object(preflight.config, "source_path", Path("/movie/source.mkv")),
+            patch.object(preflight.config, "start_stage", Stage.CREATE_MKV),
+        ):
+            required_paths = preflight.get_required_dependency_binaries_for_current_job()
+
+        self.assertIn(preflight.config.MP4BOX_PATH, required_paths)
+        self.assertNotIn(preflight.config.SPATIAL_MEDIA_PATH, required_paths)
+
+    def test_av1_mode_requires_libsvtav1_before_encoding_stage(self) -> None:
+        with (
+            patch.object(preflight.config, "video_mode", VideoMode.AV1_SBS),
+            patch.object(preflight.config, "start_stage", Stage.CREATE_LEFT_RIGHT_FILES),
+            patch.object(preflight.config, "FFMPEG_PATH", Path("/tools/ffmpeg")),
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    subprocess.CompletedProcess(
+                        args=[],
+                        returncode=0,
+                        stdout=" V..... libsvtav1 SVT-AV1 encoder\n",
+                    ),
+                    subprocess.CompletedProcess(args=[], returncode=0, stdout="av1_metadata\n"),
+                ],
+            ) as run,
+        ):
+            preflight.verify_av1_encoder_ready()
+
+        self.assertEqual(run.call_count, 2)
+
+    def test_av1_mode_rejects_ffmpeg_without_libsvtav1(self) -> None:
+        with (
+            patch.object(preflight.config, "video_mode", VideoMode.AV1_SBS),
+            patch.object(preflight.config, "start_stage", Stage.CREATE_LEFT_RIGHT_FILES),
+            patch.object(preflight.config, "FFMPEG_PATH", Path("/tools/ffmpeg")),
+            patch(
+                "subprocess.run",
+                return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=" V..... libaom-av1\n"),
+            ),
+            self.assertRaisesRegex(preflight.DependencyPreflightError, "libsvtav1"),
+        ):
+            preflight.verify_av1_encoder_ready()
+
+    def test_av1_mode_rejects_ffmpeg_without_metadata_filter(self) -> None:
+        with (
+            patch.object(preflight.config, "video_mode", VideoMode.AV1_SBS),
+            patch.object(preflight.config, "start_stage", Stage.CREATE_LEFT_RIGHT_FILES),
+            patch.object(preflight.config, "FFMPEG_PATH", Path("/tools/ffmpeg")),
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    subprocess.CompletedProcess(args=[], returncode=0, stdout=" V..... libsvtav1\n"),
+                    subprocess.CompletedProcess(args=[], returncode=0, stdout="extract_extradata\n"),
+                ],
+            ),
+            self.assertRaisesRegex(preflight.DependencyPreflightError, "av1_metadata"),
+        ):
+            preflight.verify_av1_encoder_ready()
 
     def test_fx_upscale_tool_is_required_only_when_enabled(self) -> None:
         with (

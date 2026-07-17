@@ -12,6 +12,7 @@ from bd_to_avp.modules.config import (
 from bd_to_avp.modules.command import run_command, run_ffmpeg_print_errors
 from bd_to_avp.modules.languages import language_name, normalize_source_language
 from bd_to_avp.modules.util import sorted_files_by_creation_filtered_on_suffix
+from bd_to_avp.modules.video_mode import VideoMode
 
 
 AUDIO_CHANNEL_LAYOUT_NAMES = {
@@ -51,13 +52,13 @@ def extract_mvc_and_audio(
 
 def create_muxed_file(
     audio_path: Path,
-    mv_hevc_path: Path,
+    video_path: Path,
     output_folder: Path,
     disc_name: str,
 ) -> Path:
-    muxed_path = output_folder / f"{disc_name}{config.FINAL_FILE_TAG}.mov"
+    muxed_path = output_folder / f"{disc_name}{config.final_file_tag}.mov"
     if config.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
-        mux_video_audio_subs(mv_hevc_path, audio_path, muxed_path, output_folder)
+        mux_video_audio_subs(video_path, audio_path, muxed_path, output_folder)
     return muxed_path
 
 
@@ -84,19 +85,20 @@ def create_mvc_and_audio(
     )
 
 
-def mux_video_audio_subs(mv_hevc_path: Path, audio_path: Path, muxed_path: Path, output_folder: Path) -> None:
+def mux_video_audio_subs(video_path: Path, audio_path: Path, muxed_path: Path, output_folder: Path) -> None:
     audio_streams = get_audio_stream_data(audio_path)
     has_declared_audio_default = any(
         int(stream.get("disposition", {}).get("default", 0) or 0) == 1 for stream in audio_streams
     )
     output_track_index = 1
+    video_import = f"{video_path}:forcesync" if config.video_mode is VideoMode.MV_HEVC else video_path
     command = [
         config.MP4BOX_PATH,
         "-new",
         "-add",
         # QuickTime and AVP seeking depend on a useful sync sample table. MP4Box can
         # collapse imported MV-HEVC tracks to one sync sample unless this is forced.
-        f"{mv_hevc_path}:forcesync",
+        video_import,
     ]
     output_track_index += 1
     for audio_position, stream in enumerate(audio_streams):

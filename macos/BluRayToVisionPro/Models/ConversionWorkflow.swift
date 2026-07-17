@@ -173,7 +173,7 @@ struct ConversionDraft: Equatable {
     }
 
     var proposedOutputURL: URL {
-        destinationURL.appendingPathComponent("\(outputStem)_AVP.mov")
+        destinationURL.appendingPathComponent("\(outputStem)\(options.encoding.videoOutputMode.outputFileTag).mov")
     }
 
     func withSourceDetails(_ sourceDetails: SourceInspection?) -> ConversionDraft {

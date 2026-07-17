@@ -400,23 +400,13 @@ private struct ProfileEncodingSummaryView: View {
                 switch section {
                 case .video:
                     ProfileSummarySection(
-                        title: "Spatial Video Encoding",
-                        items: [
-                            ProfileSummaryItem(title: "HEVC quality", value: "\(options.hevcQuality)"),
-                            ProfileSummaryItem(title: "Left / right bitrate", value: "\(options.leftRightBitrate) Mbps"),
-                            ProfileSummaryItem(title: "AI FX upscale to 2× resolution", value: enabledText(options.upscaleEnabled)),
-                            ProfileSummaryItem(title: "Upscale quality", value: "\(options.upscaleQuality)"),
-                            ProfileSummaryItem(title: "Link HEVC and upscale quality", value: enabledText(options.linkQuality)),
-                        ]
+                        title: "Video Output",
+                        items: videoItems
                     )
 
                     ProfileSummarySection(
                         title: "Picture",
-                        items: [
-                            ProfileSummaryItem(title: "Field of view", value: "\(options.fieldOfView)°"),
-                            ProfileSummaryItem(title: "Resolution override", value: fallbackText(options.resolutionOverride)),
-                            ProfileSummaryItem(title: "Frame-rate override", value: fallbackText(options.frameRateOverride)),
-                        ]
+                        items: pictureItems
                     )
 
                     ProfileSummarySection(
@@ -454,6 +444,41 @@ private struct ProfileEncodingSummaryView: View {
             items.append(ProfileSummaryItem(title: bitrateLabel, value: "\(options.audioBitrate) kbps"))
         }
         return items
+    }
+
+    private var videoItems: [ProfileSummaryItem] {
+        var items = [ProfileSummaryItem(title: "Format", value: options.videoOutputMode.title)]
+        switch options.videoOutputMode {
+        case .mvHEVC:
+            items.append(contentsOf: [
+                ProfileSummaryItem(title: "HEVC quality", value: "\(options.hevcQuality)"),
+                ProfileSummaryItem(title: "Left / right bitrate", value: "\(options.leftRightBitrate) Mbps"),
+                ProfileSummaryItem(title: "AI FX upscale to 2× resolution", value: enabledText(options.upscaleEnabled)),
+                ProfileSummaryItem(title: "Upscale quality", value: "\(options.upscaleQuality)"),
+                ProfileSummaryItem(title: "Link HEVC and upscale quality", value: enabledText(options.linkQuality)),
+            ])
+        case .av1Stereo:
+            items.append(contentsOf: [
+                ProfileSummaryItem(title: "AV1 quality", value: "CRF \(options.av1CRF)"),
+                ProfileSummaryItem(title: "Packing", value: "Full side-by-side"),
+                ProfileSummaryItem(title: "Encoder", value: "Software SVT-AV1"),
+            ])
+        }
+        return items
+    }
+
+    private var pictureItems: [ProfileSummaryItem] {
+        if options.videoOutputMode == .av1Stereo {
+            return [
+                ProfileSummaryItem(title: "Resolution", value: "Full source resolution per eye"),
+                ProfileSummaryItem(title: "Frame-rate override", value: fallbackText(options.frameRateOverride)),
+            ]
+        }
+        return [
+            ProfileSummaryItem(title: "Field of view", value: "\(options.fieldOfView)°"),
+            ProfileSummaryItem(title: "Resolution override", value: fallbackText(options.resolutionOverride)),
+            ProfileSummaryItem(title: "Frame-rate override", value: fallbackText(options.frameRateOverride)),
+        ]
     }
 
     private func enabledText(_ enabled: Bool) -> String {

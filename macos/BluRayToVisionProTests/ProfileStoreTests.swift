@@ -23,9 +23,11 @@ final class ProfileStoreTests: XCTestCase {
         let fileURL = directoryURL.appendingPathComponent("profiles.json")
         let identifier = UUID(uuidString: "A4CC523E-72FA-4F36-A38D-1FB0D6A84742")!
         let options = EncodingOptions(
+            videoOutputMode: .av1Stereo,
+            av1CRF: 24,
             hevcQuality: 91,
             leftRightBitrate: 35,
-            upscaleEnabled: true,
+            upscaleEnabled: false,
             upscaleQuality: 87,
             linkQuality: false,
             fieldOfView: 100,
@@ -48,7 +50,7 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testVersionTwoProfilesKeepAllAudioHandlingRawValuesWithoutMigration() throws {
+    func testVersionTwoProfilesMigrateAllAudioHandlingRawValuesToVersionThree() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -79,6 +81,8 @@ final class ProfileStoreTests: XCTestCase {
 
         XCTAssertNil(store.loadErrorMessage)
         XCTAssertEqual(store.customProfiles.map(\.options.audioHandling), [.pcm, .convertAAC, .automatic])
+        XCTAssertTrue(store.customProfiles.allSatisfy { $0.options.videoOutputMode == .mvHEVC })
+        XCTAssertTrue(store.customProfiles.allSatisfy { $0.options.av1CRF == 32 })
         for profile in store.customProfiles {
             try store.updateProfile(profile.id, name: profile.name, options: profile.options)
         }
@@ -86,7 +90,7 @@ final class ProfileStoreTests: XCTestCase {
         let persistedDocument = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
         )
-        XCTAssertEqual(persistedDocument["version"] as? Int, 2)
+        XCTAssertEqual(persistedDocument["version"] as? Int, 3)
         let persistedProfiles = try XCTUnwrap(persistedDocument["profiles"] as? [[String: Any]])
         let persistedRawValues = try persistedProfiles.map { profile in
             let options = try XCTUnwrap(profile["options"] as? [String: Any])
@@ -96,7 +100,7 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testVersionOneProfilesMigrateAtomicallyToCanonicalVersionTwoData() throws {
+    func testVersionOneProfilesMigrateAtomicallyToCanonicalVersionThreeData() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -144,6 +148,8 @@ final class ProfileStoreTests: XCTestCase {
             [.off, .preferredOnly, .preferredPlusOthers, .preferredPlusOthers]
         )
         let migratedOptions = try XCTUnwrap(store.customProfiles.first?.options)
+        XCTAssertEqual(migratedOptions.videoOutputMode, .mvHEVC)
+        XCTAssertEqual(migratedOptions.av1CRF, 32)
         XCTAssertEqual(migratedOptions.hevcQuality, 91)
         XCTAssertEqual(migratedOptions.leftRightBitrate, 35)
         XCTAssertTrue(migratedOptions.upscaleEnabled)
@@ -160,7 +166,7 @@ final class ProfileStoreTests: XCTestCase {
         let migratedJSON = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
         )
-        XCTAssertEqual(migratedJSON["version"] as? Int, 2)
+        XCTAssertEqual(migratedJSON["version"] as? Int, 3)
         let profiles = try XCTUnwrap(migratedJSON["profiles"] as? [[String: Any]])
         let options = try XCTUnwrap(profiles.first?["options"] as? [String: Any])
         let subtitles = try XCTUnwrap(options["subtitles"] as? [String: Any])
@@ -378,6 +384,8 @@ final class ProfileStoreTests: XCTestCase {
         var options = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: JSONEncoder().encode(EncodingOptions())) as? [String: Any]
         )
+        options.removeValue(forKey: "videoOutputMode")
+        options.removeValue(forKey: "av1CRF")
         options["audioHandling"] = audioHandlingRawValue
         return options
     }

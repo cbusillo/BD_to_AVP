@@ -539,13 +539,23 @@ struct SourceWorkspaceView: View {
                 HStack(spacing: 5) {
                     PipelineStep(systemImage: "opticaldisc", title: "1 Create MKV")
                     pipelineChevron
-                    PipelineStep(systemImage: "rectangle.split.2x1", title: "2–4 Extract 3D")
+                    PipelineStep(
+                        systemImage: "rectangle.split.2x1",
+                        title: options.encoding.videoOutputMode == .av1Stereo ? "2–3 Extract 3D" : "2–4 Extract 3D"
+                    )
                     pipelineChevron
-                    PipelineStep(systemImage: "visionpro", title: "5–6 Encode")
+                    PipelineStep(
+                        systemImage: options.encoding.videoOutputMode == .av1Stereo ? "rectangle.split.2x1" : "visionpro",
+                        title: options.encoding.videoOutputMode == .av1Stereo ? "4–5 AV1 Stereo" : "5–6 Spatial"
+                    )
                     pipelineChevron
                     PipelineStep(systemImage: "checkmark.circle", title: "7–9 Finish")
                 }
-                Text("Nine restartable stages are available under Files & Recovery.")
+                Text(
+                    options.encoding.videoOutputMode == .av1Stereo
+                        ? "AV1 uses stages 1–5 and 7–9; stage 6 FX Upscale is unavailable."
+                        : "Nine restartable stages are available under Files & Recovery."
+                )
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

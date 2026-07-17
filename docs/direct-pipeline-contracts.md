@@ -40,16 +40,23 @@ named restartable file.
 
 - Input: streamed source container in default mode or extracted MVC elementary
   stream with `--keep-files`, plus crop/title metadata.
-- Output: `<name>_left_movie.mov` and `<name>_right_movie.mov`.
+- MV-HEVC output: `<name>_left_movie.mov` and `<name>_right_movie.mov`.
+- AV1 stereo output: `<name>_AV1-SBS-unmarked.mp4`, encoded directly from the
+  native splitter's Y4M output without a lossy HEVC intermediate. The AV1
+  sequence header carries limited-range BT.709 matrix, primaries, and transfer
+  signaling.
 - Restart/debug value: very high. External AI upscaling workflows often start
-  here.
+  here for MV-HEVC; AV1 resumes use the packed file.
 
 ### `COMBINE_TO_MV_HEVC`
 
-- Input: left/right eye movie files.
-- Output: `<name>_MV-HEVC.mov`.
-- Restart/debug value: high. This is the Apple spatial video intermediate and
-  final mux input.
+- MV-HEVC input/output: left/right eye movie files become
+  `<name>_MV-HEVC.mov`.
+- AV1 input/output: `<name>_AV1-SBS-unmarked.mp4` receives Apple
+  `vexu/eyes/pack` metadata and becomes `<name>_AV1-Stereo.mp4`. MP4Box imports
+  that track into the final MOV.
+- Restart/debug value: high. This creates the mode-specific final video input
+  for audio/subtitle muxing.
 
 ### `UPSCALE_VIDEO`
 
@@ -79,8 +86,10 @@ named restartable file.
 
 ### `CREATE_FINAL_FILE`
 
-- Input: MV-HEVC/upscaled movie, audio movie, and `.srt` files.
-- Output: `<name>_AVP.mov` inside the output folder.
+- Input: finalized MV-HEVC/upscaled or AV1 stereo movie, audio movie, and `.srt`
+  files.
+- Output: `<name>_AVP.mov` for MV-HEVC or `<name>_AV1_Stereo.mov` for AV1 inside
+  the output folder.
 - Restart/debug value: high. This is the MP4Box subtitle/audio/video mux
   boundary.
 
@@ -114,10 +123,12 @@ intermediate PCM MOV, and MVC video is demuxed as Annex B into the native
 splitter without an intermediate `.h264` file.
 
 The MVC path is a bounded three-process pipeline: source FFmpeg to
-`edge264_test` to encoding FFmpeg. Subtitles, AAC, left/right eye files,
-MV-HEVC, and the final movie remain named stage artifacts. Default mode removes
-consumed intermediates after the final output is complete; `--keep-files`
-retains them. Disc/ISO inputs retain their MakeMKV materialization.
+`edge264_test` to encoding FFmpeg. MV-HEVC materializes left/right eye files;
+AV1 directly materializes one packed software-encoded video. Subtitles, AAC,
+the mode-specific finalized video, and the final movie remain named stage
+artifacts. Default mode removes consumed intermediates after the final output
+is complete; `--keep-files` retains them. Disc/ISO inputs retain their MakeMKV
+materialization.
 
 The reused source is user-owned. Automatic cleanup never deletes it.
 `--remove-original` is the explicit exception and removes the source only after
@@ -144,16 +155,16 @@ That keeps downstream stage code path-based and avoids one large copy. The
 ownership rule is the critical part: direct mode must never delete a user source
 that was not created by BD_to_AVP.
 
-### Native MVC Splitter To Left/Right Encode
+### Native MVC Splitter To Stereo Encode
 
 This boundary streams internally: source FFmpeg writes Annex B MVC to
 `edge264_test` stdin, `edge264_test` writes Y4M to stdout, and encoding FFmpeg
-produces left/right eye movie files. The output files remain important because
-they are the main external upscaler/restart boundary.
+either produces left/right HEVC eye movies or one full side-by-side AV1 movie.
+The output files remain the restart boundary.
 
-Left/right outputs remain materialized as the external-upscaler and restart
-boundary during processing and are retained after completion with
-`--keep-files`.
+Left/right HEVC outputs remain the external-upscaler boundary. AV1 does not use
+FX Upscale in its initial contract; its packed intermediate is retained after
+completion only with `--keep-files`.
 
 ### Extracted Audio To Transcoded Audio
 

@@ -138,6 +138,8 @@ class NativeAppPackagingTests(unittest.TestCase):
         for label in (
             "HEVC quality",
             "Left / right bitrate",
+            "Video Output",
+            "AV1 quality",
             "AI FX upscale to 2\u00d7 resolution",
             "Crop black bars",
             "Swap left and right eyes",
@@ -147,7 +149,7 @@ class NativeAppPackagingTests(unittest.TestCase):
             "Start stage",
             "Keep durable stage files",
             "Continue processing after recoverable errors",
-            "Use software encoder",
+            "Use software HEVC encoder",
             "Overwrite an existing output file",
             "Remove original after success",
             "Show generated commands in activity",

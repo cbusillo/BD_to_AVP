@@ -7,10 +7,13 @@ file compatible with the Apple Vision Pro. It uses FFmpeg, MakeMKV, and a bundle
 extraction, audio transcoding, and video stream merging to convert from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The
 tool also injects 360° metadata
 into the video file for spatial media playback. You have the option of AI upscaling the video to 4K resolution and AI
-OCR of subtitles.
+OCR of subtitles. MV-HEVC remains the default native Apple spatial output; an opt-in software AV1 mode produces a
+full-resolution side-by-side stereo MOV for storage-conscious and custom-playback workflows.
 
-The videos will play directly in the Files or
+The default MV-HEVC videos play directly in the Files or
 [Screenlit](https://apps.apple.com/us/app/screenlit/id6499478407) app on the AVP.
+AV1 stereo playback depends on the device generation and player; see the
+feasibility record before choosing it for headset delivery.
 
 ## Screenshots
 
@@ -34,8 +37,8 @@ automatic minimum-materialization behavior and the durable `--keep-files`
 stage contracts.
 
 See [AV1 Stereo Feasibility](docs/av1-stereo-feasibility.md) for the
-evidence-backed decision to keep MV-HEVC as the native Apple spatial-video
-output instead of adding an AV1 mode.
+standards evidence, Apple metadata probe, and boundaries between native
+MV-HEVC spatial output and software AV1 stereo export.
 
 ## Terminal install or update (power users)
 

@@ -1,7 +1,7 @@
 import Foundation
 
 struct WorkerJobSpec: Encodable, Equatable {
-    static let protocolVersion = 6
+    static let protocolVersion = 7
 
     struct Source: Encodable, Equatable {
         enum Kind: String, Encodable {
@@ -86,6 +86,8 @@ struct WorkerJobSpec: Encodable, Equatable {
         }
 
         let audio: Audio
+        let videoMode: VideoOutputMode
+        let av1CRF: Int
         let leftRightBitrate: Int
         let linkQuality: Bool
         let mvHEVCQuality: Int
@@ -100,6 +102,8 @@ struct WorkerJobSpec: Encodable, Equatable {
 
         enum CodingKeys: String, CodingKey {
             case audio
+            case videoMode = "video_mode"
+            case av1CRF = "av1_crf"
             case leftRightBitrate = "left_right_bitrate"
             case linkQuality = "link_quality"
             case mvHEVCQuality = "mv_hevc_quality"
@@ -241,21 +245,24 @@ struct WorkerJobSpec: Encodable, Equatable {
     }
 
     private static func encoding(from options: EncodingOptions) -> Encoding {
-        Encoding(
+        let isAV1Stereo = options.videoOutputMode == .av1Stereo
+        return Encoding(
             audio: Encoding.Audio(
                 mode: audioMode(from: options.audioHandling),
                 bitrate: options.audioBitrate
             ),
+            videoMode: options.videoOutputMode,
+            av1CRF: options.av1CRF,
             leftRightBitrate: options.leftRightBitrate,
             linkQuality: options.linkQuality,
             mvHEVCQuality: options.hevcQuality,
             upscaleQuality: options.upscaleQuality,
             fieldOfView: options.fieldOfView,
             frameRate: options.frameRateOverride,
-            resolution: options.resolutionOverride,
+            resolution: isAV1Stereo ? "" : options.resolutionOverride,
             cropBlackBars: options.cropBlackBars,
             swapEyes: options.swapEyes,
-            fxUpscale: options.upscaleEnabled,
+            fxUpscale: isAV1Stereo ? false : options.upscaleEnabled,
             subtitles: subtitleOptions(from: options)
         )
     }

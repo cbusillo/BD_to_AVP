@@ -8,6 +8,7 @@ from bd_to_avp.modules import process
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import Stage
 from bd_to_avp.modules.disc import DiscInfo
+from bd_to_avp.modules.video_mode import VideoMode
 
 
 class ProcessAudioWiringTests(unittest.TestCase):
@@ -107,6 +108,7 @@ class ProcessAudioWiringTests(unittest.TestCase):
                 stack.enter_context(patch.object(process.config, "overwrite", True))
                 stack.enter_context(patch.object(process.config, "keep_files", False))
                 stack.enter_context(patch.object(process.config, "audio_mode", AudioMode.AUTOMATIC))
+                stack.enter_context(patch.object(process.config, "video_mode", VideoMode.MV_HEVC))
                 stack.enter_context(patch.object(process.config, "start_stage", Stage.CREATE_MKV))
                 stack.enter_context(patch.object(process.config, "remove_original", True))
                 stack.enter_context(patch.object(process.config, "language_code", "eng"))
@@ -184,6 +186,7 @@ class ProcessAudioWiringTests(unittest.TestCase):
                 stack.enter_context(patch.object(process.config, "overwrite", True))
                 stack.enter_context(patch.object(process.config, "keep_files", False))
                 stack.enter_context(patch.object(process.config, "audio_mode", AudioMode.AUTOMATIC))
+                stack.enter_context(patch.object(process.config, "video_mode", VideoMode.MV_HEVC))
                 stack.enter_context(patch.object(process.config, "start_stage", Stage.CREATE_MKV))
                 stack.enter_context(patch.object(process.config, "remove_original", False))
                 stack.enter_context(patch.object(process.preflight, "verify_runtime_ready"))
@@ -212,6 +215,64 @@ class ProcessAudioWiringTests(unittest.TestCase):
                 process.process_each(activity=activity)
 
             self.assertIn(("transcode_audio", "Prepare Audio"), activity.started)
+
+    def test_av1_mode_uses_packed_encode_and_preserves_final_mux_wiring(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_path = temp_path / "source.mkv"
+            output_folder = temp_path / "Movie"
+            mvc_path = output_folder / "Movie_mvc.h264"
+            unmarked_path = output_folder / "Movie_AV1-SBS-unmarked.mp4"
+            stereo_path = output_folder / "Movie_AV1-Stereo.mp4"
+            audio_path = output_folder / "Movie_audio_PCM.mov"
+            final_path = output_folder / "Movie_AV1_Stereo.mov"
+            source_path.write_bytes(b"source")
+            output_folder.mkdir()
+
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(process.config, "source_path", source_path))
+                stack.enter_context(patch.object(process.config, "output_root_path", temp_path))
+                stack.enter_context(patch.object(process.config, "overwrite", True))
+                stack.enter_context(patch.object(process.config, "keep_files", False))
+                stack.enter_context(patch.object(process.config, "audio_mode", AudioMode.PCM))
+                stack.enter_context(patch.object(process.config, "video_mode", VideoMode.AV1_SBS))
+                stack.enter_context(patch.object(process.config, "fx_upscale", False))
+                stack.enter_context(patch.object(process.config, "start_stage", Stage.CREATE_MKV))
+                stack.enter_context(patch.object(process.config, "remove_original", False))
+                stack.enter_context(patch.object(process.preflight, "verify_runtime_ready"))
+                stack.enter_context(
+                    patch.object(process, "get_disc_and_mvc_video_info", return_value=DiscInfo(name="Movie"))
+                )
+                stack.enter_context(
+                    patch.object(process, "prepare_output_folder_for_source", return_value=output_folder)
+                )
+                stack.enter_context(patch.object(process, "file_exists_normalized", return_value=False))
+                stack.enter_context(patch.object(process, "create_mkv_file", return_value=source_path))
+                stack.enter_context(patch.object(process, "get_video_color_depth", return_value=8))
+                stack.enter_context(patch.object(process, "detect_crop_parameters", return_value=None))
+                stack.enter_context(patch.object(process, "create_mvc_and_audio", return_value=(audio_path, mvc_path)))
+                stack.enter_context(patch.object(process, "create_srt_from_mkv"))
+                create_sbs = stack.enter_context(
+                    patch.object(process, "create_av1_sbs_file", return_value=unmarked_path)
+                )
+                finalize = stack.enter_context(
+                    patch.object(process, "create_av1_stereo_file", return_value=stereo_path)
+                )
+                create_left_right = stack.enter_context(patch.object(process, "create_left_right_files"))
+                create_mv_hevc = stack.enter_context(patch.object(process, "create_mv_hevc_file"))
+                stack.enter_context(patch.object(process, "create_upscaled_file", return_value=stereo_path))
+                stack.enter_context(patch.object(process, "create_transcoded_audio_file", return_value=audio_path))
+                mux = stack.enter_context(patch.object(process, "create_muxed_file", return_value=final_path))
+                stack.enter_context(patch.object(process, "move_file_to_output_root_folder"))
+                stack.enter_context(patch.dict(process.os.environ, {}, clear=False))
+
+                process.process_each()
+
+            create_sbs.assert_called_once_with(DiscInfo(name="Movie", color_depth=8), output_folder, mvc_path, None)
+            finalize.assert_called_once_with(unmarked_path, output_folder, DiscInfo(name="Movie", color_depth=8))
+            create_left_right.assert_not_called()
+            create_mv_hevc.assert_not_called()
+            mux.assert_called_once_with(audio_path, stereo_path, output_folder, "Movie")
 
 
 if __name__ == "__main__":

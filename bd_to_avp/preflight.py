@@ -4,6 +4,7 @@ from pathlib import Path
 
 from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr, OcrError
 from bd_to_avp.modules.config import Stage, config
+from bd_to_avp.modules.video_mode import VideoMode
 
 
 class DependencyPreflightError(RuntimeError):
@@ -13,6 +14,7 @@ class DependencyPreflightError(RuntimeError):
 def verify_runtime_ready() -> None:
     missing_binaries = get_missing_dependency_binaries_for_current_job()
     if not missing_binaries:
+        verify_av1_encoder_ready()
         verify_apple_vision_ocr_ready()
         return
 
@@ -39,7 +41,7 @@ def get_required_dependency_binaries_for_current_job() -> list[Path]:
         required_paths.append(config.MAKEMKVCON_PATH)
     if needs_native_mvc_splitter():
         required_paths.append(config.EDGE264_TEST_PATH)
-    if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
+    if config.video_mode is VideoMode.MV_HEVC and config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
         required_paths.append(config.SPATIAL_MEDIA_PATH)
     if config.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
         required_paths.append(config.MP4BOX_PATH)
@@ -130,6 +132,39 @@ def ensure_native_mvc_splitter_executable() -> bool:
     except OSError:
         return False
     return os.access(config.EDGE264_TEST_PATH, os.X_OK)
+
+
+def verify_av1_encoder_ready() -> None:
+    if config.video_mode is not VideoMode.AV1_SBS or config.start_stage.value > Stage.CREATE_LEFT_RIGHT_FILES.value:
+        return
+
+    import subprocess
+
+    try:
+        encoders = subprocess.run(
+            [config.FFMPEG_PATH, "-hide_banner", "-encoders"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+        bitstream_filters = subprocess.run(
+            [config.FFMPEG_PATH, "-hide_banner", "-bsfs"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as error:
+        raise DependencyPreflightError("FFmpeg could not verify the required AV1 encoding support.") from error
+    if "libsvtav1" not in encoders:
+        raise DependencyPreflightError(
+            "AV1 stereo export requires an FFmpeg build with the libsvtav1 software encoder."
+        )
+    if "av1_metadata" not in bitstream_filters:
+        raise DependencyPreflightError(
+            "AV1 stereo export requires an FFmpeg build with the av1_metadata bitstream filter."
+        )
 
 
 def verify_apple_vision_ocr_ready() -> None:

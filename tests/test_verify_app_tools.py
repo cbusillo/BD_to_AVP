@@ -54,6 +54,46 @@ class VerifyAppToolsTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "/usr/local"):
                     verify_app_tools.verify_tool(tool_path, ["-version"])
 
+    def test_verify_ffmpeg_requires_libsvtav1(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tool_path = Path(temp_dir) / "ffmpeg"
+            tool_path.write_text("tool")
+            tool_path.chmod(0o755)
+
+            def fake_run(command: list[str | Path]):
+                if command[:2] == ["otool", "-L"]:
+                    return subprocess.CompletedProcess(args=command, returncode=0, stdout="")
+                if "-encoders" in command:
+                    return subprocess.CompletedProcess(args=command, returncode=0, stdout=" V..... libaom-av1\n")
+                return subprocess.CompletedProcess(args=command, returncode=0, stdout="")
+
+            with (
+                patch.object(verify_app_tools, "run", side_effect=fake_run),
+                self.assertRaisesRegex(RuntimeError, "libsvtav1"),
+            ):
+                verify_app_tools.verify_tool(tool_path, ["-version"])
+
+    def test_verify_ffmpeg_requires_av1_metadata_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tool_path = Path(temp_dir) / "ffmpeg"
+            tool_path.write_text("tool")
+            tool_path.chmod(0o755)
+
+            def fake_run(command: list[str | Path]):
+                if command[:2] == ["otool", "-L"]:
+                    return subprocess.CompletedProcess(args=command, returncode=0, stdout="")
+                if "-encoders" in command:
+                    return subprocess.CompletedProcess(args=command, returncode=0, stdout=" V..... libsvtav1\n")
+                if "-bsfs" in command:
+                    return subprocess.CompletedProcess(args=command, returncode=0, stdout="extract_extradata\n")
+                return subprocess.CompletedProcess(args=command, returncode=0, stdout="")
+
+            with (
+                patch.object(verify_app_tools, "run", side_effect=fake_run),
+                self.assertRaisesRegex(RuntimeError, "av1_metadata"),
+            ):
+                verify_app_tools.verify_tool(tool_path, ["-version"])
+
     def test_rejects_mach_o_newer_than_app_minimum(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             app_path = Path(temp_dir) / "Test.app"

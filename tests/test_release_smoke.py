@@ -84,6 +84,14 @@ class ReleaseSmokeTests(unittest.TestCase):
                         returncode=0,
                         stdout="/opt/homebrew/lib/libexample.dylib\n",
                     )
+                if "-encoders" in command:
+                    return smoke_release_app.subprocess.CompletedProcess(
+                        args=command, returncode=0, stdout=" V..... libsvtav1\n"
+                    )
+                if "-bsfs" in command:
+                    return smoke_release_app.subprocess.CompletedProcess(
+                        args=command, returncode=0, stdout="av1_metadata\n"
+                    )
                 return smoke_release_app.subprocess.CompletedProcess(args=command, returncode=0, stdout="")
 
             with patch.object(smoke_release_app, "run", side_effect=fake_run):
@@ -124,7 +132,11 @@ class ReleaseSmokeTests(unittest.TestCase):
             app_path = make_fake_app(Path(temp_dir), version="1.2.3")
             bundle = smoke_release_app.read_bundle(app_path)
 
-            with patch.object(smoke_release_app, "run") as run:
+            def fake_run(command: list[str | Path], *, env: dict[str, str] | None = None):
+                output = "av1_metadata\n" if "-bsfs" in command else " V..... libsvtav1\n"
+                return smoke_release_app.subprocess.CompletedProcess(args=command, returncode=0, stdout=output)
+
+            with patch.object(smoke_release_app, "run", side_effect=fake_run) as run:
                 smoke_release_app.verify_bundled_tool(
                     bundle.bin_dir / "ffmpeg",
                     ["-version"],
@@ -132,7 +144,27 @@ class ReleaseSmokeTests(unittest.TestCase):
                     check_links=False,
                 )
 
-        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_count, 3)
+
+    def test_bundled_ffmpeg_requires_av1_metadata_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = make_fake_app(Path(temp_dir), version="1.2.3")
+            bundle = smoke_release_app.read_bundle(app_path)
+
+            def fake_run(command: list[str | Path], *, env: dict[str, str] | None = None):
+                output = "extract_extradata\n" if "-bsfs" in command else " V..... libsvtav1\n"
+                return smoke_release_app.subprocess.CompletedProcess(args=command, returncode=0, stdout=output)
+
+            with (
+                patch.object(smoke_release_app, "run", side_effect=fake_run),
+                self.assertRaisesRegex(smoke_release_app.SmokeFailure, "av1_metadata"),
+            ):
+                smoke_release_app.verify_bundled_tool(
+                    bundle.bin_dir / "ffmpeg",
+                    ["-version"],
+                    clean_env=smoke_release_app.build_clean_env(),
+                    check_links=False,
+                )
 
 
 def make_fake_app(
@@ -180,7 +212,19 @@ def make_fake_app(
     )
 
     for tool_name in [*smoke_release_app.REQUIRED_BUNDLED_TOOLS, *smoke_release_app.OPTIONAL_BUNDLED_TOOLS]:
-        write_executable(bin_path / tool_name, ["#!/bin/sh", "echo ok"])
+        lines = ["#!/bin/sh", "echo ok"]
+        if tool_name == "ffmpeg":
+            lines = [
+                "#!/bin/sh",
+                " ".join(
+                    [
+                        'if [ "$2" = "-encoders" ]; then echo " V..... libsvtav1";',
+                        'elif [ "$2" = "-bsfs" ]; then echo "av1_metadata";',
+                        "else echo ok; fi",
+                    ]
+                ),
+            ]
+        write_executable(bin_path / tool_name, lines)
 
     return app_path
 

@@ -24,6 +24,20 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(draft.proposedOutputURL.path, "/Movies/Feature_AVP.mov")
     }
 
+    func testAV1DraftUsesDistinctOutputName() {
+        var options = ConversionOptions()
+        options.encoding.videoOutputMode = .av1Stereo
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/Feature.mkv")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/Movies", isDirectory: true),
+            options: options
+        )
+
+        XCTAssertEqual(draft.proposedOutputURL.path, "/Movies/Feature_AV1_Stereo.mov")
+    }
+
     func testDraftPreservesDotsInExtensionlessInspectedName() {
         let draft = ConversionDraft(
             source: ConversionSource(
@@ -168,11 +182,11 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertTrue(EncodingOptions().compactSummary.contains("uncompressed PCM audio"))
         XCTAssertEqual(
             EncodingOptions(audioHandling: .automatic, audioBitrate: 448).compactSummary,
-            "HEVC 75 · 20 Mbps eyes · source resolution · automatic audio (AAC fallback 448 kbps)"
+            "MV-HEVC 75 · 20 Mbps eyes · source resolution · automatic audio (AAC fallback 448 kbps)"
         )
         XCTAssertEqual(
             EncodingOptions(audioHandling: .convertAAC, audioBitrate: 448).compactSummary,
-            "HEVC 75 · 20 Mbps eyes · source resolution · AAC 448 kbps"
+            "MV-HEVC 75 · 20 Mbps eyes · source resolution · AAC 448 kbps"
         )
         XCTAssertTrue(BuiltInProfile.balanced.summary.contains("uncompressed PCM audio"))
     }
@@ -546,6 +560,28 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(spec.encoding?.audio, WorkerJobSpec.Encoding.Audio(mode: .convertAAC, bitrate: 512))
     }
 
+    func testAV1JobSpecClearsIncompatibleUpscaleAndResolution() {
+        var encoding = EncodingOptions()
+        encoding.videoOutputMode = .av1Stereo
+        encoding.av1CRF = 28
+        encoding.upscaleEnabled = true
+        encoding.resolutionOverride = "3840x2160"
+
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/src/m.mkv")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/Movies"),
+            options: ConversionOptions(encoding: encoding)
+        )
+        let workerEncoding = WorkerJobSpec(draft: draft).encoding
+
+        XCTAssertEqual(workerEncoding?.videoMode, .av1Stereo)
+        XCTAssertEqual(workerEncoding?.av1CRF, 28)
+        XCTAssertEqual(workerEncoding?.resolution, "")
+        XCTAssertFalse(workerEncoding?.fxUpscale == true)
+    }
+
     func testConversionJobSpecEncodesJobSettings() {
         var job = JobOptions()
         job.startStage = .extractMVCAndAudio
@@ -656,10 +692,12 @@ final class ConversionWorkflowTests: XCTestCase {
         let source = try XCTUnwrap(json["source"] as? [String: Any])
 
         XCTAssertEqual(json["operation"] as? String, "convert_source")
-        XCTAssertEqual(json["protocol_version"] as? Int, 6)
+        XCTAssertEqual(json["protocol_version"] as? Int, 7)
         XCTAssertEqual(source["kind"] as? String, "direct_file")
         XCTAssertEqual((json["destination"] as? [String: Any])?["path"] as? String, "/Movies")
         XCTAssertEqual(encoding["mv_hevc_quality"] as? Int, 75)
+        XCTAssertEqual(encoding["video_mode"] as? String, "mv_hevc")
+        XCTAssertEqual(encoding["av1_crf"] as? Int, 32)
         let audio = try XCTUnwrap(encoding["audio"] as? [String: Any])
         XCTAssertEqual(audio["mode"] as? String, "pcm")
         XCTAssertEqual(audio["bitrate"] as? Int, 384)
@@ -767,7 +805,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(changedEncoding.audio, originalEncoding.audio)
     }
 
-    func testConversionJobSpecMatchesSharedV6WorkerFixture() throws {
+    func testConversionJobSpecMatchesSharedV7WorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic
         let draft = ConversionDraft(
@@ -783,7 +821,7 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_convert_v6.json")
+            with: sharedFixtureData(named: "native_worker_convert_v7.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
@@ -814,7 +852,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(source["title_id"] as? String, "provider:playlist-01005")
     }
 
-    func testPreviewJobSpecMatchesSharedV6WorkerFixture() throws {
+    func testPreviewJobSpecMatchesSharedV7WorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic
         let conversion = ConversionDraft(
@@ -842,13 +880,13 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_preview_v6.json")
+            with: sharedFixtureData(named: "native_worker_preview_v7.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
     }
 
-    func testPhysicalDiscJobSpecMatchesSharedV6WorkerFixture() throws {
+    func testPhysicalDiscJobSpecMatchesSharedV7WorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic
         let draft = ConversionDraft(
@@ -877,7 +915,7 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_convert_physical_disc_v6.json")
+            with: sharedFixtureData(named: "native_worker_convert_physical_disc_v7.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)

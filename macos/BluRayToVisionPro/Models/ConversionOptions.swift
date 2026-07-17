@@ -106,6 +106,40 @@ struct SubtitlePolicy: Codable, Equatable {
     var preferredLanguage = SubtitleLanguage.english
 }
 
+enum VideoOutputMode: String, CaseIterable, Codable, Identifiable {
+    case mvHEVC = "mv_hevc"
+    case av1Stereo = "av1_sbs"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .mvHEVC:
+            "Apple Spatial (MV-HEVC)"
+        case .av1Stereo:
+            "AV1 Stereo (Software)"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .mvHEVC:
+            "Native Apple spatial-video output using hardware HEVC encoding by default."
+        case .av1Stereo:
+            "Full-resolution side-by-side AV1 with Apple stereo metadata. Encoding is software-only and may take substantially longer."
+        }
+    }
+
+    var outputFileTag: String {
+        switch self {
+        case .mvHEVC:
+            "_AVP"
+        case .av1Stereo:
+            "_AV1_Stereo"
+        }
+    }
+}
+
 enum ConversionStage: Int, CaseIterable, Codable, Identifiable {
     case createMKV = 1
     case extractMVCAndAudio
@@ -128,9 +162,9 @@ enum ConversionStage: Int, CaseIterable, Codable, Identifiable {
         case .extractSubtitles:
             "3 — Extract Subtitles"
         case .createLeftRightFiles:
-            "4 — Create Left / Right Video"
+            "4 — Encode Stereo Video"
         case .combineToMVHEVC:
-            "5 — Create Spatial Video"
+            "5 — Finalize Stereo Video"
         case .upscaleVideo:
             "6 — Upscale Video"
         case .transcodeAudio:
@@ -144,6 +178,8 @@ enum ConversionStage: Int, CaseIterable, Codable, Identifiable {
 }
 
 struct EncodingOptions: Codable, Equatable {
+    var videoOutputMode = VideoOutputMode.mvHEVC
+    var av1CRF = 32
     var hevcQuality = 75
     var leftRightBitrate = 20
     var upscaleEnabled = false
@@ -162,7 +198,12 @@ struct EncodingOptions: Codable, Equatable {
     var compactSummary: String {
         let resolution = upscaleEnabled ? "2× upscale" : "source resolution"
         let audio = audioHandling.compactSummary(bitrate: audioBitrate)
-        return "HEVC \(hevcQuality) · \(leftRightBitrate) Mbps eyes · \(resolution) · \(audio)"
+        switch videoOutputMode {
+        case .mvHEVC:
+            return "MV-HEVC \(hevcQuality) · \(leftRightBitrate) Mbps eyes · \(resolution) · \(audio)"
+        case .av1Stereo:
+            return "AV1 stereo CRF \(av1CRF) · full side-by-side · source resolution · \(audio)"
+        }
     }
 }
 

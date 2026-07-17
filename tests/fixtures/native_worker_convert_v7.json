@@ -1,20 +1,22 @@
 {
-  "protocol_version": 6,
+  "protocol_version": 7,
   "type": "job.start",
-  "job_id": "22222222-2222-4222-8222-222222222222",
-  "operation": "preview_source",
+  "job_id": "11111111-1111-4111-8111-111111111111",
+  "operation": "convert_source",
   "source": {
     "kind": "direct_file",
     "path": "/tmp/movie.mkv"
   },
   "destination": {
-    "path": "/tmp/previews/22222222-2222-4222-8222-222222222222"
+    "path": "/tmp/output"
   },
   "encoding": {
     "audio": {
       "mode": "automatic",
       "bitrate": 384
     },
+    "video_mode": "mv_hevc",
+    "av1_crf": 32,
     "left_right_bitrate": 20,
     "link_quality": true,
     "mv_hevc_quality": 75,
@@ -33,16 +35,11 @@
   "job": {
     "start_stage": 1,
     "keep_files": false,
-    "overwrite": true,
+    "overwrite": false,
     "remove_original": false,
     "continue_on_error": false,
     "software_encoder": false,
     "output_commands": false,
     "keep_awake": true
-  },
-  "preview": {
-    "parent_job_id": "11111111-1111-4111-8111-111111111111",
-    "position": "middle",
-    "duration_seconds": 60
   }
 }
