@@ -154,12 +154,13 @@ staging mechanism for the embedded Python engine, but its Python GUI is not the
 shipping interface. The Xcode `Release` configuration owns the production name,
 bundle identifier, macOS 26 deployment target, and Sparkle metadata.
 
-The signing job requires the bounded Apple-Silicon runner labeled
-`bd-to-avp-release`, running macOS 27 with Xcode 27 and XcodeGen 2.45.4. It uses
-the reviewed `macos-signing` environment, an ephemeral keychain, Developer ID
-signing, and notarization for both the app and DMG. The artifact must then pass
-the separate macOS 26 compatibility job before the existing production draft,
-appcast, PyPI, Pages, and publication boundaries can proceed.
+The signing job runs on GitHub's Apple-Silicon `macos-26` image, selects Xcode
+26.5 build `17F42`, and installs XcodeGen 2.45.4 from its digest-pinned release
+artifact. It uses the reviewed `macos-signing` environment, an ephemeral
+keychain, Developer ID signing, and notarization for both the app and DMG. The
+artifact must then pass a separate fresh-runner macOS 26 compatibility job
+before the existing production draft, appcast, PyPI, Pages, and publication
+boundaries can proceed.
 
 RC items remain isolated through Sparkle's `rc` channel. Normal stable
 installations do not discover an RC; only installations that explicitly select

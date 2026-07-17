@@ -1,7 +1,0 @@
-self-hosted-runner:
-  labels:
-    - bd-to-avp-release
-
-config-variables: null
-
-paths:

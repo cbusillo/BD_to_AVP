@@ -31,7 +31,6 @@
       "secrets": [
         "APPLE_ID",
         "CERTIFICATE",
-        "CERTIFICATE_INSTALLER",
         "CERTIFICATE_PASSWORD",
         "DEV_ID",
         "KEYCHAIN_PASSWORD",

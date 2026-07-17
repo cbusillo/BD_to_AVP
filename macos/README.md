@@ -46,8 +46,8 @@ cache while the embedded AVPlayer is open and removed when the preview closes.
 See `docs/native-worker-protocol-v7.md` for the request, event, and ownership
 contract.
 
-The application targets Apple Silicon macOS 26 or later while remaining
-buildable with the Xcode 27 SDK. Packaged release validation rejects a Swift
+The application targets Apple Silicon macOS 26 or later and uses the pinned
+Xcode 26.5 release toolchain for production packaging. Packaged validation rejects a Swift
 binary, embedded engine, or bundled Mach-O that requires a newer system.
 
 See [macOS UI Acceptance](../docs/macos-ui-acceptance.md) for the current

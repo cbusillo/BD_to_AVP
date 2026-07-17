@@ -15,6 +15,9 @@ permissions:
 env:
   GH_REPO: ${{ github.repository }}
   XCODEGEN_VERSION: 2.45.4
+  XCODEGEN_SHA256: 090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef
+  XCODE_VERSION: "26.5"
+  XCODE_BUILD_VERSION: 17F42
 
 concurrency:
   group: release
@@ -306,7 +309,7 @@ jobs:
   package:
     name: Build, sign, notarize, and validate DMG
     needs: prepare
-    runs-on: [self-hosted, macOS, ARM64, bd-to-avp-release]
+    runs-on: macos-26
     timeout-minutes: 180
     environment: macos-signing
     permissions:
@@ -333,19 +336,31 @@ jobs:
             exit 1
           fi
           test "$(uname -m)" = "arm64"
-          test "$(sw_vers -productVersion | cut -d. -f1)" = "27"
-          XCODE_VERSION=$(xcodebuild -version)
-          if [[ ! "$XCODE_VERSION" =~ ^Xcode\ 27([.]|$) ]]; then
-            echo "Release builds require Xcode 27." >&2
-            printf '%s\n' "$XCODE_VERSION" >&2
+          test "$(sw_vers -productVersion | cut -d. -f1)" = "26"
+          XCODE_PATH="/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+          if [ ! -d "$XCODE_PATH" ]; then
+            echo "Pinned Xcode path is unavailable: $XCODE_PATH" >&2
             exit 1
           fi
-          command -v xcodegen >/dev/null
-          test "$(xcodegen --version)" = "Version: $XCODEGEN_VERSION"
+          sudo xcode-select -s "$XCODE_PATH"
+          test "$(xcodebuild -version | sed -n '1p')" = "Xcode $XCODE_VERSION"
+          test "$(xcodebuild -version | sed -n '2p')" = "Build version $XCODE_BUILD_VERSION"
           if [ -n "${BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE:-}" ]; then
             echo "Release builds must not override the macOS 26 deployment target." >&2
             exit 1
           fi
+
+      - name: Install pinned XcodeGen
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/xcodegen.zip"
+          curl --fail --location --silent --show-error \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip" \
+            --output "$ARCHIVE"
+          printf '%s  %s\n' "$XCODEGEN_SHA256" "$ARCHIVE" | shasum -a 256 --check
+          ditto -x -k "$ARCHIVE" "$RUNNER_TEMP"
+          test "$("$RUNNER_TEMP/xcodegen/bin/xcodegen" --version)" = "Version: $XCODEGEN_VERSION"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
@@ -745,9 +760,6 @@ jobs:
           discs. Power users who use the terminal/PyPI version should follow
           the manual dependency instructions in the README.
 
-          The packaged command-line entry point is available inside the app at
-          `Contents/MacOS/3D Blu-ray to Vision Pro`. Launching it with arguments
-          uses terminal mode; launching it without arguments opens the GUI.
           NOTES
           } > release-notes-prefix.md
 

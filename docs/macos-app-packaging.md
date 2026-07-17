@@ -89,8 +89,9 @@ interface is reserved for `0.3.0rc1` with a build greater than stable build
 the stable workflow ID, PyPI Trusted Publisher binding, appcast history,
 attestation checks, and guarded environment approval contract.
 
-The package job runs on the bounded Apple-Silicon release runner with macOS 27,
-Xcode 27, and XcodeGen 2.45.4. It:
+The package job runs on GitHub's Apple-Silicon `macos-26` runner. It selects
+Xcode 26.5 build `17F42` explicitly and installs the XcodeGen 2.45.4 release
+artifact only after verifying its committed SHA-256 digest. It:
 
 1. verifies that protected `main` has not moved;
 2. imports the Developer ID Application certificate into an ephemeral keychain;

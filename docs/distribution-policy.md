@@ -80,8 +80,8 @@ document it as an external dependency with preflight behavior.
 
 - The accepted SwiftUI application and bundled-worker architecture are the
   production GUI path. The protected-main release workflow builds that app with
-  the production name and bundle identifier, notarizes it on the bounded macOS
-  27 release runner, and verifies the exact DMG again on macOS 26.
+  the production name and bundle identifier on a pinned GitHub-hosted macOS 26
+  toolchain, then verifies the exact DMG again in a separate macOS 26 job.
 - The first candidate on that path is reserved for `0.3.0rc1` after Ship's
   physical-disc evidence is accepted. RC visibility remains explicit opt-in;
   normal stable installations must not discover it.

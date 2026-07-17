@@ -212,7 +212,11 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
         compatibility = workflow["jobs"]["compatibility"]
         create_draft = workflow["jobs"]["create-draft"]
 
-        self.assertEqual(package["runs-on"], ["self-hosted", "macOS", "ARM64", "bd-to-avp-release"])
+        self.assertEqual(package["runs-on"], "macos-26")
+        self.assertEqual(workflow["env"]["XCODE_VERSION"], "26.5")
+        self.assertIn("Xcode_${XCODE_VERSION}.app", str(package))
+        self.assertIn("17F42", str(workflow["env"]))
+        self.assertIn("090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef", str(workflow["env"]))
         self.assertIn("python scripts/native_app.py package", str(package))
         self.assertIn("python -m scripts.macos_release", str(package))
         self.assertNotIn("python -m scripts.briefcase_app package", str(package))
