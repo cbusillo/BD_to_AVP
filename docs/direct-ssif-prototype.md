@@ -34,7 +34,7 @@ Homebrew formula update therefore fails CI until the recorded compatibility
 baseline is reviewed and updated.
 
 The binary is written to `build/ssif-probe/ssif_probe`, which is ignored and is
-not included in wheels, Briefcase, or the native preview app.
+not included in wheels, Briefcase staging, or the production macOS app.
 
 ## Commands
 

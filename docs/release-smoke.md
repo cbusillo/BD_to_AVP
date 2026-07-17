@@ -156,7 +156,7 @@ way so device, permission, AACS, and media-read failures can be distinguished.
 - The app's bundled tools are used where expected.
 - Missing MakeMKV produces a clear recovery path.
 - Installing MakeMKV clears the MakeMKV preflight blocker.
-- The physical-disc beta passes inspection, cancellation/eject, automatic
+- The physical-disc candidate passes inspection, cancellation/eject, automatic
   insertion/ejection refresh, and at least one recorded real-disc conversion
   attempt on supported hardware.
 - A recoverable MakeMKV or subtitle failure presents explicit actions and never
@@ -172,12 +172,12 @@ way so device, permission, AACS, and media-read failures can be distinguished.
 Before a draft GitHub Release is published, the release workflow must run:
 
 ```sh
-uv run python -m scripts.sparkle_bundle \
-  --app "build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app"
-uv run python -m scripts.sparkle_bundle \
-  --app "build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app" \
+uv run python -m scripts.macos_release verify-app \
+  --app "macos/build/package/3D Blu-ray to Vision Pro.app"
+uv run python -m scripts.macos_release verify-app \
+  --app "macos/build/package/3D Blu-ray to Vision Pro.app" \
   --verify-signatures
-uv run python -m scripts.sparkle_bundle \
+uv run python -m scripts.macos_release verify-dmg \
   --dmg dist/<release>.dmg \
   --verify-signatures \
   --verify-distribution

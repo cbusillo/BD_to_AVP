@@ -27,6 +27,10 @@ version = "{version}"
 
 [tool.briefcase]
 project_name = "Test"
+bundle = "com.shinycomputers"
+
+[tool.briefcase.app.bd-to-avp]
+formal_name = "Test"
 
 [tool.briefcase.app.bd-to-avp.macOS.info]
 CFBundleVersion = "{build}"
@@ -45,6 +49,27 @@ source = {{ editable = "." }}
         encoding="utf-8",
     )
     return pyproject_path, lock_path
+
+
+def make_macos_project(root: Path, *, version: str = "1.2.3", build: str = "10") -> Path:
+    project_path = root / "project.yml"
+    project_path.write_text(
+        f"""\
+targets:
+  BluRayToVisionPro:
+    settings:
+      base:
+        CURRENT_PROJECT_VERSION: {build}
+        MARKETING_VERSION: {version}
+        PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp
+        PRODUCT_NAME: Test
+      configs:
+        Release:
+          INFOPLIST_FILE: BluRayToVisionPro/Info-Release.plist
+""",
+        encoding="utf-8",
+    )
+    return project_path
 
 
 def published_release(tag_name: str, *, prerelease: bool = False, draft: bool = False) -> dict[str, object]:
@@ -136,6 +161,15 @@ class ReleaseMetadataTests(unittest.TestCase):
 
             with self.assertRaisesRegex(release.ReleaseError, "does not match"):
                 release.load_release_metadata(pyproject_path, lock_path)
+
+    def test_metadata_rejects_macos_project_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root)
+            macos_project_path = make_macos_project(root, build="9")
+
+            with self.assertRaisesRegex(release.ReleaseError, "CURRENT_PROJECT_VERSION"):
+                release.load_release_metadata(pyproject_path, lock_path, macos_project_path)
 
     def test_metadata_rejects_noncanonical_release_versions(self) -> None:
         for value in ("1.2", "1.2.3.post1", "01.2.3", "1.2.3RC1"):
@@ -274,6 +308,27 @@ class ReleasePreparationTests(unittest.TestCase):
             "11",
         )
         self.assertEqual(lock["package"][0]["version"], "1.2.4rc1")
+
+    def test_prepare_updates_macos_project_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root)
+            macos_project_path = make_macos_project(root)
+
+            metadata = release.prepare_release(
+                "1.2.4rc1",
+                "11",
+                pyproject_path=pyproject_path,
+                lock_path=lock_path,
+                macos_project_path=macos_project_path,
+                lock_runner=fake_lock_runner,
+            )
+
+            project_text = macos_project_path.read_text(encoding="utf-8")
+
+        self.assertEqual(metadata.package_version, "1.2.4rc1")
+        self.assertIn("MARKETING_VERSION: 1.2.4rc1", project_text)
+        self.assertIn("CURRENT_PROJECT_VERSION: 11", project_text)
 
     def test_prepare_leaves_files_unchanged_when_lock_refresh_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

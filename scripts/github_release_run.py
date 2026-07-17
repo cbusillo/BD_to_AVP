@@ -25,7 +25,6 @@ NONTERMINAL_STATUSES = {"in_progress", "pending", "queued", "requested"}
 REPOSITORY = "cbusillo/BD_to_AVP"
 WORKFLOW_POLICIES = {
     "Release from protected main": (".github/workflows/briefcase.yml", 101_708_423),
-    "Publish Native UI Preview": (".github/workflows/native-ui-preview.yml", 311_846_830),
 }
 ALLOWED_WORKFLOWS = tuple(WORKFLOW_POLICIES)
 REQUIRED_BRANCH = "main"
