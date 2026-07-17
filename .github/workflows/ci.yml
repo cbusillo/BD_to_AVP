@@ -71,6 +71,21 @@ jobs:
           uv run python -c
           "import bd_to_avp; import bd_to_avp.__main__; import bd_to_avp.app"
 
+      - name: CLI-only install smoke
+        env:
+          UV_PROJECT_ENVIRONMENT: .venv-cli
+        run: |
+          uv sync --locked --no-default-groups --no-editable --python 3.12
+          .venv-cli/bin/python -c \
+            "import importlib.util; assert importlib.util.find_spec('PySide6') is None"
+          .venv-cli/bin/bd-to-avp --version
+          .venv-cli/bin/bd-to-avp --help >/dev/null
+          if OUTPUT=$(.venv-cli/bin/bd-to-avp 2>&1); then
+            echo "CLI-only install unexpectedly started the GUI." >&2
+            exit 1
+          fi
+          grep -F 'bd_to_avp[gui]' <<< "$OUTPUT"
+
       - name: Build Python package
         run: uv build
 
