@@ -107,9 +107,27 @@ targets:
         MARKETING_VERSION: 0.1.0
         PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.spatial-playback-probe
         PRODUCT_MODULE_NAME: SpatialPlaybackProbe
-        PRODUCT_NAME: BD to AVP Spatial Playback
+        PRODUCT_NAME: BD to AVP Playback Check
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "7"
+        XROS_DEPLOYMENT_TARGET: "26.0"
+
+  SpatialPlaybackProbeTests:
+    type: bundle.unit-test
+    platform: auto
+    supportedDestinations: [visionOS]
+    deploymentTarget:
+      visionOS: "26.0"
+    sources:
+      - path: SpatialPlaybackProbeTests
+    dependencies:
+      - target: SpatialPlaybackProbe
+    settings:
+      base:
+        BUNDLE_LOADER: $(TEST_HOST)
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.spatial-playback-probe.tests
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/BD to AVP Playback Check.app/BD to AVP Playback Check
         XROS_DEPLOYMENT_TARGET: "26.0"
 
   SpatialPlaybackProbeUITests:
@@ -146,8 +164,10 @@ schemes:
     build:
       targets:
         SpatialPlaybackProbe: all
+        SpatialPlaybackProbeTests: [test]
     run:
       config: Debug
     test:
       targets:
+        - SpatialPlaybackProbeTests
         - SpatialPlaybackProbeUITests

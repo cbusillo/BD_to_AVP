@@ -559,14 +559,14 @@ Generated fixtures are {DURATION_SECONDS} seconds long. A white flash occurs onc
 
 ## Per-Fixture Gate
 
-1. Open the movie and select **Open Spatial View**.
-2. Confirm decode support is **Supported**, player and rendering are **Ready**, and actual presentation is **spatial**.
-3. Confirm depth is comfortable and not inverted; the left eye must remain primary.
-4. Enable English subtitles and play the default English 5.1 track. Each channel beep must align with the white flash.
-5. Seek to **Beginning**, **Middle**, and **End** twice. Playback must resume without drift, silence,
-   or loss of spatial mode.
-6. Switch to the French alternate stereo track. The sound must change to alternating left/right higher-pitched beeps.
-7. Switch back to English 5.1 and confirm the six-position sequence returns.
+1. Open the movie in **BD to AVP Playback Check** and select **Run Playback Check**.
+2. Watch the beginning, middle, and end sequence, then answer the two visible playback questions.
+3. Confirm the automatic result passes and depth is comfortable and not inverted; the left eye must remain primary.
+4. Expand **Technical details**, enable English subtitles, and play the default English 5.1 track.
+   Each channel beep must align with the white flash.
+5. Switch to the French alternate stereo track. The sound must change to alternating left/right higher-pitched beeps.
+6. Switch back to English 5.1 and confirm the six-position sequence returns.
+7. Share the playback report with the fixture notes.
 
 | Pass | Fixture | Pipeline path | Result |
 | --- | --- | --- | --- |

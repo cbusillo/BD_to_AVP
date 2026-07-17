@@ -52,5 +52,5 @@ binary, embedded engine, or bundled Mach-O that requires a newer system.
 See [Native UI Acceptance](../docs/native-ui-acceptance.md) for the current
 profile, appearance, accessibility, window-size, and native screenshot evidence.
 
-See [visionOS Spatial Playback Probe](../docs/visionos-spatial-playback-probe.md)
+See [visionOS Playback Validator](../docs/visionos-playback-validator.md)
 for the isolated RealityKit companion target and physical-headset validation flow.
