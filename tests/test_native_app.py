@@ -18,6 +18,7 @@ from scripts.native_app import (
     NATIVE_EXECUTABLE_NAME,
     NATIVE_MINIMUM_SYSTEM_VERSION,
     NATIVE_PACKAGE_CONFIGURATION,
+    NATIVE_PRERELEASE_VERSION,
     NATIVE_PRODUCT_NAME,
     NATIVE_SHORT_VERSION,
     WORKER_PROTOCOL_VERSION,
@@ -54,7 +55,8 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertEqual(NATIVE_EXECUTABLE_NAME, NATIVE_PRODUCT_NAME)
         self.assertEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp.native-preview")
         self.assertEqual(NATIVE_SHORT_VERSION, "0.3.0")
-        self.assertEqual(NATIVE_BUILD_VERSION, "2")
+        self.assertEqual(NATIVE_BUILD_VERSION, "3")
+        self.assertEqual(NATIVE_PRERELEASE_VERSION, "0.3.0-beta.2")
         self.assertEqual(NATIVE_MINIMUM_SYSTEM_VERSION, "26.0")
 
     def test_uses_one_native_settings_scene_and_release_grade_source_groups(self) -> None:
@@ -86,7 +88,9 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn('Picker("Update Channel"', app_source)
         self.assertIn("openWindow(id: AppWindowID.settings)", app_source)
         self.assertIn(".windowResizability(.contentMinSize)", app_source)
-        self.assertEqual(target_settings["base"]["CURRENT_PROJECT_VERSION"], NATIVE_BUILD_VERSION)
+        self.assertEqual(target_settings["base"]["CURRENT_PROJECT_VERSION"], "2")
+        self.assertEqual(preview_settings["CURRENT_PROJECT_VERSION"], NATIVE_BUILD_VERSION)
+        self.assertNotIn("CURRENT_PROJECT_VERSION", release_settings)
         self.assertEqual(project["options"]["deploymentTarget"]["macOS"], NATIVE_MINIMUM_SYSTEM_VERSION)
         self.assertEqual(project["settings"]["base"]["MACOSX_DEPLOYMENT_TARGET"], NATIVE_MINIMUM_SYSTEM_VERSION)
         self.assertEqual(preview_settings["MARKETING_VERSION"], NATIVE_SHORT_VERSION)

@@ -110,7 +110,7 @@ jobs:
           fi
 
           LATEST_RELEASE_TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" \
-            --jq .tag_name 2>/dev/null || true)
+            --jq .tag_name)
           echo "latest_release_tag=$LATEST_RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
   package:
@@ -574,7 +574,7 @@ jobs:
           done
 
           LATEST_RELEASE_TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" \
-            --jq .tag_name 2>/dev/null || true)
+            --jq .tag_name)
           if [ "$LATEST_RELEASE_TAG" = "$PREVIEW_TAG" ] \
             || [ "$LATEST_RELEASE_TAG" != "$EXPECTED_LATEST_RELEASE_TAG" ]; then
             jq -n '{draft: true, prerelease: true, make_latest: "false"}' > unpublish.json
@@ -611,3 +611,49 @@ jobs:
             fi
             sleep 5
           done
+
+      - name: Restore failed preview publication to draft
+        if: failure() && steps.draft_release.outputs.release_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.draft_release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          RELEASE_JSON=""
+          for attempt in {1..5}; do
+            if RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"); then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "CRITICAL: failed preview release could not be inspected for draft restoration." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ "$(jq -r .draft <<< "$RELEASE_JSON")" = "true" ]; then
+            exit 0
+          fi
+          if [ "$(jq -r .tag_name <<< "$RELEASE_JSON")" != "$PREVIEW_TAG" ] \
+            || [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ] \
+            || [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "true" ] \
+            || [ "$(jq -r .name <<< "$RELEASE_JSON")" != "$PREVIEW_RELEASE_NAME" ]; then
+            echo "CRITICAL: failed preview release identity changed; refusing to modify it." >&2
+            exit 1
+          fi
+
+          jq -n '{draft: true, prerelease: true, make_latest: "false"}' > restore-draft.json
+          for attempt in {1..5}; do
+            if gh api --method PATCH \
+              "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+              --input restore-draft.json > restored.json \
+              && [ "$(jq -r .draft restored.json)" = "true" ] \
+              && [ "$(jq -r .prerelease restored.json)" = "true" ] \
+              && [ "$(jq -r .tag_name restored.json)" = "$PREVIEW_TAG" ]; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              sleep 2
+            fi
+          done
+          echo "CRITICAL: preview publication failed and the release could not be restored to draft." >&2
+          exit 1

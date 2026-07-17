@@ -302,6 +302,7 @@ class NativePreviewWorkflowTests(unittest.TestCase):
     def test_workflow_isolated_from_production_channels(self) -> None:
         workflow = load_workflow()
         workflow_text = str(workflow).lower()
+        workflow_source = (REPO_ROOT / ".github" / "workflows" / "native-ui-preview.yml").read_text(encoding="utf-8")
 
         self.assertNotIn("appcast", workflow_text)
         self.assertNotIn("sparkle", workflow_text)
@@ -321,7 +322,26 @@ class NativePreviewWorkflowTests(unittest.TestCase):
         self.assertIn("unpublish.json", workflow_text)
         self.assertIn("critical: latest-release validation failed", workflow_text)
         self.assertNotIn("--input unpublish.json >/dev/null || true", workflow_text)
+        self.assertEqual(
+            workflow_source.count('releases/latest" \\\n            --jq .tag_name)'),
+            2,
+        )
         self.assertIn('"$total_count" = "2"', workflow_text)
+
+    def test_workflow_restores_failed_publication_to_resumable_draft(self) -> None:
+        workflow = load_workflow()
+        publish_steps = {step["name"]: step for step in workflow["jobs"]["publish"]["steps"]}
+        restore = publish_steps["Restore failed preview publication to draft"]
+        restore_text = str(restore).lower()
+
+        self.assertEqual(restore["if"], "failure() && steps.draft_release.outputs.release_id != ''")
+        self.assertIn("steps.draft_release.outputs.release_id", restore_text)
+        self.assertIn("draft: true", restore_text)
+        self.assertIn("target_commitish", restore_text)
+        self.assertEqual(restore_text.count("for attempt in {1..5}"), 2)
+        self.assertIn("could not be inspected for draft restoration", restore_text)
+        self.assertIn("refusing to modify it", restore_text)
+        self.assertIn("could not be restored to draft", restore_text)
 
     def test_workflow_attests_and_revalidates_exact_assets(self) -> None:
         workflow = load_workflow()
