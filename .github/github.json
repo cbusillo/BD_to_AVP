@@ -145,7 +145,7 @@
   "qaLabels": [],
   "deployLabels": [],
   "healthUrls": ["https://cbusillo.github.io/BD_to_AVP/appcast.xml"],
-  "relatedRepos": [],
+  "relatedRepos": ["cbusillo/homebrew-tap"],
   "githubSignals": {
     "postMerge": {
       "waitForActions": true,

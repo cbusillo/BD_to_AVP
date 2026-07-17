@@ -42,10 +42,11 @@ MV-HEVC spatial output and software AV1 stereo export.
 
 ## Terminal install or update (power users)
 
-The Homebrew formula is the preferred terminal install. It installs the locked CLI dependencies and FFmpeg while
-intentionally omitting the PySide6 GUI. Use the signed release DMG for the desktop app.
+The formula in the custom third-party `cbusillo/tap` repository is the preferred terminal install. It installs the
+locked CLI dependencies and FFmpeg while intentionally omitting the PySide6 GUI. Use the signed release DMG for the
+desktop app.
 
-### Homebrew formula
+### Custom Homebrew tap
 
 ```bash
 brew tap cbusillo/tap
