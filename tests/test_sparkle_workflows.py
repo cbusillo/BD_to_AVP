@@ -29,10 +29,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         smoke_text = (REPO_ROOT / "docs" / "release-smoke.md").read_text(encoding="utf-8")
 
         self.assertNotIn("python scripts/sparkle_bundle.py", workflow_text)
-        self.assertEqual(workflow_text.count("python -m scripts.sparkle_bundle"), 5)
+        self.assertEqual(workflow_text.count("python -m scripts.sparkle_bundle"), 2)
         self.assertNotIn("python scripts/sparkle_bundle.py", smoke_text)
         self.assertNotIn("python scripts/briefcase_app.py", workflow_text + ci_text)
-        self.assertEqual((workflow_text + ci_text).count("python -m scripts.briefcase_app"), 5)
+        self.assertEqual((workflow_text + ci_text).count("python -m scripts.briefcase_app"), 2)
+        self.assertIn("python scripts/native_app.py package", workflow_text)
+        self.assertIn("python -m scripts.macos_release", workflow_text)
 
         result = subprocess.run(
             [sys.executable, "-S", "-m", "scripts.sparkle_bundle", "--help"],
@@ -94,6 +96,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(package["needs"], "prepare")
         self.assertEqual(package["environment"], "macos-signing")
         self.assertEqual(package["permissions"]["contents"], "read")
+        self.assertEqual(package["runs-on"], "macos-26")
+        self.assertNotIn("self-hosted", str(package))
+        self.assertEqual(workflow["env"]["XCODE_VERSION"], "26.5")
+        self.assertIn("Xcode_${XCODE_VERSION}.app", str(package))
+        self.assertIn("Build version $XCODE_BUILD_VERSION", str(package))
+        self.assertIn("xcodegen.zip", str(package))
+        self.assertIn("XCODEGEN_SHA256", str(package))
         self.assertIn("--verify-signatures", str(package))
         self.assertIn("--verify-distribution", str(package))
         self.assertIn("BUILD_VERSION", str(package))
@@ -101,10 +110,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("dmg_sha256", package["outputs"])
         self.assertIn("dmg_size", package["outputs"])
         self.assertIn("SHA256SUMS", str(package))
-        self.assertIn("DMG_NAME=${ORIGINAL_DMG_NAME// /-}", str(package))
+        self.assertIn('DMG_NAME="3D-Blu-ray-to-Vision-Pro-$PACKAGE_VERSION.dmg"', str(package))
         self.assertIn("BUILD_KEYCHAIN_PASSWORD", str(package))
         self.assertIn("APPLE_APP_PASSWORD", str(package))
-        self.assertIn('NOTARY_PROFILE="briefcase-macOS-$TEAM_ID"', str(package))
+        self.assertIn('NOTARY_PROFILE="bd-to-avp-release-$TEAM_ID-$GITHUB_RUN_ID"', str(package))
+        self.assertIn("python scripts/native_app.py package", str(package))
+        self.assertIn("python -m scripts.macos_release", str(package))
+        self.assertNotIn("python -m scripts.briefcase_app package", str(package))
+        self.assertNotIn("CERTIFICATE_INSTALLER", str(package))
+        self.assertNotIn("default-keychain", str(package))
         self.assertNotIn("KEYCHAIN_NAME", str(package))
         self.assertNotIn("SPARKLE_EDDSA_PRIVATE_KEY", str(package))
 
@@ -114,7 +128,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             set(jobs["create-draft"]["needs"]),
-            {"prepare", "package", "attest-package"},
+            {"prepare", "package", "attest-package", "compatibility"},
         )
         self.assertIn("release_id", jobs["create-draft"]["outputs"])
         self.assertIn("release_created_at", jobs["create-draft"]["outputs"])
@@ -200,6 +214,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(verify["permissions"]["attestations"], "read")
         self.assertIn("gh attestation verify", str(verify))
         self.assertIn('--source-digest "$GITHUB_SHA"', str(verify))
+        self.assertIn("--deny-self-hosted-runners", str(verify))
         self.assertIn("TOTAL_ASSET_COUNT", str(verify))
 
     def test_private_key_is_only_exposed_to_read_only_signing_step(self) -> None:

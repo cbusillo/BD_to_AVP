@@ -30,7 +30,7 @@ from scripts.github_release_run import (
 REPOSITORY = "cbusillo/BD_to_AVP"
 RUN_ID = 29597548980
 HEAD_SHA = "9e9a38c715dbbe5df97e6d3a8ba715731607db6a"
-WORKFLOW = "Publish Native UI Preview"
+WORKFLOW = "Release from protected main"
 ENVIRONMENT_ID = 17_971_370_694
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUN_ENDPOINT = f"repos/{REPOSITORY}/actions/runs/{RUN_ID}"
@@ -76,8 +76,8 @@ def expectation(**overrides: Any) -> RunExpectation:
 def workflow_run(*, status: str, conclusion: str | None = None, **overrides: Any) -> dict[str, object]:
     values: dict[str, object] = {
         "name": WORKFLOW,
-        "path": ".github/workflows/native-ui-preview.yml",
-        "workflow_id": 311_846_830,
+        "path": ".github/workflows/briefcase.yml",
+        "workflow_id": 101_708_423,
         "head_sha": HEAD_SHA,
         "head_branch": "main",
         "event": "workflow_dispatch",
@@ -247,7 +247,7 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
 
     def test_wrong_workflow_is_a_safety_error(self) -> None:
         client = FakeGitHubAPI()
-        client.add(RUN_ENDPOINT, workflow_run(status="in_progress", name="Release from protected main"))
+        client.add(RUN_ENDPOINT, workflow_run(status="in_progress", name="Unexpected release workflow"))
         events: list[dict[str, object]] = []
 
         result = main(
@@ -623,10 +623,6 @@ class GitHubReleaseRunContractTests(unittest.TestCase):
                 "Release from protected main": {
                     "path": ".github/workflows/briefcase.yml",
                     "id": 101_708_423,
-                },
-                "Publish Native UI Preview": {
-                    "path": ".github/workflows/native-ui-preview.yml",
-                    "id": 311_846_830,
                 },
             },
         )

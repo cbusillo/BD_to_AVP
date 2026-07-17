@@ -34,29 +34,30 @@ synchronous PyGithub About-dialog checker, and exposes Sparkle's standard
 `Check for Updates…` action. Source/development builds retain only a manual
 GitHub Releases link and never initialize Sparkle.
 
-The native SwiftUI project now exact-pins the same Sparkle 2.9.4 package. A
+The production SwiftUI project exact-pins the same Sparkle 2.9.4 package. A
 single observable update controller owns Sparkle's automatic-check preference,
 the shared `BDToAVPUpdateChannel` Stable/`rc` selection, check availability,
 Settings controls, and Help commands. It starts Sparkle only when the bundle has
 the complete direct-distribution policy: `direct` channel, HTTPS feed, public
 key, automatic installation disabled, extraction verification enabled, and no
 forced `SUEnableAutomaticChecks` value. Missing or invalid metadata fails closed
-to the GitHub Releases fallback. Sparkle relaunch is postponed while the native
+to the GitHub Releases fallback. Sparkle relaunch is postponed while the
 conversion worker is active and resumes after the worker becomes idle.
 
-Native Debug and Preview builds omit all update metadata and do not initialize
-Sparkle, although the current single-target SPM build embeds the dormant signed
-framework. The native Release plist matches the Briefcase updater policy, but
-its current version/build identity is not eligible for production publication.
-Signed installed-app upgrades, Stable/RC feed behavior, permission prompting,
-and final rendered-note appearance remain release-cycle validation for #197.
+Debug builds use a separate Development identity, omit all update metadata, and
+do not initialize Sparkle, although the single-target SPM build embeds the
+dormant signed framework. The Release configuration uses the production bundle
+identifier and updater policy. Signed installed-app upgrades, Stable/RC feed
+behavior, permission prompting, and final rendered-note appearance remain
+release-cycle validation for #197.
 
-Briefcase writes the direct-distribution metadata and repository build counter,
-and the repo-owned signing extension adds nested `.xpc` bundles to Briefcase's
-inside-out signing pass. The manual main-only release workflow validates the
-final notarized DMG, creates a draft release, signs it with the protected
-environment key, attaches a cumulative appcast snapshot, re-downloads and
-verifies every asset, publishes the draft, and deploys that durable snapshot.
+The Xcode Release target writes the direct-distribution metadata and canonical
+repository build counter. Briefcase stages only the embedded Python engine. The
+manual main-only release workflow validates the final notarized app and DMG on
+the release host and again on macOS 26, creates a draft release, signs it with
+the protected environment key, attaches a cumulative appcast snapshot,
+re-downloads and verifies every asset, publishes the draft, and deploys that
+durable snapshot.
 Each new appcast item embeds the digest-bound draft release body as Markdown, so
 Sparkle uses its adaptive native text view without loading GitHub page chrome or
 making a second release-note request. A full-release link remains available for
@@ -64,10 +65,10 @@ downloads and extended context, and historical external-link items remain valid.
 The live feed remains empty until the first enabled release is published. See
 [release-process.md](release-process.md) for the operator sequence.
 
-The direct app requires macOS 14 or later, matching the minimum deployment
-target of the bundled MP4Box and edge264 executables.
-PySide6 remains below 6.10 because newer wheels contain binaries requiring
-macOS 15 even though their wheel platform tags permit installation on 14.
+Stable `0.2.143` remains compatible with macOS 14. The production SwiftUI line
+starting with `0.3.0rc1` requires Apple Silicon and macOS 26. Sparkle's minimum
+system version prevents older systems from being offered an incompatible item;
+those installations remain on the last compatible stable build.
 
 ## Implementation Evidence
 
@@ -120,55 +121,46 @@ A future App Store build will set its channel to `app-store`, omit Sparkle
 metadata, and omit `Sparkle.framework` entirely.
 
 `vendor/sparkle-macos.toml` pins the Sparkle version, archive URL, and digest.
-`scripts/sparkle_macos.py` verifies and safely extracts the archive, then copies
-the framework before Briefcase's build/package signing pass while preserving
-symlinks and executable permissions. Production packaging and `sign_update`
-preparation force a fresh extraction from the verified archive instead of
-trusting the extraction cache.
+The Xcode project exact-pins that version through Swift Package Manager.
+Production packaging signs the resulting framework, nested app, and XPC bundles
+from the inside out before signing the containing application.
 
 Sparkle 2.9.4 contains `Updater.app`, `Downloader.xpc`, and `Installer.xpc`.
-Briefcase 0.4.4 does not sign `.xpc` bundles as first-class targets, so the
-repo-owned signing patch includes them without modifying site-packages. Nested
-XPC services and apps are signed before `Sparkle.framework`, which is signed
-before the containing app. Sparkle targets do not inherit the host app's Python
-runtime entitlements.
+Nested XPC services and apps are signed before `Sparkle.framework`, which is
+signed before the containing app. Sparkle targets do not inherit the worker's
+Python runtime entitlements.
 
 ## Build Versioning
 
 `CFBundleShortVersionString` remains the human release version, such as
-`0.2.144` or `0.2.144rc1`.
+`0.3.0` or `0.3.0rc1`.
 
-`CFBundleVersion` must be a repository-tracked monotonic integer string. With
-the currently locked Briefcase 0.4.4, #163 must set it explicitly through the
-macOS Info.plist map, for example:
+`CFBundleVersion` must be a repository-tracked monotonic integer string. The
+canonical value remains in the macOS Info.plist map used by runtime staging:
 
 ```toml
 [tool.briefcase.app.bd-to-avp.macOS.info]
-CFBundleVersion = "144"
+CFBundleVersion = "147"
 ```
 
-It must increment for every published direct-DMG build, including prereleases,
-independently of the human version. If #163 upgrades Briefcase instead, the
-generated app must prove that the replacement configuration writes the expected
-`CFBundleVersion` before this direct override can be removed.
+It must increment for every published direct-DMG build, including RCs,
+independently of the human version. The Xcode Release target must use the same
+value.
 
-Briefcase 0.4.4 inherits the human version from `[project].version`; the
-duplicate `[tool.briefcase].version` key is intentionally absent. Full RC and
-Stable versions are committed before release. Prepare both the human version,
-the monotonic build counter, and `uv.lock` with:
+Briefcase staging and the Xcode package both inherit the human version from
+`[project].version`; the duplicate `[tool.briefcase].version` key is
+intentionally absent. Full RC and Stable versions are committed before release.
+Prepare the human version, monotonic build counter, `uv.lock`, and Xcode Release
+metadata with:
 
 ```sh
 uv run python scripts/release.py prepare --version <version> --build <build>
 ```
 
-Because the v0.4.4 template emits its default before custom `info` entries,
-implementation issue #163 must inspect the generated plist with
-`plutil -extract CFBundleVersion raw <Info.plist>` and fail unless the resolved
-value exactly matches the repository counter.
-
 The workflow must fail before release publication if the build number is
 missing, still `1`, non-numeric, duplicated by an existing release, or not newer
-than the feed.
+than the feed. Packaging also rejects an Xcode bundle whose version or build
+differs from the committed release metadata.
 
 ## Appcast and Key Custody
 

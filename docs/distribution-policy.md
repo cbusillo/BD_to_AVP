@@ -62,8 +62,9 @@ The custom `cbusillo/tap` Homebrew formula is the preferred terminal install.
 It builds from the stable GitHub tag, consumes the committed `uv.lock`, depends
 on Homebrew FFmpeg and Python 3.12, and omits the PySide6 GUI packages. The base
 PyPI package follows the same CLI-only boundary; users who intentionally want
-the legacy Python GUI may install the `gui` extra, while the Briefcase release
-continues to declare PySide6 explicitly.
+the legacy Python GUI may install the `gui` extra. The production DMG uses the
+SwiftUI interface while retaining Briefcase only to stage the embedded Python
+engine and its dependencies.
 
 The formula does not depend on a MakeMKV cask. MakeMKV is optional for existing
 MKV, MTS, and M2TS inputs, remains external for disc extraction, and should be
@@ -75,24 +76,18 @@ Terminal dependency changes should not weaken the GUI policy. If a tool is
 required by the GUI, the release workflow should either bundle and verify it or
 document it as an external dependency with preflight behavior.
 
-## Deferred Tracks
+## Current And Deferred Tracks
 
-- The native SwiftUI shell and bundled-worker architecture proof is tracked in
-  #198. It remains a direct-distribution prototype and does not change the
-  current Briefcase DMG release channel.
-- An early native UI feedback build is tracked in #202. It must ship as a
-  separately identified, opt-in GitHub prerelease that installs beside the
-  production app and does not enter either Sparkle channel, GitHub latest, or
-  PyPI. The first native production-replacement candidate is reserved for the
-  `0.3.0rc1` line after real conversion and updater prerequisites are complete.
-  Native UI prereleases are published by their own protected-main workflow with
-  an explicit semantic prerelease identity while retaining a monotonically
-  increasing native build number. Historical build `1` keeps its immutable tag
-  `native-ui-preview-1` and is identified as `v0.3.0-alpha.1`. Build `2` is
-  `v0.3.0-beta.1`; build `3` is `v0.3.0-beta.2`. The lane uses a dedicated macOS
-  27/Xcode 27 release runner to build a macOS 26-targeted app, then verifies the
-  notarized DMG on a macOS 26 runner before publication. Its exact two-asset
-  allowlist is the notarized DMG and `SHA256SUMS`.
+- The accepted SwiftUI application and bundled-worker architecture are the
+  production GUI path. The protected-main release workflow builds that app with
+  the production name and bundle identifier on a pinned GitHub-hosted macOS 26
+  toolchain, then verifies the exact DMG again in a separate macOS 26 job.
+- The first candidate on that path is reserved for `0.3.0rc1` after Ship's
+  physical-disc evidence is accepted. RC visibility remains explicit opt-in;
+  normal stable installations must not discover it.
+- The former side-by-side feedback lane is retired. Its immutable historical
+  tags and assets—`native-ui-preview-1`, `v0.3.0-beta.1`, and
+  `v0.3.0-beta.2`—remain outside Sparkle, GitHub latest, and PyPI.
 - PKG artifact policy is tracked in #118. Until that issue decides otherwise,
   PKG output is not the normal-user release path.
 - The Sparkle direct-DMG implementation and Stable/Release Candidates policy is

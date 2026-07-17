@@ -31,7 +31,6 @@
       "secrets": [
         "APPLE_ID",
         "CERTIFICATE",
-        "CERTIFICATE_INSTALLER",
         "CERTIFICATE_PASSWORD",
         "DEV_ID",
         "KEYCHAIN_PASSWORD",
@@ -73,10 +72,6 @@
       "Release from protected main": {
         "path": ".github/workflows/briefcase.yml",
         "id": 101708423
-      },
-      "Publish Native UI Preview": {
-        "path": ".github/workflows/native-ui-preview.yml",
-        "id": 311846830
       }
     }
   },
@@ -87,7 +82,6 @@
     "releaseProcess": "docs/release-process.md",
     "releaseWorkflows": [
       ".github/workflows/briefcase.yml",
-      ".github/workflows/native-ui-preview.yml",
       ".github/workflows/sparkle-pages.yml",
       ".github/workflows/manage-sparkle-pages.yml"
     ]
@@ -108,7 +102,7 @@
     },
     "test": {
       "unitSmoke": "uv run python -m unittest discover -s tests -t .",
-      "nativeShell": "uv run python scripts/native_app.py test",
+      "macosApp": "uv run python scripts/native_app.py test",
       "importSmoke": "uv run python -c 'import bd_to_avp; import bd_to_avp.__main__; import bd_to_avp.app'",
       "cliSmoke": "uv run bd-to-avp --help"
     },
@@ -116,7 +110,7 @@
       "pythonPackage": "uv build",
       "briefcaseCreate": "uv run python -m scripts.briefcase_app create --no-input",
       "briefcaseBuild": "uv run python -m scripts.briefcase_app build --no-input",
-      "nativePreviewPackage": "uv run python scripts/native_app.py package"
+      "macosPackage": "uv run python scripts/native_app.py package"
     },
     "inspection": {
       "tool": "jetbrains",
@@ -128,7 +122,7 @@
       "dependency or installer changes",
       "release workflow changes",
       "Briefcase packaging changes",
-      "native macOS packaging changes",
+      "macOS application packaging changes",
       "runtime toolchain changes",
       "GitHub repository settings change"
     ]
@@ -137,7 +131,6 @@
     "CI",
     "CodeQL",
     "Release from protected main",
-    "Publish Native UI Preview",
     "Manage Sparkle Pages",
     "Update FFmpeg Vendor Pins"
   ],

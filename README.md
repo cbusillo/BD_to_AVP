@@ -17,8 +17,8 @@ feasibility record before choosing it for headset delivery.
 
 ## Screenshots
 
-[![Screenshot of main screen](screenshots/main_medium.png)](screenshots/main.png)
-[![Screenshot of about screen](screenshots/about_medium.png)](screenshots/about.png)
+[![Main window](docs/images/native-ui-acceptance/main-empty-light.png)](docs/images/native-ui-acceptance/main-empty-light.png)
+[![Profiles settings](docs/images/native-ui-acceptance/profiles-dark.png)](docs/images/native-ui-acceptance/profiles-dark.png)
 
 ## GUI install
 
@@ -28,6 +28,10 @@ DMG file and drag the app to your Applications folder.
 The GUI app does not install Homebrew or modify your shell setup. Runtime tools are bundled into the app where possible.
 MakeMKV remains an external requirement for reading Blu-ray discs; install the current macOS version from the
 [MakeMKV] website before converting discs.
+
+The production interface starting with the `0.3.0` release line requires Apple
+Silicon and macOS 26 or later. Stable `0.2.143` remains the last desktop build
+for macOS 14 through 25.
 
 See [Distribution Policy](docs/distribution-policy.md) for the current GUI
 release artifact and dependency policy.
@@ -125,7 +129,7 @@ The GUI locks configuration load/save actions while a job is active so each
 run uses the settings captured at startup. Choosing **Stop Processing**
 requests a cooperative stop and keeps the button in a stopping state until the
 worker exits. When a disc, ISO, or Blu-ray folder contains multiple MVC titles,
-the native GUI can convert the main movie, every detected 3D video, or a custom
+the macOS app can convert the main movie, every detected 3D video, or a custom
 selection. Multi-title selections run serially and preserve completed outputs
 if a later video needs attention. For source-folder jobs, accepted MKV or subtitle error
 continuations resume the failed source and then continue through the original
