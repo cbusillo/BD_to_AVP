@@ -41,7 +41,7 @@ ffmpeg -hide_banner -loglevel error -f lavfi -i 'sine=frequency=880:sample_rate=
 cat >"$work_dir/subtitles.srt" <<'EOF'
 1
 00:00:00,500 --> 00:00:02,500
-BD to AVP spatial playback probe
+BD to AVP guided playback check
 
 2
 00:00:03,000 --> 00:00:05,500

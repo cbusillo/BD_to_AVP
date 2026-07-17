@@ -5,28 +5,33 @@ final class SpatialPlaybackProbeUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func testPhysicalDeviceOpensSpatialPortal() throws {
+    func testLaunchExplainsTheSingleGuidedAction() {
+        let app = XCUIApplication()
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["playback-check-title"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["choose-movie-button"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["Check a movie before release"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Nothing is uploaded")).firstMatch.exists)
+    }
+
+    func testPhysicalDeviceRunsAutomaticSpatialChecks() throws {
         #if targetEnvironment(simulator)
-        throw XCTSkip("Spatial portal acceptance requires a physical Apple Vision Pro.")
+        throw XCTSkip("Spatial playback acceptance requires a physical Apple Vision Pro.")
         #else
         let app = XCUIApplication()
         app.launchEnvironment["BD_TO_AVP_PROBE_AUTORUN"] = "1"
         app.launch()
 
-        XCTAssertTrue(app.staticTexts["Probe.mov"].waitForExistence(timeout: 20))
+        let automaticStatus = app.staticTexts["automatic-check-status"]
+        XCTAssertTrue(automaticStatus.waitForExistence(timeout: 90))
+        XCTAssertTrue(app.staticTexts["Probe.mov"].exists)
 
-        let openSpatialView = app.buttons["Open Spatial View"]
-        XCTAssertTrue(openSpatialView.waitForExistence(timeout: 20))
-        openSpatialView.tap()
-
-        XCTAssertTrue(app.buttons["Close Spatial View"].waitForExistence(timeout: 20))
-
-        let presentationStatus = app.descendants(matching: .any)["actual-presentation-status"]
-        XCTAssertTrue(presentationStatus.waitForExistence(timeout: 20))
-
-        let spatialPredicate = NSPredicate(format: "label CONTAINS %@", "Stereo · Spatial · Portal")
-        expectation(for: spatialPredicate, evaluatedWith: presentationStatus)
+        let passPredicate = NSPredicate(format: "label CONTAINS %@", "Automatic checks passed")
+        expectation(for: passPredicate, evaluatedWith: automaticStatus)
         waitForExpectations(timeout: 30)
+
+        XCTAssertTrue(app.otherElements["playback-observations"].exists)
         #endif
     }
 }
