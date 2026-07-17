@@ -56,11 +56,20 @@ reinstalling BD_to_AVP.
   to a focused follow-up issue. Do not tell users to reinstall the current app
   unless the current release artifact actually contains the missing dependency.
 
-## Terminal And PyPI Channel
+## Terminal, PyPI, And Homebrew Channel
 
-The terminal/PyPI channel is for users who intentionally manage dependencies
-themselves. README terminal instructions may continue to use Homebrew because
-that channel is explicitly command-line oriented.
+The custom `cbusillo/tap` Homebrew formula is the preferred terminal install.
+It builds from the stable GitHub tag, consumes the committed `uv.lock`, depends
+on Homebrew FFmpeg and Python 3.12, and omits the PySide6 GUI packages. The base
+PyPI package follows the same CLI-only boundary; users who intentionally want
+the legacy Python GUI may install the `gui` extra, while the Briefcase release
+continues to declare PySide6 explicitly.
+
+The formula does not depend on a MakeMKV cask. MakeMKV is optional for existing
+MKV, MTS, and M2TS inputs, remains external for disc extraction, and should be
+installed from its current supported macOS distribution. A Homebrew cask for
+BD_to_AVP is not maintained because it would duplicate the signed DMG channel
+without providing a reliable CLI link for the Briefcase launcher.
 
 Terminal dependency changes should not weaken the GUI policy. If a tool is
 required by the GUI, the release workflow should either bundle and verify it or
@@ -86,7 +95,6 @@ document it as an external dependency with preflight behavior.
   allowlist is the notarized DMG and `SHA256SUMS`.
 - PKG artifact policy is tracked in #118. Until that issue decides otherwise,
   PKG output is not the normal-user release path.
-- Homebrew distribution for CLI users is tracked in #119.
 - The Sparkle direct-DMG implementation and Stable/Release Candidates policy is
   documented in [sparkle-updates.md](sparkle-updates.md) and tracked through
   #162 through #165.

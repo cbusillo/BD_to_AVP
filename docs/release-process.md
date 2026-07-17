@@ -126,10 +126,16 @@ The workflow performs these ordered boundaries:
    Publishing with PEP 740 attestations; RC releases never publish to PyPI.
 8. Deploy the durable `appcast.xml` release asset to GitHub Pages. A deployment
    failure can be retried without rebuilding, retagging, or re-signing.
+9. The separate `cbusillo/homebrew-tap` repository checks the latest stable
+   GitHub Release on a schedule and by manual dispatch. Homebrew opens a formula
+   update pull request when the version changes; tap CI must pass formula audit,
+   source installation, command tests, and linkage checks before merge. RC
+   releases do not update the formula.
 
-For Stable releases, PyPI publication and Sparkle Pages deployment are
-independent post-publication jobs. Either channel can be retried without
-rebuilding or changing the published GitHub Release.
+For Stable releases, PyPI publication, Sparkle Pages deployment, and the
+Homebrew tap update are independent post-publication jobs. Each channel can be
+retried without rebuilding or changing the published GitHub Release. The tap
+uses its own repository token and requires no cross-repository release secret.
 
 Release bodies are also the updater's native Markdown source. Keep the opening
 paragraph useful as the version summary and prefer headings, lists, links,
