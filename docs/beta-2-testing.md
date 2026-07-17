@@ -1,6 +1,8 @@
-This is **v0.3.0-beta.2**, an opt-in preview of the native macOS interface for
-3D Blu-ray to Vision Pro. It installs beside the current production app and
-does not replace or update it.
+This document preserves the **v0.3.0-beta.2** validation checklist for the new
+macOS interface. That historical build installs beside the production app and
+does not replace or update it. The accepted interface is now promoted through
+the production release workflow; this checklist remains useful for Ship's
+physical-disc report.
 
 ## What's New Since Beta 1
 
@@ -10,7 +12,7 @@ does not replace or update it.
   visible retry and stop behavior.
 - Generate bounded beginning, middle, or end previews and review completed
   samples before running a full conversion.
-- Create, duplicate, reorder, and choose default encoding profiles in native
+- Create, duplicate, reorder, and choose default encoding profiles in
   Settings.
 - Search a canonical subtitle-language catalog with aliases and explicit
   subtitle modes.
@@ -31,12 +33,12 @@ does not replace or update it.
 - Inspect physical-disc, Blu-ray-folder, ISO, MKV, MTS, and M2TS source metadata
   through the bundled engine.
 - Convert an inspected physical disc, Blu-ray folder, ISO, MKV, MTS, or M2TS
-  source to a completed stereo `.mov` through the bundled engine, with native
+  source to a completed stereo `.mov` through the bundled engine, with visible
   progress, cancellation, and results.
 - During conversion and preview generation, confirm the app reports the current
   workflow stage and total stage count. MakeMKV source preparation also shows a
   determinate percentage from MakeMKV's own progress feed.
-- Exercise the native recovery card if MakeMKV leaves a usable intermediate MKV
+- Exercise the recovery card if MakeMKV leaves a usable intermediate MKV
   or subtitle extraction cannot continue. Recovery creates a new one-off job
   without changing the selected profile or visible conversion defaults.
 - Select a source folder and review its contextual queue. Confirm supported files
@@ -64,13 +66,12 @@ does not replace or update it.
 
 - Source-folder queues run sequentially and are not restored after the app quits.
   Parallel workers, queue reordering, and persistent queue history are not part
-  of this preview.
+  of Beta 2.
 - Stages without a trustworthy tool-reported denominator remain indeterminate.
   The activity heartbeat and elapsed time continue to show that those stages are
   running; the app does not infer an ETA from elapsed time or treat each stage as
   equal-duration work.
-- This beta has no automatic updater. Future prerelease builds must be
-  downloaded manually.
+- Beta 2 has no automatic updater and does not update into the production app.
 - Live playback of a file while it is still being generated is not supported.
   Completed bounded previews can be reviewed after their worker job finishes.
 - Bounded preview generation is limited to one selected MKV, MTS/M2TS, or ISO

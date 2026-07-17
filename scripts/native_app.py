@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 from collections.abc import Mapping
 from pathlib import Path
@@ -21,16 +22,22 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MACOS_ROOT = REPO_ROOT / "macos"
 PROJECT_SPEC = MACOS_ROOT / "project.yml"
 NATIVE_PROJECT_NAME = "BluRayToVisionPro"
-NATIVE_PRODUCT_NAME = "3D Blu-ray to Vision Pro Native Preview"
-NATIVE_BUNDLE_IDENTIFIER = "com.shinycomputers.bd-to-avp.native-preview"
-NATIVE_SHORT_VERSION = "0.3.0"
-NATIVE_BUILD_VERSION = "3"
-NATIVE_PRERELEASE_VERSION = "0.3.0-beta.2"
+PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
+with PYPROJECT_PATH.open("rb") as pyproject_file:
+    PYPROJECT = tomllib.load(pyproject_file)
+PROJECT_METADATA = PYPROJECT["project"]
+BRIEFCASE_METADATA = PYPROJECT["tool"]["briefcase"]
+BRIEFCASE_APP_METADATA = BRIEFCASE_METADATA["app"]["bd-to-avp"]
+NATIVE_PRODUCT_NAME = str(BRIEFCASE_APP_METADATA["formal_name"])
+NATIVE_BUNDLE_IDENTIFIER = f"{BRIEFCASE_METADATA['bundle']}.bd-to-avp"
+NATIVE_SHORT_VERSION = str(PROJECT_METADATA["version"])
+NATIVE_UPDATE_INFO = dict(BRIEFCASE_APP_METADATA["macOS"]["info"])
+NATIVE_BUILD_VERSION = str(NATIVE_UPDATE_INFO["CFBundleVersion"])
 NATIVE_MINIMUM_SYSTEM_VERSION = "26.0"
 NATIVE_EXECUTABLE_NAME = NATIVE_PRODUCT_NAME
 PROJECT_PATH = MACOS_ROOT / f"{NATIVE_PROJECT_NAME}.xcodeproj"
 SCHEME = NATIVE_PROJECT_NAME
-NATIVE_PACKAGE_CONFIGURATION = "Preview"
+NATIVE_PACKAGE_CONFIGURATION = "Release"
 DERIVED_DATA = MACOS_ROOT / "build" / "DerivedData"
 NATIVE_APP_NAME = f"{NATIVE_PRODUCT_NAME}.app"
 BRIEFCASE_APP = REPO_ROOT / "build" / "bd-to-avp" / "macos" / "app" / "3D Blu-ray to Vision Pro.app"
@@ -39,7 +46,7 @@ PACKAGED_APP = PACKAGE_ROOT / NATIVE_APP_NAME
 WORKER_EXECUTABLE_NAME = "BluRayToVisionProEngine"
 WORKER_PROTOCOL_VERSION = PROTOCOL_VERSION
 WORKER_ENTITLEMENTS = MACOS_ROOT / "BluRayToVisionPro" / "Worker.entitlements"
-DEPLOYMENT_TARGET_OVERRIDE_ENV = "BD_TO_AVP_NATIVE_DEPLOYMENT_TARGET_OVERRIDE"
+DEPLOYMENT_TARGET_OVERRIDE_ENV = "BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE"
 USER_INTERFACE_SOURCE_FILES = sorted(
     [
         *(MACOS_ROOT / "BluRayToVisionPro" / "App").glob("*.swift"),
@@ -59,6 +66,8 @@ BANNED_USER_COPY = (
 )
 BANNED_RELEASE_IDENTIFIERS = (
     "BDToAVPNative",
+    "Native Preview",
+    ".native-preview",
     "native-prototype",
     "Native worker prototype",
     "Protocol v1",
@@ -103,7 +112,7 @@ def verify_product_source_copy() -> None:
             if marker.lower() in source_text:
                 violations.append(f"{source_path.relative_to(REPO_ROOT)}: {marker}")
     if violations:
-        raise RuntimeError("User-facing native copy contains internal terminology:\n" + "\n".join(violations))
+        raise RuntimeError("User-facing macOS copy contains internal terminology:\n" + "\n".join(violations))
 
 
 def xcodebuild(action: str, configuration: str) -> None:
@@ -133,10 +142,18 @@ def native_build_settings(configuration: str, environment: Mapping[str, str]) ->
     deployment_target = environment.get(DEPLOYMENT_TARGET_OVERRIDE_ENV, "").strip()
     if deployment_target:
         if re.fullmatch(r"\d+(?:\.\d+)+", deployment_target) is None:
-            raise ValueError(f"Invalid native deployment target override: {deployment_target!r}")
+            raise ValueError(f"Invalid macOS deployment target override: {deployment_target!r}")
         build_settings.append(f"MACOSX_DEPLOYMENT_TARGET={deployment_target}")
-    if configuration in {"Preview", "Release"}:
+    if configuration == "Release":
         build_settings.extend(["ARCHS=arm64", "ENABLE_CODE_COVERAGE=NO", "ONLY_ACTIVE_ARCH=NO"])
+        build_settings.extend(
+            [
+                f"CURRENT_PROJECT_VERSION={NATIVE_BUILD_VERSION}",
+                f"MARKETING_VERSION={NATIVE_SHORT_VERSION}",
+                f"PRODUCT_BUNDLE_IDENTIFIER={NATIVE_BUNDLE_IDENTIFIER}",
+                f"PRODUCT_NAME={NATIVE_PRODUCT_NAME}",
+            ]
+        )
     return build_settings
 
 
@@ -151,7 +168,7 @@ def prepare_briefcase_runtime() -> None:
 def assemble_package() -> Path:
     source_app = DERIVED_DATA / "Build" / "Products" / NATIVE_PACKAGE_CONFIGURATION / NATIVE_APP_NAME
     if not source_app.is_dir():
-        raise RuntimeError(f"Native build product is missing at {source_app}")
+        raise RuntimeError(f"macOS build product is missing at {source_app}")
 
     if PACKAGED_APP.exists():
         shutil.rmtree(PACKAGED_APP)
@@ -215,7 +232,7 @@ def verify_layout(app_path: Path) -> None:
     ]
     missing = [path for path in required_paths if not path.exists()]
     if missing:
-        raise RuntimeError("Packaged native app is missing:\n" + "\n".join(str(path) for path in missing))
+        raise RuntimeError("Packaged macOS app is missing:\n" + "\n".join(str(path) for path in missing))
     for executable in (native_executable, worker_executable, ffprobe_executable):
         if executable_architectures(executable) != {"arm64"}:
             raise RuntimeError(f"Packaged executable must be arm64-only: {executable}")
@@ -226,11 +243,11 @@ def verify_layout(app_path: Path) -> None:
 
 def verify_product_identity(app_path: Path) -> None:
     if app_path.name != NATIVE_APP_NAME:
-        raise RuntimeError(f"Native app must use the product name: {NATIVE_APP_NAME}")
+        raise RuntimeError(f"macOS app must use the product name: {NATIVE_APP_NAME}")
 
     info_path = app_path / "Contents" / "Info.plist"
     if not info_path.is_file():
-        raise RuntimeError(f"Native app Info.plist is missing: {info_path}")
+        raise RuntimeError(f"macOS app Info.plist is missing: {info_path}")
     with info_path.open("rb") as info_file:
         info = plistlib.load(info_file)
 
@@ -253,9 +270,18 @@ def verify_product_identity(app_path: Path) -> None:
     development_keys = [key for key in info if "DevelopmentRepositoryRoot" in key]
     if development_keys:
         mismatches.append("development repository metadata is present")
-    update_keys = sorted(key for key in info if key.startswith("SU") or key == "BDToAVPDistributionChannel")
-    if update_keys:
-        mismatches.append("production update metadata is present: " + ", ".join(update_keys))
+    for key in (
+        "BDToAVPDistributionChannel",
+        "SUFeedURL",
+        "SUPublicEDKey",
+        "SUAllowsAutomaticUpdates",
+        "SUVerifyUpdateBeforeExtraction",
+    ):
+        expected = NATIVE_UPDATE_INFO[key]
+        if info.get(key) != expected:
+            mismatches.append(f"{key}: expected {expected!r}, found {info.get(key)!r}")
+    if "SUEnableAutomaticChecks" in info:
+        mismatches.append("SUEnableAutomaticChecks must remain unset")
 
     internal_documents = [
         app_path / "Contents" / "Resources" / "app" / "README.md",
@@ -271,7 +297,7 @@ def verify_product_identity(app_path: Path) -> None:
             mismatches.append(f"release identifier contains {marker!r}")
 
     if mismatches:
-        raise RuntimeError("Native app identity validation failed:\n" + "\n".join(mismatches))
+        raise RuntimeError("macOS app identity validation failed:\n" + "\n".join(mismatches))
 
 
 def executable_architectures(path: Path) -> set[str]:
@@ -303,7 +329,7 @@ def verify_mach_o_minimum_system_versions(app_path: Path, native_executable: Pat
     if {normalized_version(version) for version in native_versions} != {expected_version}:
         found = ", ".join(sorted(native_versions))
         raise RuntimeError(
-            f"Native executable must target macOS {NATIVE_MINIMUM_SYSTEM_VERSION}; found {found}: {native_executable}"
+            f"Swift executable must target macOS {NATIVE_MINIMUM_SYSTEM_VERSION}; found {found}: {native_executable}"
         )
 
     incompatible: list[str] = []
@@ -332,7 +358,7 @@ def normalized_version(version: str) -> tuple[int, int, int]:
 def verify_native_binary_paths(native_executable: Path) -> None:
     executable_bytes = native_executable.read_bytes()
     if os.fsencode(REPO_ROOT) in executable_bytes:
-        raise RuntimeError("Native Release executable contains the development repository path.")
+        raise RuntimeError("macOS Release executable contains the development repository path.")
 
 
 def verify_package_paths(app_path: Path) -> None:
@@ -521,11 +547,11 @@ def package(identity: str, keychain: str | None = None) -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build and package the native macOS preview application.")
+    parser = argparse.ArgumentParser(description="Build and package the macOS application.")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("generate", help="Generate the Xcode project from macos/project.yml.")
-    commands.add_parser("test", help="Run the native unit tests.")
-    commands.add_parser("build", help="Build the native Debug app without embedding Python.")
+    commands.add_parser("test", help="Run the macOS application unit tests.")
+    commands.add_parser("build", help="Build the macOS Development app without embedding Python.")
     package_parser = commands.add_parser("package", help="Build, embed, sign, and smoke the Python worker.")
     package_parser.add_argument(
         "--sign-identity",

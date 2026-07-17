@@ -63,7 +63,7 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Native shell tests
+      - name: macOS app tests
         run: uv run python scripts/native_app.py test
 
       - name: Import smoke

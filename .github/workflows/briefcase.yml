@@ -14,6 +14,7 @@ permissions:
 
 env:
   GH_REPO: ${{ github.repository }}
+  XCODEGEN_VERSION: 2.45.4
 
 concurrency:
   group: release
@@ -305,8 +306,8 @@ jobs:
   package:
     name: Build, sign, notarize, and validate DMG
     needs: prepare
-    runs-on: macos-15
-    timeout-minutes: 120
+    runs-on: [self-hosted, macOS, ARM64, bd-to-avp-release]
+    timeout-minutes: 180
     environment: macos-signing
     permissions:
       contents: read
@@ -322,7 +323,7 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
 
-      - name: Verify checkout identity
+      - name: Verify release runner and checkout
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -331,32 +332,37 @@ jobs:
             echo "Protected main moved after signing approval." >&2
             exit 1
           fi
-
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
+          test "$(uname -m)" = "arm64"
+          test "$(sw_vers -productVersion | cut -d. -f1)" = "27"
+          XCODE_VERSION=$(xcodebuild -version)
+          if [[ ! "$XCODE_VERSION" =~ ^Xcode\ 27([.]|$) ]]; then
+            echo "Release builds require Xcode 27." >&2
+            printf '%s\n' "$XCODE_VERSION" >&2
+            exit 1
+          fi
+          command -v xcodegen >/dev/null
+          test "$(xcodegen --version)" = "Version: $XCODEGEN_VERSION"
+          if [ -n "${BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE:-}" ]; then
+            echo "Release builds must not override the macOS 26 deployment target." >&2
+            exit 1
+          fi
 
       - name: Set up uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           enable-cache: true
+          python-version: "3.12"
 
-      - name: Install locked dependencies
-        run: uv sync --locked --all-groups --python 3.12
-
-      - name: Generate ephemeral build keychain password
+      - name: Install Python and locked dependencies
         run: |
-          set -euo pipefail
-          BUILD_KEYCHAIN_PASSWORD=$(openssl rand -hex 32)
-          echo "::add-mask::$BUILD_KEYCHAIN_PASSWORD"
-          echo "BUILD_KEYCHAIN_PASSWORD=$BUILD_KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+          uv python install 3.12
+          uv sync --locked --all-groups --python 3.12
 
-      - name: Install certificates
+      - name: Install signing certificate in an ephemeral keychain
         env:
           CERTIFICATE: ${{ secrets.CERTIFICATE }}
-          CERTIFICATE_INSTALLER: ${{ secrets.CERTIFICATE_INSTALLER }}
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+          DEV_ID: ${{ secrets.DEV_ID }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
@@ -364,27 +370,46 @@ jobs:
             echo "Protected main moved immediately before certificate use." >&2
             exit 1
           fi
-          KEYCHAIN_PATH="$(pwd)/build.keychain"
+          case "$DEV_ID" in
+            "Developer ID Application:"*) ;;
+            *) echo "DEV_ID must name a Developer ID Application identity." >&2; exit 1 ;;
+          esac
+
+          BUILD_KEYCHAIN_PASSWORD=$(openssl rand -hex 32)
+          KEYCHAIN_PATH="$RUNNER_TEMP/bd-to-avp-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.keychain-db"
+          CERTIFICATE_PATH="$RUNNER_TEMP/bd-to-avp-$GITHUB_RUN_ID.p12"
+          echo "::add-mask::$BUILD_KEYCHAIN_PASSWORD"
+
+          {
+            echo "BUILD_KEYCHAIN_PASSWORD=$BUILD_KEYCHAIN_PASSWORD"
+            echo "CERTIFICATE_PATH=$CERTIFICATE_PATH"
+            echo "KEYCHAIN_PATH=$KEYCHAIN_PATH"
+          } >> "$GITHUB_ENV"
+
+          cleanup_on_failure() {
+            status=$?
+            trap - EXIT
+            if [ "$status" -ne 0 ]; then
+              security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
+              rm -f "$CERTIFICATE_PATH"
+            fi
+            exit "$status"
+          }
+          trap cleanup_on_failure EXIT
+
           security create-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          USER_KEYCHAINS=()
-          while IFS= read -r keychain; do
-            USER_KEYCHAINS+=("$keychain")
-          done < <(security list-keychains -d user | sed 's/[" ]//g')
-          security list-keychains -d user -s "$KEYCHAIN_PATH" "${USER_KEYCHAINS[@]}"
-          security default-keychain -s "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          printf '%s' "$CERTIFICATE" | base64 --decode > app_certificate.p12
-          printf '%s' "$CERTIFICATE_INSTALLER" | base64 --decode > installer_certificate.p12
-          security import app_certificate.p12 -k "$KEYCHAIN_PATH" -P "$CERTIFICATE_PASSWORD" \
-            -A -T "/usr/bin/codesign" -T "/usr/bin/productsign"
-          security import installer_certificate.p12 -k "$KEYCHAIN_PATH" -P "$CERTIFICATE_PASSWORD" \
-            -A -T "/usr/bin/codesign" -T "/usr/bin/productsign"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH"
+          security import "$CERTIFICATE_PATH" -k "$KEYCHAIN_PATH" -P "$CERTIFICATE_PASSWORD" \
+            -T "/usr/bin/codesign"
           security set-key-partition-list \
-            -S apple-tool:,apple:,codesign:,productsign: \
+            -S apple-tool:,apple:,codesign: \
             -s -k "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F "$DEV_ID"
+          trap - EXIT
 
-      - name: Store notarization credentials
+      - name: Store notarization credentials in the ephemeral keychain
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -396,15 +421,19 @@ jobs:
             echo "Protected main moved immediately before notarization credential use." >&2
             exit 1
           fi
-          NOTARY_PROFILE="briefcase-macOS-$TEAM_ID"
+          NOTARY_PROFILE="bd-to-avp-release-$TEAM_ID-$GITHUB_RUN_ID"
+          security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           xcrun notarytool store-credentials "$NOTARY_PROFILE" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
-            --team-id "$TEAM_ID"
+            --team-id "$TEAM_ID" \
+            --keychain "$KEYCHAIN_PATH"
+          echo "NOTARY_PROFILE=$NOTARY_PROFILE" >> "$GITHUB_ENV"
 
       - name: Package application for GitHub
         id: package_artifact
         env:
+          BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE: ""
           BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
           DEV_ID: ${{ secrets.DEV_ID }}
           PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
@@ -415,53 +444,64 @@ jobs:
             echo "Protected main moved immediately before package signing." >&2
             exit 1
           fi
-          security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$(pwd)/build.keychain"
-          uv run python -m scripts.briefcase_app create
-          uv run python -m scripts.briefcase_app build
-          find . -name QtWebEngineCore.framework -type d | while read -r dir; do
-            find "$dir" -type f -execdir codesign --force --verify --verbose \
-              --sign "$DEV_ID" {} \;
-          done
-          find build/bd-to-avp/macos/app -path "*/bd_to_avp/bin/*" -type f -perm +111 \
-            -exec codesign --force --options runtime --timestamp \
-              --sign "$DEV_ID" {} \;
-          find build/bd-to-avp/macos/app -name "*.dylib" \
-            -exec codesign --force --sign - {} \;
-          uv run python scripts/verify_app_tools.py --profile release
-          uv run python -m scripts.sparkle_bundle \
-            --app "build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app" \
-            > app-metadata.json
-          if [ "$(jq -r .short_version app-metadata.json)" != "$PACKAGE_VERSION" ]; then
+          security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          APP_PATH="macos/build/package/3D Blu-ray to Vision Pro.app"
+          DMG_NAME="3D-Blu-ray-to-Vision-Pro-$PACKAGE_VERSION.dmg"
+          DMG_PATH="dist/$DMG_NAME"
+          APP_ARCHIVE="$RUNNER_TEMP/bd-to-avp-app-$GITHUB_RUN_ID.zip"
+          mkdir -p dist/notary
+
+          uv run python scripts/native_app.py package \
+            --sign-identity "$DEV_ID" \
+            --sign-keychain "$KEYCHAIN_PATH"
+          uv run python -m scripts.macos_release verify-app \
+            --app "$APP_PATH" \
+            --verify-signatures \
+            > dist/macos-app-metadata.json
+          if [ "$(jq -r .short_version dist/macos-app-metadata.json)" != "$PACKAGE_VERSION" ]; then
             echo "Built app version does not match $PACKAGE_VERSION." >&2
             exit 1
           fi
-          uv run python -m scripts.briefcase_app package -i "$DEV_ID"
-          uv run python -m scripts.sparkle_bundle \
-            --app "build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app" \
-            --verify-signatures
-
-          DMG_COUNT=$(find dist -maxdepth 1 -type f -name '*.dmg' | wc -l | tr -d ' ')
-          if [ "$DMG_COUNT" != "1" ]; then
-            echo "Expected exactly one DMG in dist; found $DMG_COUNT." >&2
+          if [ "$(jq -r .build_version dist/macos-app-metadata.json)" != "$BUILD_VERSION" ]; then
+            echo "Built app build does not match $BUILD_VERSION." >&2
             exit 1
           fi
-          DMG_PATH=$(find dist -maxdepth 1 -type f -name '*.dmg' -print -quit)
-          ORIGINAL_DMG_NAME=$(basename "$DMG_PATH")
-          DMG_NAME=${ORIGINAL_DMG_NAME// /-}
-          if [ "$DMG_NAME" != "$ORIGINAL_DMG_NAME" ]; then
-            mv "$DMG_PATH" "dist/$DMG_NAME"
-            DMG_PATH="dist/$DMG_NAME"
-          fi
-          uv run python -m scripts.sparkle_bundle \
+
+          ditto -c -k --keepParent "$APP_PATH" "$APP_ARCHIVE"
+          uv run python -m scripts.macos_release notarize \
+            --submission "$APP_ARCHIVE" \
+            --staple "$APP_PATH" \
+            --keychain-profile "$NOTARY_PROFILE" \
+            --keychain "$KEYCHAIN_PATH" \
+            --log dist/notary/app-notary.json
+          uv run python -m scripts.macos_release verify-app \
+            --app "$APP_PATH" \
+            --verify-signatures \
+            --verify-distribution \
+            --smoke-worker \
+            > dist/macos-app-metadata.json
+
+          uv run python -m scripts.macos_release create-dmg \
+            --app "$APP_PATH" \
+            --output "$DMG_PATH"
+          codesign --force --timestamp --sign "$DEV_ID" --keychain "$KEYCHAIN_PATH" "$DMG_PATH"
+          uv run python -m scripts.macos_release notarize \
+            --submission "$DMG_PATH" \
+            --staple "$DMG_PATH" \
+            --keychain-profile "$NOTARY_PROFILE" \
+            --keychain "$KEYCHAIN_PATH" \
+            --log dist/notary/dmg-notary.json
+          uv run python -m scripts.macos_release verify-dmg \
             --dmg "$DMG_PATH" \
             --verify-signatures \
             --verify-distribution \
-            > dmg-metadata.json
-          if [ "$(jq -r .short_version dmg-metadata.json)" != "$PACKAGE_VERSION" ]; then
+            --smoke-worker \
+            > dist/macos-release-metadata.json
+          if [ "$(jq -r .short_version dist/macos-release-metadata.json)" != "$PACKAGE_VERSION" ]; then
             echo "Packaged DMG version does not match $PACKAGE_VERSION." >&2
             exit 1
           fi
-          if [ "$(jq -r .build_version dmg-metadata.json)" != "$BUILD_VERSION" ]; then
+          if [ "$(jq -r .build_version dist/macos-release-metadata.json)" != "$BUILD_VERSION" ]; then
             echo "Packaged DMG build does not match $BUILD_VERSION." >&2
             exit 1
           fi
@@ -478,14 +518,27 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: briefcase-log
-          path: /Users/runner/work/BD_to_AVP/BD_to_AVP/logs/briefcase.*.log
+          name: macos-release-diagnostics
+          path: |
+            dist/notary/*.json
+            logs/briefcase.*.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Remove temporary signing material
         if: always()
         run: |
-          rm -f app_certificate.p12 installer_certificate.p12
-          security delete-keychain "$(pwd)/build.keychain" >/dev/null 2>&1 || true
+          set +e
+          if [ -n "${KEYCHAIN_PATH:-}" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
+          fi
+          rm -f "${CERTIFICATE_PATH:-}" "$RUNNER_TEMP/bd-to-avp-app-$GITHUB_RUN_ID.zip"
+          {
+            echo "BUILD_KEYCHAIN_PASSWORD="
+            echo "CERTIFICATE_PATH="
+            echo "KEYCHAIN_PATH="
+            echo "NOTARY_PROFILE="
+          } >> "$GITHUB_ENV"
 
       - name: Upload verified release package
         if: success()
@@ -536,6 +589,49 @@ jobs:
         with:
           subject-path: release-package/${{ needs.package.outputs.dmg_name }}
 
+  compatibility:
+    name: Verify notarized package on macOS 26
+    needs:
+      - package
+    runs-on: macos-26
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout released commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Download verified release package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-package
+          path: release-package
+
+      - name: Validate the packaged app on macOS 26
+        env:
+          EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
+          EXPECTED_DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(sw_vers -productVersion | cut -d. -f1)" = "26"
+          DMG_PATH="release-package/$EXPECTED_DMG_NAME"
+          test "$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')" = "$EXPECTED_DMG_SHA256"
+          python -m scripts.macos_release verify-dmg \
+            --dmg "$DMG_PATH" \
+            --verify-signatures \
+            --verify-distribution \
+            --smoke-app \
+            --smoke-tools \
+            --smoke-worker
+
   build-python:
     name: Build stable Python distributions
     needs: prepare
@@ -578,6 +674,7 @@ jobs:
       - prepare
       - package
       - attest-package
+      - compatibility
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

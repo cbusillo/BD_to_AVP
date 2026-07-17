@@ -7,15 +7,16 @@ pull request before release orchestration runs. Use the repository command:
 
 ```sh
 uv run python scripts/release.py prepare \
-  --version 0.2.143 \
-  --build 146
+  --version 0.3.0rc1 \
+  --build 147
 ```
 
 The version must be a canonical three-part stable version or release candidate,
-such as `0.2.144` or `0.2.144rc1`. The numeric `CFBundleVersion` must increase
+such as `0.3.0` or `0.3.0rc1`. The numeric `CFBundleVersion` must increase
 for every RC and Stable DMG. The command stages a refreshed `uv.lock`, validates
-the staged metadata, and updates `pyproject.toml` and `uv.lock` together only
-after every check succeeds. A lock refresh failure leaves both files unchanged.
+the staged metadata, and updates `pyproject.toml`, `uv.lock`, and the Xcode
+Release version/build together only after every check succeeds. A lock refresh
+or metadata failure leaves all three files unchanged.
 
 The initial main-only Sparkle migration used `0.2.143rc4` build `144` and
 `0.2.143rc5` build `145` to prove a real RC-to-RC updater path. Stable
@@ -99,34 +100,37 @@ The workflow performs these ordered boundaries:
    version while allowing a matching draft to resume. The active Pages state
    and newest durable snapshot are both checked.
 3. After the single release approval, build, sign, notarize, and
-   Gatekeeper-validate the macOS DMG without a write-capable repository token.
-   Normalize its release filename to use hyphens instead of spaces, record its
-   exact name, byte size, SHA-256, and `SHA256SUMS` entry, then publish GitHub
-   artifact attestations for the verified package before release creation.
-4. Create a draft GitHub Release targeting only `github.sha`, retain its release
+   Gatekeeper-validate the SwiftUI macOS app and DMG without a write-capable
+   repository token. Record its exact name, byte size, SHA-256, and
+   `SHA256SUMS` entry, then publish GitHub artifact attestations for the verified
+   package before release creation.
+4. Download that exact notarized DMG on the separate macOS 26 runner and repeat
+   checksum, signature, Gatekeeper, startup, bundled-tool, and worker validation.
+   Draft creation cannot begin unless this compatibility boundary passes.
+5. Create a draft GitHub Release targeting only `github.sha`, retain its release
    ID for authenticated inspection, freeze the exact UTF-8 release body into a
    digest-bound workflow artifact, and transfer draft assets through release and
    asset IDs rather than runner-dependent tag lookup. Asset overwrite stays
    disabled by default.
-5. In the main-only `sparkle-release` environment, download the verified
+6. In the main-only `sparkle-release` environment, download the verified
    package and release-note workflow artifacts without a write-capable
    repository token, verify their exact identities, load the active durable
    `appcast.xml` selected by Pages state, sign the DMG, and build the cumulative
    snapshot. New items embed the frozen body as
    `<description sparkle:format="markdown">` and retain the GitHub Release page
    as their full-notes link; historical tag-page items remain valid.
-6. Upload `appcast.xml` to the draft, re-download the DMG, checksum, and appcast,
+7. Upload `appcast.xml` to the draft, re-download the DMG, checksum, and appcast,
    and repeat the exact digest, size, notarization, Gatekeeper, bundle-version,
    embedded-release-note, appcast-item, and exact-main-commit GitHub provenance
    checks.
-7. Publish the verified draft only if it still targets the current `main` HEAD.
+8. Publish the verified draft only if it still targets the current `main` HEAD.
    The release body is hashed again immediately before and after publication so
    edits cannot silently diverge from the updater notes. Stable releases then
    publish separately built Python distributions through PyPI Trusted
    Publishing with PEP 740 attestations; RC releases never publish to PyPI.
-8. Deploy the durable `appcast.xml` release asset to GitHub Pages. A deployment
+9. Deploy the durable `appcast.xml` release asset to GitHub Pages. A deployment
    failure can be retried without rebuilding, retagging, or re-signing.
-9. The separate `cbusillo/homebrew-tap` repository checks the latest stable
+10. The separate `cbusillo/homebrew-tap` repository checks the latest stable
    GitHub Release on a schedule and by manual dispatch. Homebrew opens a formula
    update pull request when the version changes; tap CI must pass formula audit,
    source installation, command tests, and linkage checks before merge. RC
@@ -142,37 +146,34 @@ paragraph useful as the version summary and prefer headings, lists, links,
 emphasis, block quotes, and code. Avoid relying on GitHub-only tables, images,
 or embedded HTML for information required in the Sparkle dialog.
 
-### Native UI Preview
+### Production macOS Application
 
-The native UI feedback release lane uses
-`.github/workflows/native-ui-preview.yml`, not the production Briefcase release
-workflow. Dispatch it only from the current protected `main` commit after CI is
-green and an ephemeral Apple Silicon runner labeled `bd-to-avp-release` is ready
-with macOS 27, Xcode 27, and XcodeGen 2.45.4. The builder uses the committed
-macOS 26 deployment target; publication is additionally gated by verification
-and packaged-worker execution on a separate macOS 26 runner.
+The accepted SwiftUI/AppKit interface is packaged by the existing
+`.github/workflows/briefcase.yml` production workflow. Briefcase remains the
+staging mechanism for the embedded Python engine, but its Python GUI is not the
+shipping interface. The Xcode `Release` configuration owns the production name,
+bundle identifier, macOS 26 deployment target, and Sparkle metadata.
 
-Use the same monitoring contract with workflow name
-`Publish Native UI Preview`. A preview run also requires `main` to remain fixed
-through publication, even though it never changes production appcasts, PyPI, or
-GitHub latest.
+The signing job requires the bounded Apple-Silicon runner labeled
+`bd-to-avp-release`, running macOS 27 with Xcode 27 and XcodeGen 2.45.4. It uses
+the reviewed `macos-signing` environment, an ephemeral keychain, Developer ID
+signing, and notarization for both the app and DMG. The artifact must then pass
+the separate macOS 26 compatibility job before the existing production draft,
+appcast, PyPI, Pages, and publication boundaries can proceed.
 
-The workflow uses the existing reviewed `macos-signing` environment to sign and
-notarize the side-by-side Preview bundle, creates and revalidates a DMG, and
-derives its semantic prerelease tag, version-first release title, app name, and
-DMG filename from committed native metadata. Historical build `1` keeps tag
-`native-ui-preview-1` and is titled `v0.3.0-alpha.1`. Build `2` uses
-`v0.3.0-beta.1` for both tag and title; build `3` uses `v0.3.0-beta.2`.
-Native build numbers are monotonically increasing and may not be reused. The
-workflow never derives metadata from `pyproject.toml`, invokes the
-Sparkle/Pages workflows, publishes Python distributions, or marks a preview as
-GitHub latest. A failed run may resume only an exact matching draft. Published
-tags and assets are immutable; maintainers may correct the human-readable title
-or notes without replacing artifacts or changing the target commit.
+RC items remain isolated through Sparkle's `rc` channel. Normal stable
+installations do not discover an RC; only installations that explicitly select
+Release Candidates can do so. The final stable item is unchanneled and can later
+supersede the RC for both channel choices.
+
+The retired side-by-side feedback releases remain immutable historical
+evidence. Their tags include `native-ui-preview-1`, `v0.3.0-beta.1`, and
+`v0.3.0-beta.2`. Do not replace those assets, repurpose their bundle identifier,
+or add them to the production appcast.
 
 The cumulative `appcast.xml` attached to every published GitHub Release is the
 recovery source of truth, including the publication-time Markdown shown in the
-native updater. Pages also publishes `appcast-state.json`, which binds the live
+updater. Pages also publishes `appcast-state.json`, which binds the live
 feed to one durable release snapshot or records that updates are disabled.
 GitHub Pages is a deployment target, not the only copy of feed history.
 
@@ -215,7 +216,7 @@ Keep the live repository settings aligned with these contracts:
   with a required maintainer review. Self-review is prevented and administrators
   cannot bypass the protection rule. The legacy `KEYCHAIN_PASSWORD` value is the
   Apple app-specific password; the workflow generates a separate ephemeral build
-  keychain password for every run and derives Briefcase's notarization profile
+  keychain password for every run and derives the notarization profile
   name from `TEAM_ID`, so no `KEYCHAIN_NAME` secret is required.
 - `sparkle-release` is limited to `main`, contains only
   `SPARKLE_EDDSA_PRIVATE_KEY`, and has no separate required-review rule. The

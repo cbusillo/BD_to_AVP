@@ -17,6 +17,7 @@ from typing import Any, Callable
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 LOCK_PATH = REPO_ROOT / "uv.lock"
+MACOS_PROJECT_PATH = REPO_ROOT / "macos" / "project.yml"
 VERSION_PATTERN = re.compile(
     r"^(?P<major>0|[1-9][0-9]*)\."
     r"(?P<minor>0|[1-9][0-9]*)\."
@@ -216,9 +217,88 @@ def _locked_project_version(lock_path: Path) -> str:
     return str(project_packages[0].get("version", ""))
 
 
+def _yaml_mapping_value(text: str, path: tuple[str, ...], key: str) -> str:
+    stack: dict[int, str] = {}
+    matches: list[str] = []
+    for line in text.splitlines():
+        match = re.match(r"^(?P<indent> *)(?P<key>[^#][^:]*):(?:[ ]*(?P<value>.*))?$", line)
+        if match is None:
+            continue
+        indentation = len(match.group("indent"))
+        for level in [level for level in stack if level >= indentation]:
+            del stack[level]
+        parent_path = tuple(stack[level] for level in sorted(stack))
+        mapping_key = match.group("key").strip()
+        raw_value = (match.group("value") or "").strip()
+        if parent_path == path and mapping_key == key and raw_value:
+            matches.append(raw_value.strip("\"'"))
+        if not raw_value:
+            stack[indentation] = mapping_key
+    if len(matches) != 1:
+        joined_path = ".".join((*path, key))
+        raise ReleaseError(f"Expected exactly one {joined_path} entry in the macOS project; found {len(matches)}.")
+    return matches[0]
+
+
+def _replace_yaml_mapping_value(text: str, path: tuple[str, ...], key: str, value: str) -> str:
+    lines = text.splitlines(keepends=True)
+    stack: dict[int, str] = {}
+    matches: list[int] = []
+    for index, line in enumerate(lines):
+        match = re.match(r"^(?P<indent> *)(?P<key>[^#][^:]*):(?:[ ]*(?P<value>.*?))?(?P<newline>\n?)$", line)
+        if match is None:
+            continue
+        indentation = len(match.group("indent"))
+        for level in [level for level in stack if level >= indentation]:
+            del stack[level]
+        parent_path = tuple(stack[level] for level in sorted(stack))
+        mapping_key = match.group("key").strip()
+        raw_value = (match.group("value") or "").strip()
+        if parent_path == path and mapping_key == key and raw_value:
+            matches.append(index)
+        if not raw_value:
+            stack[indentation] = mapping_key
+    if len(matches) != 1:
+        joined_path = ".".join((*path, key))
+        raise ReleaseError(f"Expected exactly one {joined_path} entry in the macOS project; found {len(matches)}.")
+    index = matches[0]
+    indentation = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+    newline = "\n" if lines[index].endswith("\n") else ""
+    lines[index] = f"{indentation}{key}: {value}{newline}"
+    return "".join(lines)
+
+
+def _validate_macos_project_metadata(path: Path, pyproject: dict[str, Any], version: str, build: str) -> None:
+    try:
+        project_text = path.read_text(encoding="utf-8")
+        briefcase = pyproject["tool"]["briefcase"]
+        app = briefcase["app"]["bd-to-avp"]
+    except (OSError, KeyError, TypeError) as error:
+        raise ReleaseError(f"Unable to load production macOS project metadata: {error}") from error
+    base_path = ("targets", "BluRayToVisionPro", "settings", "base")
+    release_path = ("targets", "BluRayToVisionPro", "settings", "configs", "Release")
+    expected_values = {
+        "CURRENT_PROJECT_VERSION": build,
+        "MARKETING_VERSION": version,
+        "PRODUCT_BUNDLE_IDENTIFIER": f"{briefcase['bundle']}.bd-to-avp",
+        "PRODUCT_NAME": str(app["formal_name"]),
+    }
+    mismatches = [
+        f"{key}: expected {expected!r}, found {actual!r}"
+        for key, expected in expected_values.items()
+        if (actual := _yaml_mapping_value(project_text, base_path, key)) != expected
+    ]
+    release_plist = _yaml_mapping_value(project_text, release_path, "INFOPLIST_FILE")
+    if release_plist != "BluRayToVisionPro/Info-Release.plist":
+        mismatches.append(f"INFOPLIST_FILE: expected 'BluRayToVisionPro/Info-Release.plist', found {release_plist!r}")
+    if mismatches:
+        raise ReleaseError("Production macOS project metadata is inconsistent:\n" + "\n".join(mismatches))
+
+
 def load_release_metadata(
     pyproject_path: Path = PYPROJECT_PATH,
     lock_path: Path = LOCK_PATH,
+    macos_project_path: Path | None = None,
 ) -> ReleaseMetadata:
     pyproject = _load_toml(pyproject_path)
     try:
@@ -240,6 +320,10 @@ def load_release_metadata(
         raise ReleaseError(
             f"uv.lock project version {locked_version!r} does not match [project].version {version.text!r}."
         )
+    if macos_project_path is None and pyproject_path == PYPROJECT_PATH and lock_path == LOCK_PATH:
+        macos_project_path = MACOS_PROJECT_PATH
+    if macos_project_path is not None:
+        _validate_macos_project_metadata(macos_project_path, pyproject, version.text, build_version)
 
     return ReleaseMetadata(
         package_version=version.text,
@@ -301,10 +385,13 @@ def prepare_release(
     *,
     pyproject_path: Path = PYPROJECT_PATH,
     lock_path: Path = LOCK_PATH,
+    macos_project_path: Path | None = None,
     uv_executable: str = "uv",
     lock_runner: LockRunner = refresh_uv_lock,
 ) -> ReleaseMetadata:
-    current = load_release_metadata(pyproject_path, lock_path)
+    if macos_project_path is None and pyproject_path == PYPROJECT_PATH and lock_path == LOCK_PATH:
+        macos_project_path = MACOS_PROJECT_PATH
+    current = load_release_metadata(pyproject_path, lock_path, macos_project_path)
     current_version = parse_release_version(current.package_version)
     next_version = parse_release_version(version_value)
     current_build = parse_build_version(current.build_version)
@@ -316,6 +403,7 @@ def prepare_release(
 
     original_pyproject = pyproject_path.read_bytes()
     original_lock = lock_path.read_bytes()
+    original_macos_project = macos_project_path.read_bytes() if macos_project_path is not None else None
     updated_pyproject = _replace_section_value(
         original_pyproject.decode("utf-8"),
         "project",
@@ -328,38 +416,66 @@ def prepare_release(
         "CFBundleVersion",
         str(next_build),
     )
+    updated_macos_project: str | None = None
+    if original_macos_project is not None:
+        updated_macos_project = _replace_yaml_mapping_value(
+            original_macos_project.decode("utf-8"),
+            ("targets", "BluRayToVisionPro", "settings", "base"),
+            "MARKETING_VERSION",
+            next_version.text,
+        )
+        updated_macos_project = _replace_yaml_mapping_value(
+            updated_macos_project,
+            ("targets", "BluRayToVisionPro", "settings", "base"),
+            "CURRENT_PROJECT_VERSION",
+            str(next_build),
+        )
 
     with tempfile.TemporaryDirectory(prefix="release-prep-", dir=pyproject_path.parent) as temporary_dir:
         stage_root = Path(temporary_dir)
         staged_pyproject = stage_root / "pyproject.toml"
         staged_lock = stage_root / "uv.lock"
+        staged_macos_project = stage_root / "project.yml"
         staged_pyproject.write_text(updated_pyproject, encoding="utf-8")
         staged_lock.write_bytes(original_lock)
+        if updated_macos_project is not None:
+            staged_macos_project.write_text(updated_macos_project, encoding="utf-8")
         for filename in ("README.md", "LICENSE"):
             source = pyproject_path.parent / filename
             if source.is_file():
                 shutil.copy2(source, stage_root / filename)
         lock_runner(stage_root, uv_executable)
-        staged_metadata = load_release_metadata(staged_pyproject, staged_lock)
+        staged_metadata = load_release_metadata(
+            staged_pyproject,
+            staged_lock,
+            staged_macos_project if updated_macos_project is not None else None,
+        )
         if staged_metadata.package_version != next_version.text or staged_metadata.build_version != str(next_build):
             raise ReleaseError("Staged release metadata does not match the requested version and build.")
         staged_lock_content = staged_lock.read_bytes()
 
     if pyproject_path.read_bytes() != original_pyproject or lock_path.read_bytes() != original_lock:
         raise ReleaseError("Release files changed while release preparation was running; no updates were applied.")
+    if macos_project_path is not None and macos_project_path.read_bytes() != original_macos_project:
+        raise ReleaseError("Release files changed while release preparation was running; no updates were applied.")
     try:
         _atomic_write(pyproject_path, updated_pyproject.encode("utf-8"))
         _atomic_write(lock_path, staged_lock_content)
+        if macos_project_path is not None and updated_macos_project is not None:
+            _atomic_write(macos_project_path, updated_macos_project.encode("utf-8"))
     except Exception:
         _atomic_write(pyproject_path, original_pyproject)
         _atomic_write(lock_path, original_lock)
+        if macos_project_path is not None and original_macos_project is not None:
+            _atomic_write(macos_project_path, original_macos_project)
         raise
-    return load_release_metadata(pyproject_path, lock_path)
+    return load_release_metadata(pyproject_path, lock_path, macos_project_path)
 
 
 def _add_paths(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--pyproject", type=Path, default=PYPROJECT_PATH)
     parser.add_argument("--lock", type=Path, default=LOCK_PATH)
+    parser.add_argument("--macos-project", type=Path)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -419,10 +535,11 @@ def main(argv: list[str] | None = None) -> int:
             args.build,
             pyproject_path=args.pyproject,
             lock_path=args.lock,
+            macos_project_path=args.macos_project,
             uv_executable=args.uv,
         )
     else:
-        metadata = load_release_metadata(args.pyproject, args.lock)
+        metadata = load_release_metadata(args.pyproject, args.lock, args.macos_project)
     if args.command == "metadata" and args.github_output:
         with args.github_output.open("a", encoding="utf-8") as handle:
             for key, value in metadata.github_outputs().items():

@@ -18,9 +18,9 @@ from scripts.native_app import (
     NATIVE_EXECUTABLE_NAME,
     NATIVE_MINIMUM_SYSTEM_VERSION,
     NATIVE_PACKAGE_CONFIGURATION,
-    NATIVE_PRERELEASE_VERSION,
     NATIVE_PRODUCT_NAME,
     NATIVE_SHORT_VERSION,
+    NATIVE_UPDATE_INFO,
     WORKER_PROTOCOL_VERSION,
     MACOS_ROOT,
     PROJECT_PATH,
@@ -47,29 +47,28 @@ class NativeAppPackagingTests(unittest.TestCase):
     def test_worker_smoke_uses_current_protocol_version(self) -> None:
         self.assertEqual(WORKER_PROTOCOL_VERSION, PROTOCOL_VERSION)
 
-    def test_uses_side_by_side_preview_identity(self) -> None:
+    def test_uses_production_identity(self) -> None:
         self.assertEqual(PROJECT_PATH.name, "BluRayToVisionPro.xcodeproj")
         self.assertEqual(SCHEME, "BluRayToVisionPro")
-        self.assertEqual(NATIVE_PACKAGE_CONFIGURATION, "Preview")
-        self.assertEqual(NATIVE_APP_NAME, "3D Blu-ray to Vision Pro Native Preview.app")
+        self.assertEqual(NATIVE_PACKAGE_CONFIGURATION, "Release")
+        self.assertEqual(NATIVE_APP_NAME, "3D Blu-ray to Vision Pro.app")
         self.assertEqual(NATIVE_EXECUTABLE_NAME, NATIVE_PRODUCT_NAME)
-        self.assertEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp.native-preview")
-        self.assertEqual(NATIVE_SHORT_VERSION, "0.3.0")
-        self.assertEqual(NATIVE_BUILD_VERSION, "3")
-        self.assertEqual(NATIVE_PRERELEASE_VERSION, "0.3.0-beta.2")
+        self.assertEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp")
+        self.assertEqual(NATIVE_SHORT_VERSION, "0.2.143")
+        self.assertEqual(NATIVE_BUILD_VERSION, "146")
         self.assertEqual(NATIVE_MINIMUM_SYSTEM_VERSION, "26.0")
 
     def test_uses_one_native_settings_scene_and_release_grade_source_groups(self) -> None:
         project_spec = (MACOS_ROOT / "project.yml").read_text(encoding="utf-8")
         project = yaml.load(project_spec, Loader=yaml.BaseLoader)
         target_settings = project["targets"]["BluRayToVisionPro"]["settings"]
-        preview_settings = target_settings["configs"]["Preview"]
+        debug_settings = target_settings["configs"]["Debug"]
         release_settings = target_settings["configs"]["Release"]
         sparkle_manifest = tomllib.loads((REPO_ROOT / "vendor" / "sparkle-macos.toml").read_text(encoding="utf-8"))
         briefcase_info = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["briefcase"][
             "app"
         ]["bd-to-avp"]["macOS"]["info"]
-        preview_info = plistlib.loads((MACOS_ROOT / "BluRayToVisionPro" / "Info.plist").read_bytes())
+        debug_info = plistlib.loads((MACOS_ROOT / "BluRayToVisionPro" / "Info.plist").read_bytes())
         release_info = plistlib.loads((MACOS_ROOT / "BluRayToVisionPro" / "Info-Release.plist").read_bytes())
         app_source = (MACOS_ROOT / "BluRayToVisionPro" / "App" / "BluRayToVisionProApp.swift").read_text(
             encoding="utf-8"
@@ -88,15 +87,18 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn('Picker("Update Channel"', app_source)
         self.assertIn("openWindow(id: AppWindowID.settings)", app_source)
         self.assertIn(".windowResizability(.contentMinSize)", app_source)
-        self.assertEqual(target_settings["base"]["CURRENT_PROJECT_VERSION"], "2")
-        self.assertEqual(preview_settings["CURRENT_PROJECT_VERSION"], NATIVE_BUILD_VERSION)
+        self.assertEqual(target_settings["base"]["CURRENT_PROJECT_VERSION"], NATIVE_BUILD_VERSION)
         self.assertNotIn("CURRENT_PROJECT_VERSION", release_settings)
         self.assertEqual(project["options"]["deploymentTarget"]["macOS"], NATIVE_MINIMUM_SYSTEM_VERSION)
         self.assertEqual(project["settings"]["base"]["MACOSX_DEPLOYMENT_TARGET"], NATIVE_MINIMUM_SYSTEM_VERSION)
-        self.assertEqual(preview_settings["MARKETING_VERSION"], NATIVE_SHORT_VERSION)
-        self.assertEqual(preview_settings["PRODUCT_BUNDLE_IDENTIFIER"], NATIVE_BUNDLE_IDENTIFIER)
-        self.assertEqual(preview_settings["PRODUCT_NAME"], NATIVE_PRODUCT_NAME)
-        self.assertIn("Preview: release", project_spec)
+        self.assertEqual(target_settings["base"]["MARKETING_VERSION"], NATIVE_SHORT_VERSION)
+        self.assertEqual(target_settings["base"]["PRODUCT_BUNDLE_IDENTIFIER"], NATIVE_BUNDLE_IDENTIFIER)
+        self.assertEqual(target_settings["base"]["PRODUCT_NAME"], NATIVE_PRODUCT_NAME)
+        self.assertEqual(debug_settings["PRODUCT_BUNDLE_IDENTIFIER"], "com.shinycomputers.bd-to-avp.development")
+        self.assertEqual(debug_settings["PRODUCT_NAME"], "3D Blu-ray to Vision Pro Development")
+        self.assertNotIn("Preview: release", project_spec)
+        self.assertNotIn("Native Preview", project_spec)
+        self.assertNotIn(".native-preview", project_spec)
         self.assertEqual(project["packages"]["Sparkle"]["exactVersion"], sparkle_manifest["version"])
         self.assertIn({"package": "Sparkle"}, project["targets"]["BluRayToVisionPro"]["dependencies"])
         update_keys = {
@@ -107,9 +109,9 @@ class NativeAppPackagingTests(unittest.TestCase):
             "SUVerifyUpdateBeforeExtraction",
         }
         for key in update_keys:
-            self.assertNotIn(key, preview_info)
+            self.assertNotIn(key, debug_info)
             self.assertEqual(release_info[key], briefcase_info[key])
-        self.assertEqual(preview_info, {key: value for key, value in release_info.items() if key not in update_keys})
+        self.assertEqual(debug_info, {key: value for key, value in release_info.items() if key not in update_keys})
         self.assertEqual(release_settings["INFOPLIST_FILE"], "BluRayToVisionPro/Info-Release.plist")
         self.assertNotIn("SUEnableAutomaticChecks", release_info)
 
@@ -181,20 +183,23 @@ class NativeAppPackagingTests(unittest.TestCase):
     def test_native_build_settings_support_hosted_ci_deployment_override(self) -> None:
         settings = native_build_settings(
             "Debug",
-            {"BD_TO_AVP_NATIVE_DEPLOYMENT_TARGET_OVERRIDE": "26.0"},
+            {"BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE": "26.0"},
         )
 
         self.assertIn("MACOSX_DEPLOYMENT_TARGET=26.0", settings)
         self.assertNotIn("ARCHS=arm64", settings)
 
-        preview_settings = native_build_settings("Preview", {})
-        self.assertIn("ARCHS=arm64", preview_settings)
+        release_settings = native_build_settings("Release", {})
+        self.assertIn("ARCHS=arm64", release_settings)
+        self.assertIn(f"CURRENT_PROJECT_VERSION={NATIVE_BUILD_VERSION}", release_settings)
+        self.assertIn(f"MARKETING_VERSION={NATIVE_SHORT_VERSION}", release_settings)
+        self.assertIn(f"PRODUCT_BUNDLE_IDENTIFIER={NATIVE_BUNDLE_IDENTIFIER}", release_settings)
 
     def test_native_build_settings_reject_invalid_deployment_override(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Invalid native deployment target override"):
+        with self.assertRaisesRegex(ValueError, "Invalid macOS deployment target override"):
             native_build_settings(
                 "Debug",
-                {"BD_TO_AVP_NATIVE_DEPLOYMENT_TARGET_OVERRIDE": "latest"},
+                {"BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE": "latest"},
             )
 
     def test_reads_minimum_versions_from_mach_o_build_commands(self) -> None:
@@ -331,7 +336,7 @@ Load command 3
             with self.assertRaisesRegex(RuntimeError, "development repository paths"):
                 verify_package_paths(app_path)
 
-    def test_accepts_preview_product_metadata(self) -> None:
+    def test_accepts_production_product_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             app_path = Path(temporary_directory) / NATIVE_APP_NAME
             info_path = app_path / "Contents" / "Info.plist"
@@ -348,6 +353,7 @@ Load command 3
                         "LSMinimumSystemVersion": NATIVE_MINIMUM_SYSTEM_VERSION,
                         "MainModule": "bd_to_avp.worker",
                         "BluRayToVisionProEngineBundled": True,
+                        **NATIVE_UPDATE_INFO,
                     },
                     info_file,
                 )
@@ -371,6 +377,7 @@ Load command 3
                         "LSMinimumSystemVersion": NATIVE_MINIMUM_SYSTEM_VERSION,
                         "MainModule": "bd_to_avp.worker",
                         "BluRayToVisionProEngineBundled": True,
+                        **NATIVE_UPDATE_INFO,
                         "BDToAVPDevelopmentRepositoryRoot": "/private/tmp/source",
                     },
                     info_file,
@@ -396,6 +403,7 @@ Load command 3
                         "LSMinimumSystemVersion": NATIVE_MINIMUM_SYSTEM_VERSION,
                         "MainModule": "bd_to_avp.worker",
                         "BluRayToVisionProEngineBundled": True,
+                        **NATIVE_UPDATE_INFO,
                     },
                     info_file,
                 )

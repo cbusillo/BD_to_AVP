@@ -1,6 +1,6 @@
-# Native macOS UI Acceptance
+# macOS UI Acceptance
 
-This record covers the native SwiftUI/AppKit acceptance pass for issues #178,
+This record covers the SwiftUI/AppKit acceptance pass for issues #178,
 #191, and #201. The application deploys to Apple Silicon macOS 26 or later and
 was reviewed on the macOS 27 development host with the Xcode 27 SDK on
 2026-07-15. The release workflow separately verifies the signed package on a
@@ -8,9 +8,9 @@ macOS 26 runner; these screenshots validate layout and platform behavior on the
 available interactive host rather than claiming pixel-identical rendering
 between major macOS releases.
 
-The production Briefcase screenshots in the repository root remain historical
-evidence for the current `0.2.x` release line. Native-interface evidence lives
-here until the native app replaces that release line.
+The Briefcase screenshots in the repository root remain historical evidence for
+the `0.2.x` release line. The evidence here is the accepted production-interface
+baseline for `0.3.0` and later.
 
 ## Acceptance Results
 
@@ -19,7 +19,7 @@ here until the native app replaces that release line.
 | Deployment floor | Pass | XcodeGen and `MACOSX_DEPLOYMENT_TARGET` remain 26.0; package compatibility is enforced separately. |
 | Profiles | Pass | Built-ins are immutable; custom profiles support create, duplicate, rename, edit, reorder, delete, default selection, atomic persistence, and corruption recovery. Reordering and duplicate-name progression now have persistence tests. |
 | Current-job isolation | Pass | Profile writes contain only reusable encoding settings. Source, destination, preview intent, and job/recovery options remain outside the stored profile. |
-| Standard platform controls | Pass | The shell uses native windows, toolbar/menu roles, forms, pickers, lists, split views, materials, and AVKit playback rather than custom replicas. |
+| Standard platform controls | Pass | The application uses platform windows, toolbar/menu roles, forms, pickers, lists, split views, materials, and AVKit playback rather than custom replicas. |
 | Structural chrome | Pass | Footers use system material normally and switch to an opaque window background for Reduce Transparency or Increase Contrast. No explicit `glassEffect` is applied to dense content. |
 | Readability | Pass | Forms and metadata remain opaque; video keeps a black backing; diagnostics use the platform text background. |
 | Appearance | Pass | Main and Profiles views were reviewed in light and dark appearances. |
@@ -35,7 +35,7 @@ here until the native app replaces that release line.
 
 | Light | Dark |
 | --- | --- |
-| ![Native main window in light appearance](images/native-ui-acceptance/main-empty-light.png) | ![Native main window in dark appearance](images/native-ui-acceptance/main-empty-dark.png) |
+| ![Main window in light appearance](images/native-ui-acceptance/main-empty-light.png) | ![Main window in dark appearance](images/native-ui-acceptance/main-empty-dark.png) |
 
 ### Profiles
 
@@ -55,5 +55,5 @@ here until the native app replaces that release line.
   trustworthy denominator.
 - The interactive review used the macOS 27 development host. macOS 26 package
   compatibility remains a release-workflow gate.
-- Finalized preview playback is covered by the native AVPlayer flow; growing
+- Finalized preview playback is covered by the AVPlayer flow; growing
   MOV playback remains intentionally unsupported.
