@@ -14,6 +14,7 @@ enum PlaybackCheckID: String, Codable, CaseIterable {
     case stereoDecode
     case playerReady
     case renderingReady
+    case stereoPresentation
     case spatialPresentation
     case beginningSeek
     case middleSeek
@@ -27,8 +28,10 @@ enum PlaybackCheckID: String, Codable, CaseIterable {
             return "Movie opens for playback"
         case .renderingReady:
             return "Picture is ready"
+        case .stereoPresentation:
+            return "Stereoscopic playback is active"
         case .spatialPresentation:
-            return "3D presentation is active"
+            return "Spatial treatment is active"
         case .beginningSeek:
             return "Beginning plays"
         case .middleSeek:
@@ -135,6 +138,12 @@ struct PlaybackSourceSummary: Codable, Equatable {
     let subtitleOptionCount: Int
 }
 
+struct PlaybackPresentationSummary: Codable, Equatable {
+    let viewingMode: String
+    let spatialVideoMode: String
+    let immersiveViewingMode: String
+}
+
 struct PlaybackValidationReport: Codable, Equatable {
     let schemaVersion: Int
     let validatorVersion: String
@@ -142,6 +151,7 @@ struct PlaybackValidationReport: Codable, Equatable {
     let generatedAt: String
     let operatingSystem: String
     let source: PlaybackSourceSummary
+    let presentation: PlaybackPresentationSummary
     let automaticChecks: [PlaybackCheck]
     let observations: PlaybackObservations
     let result: PlaybackValidationResult
@@ -154,7 +164,9 @@ struct PlaybackSeekEvidence: Equatable {
     let playbackAdvanceSeconds: Double
     let requiredPlaybackAdvanceSeconds: Double
     let renderingReady: Bool
+    let stereoPresentation: Bool
     let spatialPresentation: Bool
+    let requiresSpatialPresentation: Bool
 }
 
 enum PlaybackValidationRules {
@@ -184,7 +196,61 @@ enum PlaybackValidationRules {
             && evidence.targetErrorSeconds <= evidence.allowedTargetErrorSeconds
             && evidence.playbackAdvanceSeconds >= evidence.requiredPlaybackAdvanceSeconds
             && evidence.renderingReady
-            && evidence.spatialPresentation
+            && evidence.stereoPresentation
+            && (!evidence.requiresSpatialPresentation || evidence.spatialPresentation)
+    }
+}
+
+struct PlaybackReportFiles: Equatable {
+    let archiveURL: URL
+    let latestURL: URL
+}
+
+enum PlaybackReportStore {
+    static let directoryName = "PlaybackValidatorReports"
+    static let latestFileName = "Latest-Playback-Report.json"
+
+    static func write(
+        _ data: Data,
+        sourceFileName: String,
+        generatedAt: Date,
+        documentsDirectory: URL
+    ) throws -> PlaybackReportFiles {
+        let fileManager = FileManager.default
+        let reportDirectory = documentsDirectory.appendingPathComponent(directoryName, isDirectory: true)
+        try fileManager.createDirectory(at: reportDirectory, withIntermediateDirectories: true)
+
+        let archiveURL = reportDirectory.appendingPathComponent(
+            archiveFileName(sourceFileName: sourceFileName, generatedAt: generatedAt)
+        )
+        let latestURL = reportDirectory.appendingPathComponent(latestFileName)
+        try data.write(to: archiveURL, options: .atomic)
+        try data.write(to: latestURL, options: .atomic)
+        return PlaybackReportFiles(archiveURL: archiveURL, latestURL: latestURL)
+    }
+
+    static func archiveFileName(sourceFileName: String, generatedAt: Date) -> String {
+        let sourceBaseName = URL(fileURLWithPath: sourceFileName)
+            .deletingPathExtension()
+            .lastPathComponent
+        let sanitizedSourceName = sanitizedFileNameComponent(sourceBaseName)
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+
+        return "BD-to-AVP-Playback-Check-\(sanitizedSourceName)-\(formatter.string(from: generatedAt)).json"
+    }
+
+    private static func sanitizedFileNameComponent(_ value: String) -> String {
+        let replacedCharacters = value.map { character in
+            character.isLetter || character.isNumber ? character : "-"
+        }
+        let collapsedValue = String(replacedCharacters)
+            .split(separator: "-", omittingEmptySubsequences: true)
+            .joined(separator: "-")
+        return collapsedValue.isEmpty ? "Movie" : String(collapsedValue.prefix(64))
     }
 }
 

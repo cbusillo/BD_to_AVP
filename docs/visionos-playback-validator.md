@@ -20,8 +20,8 @@ Movies selected through Files are copied into the app's cache so playback can co
 - `VTIsStereoMVHEVCDecodeSupported()` on the current device.
 - `AVPlayerItem.status == .readyToPlay` for the selected movie.
 - `VideoPlayerComponent.currentRenderingStatus == .ready`.
-- Actual stereo, spatial, portal presentation instead of flat-screen fallback.
-- Beginning, middle, and end seeks, including preservation of spatial presentation after every seek.
+- Actual stereoscopic playback, reported separately from optional spatial treatment and portal presentation.
+- Beginning, middle, and end seeks, including preservation of stereoscopic playback and any spatial treatment that was active before the seek.
 - Available audio and subtitle choices for manual review under **Technical details**.
 
 After the automatic sequence, the validator asks only:
@@ -43,7 +43,7 @@ Technical terms such as `Stereo · Spatial · Portal` appear only under **Techni
 - **One result needs review**: the automatic checks did not fail, but at least one observation was **Not sure** or a check did not reach a final pass state.
 - **Playback check found a problem**: an automatic check failed or either visible observation was **No**.
 
-The shared JSON report contains a schema version, validator version and build, visionOS version, filename, full-file SHA-256 fingerprint, file size, duration, media-option counts, automatic check details, observations, and result. It intentionally omits the source file path. The fingerprint binds release evidence to the exact movie even when an automated device transfer names it `Probe.mov`.
+The app automatically writes a named JSON report plus `Latest-Playback-Report.json` under its Documents directory. **Share JSON Report** sends that file as a `.json` attachment instead of untyped text. The report contains a schema version, validator version and build, visionOS version, filename, full-file SHA-256 fingerprint, file size, duration, media-option counts, actual viewing/spatial/immersive modes, automatic check details, observations, and result. It intentionally omits the source file path. The fingerprint binds release evidence to the exact movie even when an automated device transfer names it `Probe.mov`.
 
 ## Build
 
@@ -52,6 +52,8 @@ Create a six-second finalized MV-HEVC fixture with English audio and subtitles:
 ```bash
 scripts/create_spatial_playback_fixture.sh
 ```
+
+The fixture contains three labeled depth markers: blue should appear behind the screen plane, green on the screen plane, and red in front. This gives the operator an unambiguous depth-order check instead of a single flat test pattern.
 
 Generate the project and build for the simulator:
 
@@ -104,6 +106,19 @@ xcrun devicectl device copy to \
 ```
 
 Autorun starts the automatic sequence after the player is ready. It stops at the two human observations; automation does not fabricate visible playback answers. The physical UI test requires all automatic checks to pass and verifies that the observation screen is presented.
+
+After the operator selects **Finish Check**, retrieve the report directly without asking them to save share-sheet text manually:
+
+```bash
+xcrun devicectl device copy from \
+  --device <device-id> \
+  --source Documents/PlaybackValidatorReports/Latest-Playback-Report.json \
+  --destination /absolute/path/to/playback-report.json \
+  --domain-type appDataContainer \
+  --domain-identifier com.shinycomputers.bd-to-avp.spatial-playback-probe
+```
+
+The synthetic `Probe.mov` is the controlled visibility, stereo, and seek smoke test. A stereo-screen pass proves visible stereoscopic playback; it does not by itself prove RealityKit spatial treatment. The report keeps those outcomes separate so a missing spatial mode does not create three misleading seek failures.
 
 ## Audio Validation Matrix
 
