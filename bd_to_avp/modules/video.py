@@ -626,6 +626,8 @@ def combine_to_mv_hevc(
         "--left-is-primary",
         "--horizontal-field-of-view",
         config.fov,
+        "--horizontal-disparity-adjustment",
+        0,
         "--color-depth",
         color_depth,
         "--output-file",

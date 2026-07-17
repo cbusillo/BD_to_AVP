@@ -15,6 +15,13 @@ from bd_to_avp.modules.util import sorted_files_by_creation_filtered_on_suffix
 from bd_to_avp.modules.video_mode import VideoMode
 
 
+AUDIO_CHANNEL_LAYOUT_NAMES = {
+    1: "mono",
+    2: "stereo",
+}
+GENERIC_AUDIO_HANDLER_NAMES = frozenset({"soundhandler"})
+
+
 def extract_mvc_and_audio(
     input_path: Path,
     video_output_path: Path | None,
@@ -29,7 +36,14 @@ def extract_mvc_and_audio(
         )
 
     if audio_output_path:
-        output_streams.append(ffmpeg.output(stream["a"], f"file:{audio_output_path}", c="pcm_s24le"))
+        output_streams.append(
+            ffmpeg.output(
+                stream["a"],
+                f"file:{audio_output_path}",
+                c="pcm_s24le",
+                **audio_handler_metadata_options(input_path),
+            )
+        )
 
     if output_streams:
         output_message = "ffmpeg to extract MVC video and audio from source"
@@ -90,9 +104,8 @@ def mux_video_audio_subs(video_path: Path, audio_path: Path, muxed_path: Path, o
     for audio_position, stream in enumerate(audio_streams):
         index = stream["index"] + 1
         language_code, audio_language_name = normalize_track_language(stream.get("tags", {}).get("language"))
-        channel_layout = stream.get("channel_layout", "unknown")
-        tags = stream.get("tags", {})
-        title = tags.get("title") or tags.get("name")
+        channel_layout = audio_channel_layout_name(stream)
+        title = audio_track_title(stream)
         default_disposition = int(stream.get("disposition", {}).get("default", 0) or 0) == 1
 
         audio_track_options = f":lang={language_code}:group=1:alternate_group=1"
@@ -130,6 +143,56 @@ def mux_video_audio_subs(video_path: Path, audio_path: Path, muxed_path: Path, o
 
     command += [muxed_path]
     run_command(command, "mux video, audio, and subtitles.")
+
+
+def audio_channel_layout_name(stream: dict[str, Any]) -> str:
+    channel_layout = stream.get("channel_layout")
+    if isinstance(channel_layout, str) and channel_layout.strip():
+        return channel_layout.strip()
+
+    raw_channel_count = stream.get("channels")
+    if raw_channel_count is None:
+        return "unknown"
+    try:
+        channel_count = int(raw_channel_count)
+    except (TypeError, ValueError):
+        return "unknown"
+    return AUDIO_CHANNEL_LAYOUT_NAMES.get(channel_count, f"{channel_count}-channel")
+
+
+def audio_track_title(stream: dict[str, Any]) -> str | None:
+    tags = stream.get("tags", {})
+    if not isinstance(tags, dict):
+        return None
+
+    for key in ("title", "name", "handler_name"):
+        title = tags.get(key)
+        if not isinstance(title, str):
+            continue
+        normalized_title = title.strip()
+        if not normalized_title:
+            continue
+        if key == "handler_name" and normalized_title.casefold() in GENERIC_AUDIO_HANDLER_NAMES:
+            continue
+        return normalized_title
+    return None
+
+
+def audio_handler_metadata_options(input_path: Path, audio_selector: str = "a") -> dict[str, str]:
+    streams = get_audio_stream_data(input_path)
+    if audio_selector != "a":
+        stream_type, separator, stream_index = audio_selector.partition(":")
+        if stream_type != "a" or not separator or not stream_index.isdigit():
+            return {}
+        selected_index = int(stream_index)
+        streams = streams[selected_index : selected_index + 1]
+
+    options: dict[str, str] = {}
+    for output_index, stream in enumerate(streams):
+        title = audio_track_title(stream)
+        if title is not None:
+            options[f"metadata:s:a:{output_index}"] = f"handler_name={title}"
+    return options
 
 
 def normalize_track_language(language_code: object) -> tuple[str, str]:

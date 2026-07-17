@@ -15,6 +15,7 @@ class AudioExtractionTests(unittest.TestCase):
     def test_subtitle_filter_does_not_limit_extracted_audio_tracks(self) -> None:
         with (
             patch.object(container.config, "remove_extra_languages", True),
+            patch.object(container, "get_audio_stream_data", return_value=[]),
             patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
         ):
             container.extract_mvc_and_audio(Path("source.mkv"), None, Path("audio.mov"))
@@ -22,6 +23,26 @@ class AudioExtractionTests(unittest.TestCase):
         command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
         self.assertIn("0:a", command)
         self.assertNotIn("0:a:0", command)
+
+    def test_pcm_extraction_preserves_audio_titles_as_handler_names(self) -> None:
+        with (
+            patch.object(
+                container,
+                "get_audio_stream_data",
+                return_value=[
+                    {"tags": {"title": "Main 5.1"}},
+                    {"tags": {"name": "Alternate Stereo"}},
+                ],
+            ),
+            patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
+        ):
+            container.extract_mvc_and_audio(Path("source.mkv"), None, Path("audio.mov"))
+
+        command = ffmpeg.compile(run_ffmpeg.call_args.args[0][0])
+        self.assertIn("-metadata:s:a:0", command)
+        self.assertIn("handler_name=Main 5.1", command)
+        self.assertIn("-metadata:s:a:1", command)
+        self.assertIn("handler_name=Alternate Stereo", command)
 
     def test_direct_pipeline_skips_intermediate_video_and_pcm(self) -> None:
         with (
@@ -56,6 +77,7 @@ class AudioExtractionTests(unittest.TestCase):
             patch.object(container.config, "audio_mode", AudioMode.PCM),
             patch.object(container.config, "keep_files", False),
             patch.object(container.config, "start_stage", Stage.CREATE_MKV),
+            patch.object(container, "audio_handler_metadata_options", return_value={}),
             patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
         ):
             audio_path, video_path = container.create_mvc_and_audio("Movie", Path("source.mkv"), Path("output"))
@@ -246,6 +268,60 @@ class MuxCommandTests(unittest.TestCase):
 
         command = run_command.call_args.args[0]
         self.assertIn("2:type=name:str='Director Commentary'", command)
+
+    def test_final_mux_uses_preserved_handler_name_as_audio_title(self) -> None:
+        with (
+            patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+            patch.object(
+                container,
+                "get_audio_stream_data",
+                return_value=[
+                    {
+                        "index": 0,
+                        "tags": {"language": "eng", "handler_name": "Main 5.1"},
+                        "channels": 6,
+                    }
+                ],
+            ),
+            patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
+            patch.object(container, "run_command") as run_command,
+        ):
+            container.mux_video_audio_subs(
+                Path("movie_MV-HEVC.mov"),
+                Path("Movie_audio_AAC.m4a"),
+                Path("movie_AVP.mov"),
+                Path("."),
+            )
+
+        command = run_command.call_args.args[0]
+        self.assertIn("2:type=name:str='Main 5.1'", command)
+
+    def test_final_mux_uses_channel_count_when_layout_and_title_are_missing(self) -> None:
+        with (
+            patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+            patch.object(
+                container,
+                "get_audio_stream_data",
+                return_value=[
+                    {
+                        "index": 0,
+                        "tags": {"language": "eng", "handler_name": "SoundHandler"},
+                        "channels": 6,
+                    }
+                ],
+            ),
+            patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
+            patch.object(container, "run_command") as run_command,
+        ):
+            container.mux_video_audio_subs(
+                Path("movie_MV-HEVC.mov"),
+                Path("Movie_audio_AAC.m4a"),
+                Path("movie_AVP.mov"),
+                Path("."),
+            )
+
+        command = run_command.call_args.args[0]
+        self.assertIn("2:type=name:str='English 6-channel Audio'", command)
 
     def test_final_mux_normalizes_bibliographic_audio_language(self) -> None:
         with (

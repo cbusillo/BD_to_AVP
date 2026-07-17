@@ -33,6 +33,7 @@ ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=656x360:rate=30' 
 	--quality 60 \
 	--left-is-primary \
 	--horizontal-field-of-view 90 \
+	--horizontal-disparity-adjustment 0 \
 	--output-file "$work_dir/spatial.mov"
 
 ffmpeg -hide_banner -loglevel error -f lavfi -i 'sine=frequency=880:sample_rate=48000' -t 6 -c:a aac -b:a 192k -metadata:s:a:0 language=eng -y "$work_dir/audio.m4a"
