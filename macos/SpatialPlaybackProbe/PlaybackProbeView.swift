@@ -1,21 +1,17 @@
-import RealityKit
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct PlaybackProbeView: View {
-    @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
-    @Environment(\.openImmersiveSpace) private var openImmersiveSpace
-
     @ObservedObject var model: PlaybackProbeModel
     @State private var isImporting = false
 
     var body: some View {
-        HStack(spacing: 0) {
-            playerPane
-            Divider()
+        VStack(spacing: 0) {
             inspector
-                .frame(width: 330)
+            Divider()
+            playbackControls
         }
+        .frame(minWidth: 520, minHeight: 620)
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.movie],
@@ -32,51 +28,8 @@ struct PlaybackProbeView: View {
         }
     }
 
-    private var playerPane: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                Color.black.opacity(0.72)
-                RealityView { content in
-                    model.installPlayerComponent()
-                    if model.playerEntity.parent == nil {
-                        content.add(model.playerEntity)
-                    }
-                } update: { content in
-                    if !model.immersiveSpaceIsOpen, model.playerEntity.parent == nil {
-                        content.add(model.playerEntity)
-                    }
-                }
-
-                if !model.hasLoadedAsset {
-                    ContentUnavailableView {
-                        Label("Open a Finalized Preview", systemImage: "visionpro")
-                    } description: {
-                        Text("Choose a completed MV-HEVC movie. Conversion tools are intentionally not included in this companion.")
-                    } actions: {
-                        Button("Open Preview…") {
-                            isImporting = true
-                        }
-                    }
-                } else if model.isLoading {
-                    ProgressView("Preparing spatial playback…")
-                        .padding(24)
-                        .glassBackgroundEffect()
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(.black.opacity(0.72))
-
-            Divider()
-
-            playbackControls
-                .padding(.horizontal, 24)
-                .padding(.vertical, 16)
-                .background(.regularMaterial)
-        }
-    }
-
     private var playbackControls: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             Button {
                 model.togglePlayback()
             } label: {
@@ -109,13 +62,14 @@ struct PlaybackProbeView: View {
                 isImporting = true
             }
 
-            Button(model.immersiveSpaceIsOpen ? "Close Spatial View" : "Open Spatial View") {
-                Task {
-                    await toggleSpatialView()
-                }
+            Button(model.spatialViewIsOpen ? "Close Spatial View" : "Open Spatial View") {
+                model.toggleSpatialView()
             }
         }
         .buttonStyle(.bordered)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+        .background(.regularMaterial)
     }
 
     private var inspector: some View {
@@ -164,7 +118,7 @@ struct PlaybackProbeView: View {
             )
             statusRow(title: "AVPlayer item", value: model.playerItemStatusText)
             statusRow(title: "RealityKit rendering", value: model.renderingStatusText)
-            statusRow(title: "Immersive space", value: model.immersiveSpaceStatusText)
+            statusRow(title: "Spatial view", value: model.spatialViewStatusText)
             statusRow(title: "Requested presentation", value: "Stereo · Spatial · Portal")
             statusRow(
                 title: "Actual presentation",
@@ -240,26 +194,4 @@ struct PlaybackProbeView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func toggleSpatialView() async {
-        if model.immersiveSpaceIsOpen {
-            await dismissImmersiveSpace()
-            model.recordImmersiveSpaceStatus("Closed", isOpen: false)
-        } else {
-            await openSpatialView()
-        }
-    }
-
-    private func openSpatialView() async {
-        model.recordImmersiveSpaceStatus("Opening", isOpen: false)
-        switch await openImmersiveSpace(id: SpatialPlaybackProbeApp.immersiveSpaceID) {
-        case .opened:
-            model.recordImmersiveSpaceStatus("Open", isOpen: true)
-        case .userCancelled:
-            model.recordImmersiveSpaceStatus("Cancelled", isOpen: false)
-        case .error:
-            model.recordImmersiveSpaceStatus("Could not open", isOpen: false)
-        @unknown default:
-            model.recordImmersiveSpaceStatus("Unknown", isOpen: false)
-        }
-    }
 }

@@ -2,13 +2,13 @@ import SwiftUI
 
 @main
 struct SpatialPlaybackProbeApp: App {
-    static let immersiveSpaceID = "spatial-playback"
+    static let controlsWindowID = "spatial-controls"
+    static let playerWindowID = "spatial-player"
 
     @StateObject private var model = PlaybackProbeModel()
-    @State private var immersionStyle: ImmersionStyle = .mixed
 
     var body: some Scene {
-        WindowGroup("Spatial Playback") {
+        Window("Spatial Playback Controls", id: Self.controlsWindowID) {
             PlaybackProbeView(model: model)
                 .task {
                     await model.bootstrap()
@@ -17,12 +17,14 @@ struct SpatialPlaybackProbeApp: App {
                     model.importAsset(from: url)
                 }
         }
-        .defaultSize(width: 1.1, height: 0.76, depth: 0.24, in: .meters)
-        .windowStyle(.volumetric)
+        .defaultSize(width: 0.62, height: 0.72, depth: 0.12, in: .meters)
+        .windowStyle(.plain)
 
-        ImmersiveSpace(id: Self.immersiveSpaceID) {
-            SpatialPlaybackRealityView(model: model)
+        Window("Spatial Player", id: Self.playerWindowID) {
+            SpatialPlaybackPlayerView(model: model)
+                .frame(depth: 1)
         }
-        .immersionStyle(selection: $immersionStyle, in: .mixed)
+        .defaultSize(width: 1.2, height: 0.675, depth: 1, in: .meters)
+        .windowStyle(.plain)
     }
 }

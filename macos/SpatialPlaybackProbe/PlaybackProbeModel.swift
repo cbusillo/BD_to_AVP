@@ -50,8 +50,8 @@ final class PlaybackProbeModel: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published private(set) var playerItemStatusText = "Not loaded"
     @Published private(set) var renderingStatusText = "Not loaded"
-    @Published private(set) var immersiveSpaceStatusText = "Not open"
-    @Published private(set) var immersiveSpaceIsOpen = false
+    @Published private(set) var spatialViewStatusText = "Opening"
+    @Published private(set) var spatialViewIsOpen = true
     @Published private(set) var actualPresentationText = "Not available"
     @Published private(set) var isActuallySpatial = false
     @Published private(set) var currentSeconds = 0.0
@@ -149,7 +149,7 @@ final class PlaybackProbeModel: ObservableObject {
         component.desiredImmersiveViewingMode = .portal
         playerEntity.components.set(component)
         playerEntity.position = .zero
-        playerEntity.scale = SIMD3<Float>(repeating: 0.20)
+        playerEntity.scale = .one
         playerComponentInstalled = true
         startStatusPolling()
 
@@ -195,14 +195,28 @@ final class PlaybackProbeModel: ObservableObject {
         )
     }
 
-    func recordImmersiveSpaceStatus(_ status: String, isOpen: Bool) {
-        immersiveSpaceStatusText = status
-        immersiveSpaceIsOpen = isOpen
+    func toggleSpatialView() {
+        guard var component = playerEntity.components[VideoPlayerComponent.self] else {
+            return
+        }
+
+        spatialViewIsOpen.toggle()
+        component.desiredViewingMode = .stereo
+        component.desiredSpatialVideoMode = spatialViewIsOpen ? .spatial : .screen
+        component.desiredImmersiveViewingMode = .portal
+        playerEntity.components.set(component)
+        spatialViewStatusText = spatialViewIsOpen ? "Opening" : "Closed"
+        if !spatialViewIsOpen {
+            isActuallySpatial = false
+        }
+
         emit(
-            "immersive_space",
+            "spatial_view",
             values: [
-                "status": status.lowercased().replacingOccurrences(of: " ", with: "_"),
-                "is_open": String(isOpen),
+                "status": spatialViewStatusText.lowercased(),
+                "is_open": String(spatialViewIsOpen),
+                "desired_spatial_video_mode": spatialViewIsOpen ? "spatial" : "screen",
+                "desired_immersive_viewing_mode": "portal",
             ]
         )
         scheduleAutomatedProbeIfNeeded()
@@ -408,6 +422,9 @@ final class PlaybackProbeModel: ObservableObject {
         isActuallySpatial = component.spatialVideoMode == .spatial
             && component.viewingMode == .stereo
             && component.immersiveViewingMode == .portal
+        if spatialViewIsOpen {
+            spatialViewStatusText = isActuallySpatial ? "Open" : "Opening"
+        }
 
         if didChange {
             emit(
@@ -428,7 +445,7 @@ final class PlaybackProbeModel: ObservableObject {
         guard
             shouldRunAutomatedProbe,
             !automatedProbeStarted,
-            immersiveSpaceIsOpen,
+            spatialViewIsOpen,
             isActuallySpatial,
             player.currentItem?.status == .readyToPlay,
             renderingStatusText == "Ready",

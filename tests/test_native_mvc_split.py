@@ -97,6 +97,19 @@ class NativeMvcCommandTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "8-bit"):
             video.generate_native_mvc_ffmpeg_command(Path("left.mov"), Path("right.mov"), self.disc_info, "")
 
+    def test_mv_hevc_merge_writes_neutral_stereo_disparity_metadata(self) -> None:
+        with (
+            patch.object(video.config, "SPATIAL_MEDIA_PATH", Path("/tools/spatial-media-kit-tool")),
+            patch.object(video.config, "mv_hevc_quality", 75),
+            patch.object(video.config, "fov", 90),
+            patch.object(video, "run_command", return_value="") as run_command,
+        ):
+            video.combine_to_mv_hevc(Path("left.mov"), Path("right.mov"), Path("spatial.mov"), 8)
+
+        command = run_command.call_args.args[0]
+        disparity_option = command.index("--horizontal-disparity-adjustment")
+        self.assertEqual(command[disparity_option + 1], 0)
+
 
 class NativeMvcSelectionTests(unittest.TestCase):
     def test_direct_pipeline_keeps_streamed_source_file(self) -> None:

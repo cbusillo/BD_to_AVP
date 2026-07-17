@@ -45,7 +45,7 @@ xcodebuild build \
   DEVELOPMENT_TEAM=<team-id>
 ```
 
-The `SpatialPlaybackProbeUITests` target performs the user-initiated **Open Spatial View** action required by visionOS and verifies the reported stereo, spatial, portal presentation on a physical headset. Simulator runs skip this acceptance test. The headset must allow Xcode to enter UI automation mode; a timeout while enabling automation is an environment blocker, not spatial-playback evidence.
+The `SpatialPlaybackProbeUITests` target performs the user-initiated **Open Spatial View** action and verifies the reported stereo, spatial, portal presentation on a physical headset. Simulator runs skip this acceptance test. Portal presentation stays in the shared-space window; it is not moved into an `ImmersiveSpace`. The headset must allow Xcode to enter UI automation mode; a timeout while enabling automation is an environment blocker, not spatial-playback evidence.
 
 ## Generate the Audio Validation Matrix
 
@@ -64,7 +64,7 @@ The generator exercises the production audio preparation and final-mux functions
 - `03-Convert-AAC.mov`: E-AC-3 plus FLAC input that must convert both tracks to AAC.
 - `04-PCM.mov`: E-AC-3 plus FLAC input that must extract both tracks as 24-bit PCM.
 
-Each movie is 24 seconds long with a default English 5.1 track, a French alternate stereo track, selectable English subtitles, and a white flash synchronized to each channel beep. The generator fails unless codec, language, channel-layout, packet/sample integrity, warning, subtitle, and left/right MV-HEVC split checks pass. `manifest.json` records the machine-verifiable evidence, and `CHECKLIST.md` contains the headset operator gate.
+Each movie is 24 seconds long with a default English 5.1 track, a French alternate stereo track, selectable English subtitles, and a white flash synchronized to each channel beep. MV-HEVC generation writes an explicit neutral horizontal disparity adjustment so AVFoundation reports both stereo multiview content and QuickTime stereo metadata; omitting that metadata leaves RealityKit in screen fallback. The generator fails unless codec, language, channel-layout, packet/sample integrity, warning, subtitle, and left/right MV-HEVC split checks pass. `manifest.json` records the machine-verifiable evidence, and `CHECKLIST.md` contains the headset operator gate.
 
 After installing the signed app, copy the matrix into its Documents container and place the first fixture at the autorun path:
 
@@ -86,9 +86,9 @@ xcrun devicectl device copy to \
 
 ## Open a Finalized Movie
 
-Launch the app on Apple Vision Pro and choose **Open Preview…**. The file importer accepts a movie from Files, copies it into the app container, and keeps playback independent from the source file's security-scoped lifetime. The default volumetric window renders through `VideoPlayerComponent`; **Open Spatial View** requests a mixed immersive-space portal for focused review.
+Launch the app on Apple Vision Pro and choose **Open Preview…** in the controls window. The file importer accepts a movie from Files, copies it into the app container, and keeps playback independent from the source file's security-scoped lifetime. A separate singleton 16:9 player window renders the shared-space portal through `VideoPlayerComponent`; **Open Spatial View** requests stereo `.spatial` treatment without changing player ownership or geometry.
 
-For automated development-device evidence, install the built app, copy a finalized movie into its data container as `Documents/Probe.mov`, and launch with `BD_TO_AVP_PROBE_AUTORUN=1`. The visible **Open Spatial View** action—or the physical-device UI test—must enter the immersive portal before the automated seek sequence begins and `.spatial` can be accepted.
+For automated development-device evidence, install the built app, copy a finalized movie into its data container as `Documents/Probe.mov`, and launch with `BD_TO_AVP_PROBE_AUTORUN=1`. The visible **Open Spatial View** action—or the physical-device UI test—must activate the windowed portal before the automated seek sequence begins and `.spatial` can be accepted.
 
 Structured events are printed with the `BD_TO_AVP_PLAYBACK_PROBE` prefix. The terminal event is `automated_probe_complete`; acceptance requires `result=pass`, `rendering_status=ready`, a stereo/spatial actual presentation, and all three seeks to finish.
 
