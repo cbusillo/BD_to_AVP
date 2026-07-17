@@ -216,8 +216,13 @@ def make_fake_app(
         if tool_name == "ffmpeg":
             lines = [
                 "#!/bin/sh",
-                'if [ "$2" = "-encoders" ]; then echo " V..... libsvtav1"; '
-                'elif [ "$2" = "-bsfs" ]; then echo "av1_metadata"; else echo ok; fi',
+                " ".join(
+                    [
+                        'if [ "$2" = "-encoders" ]; then echo " V..... libsvtav1";',
+                        'elif [ "$2" = "-bsfs" ]; then echo "av1_metadata";',
+                        "else echo ok; fi",
+                    ]
+                ),
             ]
         write_executable(bin_path / tool_name, lines)
 

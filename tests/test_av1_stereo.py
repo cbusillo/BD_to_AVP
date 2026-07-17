@@ -1,4 +1,3 @@
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -78,17 +77,19 @@ class Av1StereoTests(unittest.TestCase):
     def test_add_av1_stereo_metadata_removes_temporary_patch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             patch_path = Path(temp_dir) / "stereo.xml"
-            file_descriptor = os.open(patch_path, os.O_CREAT | os.O_RDWR)
+            patch_path.touch()
             input_path = Path(temp_dir) / "input.mp4"
             output_path = Path(temp_dir) / "output.mp4"
 
             with (
-                patch.object(video.tempfile, "mkstemp", return_value=(file_descriptor, str(patch_path))),
+                patch.object(video.tempfile, "mkstemp", return_value=(42, str(patch_path))),
+                patch.object(video.os, "close") as close,
                 patch.object(video, "run_command") as run_command,
                 patch.object(video.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
             ):
                 video.add_av1_stereo_metadata(input_path, output_path)
 
+            close.assert_called_once_with(42)
             run_command.assert_called_once_with(
                 [Path("/tools/MP4Box"), "-patch", patch_path, input_path, "-out", output_path],
                 "add Apple stereo packing metadata to AV1 video.",
