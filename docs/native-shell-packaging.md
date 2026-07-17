@@ -46,8 +46,8 @@ It uses ad-hoc signing by default. Set `BD_TO_AVP_NATIVE_SIGN_IDENTITY` or pass
 
 The package command always produces the side-by-side preview identity
 `com.shinycomputers.bd-to-avp.native-preview` with marketing version `0.3.0`
-and preview-local build number `2`. This build is publicly identified as
-`v0.3.0-beta.1`; it cannot overwrite the production app.
+and preview-local build number `3`. This build is publicly identified as
+`v0.3.0-beta.2`; it cannot overwrite the production app.
 
 The auxiliary Python launcher is signed with the same direct-distribution
 entitlements already required by the Briefcase launcher: unsigned executable
@@ -125,9 +125,10 @@ be registered only for the bounded dispatch then removed after the job exits.
 The native shell does not yet replace the current `0.2.x` Briefcase/Sparkle
 release line. Native Start Processing supports inspected Blu-ray folders, ISO,
 physical disc, MKV, MTS, and M2TS sources, including the worker's MakeMKV and
-subtitle recovery choices. Batch and the native updater path still need
-release-level completion before promotion through the normal Release Candidates
-appcast.
+subtitle recovery choices. Contextual queues, bounded previews, and the native
+updater implementation are present; physical-disc, audio, and signed
+installed-app updater evidence still gate promotion through the normal Release
+Candidates appcast.
 
 The preview uses a separate product name and bundle identifier, installs beside
 the production app, targets Apple Silicon macOS 26 or later, and is published
@@ -135,10 +136,12 @@ only as a GitHub prerelease. It does not mutate Sparkle Pages, either appcast
 channel, GitHub latest, or PyPI. Release identity is derived from committed
 native version, semantic prerelease, and monotonically increasing build
 metadata. Version `0.3.0` Beta 1 uses `v0.3.0-beta.1` for both tag and title,
-with preview-local build `2`. Repeated runs
+with preview-local build `2`; Beta 2 uses `v0.3.0-beta.2` with preview-local
+build `3`. Repeated runs
 may resume only a matching draft with byte-identical assets, and fail closed
-after publication. Published tags and assets remain immutable even if the
-human-readable title or notes need a metadata-only correction.
+after publication by restoring a failed publication to that resumable draft.
+Published tags and assets remain immutable even if the human-readable title or
+notes need a metadata-only correction.
 
 The first native build eligible to replace production is reserved for
 `0.3.0rc1`. That candidate must use a production `CFBundleVersion` greater than

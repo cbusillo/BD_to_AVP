@@ -109,7 +109,7 @@ notarize the side-by-side Preview bundle, creates and revalidates a DMG, and
 derives its semantic prerelease tag, version-first release title, app name, and
 DMG filename from committed native metadata. Historical build `1` keeps tag
 `native-ui-preview-1` and is titled `v0.3.0-alpha.1`. Build `2` uses
-`v0.3.0-beta.1` for both tag and title.
+`v0.3.0-beta.1` for both tag and title; build `3` uses `v0.3.0-beta.2`.
 Native build numbers are monotonically increasing and may not be reused. The
 workflow never derives metadata from `pyproject.toml`, invokes the
 Sparkle/Pages workflows, publishes Python distributions, or marks a preview as
