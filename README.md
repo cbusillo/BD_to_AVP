@@ -42,8 +42,22 @@ MV-HEVC spatial output and software AV1 stereo export.
 
 ## Terminal install or update (power users)
 
-The terminal/PyPI version is for power users who manage their own command-line dependencies. Install the tools listed
-below, create a Python environment, then install `BD_to_AVP` with `pip`.
+The Homebrew formula is the preferred terminal install. It installs the locked CLI dependencies and FFmpeg while
+intentionally omitting the PySide6 GUI. Use the signed release DMG for the desktop app.
+
+### Homebrew formula
+
+```bash
+brew tap cbusillo/tap
+brew trust cbusillo/tap
+brew install bd-to-avp
+bd-to-avp --help
+```
+
+MakeMKV remains a separate optional install for Blu-ray disc input. Install the current macOS version from the
+[MakeMKV] website; existing MKV, MTS, and M2TS sources do not require it.
+
+The manual PyPI path remains available for power users who prefer to manage their own Python environment and FFmpeg.
 
 ## Prerequisites
 
@@ -51,12 +65,10 @@ Ensure the following are installed on your Mac *(if using the terminal/PyPI vers
 
 - **Apple Silicon [Mac]**: A Mac with Apple Silicon, such as the M1, M1 Pro, or M1 Max
 - **[macOS Sonoma]**: macOS 14 or later.
-- **[Python] 3.12**: The latest version of Python.
+- **[Python] 3.12**: The supported Python runtime for the PyPI package.
 - **[Homebrew]**: The missing package manager for macOS (or Linux).
 - **[FFmpeg]**: A complete, cross-platform solution to record, convert, and stream audio and video.
-- **[MakeMKV]**: For converting disc video content into MKV files.
-- **[spatial-media-kit-tool]**: A tool for injecting 360° metadata into video files.
-- **[MP4Box]**: A multimedia packager available for Windows, Mac, and Linux.
+- **[MakeMKV]**: Required only for reading Blu-ray discs and extracting titles.
 
 Current release note: BD_to_AVP still uses MakeMKV for Blu-ray title extraction. By default, existing MKV/MTS/M2TS
 sources are reused in place, MVC video streams directly into the bundled native Apple Silicon splitter, and AAC
@@ -78,8 +90,8 @@ and install MakeMKV from the [MakeMKV] website.
 # Install Homebrew
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# Install Homebrew formula dependencies. MP4Box is provided by gpac.
-brew install ffmpeg gpac python@3.12
+# Install the external command-line dependencies.
+brew install ffmpeg python@3.12
 
 # Install the current macOS MakeMKV build from https://www.makemkv.com/.
 # The app bundle is detected automatically from /Applications/MakeMKV.app.
@@ -96,12 +108,13 @@ pip install bd_to_avp
 bd-to-avp --help
 ```
 
-## GUI Usage
+## PyPI GUI extra
 
-If you have installed the terminal version and wish to use the GUI version, you can run the following command in your
-terminal:
+The signed release DMG is the supported GUI install. PyPI users who intentionally want the legacy Python GUI can add
+the optional dependency and then launch without arguments:
 
 ```bash
+pip install "bd_to_avp[gui]"
 bd-to-avp
 ```
 

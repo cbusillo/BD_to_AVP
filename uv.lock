@@ -99,10 +99,14 @@ dependencies = [
     { name = "opencv-python" },
     { name = "psutil" },
     { name = "pyobjc-framework-vision" },
-    { name = "pyside6" },
     { name = "pysrt" },
     { name = "trakit" },
     { name = "wakepy" },
+]
+
+[package.optional-dependencies]
+gui = [
+    { name = "pyside6" },
 ]
 
 [package.dev-dependencies]
@@ -110,6 +114,7 @@ dev = [
     { name = "black" },
     { name = "briefcase" },
     { name = "mypy" },
+    { name = "pyside6" },
     { name = "ruff" },
     { name = "types-psutil" },
 ]
@@ -125,17 +130,19 @@ requires-dist = [
     { name = "opencv-python", specifier = "==5.0.0.93" },
     { name = "psutil", specifier = ">=5.9.8,<8" },
     { name = "pyobjc-framework-vision", specifier = ">=11.0,<13" },
-    { name = "pyside6", specifier = ">=6.7.1,<6.10" },
+    { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.7.1,<6.10" },
     { name = "pysrt", specifier = ">=1.1.2,<2" },
     { name = "trakit", specifier = ">=0.2.2,<0.3" },
     { name = "wakepy", specifier = ">=0.9.1,<1.1" },
 ]
+provides-extras = ["gui"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "black", specifier = ">=26.5.1,<27" },
     { name = "briefcase", specifier = "==0.4.4" },
     { name = "mypy", specifier = ">=2.1.0,<3" },
+    { name = "pyside6", specifier = ">=6.7.1,<6.10" },
     { name = "ruff", specifier = ">=0.15.20,<0.16" },
     { name = "types-psutil", specifier = ">=5.9.5.20240516" },
 ]

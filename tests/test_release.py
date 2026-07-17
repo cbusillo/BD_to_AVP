@@ -71,6 +71,16 @@ def fake_lock_runner(stage_root: Path, _uv_executable: str) -> None:
 
 
 class ReleaseMetadataTests(unittest.TestCase):
+    def test_repository_keeps_gui_dependency_out_of_cli_base(self) -> None:
+        with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
+            pyproject = tomllib.load(handle)
+
+        pyside_requirement = "pyside6>=6.7.1,<6.10"
+        self.assertNotIn(pyside_requirement, pyproject["project"]["dependencies"])
+        self.assertEqual(pyproject["project"]["optional-dependencies"]["gui"], [pyside_requirement])
+        self.assertIn(pyside_requirement, pyproject["dependency-groups"]["dev"])
+        self.assertIn(pyside_requirement, pyproject["tool"]["briefcase"]["app"]["bd-to-avp"]["requires"])
+
     def test_repository_uses_expected_briefcase_version(self) -> None:
         with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
             pyproject = tomllib.load(handle)

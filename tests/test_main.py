@@ -1,3 +1,4 @@
+import builtins
 import sys
 import unittest
 from pathlib import Path
@@ -10,6 +11,32 @@ from bd_to_avp.modules.config import Config
 
 
 class MainSmokeTests(unittest.TestCase):
+    def test_gui_start_is_lazy(self) -> None:
+        with (
+            patch.object(__main__.config.app, "is_gui", True),
+            patch("bd_to_avp.__main__._start_gui") as start_gui,
+            patch("bd_to_avp.__main__.start_process") as start_process,
+            patch("bd_to_avp.__main__.signal.signal"),
+        ):
+            __main__.main()
+
+        start_gui.assert_called_once_with()
+        start_process.assert_not_called()
+
+    def test_missing_gui_extra_exits_with_install_guidance(self) -> None:
+        real_import = builtins.__import__
+
+        def import_without_pyside(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "bd_to_avp.app":
+                raise ModuleNotFoundError("No module named 'PySide6'", name="PySide6")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with (
+            patch("builtins.__import__", side_effect=import_without_pyside),
+            self.assertRaisesRegex(SystemExit, r"bd_to_avp\[gui\].*release DMG"),
+        ):
+            __main__._start_gui()
+
     def test_audio_mode_defaults_to_automatic_and_legacy_false_remains_pcm(self) -> None:
         config = Config()
 
