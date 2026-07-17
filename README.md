@@ -139,7 +139,7 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
   not change the selected audio policy. An explicit `--remove-original` still removes the selected source after a
   successful conversion.
 - `--output-root-folder`: Output folder path. Defaults to the current directory.
-- `--audio-mode`: Audio handling mode: `automatic`, `convert_aac`, or `pcm` (default: `pcm`). Automatic copies
+- `--audio-mode`: Audio handling mode: `automatic`, `convert_aac`, or `pcm` (default: `automatic`). Automatic copies
   qualified AAC audio to an owned M4A, and converts the whole selected set to AAC if any selected stream is unqualified.
 - `--transcode-audio`: Legacy alias for `--audio-mode convert_aac`.
 - `--audio-bitrate`: Audio bitrate for AAC conversion in kb/s do not include unit (default: "384").

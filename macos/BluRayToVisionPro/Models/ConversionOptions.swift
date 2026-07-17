@@ -191,7 +191,7 @@ struct EncodingOptions: Codable, Equatable {
     var cropBlackBars = false
     var swapEyes = false
 
-    var audioHandling = AudioHandling.pcm
+    var audioHandling = AudioHandling.automatic
     var audioBitrate = 384
     var subtitles = SubtitlePolicy()
 

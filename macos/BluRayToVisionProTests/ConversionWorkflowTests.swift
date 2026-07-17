@@ -158,14 +158,14 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(SubtitleLanguage.chinese.code, "zho")
     }
 
-    func testAudioHandlingPreservesProfileValuesAndPCMDefaults() {
+    func testAudioHandlingPreservesProfileValuesAndAutomaticDefaults() {
         XCTAssertEqual(AudioHandling.allCases, [.automatic, .convertAAC, .pcm])
         XCTAssertEqual(AudioHandling.automatic.rawValue, "automatic")
         XCTAssertEqual(AudioHandling.convertAAC.rawValue, "transcodeAAC")
         XCTAssertEqual(AudioHandling.pcm.rawValue, "preserve")
         XCTAssertEqual(AudioHandling.pcm.title, "Uncompressed PCM")
-        XCTAssertEqual(EncodingOptions().audioHandling, .pcm)
-        XCTAssertTrue(BuiltInProfile.allCases.allSatisfy { $0.options.audioHandling == .pcm })
+        XCTAssertEqual(EncodingOptions().audioHandling, .automatic)
+        XCTAssertTrue(BuiltInProfile.allCases.allSatisfy { $0.options.audioHandling == .automatic })
         XCTAssertEqual(ConversionStage.transcodeAudio.title, "7 — Prepare Audio")
     }
 
@@ -179,7 +179,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(AudioHandling.automatic.bitrateLabel, "AAC fallback bitrate")
         XCTAssertEqual(AudioHandling.convertAAC.bitrateLabel, "AAC bitrate")
         XCTAssertNil(AudioHandling.pcm.bitrateLabel)
-        XCTAssertTrue(EncodingOptions().compactSummary.contains("uncompressed PCM audio"))
+        XCTAssertTrue(EncodingOptions().compactSummary.contains("automatic audio"))
         XCTAssertEqual(
             EncodingOptions(audioHandling: .automatic, audioBitrate: 448).compactSummary,
             "MV-HEVC 75 · 20 Mbps eyes · source resolution · automatic audio (AAC fallback 448 kbps)"
@@ -188,7 +188,7 @@ final class ConversionWorkflowTests: XCTestCase {
             EncodingOptions(audioHandling: .convertAAC, audioBitrate: 448).compactSummary,
             "MV-HEVC 75 · 20 Mbps eyes · source resolution · AAC 448 kbps"
         )
-        XCTAssertTrue(BuiltInProfile.balanced.summary.contains("uncompressed PCM audio"))
+        XCTAssertTrue(BuiltInProfile.balanced.summary.contains("automatic audio"))
     }
 
     func testSourceInferencePreservesProductHierarchy() throws {
@@ -699,7 +699,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(encoding["video_mode"] as? String, "mv_hevc")
         XCTAssertEqual(encoding["av1_crf"] as? Int, 32)
         let audio = try XCTUnwrap(encoding["audio"] as? [String: Any])
-        XCTAssertEqual(audio["mode"] as? String, "pcm")
+        XCTAssertEqual(audio["mode"] as? String, "automatic")
         XCTAssertEqual(audio["bitrate"] as? Int, 384)
         XCTAssertEqual(Set(audio.keys), ["mode", "bitrate"])
         XCTAssertNil(encoding["transcode_audio"])

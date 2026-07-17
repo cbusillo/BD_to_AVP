@@ -1,5 +1,7 @@
 import sys
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from bd_to_avp import __main__
@@ -8,12 +10,38 @@ from bd_to_avp.modules.config import Config
 
 
 class MainSmokeTests(unittest.TestCase):
-    def test_audio_mode_defaults_and_legacy_false_remain_pcm(self) -> None:
+    def test_audio_mode_defaults_to_automatic_and_legacy_false_remains_pcm(self) -> None:
         config = Config()
 
-        self.assertEqual(config.audio_mode, AudioMode.PCM)
+        self.assertEqual(config.audio_mode, AudioMode.AUTOMATIC)
         config.transcode_audio = False
         self.assertEqual(config.audio_mode, AudioMode.PCM)
+
+    def test_cli_without_audio_mode_uses_automatic(self) -> None:
+        config = Config()
+
+        with patch.object(sys, "argv", ["bd-to-avp", "--source", "/tmp/movie.mkv"]):
+            config.parse_args()
+
+        self.assertEqual(config.audio_mode, AudioMode.AUTOMATIC)
+
+    def test_saved_audio_choices_survive_automatic_default(self) -> None:
+        cases = [
+            ("transcode_audio = False", AudioMode.PCM),
+            ("audio_mode = pcm", AudioMode.PCM),
+            ("audio_mode = convert_aac", AudioMode.CONVERT_AAC),
+        ]
+
+        with TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.ini"
+            for saved_option, expected_mode in cases:
+                with self.subTest(saved_option=saved_option):
+                    config_path.write_text(f"[Options]\n{saved_option}\n")
+                    config = Config()
+                    config.app.config_file = config_path
+                    config.load_config_from_file()
+
+                    self.assertEqual(config.audio_mode, expected_mode)
 
     def test_apple_vision_smoke_flag_runs_without_source(self) -> None:
         with (
