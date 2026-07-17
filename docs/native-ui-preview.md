@@ -76,8 +76,9 @@ does not replace or update it.
 - Bounded preview generation is limited to one selected MKV, MTS/M2TS, or ISO
   title. It is not available for physical discs, Blu-ray folders, source-folder
   queues, or multi-title selections.
-- Uncompressed PCM remains the default for new profiles until the four-mode
-  physical Apple Vision Pro audio checklist in issue #56 is complete.
+- Automatic is the default for new and built-in profiles after the four-mode
+  physical Apple Vision Pro audio checklist completed in issue #56. Existing
+  custom profiles keep their saved audio choice.
 - AV1 encoding is software-only. The output is Apple-recognized side-by-side
   stereo, not MV-HEVC or native Apple spatial video; playback support and
   performance vary by device generation and player.
@@ -88,6 +89,6 @@ does not replace or update it.
   are not supported.
 
 Please report general prerelease and physical-disc feedback in issue #202.
-Record the four-mode headset audio checklist in issue #56. Include the source
-type, selected titles, profile, output mode, recovery action, and relevant app
-activity when reporting a conversion problem.
+The completed four-mode headset audio checklist is recorded in issue #56.
+Include the source type, selected titles, profile, output mode, recovery action,
+and relevant app activity when reporting a conversion problem.

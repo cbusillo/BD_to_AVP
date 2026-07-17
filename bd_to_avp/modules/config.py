@@ -197,7 +197,7 @@ class Config:
         self.source_folder_path: Path | None = None
         self.output_root_path = Path.home() / "Movies"
         self.overwrite = False
-        self.audio_mode = AudioMode.PCM
+        self.audio_mode = AudioMode.AUTOMATIC
         self.audio_bitrate = 384
         self.video_mode = VideoMode.MV_HEVC
         self.av1_crf = 32
@@ -370,12 +370,13 @@ class Config:
         parser.add_argument(
             "--transcode-audio",
             action="store_true",
+            default=None,
             help="Legacy alias for --audio-mode convert_aac.",
         )
         parser.add_argument(
             "--audio-mode",
             choices=[mode.value for mode in AudioMode],
-            help="Audio handling mode: automatic, convert_aac, or pcm.",
+            help="Audio handling mode: automatic, convert_aac, or pcm (default: automatic).",
         )
         parser.add_argument(
             "--audio-bitrate",

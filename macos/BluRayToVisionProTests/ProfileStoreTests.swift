@@ -50,6 +50,24 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testExplicitPCMAndAACProfilesSurviveAutomaticDefault() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        var pcmOptions = EncodingOptions()
+        pcmOptions.audioHandling = .pcm
+        var aacOptions = EncodingOptions()
+        aacOptions.audioHandling = .convertAAC
+        let store = ProfileStore(fileURL: fileURL)
+
+        _ = try store.createProfile(name: "PCM", options: pcmOptions)
+        _ = try store.createProfile(name: "AAC", options: aacOptions)
+
+        let restoredStore = ProfileStore(fileURL: fileURL)
+        XCTAssertEqual(restoredStore.customProfiles.map(\.options.audioHandling), [.pcm, .convertAAC])
+    }
+
+    @MainActor
     func testVersionTwoProfilesMigrateAllAudioHandlingRawValuesToVersionThree() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
