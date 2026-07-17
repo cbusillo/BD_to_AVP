@@ -104,6 +104,7 @@ final class PlaybackProbeModel: ObservableObject {
     @Published private(set) var playerItemStatusText = "Not loaded"
     @Published private(set) var renderingStatusText = "Not loaded"
     @Published private(set) var actualPresentationText = "Not available"
+    @Published private(set) var isActuallyStereo = false
     @Published private(set) var isActuallySpatial = false
     @Published private(set) var isSpatialPresentationRequested = false
     @Published private(set) var currentSeconds = 0.0
@@ -120,6 +121,8 @@ final class PlaybackProbeModel: ObservableObject {
     @Published private(set) var observations = PlaybackObservations()
     @Published private(set) var validationResult: PlaybackValidationResult?
     @Published private(set) var validationReportText = ""
+    @Published private(set) var validationReportURL: URL?
+    @Published private(set) var validationReportSaveError: String?
     @Published private(set) var currentValidationStepText = ""
     @Published private(set) var playerComponentInstalled = false
 
@@ -141,6 +144,14 @@ final class PlaybackProbeModel: ObservableObject {
     private var componentStatusSampleSequence = 0
     private var currentImportedURL: URL?
     private var hasBootstrapped = false
+    private var actualViewingModeValue = "unknown"
+    private var actualSpatialVideoModeValue = "screen"
+    private var actualImmersiveViewingModeValue = "none"
+    private var validatedPresentation = PlaybackPresentationSummary(
+        viewingMode: "unknown",
+        spatialVideoMode: "screen",
+        immersiveViewingMode: "none"
+    )
 
     private var environment: [String: String] {
         ProcessInfo.processInfo.environment
@@ -402,6 +413,13 @@ final class PlaybackProbeModel: ObservableObject {
         observations = PlaybackObservations()
         validationResult = nil
         validationReportText = ""
+        validationReportURL = nil
+        validationReportSaveError = nil
+        validatedPresentation = PlaybackPresentationSummary(
+            viewingMode: "unknown",
+            spatialVideoMode: "screen",
+            immersiveViewingMode: "none"
+        )
         validationPhase = .running
         currentValidationStepText = "Preparing the playback check…"
         requestSpatialPresentation(true)
@@ -431,11 +449,12 @@ final class PlaybackProbeModel: ObservableObject {
         validationPhase = .complete
         currentValidationStepText = ""
 
+        let generatedAt = Date()
         let report = PlaybackValidationReport(
-            schemaVersion: 1,
+            schemaVersion: 2,
             validatorVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development",
             validatorBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development",
-            generatedAt: ISO8601DateFormatter().string(from: Date()),
+            generatedAt: ISO8601DateFormatter().string(from: generatedAt),
             operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
             source: PlaybackSourceSummary(
                 fileName: assetName,
@@ -445,6 +464,7 @@ final class PlaybackProbeModel: ObservableObject {
                 audioOptionCount: audioOptions.count,
                 subtitleOptionCount: max(0, subtitleOptions.count - 1)
             ),
+            presentation: validatedPresentation,
             automaticChecks: validationChecks,
             observations: observations,
             result: result
@@ -452,7 +472,49 @@ final class PlaybackProbeModel: ObservableObject {
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        validationReportText = (try? encoder.encode(report)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        do {
+            let reportData = try encoder.encode(report)
+            validationReportText = String(data: reportData, encoding: .utf8) ?? ""
+            do {
+                let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                let reportFiles = try PlaybackReportStore.write(
+                    reportData,
+                    sourceFileName: assetName,
+                    generatedAt: generatedAt,
+                    documentsDirectory: documentsDirectory
+                )
+                validationReportURL = reportFiles.archiveURL
+                validationReportSaveError = nil
+                emit(
+                    "report_saved",
+                    values: [
+                        "archive_file": reportFiles.archiveURL.lastPathComponent,
+                        "latest_file": reportFiles.latestURL.lastPathComponent,
+                    ]
+                )
+            } catch {
+                validationReportURL = nil
+                validationReportSaveError = error.localizedDescription
+                emit(
+                    "warning",
+                    values: [
+                        "category": "report_save_failed",
+                        "message": error.localizedDescription,
+                    ]
+                )
+            }
+        } catch {
+            validationReportText = ""
+            validationReportURL = nil
+            validationReportSaveError = error.localizedDescription
+            emit(
+                "warning",
+                values: [
+                    "category": "report_encode_failed",
+                    "message": error.localizedDescription,
+                ]
+            )
+        }
 
         emit(
             "guided_validation_complete",
@@ -568,6 +630,7 @@ final class PlaybackProbeModel: ObservableObject {
             playerItemStatusText = "Loading"
             renderingStatusText = "Loading"
             actualPresentationText = "Waiting for playback"
+            isActuallyStereo = false
             isActuallySpatial = false
             requestSpatialPresentation(false)
             currentSeconds = 0
@@ -716,6 +779,10 @@ final class PlaybackProbeModel: ObservableObject {
 
         renderingStatusText = newRenderingStatus
         actualPresentationText = newPresentation
+        actualViewingModeValue = viewingMode.lowercased()
+        actualSpatialVideoModeValue = component.spatialVideoMode == .spatial ? "spatial" : "screen"
+        actualImmersiveViewingModeValue = immersiveMode.lowercased()
+        isActuallyStereo = component.viewingMode == .stereo
         isActuallySpatial = component.spatialVideoMode == .spatial
             && component.viewingMode == .stereo
             && component.immersiveViewingMode == .portal
@@ -783,8 +850,24 @@ final class PlaybackProbeModel: ObservableObject {
             detail: renderingReady ? "RealityKit reports that the picture is ready." : "The picture did not become ready within 10 seconds."
         )
 
+        currentValidationStepText = "Checking stereoscopic playback…"
+        updateCheck(.stereoPresentation, status: .running, detail: "Waiting for stereoscopic playback.")
+        let stereoPresentationReady = await waitForCondition(maxAttempts: 40) { [weak self] in
+            self?.isActuallyStereo == true
+        }
+        guard isValidationCurrent(generation, item: validationItem) else {
+            return
+        }
+        updateCheck(
+            .stereoPresentation,
+            status: stereoPresentationReady ? .passed : .failed,
+            detail: stereoPresentationReady
+                ? "RealityKit reports stereoscopic playback."
+                : "The movie remained monoscopic instead of stereoscopic."
+        )
+
         currentValidationStepText = "Checking 3D presentation…"
-        updateCheck(.spatialPresentation, status: .running, detail: "Waiting for stereoscopic spatial presentation.")
+        updateCheck(.spatialPresentation, status: .running, detail: "Waiting for spatial treatment and portal presentation.")
         let spatialPresentationReady = await waitForCondition(maxAttempts: 40) { [weak self] in
             self?.isActuallySpatial == true
         }
@@ -795,8 +878,8 @@ final class PlaybackProbeModel: ObservableObject {
             .spatialPresentation,
             status: spatialPresentationReady ? .passed : .failed,
             detail: spatialPresentationReady
-                ? "The movie is rendering as stereoscopic spatial video."
-                : "The movie remained in flat-screen fallback instead of spatial presentation."
+                ? "The movie is rendering with spatial treatment in a portal."
+                : "Stereoscopic playback is available, but RealityKit remained in screen mode without spatial treatment."
         )
 
         for position in ProbeSeekPosition.allCases {
@@ -852,7 +935,9 @@ final class PlaybackProbeModel: ObservableObject {
                 playbackAdvanceSeconds: max(0, normalizedSeconds - landedSeconds),
                 requiredPlaybackAdvanceSeconds: requiredPlaybackAdvance,
                 renderingReady: receivedFreshStatus && renderingStatusText == "Ready",
-                spatialPresentation: receivedFreshStatus && isActuallySpatial
+                stereoPresentation: receivedFreshStatus && isActuallyStereo,
+                spatialPresentation: receivedFreshStatus && isActuallySpatial,
+                requiresSpatialPresentation: spatialPresentationReady
             )
             let passed = PlaybackValidationRules.seekPassed(evidence)
 
@@ -875,6 +960,7 @@ final class PlaybackProbeModel: ObservableObject {
                     "target_error_seconds": formatNumber(targetError),
                     "playback_advance_seconds": formatNumber(evidence.playbackAdvanceSeconds),
                     "fresh_rendering_status": String(evidence.renderingReady),
+                    "stereo_presentation": String(evidence.stereoPresentation),
                     "spatial_presentation": String(evidence.spatialPresentation),
                 ]
             )
@@ -896,6 +982,11 @@ final class PlaybackProbeModel: ObservableObject {
             ]
         )
 
+        validatedPresentation = PlaybackPresentationSummary(
+            viewingMode: actualViewingModeValue,
+            spatialVideoMode: actualSpatialVideoModeValue,
+            immersiveViewingMode: actualImmersiveViewingModeValue
+        )
         requestSpatialPresentation(false)
         _ = await waitForCondition(maxAttempts: 20) { [weak self] in
             self?.isActuallySpatial == false
@@ -959,10 +1050,16 @@ final class PlaybackProbeModel: ObservableObject {
         if evidence.playbackAdvanceSeconds < evidence.requiredPlaybackAdvanceSeconds {
             return "Playback reached the \(position.plainLanguageName), but the picture did not resume."
         }
-        if !evidence.renderingReady || !evidence.spatialPresentation {
-            return "Playback reached the \(position.plainLanguageName), but 3D presentation was lost."
+        if !evidence.renderingReady || !evidence.stereoPresentation {
+            return "Playback reached the \(position.plainLanguageName), but stereoscopic playback was lost."
         }
-        return "The \(position.plainLanguageName) played and remained spatial."
+        if evidence.requiresSpatialPresentation && !evidence.spatialPresentation {
+            return "Playback reached the \(position.plainLanguageName), but spatial treatment was lost."
+        }
+        if evidence.spatialPresentation {
+            return "The \(position.plainLanguageName) played and remained spatial."
+        }
+        return "The \(position.plainLanguageName) played and remained stereoscopic."
     }
 
     private func isValidationCurrent(_ generation: Int, item: AVPlayerItem) -> Bool {
@@ -1009,6 +1106,13 @@ final class PlaybackProbeModel: ObservableObject {
         observations = PlaybackObservations()
         validationResult = nil
         validationReportText = ""
+        validationReportURL = nil
+        validationReportSaveError = nil
+        validatedPresentation = PlaybackPresentationSummary(
+            viewingMode: "unknown",
+            spatialVideoMode: "screen",
+            immersiveViewingMode: "none"
+        )
         currentValidationStepText = ""
         validationPhase = phase
     }
@@ -1134,6 +1238,11 @@ final class PlaybackProbeModel: ObservableObject {
         playerItemStatusText = "Failed"
         renderingStatusText = "Not loaded"
         actualPresentationText = "Not available"
+        isActuallyStereo = false
+        isActuallySpatial = false
+        actualViewingModeValue = "unknown"
+        actualSpatialVideoModeValue = "screen"
+        actualImmersiveViewingModeValue = "none"
         isPlaying = false
         currentSeconds = 0
         durationSeconds = 0

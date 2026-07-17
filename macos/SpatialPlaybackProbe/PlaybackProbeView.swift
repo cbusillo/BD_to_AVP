@@ -3,6 +3,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct PlaybackProbeView: View {
+    private static let playerScaleInset: Float = 0.86
+    private static let playerDepthOffset: Float = -0.14
+
     @ObservedObject var model: PlaybackProbeModel
     @State private var isImporting = false
     @State private var showsTechnicalDetails = false
@@ -352,16 +355,46 @@ struct PlaybackProbeView: View {
 
             checkList
 
-            if !model.validationReportText.isEmpty {
+            if let validationReportURL = model.validationReportURL {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("JSON report saved automatically", systemImage: "doc.badge.checkmark")
+                        .font(.headline)
+                        .foregroundStyle(.green)
+                    Text(validationReportURL.lastPathComponent)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+
                 ShareLink(
-                    item: model.validationReportText,
+                    item: validationReportURL,
                     subject: Text("BD to AVP playback check report")
                 ) {
-                    Label("Share Report", systemImage: "square.and.arrow.up")
+                    Label("Share JSON Report", systemImage: "square.and.arrow.up")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                .accessibilityIdentifier("share-playback-report")
+            } else if let validationReportSaveError = model.validationReportSaveError {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label(
+                        "The JSON file could not be saved: \(validationReportSaveError)",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.red)
+
+                    if !model.validationReportText.isEmpty {
+                        ShareLink(
+                            item: model.validationReportText,
+                            subject: Text("BD to AVP playback check report")
+                        ) {
+                            Label("Share Report Text", systemImage: "square.and.arrow.up")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
             }
 
             Button("Run Again") {
@@ -544,19 +577,18 @@ struct PlaybackProbeView: View {
         }
 
         let frame = proxy.frame(in: .local)
-        let frameBounds = content.convert(frame, from: .local, to: .scene)
         let frameSize = abs(content.convert(frame.size, from: .local, to: .scene))
         let screenSize = component.playerScreenSize
         guard screenSize.x > 0, screenSize.y > 0 else {
             return
         }
 
-        let scale = min(frameSize.x / screenSize.x, frameSize.y / screenSize.y) * 0.92
+        let scale = min(frameSize.x / screenSize.x, frameSize.y / screenSize.y) * Self.playerScaleInset
         guard scale.isFinite, scale > 0 else {
             return
         }
         model.playerEntity.scale = SIMD3<Float>(repeating: scale)
-        model.playerEntity.position = frameBounds.center
+        model.playerEntity.position = SIMD3<Float>(0, 0, Self.playerDepthOffset)
     }
 
     private func checkSymbol(_ status: PlaybackCheckStatus) -> String {

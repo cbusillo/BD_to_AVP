@@ -24,8 +24,12 @@ done
 
 mkdir -p "$(dirname "$output_path")"
 
-ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=656x360:rate=30' -t 6 -vf 'crop=640:360:0:0' -c:v hevc_videotoolbox -tag:v hvc1 -b:v 2M -an -y "$work_dir/left.mov"
-ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=656x360:rate=30' -t 6 -vf 'crop=640:360:16:0' -c:v hevc_videotoolbox -tag:v hvc1 -b:v 2M -an -y "$work_dir/right.mov"
+font_file="/System/Library/Fonts/Helvetica.ttc"
+left_filter="drawgrid=width=40:height=40:thickness=1:color=white@0.18,drawbox=x=52:y=58:w=158:h=82:color=0x2878ff@0.92:t=fill,drawtext=fontfile='${font_file}':text='BLUE  BEHIND':x=70:y=88:fontsize=20:fontcolor=white,drawbox=x=241:y=151:w=158:h=82:color=0x20a45b@0.92:t=fill,drawtext=fontfile='${font_file}':text='GREEN  SCREEN':x=250:y=181:fontsize=19:fontcolor=white,drawbox=x=430:y=244:w=158:h=82:color=0xe34242@0.94:t=fill,drawtext=fontfile='${font_file}':text='RED  IN FRONT':x=441:y=274:fontsize=19:fontcolor=white"
+right_filter="drawgrid=width=40:height=40:thickness=1:color=white@0.18,drawbox=x=60:y=58:w=158:h=82:color=0x2878ff@0.92:t=fill,drawtext=fontfile='${font_file}':text='BLUE  BEHIND':x=78:y=88:fontsize=20:fontcolor=white,drawbox=x=241:y=151:w=158:h=82:color=0x20a45b@0.92:t=fill,drawtext=fontfile='${font_file}':text='GREEN  SCREEN':x=250:y=181:fontsize=19:fontcolor=white,drawbox=x=406:y=244:w=158:h=82:color=0xe34242@0.94:t=fill,drawtext=fontfile='${font_file}':text='RED  IN FRONT':x=417:y=274:fontsize=19:fontcolor=white"
+
+ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=640x360:rate=30' -t 6 -vf "$left_filter" -c:v hevc_videotoolbox -tag:v hvc1 -b:v 2M -an -y "$work_dir/left.mov"
+ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=640x360:rate=30' -t 6 -vf "$right_filter" -c:v hevc_videotoolbox -tag:v hvc1 -b:v 2M -an -y "$work_dir/right.mov"
 
 "$spatial_tool" merge \
 	--left-file "$work_dir/left.mov" \
@@ -41,7 +45,7 @@ ffmpeg -hide_banner -loglevel error -f lavfi -i 'sine=frequency=880:sample_rate=
 cat >"$work_dir/subtitles.srt" <<'EOF'
 1
 00:00:00,500 --> 00:00:02,500
-BD to AVP guided playback check
+Blue behind, green on screen, red in front
 
 2
 00:00:03,000 --> 00:00:05,500
