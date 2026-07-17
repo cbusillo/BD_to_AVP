@@ -97,6 +97,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(package["environment"], "macos-signing")
         self.assertEqual(package["permissions"]["contents"], "read")
         self.assertEqual(package["runs-on"], "macos-26")
+        self.assertNotIn("self-hosted", str(package))
         self.assertEqual(workflow["env"]["XCODE_VERSION"], "26.5")
         self.assertIn("Xcode_${XCODE_VERSION}.app", str(package))
         self.assertIn("Build version $XCODE_BUILD_VERSION", str(package))
@@ -213,6 +214,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(verify["permissions"]["attestations"], "read")
         self.assertIn("gh attestation verify", str(verify))
         self.assertIn('--source-digest "$GITHUB_SHA"', str(verify))
+        self.assertIn("--deny-self-hosted-runners", str(verify))
         self.assertIn("TOTAL_ASSET_COUNT", str(verify))
 
     def test_private_key_is_only_exposed_to_read_only_signing_step(self) -> None:

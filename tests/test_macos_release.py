@@ -213,6 +213,7 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
         create_draft = workflow["jobs"]["create-draft"]
 
         self.assertEqual(package["runs-on"], "macos-26")
+        self.assertNotIn("self-hosted", str(package))
         self.assertEqual(workflow["env"]["XCODE_VERSION"], "26.5")
         self.assertIn("Xcode_${XCODE_VERSION}.app", str(package))
         self.assertIn("17F42", str(workflow["env"]))
