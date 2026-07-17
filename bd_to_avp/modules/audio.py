@@ -9,7 +9,7 @@ import ffmpeg
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.command import run_ffmpeg_print_errors
 from bd_to_avp.modules.config import Stage, config
-from bd_to_avp.modules.container import get_audio_stream_data
+from bd_to_avp.modules.container import audio_handler_metadata_options, get_audio_stream_data
 
 
 class AudioActivityReporter(Protocol):
@@ -50,6 +50,7 @@ def transcode_audio(input_path: Path, transcoded_audio_path: Path, bitrate: int,
         acodec="aac",
         audio_bitrate=f"{bitrate}k",
         map_metadata=0,
+        **audio_handler_metadata_options(input_path, audio_selector),
     )
     run_ffmpeg_print_errors(audio_transcoded, f"transcode audio to {bitrate}kbps", overwrite_output=True)
 
@@ -61,6 +62,7 @@ def copy_audio(input_path: Path, copied_audio_path: Path) -> None:
         str(f"file:{copied_audio_path}"),
         acodec="copy",
         map_metadata=0,
+        **audio_handler_metadata_options(input_path),
     )
     run_ffmpeg_print_errors(copied_audio, "copy AAC audio tracks", overwrite_output=True)
 

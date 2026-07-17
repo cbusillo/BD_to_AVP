@@ -47,6 +47,43 @@ xcodebuild build \
 
 The `SpatialPlaybackProbeUITests` target performs the user-initiated **Open Spatial View** action required by visionOS and verifies the reported stereo, spatial, portal presentation on a physical headset. Simulator runs skip this acceptance test. The headset must allow Xcode to enter UI automation mode; a timeout while enabling automation is an environment blocker, not spatial-playback evidence.
 
+## Generate the Audio Validation Matrix
+
+Create the four representative finalized movies used by the physical audio gate:
+
+```bash
+uv run python scripts/create_spatial_audio_validation_fixtures.py \
+  --output "$HOME/Movies/BD to AVP Audio Validation" \
+  --force
+```
+
+The generator exercises the production audio preparation and final-mux functions. It produces:
+
+- `01-Automatic-AAC-Copy.mov`: two qualified AAC tracks whose packet payloads must remain unchanged.
+- `02-Automatic-AAC-Fallback.mov`: AC-3 plus AAC input that must emit the structured fallback warning and convert the whole selected set.
+- `03-Convert-AAC.mov`: E-AC-3 plus FLAC input that must convert both tracks to AAC.
+- `04-PCM.mov`: E-AC-3 plus FLAC input that must extract both tracks as 24-bit PCM.
+
+Each movie is 24 seconds long with a default English 5.1 track, a French alternate stereo track, selectable English subtitles, and a white flash synchronized to each channel beep. MV-HEVC generation writes an explicit neutral horizontal disparity adjustment so AVFoundation reports QuickTime stereo metadata instead of treating the file as stereo multiview alone. The generator fails unless codec, language, channel-layout, packet/sample integrity, warning, subtitle, and left/right MV-HEVC split checks pass. `manifest.json` records the machine-verifiable evidence, and `CHECKLIST.md` contains the headset operator gate.
+
+After installing the signed app, copy the matrix into its Documents container and place the first fixture at the autorun path:
+
+```bash
+xcrun devicectl device copy to \
+  --device <device-id> \
+  --source "$HOME/Movies/BD to AVP Audio Validation" \
+  --destination "Documents/Audio Validation" \
+  --domain-type appDataContainer \
+  --domain-identifier com.shinycomputers.bd-to-avp.spatial-playback-probe
+
+xcrun devicectl device copy to \
+  --device <device-id> \
+  --source "$HOME/Movies/BD to AVP Audio Validation/01-Automatic-AAC-Copy.mov" \
+  --destination Documents/Probe.mov \
+  --domain-type appDataContainer \
+  --domain-identifier com.shinycomputers.bd-to-avp.spatial-playback-probe
+```
+
 ## Open a Finalized Movie
 
 Launch the app on Apple Vision Pro and choose **Open Preview…**. The file importer accepts a movie from Files, copies it into the app container, and keeps playback independent from the source file's security-scoped lifetime. The default volumetric window renders through `VideoPlayerComponent`; **Open Spatial View** requests a mixed immersive-space portal for focused review.

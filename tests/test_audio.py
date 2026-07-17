@@ -282,7 +282,10 @@ class AudioPreparationTests(unittest.TestCase):
         self.assertEqual(results[8].reason, "sample_rate_missing")
 
     def test_transcode_audio_maps_requested_stream_selector(self) -> None:
-        with patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg:
+        with (
+            patch.object(audio, "audio_handler_metadata_options", return_value={}),
+            patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg,
+        ):
             audio.transcode_audio(Path("source.mkv"), Path("audio.m4a"), 384, "a:0")
 
         command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
@@ -291,13 +294,35 @@ class AudioPreparationTests(unittest.TestCase):
         self.assertIn("-map_metadata", command)
 
     def test_copy_audio_maps_all_audio_tracks_without_encoder(self) -> None:
-        with patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg:
+        with (
+            patch.object(audio, "audio_handler_metadata_options", return_value={}),
+            patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg,
+        ):
             audio.copy_audio(Path("source.mkv"), Path("audio.m4a"))
 
         command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
         self.assertIn("0:a", command)
         self.assertIn("copy", command)
         self.assertIn("file:audio.m4a", command)
+
+    def test_audio_preparation_preserves_stream_titles_as_handler_names(self) -> None:
+        with (
+            patch.object(audio, "audio_handler_metadata_options") as metadata_options,
+            patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg,
+        ):
+            metadata_options.return_value = {
+                "metadata:s:a:0": "handler_name=Main 5.1",
+                "metadata:s:a:1": "handler_name=Alternate Stereo",
+            }
+            audio.transcode_audio(Path("source.mkv"), Path("audio.m4a"), 384)
+
+        command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
+        self.assertIn("-metadata:s:a:0", command)
+        self.assertIn("handler_name=Main 5.1", command)
+        self.assertIn("-metadata:s:a:1", command)
+        self.assertIn("handler_name=Alternate Stereo", command)
+        self.assertNotIn("-metadata:s:a:2", command)
+        metadata_options.assert_called_once_with(Path("source.mkv"), "a")
 
 
 def audio_qualification(
