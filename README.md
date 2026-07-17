@@ -33,6 +33,10 @@ See [Direct Pipeline Contracts](docs/direct-pipeline-contracts.md) for the
 automatic minimum-materialization behavior and the durable `--keep-files`
 stage contracts.
 
+See [AV1 Stereo Feasibility](docs/av1-stereo-feasibility.md) for the
+evidence-backed decision to keep MV-HEVC as the native Apple spatial-video
+output instead of adding an AV1 mode.
+
 ## Terminal install or update (power users)
 
 The terminal/PyPI version is for power users who manage their own command-line dependencies. Install the tools listed
