@@ -39,9 +39,17 @@ class ReleaseRunError(RuntimeError):
 
 
 class GitHubAPI(Protocol):
-    def get_json(self, endpoint: str, *, active_auth: bool = False) -> object: ...
+    def get_json(self, endpoint: str, *, active_auth: bool = False) -> object:
+        raise NotImplementedError
 
-    def post_json(self, endpoint: str, payload: Mapping[str, object], *, active_auth: bool = False) -> object: ...
+    def post_json(
+        self,
+        endpoint: str,
+        payload: Mapping[str, object],
+        *,
+        active_auth: bool = False,
+    ) -> object:
+        raise NotImplementedError
 
 
 class GhAPIClient:
