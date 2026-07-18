@@ -334,7 +334,7 @@ class ChildProcessRunnerTests(unittest.TestCase):
             try:
                 os.kill(escaped_pid, signal.SIGKILL)
             except ProcessLookupError:
-                pass
+                return
 
     def test_same_group_descendant_is_terminated_after_leader_exit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -523,7 +523,7 @@ class ChildProcessRunner:
             expected_streams.add(ProcessStream.STDERR)
         closed_streams: set[ProcessStream] = set()
         framers = {stream: _LineFramer(spec.line_limit_bytes) for stream in expected_streams}
-        artifact_states = [_ArtifactState() for _probe in spec.artifacts]
+        artifact_states = [_ArtifactState(path=probe.path) for probe in spec.artifacts]
 
         pending_error: BaseException | None = None
         failure_code: str | None = None
@@ -561,13 +561,12 @@ class ChildProcessRunner:
                                 line_handler,
                                 progress_parser,
                             )
-                    except BaseException as error:
-                        if isinstance(error, KeyboardInterrupt):
-                            keyboard_interrupt = error
-                            cancelled = True
-                        else:
-                            pending_error = error
-                            failure_code = "output_handler_failed"
+                    except KeyboardInterrupt as error:
+                        keyboard_interrupt = error
+                        cancelled = True
+                    except (Exception, SystemExit) as error:
+                        pending_error = error
+                        failure_code = "output_handler_failed"
                 elif isinstance(item, _StreamClosed):
                     closed_streams.add(item.stream)
                     if pending_error is None:
@@ -581,13 +580,12 @@ class ChildProcessRunner:
                                     line_handler,
                                     progress_parser,
                                 )
-                        except BaseException as error:
-                            if isinstance(error, KeyboardInterrupt):
-                                keyboard_interrupt = error
-                                cancelled = True
-                            else:
-                                pending_error = error
-                                failure_code = "output_handler_failed"
+                        except KeyboardInterrupt as error:
+                            keyboard_interrupt = error
+                            cancelled = True
+                        except (Exception, SystemExit) as error:
+                            pending_error = error
+                            failure_code = "output_handler_failed"
 
                 if dispatch_overflow.is_set() and pending_error is None:
                     pending_error = ProcessOutputDispatchError(
@@ -733,13 +731,25 @@ class ChildProcessRunner:
                     break
 
             returncode = process.wait(timeout=spec.kill_wait_seconds)
-        except BaseException as error:
-            if isinstance(error, KeyboardInterrupt):
-                keyboard_interrupt = error
-                cancelled = True
-            else:
-                pending_error = error
-                failure_code = failure_code or "runner_interrupted"
+        except KeyboardInterrupt as error:
+            keyboard_interrupt = error
+            cancelled = True
+            forced_termination = (
+                self._terminate_process_group(
+                    process,
+                    process.pid,
+                    spec.termination_grace_seconds,
+                    spec.kill_wait_seconds,
+                )
+                or forced_termination
+            )
+            returncode = process.poll()
+            if returncode is None:
+                process.kill()
+                returncode = process.wait()
+        except (Exception, SystemExit) as error:
+            pending_error = error
+            failure_code = failure_code or "runner_interrupted"
             forced_termination = (
                 self._terminate_process_group(
                     process,
