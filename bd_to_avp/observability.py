@@ -799,4 +799,4 @@ class RotatingJSONLEventSink:
         try:
             os.unlink(name, dir_fd=directory_descriptor)
         except FileNotFoundError:
-            pass
+            return
