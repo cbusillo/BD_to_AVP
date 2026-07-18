@@ -20,6 +20,44 @@ final class WorkerProcessClientTests: XCTestCase {
         XCTAssertEqual(events.map(\.type), [.workerReady, .jobCompleted])
         XCTAssertEqual(result.terminalEvent.payload.result?.resolution, "1920x1080")
         XCTAssertEqual(result.exitStatus, 0)
+        XCTAssertFalse(result.diagnosticSnapshot.isRunning)
+    }
+
+    func testStreamsAndBoundsDiagnosticsWhileWorkerIsActive() async throws {
+        let client = fixtureClient(body: """
+        \(readyEvent())
+        print("FIRST-MARKER", file=sys.stderr, flush=True)
+        print("x" * 600000, file=sys.stderr, flush=True)
+        print("TAIL-MARKER", file=sys.stderr, flush=True)
+        time.sleep(30)
+        """)
+        let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
+        let ready = expectation(description: "worker ready")
+        let task = Task {
+            try await client.run(job: job) { event in
+                if event.type == .workerReady {
+                    ready.fulfill()
+                }
+            }
+        }
+
+        await fulfillment(of: [ready], timeout: 2)
+        var snapshot = client.diagnosticSnapshot()
+        let deadline = Date().addingTimeInterval(3)
+        while !snapshot.toolOutput.text.contains("TAIL-MARKER"), Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+            snapshot = client.diagnosticSnapshot()
+        }
+
+        XCTAssertTrue(snapshot.isRunning)
+        XCTAssertTrue(snapshot.toolOutput.truncated)
+        XCTAssertGreaterThan(snapshot.toolOutput.droppedBytes, 0)
+        XCTAssertFalse(snapshot.toolOutput.text.contains("FIRST-MARKER"))
+        XCTAssertTrue(snapshot.toolOutput.text.contains("TAIL-MARKER"))
+
+        client.cancel()
+        _ = await task.result
+        XCTAssertTrue(client.diagnosticSnapshot().cancellationRequested)
     }
 
     func testReportsMissingTerminalEvent() async throws {

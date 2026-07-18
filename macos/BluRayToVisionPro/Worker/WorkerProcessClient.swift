@@ -64,6 +64,19 @@ struct WorkerRunResult {
     let terminalEvent: WorkerEvent
     let exitStatus: Int32
     let diagnostics: String
+    let diagnosticSnapshot: WorkerProcessDiagnosticSnapshot
+
+    init(
+        terminalEvent: WorkerEvent,
+        exitStatus: Int32,
+        diagnostics: String,
+        diagnosticSnapshot: WorkerProcessDiagnosticSnapshot = .empty
+    ) {
+        self.terminalEvent = terminalEvent
+        self.exitStatus = exitStatus
+        self.diagnostics = diagnostics
+        self.diagnosticSnapshot = diagnosticSnapshot
+    }
 }
 
 protocol WorkerProcessRunning: AnyObject {
@@ -72,6 +85,11 @@ protocol WorkerProcessRunning: AnyObject {
         onEvent: @escaping (WorkerEvent) async throws -> Void
     ) async throws -> WorkerRunResult
     func cancel()
+    func diagnosticSnapshot() -> WorkerProcessDiagnosticSnapshot
+}
+
+extension WorkerProcessRunning {
+    func diagnosticSnapshot() -> WorkerProcessDiagnosticSnapshot { .empty }
 }
 
 final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
@@ -87,6 +105,8 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
     private let stateLock = NSLock()
     private var activeProcess: Process?
     private var activeProcessGroupID: pid_t?
+    private var activeDiagnosticBuffer: BoundedDiagnosticTextBuffer?
+    private var lastDiagnosticSnapshot = WorkerProcessDiagnosticSnapshot.empty
     private var cancellationRequested = false
 
     init(configuration: WorkerLaunchConfiguration) {
@@ -98,6 +118,7 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         let standardInput = Pipe()
         let standardOutput = Pipe()
         let standardError = Pipe()
+        let diagnosticBuffer = BoundedDiagnosticTextBuffer(maximumBytes: 512 * 1_024)
         _ = fcntl(standardInput.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
 
         process.executableURL = configuration.executableURL
@@ -112,7 +133,7 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
             exitWaiter.complete(with: terminatedProcess.terminationStatus)
         }
 
-        guard register(process) else {
+        guard register(process, diagnosticBuffer: diagnosticBuffer) else {
             throw WorkerClientError.alreadyRunning
         }
         defer {
@@ -132,7 +153,10 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
             cancel()
         }
 
-        async let diagnosticsData = Self.readAll(from: standardError.fileHandleForReading)
+        async let diagnosticsRead = Self.readDiagnostics(
+            from: standardError.fileHandleForReading,
+            into: diagnosticBuffer
+        )
         async let processExitStatus = exitWaiter.wait()
 
         do {
@@ -143,7 +167,7 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         } catch {
             cancel()
             _ = await processExitStatus
-            _ = await diagnosticsData
+            _ = await diagnosticsRead
             throw WorkerClientError.requestEncoding(error.localizedDescription)
         }
 
@@ -156,7 +180,8 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
                 onEvent: onEvent
             ) else {
                 let exitStatus = await processExitStatus
-                let diagnostics = Self.decodeDiagnostics(await diagnosticsData)
+                _ = await diagnosticsRead
+                let diagnostics = diagnosticBuffer.snapshot().text
                 throw WorkerClientError.missingTerminalEvent(exitStatus: exitStatus, diagnostics: diagnostics)
             }
             terminalEvent = event
@@ -165,20 +190,28 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         } catch {
             cancel()
             let exitStatus = await processExitStatus
-            let diagnostics = Self.decodeDiagnostics(await diagnosticsData)
+            _ = await diagnosticsRead
+            let diagnostics = diagnosticBuffer.snapshot().text
             let detail = diagnostics.isEmpty ? "worker exit status \(exitStatus)" : diagnostics
             throw WorkerClientError.protocolFailure(message: error.localizedDescription, diagnostics: detail)
         }
 
         let exitStatus = await processExitStatus
-        let diagnostics = Self.decodeDiagnostics(await diagnosticsData)
+        _ = await diagnosticsRead
+        let finalSnapshot = processDiagnosticSnapshot(process: process, buffer: diagnosticBuffer)
+        let diagnostics = finalSnapshot.toolOutput.text
         let wasCancelled = stateLock.withLock {
             activeProcess === process && cancellationRequested
         }
         if terminalEvent.type == .jobCompleted, exitStatus != 0, !wasCancelled {
             throw WorkerClientError.unexpectedExit(exitStatus: exitStatus, diagnostics: diagnostics)
         }
-        return WorkerRunResult(terminalEvent: terminalEvent, exitStatus: exitStatus, diagnostics: diagnostics)
+        return WorkerRunResult(
+            terminalEvent: terminalEvent,
+            exitStatus: exitStatus,
+            diagnostics: diagnostics,
+            diagnosticSnapshot: finalSnapshot
+        )
     }
 
     func cancel() {
@@ -215,13 +248,33 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         }
     }
 
-    private func register(_ process: Process) -> Bool {
+    func diagnosticSnapshot() -> WorkerProcessDiagnosticSnapshot {
+        stateLock.withLock {
+            guard let activeProcess, let activeDiagnosticBuffer else {
+                return lastDiagnosticSnapshot
+            }
+            return WorkerProcessDiagnosticSnapshot(
+                isRunning: activeProcess.isRunning,
+                processIdentifier: activeProcess.processIdentifier > 0 ? activeProcess.processIdentifier : nil,
+                processGroupIdentifier: activeProcessGroupID,
+                cancellationRequested: cancellationRequested,
+                toolOutput: activeDiagnosticBuffer.snapshot()
+            )
+        }
+    }
+
+    private func register(
+        _ process: Process,
+        diagnosticBuffer: BoundedDiagnosticTextBuffer
+    ) -> Bool {
         stateLock.withLock {
             guard activeProcess == nil else {
                 return false
             }
             activeProcess = process
             activeProcessGroupID = nil
+            activeDiagnosticBuffer = diagnosticBuffer
+            lastDiagnosticSnapshot = .empty
             return true
         }
     }
@@ -231,9 +284,32 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
             guard activeProcess === process else {
                 return
             }
+            lastDiagnosticSnapshot = WorkerProcessDiagnosticSnapshot(
+                isRunning: false,
+                processIdentifier: process.processIdentifier > 0 ? process.processIdentifier : nil,
+                processGroupIdentifier: activeProcessGroupID,
+                cancellationRequested: cancellationRequested,
+                toolOutput: activeDiagnosticBuffer?.snapshot() ?? .empty
+            )
             activeProcess = nil
             activeProcessGroupID = nil
+            activeDiagnosticBuffer = nil
             cancellationRequested = false
+        }
+    }
+
+    private func processDiagnosticSnapshot(
+        process: Process,
+        buffer: BoundedDiagnosticTextBuffer
+    ) -> WorkerProcessDiagnosticSnapshot {
+        stateLock.withLock {
+            WorkerProcessDiagnosticSnapshot(
+                isRunning: process.isRunning,
+                processIdentifier: process.processIdentifier > 0 ? process.processIdentifier : nil,
+                processGroupIdentifier: activeProcess === process ? activeProcessGroupID : nil,
+                cancellationRequested: activeProcess === process && cancellationRequested,
+                toolOutput: buffer.snapshot()
+            )
         }
     }
 
@@ -346,20 +422,15 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         }
     }
 
-    private static func readAll(from fileHandle: FileHandle) async -> Data {
-        var output = Data()
+    private static func readDiagnostics(
+        from fileHandle: FileHandle,
+        into buffer: BoundedDiagnosticTextBuffer
+    ) async {
         do {
             for try await chunk in chunks(from: fileHandle) {
-                output.append(chunk)
+                buffer.append(chunk)
             }
-        } catch {
-            return output
-        }
-        return output
-    }
-
-    private static func decodeDiagnostics(_ data: Data) -> String {
-        String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        } catch {}
     }
 }
 
