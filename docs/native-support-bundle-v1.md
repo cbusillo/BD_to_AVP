@@ -212,8 +212,10 @@ BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://support.example \
   uv run python scripts/native_app.py package
 ```
 
-No service credential is embedded in the app. The endpoint may remain empty
-until the private service has an approved production origin.
+No service credential is embedded in the app. Debug builds may remain
+local-only, but Release packaging fails unless the repository variable
+`SUPPORT_DIAGNOSTICS_ENDPOINT` supplies an approved production HTTPS origin.
+This prevents a signed build from silently shipping without online reporting.
 
 ## Upload Client Security
 

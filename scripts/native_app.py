@@ -147,6 +147,8 @@ def native_build_settings(configuration: str, environment: Mapping[str, str]) ->
             raise ValueError(f"Invalid macOS deployment target override: {deployment_target!r}")
         build_settings.append(f"MACOSX_DEPLOYMENT_TARGET={deployment_target}")
     support_endpoint = environment.get(SUPPORT_DIAGNOSTICS_ENDPOINT_ENV, "").strip()
+    if configuration == "Release" and not support_endpoint:
+        raise ValueError("Release builds require an approved support diagnostics endpoint")
     if support_endpoint:
         parsed_endpoint = urlsplit(support_endpoint)
         try:
