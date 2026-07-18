@@ -52,8 +52,8 @@ private enum WorkerStreamError: Error, LocalizedError {
         switch self {
         case let .expectedWorkerReady(received):
             return "The first worker event was \(received.rawValue), not worker.ready."
-        case let .invalidProcessGroup(received):
-            return "The worker reported an invalid process group: \(received.map(String.init) ?? "missing")."
+        case .invalidProcessGroup:
+            return "The worker reported an invalid process group identifier."
         case .duplicateWorkerReady:
             return "The worker sent worker.ready more than once."
         }

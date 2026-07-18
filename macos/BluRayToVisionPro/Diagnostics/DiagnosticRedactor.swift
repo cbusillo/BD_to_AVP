@@ -23,10 +23,13 @@ final class DiagnosticRedactor {
         }
         let token = String(format: "<path:%@:%03d>", scope, pathTokens.count + 1)
         pathTokens[normalizedPath] = token
-        registerExact(rawPath, replacement: token)
-        registerExact(normalizedPath, replacement: token)
+        registerPathVariant(rawPath, replacement: token)
+        registerPathVariant(normalizedPath, replacement: token)
         if normalizedPath.hasPrefix("/") {
-            registerExact(URL(fileURLWithPath: normalizedPath).absoluteString, replacement: token)
+            registerPathVariant(URL(fileURLWithPath: normalizedPath).absoluteString, replacement: token)
+            for prefix in ["file:", "dev:", "iso:"] {
+                registerPathVariant(prefix + normalizedPath, replacement: token)
+            }
         }
         let filename = URL(fileURLWithPath: normalizedPath).lastPathComponent
         if !filename.isEmpty && filename != "/" {
@@ -81,6 +84,7 @@ final class DiagnosticRedactor {
     func redact(_ value: String) -> String {
         var redacted = Self.removingUnsafeControlCharacters(from: value)
         redacted = redactCommandArguments(in: redacted)
+        redacted = redactTitleArguments(in: redacted)
         for (sensitiveValue, replacement) in exactReplacements.sorted(by: { $0.key.count > $1.key.count }) {
             redacted = redacted.replacingOccurrences(
                 of: sensitiveValue,
@@ -89,11 +93,17 @@ final class DiagnosticRedactor {
             )
         }
         redacted = replaceCapturedMatches(
-            pattern: #"[\"'`](file://(?:/|%2F)[^\"'`\r\n]+|/(?:[^\"'`\r\n]+))[\"'`]"#,
+            pattern: #"[\"'`]((?:(?:file|dev|iso):/{1,3}|/|~/)[^\"'`\r\n]+)[\"'`]"#,
             in: redacted,
             captureGroup: 1
         ) { [weak self] path in
-            self?.pathToken(for: path.removingPercentEncoding ?? path) ?? "<path:redacted>"
+            self?.pathToken(for: path) ?? "<path:redacted>"
+        }
+        redacted = replaceMatches(
+            pattern: #"(?i)(?<![A-Za-z0-9])(?:file|dev|iso):/{1,3}(?:\\[^\r\n]|[^\s\\\]\[\)\(\{\},;:\"'<>|])+"#,
+            in: redacted
+        ) { [weak self] path in
+            self?.pathToken(for: path) ?? "<path:redacted>"
         }
         redacted = replaceMatches(
             pattern: #"(?i)/Volumes/[^\r\n]+"#,
@@ -108,13 +118,13 @@ final class DiagnosticRedactor {
             self?.pathToken(for: path.removingPercentEncoding ?? path) ?? "<path:redacted>"
         }
         redacted = replaceMatches(
-            pattern: #"(?<![A-Za-z0-9:/])/(?!/)(?:[^\s\]\[\)\(\{\},;:\"'<>|]+/?)+"#,
+            pattern: #"(?<![A-Za-z0-9:/])/(?!/)(?:\\[^\r\n]|[^\s\\\]\[\)\(\{\},;:\"'<>|])+"#,
             in: redacted
         ) { [weak self] path in
             self?.pathToken(for: path) ?? "<path:redacted>"
         }
         redacted = replaceMatches(
-            pattern: #"(?<![A-Za-z0-9])~/(?:[^\s\]\[\)\(\{\},;:\"'<>|]+/?)+"#,
+            pattern: #"(?<![A-Za-z0-9])~/(?:\\[^\r\n]|[^\s\\\]\[\)\(\{\},;:\"'<>|])+"#,
             in: redacted
         ) { [weak self] path in
             self?.pathToken(for: path) ?? "<path:redacted>"
@@ -135,13 +145,12 @@ final class DiagnosticRedactor {
             self.registerSensitiveName(filename)
             return self.nameTokens[filename.lowercased()] ?? "<name:redacted>"
         }
+        redacted = redactSensitiveAssignments(in: redacted)
         redacted = replaceCapturedMatches(
-            pattern: #"(?i)\b(authorization|api[_-]?key|password|secret|token|serial(?:[_ -]?number)?|device[_-]?id)\b\s*[:=]\s*(?:Bearer\s+[A-Za-z0-9._~+/=-]+|\"[^\"]*\"|'[^']*'|[^\s,;]+)"#,
+            pattern: #"(?i)\b(pid|ppid|pgid|process[_ -]?(?:group[_ -]?)?id)\b(?:\s*[:=]\s*|\s+)[0-9]+"#,
             in: redacted,
             captureGroup: 1
-        ) { key in
-            "\(key)=<redacted>"
-        }
+        ) { key in "\(key)=<redacted>" }
         redacted = replaceMatches(
             pattern: #"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"#,
             in: redacted
@@ -197,11 +206,16 @@ final class DiagnosticRedactor {
         exactReplacements[normalizedValue] = replacement
     }
 
+    private func registerPathVariant(_ value: String, replacement: String) {
+        registerExact(value, replacement: replacement)
+        registerExact(Self.shellEscapedPath(value), replacement: replacement)
+    }
+
     private func redactCommandArguments(in text: String) -> String {
         let lines = text.components(separatedBy: "\n")
         return lines.map { line in
             guard let expression = try? NSRegularExpression(
-                pattern: #"(?i)(?:^|[\s\"'])(?:/[^\s\"']*/)?(ffmpeg|ffprobe|makemkvcon|mp4box|edge264(?:_test)?|pgsrip|python(?:3(?:\.\d+)?)?|ditto|unzip|zip)(?=\s)"#
+                pattern: #"(?i)(?:^|[\s\"'])(?:/(?:\\.|[^\s\"'])*/)?(ffmpeg|ffprobe|makemkvcon|mp4box|edge264(?:_test)?|pgsrip|python(?:3(?:\.\d+)?)?|ditto|unzip|zip)(?=\s)"#
             ),
                 let match = expression.firstMatch(
                     in: line,
@@ -227,6 +241,35 @@ final class DiagnosticRedactor {
             return "\(prefix)\(line[toolRange]) <arguments:redacted>"
         }
         .joined(separator: "\n")
+    }
+
+    private func redactTitleArguments(in text: String) -> String {
+        replaceCapturedMatches(
+            pattern: #"(?i)(?<![A-Za-z0-9_])((?:--?)?(?:disc[_-]?)?title(?:[_-]?(?:id|name))?\s*(?:=|\s)\s*)(?:\"(?:\\.|[^\"\r\n])*\"|'(?:\\.|[^'\r\n])*'|(?:\\.|[^\s,;])+)"#,
+            in: text,
+            captureGroup: 1
+        ) { prefix in
+            "\(prefix)<title:redacted>"
+        }
+    }
+
+    private func redactSensitiveAssignments(in text: String) -> String {
+        let valuePattern = #"(?:Bearer\s+[A-Za-z0-9._~+/=-]+|\"(?:\\.|[^\"\r\n])*\"|'(?:\\.|[^'\r\n])*'|[^\r\n,;\}\]]+)"#
+        var redacted = replaceCapturedMatches(
+            pattern: #"(?i)[\"']?([A-Z0-9_.-]*(?:API[_-]?KEY|AUTH(?:ORIZATION)?|TOKEN|PASSWORD|PASSWD|SECRET|CREDENTIALS?|PRIVATE[_-]?KEY|SESSION|COOKIE)[A-Z0-9_.-]*)[\"']?\s*[:=]\s*"# + valuePattern,
+            in: text,
+            captureGroup: 1
+        ) { key in
+            "\(key)=<redacted>"
+        }
+        redacted = replaceCapturedMatches(
+            pattern: #"(?i)[\"']?(serial(?:[_ -]?number)?|device[_-]?id)[\"']?\s*[:=]\s*"# + valuePattern,
+            in: redacted,
+            captureGroup: 1
+        ) { key in
+            "\(key)=<redacted>"
+        }
+        return redacted
     }
 
     private func replaceMatches(
@@ -266,14 +309,61 @@ final class DiagnosticRedactor {
     }
 
     private static func normalizedPath(_ path: String) -> String {
-        let decoded = path.removingPercentEncoding ?? path
+        var decoded = path.removingPercentEncoding ?? path
+        let lowercased = decoded.lowercased()
+        if decoded.hasPrefix("/")
+            || decoded.hasPrefix("~/")
+            || lowercased.hasPrefix("file:")
+            || lowercased.hasPrefix("dev:")
+            || lowercased.hasPrefix("iso:")
+        {
+            decoded = removingShellEscapes(from: decoded)
+        }
         if decoded.lowercased().hasPrefix("file://"), let url = URL(string: decoded), url.isFileURL {
             return url.standardizedFileURL.path
+        }
+        for prefix in ["file:", "dev:", "iso:"] where decoded.lowercased().hasPrefix(prefix) {
+            decoded.removeFirst(prefix.count)
+            while decoded.hasPrefix("//") {
+                decoded.removeFirst()
+            }
+            break
         }
         if decoded.hasPrefix("/") || decoded.hasPrefix("~") {
             return NSString(string: decoded).standardizingPath
         }
         return decoded
+    }
+
+    private static func shellEscapedPath(_ path: String) -> String {
+        var result = ""
+        let escapedCharacters = "\\\"'()[]{}$&;"
+        for character in path {
+            if character.isWhitespace || escapedCharacters.contains(character) {
+                result.append("\\")
+            }
+            result.append(character)
+        }
+        return result
+    }
+
+    private static func removingShellEscapes(from path: String) -> String {
+        var result = ""
+        var isEscaped = false
+        for character in path {
+            if isEscaped {
+                result.append(character)
+                isEscaped = false
+            } else if character == "\\" {
+                isEscaped = true
+            } else {
+                result.append(character)
+            }
+        }
+        if isEscaped {
+            result.append("\\")
+        }
+        return result
     }
 
     private static func removingUnsafeControlCharacters(from text: String) -> String {

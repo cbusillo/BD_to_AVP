@@ -46,6 +46,43 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertTrue(output.contains("<identifier:01234567:001>"))
     }
 
+    func testRedactorHandlesEscapedAndSchemePathsTitleArgumentsAndSecretEnvironmentKeys() {
+        let redactor = DiagnosticRedactor(bundleID: fixedBundleID)
+        let text = """
+        shell=/Users/alice/Movies/Secret\\ Feature.mkv
+        source=file:/Users/alice/Movies/Another\\ Secret.mkv
+        device=dev:/dev/rdisk7
+        image=iso:/Volumes/Private\\ Disc/Feature.iso
+        arguments: converter --title Secret\\ Feature --mode safe
+        command: /Applications/Tool\\ Suite/ffmpeg -i /Users/alice/Movies/Input\\ Feature.mkv --title Input\\ Feature
+        OPENAI_API_KEY   =   "sk-live secret value"
+        "AWS_SECRET_ACCESS_KEY"  :  "aws secret value"
+        process_group_id = 4242
+        pid 9876
+        NORMAL_VALUE = visible
+        """
+
+        let output = redactor.redact(text)
+
+        XCTAssertFalse(output.contains(#"/Users/alice/Movies/Secret\ Feature.mkv"#))
+        XCTAssertFalse(output.contains(#"file:/Users/alice/Movies/Another\ Secret.mkv"#))
+        XCTAssertFalse(output.contains("dev:/dev/rdisk7"))
+        XCTAssertFalse(output.contains(#"iso:/Volumes/Private\ Disc/Feature.iso"#))
+        XCTAssertFalse(output.contains(#"/Applications/Tool\ Suite/ffmpeg"#))
+        XCTAssertFalse(output.contains("sk-live secret value"))
+        XCTAssertFalse(output.contains("aws secret value"))
+        XCTAssertFalse(output.contains("4242"))
+        XCTAssertFalse(output.contains("9876"))
+        XCTAssertTrue(output.contains("--title <title:redacted>"))
+        XCTAssertTrue(output.contains("ffmpeg <arguments:redacted>"))
+        XCTAssertTrue(output.contains("OPENAI_API_KEY=<redacted>"))
+        XCTAssertTrue(output.contains("AWS_SECRET_ACCESS_KEY=<redacted>"))
+        XCTAssertTrue(output.contains("process_group_id=<redacted>"))
+        XCTAssertTrue(output.contains("pid=<redacted>"))
+        XCTAssertTrue(output.contains("NORMAL_VALUE = visible"))
+        XCTAssertGreaterThanOrEqual(output.components(separatedBy: "<path:01234567:").count - 1, 4)
+    }
+
     func testStorageProbeClassifiesInaccessibleMetadataWithoutLeakingPath() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -256,6 +293,141 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertEqual(snapshot.workerVersion, "0.3.0")
         XCTAssertEqual(snapshot.events.entries.last?.name, "job.completed")
         XCTAssertEqual(snapshot.events.entries.last?.resultSizeBytes, 10)
+    }
+
+    func testSerializedDiagnosticsOmitProcessIdentifiersAndRoundMediaAndStorageSizes() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let fileQuantum: Int64 = 256 * 1_024 * 1_024
+        let volumeQuantum: Int64 = 16 * 1_024 * 1_024 * 1_024
+        let rawFileSize = fileQuantum * 7 + 12_345
+        let rawAvailableSize = volumeQuantum * 31 + 54_321
+        let rawTotalSize = volumeQuantum * 63 + 98_765
+        let sourceURL = directory.appendingPathComponent("Private Source.mkv")
+        let destinationURL = directory.appendingPathComponent("Private Destination", isDirectory: true)
+        let source = ConversionSource(kind: .matroska, url: sourceURL)
+        let draft = ConversionDraft(
+            source: source,
+            sourceDetails: SourceInspection(
+                name: "Private Source.mkv",
+                resolution: "1920x1080",
+                frameRate: "24/1",
+                interlaced: false,
+                sizeBytes: rawFileSize
+            ),
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: destinationURL,
+            options: ConversionOptions()
+        )
+        let probe = FixedDiagnosticStorageProbe(
+            fileSizeBytes: rawFileSize,
+            volumeAvailableBytes: rawAvailableSize,
+            volumeTotalBytes: rawTotalSize
+        )
+        let jobID = UUID()
+        var lifecycle = WorkerLifecycleState()
+        lifecycle.selectSource(sourceURL)
+        try lifecycle.begin(jobID: jobID, operationKind: .conversion)
+        let recorder = DiagnosticSessionRecorder(storageSampleInterval: 0)
+        recorder.beginJob(
+            context: DiagnosticJobContext(jobID: jobID, draft: draft),
+            lifecycle: lifecycle,
+            activeMode: "single_conversion",
+            recordedAt: fixedDate
+        )
+        recorder.record(
+            event: WorkerEvent(
+                protocolVersion: WorkerJobSpec.protocolVersion,
+                type: .workerReady,
+                jobID: jobID,
+                sequence: 0,
+                payload: WorkerEventPayload(workerVersion: "0.3.0", processGroupID: 4242)
+            ),
+            lifecycle: lifecycle,
+            activeMode: "single_conversion",
+            recordedAt: fixedDate.addingTimeInterval(1)
+        )
+        recorder.record(
+            event: WorkerEvent(
+                protocolVersion: WorkerJobSpec.protocolVersion,
+                type: .jobCompleted,
+                jobID: jobID,
+                sequence: 1,
+                payload: WorkerEventPayload(
+                    conversionResult: ConversionResult(
+                        outputPath: draft.proposedOutputURL.path,
+                        sizeBytes: rawFileSize
+                    )
+                )
+            ),
+            lifecycle: lifecycle,
+            activeMode: "single_conversion",
+            recordedAt: fixedDate.addingTimeInterval(2)
+        )
+        recorder.sampleCurrentStorage(
+            using: probe,
+            recordedAt: fixedDate.addingTimeInterval(3),
+            force: true
+        )
+        let snapshot = recorder.snapshot(
+            capturedAt: fixedDate.addingTimeInterval(4),
+            lifecycle: lifecycle,
+            activeMode: "single_conversion",
+            batchSummary: nil,
+            process: WorkerProcessDiagnosticSnapshot(
+                isRunning: true,
+                processIdentifier: 4242,
+                processGroupIdentifier: 4242,
+                cancellationRequested: false,
+                toolOutput: .empty
+            )
+        )
+        let builder = DiagnosticBundleBuilder(
+            storageProbe: probe,
+            bundleIDProvider: { self.fixedBundleID }
+        )
+
+        let artifact = try builder.createBundle(from: snapshot, outputDirectory: directory)
+        let manifestData = try unzipEntry("manifest.json", from: artifact.archiveURL)
+        let eventsData = try unzipEntry("events.jsonl", from: artifact.archiveURL)
+        let storageData = try unzipEntry("storage.json", from: artifact.archiveURL)
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        let worker = try XCTUnwrap(manifest["worker"] as? [String: Any])
+        let privacy = try XCTUnwrap(manifest["privacy"] as? [String: Any])
+        let events = try eventsData.split(separator: 0x0A).map { line in
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line)) as? [String: Any])
+        }
+        let completedEvent = try XCTUnwrap(events.first { $0["name"] as? String == "job.completed" })
+        let storage = try XCTUnwrap(JSONSerialization.jsonObject(with: storageData) as? [String: Any])
+        let probes = try XCTUnwrap(storage["probes"] as? [[String: Any]])
+        let sourceProbe = try XCTUnwrap(probes.first { $0["role"] as? String == "source" })
+        let samples = try XCTUnwrap(storage["samples"] as? [[String: Any]])
+        let serializedText = [manifestData, eventsData, storageData]
+            .map { String(decoding: $0, as: UTF8.self) }
+            .joined(separator: "\n")
+
+        XCTAssertNil(worker["process_identifier"])
+        XCTAssertNil(worker["process_group_identifier"])
+        XCTAssertTrue(events.allSatisfy { $0["process_group_identifier"] == nil })
+        XCTAssertEqual((completedEvent["result_size_rounded_bytes"] as? NSNumber)?.int64Value, fileQuantum * 7)
+        XCTAssertNil(completedEvent["result_size_bytes"])
+        XCTAssertEqual((sourceProbe["file_size_rounded_bytes"] as? NSNumber)?.int64Value, fileQuantum * 7)
+        XCTAssertEqual(
+            (sourceProbe["volume_available_rounded_bytes"] as? NSNumber)?.int64Value,
+            volumeQuantum * 31
+        )
+        XCTAssertEqual((sourceProbe["volume_total_rounded_bytes"] as? NSNumber)?.int64Value, volumeQuantum * 63)
+        XCTAssertTrue(samples.allSatisfy { $0["file_size_bytes"] == nil && $0["volume_available_bytes"] == nil })
+        XCTAssertEqual(privacy["rules_version"] as? Int, 2)
+        XCTAssertEqual(privacy["size_rounding_mode"] as? String, "down")
+        XCTAssertEqual((privacy["file_size_quantum_bytes"] as? NSNumber)?.int64Value, fileQuantum)
+        XCTAssertEqual((privacy["volume_capacity_quantum_bytes"] as? NSNumber)?.int64Value, volumeQuantum)
+        XCTAssertFalse(serializedText.contains(String(rawFileSize)))
+        XCTAssertFalse(serializedText.contains(String(rawAvailableSize)))
+        XCTAssertFalse(serializedText.contains(String(rawTotalSize)))
     }
 
     func testBundleIsRedactedBoundedTruncatedAndSaveShareReady() throws {
@@ -486,6 +658,30 @@ final class DiagnosticBundleTests: XCTestCase {
             )
         }
         return data
+    }
+}
+
+private struct FixedDiagnosticStorageProbe: DiagnosticStorageProbing {
+    let fileSizeBytes: Int64
+    let volumeAvailableBytes: Int64
+    let volumeTotalBytes: Int64
+
+    func probe(role: DiagnosticStorageRole, url: URL, capturedAt: Date) -> RawDiagnosticStorageProbe {
+        RawDiagnosticStorageProbe(
+            capturedAt: capturedAt,
+            role: role,
+            url: url,
+            status: .available,
+            isDirectory: role == .destination,
+            isReadable: true,
+            isWritable: role != .source,
+            fileSizeBytes: fileSizeBytes,
+            modificationAgeSeconds: 120,
+            volumeAvailableBytes: volumeAvailableBytes,
+            volumeTotalBytes: volumeTotalBytes,
+            volumeReadOnly: false,
+            errorKind: nil
+        )
     }
 }
 

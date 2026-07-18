@@ -102,6 +102,26 @@ struct DiagnosticRuntimeMetadata: Equatable {
     }
 }
 
+private enum DiagnosticSizeRounding {
+    static let fileSizeQuantumBytes: Int64 = 256 * 1_024 * 1_024
+    static let volumeCapacityQuantumBytes: Int64 = 16 * 1_024 * 1_024 * 1_024
+
+    static func fileSize(_ bytes: Int64?) -> Int64? {
+        roundedDown(bytes, quantum: fileSizeQuantumBytes)
+    }
+
+    static func volumeCapacity(_ bytes: Int64?) -> Int64? {
+        roundedDown(bytes, quantum: volumeCapacityQuantumBytes)
+    }
+
+    private static func roundedDown(_ bytes: Int64?, quantum: Int64) -> Int64? {
+        guard let bytes, bytes >= 0 else {
+            return nil
+        }
+        return bytes - (bytes % quantum)
+    }
+}
+
 final class DiagnosticBundleBuilder {
     struct Configuration {
         let maximumArchiveBytes: Int
@@ -444,8 +464,6 @@ final class DiagnosticBundleBuilder {
             worker: BundleWorker(
                 version: redactor.redact(snapshot.workerVersion),
                 active: snapshot.process.isRunning,
-                processIdentifier: snapshot.process.processIdentifier,
-                processGroupIdentifier: snapshot.process.processGroupIdentifier,
                 cancellationRequested: snapshot.process.cancellationRequested
             ),
             lifecycle: BundleLifecycle(
@@ -577,14 +595,17 @@ final class DiagnosticBundleBuilder {
     }
 
     private static let privacyManifest = BundlePrivacy(
-        rulesVersion: 1,
+        rulesVersion: 2,
         pathTokenScope: "bundle",
+        sizeRoundingMode: "down",
+        fileSizeQuantumBytes: DiagnosticSizeRounding.fileSizeQuantumBytes,
+        volumeCapacityQuantumBytes: DiagnosticSizeRounding.volumeCapacityQuantumBytes,
         included: [
             "app/build and worker protocol versions",
             "worker lifecycle, stage, heartbeat, progress, warnings, and terminal state",
             "selected non-identifying conversion settings",
             "source kind and per-bundle path correlation tokens",
-            "destination capacity, accessibility, artifact size, and modification age",
+            "coarsely rounded destination capacity and artifact size, accessibility, and modification age",
             "bounded redacted worker tool-output tail",
             "batch status counts and retry/cancellation transitions",
         ],
@@ -594,6 +615,7 @@ final class DiagnosticBundleBuilder {
             "raw full paths, filenames, volume names, and movie titles",
             "raw job requests and command arguments",
             "environment variables and credentials",
+            "raw process identifiers",
             "hardware serial numbers and reusable file hashes",
         ]
     )
@@ -653,8 +675,6 @@ private struct BundleApp: Encodable {
 private struct BundleWorker: Encodable {
     let version: String?
     let active: Bool
-    let processIdentifier: Int32?
-    let processGroupIdentifier: Int32?
     let cancellationRequested: Bool
 }
 
@@ -757,6 +777,9 @@ private struct BundleToolTailTruncation: Encodable {
 private struct BundlePrivacy: Encodable {
     let rulesVersion: Int
     let pathTokenScope: String
+    let sizeRoundingMode: String
+    let fileSizeQuantumBytes: Int64
+    let volumeCapacityQuantumBytes: Int64
     let included: [String]
     let excluded: [String]
 }
@@ -781,9 +804,8 @@ private struct BundleEvent: Encodable {
     let failureCode: String?
     let retryable: Bool?
     let choices: [String]?
-    let resultSizeBytes: Int64?
+    let resultSizeRoundedBytes: Int64?
     let workerVersion: String?
-    let processGroupIdentifier: Int32?
     let exitStatus: Int32?
     let textTruncated: Bool
 
@@ -819,9 +841,8 @@ private struct BundleEvent: Encodable {
         failureCode = bounded(event.failureCode, maximumBytes: 512)
         retryable = event.retryable
         choices = event.choices?.map { bounded($0, maximumBytes: 512) ?? "<redacted>" }
-        resultSizeBytes = event.resultSizeBytes
+        resultSizeRoundedBytes = DiagnosticSizeRounding.fileSize(event.resultSizeBytes)
         workerVersion = bounded(event.workerVersion, maximumBytes: 512)
-        processGroupIdentifier = event.processGroupID
         exitStatus = event.exitStatus
         textTruncated = didTruncate
     }
@@ -843,10 +864,10 @@ private struct BundleStorageProbe: Encodable {
     let isDirectory: Bool?
     let isReadable: Bool?
     let isWritable: Bool?
-    let fileSizeBytes: Int64?
+    let fileSizeRoundedBytes: Int64?
     let modificationAgeSeconds: Int64?
-    let volumeAvailableBytes: Int64?
-    let volumeTotalBytes: Int64?
+    let volumeAvailableRoundedBytes: Int64?
+    let volumeTotalRoundedBytes: Int64?
     let volumeReadOnly: Bool?
     let errorKind: String?
 
@@ -858,10 +879,10 @@ private struct BundleStorageProbe: Encodable {
         isDirectory = probe.isDirectory
         isReadable = probe.isReadable
         isWritable = probe.isWritable
-        fileSizeBytes = probe.fileSizeBytes
+        fileSizeRoundedBytes = DiagnosticSizeRounding.fileSize(probe.fileSizeBytes)
         modificationAgeSeconds = probe.modificationAgeSeconds
-        volumeAvailableBytes = probe.volumeAvailableBytes
-        volumeTotalBytes = probe.volumeTotalBytes
+        volumeAvailableRoundedBytes = DiagnosticSizeRounding.volumeCapacity(probe.volumeAvailableBytes)
+        volumeTotalRoundedBytes = DiagnosticSizeRounding.volumeCapacity(probe.volumeTotalBytes)
         volumeReadOnly = probe.volumeReadOnly
         errorKind = probe.errorKind?.rawValue
     }
@@ -872,17 +893,17 @@ private struct BundleStorageSample: Encodable {
     let role: String
     let pathToken: String
     let status: String
-    let fileSizeBytes: Int64?
+    let fileSizeRoundedBytes: Int64?
     let modificationAgeSeconds: Int64?
-    let volumeAvailableBytes: Int64?
+    let volumeAvailableRoundedBytes: Int64?
 
     init(sample: RawDiagnosticStorageSample, redactor: DiagnosticRedactor) {
         capturedAt = DiagnosticBundleBuilder.timestamp(sample.capturedAt)
         role = sample.role.rawValue
         pathToken = redactor.pathToken(for: sample.url)
         status = sample.status.rawValue
-        fileSizeBytes = sample.fileSizeBytes
+        fileSizeRoundedBytes = DiagnosticSizeRounding.fileSize(sample.fileSizeBytes)
         modificationAgeSeconds = sample.modificationAgeSeconds
-        volumeAvailableBytes = sample.volumeAvailableBytes
+        volumeAvailableRoundedBytes = DiagnosticSizeRounding.volumeCapacity(sample.volumeAvailableBytes)
     }
 }

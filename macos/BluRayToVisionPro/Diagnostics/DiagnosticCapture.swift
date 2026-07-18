@@ -434,7 +434,6 @@ struct DiagnosticEventRecord: Equatable {
     let choices: [String]?
     let resultSizeBytes: Int64?
     let workerVersion: String?
-    let processGroupID: Int32?
     let exitStatus: Int32?
 
     var approximateBytes: Int {
@@ -639,7 +638,6 @@ final class DiagnosticSessionRecorder {
             choices: event.payload.decision?.choices,
             resultSizeBytes: resultSize,
             workerVersion: event.payload.workerVersion,
-            processGroupID: event.payload.processGroupID,
             exitStatus: nil
         )
         history.append(record)
@@ -681,7 +679,6 @@ final class DiagnosticSessionRecorder {
                 choices: lifecycle.recoveryDecision?.choices,
                 resultSizeBytes: lifecycle.conversionResult?.sizeBytes,
                 workerVersion: workerVersion,
-                processGroupID: latestProcessSnapshot.processGroupIdentifier,
                 exitStatus: exitStatus
             )
         )
