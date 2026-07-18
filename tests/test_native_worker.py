@@ -5,6 +5,7 @@ import signal
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 
@@ -632,6 +633,58 @@ class WorkerActivityReporterTests(unittest.TestCase):
 
 
 class WorkerRuntimeTests(unittest.TestCase):
+    def test_tool_output_reaches_diagnostic_stream_before_operation_finishes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source_path = Path(temporary_directory) / "movie.m2ts"
+            source_path.write_bytes(b"video")
+            output = io.StringIO()
+            diagnostic = SignalingTextStream("live tool output")
+            release_operation = threading.Event()
+            exit_codes: list[int] = []
+
+            def operation(
+                _job: JobSpec,
+                _owner: WorkerProcessOwner,
+                _activity: WorkerActivityReporter,
+            ) -> dict[str, object]:
+                print("live tool output", flush=True)
+                self.assertTrue(release_operation.wait(timeout=2))
+                return {
+                    "name": "movie",
+                    "resolution": "1920x1080",
+                    "frame_rate": "24/1",
+                    "interlaced": False,
+                    "size_bytes": 5,
+                    "titles": [],
+                }
+
+            worker = threading.Thread(
+                target=lambda: exit_codes.append(
+                    run_worker(
+                        io.StringIO(request_line(source_path)),
+                        output,
+                        diagnostic,
+                        establish_session=False,
+                        heartbeat_interval=0.01,
+                        operation_runner=operation,
+                    )
+                )
+            )
+            with patch.object(WorkerProcessOwner, "install_signal_handlers"):
+                worker.start()
+                try:
+                    self.assertTrue(diagnostic.match_written.wait(timeout=1))
+                    self.assertTrue(worker.is_alive())
+                    self.assertNotIn("live tool output", output.getvalue())
+                finally:
+                    release_operation.set()
+                    worker.join(timeout=2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(exit_codes, [0])
+        self.assertIn("live tool output", diagnostic.getvalue())
+        self.assertEqual(decoded_events(output)[-1]["type"], "job.completed")
+
     def test_success_emits_structured_terminal_event_and_redirects_prints(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             source_path = Path(temporary_directory) / "movie.m2ts"
@@ -853,6 +906,19 @@ class WorkerRuntimeTests(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "job.completed")
         self.assertEqual(events[-1]["payload"]["conversion_result"]["output_path"], "/tmp/Movie_AVP.mov")
         self.assertNotIn("result", events[-1]["payload"])
+
+
+class SignalingTextStream(io.StringIO):
+    def __init__(self, marker: str) -> None:
+        super().__init__()
+        self.marker = marker
+        self.match_written = threading.Event()
+
+    def write(self, value: str) -> int:
+        written = super().write(value)
+        if self.marker in self.getvalue():
+            self.match_written.set()
+        return written
 
 
 class SourceInspectionTests(unittest.TestCase):

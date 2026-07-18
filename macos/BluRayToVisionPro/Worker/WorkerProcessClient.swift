@@ -3,9 +3,9 @@ import Foundation
 
 enum WorkerClientError: Error, LocalizedError {
     case alreadyRunning
-    case requestEncoding(String)
+    case requestEncoding(message: String, exitStatus: Int32?)
     case launch(String)
-    case protocolFailure(message: String, diagnostics: String)
+    case protocolFailure(message: String, diagnostics: String, exitStatus: Int32)
     case missingTerminalEvent(exitStatus: Int32, diagnostics: String)
     case unexpectedExit(exitStatus: Int32, diagnostics: String)
 
@@ -28,10 +28,20 @@ enum WorkerClientError: Error, LocalizedError {
 
     var technicalDetails: String? {
         switch self {
-        case let .requestEncoding(message), let .launch(message):
+        case let .requestEncoding(message, exitStatus):
+            return [
+                message,
+                exitStatus.map { "Exit status: \($0)" },
+            ]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+        case let .launch(message):
             return message
-        case let .protocolFailure(message, diagnostics):
-            return [message, diagnostics].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        case let .protocolFailure(message, diagnostics, exitStatus):
+            return [message, "Exit status: \(exitStatus)", diagnostics]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
         case let .missingTerminalEvent(exitStatus, diagnostics),
              let .unexpectedExit(exitStatus, diagnostics):
             return ["Exit status: \(exitStatus)", diagnostics].filter { !$0.isEmpty }.joined(separator: "\n\n")
@@ -41,6 +51,19 @@ enum WorkerClientError: Error, LocalizedError {
     }
 
     var diagnostics: String? { technicalDetails }
+
+    var processExitStatus: Int32? {
+        switch self {
+        case let .requestEncoding(_, exitStatus):
+            return exitStatus
+        case let .protocolFailure(_, _, exitStatus),
+             let .missingTerminalEvent(exitStatus, _),
+             let .unexpectedExit(exitStatus, _):
+            return exitStatus
+        case .alreadyRunning, .launch:
+            return nil
+        }
+    }
 }
 
 private enum WorkerStreamError: Error, LocalizedError {
@@ -52,8 +75,8 @@ private enum WorkerStreamError: Error, LocalizedError {
         switch self {
         case let .expectedWorkerReady(received):
             return "The first worker event was \(received.rawValue), not worker.ready."
-        case let .invalidProcessGroup(received):
-            return "The worker reported an invalid process group: \(received.map(String.init) ?? "missing")."
+        case .invalidProcessGroup:
+            return "The worker reported an invalid process group identifier."
         case .duplicateWorkerReady:
             return "The worker sent worker.ready more than once."
         }
@@ -64,6 +87,19 @@ struct WorkerRunResult {
     let terminalEvent: WorkerEvent
     let exitStatus: Int32
     let diagnostics: String
+    let diagnosticSnapshot: WorkerProcessDiagnosticSnapshot
+
+    init(
+        terminalEvent: WorkerEvent,
+        exitStatus: Int32,
+        diagnostics: String,
+        diagnosticSnapshot: WorkerProcessDiagnosticSnapshot = .empty
+    ) {
+        self.terminalEvent = terminalEvent
+        self.exitStatus = exitStatus
+        self.diagnostics = diagnostics
+        self.diagnosticSnapshot = diagnosticSnapshot
+    }
 }
 
 protocol WorkerProcessRunning: AnyObject {
@@ -72,6 +108,11 @@ protocol WorkerProcessRunning: AnyObject {
         onEvent: @escaping (WorkerEvent) async throws -> Void
     ) async throws -> WorkerRunResult
     func cancel()
+    func diagnosticSnapshot() -> WorkerProcessDiagnosticSnapshot
+}
+
+extension WorkerProcessRunning {
+    func diagnosticSnapshot() -> WorkerProcessDiagnosticSnapshot { .empty }
 }
 
 final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
@@ -87,6 +128,8 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
     private let stateLock = NSLock()
     private var activeProcess: Process?
     private var activeProcessGroupID: pid_t?
+    private var activeDiagnosticBuffer: BoundedDiagnosticTextBuffer?
+    private var lastDiagnosticSnapshot = WorkerProcessDiagnosticSnapshot.empty
     private var cancellationRequested = false
 
     init(configuration: WorkerLaunchConfiguration) {
@@ -98,6 +141,7 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         let standardInput = Pipe()
         let standardOutput = Pipe()
         let standardError = Pipe()
+        let diagnosticBuffer = BoundedDiagnosticTextBuffer(maximumBytes: 512 * 1_024)
         _ = fcntl(standardInput.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
 
         process.executableURL = configuration.executableURL
@@ -112,7 +156,7 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
             exitWaiter.complete(with: terminatedProcess.terminationStatus)
         }
 
-        guard register(process) else {
+        guard register(process, diagnosticBuffer: diagnosticBuffer) else {
             throw WorkerClientError.alreadyRunning
         }
         defer {
@@ -132,7 +176,11 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
             cancel()
         }
 
-        async let diagnosticsData = Self.readAll(from: standardError.fileHandleForReading)
+        let diagnosticsDrainer = DiagnosticPipeDrainer(
+            fileHandle: standardError.fileHandleForReading,
+            buffer: diagnosticBuffer,
+            queue: Self.ioQueue
+        )
         async let processExitStatus = exitWaiter.wait()
 
         do {
@@ -142,9 +190,12 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
             try standardInput.fileHandleForWriting.close()
         } catch {
             cancel()
-            _ = await processExitStatus
-            _ = await diagnosticsData
-            throw WorkerClientError.requestEncoding(error.localizedDescription)
+            let exitStatus = await processExitStatus
+            await diagnosticsDrainer.wait()
+            throw WorkerClientError.requestEncoding(
+                message: error.localizedDescription,
+                exitStatus: exitStatus
+            )
         }
 
         let terminalEvent: WorkerEvent
@@ -156,7 +207,8 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
                 onEvent: onEvent
             ) else {
                 let exitStatus = await processExitStatus
-                let diagnostics = Self.decodeDiagnostics(await diagnosticsData)
+                await diagnosticsDrainer.wait()
+                let diagnostics = diagnosticBuffer.snapshot().text
                 throw WorkerClientError.missingTerminalEvent(exitStatus: exitStatus, diagnostics: diagnostics)
             }
             terminalEvent = event
@@ -165,20 +217,31 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         } catch {
             cancel()
             let exitStatus = await processExitStatus
-            let diagnostics = Self.decodeDiagnostics(await diagnosticsData)
-            let detail = diagnostics.isEmpty ? "worker exit status \(exitStatus)" : diagnostics
-            throw WorkerClientError.protocolFailure(message: error.localizedDescription, diagnostics: detail)
+            await diagnosticsDrainer.wait()
+            let diagnostics = diagnosticBuffer.snapshot().text
+            throw WorkerClientError.protocolFailure(
+                message: error.localizedDescription,
+                diagnostics: diagnostics,
+                exitStatus: exitStatus
+            )
         }
 
         let exitStatus = await processExitStatus
-        let diagnostics = Self.decodeDiagnostics(await diagnosticsData)
+        await diagnosticsDrainer.wait()
+        let finalSnapshot = processDiagnosticSnapshot(process: process, buffer: diagnosticBuffer)
+        let diagnostics = finalSnapshot.toolOutput.text
         let wasCancelled = stateLock.withLock {
             activeProcess === process && cancellationRequested
         }
         if terminalEvent.type == .jobCompleted, exitStatus != 0, !wasCancelled {
             throw WorkerClientError.unexpectedExit(exitStatus: exitStatus, diagnostics: diagnostics)
         }
-        return WorkerRunResult(terminalEvent: terminalEvent, exitStatus: exitStatus, diagnostics: diagnostics)
+        return WorkerRunResult(
+            terminalEvent: terminalEvent,
+            exitStatus: exitStatus,
+            diagnostics: diagnostics,
+            diagnosticSnapshot: finalSnapshot
+        )
     }
 
     func cancel() {
@@ -215,13 +278,33 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         }
     }
 
-    private func register(_ process: Process) -> Bool {
+    func diagnosticSnapshot() -> WorkerProcessDiagnosticSnapshot {
+        stateLock.withLock {
+            guard let activeProcess, let activeDiagnosticBuffer else {
+                return lastDiagnosticSnapshot
+            }
+            return WorkerProcessDiagnosticSnapshot(
+                isRunning: activeProcess.isRunning,
+                processIdentifier: activeProcess.processIdentifier > 0 ? activeProcess.processIdentifier : nil,
+                processGroupIdentifier: activeProcessGroupID,
+                cancellationRequested: cancellationRequested,
+                toolOutput: activeDiagnosticBuffer.snapshot()
+            )
+        }
+    }
+
+    private func register(
+        _ process: Process,
+        diagnosticBuffer: BoundedDiagnosticTextBuffer
+    ) -> Bool {
         stateLock.withLock {
             guard activeProcess == nil else {
                 return false
             }
             activeProcess = process
             activeProcessGroupID = nil
+            activeDiagnosticBuffer = diagnosticBuffer
+            lastDiagnosticSnapshot = .empty
             return true
         }
     }
@@ -231,9 +314,32 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
             guard activeProcess === process else {
                 return
             }
+            lastDiagnosticSnapshot = WorkerProcessDiagnosticSnapshot(
+                isRunning: false,
+                processIdentifier: process.processIdentifier > 0 ? process.processIdentifier : nil,
+                processGroupIdentifier: activeProcessGroupID,
+                cancellationRequested: cancellationRequested,
+                toolOutput: activeDiagnosticBuffer?.snapshot() ?? .empty
+            )
             activeProcess = nil
             activeProcessGroupID = nil
+            activeDiagnosticBuffer = nil
             cancellationRequested = false
+        }
+    }
+
+    private func processDiagnosticSnapshot(
+        process: Process,
+        buffer: BoundedDiagnosticTextBuffer
+    ) -> WorkerProcessDiagnosticSnapshot {
+        stateLock.withLock {
+            WorkerProcessDiagnosticSnapshot(
+                isRunning: process.isRunning,
+                processIdentifier: process.processIdentifier > 0 ? process.processIdentifier : nil,
+                processGroupIdentifier: activeProcess === process ? activeProcessGroupID : nil,
+                cancellationRequested: activeProcess === process && cancellationRequested,
+                toolOutput: buffer.snapshot()
+            )
         }
     }
 
@@ -309,8 +415,11 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         return terminalEvent
     }
 
+    private static let stdoutChunkBytes = 64 * 1_024
+    private static let stdoutQueueChunkLimit = 128
+
     private static func chunks(from fileHandle: FileHandle) -> AsyncThrowingStream<Data, Error> {
-        AsyncThrowingStream { continuation in
+        AsyncThrowingStream(bufferingPolicy: .bufferingOldest(stdoutQueueChunkLimit)) { continuation in
             let fileDescriptor = dup(fileHandle.fileDescriptor)
             guard fileDescriptor >= 0 else {
                 continuation.finish(
@@ -326,9 +435,29 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
                 close(fileDescriptor)
             }
             channel.setLimit(lowWater: 1)
+            channel.setLimit(highWater: stdoutChunkBytes)
             channel.read(offset: 0, length: Int.max, queue: ioQueue) { done, dispatchData, errorCode in
                 if let dispatchData, !dispatchData.isEmpty {
-                    continuation.yield(Data(dispatchData))
+                    switch continuation.yield(Data(dispatchData)) {
+                    case .enqueued:
+                        break
+                    case .dropped:
+                        continuation.finish(
+                            throwing: NSError(
+                                domain: NSPOSIXErrorDomain,
+                                code: Int(ENOBUFS),
+                                userInfo: [NSLocalizedDescriptionKey: "Worker stdout overflow: event processing fell behind."]
+                            )
+                        )
+                        channel.close(flags: .stop)
+                        return
+                    case .terminated:
+                        channel.close(flags: .stop)
+                        return
+                    @unknown default:
+                        channel.close(flags: .stop)
+                        return
+                    }
                 }
                 if errorCode != 0 {
                     continuation.finish(
@@ -346,20 +475,106 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         }
     }
 
-    private static func readAll(from fileHandle: FileHandle) async -> Data {
-        var output = Data()
-        do {
-            for try await chunk in chunks(from: fileHandle) {
-                output.append(chunk)
-            }
-        } catch {
-            return output
+}
+
+private final class DiagnosticPipeDrainer: @unchecked Sendable {
+    private static let maximumChunkBytes = 64 * 1_024
+
+    private let lock = NSLock()
+    private let completion = AsyncCompletion()
+    private var channel: DispatchIO?
+    private var finished = false
+
+    init(
+        fileHandle: FileHandle,
+        buffer: BoundedDiagnosticTextBuffer,
+        queue: DispatchQueue
+    ) {
+        let fileDescriptor = dup(fileHandle.fileDescriptor)
+        guard fileDescriptor >= 0 else {
+            completion.complete()
+            return
         }
-        return output
+        let channel = DispatchIO(
+            type: .stream,
+            fileDescriptor: fileDescriptor,
+            queue: queue
+        ) { _ in
+            close(fileDescriptor)
+        }
+        self.channel = channel
+        channel.setLimit(lowWater: 1)
+        channel.setLimit(highWater: Self.maximumChunkBytes)
+        channel.read(offset: 0, length: Int.max, queue: queue) { [weak self] done, dispatchData, errorCode in
+            guard let self else {
+                return
+            }
+            if let dispatchData, !dispatchData.isEmpty {
+                buffer.append(Data(dispatchData))
+            }
+            if errorCode != 0 {
+                finish(stop: true)
+            } else if done {
+                finish(stop: false)
+            }
+        }
     }
 
-    private static func decodeDiagnostics(_ data: Data) -> String {
-        String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    deinit {
+        finish(stop: true)
+    }
+
+    func wait() async {
+        await completion.wait()
+    }
+
+    private func finish(stop: Bool) {
+        let channel = lock.withLock { () -> DispatchIO? in
+            guard !finished else {
+                return nil
+            }
+            finished = true
+            defer { self.channel = nil }
+            return self.channel
+        }
+        guard let channel else {
+            return
+        }
+        channel.close(flags: stop ? .stop : [])
+        completion.complete()
+    }
+}
+
+private final class AsyncCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completed = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func complete() {
+        let waitingContinuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            guard !completed else {
+                return nil
+            }
+            completed = true
+            defer { continuation = nil }
+            return continuation
+        }
+        waitingContinuation?.resume()
+    }
+
+    func wait() async {
+        await withCheckedContinuation { waitingContinuation in
+            let isCompleted = lock.withLock { () -> Bool in
+                if completed {
+                    return true
+                }
+                continuation = waitingContinuation
+                return false
+            }
+            if isCompleted {
+                waitingContinuation.resume()
+            }
+        }
     }
 }
 

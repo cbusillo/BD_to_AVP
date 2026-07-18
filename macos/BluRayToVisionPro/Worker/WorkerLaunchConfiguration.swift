@@ -19,6 +19,14 @@ enum WorkerLaunchConfigurationError: Error, LocalizedError, Equatable {
 
 struct WorkerLaunchConfiguration: Equatable {
     static let packagedExecutableName = "BluRayToVisionProEngine"
+    private static let inheritedEnvironmentKeys: Set<String> = [
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TMPDIR",
+    ]
+    private static let executableSearchPath = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
 
     let executableURL: URL
     let arguments: [String]
@@ -90,13 +98,10 @@ struct WorkerLaunchConfiguration: Equatable {
     }
 
     static func sanitizedEnvironment(from environment: [String: String]) -> [String: String] {
-        var workerEnvironment = environment
-        for key in workerEnvironment.keys where key.hasPrefix("PYTHON")
-            || key.hasPrefix("DYLD_")
-            || key.hasPrefix("BD_TO_AVP_")
-        {
-            workerEnvironment.removeValue(forKey: key)
+        var workerEnvironment = environment.filter { key, value in
+            inheritedEnvironmentKeys.contains(key) && !value.isEmpty
         }
+        workerEnvironment["PATH"] = executableSearchPath
         workerEnvironment["PYTHONUNBUFFERED"] = "1"
         return workerEnvironment
     }

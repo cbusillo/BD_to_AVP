@@ -20,6 +20,60 @@ final class WorkerProcessClientTests: XCTestCase {
         XCTAssertEqual(events.map(\.type), [.workerReady, .jobCompleted])
         XCTAssertEqual(result.terminalEvent.payload.result?.resolution, "1920x1080")
         XCTAssertEqual(result.exitStatus, 0)
+        XCTAssertFalse(result.diagnosticSnapshot.isRunning)
+    }
+
+    func testStreamsAndBoundsDiagnosticsWhileWorkerIsActive() async throws {
+        let diagnosticPayloadBytes = 4 * 1_024 * 1_024
+        let client = fixtureClient(body: """
+        \(readyEvent())
+        sys.stderr.buffer.write(b"FIRST-MARKER\\n")
+        for _ in range(\(diagnosticPayloadBytes / (64 * 1_024))):
+            sys.stderr.buffer.write(b"x" * (64 * 1_024))
+        sys.stderr.buffer.write(b"TAIL-MARKER\\n")
+        sys.stderr.flush()
+        time.sleep(30)
+        """)
+        let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
+        let ready = expectation(description: "worker ready")
+        let task = Task {
+            try await client.run(job: job) { event in
+                if event.type == .workerReady {
+                    ready.fulfill()
+                }
+            }
+        }
+
+        await fulfillment(of: [ready], timeout: 2)
+        var snapshot = client.diagnosticSnapshot()
+        let deadline = Date().addingTimeInterval(3)
+        while !snapshot.toolOutput.text.contains("TAIL-MARKER"), Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+            snapshot = client.diagnosticSnapshot()
+        }
+        guard snapshot.toolOutput.text.contains("TAIL-MARKER") else {
+            client.cancel()
+            _ = await task.result
+            return XCTFail("Timed out after 3 s waiting for TAIL-MARKER in stderr tail")
+        }
+
+        XCTAssertTrue(snapshot.isRunning)
+        XCTAssertTrue(snapshot.toolOutput.truncated)
+        XCTAssertLessThanOrEqual(snapshot.toolOutput.retainedBytes, 512 * 1_024)
+        XCTAssertEqual(
+            snapshot.toolOutput.totalBytes,
+            diagnosticPayloadBytes + Data("FIRST-MARKER\nTAIL-MARKER\n".utf8).count
+        )
+        XCTAssertEqual(
+            snapshot.toolOutput.droppedBytes,
+            snapshot.toolOutput.totalBytes - snapshot.toolOutput.retainedBytes
+        )
+        XCTAssertFalse(snapshot.toolOutput.text.contains("FIRST-MARKER"))
+        XCTAssertTrue(snapshot.toolOutput.text.contains("TAIL-MARKER"))
+
+        client.cancel()
+        _ = await task.result
+        XCTAssertTrue(client.diagnosticSnapshot().cancellationRequested)
     }
 
     func testReportsMissingTerminalEvent() async throws {
@@ -37,16 +91,17 @@ final class WorkerProcessClientTests: XCTestCase {
     }
 
     func testReportsMalformedEventStream() async throws {
-        let client = fixtureClient(body: "print('not-json', flush=True)")
+        let client = fixtureClient(body: "print('not-json', flush=True); sys.exit(7)")
         let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
 
         do {
             _ = try await client.run(job: job) { _ in }
             XCTFail("Expected malformed JSON to fail")
         } catch let error as WorkerClientError {
-            guard case .protocolFailure = error else {
+            guard case let .protocolFailure(_, _, exitStatus) = error else {
                 return XCTFail("Unexpected worker error: \(error)")
             }
+            XCTAssertEqual(error.processExitStatus, exitStatus)
         }
     }
 

@@ -7,6 +7,21 @@ private enum ActiveRunMode: Equatable {
     case titleQueueConversion(index: Int)
     case batchInspection(itemID: UUID)
     case batchConversion(itemID: UUID)
+
+    var diagnosticName: String {
+        switch self {
+        case .singleInspection:
+            "single_inspection"
+        case .singleConversion:
+            "single_conversion"
+        case .titleQueueConversion:
+            "title_queue_conversion"
+        case .batchInspection:
+            "batch_inspection"
+        case .batchConversion:
+            "batch_conversion"
+        }
+    }
 }
 
 @MainActor
@@ -21,6 +36,11 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var completedBatchResults: [ConversionResult]?
 
     private let clientFactory: ClientFactory
+    private let diagnosticClock: () -> Date
+    private let diagnosticStorageProbe: any DiagnosticStorageProbing
+    private let diagnosticBundleBuilder: DiagnosticBundleBuilder
+    private let diagnosticRecorder = DiagnosticSessionRecorder()
+    private let diagnosticLogBuffer = BoundedDiagnosticTextBuffer(maximumBytes: 128 * 1_024)
     private var client: (any WorkerProcessRunning)?
     private var runTask: Task<Void, Never>?
     private var pendingTerminalEvent: WorkerEvent?
@@ -30,11 +50,21 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private var actionsWaitingForIdle: [() -> Void] = []
     private var pendingQueueIndices: [Int] = []
     private var activeQueueIndex: Int?
+    private var batchItemDiagnosticJobIDs: [UUID: UUID] = [:]
 
-    init(clientFactory: @escaping ClientFactory = {
-        WorkerProcessClient(configuration: try WorkerLaunchConfiguration.automatic())
-    }) {
+    init(
+        clientFactory: @escaping ClientFactory = {
+            WorkerProcessClient(configuration: try WorkerLaunchConfiguration.automatic())
+        },
+        diagnosticClock: @escaping () -> Date = Date.init,
+        diagnosticStorageProbe: any DiagnosticStorageProbing = FileSystemDiagnosticStorageProbe(),
+        diagnosticBundleBuilder: DiagnosticBundleBuilder? = nil
+    ) {
         self.clientFactory = clientFactory
+        self.diagnosticClock = diagnosticClock
+        self.diagnosticStorageProbe = diagnosticStorageProbe
+        self.diagnosticBundleBuilder = diagnosticBundleBuilder
+            ?? DiagnosticBundleBuilder(storageProbe: diagnosticStorageProbe)
     }
 
     var isRunning: Bool {
@@ -86,6 +116,33 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             && (state.phase == .cancelled || state.failureRetryable)
     }
 
+    var hasDiagnosticEvidence: Bool {
+        diagnosticRecorder.currentJobContext != nil
+    }
+
+    func captureDiagnosticBundle(
+        in outputDirectory: URL? = nil
+    ) async throws -> DiagnosticBundleArtifact {
+        let capturedAt = diagnosticClock()
+        let processSnapshot = client?.diagnosticSnapshot()
+            ?? diagnosticRecorder.latestProcessSnapshot
+        diagnosticRecorder.updateProcessSnapshot(processSnapshot)
+        let snapshot = diagnosticRecorder.snapshot(
+            capturedAt: capturedAt,
+            lifecycle: state,
+            activeMode: activeRunMode?.diagnosticName,
+            batchSummary: diagnosticBatchSummary,
+            process: processSnapshot
+        )
+        let builder = diagnosticBundleBuilder
+        return try await Task.detached(priority: .utility) {
+            try builder.createBundle(
+                from: snapshot,
+                outputDirectory: outputDirectory
+            )
+        }.value
+    }
+
     func selectSource(_ sourceURL: URL) {
         guard !hasActiveWork else {
             return
@@ -94,6 +151,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         lastConversionDraft = nil
         batchQueue = nil
         guard let source = ConversionSource.infer(from: sourceURL) else {
+            resetDiagnosticSession()
             self.source = nil
             state.selectSource(sourceURL.standardizedFileURL)
             state.failTransport(
@@ -111,9 +169,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
         resetQueue()
         lastConversionDraft = nil
+        resetDiagnosticSession()
         self.source = source
         state.clear()
-        diagnosticLog = ""
         if source.kind == .sourceFolder {
             batchQueue = SourceFolderQueueState(
                 folderSource: source,
@@ -142,6 +200,14 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             try state.begin(jobID: job.jobID)
             pendingTerminalEvent = nil
             activeRunMode = mode
+            diagnosticRecorder.beginJob(
+                context: DiagnosticJobContext(jobID: job.jobID, source: source),
+                lifecycle: state,
+                activeMode: mode.diagnosticName,
+                recordedAt: diagnosticClock()
+            )
+            trackDiagnosticJob(job.jobID, mode: mode)
+            scheduleDiagnosticStorageSample(recordedAt: diagnosticClock(), force: true)
             let client = try clientFactory()
             self.client = client
             runTask = Task { [weak self] in
@@ -153,7 +219,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                         guard let self else {
                             return
                         }
-                        try await self.receive(event)
+                        try self.receive(event)
                     }
                     self.finish(runResult)
                 } catch {
@@ -162,6 +228,12 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
         } catch {
             state.failTransport(message: error.localizedDescription)
+            recordDiagnosticWorkflow(
+                name: "job.launch_failed",
+                mode: mode,
+                message: error.localizedDescription,
+                jobID: job.jobID
+            )
             activeRunMode = nil
             clearActiveWorker(runDeferredActions: false)
             handleSynchronousRunFailure(mode)
@@ -253,8 +325,16 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 break
             }
             pendingTerminalEvent = nil
-            diagnosticLog = ""
+            resetDiagnosticLog()
             activeRunMode = mode
+            diagnosticRecorder.beginJob(
+                context: DiagnosticJobContext(jobID: job.jobID, draft: draft),
+                lifecycle: state,
+                activeMode: mode.diagnosticName,
+                recordedAt: diagnosticClock()
+            )
+            trackDiagnosticJob(job.jobID, mode: mode)
+            scheduleDiagnosticStorageSample(recordedAt: diagnosticClock(), force: true)
             let client = try clientFactory()
             self.client = client
             runTask = Task { [weak self] in
@@ -266,7 +346,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                         guard let self else {
                             return
                         }
-                        try await self.receive(event)
+                        try self.receive(event)
                     }
                     self.finish(runResult)
                 } catch {
@@ -276,6 +356,12 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return true
         } catch {
             state.failTransport(message: error.localizedDescription)
+            recordDiagnosticWorkflow(
+                name: "job.launch_failed",
+                mode: mode,
+                message: error.localizedDescription,
+                jobID: job.jobID
+            )
             activeRunMode = nil
             clearActiveWorker(runDeferredActions: false)
             handleSynchronousRunFailure(mode)
@@ -323,6 +409,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             options: options
         )
         batchQueue = queue
+        recordDiagnosticWorkflow(name: "batch.started", message: "source_folder")
         startNextBatchItem()
     }
 
@@ -343,6 +430,11 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
         if hasActiveWorker {
             state.requestStop()
+            recordDiagnosticWorkflow(
+                name: "cancel.requested",
+                mode: activeRunMode,
+                jobID: state.jobID
+            )
             client?.cancel()
         }
     }
@@ -351,8 +443,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         guard !hasActiveWork else {
             return
         }
+        let previousJobID = state.jobID
         state.prepareForRetry()
-        diagnosticLog = ""
+        resetDiagnosticLog()
+        recordDiagnosticWorkflow(name: "retry.prepared", jobID: previousJobID)
     }
 
     @discardableResult
@@ -365,8 +459,15 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         else {
             return false
         }
+        let decisionJobID = state.jobID
+        recordDiagnosticWorkflow(
+            name: "recovery.choice_selected",
+            message: choice.rawValue,
+            jobID: decisionJobID
+        )
         if choice == .cancel {
             state.cancelRecoveryDecision()
+            recordDiagnosticWorkflow(name: "recovery.cancelled", jobID: decisionJobID)
             if let activeQueueIndex {
                 queueItems[activeQueueIndex].status = .cancelled
                 self.activeQueueIndex = nil
@@ -416,7 +517,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         batchQueue = nil
         resetQueue()
         state.clear()
-        diagnosticLog = ""
+        resetDiagnosticSession()
         runDeferredActionsIfIdle()
     }
 
@@ -504,6 +605,11 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         queue.items[itemIndex].recoveryDecision = nil
         queue.items[itemIndex].diagnosticLog = ""
         batchQueue = queue
+        recordDiagnosticWorkflow(
+            name: "batch.retry_requested",
+            message: recoveryChoice?.rawValue,
+            jobID: batchItemDiagnosticJobIDs[itemID]
+        )
         startNextBatchItem()
     }
 
@@ -511,8 +617,13 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         guard canRetry else {
             return
         }
+        let previousJobID = state.jobID
         state.prepareForRetry()
-        diagnosticLog = ""
+        resetDiagnosticLog()
+        recordDiagnosticWorkflow(
+            name: "retry.inspection_requested",
+            jobID: previousJobID
+        )
         validateSelectedSourceAndStart()
     }
 
@@ -543,7 +654,15 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     private func receive(_ event: WorkerEvent) throws {
+        let recordedAt = diagnosticClock()
         if event.type.isTerminal {
+            diagnosticRecorder.record(
+                event: event,
+                lifecycle: state,
+                activeMode: activeRunMode?.diagnosticName,
+                recordedAt: recordedAt
+            )
+            scheduleDiagnosticStorageSample(recordedAt: recordedAt, force: true)
             pendingTerminalEvent = event
             return
         }
@@ -553,9 +672,27 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         var nextState = state
         try nextState.receive(event)
         state = nextState
+        diagnosticRecorder.record(
+            event: event,
+            lifecycle: state,
+            activeMode: activeRunMode?.diagnosticName,
+            recordedAt: recordedAt
+        )
+        if event.type == .heartbeat || event.type == .stageStarted || event.type == .artifactReady {
+            scheduleDiagnosticStorageSample(
+                recordedAt: recordedAt,
+                force: event.type == .artifactReady
+            )
+        }
     }
 
     private func finish(_ result: WorkerRunResult) {
+        let completedMode = activeRunMode
+        let completedJobID = result.terminalEvent.jobID
+        let processSnapshot = result.diagnosticSnapshot == .empty
+            ? client?.diagnosticSnapshot() ?? .empty
+            : result.diagnosticSnapshot
+        diagnosticRecorder.updateProcessSnapshot(processSnapshot)
         appendDiagnostic(result.diagnostics)
         if let pendingTerminalEvent {
             do {
@@ -578,7 +715,15 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 details: result.diagnostics.isEmpty ? nil : result.diagnostics
             )
         }
-        let completedMode = activeRunMode
+        diagnosticRecorder.recordWorkflow(
+            name: "process.exited",
+            lifecycle: state,
+            activeMode: completedMode?.diagnosticName,
+            recordedAt: diagnosticClock(),
+            jobID: completedJobID,
+            exitStatus: result.exitStatus
+        )
+        scheduleDiagnosticStorageSample(recordedAt: diagnosticClock(), force: true)
         pendingTerminalEvent = nil
         activeRunMode = nil
         clearActiveWorker(runDeferredActions: false)
@@ -589,6 +734,11 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     private func fail(_ error: Error) {
+        let completedMode = activeRunMode
+        let completedJobID = state.jobID ?? diagnosticRecorder.currentJobContext?.jobID
+        if let processSnapshot = client?.diagnosticSnapshot() {
+            diagnosticRecorder.updateProcessSnapshot(processSnapshot)
+        }
         let clientError = error as? WorkerClientError
         appendDiagnostic(clientError?.technicalDetails ?? "")
         if state.phase == .stopping {
@@ -599,7 +749,17 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 details: clientError?.technicalDetails
             )
         }
-        let completedMode = activeRunMode
+        diagnosticRecorder.recordWorkflow(
+            name: "process.failed",
+            lifecycle: state,
+            activeMode: completedMode?.diagnosticName,
+            recordedAt: diagnosticClock(),
+            message: error.localizedDescription,
+            details: clientError?.technicalDetails,
+            jobID: completedJobID,
+            exitStatus: clientError?.processExitStatus
+        )
+        scheduleDiagnosticStorageSample(recordedAt: diagnosticClock(), force: true)
         pendingTerminalEvent = nil
         activeRunMode = nil
         clearActiveWorker(runDeferredActions: false)
@@ -740,7 +900,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
         queue.items[itemIndex].status = .converting
         batchQueue = queue
-        diagnosticLog = ""
+        resetDiagnosticLog()
         startConversion(
             draft: inspectedDraft,
             mode: .batchConversion(itemID: itemID)
@@ -754,12 +914,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return
         }
 
-        queue.items[itemIndex].diagnosticLog = [
-            queue.items[itemIndex].diagnosticLog,
-            diagnosticLog,
-        ]
-        .filter { !$0.isEmpty }
-        .joined(separator: "\n")
+        let itemDiagnosticBuffer = BoundedDiagnosticTextBuffer(maximumBytes: 128 * 1_024)
+        itemDiagnosticBuffer.appendLine(queue.items[itemIndex].diagnosticLog)
+        itemDiagnosticBuffer.appendLine(diagnosticLog)
+        queue.items[itemIndex].diagnosticLog = itemDiagnosticBuffer.snapshot().text
 
         if state.phase == .completed, let conversionResult = state.conversionResult {
             queue.items[itemIndex].status = .completed
@@ -818,7 +976,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
         state.clear()
         state.selectSource(itemSource.url)
-        diagnosticLog = ""
+        resetDiagnosticLog()
         startInspection(
             source: itemSource,
             mode: .batchInspection(itemID: itemID)
@@ -835,8 +993,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
         queue.completionID = UUID()
         batchQueue = queue
+        recordDiagnosticWorkflow(name: "batch.finished")
         state.clear()
-        diagnosticLog = ""
+        resetDiagnosticLog()
     }
 
     private func runDeferredActionsIfIdle() {
@@ -930,14 +1089,117 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     private func appendDiagnostic(_ message: String) {
-        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        diagnosticLogBuffer.appendLine(message)
+        diagnosticLog = diagnosticLogBuffer.snapshot().text
+    }
+
+    private func resetDiagnosticLog() {
+        diagnosticLogBuffer.reset()
+        diagnosticLog = ""
+    }
+
+    private func resetDiagnosticSession() {
+        diagnosticRecorder.reset()
+        batchItemDiagnosticJobIDs.removeAll(keepingCapacity: true)
+        resetDiagnosticLog()
+    }
+
+    private func recordDiagnosticWorkflow(
+        name: String,
+        mode: ActiveRunMode? = nil,
+        message: String? = nil,
+        details: String? = nil,
+        jobID: UUID? = nil
+    ) {
+        diagnosticRecorder.recordWorkflow(
+            name: name,
+            lifecycle: state,
+            activeMode: (mode ?? activeRunMode)?.diagnosticName,
+            recordedAt: diagnosticClock(),
+            message: message,
+            details: details,
+            jobID: jobID
+        )
+    }
+
+    private func trackDiagnosticJob(_ jobID: UUID, mode: ActiveRunMode) {
+        switch mode {
+        case let .batchInspection(itemID), let .batchConversion(itemID):
+            batchItemDiagnosticJobIDs[itemID] = jobID
+        case .singleInspection, .singleConversion, .titleQueueConversion:
+            break
+        }
+    }
+
+    private func scheduleDiagnosticStorageSample(recordedAt: Date, force: Bool) {
+        guard let request = diagnosticRecorder.makeStorageSampleRequest(
+            recordedAt: recordedAt,
+            force: force
+        ) else {
             return
         }
-        if diagnosticLog.isEmpty {
-            diagnosticLog = trimmed
-        } else {
-            diagnosticLog += "\n\(trimmed)"
+        let probe = diagnosticStorageProbe
+        Task.detached(priority: .utility) { [weak self] in
+            let samples = request.targets.map { target in
+                RawDiagnosticStorageSample(
+                    probe: probe.probe(
+                        role: target.role,
+                        url: target.url,
+                        capturedAt: request.capturedAt
+                    )
+                )
+            }
+            await self?.recordDiagnosticStorageSamples(samples, for: request.jobID)
         }
+    }
+
+    private func recordDiagnosticStorageSamples(
+        _ samples: [RawDiagnosticStorageSample],
+        for jobID: UUID
+    ) {
+        diagnosticRecorder.recordStorageSamples(samples, for: jobID)
+    }
+
+    private var diagnosticBatchSummary: DiagnosticBatchSummary? {
+        if let batchQueue {
+            var counts: [String: Int] = [:]
+            for item in batchQueue.items {
+                counts[item.status.rawValue, default: 0] += 1
+            }
+            return DiagnosticBatchSummary(
+                kind: "source_folder",
+                totalItems: batchQueue.items.count,
+                activeItems: batchQueue.activeItemID == nil ? 0 : 1,
+                statusCounts: counts
+            )
+        }
+        guard !queueItems.isEmpty else {
+            return nil
+        }
+        var counts: [String: Int] = [:]
+        for item in queueItems {
+            let status: String
+            switch item.status {
+            case .waiting:
+                status = "waiting"
+            case .processing:
+                status = "processing"
+            case .attention:
+                status = "attention"
+            case .completed:
+                status = "completed"
+            case .failed:
+                status = "failed"
+            case .cancelled:
+                status = "cancelled"
+            }
+            counts[status, default: 0] += 1
+        }
+        return DiagnosticBatchSummary(
+            kind: "title_queue",
+            totalItems: queueItems.count,
+            activeItems: activeQueueIndex == nil ? 0 : 1,
+            statusCounts: counts
+        )
     }
 }
