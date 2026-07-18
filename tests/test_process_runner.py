@@ -13,6 +13,7 @@ from bd_to_avp.process_runner import (
     ChildProcessRunner,
     ProcessArtifactProbe,
     ProcessCancelled,
+    ProcessExecutionError,
     ProcessOutputLimitError,
     ProcessPipeDrainError,
     ProcessRunnerError,
@@ -91,13 +92,41 @@ class ChildProcessRunnerTests(unittest.TestCase):
         self.assertEqual(lines, ["first", "second"])
 
     def test_capture_limit_fails_without_unbounded_memory(self) -> None:
-        with self.assertRaises(ProcessOutputLimitError):
+        with self.assertRaises(ProcessOutputLimitError) as raised:
             ChildProcessRunner().run(
                 self.spec(
                     "import os; os.write(1, b'x' * 200000)",
                     capture_limit_bytes=32 * 1024,
                 )
             )
+
+        self.assertIsNotNone(raised.exception.stdout_snapshot)
+        assert raised.exception.stdout_snapshot is not None
+        self.assertTrue(raised.exception.stdout_snapshot.truncated)
+
+    def test_nonzero_exit_preserves_raw_bounded_output_snapshots(self) -> None:
+        with self.assertRaises(ProcessExecutionError) as raised:
+            ChildProcessRunner().run(
+                self.spec(
+                    "import os, sys; os.write(2, b'\\xff' + b'x' * 10000 + b'END'); sys.exit(2)",
+                    merge_stderr=False,
+                    capture_limit_bytes=4096,
+                    tail_limit_bytes=1024,
+                    capture_overflow=CaptureOverflowPolicy.TRUNCATE,
+                )
+            )
+
+        self.assertEqual(raised.exception.returncode, 2)
+        self.assertEqual(raised.exception.stderr_snapshot.capture[:1], b"\xff")
+        self.assertTrue(raised.exception.stderr_snapshot.truncated)
+        self.assertTrue(raised.exception.stderr_snapshot.tail.endswith(b"END"))
+
+    def test_nonzero_merged_output_preserves_called_process_error_contract(self) -> None:
+        with self.assertRaises(ProcessExecutionError) as raised:
+            ChildProcessRunner().run(self.spec("import sys; print('error', file=sys.stderr); sys.exit(2)"))
+
+        self.assertIn("error", raised.exception.output)
+        self.assertIsNone(raised.exception.stderr)
 
     def test_rejects_unmanaged_stdin_pipe(self) -> None:
         with self.assertRaisesRegex(ValueError, "stdin=subprocess.PIPE"):

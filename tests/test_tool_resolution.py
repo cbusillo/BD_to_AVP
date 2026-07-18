@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import tempfile
@@ -94,13 +95,10 @@ class ToolResolutionTests(unittest.TestCase):
 class MkvToolPathTests(unittest.TestCase):
     def test_mkv_metadata_uses_configured_ffprobe_path(self) -> None:
         metadata: dict[str, object] = {"streams": []}
-        with (
-            patch.object(mkv.config, "FFPROBE_PATH", Path("/tools/ffprobe")),
-            patch("bd_to_avp.vendor.pgsrip.mkv.ffmpeg.probe", return_value=metadata) as probe,
-        ):
+        with patch("bd_to_avp.vendor.pgsrip.mkv.run_ffprobe", return_value=metadata) as probe:
             mkv.Mkv("movie.mkv")
 
-        probe.assert_called_once_with("movie.mkv", cmd="/tools/ffprobe")
+        probe.assert_called_once_with("movie.mkv")
 
     def test_mkv_metadata_maps_ffprobe_pgs_streams_to_existing_track_model(self) -> None:
         metadata = {
@@ -116,7 +114,7 @@ class MkvToolPathTests(unittest.TestCase):
             ]
         }
 
-        with patch("bd_to_avp.vendor.pgsrip.mkv.ffmpeg.probe", return_value=metadata):
+        with patch("bd_to_avp.vendor.pgsrip.mkv.run_ffprobe", return_value=metadata):
             movie = mkv.Mkv("movie.mkv")
 
         video_track, subtitle_track = movie.tracks
@@ -162,7 +160,7 @@ class MkvToolPathTests(unittest.TestCase):
             ]
         }
 
-        with patch("bd_to_avp.vendor.pgsrip.mkv.ffmpeg.probe", return_value=metadata):
+        with patch("bd_to_avp.vendor.pgsrip.mkv.run_ffprobe", return_value=metadata):
             movie = mkv.Mkv("movie.mkv")
 
         selected = list(movie.get_selected_pgs_tracks(mkv.Options(overwrite=True, one_per_lang=False)))
@@ -173,13 +171,28 @@ class MkvToolPathTests(unittest.TestCase):
         error = mkv.ffmpeg.Error("ffprobe", b"out", b"err")
         with (
             patch.object(mkv.config, "FFPROBE_PATH", Path("/tools/ffprobe")),
-            patch("bd_to_avp.vendor.pgsrip.mkv.ffmpeg.probe", side_effect=error),
+            patch("bd_to_avp.vendor.pgsrip.mkv.run_ffprobe", side_effect=error),
             self.assertRaises(subprocess.CalledProcessError) as raised,
         ):
             mkv.Mkv("movie.mkv")
 
         self.assertEqual(raised.exception.cmd, [Path("/tools/ffprobe"), "movie.mkv"])
         self.assertEqual(raised.exception.stderr, b"err")
+
+    def test_mkv_metadata_wraps_malformed_ffprobe_output_as_called_process_error(self) -> None:
+        errors = [
+            json.JSONDecodeError("bad metadata", "", 0),
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad metadata"),
+        ]
+        for error in errors:
+            with (
+                self.subTest(error=type(error).__name__),
+                patch("bd_to_avp.vendor.pgsrip.mkv.run_ffprobe", side_effect=error),
+                self.assertRaises(subprocess.CalledProcessError) as raised,
+            ):
+                mkv.Mkv("movie.mkv")
+
+            self.assertIn(b"bad metadata", raised.exception.stderr)
 
     def test_pgs_selection_ignores_non_pgs_subtitle_streams(self) -> None:
         metadata = {
@@ -201,7 +214,7 @@ class MkvToolPathTests(unittest.TestCase):
             ]
         }
 
-        with patch("bd_to_avp.vendor.pgsrip.mkv.ffmpeg.probe", return_value=metadata):
+        with patch("bd_to_avp.vendor.pgsrip.mkv.run_ffprobe", return_value=metadata):
             movie = mkv.Mkv("movie.mkv")
 
         selected = list(movie.get_selected_pgs_tracks(mkv.Options(overwrite=True, one_per_lang=False)))

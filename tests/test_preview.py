@@ -53,7 +53,7 @@ class PreviewSourceTests(unittest.TestCase):
             with (
                 patch("bd_to_avp.modules.preview.run_command", side_effect=run),
                 patch(
-                    "bd_to_avp.modules.preview.ffmpeg.probe",
+                    "bd_to_avp.modules.preview.run_ffprobe",
                     side_effect=[
                         {
                             "format": {"start_time": "0", "duration": "7200"},

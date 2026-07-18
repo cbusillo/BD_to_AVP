@@ -1,9 +1,18 @@
 import sys
+import threading
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 from bd_to_avp.modules import command
-from bd_to_avp.process_runner import ProcessOutputSnapshot, ProcessResult, ProcessStream
+from bd_to_avp.process_runner import (
+    ProcessCancelled,
+    ProcessExecutionError,
+    ProcessOutputLimitError,
+    ProcessOutputSnapshot,
+    ProcessResult,
+    ProcessStream,
+)
 
 
 class RunCommandTests(unittest.TestCase):
@@ -74,6 +83,153 @@ class RunCommandTests(unittest.TestCase):
             )
 
         self.assertEqual(len(output), 4096)
+
+    def test_ffprobe_uses_configured_binary_and_keyword_options(self) -> None:
+        result = ProcessResult(
+            tool_run_id="run-id",
+            returncode=0,
+            elapsed_ms=10,
+            stdout=ProcessOutputSnapshot(b'{"streams": []}', b"", 15, 15, 0, 0),
+            stderr=ProcessOutputSnapshot(b"", b"", 0, 0, 0, 0),
+        )
+        with (
+            patch.object(command.config, "FFPROBE_PATH", Path("/tools/ffprobe")),
+            patch.object(command, "run_process_capture", return_value=result) as run,
+        ):
+            metadata = command.run_ffprobe("movie.mkv", select_streams="v:0")
+
+        self.assertEqual(metadata, {"streams": []})
+        process_command = run.call_args.args[0]
+        self.assertEqual(process_command[0], Path("/tools/ffprobe"))
+        self.assertIn("-select_streams", process_command)
+        self.assertIn("v:0", process_command)
+        self.assertEqual(process_command[-1], "movie.mkv")
+        self.assertEqual(run.call_args.kwargs["tool_id"], "ffprobe")
+
+    def test_ffprobe_preserves_ffmpeg_error_contract(self) -> None:
+        error = command.subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["ffprobe"],
+            output="out",
+            stderr="err",
+        )
+        with (
+            patch.object(command, "run_process_capture", side_effect=error),
+            self.assertRaises(command.ffmpeg.Error) as raised,
+        ):
+            command.run_ffprobe("movie.mkv")
+
+        self.assertEqual(raised.exception.stdout, b"out")
+        self.assertEqual(raised.exception.stderr, b"err")
+
+    def test_ffprobe_rejects_invalid_utf8(self) -> None:
+        result = ProcessResult(
+            tool_run_id="run-id",
+            returncode=0,
+            elapsed_ms=10,
+            stdout=ProcessOutputSnapshot(b"\xff", b"", 1, 1, 0, 1),
+            stderr=ProcessOutputSnapshot(b"", b"", 0, 0, 0, 0),
+        )
+        with (
+            patch.object(command, "run_process_capture", return_value=result),
+            self.assertRaises(UnicodeDecodeError),
+        ):
+            command.run_ffprobe("movie.mkv")
+
+    def test_ffprobe_translates_runner_failures_but_preserves_cancellation(self) -> None:
+        runner_error = ProcessOutputLimitError("FFprobe exceeded its output capture limit")
+        runner_error.attach_output(
+            ProcessOutputSnapshot(b"partial", b"", 7, 7, 0, 0),
+            ProcessOutputSnapshot(b"details", b"", 7, 7, 0, 0),
+        )
+        with (
+            patch.object(command, "run_process_capture", side_effect=runner_error),
+            self.assertRaises(command.ffmpeg.Error) as raised,
+        ):
+            command.run_ffprobe("movie.mkv")
+
+        self.assertEqual(raised.exception.stdout, b"partial")
+        self.assertIn(b"details", raised.exception.stderr)
+        self.assertIn(b"capture limit", raised.exception.stderr)
+
+        cancellation = ProcessCancelled("cancelled")
+        with (
+            patch.object(command, "run_process_capture", side_effect=cancellation),
+            self.assertRaises(ProcessCancelled) as cancelled,
+        ):
+            command.run_ffprobe("movie.mkv")
+
+        self.assertIs(cancelled.exception, cancellation)
+
+    def test_ffmpeg_error_includes_truncated_prefix_and_final_tail(self) -> None:
+        error = ProcessExecutionError(
+            1,
+            ["ffmpeg"],
+            ProcessOutputSnapshot(b"out", b"", 3, 3, 0, 0),
+            ProcessOutputSnapshot(b"prefix", b"terminal error", 100, 6, 94, 0),
+        )
+        with (
+            patch.object(command.ffmpeg, "compile", return_value=["ffmpeg"]),
+            patch.object(command, "run_process_capture", side_effect=error),
+            self.assertRaises(command.ffmpeg.Error) as raised,
+        ):
+            command.run_ffmpeg_capture("stream")
+
+        self.assertEqual(raised.exception.stdout, b"out")
+        self.assertIn(b"output truncated", raised.exception.stderr)
+        self.assertTrue(raised.exception.stderr.endswith(b"terminal error"))
+
+    def test_ffmpeg_capture_uses_compiled_command_and_separate_streams(self) -> None:
+        result = ProcessResult(
+            tool_run_id="run-id",
+            returncode=0,
+            elapsed_ms=10,
+            stdout=ProcessOutputSnapshot(b"out", b"", 3, 3, 0, 0),
+            stderr=ProcessOutputSnapshot(b"err", b"", 3, 3, 0, 0),
+        )
+        compiled = ["/tools/ffmpeg", "-i", "movie.mkv", "null"]
+        with (
+            patch.object(command.ffmpeg, "compile", return_value=compiled) as compile_command,
+            patch.object(command, "run_process_capture", return_value=result) as run,
+        ):
+            stdout, stderr = command.run_ffmpeg_capture("stream", overwrite_output=True)
+
+        self.assertEqual((stdout, stderr), (b"out", b"err"))
+        compile_command.assert_called_once_with(
+            "stream",
+            cmd=command.config.FFMPEG_PATH.as_posix(),
+            overwrite_output=True,
+        )
+        self.assertEqual(run.call_args.args[0], compiled)
+        self.assertEqual(run.call_args.kwargs["tool_id"], "ffmpeg")
+
+    def test_ffmpeg_spinner_wrapper_forwards_runtime_context(self) -> None:
+        result = ProcessResult(
+            tool_run_id="run-id",
+            returncode=0,
+            elapsed_ms=10,
+            stdout=ProcessOutputSnapshot(b"", b"", 0, 0, 0, 0),
+            stderr=ProcessOutputSnapshot(b"", b"", 0, 0, 0, 0),
+        )
+        compiled = ["/tools/ffmpeg", "-i", "movie.mkv", "out.mov"]
+        run_context = Mock()
+        cancellation_event = threading.Event()
+        with (
+            patch.object(command.ffmpeg, "compile", return_value=compiled),
+            patch.object(command, "run_process_capture", return_value=result) as run,
+            patch.object(command.Spinner, "start"),
+            patch.object(command.Spinner, "stop"),
+        ):
+            command.run_ffmpeg_print_errors(
+                "stream",
+                "encode",
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                overwrite_output=True,
+            )
+
+        self.assertIs(run.call_args.kwargs["run_context"], run_context)
+        self.assertIs(run.call_args.kwargs["cancellation_event"], cancellation_event)
 
 
 if __name__ == "__main__":

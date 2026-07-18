@@ -9,7 +9,7 @@ from bd_to_avp.modules.config import (
     is_audio_m4a_preparation_enabled,
     is_direct_mvc_stream_enabled,
 )
-from bd_to_avp.modules.command import run_command, run_ffmpeg_print_errors
+from bd_to_avp.modules.command import run_command, run_ffmpeg_print_errors, run_ffprobe
 from bd_to_avp.modules.languages import language_name, normalize_source_language
 from bd_to_avp.modules.util import sorted_files_by_creation_filtered_on_suffix
 from bd_to_avp.modules.video_mode import VideoMode
@@ -201,7 +201,7 @@ def normalize_track_language(language_code: object) -> tuple[str, str]:
 
 
 def get_audio_stream_data(file_path: Path) -> list[dict[str, Any]]:
-    probe = ffmpeg.probe(str(file_path), cmd=config.FFPROBE_PATH.as_posix())
+    probe = run_ffprobe(file_path)
     if not probe or "streams" not in probe:
         return []
     audio_streams = [stream for stream in probe["streams"] if stream["codec_type"] == "audio"]

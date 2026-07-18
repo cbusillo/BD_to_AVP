@@ -1,10 +1,13 @@
 import os
 import stat
 from pathlib import Path
+from subprocess import SubprocessError
 
 from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr, OcrError
+from bd_to_avp.modules.command import run_process_capture
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.process_runner import ProcessRunnerError
 
 
 class DependencyPreflightError(RuntimeError):
@@ -138,24 +141,20 @@ def verify_av1_encoder_ready() -> None:
     if config.video_mode is not VideoMode.AV1_SBS or config.start_stage.value > Stage.CREATE_LEFT_RIGHT_FILES.value:
         return
 
-    import subprocess
-
     try:
-        encoders = subprocess.run(
+        encoders = run_process_capture(
             [config.FFMPEG_PATH, "-hide_banner", "-encoders"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        ).stdout
-        bitstream_filters = subprocess.run(
+            "Verify FFmpeg AV1 encoders",
+            tool_id="ffmpeg",
+            timeout_seconds=10,
+        ).stdout.text()
+        bitstream_filters = run_process_capture(
             [config.FFMPEG_PATH, "-hide_banner", "-bsfs"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        ).stdout
-    except (OSError, subprocess.SubprocessError) as error:
+            "Verify FFmpeg AV1 bitstream filters",
+            tool_id="ffmpeg",
+            timeout_seconds=10,
+        ).stdout.text()
+    except (OSError, SubprocessError, ProcessRunnerError) as error:
         raise DependencyPreflightError("FFmpeg could not verify the required AV1 encoding support.") from error
     if "libsvtav1" not in encoders:
         raise DependencyPreflightError(
