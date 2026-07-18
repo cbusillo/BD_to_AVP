@@ -227,15 +227,14 @@ class MkvToolPathTests(unittest.TestCase):
 
             with (
                 patch.object(mkv.config, "FFMPEG_PATH", Path("/tools/ffmpeg")),
-                patch(
-                    "bd_to_avp.vendor.pgsrip.mkv.subprocess.run",
-                    return_value=mkv.subprocess.CompletedProcess(args=[], returncode=0, stdout=b"pgs", stderr=b""),
-                ) as run,
+                patch("bd_to_avp.vendor.pgsrip.mkv.run_process_capture") as run,
             ):
+                run.side_effect = lambda *_args, **kwargs: kwargs["stdout"].write(b"pgs")
                 data = mkv.MkvPgs.read_data(media_path, 3, temp_dir)
 
         self.assertEqual(data, b"pgs")
-        run.assert_called_once_with(
+        self.assertEqual(
+            run.call_args.args[0],
             [
                 Path("/tools/ffmpeg"),
                 "-hide_banner",
@@ -252,10 +251,11 @@ class MkvToolPathTests(unittest.TestCase):
                 "sup",
                 "pipe:1",
             ],
-            stdout=mkv.subprocess.PIPE,
-            stderr=mkv.subprocess.PIPE,
-            check=True,
         )
+        self.assertEqual(run.call_args.kwargs["tool_id"], "ffmpeg")
+        artifact = run.call_args.kwargs["artifacts"][0]
+        self.assertEqual(artifact.role, "subtitle_payload")
+        self.assertEqual(artifact.path, Path(temp_dir) / "track-3.sup")
 
 
 if __name__ == "__main__":

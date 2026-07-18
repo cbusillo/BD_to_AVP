@@ -6,7 +6,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, ClassVar, cast
+from typing import Any, BinaryIO, Callable, ClassVar, cast
 
 import ffmpeg
 
@@ -196,6 +196,8 @@ def run_process_capture(
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
     timeout_seconds: float | None = None,
+    stdout: int | BinaryIO = subprocess.PIPE,
+    artifacts: tuple[ProcessArtifactProbe, ...] = (),
     capture_limit_bytes: int = DEFAULT_CAPTURE_LIMIT_BYTES,
     capture_overflow: CaptureOverflowPolicy = CaptureOverflowPolicy.FAIL,
     show_command: bool = True,
@@ -210,7 +212,9 @@ def run_process_capture(
             display_name=command_name,
             env=os.environ.copy(),
             merge_stderr=merge_stderr,
+            stdout=stdout,
             event_context=observability_context or ObservabilityContext(),
+            artifacts=artifacts,
             timeout_seconds=timeout_seconds,
             capture_limit_bytes=capture_limit_bytes,
             capture_overflow=capture_overflow,

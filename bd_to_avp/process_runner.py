@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import BinaryIO, cast
+from typing import BinaryIO, Protocol, cast
 from uuid import uuid4
 
 from bd_to_avp.observability import (
@@ -41,6 +41,7 @@ DEFAULT_ARTIFACT_INTERVAL_SECONDS = 2.0
 DEFAULT_TERMINATION_GRACE_SECONDS = 5.0
 DEFAULT_KILL_WAIT_SECONDS = 5.0
 DEFAULT_PIPE_DRAIN_TIMEOUT_SECONDS = 5.0
+DEFAULT_PIPELINE_EXIT_GRACE_SECONDS = 5.0
 READ_CHUNK_BYTES = 32 * 1024
 ARTIFACT_SIZE_QUANTUM_BYTES = 64 * 1024
 ARTIFACT_AGE_QUANTUM_SECONDS = 5
@@ -56,6 +57,10 @@ class ProcessStream(StrEnum):
 class CaptureOverflowPolicy(StrEnum):
     FAIL = "fail"
     TRUNCATE = "truncate"
+
+
+class CancellationSignal(Protocol):
+    def is_set(self) -> bool: ...
 
 
 class ProcessRunnerError(RuntimeError):
@@ -121,6 +126,7 @@ class ProcessSpec:
     env: Mapping[str, str] | None = None
     cwd: Path | None = None
     stdin: int | BinaryIO | None = None
+    stdout: int | BinaryIO = subprocess.PIPE
     merge_stderr: bool = True
     event_context: ObservabilityContext = field(default_factory=ObservabilityContext)
     tool_version: str | None = None
@@ -152,6 +158,8 @@ class ProcessSpec:
             raise TypeError("artifacts must contain ProcessArtifactProbe values")
         if isinstance(self.stdin, int) and self.stdin == subprocess.PIPE:
             raise ValueError("stdin=subprocess.PIPE requires an input writer and is not supported")
+        if self.stdout != subprocess.PIPE and self.merge_stderr:
+            raise ValueError("redirected stdout requires merge_stderr=False so diagnostics remain separate")
         for integer_name, integer_value in (
             ("capture_limit_bytes", self.capture_limit_bytes),
             ("tail_limit_bytes", self.tail_limit_bytes),
@@ -229,6 +237,34 @@ ProgressParser = Callable[[ProcessStream, str], ObservabilityProgress | None]
 
 
 @dataclass(frozen=True)
+class ProcessPipelineStage:
+    spec: ProcessSpec
+    line_handler: LineHandler | None = field(default=None, compare=False, repr=False)
+    output_observer: OutputObserver | None = field(default=None, compare=False, repr=False)
+    progress_parser: ProgressParser | None = field(default=None, compare=False, repr=False)
+
+
+@dataclass(frozen=True)
+class ProcessPipelineStageResult:
+    tool_id: str
+    result: ProcessResult | None
+    error: BaseException | None = field(default=None, compare=False, repr=False)
+    completed_before_final: bool = False
+
+
+@dataclass(frozen=True)
+class ProcessPipelineResult:
+    stages: tuple[ProcessPipelineStageResult, ...]
+    forced_cleanup: bool = False
+
+
+class ProcessPipelineError(ProcessRunnerError):
+    def __init__(self, result: ProcessPipelineResult) -> None:
+        super().__init__("one or more child processes in the pipeline failed")
+        self.result = result
+
+
+@dataclass(frozen=True)
 class _OutputChunk:
     stream: ProcessStream
     payload: bytes
@@ -245,6 +281,26 @@ class _PendingEvent:
     severity: ObservabilitySeverity
     context: ObservabilityContext
     data: ObservabilityData
+
+
+@dataclass
+class _PipelineStageState:
+    stage: ProcessPipelineStage
+    started: threading.Event = field(default_factory=threading.Event)
+    done: threading.Event = field(default_factory=threading.Event)
+    result: ProcessResult | None = None
+    error: BaseException | None = None
+    completed_at: float | None = None
+    thread: threading.Thread | None = None
+
+
+class _CombinedCancellationSignal:
+    def __init__(self, internal: threading.Event, external: CancellationSignal | None) -> None:
+        self._internal = internal
+        self._external = external
+
+    def is_set(self) -> bool:
+        return self._internal.is_set() or (self._external is not None and self._external.is_set())
 
 
 class _AsyncRunEmitter:
@@ -482,7 +538,8 @@ class ChildProcessRunner:
         spec: ProcessSpec,
         *,
         run_context: RunContext | None = None,
-        cancellation_event: threading.Event | None = None,
+        cancellation_event: CancellationSignal | None = None,
+        started_event: threading.Event | None = None,
         line_handler: LineHandler | None = None,
         output_observer: OutputObserver | None = None,
         progress_parser: ProgressParser | None = None,
@@ -503,13 +560,15 @@ class ChildProcessRunner:
                 terminal=True,
             )
             emitter.close()
+            if started_event is not None:
+                started_event.set()
             raise ProcessCancelled(f"{spec.display_name} was cancelled before it started")
 
         try:
             process = subprocess.Popen(
                 [os.fspath(argument) for argument in spec.argv],
                 stdin=spec.stdin,
-                stdout=subprocess.PIPE,
+                stdout=spec.stdout,
                 stderr=subprocess.STDOUT if spec.merge_stderr else subprocess.PIPE,
                 env=dict(spec.env) if spec.env is not None else None,
                 cwd=spec.cwd,
@@ -526,6 +585,8 @@ class ChildProcessRunner:
                 terminal=True,
             )
             emitter.close()
+            if started_event is not None:
+                started_event.set()
             raise
 
         process_context = replace(
@@ -533,6 +594,8 @@ class ChildProcessRunner:
             process=ObservabilityProcess(pid=process.pid, process_group_id=process.pid),
         )
         emitter.emit("tool.started", context=process_context)
+        if started_event is not None:
+            started_event.set()
 
         stream_queue: queue.Queue[_OutputChunk | _StreamClosed] = queue.Queue(maxsize=spec.queue_chunks)
         dispatch_overflow = threading.Event()
@@ -549,7 +612,9 @@ class ChildProcessRunner:
             dispatch_overflow,
             reader_stop,
         )
-        expected_streams = {ProcessStream.STDOUT}
+        expected_streams: set[ProcessStream] = set()
+        if spec.stdout == subprocess.PIPE:
+            expected_streams.add(ProcessStream.STDOUT)
         if not spec.merge_stderr:
             expected_streams.add(ProcessStream.STDERR)
         closed_streams: set[ProcessStream] = set()
@@ -901,17 +966,18 @@ class ChildProcessRunner:
         reader_stop: threading.Event,
     ) -> list[threading.Thread]:
         readers: list[threading.Thread] = []
-        assert process.stdout is not None
-        readers.append(
-            self._start_reader(
-                cast(BinaryIO, process.stdout),
-                ProcessStream.STDOUT,
-                stream_states[ProcessStream.STDOUT],
-                stream_queue,
-                dispatch_overflow,
-                reader_stop,
+        if spec.stdout == subprocess.PIPE:
+            assert process.stdout is not None
+            readers.append(
+                self._start_reader(
+                    cast(BinaryIO, process.stdout),
+                    ProcessStream.STDOUT,
+                    stream_states[ProcessStream.STDOUT],
+                    stream_queue,
+                    dispatch_overflow,
+                    reader_stop,
+                )
             )
-        )
         if not spec.merge_stderr:
             assert process.stderr is not None
             readers.append(
@@ -984,7 +1050,7 @@ class ChildProcessRunner:
                 )
 
     @staticmethod
-    def _is_cancelled(run_context: RunContext | None, cancellation_event: threading.Event | None) -> bool:
+    def _is_cancelled(run_context: RunContext | None, cancellation_event: CancellationSignal | None) -> bool:
         return bool(
             (run_context is not None and run_context.cancellation.is_cancelled)
             or (cancellation_event is not None and cancellation_event.is_set())
@@ -1169,3 +1235,232 @@ class ChildProcessRunner:
     @staticmethod
     def _round_down(value: int, quantum: int) -> int:
         return value - (value % quantum)
+
+
+class ProcessPipelineRunner:
+    def __init__(
+        self,
+        *,
+        runner_factory: Callable[[], ChildProcessRunner] = ChildProcessRunner,
+        monotonic_clock: Callable[[], float] = time.monotonic,
+        exit_grace_seconds: float = DEFAULT_PIPELINE_EXIT_GRACE_SECONDS,
+    ) -> None:
+        if exit_grace_seconds <= 0:
+            raise ValueError("exit_grace_seconds must be positive")
+        self._runner_factory = runner_factory
+        self._monotonic_clock = monotonic_clock
+        self._exit_grace_seconds = exit_grace_seconds
+
+    def run(
+        self,
+        stages: tuple[ProcessPipelineStage, ...],
+        *,
+        run_context: RunContext | None = None,
+        cancellation_event: CancellationSignal | None = None,
+    ) -> ProcessPipelineResult:
+        if len(stages) < 2:
+            raise ValueError("a process pipeline requires at least two stages")
+        if any(not isinstance(stage, ProcessPipelineStage) for stage in stages):
+            raise TypeError("stages must contain ProcessPipelineStage values")
+
+        pipe_files = self._open_pipes(len(stages) - 1)
+        try:
+            connected_stages = self._connect_stages(stages, pipe_files)
+        except BaseException:
+            self._close_pipe_files(pipe_files)
+            raise
+        internal_cancellation = threading.Event()
+        combined_cancellation = _CombinedCancellationSignal(internal_cancellation, cancellation_event)
+        states = [_PipelineStageState(stage) for stage in connected_stages]
+        startup_error: BaseException | None = None
+
+        try:
+            for state in reversed(states):
+                state.thread = threading.Thread(
+                    target=self._run_stage,
+                    args=(state, run_context, combined_cancellation),
+                    name=f"{state.stage.spec.tool_id}-pipeline-monitor",
+                    daemon=True,
+                )
+                state.thread.start()
+                self._wait_for_stage_start(state)
+                if state.error is not None:
+                    startup_error = state.error
+                    internal_cancellation.set()
+                    break
+        finally:
+            self._close_pipe_files(pipe_files)
+
+        if startup_error is not None:
+            self._join_started_stages(states, internal_cancellation)
+            raise startup_error
+
+        final_state = states[-1]
+        upstream_failure_deadline: float | None = None
+        while not final_state.done.wait(0.05):
+            if self._externally_cancelled(run_context, cancellation_event):
+                internal_cancellation.set()
+            if upstream_failure_deadline is None and any(
+                state.done.is_set() and self._is_substantive_error(state.error) for state in states[:-1]
+            ):
+                upstream_failure_deadline = self._monotonic_clock() + self._exit_grace_seconds
+            if upstream_failure_deadline is not None and self._monotonic_clock() >= upstream_failure_deadline:
+                internal_cancellation.set()
+
+        final_completed_at = final_state.completed_at or self._monotonic_clock()
+        completed_before_final = tuple(
+            state.completed_at is not None and state.completed_at <= final_completed_at for state in states
+        )
+        if self._is_substantive_error(final_state.error) or any(
+            self._is_substantive_error(state.error) for state in states[:-1]
+        ):
+            internal_cancellation.set()
+
+        forced_cleanup = self._join_upstream_stages(states[:-1], internal_cancellation)
+        result = ProcessPipelineResult(
+            stages=tuple(
+                ProcessPipelineStageResult(
+                    tool_id=state.stage.spec.tool_id,
+                    result=state.result,
+                    error=state.error,
+                    completed_before_final=completed_before_final[index],
+                )
+                for index, state in enumerate(states)
+            ),
+            forced_cleanup=forced_cleanup,
+        )
+
+        if self._externally_cancelled(run_context, cancellation_event):
+            cancellation_error = next(
+                (stage.error for stage in result.stages if isinstance(stage.error, ProcessCancelled)),
+                None,
+            )
+            if cancellation_error is not None:
+                raise cancellation_error
+            raise ProcessCancelled("process pipeline was cancelled")
+        if any(self._is_substantive_error(stage.error) for stage in result.stages):
+            raise ProcessPipelineError(result)
+        if final_state.result is None:
+            raise ProcessRunnerError("process pipeline ended without a final-stage result")
+        return result
+
+    def _run_stage(
+        self,
+        state: _PipelineStageState,
+        run_context: RunContext | None,
+        cancellation_event: CancellationSignal,
+    ) -> None:
+        try:
+            state.result = self._runner_factory().run(
+                state.stage.spec,
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                started_event=state.started,
+                line_handler=state.stage.line_handler,
+                output_observer=state.stage.output_observer,
+                progress_parser=state.stage.progress_parser,
+            )
+        except BaseException as error:
+            state.error = error
+        finally:
+            state.completed_at = self._monotonic_clock()
+            state.done.set()
+
+    @staticmethod
+    def _open_pipes(count: int) -> list[tuple[BinaryIO, BinaryIO]]:
+        pipes: list[tuple[BinaryIO, BinaryIO]] = []
+        try:
+            for _ in range(count):
+                read_descriptor, write_descriptor = os.pipe()
+                pipes.append(
+                    (
+                        os.fdopen(read_descriptor, "rb", buffering=0),
+                        os.fdopen(write_descriptor, "wb", buffering=0),
+                    )
+                )
+        except BaseException:
+            ProcessPipelineRunner._close_pipe_files(pipes)
+            raise
+        return pipes
+
+    @staticmethod
+    def _connect_stages(
+        stages: tuple[ProcessPipelineStage, ...],
+        pipe_files: list[tuple[BinaryIO, BinaryIO]],
+    ) -> tuple[ProcessPipelineStage, ...]:
+        connected: list[ProcessPipelineStage] = []
+        for index, stage in enumerate(stages):
+            spec = stage.spec
+            if index > 0:
+                if spec.stdin is not None:
+                    raise ValueError("only the first pipeline stage may define stdin")
+                spec = replace(spec, stdin=pipe_files[index - 1][0])
+            if index < len(stages) - 1:
+                if spec.stdout != subprocess.PIPE:
+                    raise ValueError("only the final pipeline stage may redirect stdout")
+                spec = replace(spec, stdout=pipe_files[index][1], merge_stderr=False)
+            connected.append(replace(stage, spec=spec))
+        return tuple(connected)
+
+    @staticmethod
+    def _wait_for_stage_start(state: _PipelineStageState) -> None:
+        while not state.started.wait(0.01):
+            if state.done.is_set():
+                return
+
+    def _join_started_stages(
+        self,
+        states: list[_PipelineStageState],
+        internal_cancellation: threading.Event,
+    ) -> None:
+        internal_cancellation.set()
+        self._join_threads(states, self._exit_grace_seconds * 3)
+
+    def _join_upstream_stages(
+        self,
+        states: list[_PipelineStageState],
+        internal_cancellation: threading.Event,
+    ) -> bool:
+        deadline = self._monotonic_clock() + self._exit_grace_seconds
+        for state in states:
+            if state.thread is None:
+                continue
+            state.thread.join(max(0.0, deadline - self._monotonic_clock()))
+        running = [state for state in states if state.thread is not None and state.thread.is_alive()]
+        if not running:
+            return False
+        internal_cancellation.set()
+        self._join_threads(running, self._exit_grace_seconds * 3)
+        return True
+
+    def _join_threads(self, states: list[_PipelineStageState], timeout_seconds: float) -> None:
+        deadline = self._monotonic_clock() + timeout_seconds
+        for state in states:
+            if state.thread is None:
+                continue
+            state.thread.join(max(0.0, deadline - self._monotonic_clock()))
+        if any(state.thread is not None and state.thread.is_alive() for state in states):
+            raise ProcessRunnerError("a process pipeline monitor did not stop after cancellation")
+
+    @staticmethod
+    def _close_pipe_files(pipe_files: list[tuple[BinaryIO, BinaryIO]]) -> None:
+        for read_file, write_file in pipe_files:
+            for pipe_file in (read_file, write_file):
+                try:
+                    pipe_file.close()
+                except (OSError, ValueError):
+                    continue
+
+    @staticmethod
+    def _is_substantive_error(error: BaseException | None) -> bool:
+        return error is not None and not isinstance(error, ProcessCancelled)
+
+    @staticmethod
+    def _externally_cancelled(
+        run_context: RunContext | None,
+        cancellation_event: CancellationSignal | None,
+    ) -> bool:
+        return bool(
+            (run_context is not None and run_context.cancellation.is_cancelled)
+            or (cancellation_event is not None and cancellation_event.is_set())
+        )

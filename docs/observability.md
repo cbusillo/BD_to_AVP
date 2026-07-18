@@ -59,6 +59,13 @@ boundaries and must return promptly without performing unbounded I/O. Pipe
 readers remain independent from those hooks, and bounded dispatch overflow
 fails the tool rather than silently dropping parser input.
 
+`ProcessPipelineRunner` connects linear helper graphs with native OS pipes while
+using `ChildProcessRunner` to supervise every stage independently. Intermediate
+binary payloads are never decoded or retained as diagnostics; bounded stderr,
+heartbeats, exit state, cancellation, and final output artifact growth remain
+observable for the producer, MVC splitter, and encoder. Parent pipe handles are
+closed after launch so EOF and backpressure remain correct.
+
 The legacy `run_command` API is a compatibility adapter over the shared runner.
 MakeMKV inspection and ripping identify the tool explicitly, emit parsed robot
 progress, sample the actively growing MKV, and honor cancellation while the tool
@@ -92,8 +99,9 @@ single `stream_id`.
    conversion behavior.
 2. Replace fragmented child execution with one binary-safe streaming runner.
    The ordinary command path, MakeMKV, FFmpeg graph execution, FFprobe metadata,
-   and FFmpeg capability checks are migrated. Binary subtitle extraction and
-   the native MVC linear pipeline remain in the active child-tool workstream.
+   FFmpeg capability checks, binary subtitle extraction, and the native MVC
+   linear pipeline are migrated. Binary payloads are redirected to artifacts or
+   native pipes rather than entering diagnostic capture.
 3. Project semantic runner activity into the worker protocol and bounded raw
    output into the diagnostic channel.
 4. Make the native diagnostic recorder and support bundle consume the shared

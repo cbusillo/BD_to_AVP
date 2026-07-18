@@ -2,6 +2,7 @@ import json
 import logging
 import subprocess
 import typing
+from pathlib import Path
 
 import ffmpeg
 from babelfish import Language
@@ -11,8 +12,9 @@ from trakit.api import trakit
 from bd_to_avp.vendor.pgsrip.media import Media, Pgs
 from bd_to_avp.vendor.pgsrip.media_path import MediaPath
 from bd_to_avp.vendor.pgsrip.options import Options
-from bd_to_avp.modules.command import run_ffprobe
+from bd_to_avp.modules.command import run_ffprobe, run_process_capture
 from bd_to_avp.modules.config import config
+from bd_to_avp.process_runner import ProcessArtifactProbe
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +42,16 @@ class MkvPgs(Pgs):
             "sup",
             "pipe:1",
         ]
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        return result.stdout
+        output_path = Path(temp_folder) / f"track-{track_id}.sup"
+        with output_path.open("wb") as output_file:
+            run_process_capture(
+                command,
+                "Extract PGS subtitle stream",
+                tool_id="ffmpeg",
+                stdout=output_file,
+                artifacts=(ProcessArtifactProbe("subtitle_payload", path=output_path),),
+            )
+        return output_path.read_bytes()
 
     def __init__(self, media_path: MediaPath, track_id: int, language: Language, number: int, options: Options):
         temp_folder = media_path.create_temp_folder()

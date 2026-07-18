@@ -1,5 +1,6 @@
 import os
 import signal
+import subprocess
 import sys
 import tempfile
 import threading
@@ -15,6 +16,9 @@ from bd_to_avp.process_runner import (
     ProcessCancelled,
     ProcessExecutionError,
     ProcessOutputLimitError,
+    ProcessPipelineError,
+    ProcessPipelineRunner,
+    ProcessPipelineStage,
     ProcessPipeDrainError,
     ProcessRunnerError,
     ProcessSpec,
@@ -131,6 +135,150 @@ class ChildProcessRunnerTests(unittest.TestCase):
     def test_rejects_unmanaged_stdin_pipe(self) -> None:
         with self.assertRaisesRegex(ValueError, "stdin=subprocess.PIPE"):
             self.spec("pass", stdin=-1)
+
+    def test_redirected_stdout_keeps_binary_payload_out_of_log_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "payload.bin"
+            with output_path.open("wb") as output_file:
+                result = ChildProcessRunner().run(
+                    self.spec(
+                        "import os; os.write(1, b'\\xffpayload'); os.write(2, b'diagnostic\\n')",
+                        stdout=output_file,
+                        merge_stderr=False,
+                    )
+                )
+
+            self.assertEqual(output_path.read_bytes(), b"\xffpayload")
+            self.assertEqual(result.stdout.total_bytes, 0)
+            self.assertEqual(result.stderr.text(), "diagnostic\n")
+
+    def test_redirected_stdout_requires_separate_stderr(self) -> None:
+        with tempfile.TemporaryFile("wb") as output_file:
+            with self.assertRaisesRegex(ValueError, "merge_stderr=False"):
+                self.spec("pass", stdout=output_file)
+
+    def test_pipeline_streams_high_volume_binary_output_with_backpressure(self) -> None:
+        sink = BoundedEventSink(maximum_events=100, maximum_bytes=200_000)
+        context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER, sink))
+        payload_size = 5 * 1024 * 1024
+        stages = (
+            ProcessPipelineStage(
+                self.spec(
+                    f"import os; os.write(1, b'x' * {payload_size})",
+                    tool_id="producer",
+                    display_name="producer",
+                )
+            ),
+            ProcessPipelineStage(
+                self.spec(
+                    "import sys; data = sys.stdin.buffer.read(); print(len(data))",
+                    tool_id="consumer",
+                    display_name="consumer",
+                )
+            ),
+        )
+
+        result = ProcessPipelineRunner(exit_grace_seconds=0.2).run(stages, run_context=context)
+
+        self.assertEqual(result.stages[-1].result.stdout.text(), f"{payload_size}\n")
+        self.assertEqual(result.stages[0].result.stdout.total_bytes, 0)
+        events = sink.snapshot().events
+        self.assertEqual(sum(event.kind == "tool.started" for event in events), 2)
+        self.assertEqual(sum(event.kind == "tool.completed" for event in events), 2)
+
+    def test_pipeline_upstream_failure_cancels_stalled_final_stage(self) -> None:
+        stages = (
+            ProcessPipelineStage(
+                self.spec(
+                    "raise SystemExit(3)",
+                    tool_id="producer",
+                    display_name="producer",
+                    termination_grace_seconds=0.1,
+                    kill_wait_seconds=0.1,
+                )
+            ),
+            ProcessPipelineStage(
+                self.spec(
+                    "import sys, time; sys.stdin.buffer.read(); time.sleep(30)",
+                    tool_id="consumer",
+                    display_name="consumer",
+                    termination_grace_seconds=0.1,
+                    kill_wait_seconds=0.1,
+                )
+            ),
+        )
+
+        started = time.monotonic()
+        with self.assertRaises(ProcessPipelineError) as raised:
+            ProcessPipelineRunner(exit_grace_seconds=0.1).run(stages)
+
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertIsInstance(raised.exception.result.stages[0].error, subprocess.CalledProcessError)
+        self.assertIsInstance(raised.exception.result.stages[1].error, ProcessCancelled)
+
+    def test_pipeline_final_failure_cancels_blocked_producer(self) -> None:
+        stages = (
+            ProcessPipelineStage(
+                self.spec(
+                    "import os\nwhile True: os.write(1, b'x' * 65536)",
+                    tool_id="producer",
+                    display_name="producer",
+                    termination_grace_seconds=0.1,
+                    kill_wait_seconds=0.1,
+                )
+            ),
+            ProcessPipelineStage(
+                self.spec(
+                    "raise SystemExit(4)",
+                    tool_id="consumer",
+                    display_name="consumer",
+                    termination_grace_seconds=0.1,
+                    kill_wait_seconds=0.1,
+                )
+            ),
+        )
+
+        with self.assertRaises(ProcessPipelineError) as raised:
+            ProcessPipelineRunner(exit_grace_seconds=0.1).run(stages)
+
+        self.assertIsInstance(raised.exception.result.stages[0].error, ProcessCancelled)
+        final_error = raised.exception.result.stages[1].error
+        self.assertIsInstance(final_error, subprocess.CalledProcessError)
+        self.assertEqual(final_error.returncode, 4)
+
+    def test_pipeline_external_cancellation_stops_all_stages(self) -> None:
+        cancellation_event = threading.Event()
+        timer = threading.Timer(0.1, cancellation_event.set)
+        timer.start()
+        stages = (
+            ProcessPipelineStage(
+                self.spec(
+                    "import time; time.sleep(30)",
+                    tool_id="producer",
+                    display_name="producer",
+                    termination_grace_seconds=0.1,
+                    kill_wait_seconds=0.1,
+                )
+            ),
+            ProcessPipelineStage(
+                self.spec(
+                    "import sys; sys.stdin.buffer.read()",
+                    tool_id="consumer",
+                    display_name="consumer",
+                    termination_grace_seconds=0.1,
+                    kill_wait_seconds=0.1,
+                )
+            ),
+        )
+
+        try:
+            with self.assertRaises(ProcessCancelled):
+                ProcessPipelineRunner(exit_grace_seconds=0.1).run(
+                    stages,
+                    cancellation_event=cancellation_event,
+                )
+        finally:
+            timer.cancel()
 
     def test_truncation_policy_returns_bounded_prefix_and_tail(self) -> None:
         result = ChildProcessRunner().run(
