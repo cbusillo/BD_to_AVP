@@ -200,12 +200,14 @@ class ProcessExecutionError(subprocess.CalledProcessError):
         command: list[str | bytes],
         stdout_snapshot: ProcessOutputSnapshot,
         stderr_snapshot: ProcessOutputSnapshot,
+        *,
+        merge_stderr: bool = False,
     ) -> None:
         super().__init__(
             returncode,
             command,
             output=stdout_snapshot.text(),
-            stderr=stderr_snapshot.text(),
+            stderr=None if merge_stderr else stderr_snapshot.text(),
         )
         self.stdout_snapshot = stdout_snapshot
         self.stderr_snapshot = stderr_snapshot
@@ -882,6 +884,7 @@ class ChildProcessRunner:
                 [os.fspath(argument) for argument in spec.argv],
                 stdout_snapshot,
                 stderr_snapshot,
+                merge_stderr=spec.merge_stderr,
             )
 
         emitter.emit("tool.completed", context=final_context, data=final_data, terminal=True)

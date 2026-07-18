@@ -759,7 +759,7 @@ def get_video_color_depth(input_path: Path) -> int:
             if "10le" in pix_fmt or "10be" in pix_fmt:
                 return 10
             return DiscInfo.color_depth
-    except (ffmpeg.Error, json.JSONDecodeError, ProcessRunnerError):
+    except (ffmpeg.Error, json.JSONDecodeError, ProcessRunnerError, UnicodeDecodeError):
         print(f"Error getting video color depth, using default of {DiscInfo.color_depth}")
     return DiscInfo.color_depth
 

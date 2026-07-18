@@ -121,6 +121,13 @@ class ChildProcessRunnerTests(unittest.TestCase):
         self.assertTrue(raised.exception.stderr_snapshot.truncated)
         self.assertTrue(raised.exception.stderr_snapshot.tail.endswith(b"END"))
 
+    def test_nonzero_merged_output_preserves_called_process_error_contract(self) -> None:
+        with self.assertRaises(ProcessExecutionError) as raised:
+            ChildProcessRunner().run(self.spec("import sys; print('error', file=sys.stderr); sys.exit(2)"))
+
+        self.assertIn("error", raised.exception.output)
+        self.assertIsNone(raised.exception.stderr)
+
     def test_rejects_unmanaged_stdin_pipe(self) -> None:
         with self.assertRaisesRegex(ValueError, "stdin=subprocess.PIPE"):
             self.spec("pass", stdin=-1)

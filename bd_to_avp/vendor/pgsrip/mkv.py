@@ -1,6 +1,7 @@
+import json
 import logging
-import typing
 import subprocess
+import typing
 
 import ffmpeg
 from babelfish import Language
@@ -128,6 +129,12 @@ class Mkv(Media):
                 cmd=[config.FFPROBE_PATH, path],
                 output=error.stdout,
                 stderr=error.stderr,
+            ) from error
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise subprocess.CalledProcessError(
+                returncode=1,
+                cmd=[config.FFPROBE_PATH, path],
+                stderr=str(error).encode("utf-8", errors="replace"),
             ) from error
         tracks = [MkvTrack.from_ffprobe_stream(t) for t in metadata.get("streams", [])]
         super().__init__(MediaPath(path), languages={t.language for t in tracks if t.type == "subtitles"})
