@@ -11,6 +11,7 @@ import ffmpeg
 from bd_to_avp.modules.config import Stage, config, is_direct_mvc_stream_enabled
 from bd_to_avp.modules.disc import DiscInfo
 from bd_to_avp.modules.command import cleanup_process, run_command
+from bd_to_avp.process_runner import CaptureOverflowPolicy
 
 
 def has_native_mvc_splitter() -> bool:
@@ -633,7 +634,11 @@ def combine_to_mv_hevc(
         "--output-file",
         output_path,
     ]
-    output = run_command(command, "combine stereo HEVC streams to MV-HEVC.")
+    output = run_command(
+        command,
+        "combine stereo HEVC streams to MV-HEVC.",
+        capture_overflow=CaptureOverflowPolicy.FAIL,
+    )
     if "left and right input resolutions do not match. aborting!" in output:
         raise RuntimeError("Left and right input resolutions do not match.")
     elif "aborting!" in output:

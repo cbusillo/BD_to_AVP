@@ -15,6 +15,8 @@ from bd_to_avp.modules.file import (
     prepare_output_folder_for_source,
     remove_output_folder_if_safe,
 )
+from bd_to_avp.observability import ObservabilityEmitter
+from bd_to_avp.runtime import CancellationToken, ObservabilityStream, RunContext
 
 
 class ProcessPreflightTests(unittest.TestCase):
@@ -124,7 +126,10 @@ class ProcessPreflightTests(unittest.TestCase):
         cancellation_event = threading.Event()
         processed_sources: list[Path | None] = []
 
-        def cancel_after_first_source(_cancellation_event: threading.Event | None = None) -> None:
+        def cancel_after_first_source(
+            _cancellation_event: threading.Event | None = None,
+            **_kwargs: object,
+        ) -> None:
             processed_sources.append(process.config.source_path)
             cancellation_event.set()
 
@@ -142,10 +147,33 @@ class ProcessPreflightTests(unittest.TestCase):
 
         self.assertEqual(len(processed_sources), 1)
 
+    def test_batch_processing_propagates_run_context_cancellation(self) -> None:
+        cancellation = CancellationToken()
+        run_context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER), cancellation)
+
+        def cancel_from_context(*_args: object, **_kwargs: object) -> None:
+            cancellation.cancel()
+            raise process.ProcessCancelled("stop")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_folder = Path(temp_dir)
+            (source_folder / "first.m2ts").touch()
+            (source_folder / "second.m2ts").touch()
+
+            with (
+                patch.object(process.config, "source_folder_path", source_folder),
+                patch.object(process, "process_each", side_effect=cancel_from_context),
+                self.assertRaises(process.ProcessingCancelled),
+            ):
+                process.process(Stage.CREATE_MKV, run_context=run_context)
+
     def test_batch_resume_stage_only_applies_to_failed_source(self) -> None:
         processed_sources: list[tuple[Path | None, Stage]] = []
 
-        def record_source(_cancellation_event: threading.Event | None = None) -> None:
+        def record_source(
+            _cancellation_event: threading.Event | None = None,
+            **_kwargs: object,
+        ) -> None:
             processed_sources.append((process.config.source_path, process.config.start_stage))
 
         with tempfile.TemporaryDirectory() as temp_dir:

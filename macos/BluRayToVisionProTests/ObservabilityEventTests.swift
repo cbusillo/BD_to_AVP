@@ -65,6 +65,16 @@ final class ObservabilityEventTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(ObservabilityEvent.self, from: oversizedMessage))
     }
 
+    func testNegativeOutputAgeIsRejected() throws {
+        var fixture = try XCTUnwrap(try jsonObject(try sharedFixtureData()) as? [String: Any])
+        var data = try XCTUnwrap(fixture["data"] as? [String: Any])
+        data["activity"] = ["last_output_age_seconds": -1]
+        fixture["data"] = data
+        let negativeAge = try JSONSerialization.data(withJSONObject: fixture)
+
+        XCTAssertThrowsError(try JSONDecoder().decode(ObservabilityEvent.self, from: negativeAge))
+    }
+
     private func sharedFixtureData() throws -> Data {
         let fixtureURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

@@ -18,6 +18,8 @@ class WorkerProcessOwner:
     def __init__(self) -> None:
         self.cancellation_event = threading.Event()
         self._cleanup_lock = threading.Lock()
+        self._signal_cleanup_lock = threading.Lock()
+        self._signal_cleanup_started = False
 
     def establish_session(self) -> int:
         if os.getpgrp() != os.getpid():
@@ -30,6 +32,16 @@ class WorkerProcessOwner:
 
     def _handle_signal(self, _signum: int, _frame: FrameType | None) -> None:
         self.cancellation_event.set()
+        with self._signal_cleanup_lock:
+            if self._signal_cleanup_started:
+                return
+            self._signal_cleanup_started = True
+        threading.Thread(
+            target=self.terminate_descendants,
+            kwargs={"timeout": 0.5},
+            name="worker-descendant-cleanup",
+            daemon=True,
+        ).start()
 
     def request_cancel(self) -> None:
         self.cancellation_event.set()

@@ -1295,6 +1295,7 @@ class SourceConversionTests(unittest.TestCase):
                 _output_folder: Path,
                 _disc_info: DiscInfo,
                 progress_callback: object | None = None,
+                **_kwargs: object,
             ) -> Path:
                 self.assertTrue(callable(progress_callback))
                 progress_callback(50, 100)
@@ -1557,7 +1558,11 @@ class SourceConversionTests(unittest.TestCase):
             activity = WorkerActivityReporter(emitter)
             observed: dict[str, object] = {}
 
-            def fake_process_each(_cancellation_event: object, activity: object | None = None) -> Path:
+            def fake_process_each(
+                _cancellation_event: object,
+                activity: object | None = None,
+                **_kwargs: object,
+            ) -> Path:
                 observed.update(
                     {
                         "source_path": config.source_path,
@@ -1636,7 +1641,11 @@ class SourceConversionTests(unittest.TestCase):
             activity = WorkerActivityReporter(emitter)
             owner = WorkerProcessOwner()
 
-            def cancel(_cancellation_event: object, activity: object | None = None) -> Path:
+            def cancel(
+                _cancellation_event: object,
+                activity: object | None = None,
+                **_kwargs: object,
+            ) -> Path:
                 owner.request_cancel()
                 from bd_to_avp.modules.process import ProcessingCancelled
 
@@ -1703,9 +1712,8 @@ class WorkerProcessOwnerTests(unittest.TestCase):
             owner._handle_signal(signal.SIGTERM, None)
 
             self.assertTrue(owner.cancellation_event.is_set())
-            self.assertIsNone(child.poll())
-            owner.terminate_descendants(timeout=0.1)
             child.wait(timeout=3)
+            self.assertIsNotNone(child.returncode)
         finally:
             if child.poll() is None:
                 child.kill()

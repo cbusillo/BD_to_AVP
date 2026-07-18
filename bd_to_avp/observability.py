@@ -316,6 +316,14 @@ class ObservabilityCounters:
 
 
 @dataclass(frozen=True)
+class ObservabilityActivity:
+    last_output_age_seconds: int | None = None
+
+    def __post_init__(self) -> None:
+        _validate_int(self.last_output_age_seconds, "activity.last_output_age_seconds")
+
+
+@dataclass(frozen=True)
 class ObservabilityData:
     message: ObservabilityText | None = None
     detail: ObservabilityText | None = None
@@ -325,6 +333,7 @@ class ObservabilityData:
     failure: ObservabilityFailure | None = None
     cancellation: ObservabilityCancellation | None = None
     counters: ObservabilityCounters | None = None
+    activity: ObservabilityActivity | None = None
 
     def __post_init__(self) -> None:
         for name, value, expected_type in (
@@ -336,6 +345,7 @@ class ObservabilityData:
             ("data.failure", self.failure, ObservabilityFailure),
             ("data.cancellation", self.cancellation, ObservabilityCancellation),
             ("data.counters", self.counters, ObservabilityCounters),
+            ("data.activity", self.activity, ObservabilityActivity),
         ):
             if value is not None and not isinstance(value, expected_type):
                 raise TypeError(f"{name} has an invalid type")
@@ -431,6 +441,7 @@ class ObservabilityEvent:
                 failure=_optional_dataclass(ObservabilityFailure, data_value.get("failure")),
                 cancellation=_optional_dataclass(ObservabilityCancellation, data_value.get("cancellation")),
                 counters=_optional_dataclass(ObservabilityCounters, data_value.get("counters")),
+                activity=_optional_dataclass(ObservabilityActivity, data_value.get("activity")),
             ),
         )
 
