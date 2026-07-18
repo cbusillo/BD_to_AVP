@@ -58,6 +58,9 @@
       "retained_bytes": 32768,
       "dropped_bytes": 0,
       "decode_replacements": 0
+    },
+    "activity": {
+      "last_output_age_seconds": 3
     }
   }
 }

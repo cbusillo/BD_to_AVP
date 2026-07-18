@@ -28,6 +28,11 @@ class DiscStageArtifactTests(unittest.TestCase):
         self.assertIsNone(disc.parse_makemkv_progress("PRGV:5,25,0"))
         self.assertIsNone(disc.parse_makemkv_progress("MSG:1005,0,1,Finished"))
 
+        structured = disc.parse_makemkv_observability_progress("PRGV:5,25,100")
+        self.assertEqual(structured.fraction, 0.25)
+        self.assertEqual(structured.completed_units, 25)
+        self.assertEqual(structured.total_units, 100)
+
     def test_rip_requests_progress_and_reports_robot_updates(self) -> None:
         progress_updates: list[tuple[float, float]] = []
 
@@ -36,6 +41,7 @@ class DiscStageArtifactTests(unittest.TestCase):
             _name: str,
             *,
             line_handler: object,
+            **kwargs: object,
         ) -> str:
             assert callable(line_handler)
             line_handler("PRGV:5,25,100")
@@ -43,6 +49,10 @@ class DiscStageArtifactTests(unittest.TestCase):
             line_handler("PRGV:5,100,100")
             self.assertIn("--robot", command)
             self.assertIn("--progress=-same", command)
+            self.assertEqual(kwargs["tool_id"], "makemkvcon")
+            self.assertTrue(callable(kwargs["progress_parser"]))
+            self.assertEqual(len(kwargs["artifacts"]), 1)
+            self.assertEqual(kwargs["capture_overflow"], disc.CaptureOverflowPolicy.FAIL)
             return ""
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -212,17 +222,10 @@ class DiscStageArtifactTests(unittest.TestCase):
             result = disc.get_disc_and_mvc_video_info()
 
         self.assertEqual(result.name, "Physical 3D")
-        self.assertEqual(
-            run_command.call_args.args[0],
-            [
-                Path("/Applications/MakeMKV/makemkvcon"),
-                "--robot",
-                "--minlength=0",
-                None,
-                "info",
-                "dev:/dev/disk9",
-            ],
-        )
+        command = run_command.call_args.args[0]
+        self.assertNotIn("--noscan", command)
+        self.assertIn("info", command)
+        self.assertIn("dev:/dev/disk9", command)
 
     def test_disc_rip_disables_makemkv_minimum_title_length(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

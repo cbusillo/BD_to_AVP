@@ -38,6 +38,33 @@ protocol events. Structured events identify the active tool, stage, recent
 activity, process outcome, and active artifact while the bounded diagnostic tail
 retains recent raw evidence.
 
+## Child Processes
+
+`ChildProcessRunner` is the only supported path for ordinary conversion helper
+processes. It launches each helper in a new process group, drains binary stdout
+and stderr concurrently, applies incremental UTF-8 replacement for diagnostic
+views, and retains bounded captures and tails. Output capture overflow fails the
+tool by default rather than silently parsing incomplete MakeMKV or probe data;
+callers that only need a diagnostic prefix may explicitly select bounded
+truncation.
+
+When a caller supplies a `RunContext`, the runner emits low-volume lifecycle,
+heartbeat, progress, cancellation, failure, and active-artifact events through
+a bounded asynchronous delivery queue. Raw command arguments, environment
+values, and child output are never copied into those semantic events. A blocked
+or failed event sink cannot block pipe draining or process cancellation.
+
+Line, progress, raw-output, and artifact resolver hooks are internal producer
+boundaries and must return promptly without performing unbounded I/O. Pipe
+readers remain independent from those hooks, and bounded dispatch overflow
+fails the tool rather than silently dropping parser input.
+
+The legacy `run_command` API is a compatibility adapter over the shared runner.
+MakeMKV inspection and ripping identify the tool explicitly, emit parsed robot
+progress, sample the actively growing MKV, and honor cancellation while the tool
+is running. Compatibility calls that ignore output retain a bounded prefix and
+continue; callers that parse complete output explicitly fail on truncation.
+
 ## Privacy
 
 Every event declares its maximum privacy level and redaction state. Secrets are
@@ -64,6 +91,8 @@ single `stream_id`.
 1. Add the shared models, sinks, fixtures, and runtime context without changing
    conversion behavior.
 2. Replace fragmented child execution with one binary-safe streaming runner.
+   The ordinary command path and MakeMKV are migrated; FFmpeg probes and the
+   native MVC binary pipeline remain in the active child-tool workstream.
 3. Project semantic runner activity into the worker protocol and bounded raw
    output into the diagnostic channel.
 4. Make the native diagnostic recorder and support bundle consume the shared

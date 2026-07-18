@@ -168,6 +168,7 @@ struct ObservabilityEventData: Codable, Equatable, Sendable {
     let failure: ObservabilityFailure?
     let cancellation: ObservabilityCancellation?
     let counters: ObservabilityCounters?
+    let activity: ObservabilityActivity?
 }
 
 struct ObservabilityText: Codable, Equatable, Sendable {
@@ -280,5 +281,25 @@ struct ObservabilityCounters: Codable, Equatable, Sendable {
         case retainedBytes = "retained_bytes"
         case droppedBytes = "dropped_bytes"
         case decodeReplacements = "decode_replacements"
+    }
+}
+
+struct ObservabilityActivity: Codable, Equatable, Sendable {
+    let lastOutputAgeSeconds: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case lastOutputAgeSeconds = "last_output_age_seconds"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        lastOutputAgeSeconds = try container.decodeIfPresent(Int64.self, forKey: .lastOutputAgeSeconds)
+        if let lastOutputAgeSeconds, lastOutputAgeSeconds < 0 {
+            throw DecodingError.dataCorruptedError(
+                forKey: .lastOutputAgeSeconds,
+                in: container,
+                debugDescription: "Observability output age must be non-negative"
+            )
+        }
     }
 }

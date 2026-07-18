@@ -2,13 +2,17 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 from typing import Callable
 
 import ffmpeg
 
+from bd_to_avp.observability import ObservabilityProgress
 from bd_to_avp.modules.config import config, is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.file import find_largest_file_with_extensions, sanitize_filename
 from bd_to_avp.modules.command import run_command
+from bd_to_avp.process_runner import CaptureOverflowPolicy, ProcessArtifactProbe
+from bd_to_avp.runtime import RunContext
 
 
 class MKVCreationError(Exception):
@@ -65,6 +69,19 @@ def parse_makemkv_progress(line: str) -> tuple[int, int] | None:
     if maximum_progress <= 0:
         return None
     return min(max(total_progress, 0), maximum_progress), maximum_progress
+
+
+def parse_makemkv_observability_progress(line: str) -> ObservabilityProgress | None:
+    progress = parse_makemkv_progress(line)
+    if progress is None:
+        return None
+    completed, total = progress
+    return ObservabilityProgress(
+        fraction=completed / total,
+        completed_units=completed,
+        total_units=total,
+        unit="makemkv_progress",
+    )
 
 
 def parse_makemkv_output(output: str) -> tuple[str, list[TitleInfo]]:
@@ -155,7 +172,12 @@ def select_disc_title(titles: tuple[DiscTitleInfo, ...], title_id: str | None) -
     raise DiscTitleSelectionError("The selected 3D video is no longer available. Analyze the source again.")
 
 
-def get_disc_and_mvc_video_info(selected_title_id: str | None = None) -> DiscInfo:
+def get_disc_and_mvc_video_info(
+    selected_title_id: str | None = None,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: Event | None = None,
+) -> DiscInfo:
     source_path = config.source_path
     source = source_path.as_posix() if source_path else config.source_str
     if not source:
@@ -190,7 +212,14 @@ def get_disc_and_mvc_video_info(selected_title_id: str | None = None) -> DiscInf
         "info",
         source,
     ]
-    output = run_command(command, "Get disc and MVC video properties")
+    output = run_command(
+        command,
+        "Get disc and MVC video properties",
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        tool_id="makemkvcon",
+        capture_overflow=CaptureOverflowPolicy.FAIL,
+    )
 
     disc_name, raw_titles = parse_makemkv_output(output)
     try:
@@ -217,6 +246,9 @@ def rip_disc_to_mkv(
     output_folder: Path,
     disc_info: DiscInfo,
     progress_callback: ProgressCallback | None = None,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: Event | None = None,
 ) -> None:
     custom_profile_path = output_folder / "custom_profile.mmcp.xml"
     create_custom_makemkv_profile(custom_profile_path)
@@ -242,7 +274,40 @@ def rip_disc_to_mkv(
         if progress is not None:
             progress_callback(*progress)
 
-    mkv_output = run_command(command, "Rip disc to MKV file.", line_handler=report_progress)
+    baseline: dict[Path, tuple[int, int]] = {}
+    for candidate in output_folder.glob("*.mkv"):
+        try:
+            status = candidate.stat()
+        except OSError:
+            continue
+        if candidate.is_file():
+            baseline[candidate] = (status.st_size, status.st_mtime_ns)
+
+    def active_mkv() -> Path | None:
+        candidates: list[tuple[int, Path]] = []
+        for candidate in output_folder.glob("*.mkv"):
+            try:
+                status = candidate.stat()
+            except OSError:
+                continue
+            previous = baseline.get(candidate)
+            if previous is None or previous != (status.st_size, status.st_mtime_ns):
+                candidates.append((status.st_mtime_ns, candidate))
+        if not candidates:
+            return None
+        return max(candidates)[1]
+
+    mkv_output = run_command(
+        command,
+        "Rip disc to MKV file.",
+        line_handler=report_progress,
+        progress_parser=parse_makemkv_observability_progress,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        tool_id="makemkvcon",
+        artifacts=(ProcessArtifactProbe("intermediate_mkv", resolver=active_mkv),),
+        capture_overflow=CaptureOverflowPolicy.FAIL,
+    )
     if config.continue_on_error or all(error not in mkv_output for error in config.MKV_ERROR_CODES):
         return
     filtered_output = filter_lines_from_output(mkv_output, config.MKV_ERROR_FILTERS)
@@ -289,6 +354,9 @@ def create_mkv_file(
     output_folder: Path,
     disc_info: DiscInfo,
     progress_callback: ProgressCallback | None = None,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: Event | None = None,
 ) -> Path:
     if config.source_path and config.source_path.suffix.lower() in [*config.MTS_EXTENSIONS, ".mkv"]:
         if not config.source_path.is_file():
@@ -304,7 +372,13 @@ def create_mkv_file(
             return mkv_file
 
     if config.start_stage.value <= Stage.CREATE_MKV.value:
-        rip_disc_to_mkv(output_folder, disc_info, progress_callback)
+        rip_disc_to_mkv(
+            output_folder,
+            disc_info,
+            progress_callback,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+        )
 
     if mkv_file := find_largest_file_with_extensions(output_folder, [".mkv"]):
         return mkv_file

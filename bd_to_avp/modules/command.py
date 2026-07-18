@@ -9,13 +9,23 @@ from typing import Any, Callable, ClassVar, cast
 
 import ffmpeg
 
+from bd_to_avp.observability import ObservabilityContext, ObservabilityProgress
 from bd_to_avp.modules.config import config
 from bd_to_avp.modules.util import formatted_time_elapsed
+from bd_to_avp.process_runner import (
+    CaptureOverflowPolicy,
+    ChildProcessRunner,
+    DEFAULT_CAPTURE_LIMIT_BYTES,
+    ProcessArtifactProbe,
+    ProcessSpec,
+)
+from bd_to_avp.runtime import RunContext
 
 
 SpinnerUpdate = Callable[[str], object]
 LineHandler = Callable[[str], object]
-PROCESS_TERMINATION_TIMEOUT_SECONDS = 5.0
+ProgressParser = Callable[[str], ObservabilityProgress | None]
+OutputObserver = Callable[[bytes], object]
 
 
 def get_spinner_update_func() -> SpinnerUpdate | None:
@@ -95,6 +105,15 @@ def run_command(
     env: dict[str, str] | None = None,
     *,
     line_handler: LineHandler | None = None,
+    progress_parser: ProgressParser | None = None,
+    output_observer: OutputObserver | None = None,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    tool_id: str | None = None,
+    observability_context: ObservabilityContext | None = None,
+    artifacts: tuple[ProcessArtifactProbe, ...] = (),
+    capture_limit_bytes: int | None = None,
+    capture_overflow: CaptureOverflowPolicy = CaptureOverflowPolicy.TRUNCATE,
 ) -> str:
     commands = normalize_command_elements(commands)
     if not command_name:
@@ -104,62 +123,51 @@ def run_command(
         commands_to_print = add_quotes_to_path_if_space(commands)
         print(f"Running command:\n{' '.join(str(command) for command in commands_to_print)}")
 
-    env = env if env else os.environ.copy()
-    output_lines = []
     spinner = Spinner(command_name)
     spinner_update_func = get_spinner_update_func()
     spinner_thread = threading.Thread(target=spinner.start, args=(spinner_update_func,))
     spinner_thread.start()
-    process = None
     try:
-        process = subprocess.Popen(
-            commands,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            env=env,
+        result = ChildProcessRunner().run(
+            ProcessSpec(
+                argv=tuple(commands),
+                tool_id=tool_id or default_tool_id(commands[0]),
+                display_name=command_name,
+                env=env if env is not None else os.environ.copy(),
+                event_context=observability_context or ObservabilityContext(),
+                artifacts=artifacts,
+                capture_limit_bytes=(
+                    DEFAULT_CAPTURE_LIMIT_BYTES if capture_limit_bytes is None else capture_limit_bytes
+                ),
+                capture_overflow=capture_overflow,
+            ),
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            line_handler=(None if line_handler is None else lambda _stream, line: line_handler(line)),
+            output_observer=(None if output_observer is None else lambda _stream, payload: output_observer(payload)),
+            progress_parser=(None if progress_parser is None else lambda _stream, line: progress_parser(line)),
         )
-        while True and process and process.stdout:
-            line = process.stdout.readline()
-            if not line:
-                break
-            output_lines.append(line)
-            if line_handler:
-                line_handler(line.rstrip("\r\n"))
-
-        process.wait()
-        if process.returncode != 0:
-            print("Error running command:", command_name)
-            print("\n".join(output_lines))
-            raise subprocess.CalledProcessError(process.returncode, commands, output="".join(output_lines))
+        return result.stdout.text()
+    except subprocess.CalledProcessError as error:
+        print("Error running command:", command_name)
+        if error.output:
+            print(error.output)
+        raise
     except KeyboardInterrupt:
         print("\nCommand interrupted.")
-        if process:
-            terminate_and_wait(process)
         raise
-    except BaseException:
-        if process:
-            terminate_and_wait(process)
-        raise
-
     finally:
         spinner.stop(spinner_update_func)
         spinner_thread.join()
-    return "".join(output_lines)
 
 
-def terminate_and_wait(
-    process: subprocess.Popen,
-    timeout: float = PROCESS_TERMINATION_TIMEOUT_SECONDS,
-) -> None:
-    if process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
+def default_tool_id(command: str | Path | bytes) -> str:
+    decoded = os.fsdecode(command)
+    name = Path(decoded).name.strip().lower()
+    normalized = "".join(character if character.isalnum() else "_" for character in name).strip("_")
+    if not normalized or len(normalized.encode("utf-8")) > 128:
+        return "external_tool"
+    return normalized
 
 
 def run_ffmpeg_print_errors(stream_spec: Any, message: str, quiet: bool = True, **kwargs) -> None:

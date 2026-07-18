@@ -6,6 +6,7 @@ from pathlib import Path
 
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.command import run_command
+from bd_to_avp.process_runner import CaptureOverflowPolicy
 
 
 def normalize_name(name: str) -> str:
@@ -98,7 +99,11 @@ def move_file_to_output_root_folder(muxed_output_path: Path) -> Path:
 def mounted_image(image_path: Path):
     mount_point = None
     existing_mounts_command = ["hdiutil", "info"]
-    existing_mounts_output = run_command(existing_mounts_command, "Check mounted images")
+    existing_mounts_output = run_command(
+        existing_mounts_command,
+        "Check mounted images",
+        capture_overflow=CaptureOverflowPolicy.FAIL,
+    )
     try:
         for line in existing_mounts_output.split("\n"):
             if str(image_path) in line:
@@ -111,7 +116,11 @@ def mounted_image(image_path: Path):
 
         if not mount_point:
             mount_command = ["hdiutil", "attach", image_path]
-            mount_output = run_command(mount_command, "Mount image")
+            mount_output = run_command(
+                mount_command,
+                "Mount image",
+                capture_overflow=CaptureOverflowPolicy.FAIL,
+            )
             for line in mount_output.split("\n"):
                 if "/Volumes/" in line:
                     mount_point = line.split("\t")[-1]

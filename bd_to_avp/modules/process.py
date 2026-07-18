@@ -31,6 +31,8 @@ from bd_to_avp.modules.video import (
     create_upscaled_file,
     get_video_color_depth,
 )
+from bd_to_avp.process_runner import ProcessCancelled
+from bd_to_avp.runtime import RunContext
 
 
 class ProcessingCancelled(Exception):
@@ -65,6 +67,18 @@ class ActivityReporter(Protocol):
 def raise_if_cancelled(cancellation_event: Event | None) -> None:
     if cancellation_event is not None and cancellation_event.is_set():
         raise ProcessingCancelled("Processing was cancelled.")
+
+
+def normalized_cancellation_event(
+    cancellation_event: Event | None,
+    run_context: RunContext | None,
+) -> Event | None:
+    if run_context is None:
+        return cancellation_event
+    context_event = run_context.cancellation.event
+    if cancellation_event is not None and cancellation_event is not context_event:
+        raise ValueError("run_context and cancellation_event must share the same event")
+    return context_event
 
 
 def find_batch_sources(source_folder_path: Path) -> tuple[Path, ...]:
@@ -123,7 +137,9 @@ def process(
     batch_start_stage: Stage | None = None,
     batch_sources: tuple[Path, ...] | None = None,
     activity: ActivityReporter | None = None,
+    run_context: RunContext | None = None,
 ) -> Path | None:
+    cancellation_event = normalized_cancellation_event(cancellation_event, run_context)
     raise_if_cancelled(cancellation_event)
     batch_start_stage = batch_start_stage or gui_start_stage
     waiting_for_resume = resume_source_path is not None
@@ -142,9 +158,9 @@ def process(
             config.start_stage = gui_start_stage if is_resume_source else batch_start_stage
             try:
                 final_output_path = (
-                    process_each(cancellation_event, activity=activity)
+                    process_each(cancellation_event, activity=activity, run_context=run_context)
                     if activity
-                    else process_each(cancellation_event)
+                    else process_each(cancellation_event, run_context=run_context)
                 )
                 raise_if_cancelled(cancellation_event)
             except preflight.DependencyPreflightError:
@@ -153,6 +169,8 @@ def process(
                 raise BatchProcessingError(source, error, batch_sources) from error
             except FileExistsError:
                 continue
+            except ProcessCancelled as error:
+                raise ProcessingCancelled("Processing was cancelled.") from error
             except (RuntimeError, ValueError, subprocess.CalledProcessError):
                 raise_if_cancelled(cancellation_event)
                 if is_resume_source:
@@ -168,13 +186,24 @@ def process(
     else:
         if selected_title_id is None:
             final_output_path = (
-                process_each(cancellation_event, activity=activity) if activity else process_each(cancellation_event)
+                process_each(cancellation_event, activity=activity, run_context=run_context)
+                if activity
+                else process_each(cancellation_event, run_context=run_context)
             )
         else:
             final_output_path = (
-                process_each(cancellation_event, activity=activity, selected_title_id=selected_title_id)
+                process_each(
+                    cancellation_event,
+                    activity=activity,
+                    selected_title_id=selected_title_id,
+                    run_context=run_context,
+                )
                 if activity
-                else process_each(cancellation_event, selected_title_id=selected_title_id)
+                else process_each(
+                    cancellation_event,
+                    selected_title_id=selected_title_id,
+                    run_context=run_context,
+                )
             )
 
     return final_output_path
@@ -185,7 +214,9 @@ def process_each(
     activity: ActivityReporter | None = None,
     *,
     selected_title_id: str | None = None,
+    run_context: RunContext | None = None,
 ) -> Path:
+    cancellation_event = normalized_cancellation_event(cancellation_event, run_context)
     raise_if_cancelled(cancellation_event)
     if config.video_mode is VideoMode.AV1_SBS and config.fx_upscale:
         raise ValueError("AV1 stereo export does not support AI FX upscale.")
@@ -211,7 +242,11 @@ def process_each(
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("inspect_source", "Reading video metadata")
-    disc_info = get_disc_and_mvc_video_info(selected_title_id)
+    disc_info = get_disc_and_mvc_video_info(
+        selected_title_id,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+    )
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.log("Source metadata loaded", stage="inspect_source", name=disc_info.name)
@@ -239,6 +274,8 @@ def process_each(
         output_folder,
         disc_info,
         progress_callback=activity.stage_progress if activity else None,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
     )
     if config.preview_range is not None:
         raise_if_cancelled(cancellation_event)
@@ -387,28 +424,35 @@ def start_process(
     batch_start_stage: Stage | None = None,
     batch_sources: tuple[Path, ...] | None = None,
     activity: ActivityReporter | None = None,
+    run_context: RunContext | None = None,
 ) -> Path | None:
+    cancellation_event = normalized_cancellation_event(cancellation_event, run_context)
     gui_start_stage = gui_start_stage or config.start_stage
-    if config.keep_awake:
-        with keep.running():
-            return process(
-                gui_start_stage,
-                cancellation_event,
-                selected_title_id=selected_title_id,
-                resume_source_path=resume_source_path,
-                batch_start_stage=batch_start_stage,
-                batch_sources=batch_sources,
-                activity=activity,
-            )
-    return process(
-        gui_start_stage,
-        cancellation_event,
-        selected_title_id=selected_title_id,
-        resume_source_path=resume_source_path,
-        batch_start_stage=batch_start_stage,
-        batch_sources=batch_sources,
-        activity=activity,
-    )
+    try:
+        if config.keep_awake:
+            with keep.running():
+                return process(
+                    gui_start_stage,
+                    cancellation_event,
+                    selected_title_id=selected_title_id,
+                    resume_source_path=resume_source_path,
+                    batch_start_stage=batch_start_stage,
+                    batch_sources=batch_sources,
+                    activity=activity,
+                    run_context=run_context,
+                )
+        return process(
+            gui_start_stage,
+            cancellation_event,
+            selected_title_id=selected_title_id,
+            resume_source_path=resume_source_path,
+            batch_start_stage=batch_start_stage,
+            batch_sources=batch_sources,
+            activity=activity,
+            run_context=run_context,
+        )
+    except ProcessCancelled as error:
+        raise ProcessingCancelled("Processing was cancelled.") from error
 
 
 if __name__ == "__main__":
