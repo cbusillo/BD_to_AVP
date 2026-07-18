@@ -14,6 +14,7 @@ import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
@@ -47,6 +48,7 @@ WORKER_EXECUTABLE_NAME = "BluRayToVisionProEngine"
 WORKER_PROTOCOL_VERSION = PROTOCOL_VERSION
 WORKER_ENTITLEMENTS = MACOS_ROOT / "BluRayToVisionPro" / "Worker.entitlements"
 DEPLOYMENT_TARGET_OVERRIDE_ENV = "BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE"
+SUPPORT_DIAGNOSTICS_ENDPOINT_ENV = "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT"
 USER_INTERFACE_SOURCE_FILES = sorted(
     [
         *(MACOS_ROOT / "BluRayToVisionPro" / "App").glob("*.swift"),
@@ -144,6 +146,26 @@ def native_build_settings(configuration: str, environment: Mapping[str, str]) ->
         if re.fullmatch(r"\d+(?:\.\d+)+", deployment_target) is None:
             raise ValueError(f"Invalid macOS deployment target override: {deployment_target!r}")
         build_settings.append(f"MACOSX_DEPLOYMENT_TARGET={deployment_target}")
+    support_endpoint = environment.get(SUPPORT_DIAGNOSTICS_ENDPOINT_ENV, "").strip()
+    if support_endpoint:
+        parsed_endpoint = urlsplit(support_endpoint)
+        try:
+            endpoint_port = parsed_endpoint.port
+        except ValueError as error:
+            raise ValueError("Invalid support diagnostics endpoint") from error
+        if (
+            parsed_endpoint.scheme != "https"
+            or parsed_endpoint.hostname is None
+            or parsed_endpoint.username is not None
+            or parsed_endpoint.password is not None
+            or parsed_endpoint.path not in {"", "/"}
+            or parsed_endpoint.query
+            or parsed_endpoint.fragment
+            or any(character.isspace() for character in support_endpoint)
+            or (endpoint_port is not None and not 1 <= endpoint_port <= 65535)
+        ):
+            raise ValueError("Invalid support diagnostics endpoint")
+        build_settings.append(f"BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT={support_endpoint}")
     if configuration == "Release":
         build_settings.extend(["ARCHS=arm64", "ENABLE_CODE_COVERAGE=NO", "ONLY_ACTIVE_ARCH=NO"])
         build_settings.extend(

@@ -167,21 +167,67 @@ exposes:
 - `removeLocalCopy()` for explicit cleanup after the caller no longer needs the
   archive.
 
-No remote upload, consent UI, or final support action is implemented by this
-contract.
+## Native Submission Flow
 
-## Issue #267 Integration Decisions
+The Activity footer exposes one support action whenever the current session has
+diagnostic evidence. Failed source cards repeat the same action as a low-noise
+secondary entry point. Capturing, reviewing, uploading, cancelling, saving, and
+sharing diagnostics never call `stopActiveWorker()` or
+`WorkerProcessRunning.cancel()`.
 
-- Capture the archive first, then present `DiagnosticBundleArtifact.preview`.
-  Do not reconstruct or separately redact payloads in the UI.
-- Upload the exact bytes at `archiveURL`. The client builder has already
-  enforced the 2 MiB contract.
-- Upload cancellation must cancel only the upload task. It must not call
-  `stopActiveWorker()` or `WorkerProcessRunning.cancel()`.
-- Keep the local artifact after upload failure or cancellation and offer
-  `sharingItems` and `saveCopy(to:)` as the offline fallback.
-- A successful upload may remove the local copy only after the support code and
-  expiry state are safely presented or persisted.
-- The consent sheet can use the preview's included/excluded categories
-  verbatim. An optional user description should remain a separately bounded,
-  redacted service field if that feature is selected later.
+The flow captures the archive before presenting consent and displays
+`DiagnosticBundleArtifact.preview` directly:
+
+- Included and excluded categories are shown verbatim from the artifact.
+- The compressed ZIP size, 2 MiB ceiling, member sizes, and truncation notices
+  are visible before upload consent.
+- Upload uses one immutable in-memory copy of the exact `archiveURL` bytes for
+  both SHA-256 metadata and the authorized PUT.
+- Cancelling or failing an upload keeps the reviewed local artifact and offers
+  **Retry Send**, **Save a Copy…**, native **Share…**, and explicit discard.
+- Every retry starts with a new `POST /v1/reports`; upload authorizations are
+  never reused.
+- Success presents a selectable and copyable support code plus the retention
+  expiry before the temporary local copy is removed.
+
+When no service endpoint is configured, the same action becomes **Save
+Diagnostics…**. Capture and consent/review remain available, but the sheet
+offers only local Save/Share fallback instead of a disabled network action.
+
+## Endpoint Configuration
+
+The app reads the public service origin only from the
+`BDToAVPSupportDiagnosticsEndpoint` Info.plist key. It is not stored in user
+defaults and there is no endpoint field in Settings. Missing, blank, malformed,
+non-HTTPS, credential-bearing, path-bearing, query-bearing, or fragment-bearing
+values fail closed to local-only mode.
+
+`macos/project.yml` expands the key from the
+`BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT` build setting. The native packaging
+helper accepts the same-named environment value only at build time and rejects
+anything except a credential-free HTTPS origin. For example:
+
+```sh
+BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://support.example \
+  uv run python scripts/native_app.py package
+```
+
+No service credential is embedded in the app. The endpoint may remain empty
+until the private service has an approved production origin.
+
+## Upload Client Security
+
+The native client uses an ephemeral `URLSession` with no cache, cookie store, or
+credential store. It sends the v1 `application/zip` metadata request to
+`POST /v1/reports`, validates the returned schema, support code, expiry,
+authorization methods, required headers, and exact report paths, then sends the
+same immutable ZIP bytes with the returned PUT headers.
+
+Both returned upload and status URLs must remain HTTPS and match the configured
+scheme, host, and effective port. Redirects are rejected for both requests, so
+the private ZIP and short-lived bearer values cannot be forwarded to another
+origin. Upload and status bearer values remain request-scoped in memory and are
+never persisted or logged. Response bodies and headers are bounded, and
+network/HTTP failures map to a small set of user-safe offline, timeout,
+rate-limit, unavailable, rejected-bundle, expired-authorization, and invalid-
+response states without displaying server bodies or token-bearing URLs.

@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var viewModel: ConversionViewModel
     @ObservedObject var previewViewModel: PreviewViewModel
+    @ObservedObject var diagnosticReportViewModel: DiagnosticReportViewModel
     @ObservedObject var settings: AppSettings
     @ObservedObject var profileStore: ProfileStore
     let capabilities: AppCapabilities
@@ -25,16 +26,19 @@ struct ContentView: View {
     @State private var pendingReviewedPreview: PreviewDraft?
     @State private var titleSelection = DiscTitleSelection.main
     @State private var isShowingTitleChooser = false
+    @State private var isShowingDiagnosticReport = false
 
     init(
         viewModel: ConversionViewModel,
         previewViewModel: PreviewViewModel,
+        diagnosticReportViewModel: DiagnosticReportViewModel,
         settings: AppSettings,
         profileStore: ProfileStore,
         capabilities: AppCapabilities
     ) {
         _viewModel = ObservedObject(wrappedValue: viewModel)
         _previewViewModel = ObservedObject(wrappedValue: previewViewModel)
+        _diagnosticReportViewModel = ObservedObject(wrappedValue: diagnosticReportViewModel)
         _settings = ObservedObject(wrappedValue: settings)
         _profileStore = ObservedObject(wrappedValue: profileStore)
         self.capabilities = capabilities
@@ -79,6 +83,9 @@ struct ContentView: View {
                     changeSource: chooseExistingSource,
                     chooseDestination: chooseDestination,
                     retryAnalysis: viewModel.restartInspection,
+                    diagnosticsActionTitle: diagnosticActionTitle,
+                    canShowDiagnostics: canShowDiagnosticAction,
+                    showDiagnostics: showDiagnosticReport,
                     resolveRecoveryChoice: { choice in
                         _ = viewModel.resolveRecoveryChoice(choice)
                     },
@@ -153,6 +160,11 @@ struct ContentView: View {
         .onChange(of: viewModel.hasActiveWorker) { _, isActive in
             if !isActive {
                 refreshDiscs()
+            }
+        }
+        .onChange(of: viewModel.state.jobID) { previousJobID, currentJobID in
+            if currentJobID != nil, currentJobID != previousJobID {
+                diagnosticReportViewModel.prepareForNewDiagnosticSession()
             }
         }
         .onChange(of: selectedProfileID) { _, _ in
@@ -265,6 +277,9 @@ struct ContentView: View {
                 }
             }
         }
+        .sheet(isPresented: $isShowingDiagnosticReport) {
+            DiagnosticReportSheet(viewModel: diagnosticReportViewModel)
+        }
         .alert(
             "Profile Could Not Be Saved",
             isPresented: Binding(
@@ -372,6 +387,17 @@ struct ContentView: View {
 
             Spacer()
 
+            if canShowDiagnosticAction {
+                Button(action: showDiagnosticReport) {
+                    Label(diagnosticActionTitle, systemImage: "stethoscope")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help(diagnosticActionHelp)
+                .accessibilityLabel(diagnosticActionTitle.replacingOccurrences(of: "…", with: ""))
+                .accessibilityHint("Captures diagnostics without stopping the current conversion")
+            }
+
             Button {
                 isShowingActivity.toggle()
             } label: {
@@ -425,6 +451,34 @@ struct ContentView: View {
 
     private var selectedProfile: EncodingProfile {
         profileStore.profile(withID: selectedProfileID)
+    }
+
+    private var diagnosticActionTitle: String {
+        if case .success = diagnosticReportViewModel.phase {
+            return "View Support Code…"
+        }
+        return diagnosticReportViewModel.isUploadAvailable ? "Send Diagnostics…" : "Save Diagnostics…"
+    }
+
+    private var canShowDiagnosticAction: Bool {
+        if viewModel.hasDiagnosticEvidence || diagnosticReportViewModel.hasLocalArtifact {
+            return true
+        }
+        if case .success = diagnosticReportViewModel.phase {
+            return true
+        }
+        return false
+    }
+
+    private var diagnosticActionHelp: String {
+        diagnosticReportViewModel.isUploadAvailable
+            ? "Capture, review, and send privacy-safe diagnostics without stopping the current conversion."
+            : "Capture, review, and save privacy-safe diagnostics without stopping the current conversion."
+    }
+
+    private func showDiagnosticReport() {
+        diagnosticReportViewModel.begin()
+        isShowingDiagnosticReport = true
     }
 
     private var profileModified: Bool {
