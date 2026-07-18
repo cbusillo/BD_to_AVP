@@ -415,8 +415,11 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         return terminalEvent
     }
 
+    private static let stdoutChunkBytes = 64 * 1_024
+    private static let stdoutQueueChunkLimit = 128
+
     private static func chunks(from fileHandle: FileHandle) -> AsyncThrowingStream<Data, Error> {
-        AsyncThrowingStream { continuation in
+        AsyncThrowingStream(bufferingPolicy: .bufferingOldest(stdoutQueueChunkLimit)) { continuation in
             let fileDescriptor = dup(fileHandle.fileDescriptor)
             guard fileDescriptor >= 0 else {
                 continuation.finish(
@@ -432,9 +435,29 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
                 close(fileDescriptor)
             }
             channel.setLimit(lowWater: 1)
+            channel.setLimit(highWater: stdoutChunkBytes)
             channel.read(offset: 0, length: Int.max, queue: ioQueue) { done, dispatchData, errorCode in
                 if let dispatchData, !dispatchData.isEmpty {
-                    continuation.yield(Data(dispatchData))
+                    switch continuation.yield(Data(dispatchData)) {
+                    case .enqueued:
+                        break
+                    case .dropped:
+                        continuation.finish(
+                            throwing: NSError(
+                                domain: NSPOSIXErrorDomain,
+                                code: Int(ENOBUFS),
+                                userInfo: [NSLocalizedDescriptionKey: "Worker stdout overflow: event processing fell behind."]
+                            )
+                        )
+                        channel.close(flags: .stop)
+                        return
+                    case .terminated:
+                        channel.close(flags: .stop)
+                        return
+                    @unknown default:
+                        channel.close(flags: .stop)
+                        return
+                    }
                 }
                 if errorCode != 0 {
                     continuation.finish(

@@ -891,7 +891,7 @@ private enum DiagnosticJSONByteCount {
         switch scalar.value {
         case 0x08, 0x09, 0x0A, 0x0C, 0x0D, 0x22, 0x5C:
             return 2
-        case 0x00 ... 0x1F, 0x2028, 0x2029:
+        case 0x00 ... 0x1F:
             return 6
         case 0x00 ... 0x7F:
             return 1

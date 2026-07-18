@@ -70,6 +70,28 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertEqual(snapshot.droppedBytes, escaped.serializedByteCount)
     }
 
+    func testSerializedByteCountMatchesJSONEncoderForLineSeparators() {
+        let separatorMsg = "\u{2028}\u{2029}"
+        let asciiMsg = "ab"
+        let separator = diagnosticEvent(message: separatorMsg)
+        let ascii = diagnosticEvent(message: asciiMsg)
+
+        let utf8Diff = separatorMsg.utf8.count - asciiMsg.utf8.count
+        XCTAssertEqual(separator.serializedByteCount - ascii.serializedByteCount, utf8Diff)
+
+        var history = DiagnosticEventHistory(
+            maximumEntries: 8,
+            maximumBytes: separator.serializedByteCount * 2 - 1
+        )
+        history.append(separator)
+        history.append(separator)
+
+        let snapshot = history.snapshot()
+        XCTAssertEqual(snapshot.entries.count, 1)
+        XCTAssertEqual(snapshot.droppedEntries, 1)
+        XCTAssertEqual(snapshot.droppedBytes, separator.serializedByteCount)
+    }
+
     func testRedactorCorrelatesPathsAndRemovesCommandsSecretsAndIdentifiers() {
         let redactor = DiagnosticRedactor(bundleID: fixedBundleID)
         let privatePath = "/Users/alice/Movies/Secret Feature.mkv"
@@ -170,6 +192,132 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertEqual(result.status, .missing)
         XCTAssertNil(result.errorKind)
         XCTAssertNil(result.fileSizeBytes)
+    }
+
+    func testCreateBundleRemovesNewlyCreatedDirectoryOnWriteFailure() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+
+        let outputDirectory = base.appendingPathComponent("bundles", isDirectory: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outputDirectory.path))
+
+        let writeError = CocoaError(.fileWriteUnknown)
+        let recorder = DiagnosticSessionRecorder()
+        let snapshot = recorder.snapshot(
+            capturedAt: fixedDate,
+            lifecycle: WorkerLifecycleState(),
+            activeMode: nil,
+            batchSummary: nil,
+            process: .empty
+        )
+        let builder = DiagnosticBundleBuilder(
+            bundleIDProvider: { self.fixedBundleID },
+            archiveWriter: { _, _ in throw writeError }
+        )
+
+        XCTAssertThrowsError(try builder.createBundle(from: snapshot, outputDirectory: outputDirectory))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outputDirectory.path),
+                       "Newly created output directory should be removed after write failure")
+    }
+
+    func testCreateBundlePreservesPreexistingDirectoryOnWriteFailure() throws {
+        let outputDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outputDirectory) }
+
+        let writeError = CocoaError(.fileWriteUnknown)
+        let recorder = DiagnosticSessionRecorder()
+        let snapshot = recorder.snapshot(
+            capturedAt: fixedDate,
+            lifecycle: WorkerLifecycleState(),
+            activeMode: nil,
+            batchSummary: nil,
+            process: .empty
+        )
+        let builder = DiagnosticBundleBuilder(
+            bundleIDProvider: { self.fixedBundleID },
+            archiveWriter: { _, _ in throw writeError }
+        )
+
+        XCTAssertThrowsError(try builder.createBundle(from: snapshot, outputDirectory: outputDirectory))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outputDirectory.path),
+                      "Pre-existing output directory must not be removed on write failure")
+    }
+
+    func testRedactionContextEvictsOldestWhenCapacityExceeded() {
+        let recorder = DiagnosticSessionRecorder(
+            maximumEvents: 3,
+            maximumEventBytes: 64 * 1_024,
+            maximumStorageSamples: 2,
+            storageSampleInterval: 0
+        )
+        var lifecycle = WorkerLifecycleState()
+        var firstJobID: UUID?
+        for i in 0..<4 {
+            let jobID = UUID()
+            if i == 0 { firstJobID = jobID }
+            let source = ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/movie\(i).mkv"))
+            lifecycle.selectSource(source.url)
+            try? lifecycle.begin(jobID: jobID)
+            recorder.beginJob(
+                context: DiagnosticJobContext(jobID: jobID, source: source),
+                lifecycle: lifecycle,
+                activeMode: "batch_conversion",
+                recordedAt: fixedDate.addingTimeInterval(TimeInterval(i))
+            )
+        }
+
+        let snapshot = recorder.snapshot(
+            capturedAt: fixedDate.addingTimeInterval(5),
+            lifecycle: lifecycle,
+            activeMode: nil,
+            batchSummary: nil,
+            process: .empty
+        )
+
+        let retainedJobIDs = snapshot.redactionContexts.map(\.jobID)
+        XCTAssertEqual(retainedJobIDs.count, 3)
+        XCTAssertFalse(retainedJobIDs.contains(firstJobID!),
+                       "Oldest redaction context should be evicted when capacity is exceeded")
+    }
+
+    func testCreateBundleThrowsPayloadTooLargeWhenStorageExceedsLimit() throws {
+        let outputDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outputDirectory) }
+
+        let tinyConfig = DiagnosticBundleBuilder.Configuration(
+            maximumArchiveBytes: 2 * 1_024 * 1_024,
+            maximumUncompressedBytes: 1_500_000,
+            maximumManifestBytes: 64 * 1_024,
+            maximumEventsBytes: 320 * 1_024,
+            maximumStorageBytes: 1,
+            maximumToolTailBytes: 640 * 1_024
+        )
+        let recorder = DiagnosticSessionRecorder()
+        let snapshot = recorder.snapshot(
+            capturedAt: fixedDate,
+            lifecycle: WorkerLifecycleState(),
+            activeMode: nil,
+            batchSummary: nil,
+            process: .empty
+        )
+        let builder = DiagnosticBundleBuilder(
+            configuration: tinyConfig,
+            bundleIDProvider: { self.fixedBundleID }
+        )
+
+        XCTAssertThrowsError(try builder.createBundle(from: snapshot, outputDirectory: outputDirectory)) { error in
+            guard case DiagnosticBundleError.payloadTooLarge = error else {
+                return XCTFail("Expected payloadTooLarge, got \(error)")
+            }
+        }
+        let contents = (try? FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)) ?? []
+        XCTAssertTrue(contents.isEmpty, "No archive file should remain after a payloadTooLarge failure")
     }
 
     func testNoJobBundleIsVersionedAndOmitsJobEvidence() throws {
