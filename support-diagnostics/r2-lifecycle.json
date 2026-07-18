@@ -1,0 +1,17 @@
+{
+  "rules": [
+    {
+      "id": "expire-diagnostic-bundles-after-30-days",
+      "enabled": true,
+      "conditions": {
+        "prefix": "reports/"
+      },
+      "deleteObjectsTransition": {
+        "condition": {
+          "type": "Age",
+          "maxAge": 2592000
+        }
+      }
+    }
+  ]
+}
