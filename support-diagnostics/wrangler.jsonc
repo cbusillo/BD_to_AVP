@@ -1,0 +1,51 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "bd-to-avp-support-diagnostics",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-18",
+  "workers_dev": false,
+  "r2_buckets": [
+    {
+      "binding": "DIAGNOSTIC_BUNDLES",
+      "bucket_name": "bd-to-avp-support-diagnostics",
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "REPORT_REGISTRY",
+        "class_name": "ReportRegistry",
+      },
+    ],
+  },
+  "exports": {
+    "ReportRegistry": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+  },
+  "ratelimits": [
+    {
+      "name": "CREATE_RATE_LIMITER",
+      "namespace_id": "26601",
+      "simple": {
+        "limit": 3,
+        "period": 60,
+      },
+    },
+    {
+      "name": "UPLOAD_RATE_LIMITER",
+      "namespace_id": "26602",
+      "simple": {
+        "limit": 6,
+        "period": 60,
+      },
+    },
+  ],
+  "triggers": {
+    "crons": ["0 * * * *"],
+  },
+  "vars": {
+    "SERVICE_ENVIRONMENT": "production",
+  },
+}

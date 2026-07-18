@@ -1,0 +1,19 @@
+{
+  "name": "bd-to-avp-support-diagnostics",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private diagnostic bundle upload service for BD_to_AVP",
+  "type": "module",
+  "scripts": {
+    "check": "npm run typecheck && npm test",
+    "deploy:dry-run": "wrangler deploy --dry-run",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10",
+    "wrangler": "4.112.0"
+  }
+}
