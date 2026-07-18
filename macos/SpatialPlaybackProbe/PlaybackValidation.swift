@@ -10,12 +10,54 @@ enum PlaybackValidationPhase: Equatable {
     case complete
 }
 
+enum PlaybackPresentationExpectation: String, Codable, Equatable {
+    static let environmentKey = "BD_TO_AVP_PROBE_EXPECTED_PRESENTATION"
+
+    case stereo
+    case spatial
+
+    static func resolve(environment: [String: String]) -> Self {
+        environment[environmentKey]?.lowercased() == spatial.rawValue ? .spatial : .stereo
+    }
+
+    var requiresSpatialPresentation: Bool {
+        self == .spatial
+    }
+
+    func matches(isStereo: Bool, isSpatial: Bool) -> Bool {
+        switch self {
+        case .stereo:
+            return isStereo && !isSpatial
+        case .spatial:
+            return isSpatial
+        }
+    }
+
+    var technicalDescription: String {
+        switch self {
+        case .stereo:
+            return "Stereo · Screen"
+        case .spatial:
+            return "Stereo · Spatial · Portal"
+        }
+    }
+
+    var guidance: String {
+        switch self {
+        case .stereo:
+            return "This run expects normal stereoscopic screen playback for a converted Blu-ray movie."
+        case .spatial:
+            return "This run expects the controlled spatial calibration fixture to enter portal presentation."
+        }
+    }
+}
+
 enum PlaybackCheckID: String, Codable, CaseIterable {
     case stereoDecode
     case playerReady
     case renderingReady
     case stereoPresentation
-    case spatialPresentation
+    case presentationMode
     case beginningSeek
     case middleSeek
     case endSeek
@@ -30,8 +72,8 @@ enum PlaybackCheckID: String, Codable, CaseIterable {
             return "Picture is ready"
         case .stereoPresentation:
             return "Stereoscopic playback is active"
-        case .spatialPresentation:
-            return "Spatial treatment is active"
+        case .presentationMode:
+            return "3D presentation matches the movie type"
         case .beginningSeek:
             return "Beginning plays"
         case .middleSeek:
@@ -109,7 +151,7 @@ enum PlaybackValidationResult: String, Codable {
     var summary: String {
         switch self {
         case .passed:
-            return "The movie played spatially, survived all three seeks, and matched what you saw."
+            return "The movie played in the expected 3D mode, survived all three seeks, and matched what you saw."
         case .needsReview:
             return "The automatic checks completed, but one observation was uncertain. The report preserves the details without treating this as approval."
         case .failed:
@@ -139,6 +181,7 @@ struct PlaybackSourceSummary: Codable, Equatable {
 }
 
 struct PlaybackPresentationSummary: Codable, Equatable {
+    let expectation: PlaybackPresentationExpectation
     let viewingMode: String
     let spatialVideoMode: String
     let immersiveViewingMode: String

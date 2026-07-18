@@ -127,6 +127,9 @@ final class PlaybackProbeModel: ObservableObject {
     @Published private(set) var playerComponentInstalled = false
 
     let stereoDecodeSupported = VTIsStereoMVHEVCDecodeSupported()
+    let presentationExpectation = PlaybackPresentationExpectation.resolve(
+        environment: ProcessInfo.processInfo.environment
+    )
 
     private var itemStatusObservation: NSKeyValueObservation?
     private var timeObserver: Any?
@@ -148,6 +151,7 @@ final class PlaybackProbeModel: ObservableObject {
     private var actualSpatialVideoModeValue = "screen"
     private var actualImmersiveViewingModeValue = "none"
     private var validatedPresentation = PlaybackPresentationSummary(
+        expectation: .stereo,
         viewingMode: "unknown",
         spatialVideoMode: "screen",
         immersiveViewingMode: "none"
@@ -163,6 +167,14 @@ final class PlaybackProbeModel: ObservableObject {
 
     var decodeSupportText: String {
         stereoDecodeSupported ? "Supported" : "Unavailable"
+    }
+
+    var expectedPresentationText: String {
+        presentationExpectation.technicalDescription
+    }
+
+    var expectedPresentationGuidance: String {
+        presentationExpectation.guidance
     }
 
     var canControlPlayback: Bool {
@@ -416,6 +428,7 @@ final class PlaybackProbeModel: ObservableObject {
         validationReportURL = nil
         validationReportSaveError = nil
         validatedPresentation = PlaybackPresentationSummary(
+            expectation: presentationExpectation,
             viewingMode: "unknown",
             spatialVideoMode: "screen",
             immersiveViewingMode: "none"
@@ -451,7 +464,7 @@ final class PlaybackProbeModel: ObservableObject {
 
         let generatedAt = Date()
         let report = PlaybackValidationReport(
-            schemaVersion: 2,
+            schemaVersion: 3,
             validatorVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development",
             validatorBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development",
             generatedAt: ISO8601DateFormatter().string(from: generatedAt),
@@ -866,20 +879,16 @@ final class PlaybackProbeModel: ObservableObject {
                 : "The movie remained monoscopic instead of stereoscopic."
         )
 
-        currentValidationStepText = "Checking 3D presentation…"
-        updateCheck(.spatialPresentation, status: .running, detail: "Waiting for spatial treatment and portal presentation.")
-        let spatialPresentationReady = await waitForCondition(maxAttempts: 40) { [weak self] in
-            self?.isActuallySpatial == true
-        }
+        currentValidationStepText = "Checking the expected 3D presentation…"
+        updateCheck(.presentationMode, status: .running, detail: "Waiting for the expected 3D presentation mode.")
+        let presentationMatchesExpectation = await waitForExpectedPresentation()
         guard isValidationCurrent(generation, item: validationItem) else {
             return
         }
         updateCheck(
-            .spatialPresentation,
-            status: spatialPresentationReady ? .passed : .failed,
-            detail: spatialPresentationReady
-                ? "The movie is rendering with spatial treatment in a portal."
-                : "Stereoscopic playback is available, but RealityKit remained in screen mode without spatial treatment."
+            .presentationMode,
+            status: presentationMatchesExpectation ? .passed : .failed,
+            detail: presentationModeDetail(matchesExpectation: presentationMatchesExpectation)
         )
 
         for position in ProbeSeekPosition.allCases {
@@ -937,7 +946,8 @@ final class PlaybackProbeModel: ObservableObject {
                 renderingReady: receivedFreshStatus && renderingStatusText == "Ready",
                 stereoPresentation: receivedFreshStatus && isActuallyStereo,
                 spatialPresentation: receivedFreshStatus && isActuallySpatial,
-                requiresSpatialPresentation: spatialPresentationReady
+                requiresSpatialPresentation: presentationExpectation.requiresSpatialPresentation
+                    && presentationMatchesExpectation
             )
             let passed = PlaybackValidationRules.seekPassed(evidence)
 
@@ -976,6 +986,7 @@ final class PlaybackProbeModel: ObservableObject {
                 "result": automaticChecksPassed ? "pass" : "fail",
                 "rendering_status": renderingStatusText.lowercased(),
                 "actual_presentation": actualPresentationText.lowercased(),
+                "expected_presentation": presentationExpectation.rawValue,
                 "checks_passed": String(automaticChecksPassed),
                 "audio_options": String(audioOptions.count),
                 "subtitle_options": String(max(0, subtitleOptions.count - 1)),
@@ -983,6 +994,7 @@ final class PlaybackProbeModel: ObservableObject {
         )
 
         validatedPresentation = PlaybackPresentationSummary(
+            expectation: presentationExpectation,
             viewingMode: actualViewingModeValue,
             spatialVideoMode: actualSpatialVideoModeValue,
             immersiveViewingMode: actualImmersiveViewingModeValue
@@ -1011,6 +1023,36 @@ final class PlaybackProbeModel: ObservableObject {
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
         return condition()
+    }
+
+    private func waitForExpectedPresentation() async -> Bool {
+        switch presentationExpectation {
+        case .spatial:
+            return await waitForCondition(maxAttempts: 40) { [weak self] in
+                self?.isActuallySpatial == true
+            }
+        case .stereo:
+            _ = await waitForCondition(maxAttempts: 8) { [weak self] in
+                self?.isActuallySpatial == true
+            }
+            return presentationExpectation.matches(
+                isStereo: isActuallyStereo,
+                isSpatial: isActuallySpatial
+            )
+        }
+    }
+
+    private func presentationModeDetail(matchesExpectation: Bool) -> String {
+        switch (presentationExpectation, matchesExpectation) {
+        case (.stereo, true):
+            return "RealityKit reports stereoscopic screen playback, the expected mode for converted Blu-ray movies."
+        case (.stereo, false):
+            return "The movie did not remain in the expected stereoscopic screen presentation."
+        case (.spatial, true):
+            return "The calibration fixture is rendering with spatial treatment in a portal."
+        case (.spatial, false):
+            return "The calibration fixture remained in screen mode without spatial treatment."
+        }
     }
 
     private func seekTarget(for position: ProbeSeekPosition) -> Double {
@@ -1109,6 +1151,7 @@ final class PlaybackProbeModel: ObservableObject {
         validationReportURL = nil
         validationReportSaveError = nil
         validatedPresentation = PlaybackPresentationSummary(
+            expectation: presentationExpectation,
             viewingMode: "unknown",
             spatialVideoMode: "screen",
             immersiveViewingMode: "none"

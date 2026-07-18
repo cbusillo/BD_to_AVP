@@ -258,6 +258,10 @@ struct PlaybackProbeView: View {
             Text("The check takes about 15 seconds. Keep this window visible while it plays the beginning, middle, and end.")
                 .foregroundStyle(.secondary)
 
+            Text(model.expectedPresentationGuidance)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
             VStack(alignment: .leading, spacing: 12) {
                 instructionRow(number: 1, text: "Start the guided check")
                 instructionRow(number: 2, text: "Watch the picture during three short seeks")
@@ -431,8 +435,9 @@ struct PlaybackProbeView: View {
                 statusRow(title: "Stereo decode support", value: model.decodeSupportText)
                 statusRow(title: "Player", value: model.playerItemStatusText)
                 statusRow(title: "Rendering", value: model.renderingStatusText)
+                statusRow(title: "Expected presentation", value: model.expectedPresentationText)
                 statusRow(
-                    title: "Requested presentation",
+                    title: "Mode requested during check",
                     value: model.isSpatialPresentationRequested ? "Stereo · Spatial · Portal" : "Contained screen preview"
                 )
                 statusRow(title: "Actual presentation", value: model.actualPresentationText)

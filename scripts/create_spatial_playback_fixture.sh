@@ -6,7 +6,7 @@ output_path="${1:-/tmp/bd-to-avp-spatial-fixture/Probe.mov}"
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 
-for command_name in ffmpeg ffprobe; do
+for command_name in ffmpeg ffprobe python3; do
 	if ! command -v "$command_name" >/dev/null 2>&1; then
 		printf 'Required command is unavailable: %s\n' "$command_name" >&2
 		exit 1
@@ -56,7 +56,13 @@ EOF
 	-add "$work_dir/spatial.mov:forcesync" \
 	-add "$work_dir/audio.m4a#1:lang=eng:group=1:alternate_group=1" \
 	-add "$work_dir/subtitles.srt#1:hdlr=sbtl:lang=eng:group=2:name=English Subtitles:tx3g" \
-	"$output_path"
+	"$work_dir/finalized.mov"
+
+python3 "$repo_root/scripts/add_spatial_video_metadata.py" \
+	"$work_dir/finalized.mov" \
+	"$output_path" \
+	--baseline-mm 64 \
+	--disparity-adjustment 0
 
 ffprobe -v error -show_entries format=duration:stream=index,codec_name,codec_type:stream_tags=language -of json "$output_path"
 printf 'Created spatial playback fixture: %s\n' "$output_path"

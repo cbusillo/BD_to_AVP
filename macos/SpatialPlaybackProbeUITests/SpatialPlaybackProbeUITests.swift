@@ -21,6 +21,7 @@ final class SpatialPlaybackProbeUITests: XCTestCase {
         #else
         let app = XCUIApplication()
         app.launchEnvironment["BD_TO_AVP_PROBE_AUTORUN"] = "1"
+        app.launchEnvironment["BD_TO_AVP_PROBE_EXPECTED_PRESENTATION"] = "spatial"
         app.launch()
 
         let automaticStatus = app.staticTexts["automatic-check-status"]
