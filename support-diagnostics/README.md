@@ -13,18 +13,23 @@ bound abuse and storage exposure.
 
 ## Bundle Contract
 
-- Content type: `application/gzip`
+- Content type: `application/zip`
 - Maximum compressed size: `2 MiB` (`2,097,152` bytes)
-- Archive format: gzip-compressed tar archive
-- Required archive member: a regular top-level `diagnostic.json`
-- Required JSON field: `{"schema_version": 1, ...}`
+- Archive format: ZIP with raw-DEFLATE entries
+- Required top-level members: `manifest.json`, `events.jsonl`, `storage.json`,
+  and `tool-tail.txt`
+- Uncompressed limits: 64 KiB manifest, 320 KiB events, 160 KiB storage,
+  640 KiB tool tail, and 1,500,000 bytes total
+- Required schema field: integer `{"schema_version": 1, ...}` in the manifest,
+  storage document, and each event; the tool tail carries the matching header
 - The client declares the exact size, SHA-256, content type, and bundle schema
   before receiving upload authorization.
 
-The Worker validates size, content type, request checksum header, and the
-SHA-256 of the received bytes. It records the same checksum and expiry in R2
-metadata. The maintainer CLI validates those response headers, the downloaded
-checksum, archive safety, and the `diagnostic.json` schema before writing an
+The Worker validates size, content type, request checksum header, SHA-256,
+archive structure, exact member set, compression method, CRCs, decompressed
+limits, and schema markers before storage. It records the same checksum and
+expiry in R2 metadata. The maintainer CLI independently repeats the response,
+checksum, archive-safety, member, size, and schema validation before writing an
 archive to disk.
 
 ## HTTP Contract
@@ -39,7 +44,7 @@ no-store`; the Worker deliberately emits no CORS headers.
 ```json
 {
   "bundle_schema_version": 1,
-  "content_type": "application/gzip",
+  "content_type": "application/zip",
   "sha256": "<64-character lowercase SHA-256 hex>",
   "size_bytes": 12345
 }
@@ -68,7 +73,7 @@ maintainer; it never authorizes reads.
     "headers": {
       "Authorization": "Bearer <upload-token>",
       "Content-Length": "12345",
-      "Content-Type": "application/gzip",
+      "Content-Type": "application/zip",
       "X-Content-SHA256": "<64-character lowercase SHA-256 hex>"
     },
     "method": "PUT",
@@ -87,10 +92,12 @@ this unauthenticated, abuse-bounded endpoint.
 `PUT /v1/reports/{report_id}/upload`
 
 Use the exact authorization and headers returned from creation. The successful
-`201` PUT is the atomic finalization step: the Worker writes the private R2
-object only after the bounded body matches the report's authorized size and
-SHA-256, then changes the Durable Object state to `uploaded`. A token cannot
-produce a second stored object; a replay returns `409 upload_consumed`.
+`201` PUT is the finalization step. After headers match, the Worker atomically
+reserves the single-use authorization before reading the body, validates the
+bounded ZIP and its checksum, writes the private R2 object, and changes the
+Durable Object state to `uploaded`. Invalid body bytes fail the reserved report
+and require a fresh report; concurrent or later replays return
+`409 upload_consumed`.
 
 `GET /v1/reports/{report_id}/status` requires the returned short-lived status
 bearer token. It returns only the opaque report ID, upload state, and retention
@@ -106,7 +113,7 @@ GET    /v1/maintainer/reports/{support_code}
 DELETE /v1/maintainer/reports/{support_code}
 ```
 
-The GET response is the gzip archive with `X-Diagnostic-SHA256` and
+The GET response is the ZIP archive with `X-Diagnostic-SHA256` and
 `X-Diagnostic-Schema-Version` headers. The DELETE response is `204 No Content`.
 Unknown support codes return `404` only after maintainer authentication. There
 is no public list endpoint, public object route, or support-code-only read
@@ -136,13 +143,13 @@ export SUPPORT_DIAGNOSTICS_ENDPOINT='https://support.example'
 export SUPPORT_DIAGNOSTICS_TOKEN='<maintainer bearer token>'
 
 uv run python scripts/support_diagnostics.py fetch BDAVP-0123456789ABCDEF \
-  --output /secure/path/report.tar.gz
+  --output /secure/path/report.zip
 uv run python scripts/support_diagnostics.py delete BDAVP-0123456789ABCDEF --yes
 ```
 
 `fetch` refuses non-HTTPS endpoints, does not overwrite an existing file,
 streams at most 2 MiB from the response, verifies the response checksum/schema,
-validates the gzip tar archive without extracting it, and writes only a
+validates the ZIP archive without extracting it, and writes only a
 validated bundle. `delete` requires `--yes`.
 
 ## Local Checks

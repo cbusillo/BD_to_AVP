@@ -13,6 +13,10 @@ import {
   type ReportRecord,
 } from "./protocol.js";
 import {
+  InvalidDiagnosticBundleError,
+  validateDiagnosticBundle,
+} from "./bundle.js";
+import {
   constantTimeTextEqual,
   generateSupportCode,
   generateToken,
@@ -490,26 +494,17 @@ async function uploadBundle(
     throw new PublicError("invalid_request", 400);
   }
 
-  const now = nowFrom(dependencies);
   const uploadTokenHash = await sha256Hex(uploadToken);
   const authorized = await dependencies.registry.authorizeUpload(
     reportId,
     uploadTokenHash,
-    now,
+    nowFrom(dependencies),
   );
   const declaredLength = parseContentLength(request);
   if (declaredLength === undefined || declaredLength !== authorized.sizeBytes) {
     throw new PublicError("content_length_mismatch", 422);
   }
   if (suppliedSha256 !== authorized.sha256) {
-    throw new PublicError("checksum_mismatch", 422);
-  }
-
-  const bytes = await readLimitedBody(request, MAX_BUNDLE_BYTES);
-  if (bytes.byteLength !== authorized.sizeBytes) {
-    throw new PublicError("content_length_mismatch", 422);
-  }
-  if ((await sha256Hex(bytes)) !== authorized.sha256) {
     throw new PublicError("checksum_mismatch", 422);
   }
 
@@ -520,8 +515,38 @@ async function uploadBundle(
   const record = await dependencies.registry.beginUpload(
     reportId,
     uploadTokenHash,
-    now,
+    nowFrom(dependencies),
   );
+  let bytes: Uint8Array;
+  try {
+    bytes = await readLimitedBody(request, MAX_BUNDLE_BYTES);
+    if (bytes.byteLength !== authorized.sizeBytes) {
+      throw new PublicError("content_length_mismatch", 422);
+    }
+    if ((await sha256Hex(bytes)) !== authorized.sha256) {
+      throw new PublicError("checksum_mismatch", 422);
+    }
+    await validateDiagnosticBundle(bytes, record.bundleSchemaVersion);
+    if (record.uploadExpiresAt <= nowFrom(dependencies)) {
+      throw new PublicError("upload_expired", 410);
+    }
+  } catch (error) {
+    await dependencies.registry
+      .failUpload(reportId, nowFrom(dependencies))
+      .catch(() => undefined);
+    dependencies.logger?.error("report_upload_failed", {
+      outcome:
+        error instanceof InvalidDiagnosticBundleError
+          ? "invalid_bundle"
+          : "invalid_upload",
+      report_id: record.reportId,
+    });
+    if (error instanceof InvalidDiagnosticBundleError) {
+      throw new PublicError("invalid_bundle", 422);
+    }
+    throw error;
+  }
+
   try {
     await dependencies.bucket.put(
       record.objectKey,
@@ -539,14 +564,14 @@ async function uploadBundle(
           cacheControl: "no-store",
           contentDisposition: `attachment; filename="${record.supportCode}${BUNDLE_FILENAME_SUFFIX}"`,
           contentType: record.contentType,
-          expires: new Date(record.expiresAt),
+          cacheExpiry: new Date(record.expiresAt),
         },
         sha256: hexToArrayBuffer(record.sha256),
       },
     );
   } catch {
     await dependencies.registry
-      .failUpload(reportId, now)
+      .failUpload(reportId, nowFrom(dependencies))
       .catch(() => undefined);
     dependencies.logger?.error("report_upload_failed", {
       outcome: "storage_unavailable",
@@ -556,7 +581,10 @@ async function uploadBundle(
   }
 
   try {
-    const completed = await dependencies.registry.completeUpload(reportId, now);
+    const completed = await dependencies.registry.completeUpload(
+      reportId,
+      nowFrom(dependencies),
+    );
     dependencies.logger?.info("report_uploaded", {
       outcome: "stored",
       report_id: completed.reportId,
@@ -572,7 +600,7 @@ async function uploadBundle(
   } catch (error) {
     await dependencies.bucket.delete(record.objectKey).catch(() => undefined);
     await dependencies.registry
-      .failUpload(reportId, now)
+      .failUpload(reportId, nowFrom(dependencies))
       .catch(() => undefined);
     dependencies.logger?.error("report_upload_failed", {
       outcome: "finalization_unavailable",
@@ -759,7 +787,7 @@ export function createDiagnosticService(dependencies: ServiceDependencies): {
   };
 }
 
-class DurableObjectRegistryClient implements Registry {
+export class DurableObjectRegistryClient implements Registry {
   constructor(private readonly stub: DurableObjectStub) {}
 
   async create(input: CreateReportRecordInput, now: number): Promise<void> {
@@ -833,11 +861,18 @@ class DurableObjectRegistryClient implements Registry {
     try {
       body = (await response.json()) as RegistryOperationResponse;
     } catch {
-      throw new RegistryError("not_found");
+      throw new Error("registry_unavailable");
     }
     const errorCode = registryErrorCode(body.error);
-    if (!response.ok || errorCode !== undefined) {
-      throw new RegistryError(errorCode ?? "not_found");
+    if (errorCode !== undefined) {
+      throw new RegistryError(errorCode);
+    }
+    if (
+      !response.ok ||
+      body.error !== undefined ||
+      !Object.hasOwn(body, "result")
+    ) {
+      throw new Error("registry_unavailable");
     }
     return body.result as Result;
   }
@@ -851,7 +886,7 @@ function internalErrorResponse(error: unknown): Response {
   if (error instanceof RegistryError) {
     return jsonResponse({ error: error.code }, 400);
   }
-  return jsonResponse({ error: "not_found" }, 400);
+  return jsonResponse({ error: "internal_error" }, 500);
 }
 
 export class ReportRegistry {

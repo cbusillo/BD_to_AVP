@@ -1,6 +1,6 @@
 export const API_SCHEMA_VERSION = 1;
-export const BUNDLE_CONTENT_TYPE = "application/gzip";
-export const BUNDLE_FILENAME_SUFFIX = ".tar.gz";
+export const BUNDLE_CONTENT_TYPE = "application/zip";
+export const BUNDLE_FILENAME_SUFFIX = ".zip";
 export const MAX_ACTIVE_REPORTS = 500;
 export const MAX_BUNDLE_BYTES = 2 * 1024 * 1024;
 export const MAX_CREATE_REQUEST_BYTES = 4 * 1024;

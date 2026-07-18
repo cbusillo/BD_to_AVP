@@ -75,10 +75,16 @@ export class ReportRegistryService implements Registry {
       throw new RegistryError("support_code_collision");
     }
 
-    await this.consumeClientQuota(input.clientFingerprint, now);
-    await this.storage.put(reportKey(input.reportId), input);
-    await this.storage.put(supportCodeKey(input.supportCode), input.reportId);
-    await this.scheduleNextExpiry();
+    const [usageKey, usage] = await this.nextClientUsage(
+      input.clientFingerprint,
+      now,
+    );
+    await this.storage.put({
+      [usageKey]: usage,
+      [reportKey(input.reportId)]: input,
+      [supportCodeKey(input.supportCode)]: input.reportId,
+    });
+    await this.scheduleNextExpiry().catch(() => undefined);
   }
 
   async authorizeUpload(
@@ -107,6 +113,11 @@ export class ReportRegistryService implements Registry {
     const record = await this.getLiveReport(reportId, now);
     if (record.uploadState !== "uploading") {
       throw new RegistryError("upload_consumed");
+    }
+    if (record.uploadExpiresAt <= now) {
+      record.uploadState = "failed";
+      await this.storage.put(reportKey(record.reportId), record);
+      throw new RegistryError("upload_expired");
     }
     record.uploadState = "uploaded";
     await this.storage.put(reportKey(record.reportId), record);
@@ -160,7 +171,7 @@ export class ReportRegistryService implements Registry {
   ): Promise<ReportRecord> {
     const record = await this.getForMaintainer(supportCode, now);
     await this.deleteRecord(record);
-    await this.scheduleNextExpiry();
+    await this.scheduleNextExpiry().catch(() => undefined);
     return record;
   }
 
@@ -185,14 +196,14 @@ export class ReportRegistryService implements Registry {
       }
     }
 
-    await this.scheduleNextExpiry();
+    await this.scheduleNextExpiry().catch(() => undefined);
     return expiredObjectKeys;
   }
 
-  private async consumeClientQuota(
+  private async nextClientUsage(
     clientFingerprint: string,
     now: number,
-  ): Promise<void> {
+  ): Promise<readonly [string, ClientUsage]> {
     const key = clientUsageKey(clientFingerprint);
     const existing = await this.storage.get<ClientUsage>(key);
     const usage =
@@ -205,7 +216,7 @@ export class ReportRegistryService implements Registry {
     }
 
     usage.count += 1;
-    await this.storage.put(key, usage);
+    return [key, usage] as const;
   }
 
   private assertUploadAuthorization(
@@ -240,8 +251,10 @@ export class ReportRegistryService implements Registry {
   }
 
   private async deleteRecord(record: ReportRecord): Promise<void> {
-    await this.storage.delete(reportKey(record.reportId));
-    await this.storage.delete(supportCodeKey(record.supportCode));
+    await this.storage.delete([
+      reportKey(record.reportId),
+      supportCodeKey(record.supportCode),
+    ]);
   }
 
   private async scheduleNextExpiry(): Promise<void> {

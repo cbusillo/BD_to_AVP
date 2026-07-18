@@ -1,8 +1,8 @@
 export interface R2HttpMetadata {
   cacheControl?: string;
+  cacheExpiry?: Date;
   contentDisposition?: string;
   contentType?: string;
-  expires?: Date;
 }
 
 export interface R2PutOptions {
@@ -46,9 +46,11 @@ export interface DurableObjectNamespace {
 }
 
 export interface DurableObjectStorage {
+  delete(keys: string[]): Promise<number>;
   delete(key: string): Promise<boolean>;
   get<T>(key: string): Promise<T | undefined>;
   list<T>(options?: { prefix?: string }): Promise<Map<string, T>>;
+  put(entries: Record<string, unknown>): Promise<void>;
   put<T>(key: string, value: T): Promise<void>;
   setAlarm(scheduledTime: number): Promise<void>;
 }

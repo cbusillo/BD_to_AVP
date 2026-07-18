@@ -2,26 +2,38 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import io
 import json
 import os
 import re
+import struct
 import sys
-import tarfile
 import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Callable, Mapping, Protocol, cast
 
 
 MAX_BUNDLE_BYTES = 2 * 1024 * 1024
-MAX_DIAGNOSTIC_JSON_BYTES = 1024 * 1024
-MAX_ARCHIVE_MEMBERS = 16
-MAX_UNCOMPRESSED_ARCHIVE_BYTES = 8 * 1024 * 1024
+MAX_UNCOMPRESSED_ARCHIVE_BYTES = 1_500_000
+ENTRY_LIMITS = {
+    "manifest.json": 64 * 1024,
+    "events.jsonl": 320 * 1024,
+    "storage.json": 160 * 1024,
+    "tool-tail.txt": 640 * 1024,
+}
+ALLOWED_ZIP_FLAGS = {0, 0x0800}
+CENTRAL_DIRECTORY_HEADER = struct.Struct("<IHHHHHHIIIHHHHHII")
+CENTRAL_DIRECTORY_SIGNATURE = 0x02014B50
+END_OF_CENTRAL_DIRECTORY = struct.Struct("<IHHHHIIH")
+END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06054B50
+LOCAL_FILE_HEADER = struct.Struct("<IHHHHHIIIHH")
+LOCAL_FILE_HEADER_SIGNATURE = 0x04034B50
+ZIP_DEFLATED = 8
 SCHEMA_VERSION = 1
 SUPPORT_CODE_PATTERN = re.compile(r"^BDAVP-[0-9ABCDEFGHJKMNPQRSTVWXYZ]{16}$")
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
@@ -57,6 +69,16 @@ class FetchResult:
     sha256: str
     size_bytes: int
     support_code: str
+
+
+@dataclass(frozen=True)
+class _ZipEntry:
+    name: str
+    flags: int
+    crc32: int
+    compressed_size: int
+    uncompressed_size: int
+    local_header_offset: int
 
 
 def _environment_value(environ: Mapping[str, str], name: str) -> str:
@@ -102,7 +124,7 @@ def _request(url: str, method: str, token: str) -> urllib.request.Request:
     return urllib.request.Request(
         url,
         headers={
-            "Accept": "application/gzip",
+            "Accept": "application/zip",
             "Authorization": f"Bearer {token}",
             "User-Agent": "bd-to-avp-support-diagnostics-cli/1",
         },
@@ -136,9 +158,184 @@ def _parse_content_length(headers: Mapping[str, str]) -> int:
     return length
 
 
-def _safe_member_name(name: str) -> bool:
-    path = PurePosixPath(name)
-    return bool(name) and not path.is_absolute() and ".." not in path.parts
+def _schema_document(payload: bytes, name: str, expected_schema_version: int) -> dict[str, object]:
+    try:
+        document = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SupportDiagnosticsError(f"{name} is not valid UTF-8 JSON.") from error
+    if (
+        not isinstance(document, dict)
+        or type(document.get("schema_version")) is not int
+        or document["schema_version"] != expected_schema_version
+    ):
+        raise SupportDiagnosticsError(f"{name} schema verification failed.")
+    return document
+
+
+def _require_archive_range(data: bytes, offset: int, length: int) -> None:
+    if offset < 0 or length < 0 or offset + length > len(data):
+        raise SupportDiagnosticsError("Diagnostic bundle is not a valid ZIP archive.")
+
+
+def _archive_payloads(data: bytes) -> dict[str, bytes]:
+    end_offset = len(data) - END_OF_CENTRAL_DIRECTORY.size
+    _require_archive_range(data, end_offset, END_OF_CENTRAL_DIRECTORY.size)
+    (
+        signature,
+        disk_number,
+        central_directory_disk,
+        disk_entry_count,
+        entry_count,
+        central_directory_size,
+        central_directory_offset,
+        comment_length,
+    ) = END_OF_CENTRAL_DIRECTORY.unpack_from(data, end_offset)
+    if (
+        signature != END_OF_CENTRAL_DIRECTORY_SIGNATURE
+        or disk_number != 0
+        or central_directory_disk != 0
+        or disk_entry_count != len(ENTRY_LIMITS)
+        or entry_count != len(ENTRY_LIMITS)
+        or comment_length != 0
+        or central_directory_offset + central_directory_size != end_offset
+    ):
+        raise SupportDiagnosticsError("Diagnostic bundle is not a valid ZIP archive.")
+
+    entries: list[_ZipEntry] = []
+    names: set[str] = set()
+    total_uncompressed_size = 0
+    offset = central_directory_offset
+    for _ in range(entry_count):
+        _require_archive_range(data, offset, CENTRAL_DIRECTORY_HEADER.size)
+        (
+            entry_signature,
+            _version_made_by,
+            version_needed,
+            flags,
+            compression_method,
+            _modification_time,
+            _modification_date,
+            checksum,
+            compressed_size,
+            uncompressed_size,
+            name_length,
+            extra_length,
+            entry_comment_length,
+            disk_start,
+            _internal_attributes,
+            _external_attributes,
+            local_header_offset,
+        ) = CENTRAL_DIRECTORY_HEADER.unpack_from(data, offset)
+        variable_length = name_length + extra_length + entry_comment_length
+        _require_archive_range(data, offset + CENTRAL_DIRECTORY_HEADER.size, variable_length)
+        try:
+            name = data[
+                offset + CENTRAL_DIRECTORY_HEADER.size : offset + CENTRAL_DIRECTORY_HEADER.size + name_length
+            ].decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise SupportDiagnosticsError("Diagnostic bundle is not a valid ZIP archive.") from error
+        limit = ENTRY_LIMITS.get(name)
+        if (
+            entry_signature != CENTRAL_DIRECTORY_SIGNATURE
+            or version_needed != 20
+            or flags not in ALLOWED_ZIP_FLAGS
+            or compression_method != ZIP_DEFLATED
+            or extra_length != 0
+            or entry_comment_length != 0
+            or disk_start != 0
+            or limit is None
+            or name in names
+            or uncompressed_size > limit
+        ):
+            raise SupportDiagnosticsError("Diagnostic bundle contains an invalid archive entry.")
+        names.add(name)
+        total_uncompressed_size += uncompressed_size
+        if total_uncompressed_size > MAX_UNCOMPRESSED_ARCHIVE_BYTES:
+            raise SupportDiagnosticsError("Diagnostic bundle expands beyond the allowed size.")
+        entries.append(
+            _ZipEntry(
+                name=name,
+                flags=flags,
+                crc32=checksum,
+                compressed_size=compressed_size,
+                uncompressed_size=uncompressed_size,
+                local_header_offset=local_header_offset,
+            )
+        )
+        offset += CENTRAL_DIRECTORY_HEADER.size + variable_length
+    if offset != end_offset or names != set(ENTRY_LIMITS):
+        raise SupportDiagnosticsError("Diagnostic bundle has an invalid file set.")
+
+    payloads: dict[str, bytes] = {}
+    ranges: list[tuple[int, int]] = []
+    for entry in entries:
+        offset = entry.local_header_offset
+        _require_archive_range(data, offset, LOCAL_FILE_HEADER.size)
+        (
+            local_signature,
+            version_needed,
+            flags,
+            compression_method,
+            _modification_time,
+            _modification_date,
+            checksum,
+            compressed_size,
+            uncompressed_size,
+            name_length,
+            extra_length,
+        ) = LOCAL_FILE_HEADER.unpack_from(data, offset)
+        _require_archive_range(data, offset + LOCAL_FILE_HEADER.size, name_length + extra_length)
+        try:
+            local_name = data[offset + LOCAL_FILE_HEADER.size : offset + LOCAL_FILE_HEADER.size + name_length].decode(
+                "utf-8"
+            )
+        except UnicodeDecodeError as error:
+            raise SupportDiagnosticsError("Diagnostic bundle is not a valid ZIP archive.") from error
+        if (
+            local_signature != LOCAL_FILE_HEADER_SIGNATURE
+            or version_needed != 20
+            or flags != entry.flags
+            or compression_method != ZIP_DEFLATED
+            or checksum != entry.crc32
+            or compressed_size != entry.compressed_size
+            or uncompressed_size != entry.uncompressed_size
+            or extra_length != 0
+            or local_name != entry.name
+        ):
+            raise SupportDiagnosticsError("Diagnostic bundle contains an invalid archive entry.")
+        data_offset = offset + LOCAL_FILE_HEADER.size + name_length
+        range_end = data_offset + compressed_size
+        _require_archive_range(data, data_offset, compressed_size)
+        if range_end > central_directory_offset:
+            raise SupportDiagnosticsError("Diagnostic bundle is not a valid ZIP archive.")
+        compressed = data[data_offset:range_end]
+        limit = ENTRY_LIMITS[entry.name]
+        try:
+            decompressor = zlib.decompressobj(-zlib.MAX_WBITS)
+            payload = decompressor.decompress(compressed, limit + 1)
+            if len(payload) <= limit:
+                payload += decompressor.flush(limit + 1 - len(payload))
+        except zlib.error as error:
+            raise SupportDiagnosticsError("Diagnostic bundle is not a valid ZIP archive.") from error
+        if (
+            len(payload) != entry.uncompressed_size
+            or len(payload) > limit
+            or not decompressor.eof
+            or decompressor.unconsumed_tail
+            or decompressor.unused_data
+            or zlib.crc32(payload) & 0xFFFFFFFF != entry.crc32
+        ):
+            raise SupportDiagnosticsError("Diagnostic bundle contains an invalid archive entry.")
+        ranges.append((offset, range_end))
+        payloads[entry.name] = payload
+
+    ranges.sort()
+    if not ranges or ranges[0][0] != 0 or ranges[-1][1] != central_directory_offset:
+        raise SupportDiagnosticsError("Diagnostic bundle is not a valid ZIP archive.")
+    for index in range(1, len(ranges)):
+        if ranges[index - 1][1] != ranges[index][0]:
+            raise SupportDiagnosticsError("Diagnostic bundle is not a valid ZIP archive.")
+    return payloads
 
 
 def verify_bundle(data: bytes, expected_sha256: str, expected_schema_version: int) -> None:
@@ -151,40 +348,23 @@ def verify_bundle(data: bytes, expected_sha256: str, expected_schema_version: in
     if expected_schema_version != SCHEMA_VERSION:
         raise SupportDiagnosticsError("Diagnostic bundle uses an unsupported schema version.")
 
-    diagnostic_payload: bytes | None = None
-    member_count = 0
-    uncompressed_size = 0
-    try:
-        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
-            for member in archive:
-                member_count += 1
-                if member_count > MAX_ARCHIVE_MEMBERS:
-                    raise SupportDiagnosticsError("Diagnostic bundle contains too many files.")
-                if not _safe_member_name(member.name) or not member.isreg():
-                    raise SupportDiagnosticsError("Diagnostic bundle contains an unsafe archive entry.")
-                uncompressed_size += member.size
-                if uncompressed_size > MAX_UNCOMPRESSED_ARCHIVE_BYTES:
-                    raise SupportDiagnosticsError("Diagnostic bundle expands beyond the allowed size.")
-                if member.name == "diagnostic.json":
-                    if diagnostic_payload is not None or member.size > MAX_DIAGNOSTIC_JSON_BYTES:
-                        raise SupportDiagnosticsError("Diagnostic bundle has an invalid diagnostic.json entry.")
-                    member_file = archive.extractfile(member)
-                    if member_file is None:
-                        raise SupportDiagnosticsError("Diagnostic bundle has an unreadable diagnostic.json entry.")
-                    diagnostic_payload = member_file.read(MAX_DIAGNOSTIC_JSON_BYTES + 1)
-                    if len(diagnostic_payload) > MAX_DIAGNOSTIC_JSON_BYTES:
-                        raise SupportDiagnosticsError("Diagnostic bundle has an oversized diagnostic.json entry.")
-    except (OSError, tarfile.TarError) as error:
-        raise SupportDiagnosticsError("Diagnostic bundle is not a valid gzip tar archive.") from error
+    payloads = _archive_payloads(data)
 
-    if diagnostic_payload is None:
-        raise SupportDiagnosticsError("Diagnostic bundle is missing diagnostic.json.")
+    _schema_document(payloads["manifest.json"], "manifest.json", expected_schema_version)
+    _schema_document(payloads["storage.json"], "storage.json", expected_schema_version)
     try:
-        diagnostic = json.loads(diagnostic_payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise SupportDiagnosticsError("diagnostic.json is not valid UTF-8 JSON.") from error
-    if not isinstance(diagnostic, dict) or diagnostic.get("schema_version") != expected_schema_version:
-        raise SupportDiagnosticsError("diagnostic.json schema verification failed.")
+        events = payloads["events.jsonl"].decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise SupportDiagnosticsError("events.jsonl is not valid UTF-8.") from error
+    for line in events.splitlines():
+        if line:
+            _schema_document(line.encode("utf-8"), "events.jsonl entry", expected_schema_version)
+    try:
+        tool_tail = payloads["tool-tail.txt"].decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise SupportDiagnosticsError("tool-tail.txt is not valid UTF-8.") from error
+    if not tool_tail.startswith(f"# bd_to_avp_support_tool_tail schema_version={expected_schema_version}\n"):
+        raise SupportDiagnosticsError("tool-tail.txt schema verification failed.")
 
 
 def _atomic_write(output: Path, data: bytes) -> None:
@@ -215,7 +395,7 @@ def fetch_report(
     response = _open(opener, request)
     with response:
         content_type = _required_header(response.headers, "Content-Type").split(";", 1)[0].strip().lower()
-        if content_type != "application/gzip":
+        if content_type != "application/zip":
             raise SupportDiagnosticsError("Service response has an unexpected Content-Type.")
         size_bytes = _parse_content_length(response.headers)
         checksum = _required_header(response.headers, "X-Diagnostic-SHA256")
@@ -278,7 +458,7 @@ def main(
         configuration = load_configuration(environ)
         support_code = validate_support_code(arguments.support_code)
         if arguments.command == "fetch":
-            output = arguments.output or Path(f"{support_code}.tar.gz")
+            output = arguments.output or Path(f"{support_code}.zip")
             result = fetch_report(configuration, support_code, output, opener)
             print(
                 json.dumps(

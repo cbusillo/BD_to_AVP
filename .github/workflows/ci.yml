@@ -54,6 +54,10 @@ jobs:
         working-directory: support-diagnostics
         run: npm run check
 
+      - name: Validate support diagnostics deployment config
+        working-directory: support-diagnostics
+        run: npm run deploy:dry-run
+
       - name: Install direct SSIF prototype dependencies
         run: brew install libbluray libudfread pkgconf
 

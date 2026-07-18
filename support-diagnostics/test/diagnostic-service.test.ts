@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { deflateRawSync } from "node:zlib";
 
 import { sha256Hex } from "../src/crypto.js";
-import { createDiagnosticService } from "../src/index.js";
+import {
+  createDiagnosticService,
+  DurableObjectRegistryClient,
+} from "../src/index.js";
 import {
   API_SCHEMA_VERSION,
   BUNDLE_CONTENT_TYPE,
@@ -13,7 +17,9 @@ import {
 import { ReportRegistryService } from "../src/registry.js";
 import type {
   DurableObjectStorage,
+  DurableObjectStub,
   R2Bucket,
+  R2HttpMetadata,
   R2ObjectBody,
   R2PutOptions,
   RateLimitBinding,
@@ -44,8 +50,19 @@ class MemoryStorage implements DurableObjectStorage {
   readonly values = new Map<string, unknown>();
   alarm: number | undefined;
 
-  async delete(key: string): Promise<boolean> {
-    return this.values.delete(key);
+  async delete(keys: string[]): Promise<number>;
+  async delete(key: string): Promise<boolean>;
+  async delete(keyOrKeys: string | string[]): Promise<boolean | number> {
+    if (Array.isArray(keyOrKeys)) {
+      let count = 0;
+      for (const key of keyOrKeys) {
+        if (this.values.delete(key)) {
+          count += 1;
+        }
+      }
+      return count;
+    }
+    return this.values.delete(keyOrKeys);
   }
 
   async get<Value>(key: string): Promise<Value | undefined> {
@@ -64,8 +81,19 @@ class MemoryStorage implements DurableObjectStorage {
     return values;
   }
 
-  async put<Value>(key: string, value: Value): Promise<void> {
-    this.values.set(key, structuredClone(value));
+  async put(entries: Record<string, unknown>): Promise<void>;
+  async put<Value>(key: string, value: Value): Promise<void>;
+  async put<Value>(
+    keyOrEntries: string | Record<string, unknown>,
+    value?: Value,
+  ): Promise<void> {
+    if (typeof keyOrEntries === "string") {
+      this.values.set(keyOrEntries, structuredClone(value));
+      return;
+    }
+    for (const [key, entry] of Object.entries(keyOrEntries)) {
+      this.values.set(key, structuredClone(entry));
+    }
   }
 
   async setAlarm(scheduledTime: number): Promise<void> {
@@ -76,6 +104,7 @@ class MemoryStorage implements DurableObjectStorage {
 interface MemoryObject {
   bytes: Uint8Array;
   customMetadata?: Record<string, string>;
+  httpMetadata?: R2HttpMetadata;
 }
 
 class MemoryBucket implements R2Bucket {
@@ -123,8 +152,99 @@ class MemoryBucket implements R2Bucket {
     if (options?.customMetadata !== undefined) {
       object.customMetadata = options.customMetadata;
     }
+    if (options?.httpMetadata !== undefined) {
+      object.httpMetadata = options.httpMetadata;
+    }
     this.objects.set(key, object);
   }
+}
+
+function crc32(bytes: Uint8Array): number {
+  let value = 0xffffffff;
+  for (const byte of bytes) {
+    value ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value & 1) === 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+  }
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function makeDiagnosticBundle(
+  options: {
+    manifestSchemaVersion?: unknown;
+    toolTail?: string;
+    utf8Flag?: boolean;
+  } = {},
+): Uint8Array {
+  const schemaVersion = options.manifestSchemaVersion ?? API_SCHEMA_VERSION;
+  const entries = [
+    {
+      data: Buffer.from(JSON.stringify({ schema_version: schemaVersion })),
+      name: "manifest.json",
+    },
+    {
+      data: Buffer.from(
+        `${JSON.stringify({ schema_version: API_SCHEMA_VERSION, source: "client" })}\n`,
+      ),
+      name: "events.jsonl",
+    },
+    {
+      data: Buffer.from(
+        JSON.stringify({ schema_version: API_SCHEMA_VERSION, probes: [] }),
+      ),
+      name: "storage.json",
+    },
+    {
+      data: Buffer.from(
+        `# bd_to_avp_support_tool_tail schema_version=${API_SCHEMA_VERSION}\n${options.toolTail ?? ""}`,
+      ),
+      name: "tool-tail.txt",
+    },
+  ];
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  const flags = options.utf8Flag === false ? 0 : 0x0800;
+  let localOffset = 0;
+  for (const entry of entries) {
+    const name = Buffer.from(entry.name);
+    const compressed = deflateRawSync(entry.data);
+    const checksum = crc32(entry.data);
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(flags, 6);
+    localHeader.writeUInt16LE(8, 8);
+    localHeader.writeUInt32LE(checksum, 14);
+    localHeader.writeUInt32LE(compressed.byteLength, 18);
+    localHeader.writeUInt32LE(entry.data.byteLength, 22);
+    localHeader.writeUInt16LE(name.byteLength, 26);
+    localParts.push(localHeader, name, compressed);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(0x0314, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(flags, 8);
+    centralHeader.writeUInt16LE(8, 10);
+    centralHeader.writeUInt32LE(checksum, 16);
+    centralHeader.writeUInt32LE(compressed.byteLength, 20);
+    centralHeader.writeUInt32LE(entry.data.byteLength, 24);
+    centralHeader.writeUInt16LE(name.byteLength, 28);
+    centralHeader.writeUInt32LE(localOffset, 42);
+    centralParts.push(centralHeader, name);
+    localOffset += localHeader.byteLength + name.byteLength + compressed.byteLength;
+  }
+  const centralDirectory = Buffer.concat(centralParts);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(centralDirectory.byteLength, 12);
+  end.writeUInt32LE(localOffset, 16);
+  return new Uint8Array(
+    Buffer.concat([...localParts, centralDirectory, end]),
+  );
 }
 
 class FixedRateLimiter implements RateLimitBinding {
@@ -228,9 +348,7 @@ function maintainerRequest(
 describe("private diagnostic service", () => {
   it("creates a bounded report, finalizes upload, and rejects replay", async () => {
     const harness = makeHarness();
-    const bytes = new TextEncoder().encode(
-      "small diagnostic archive placeholder",
-    );
+    const bytes = makeDiagnosticBundle();
     const report = await createReport(harness.service, bytes);
 
     expect(report.support_code).toMatch(
@@ -257,6 +375,9 @@ describe("private diagnostic service", () => {
       report_id: report.report_id,
       sha256: await sha256Hex(bytes),
     });
+    expect(object?.httpMetadata?.cacheExpiry).toEqual(
+      new Date(harness.clock.now + RETENTION_MS),
+    );
 
     const status = await harness.service.fetch(
       new Request(report.status.url, {
@@ -275,9 +396,9 @@ describe("private diagnostic service", () => {
     expect(await replay.json()).toEqual({ error: "upload_consumed" });
   });
 
-  it("rejects wrong content, size, and checksum without consuming authorization", async () => {
+  it("rejects wrong headers without consuming authorization", async () => {
     const harness = makeHarness();
-    const bytes = new TextEncoder().encode("diagnostic bytes");
+    const bytes = makeDiagnosticBundle();
     const report = await createReport(harness.service, bytes);
 
     const wrongContentType = await harness.service.fetch(
@@ -288,7 +409,9 @@ describe("private diagnostic service", () => {
     expect(wrongContentType.status).toBe(415);
 
     const wrongSize = await harness.service.fetch(
-      uploadRequest(report, new TextEncoder().encode("wrong bytes")),
+      uploadRequest(report, bytes, {
+        "Content-Length": String(bytes.byteLength - 1),
+      }),
     );
     expect(wrongSize.status).toBe(422);
     expect(await wrongSize.json()).toEqual({
@@ -305,9 +428,87 @@ describe("private diagnostic service", () => {
     expect(success.status).toBe(201);
   });
 
+  it("rejects malformed archives and consumes the reserved upload", async () => {
+    const harness = makeHarness();
+    const bytes = new TextEncoder().encode("not a diagnostic ZIP");
+    const report = await createReport(harness.service, bytes);
+
+    const invalid = await harness.service.fetch(uploadRequest(report, bytes));
+    expect(invalid.status).toBe(422);
+    expect(await invalid.json()).toEqual({ error: "invalid_bundle" });
+
+    const status = await harness.service.fetch(
+      new Request(report.status.url, {
+        headers: report.status.headers,
+        method: "GET",
+      }),
+    );
+    expect(await status.json()).toMatchObject({ status: "failed" });
+
+    const replay = await harness.service.fetch(uploadRequest(report, bytes));
+    expect(replay.status).toBe(409);
+  });
+
+  it("reserves upload authorization before reading a streaming body", async () => {
+    const harness = makeHarness();
+    const bytes = makeDiagnosticBundle();
+    const report = await createReport(harness.service, bytes);
+    let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        bodyController = controller;
+      },
+    });
+    const request = new Request(report.upload.url, {
+      body,
+      duplex: "half",
+      headers: report.upload.headers,
+      method: "PUT",
+    } as RequestInit & { duplex: "half" });
+    const inFlight = harness.service.fetch(request);
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const status = await harness.service.fetch(
+        new Request(report.status.url, {
+          headers: report.status.headers,
+          method: "GET",
+        }),
+      );
+      if ((await status.json() as { status: string }).status === "uploading") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    const replay = await harness.service.fetch(uploadRequest(report, bytes));
+    expect(replay.status).toBe(409);
+    bodyController!.enqueue(bytes);
+    bodyController!.close();
+    expect((await inFlight).status).toBe(201);
+  });
+
+  it("rejects non-integer manifest schema values", async () => {
+    const harness = makeHarness();
+    const bytes = makeDiagnosticBundle({ manifestSchemaVersion: true });
+    const report = await createReport(harness.service, bytes);
+
+    const invalid = await harness.service.fetch(uploadRequest(report, bytes));
+    expect(invalid.status).toBe(422);
+    expect(await invalid.json()).toEqual({ error: "invalid_bundle" });
+  });
+
+  it("accepts standard ASCII ZIP entries without the UTF-8 filename flag", async () => {
+    const harness = makeHarness();
+    const bytes = makeDiagnosticBundle({ utf8Flag: false });
+    const report = await createReport(harness.service, bytes);
+
+    const uploaded = await harness.service.fetch(uploadRequest(report, bytes));
+    expect(uploaded.status).toBe(201);
+  });
+
   it("expires upload authorization and denies support-code guessing", async () => {
     const harness = makeHarness();
-    const bytes = new TextEncoder().encode("expiring diagnostic");
+    const bytes = makeDiagnosticBundle();
     const report = await createReport(harness.service, bytes);
     harness.clock.now += UPLOAD_AUTH_TTL_MS + 1;
 
@@ -373,7 +574,7 @@ describe("private diagnostic service", () => {
 
   it("requires the maintainer token to fetch and delete without public read routes", async () => {
     const harness = makeHarness();
-    const bytes = new TextEncoder().encode("maintainer-only diagnostic");
+    const bytes = makeDiagnosticBundle();
     const report = await createReport(harness.service, bytes);
     expect(
       (await harness.service.fetch(uploadRequest(report, bytes))).status,
@@ -430,9 +631,9 @@ describe("private diagnostic service", () => {
 
   it("records storage failure safely and exposes no token or bundle content in logs", async () => {
     const harness = makeHarness();
-    const bytes = new TextEncoder().encode(
-      "bundle content that must never be logged",
-    );
+    const bytes = makeDiagnosticBundle({
+      toolTail: "bundle content that must never be logged",
+    });
     const report = await createReport(harness.service, bytes);
     harness.bucket.failPuts = true;
 
@@ -463,7 +664,7 @@ describe("private diagnostic service", () => {
       contentType: BUNDLE_CONTENT_TYPE,
       createdAt: harness.clock.now,
       expiresAt: harness.clock.now + 1,
-      objectKey: "reports/expired.tar.gz",
+      objectKey: "reports/expired.zip",
       reportId: "00000000-0000-4000-8000-000000000000",
       sha256: "b".repeat(64),
       sizeBytes: 1,
@@ -486,5 +687,77 @@ describe("private diagnostic service", () => {
     ).rejects.toMatchObject({
       code: "not_found",
     });
+  });
+
+  it("rejects finalization after the upload authorization expires", async () => {
+    const harness = makeHarness();
+    const record: CreateReportRecordInput = {
+      bundleSchemaVersion: API_SCHEMA_VERSION,
+      clientFingerprint: "client",
+      contentType: BUNDLE_CONTENT_TYPE,
+      createdAt: harness.clock.now,
+      expiresAt: harness.clock.now + RETENTION_MS,
+      objectKey: "reports/late.zip",
+      reportId: "00000000-0000-4000-8000-000000000001",
+      sha256: "c".repeat(64),
+      sizeBytes: 1,
+      statusExpiresAt: harness.clock.now + RETENTION_MS,
+      statusTokenHash: "status",
+      supportCode: "BDAVP-1123456789ABCDEF",
+      uploadExpiresAt: harness.clock.now + UPLOAD_AUTH_TTL_MS,
+      uploadState: "pending",
+      uploadTokenHash: "upload",
+    };
+    await harness.registry.create(record, harness.clock.now);
+    await harness.registry.beginUpload(
+      record.reportId,
+      record.uploadTokenHash!,
+      harness.clock.now,
+    );
+
+    await expect(
+      harness.registry.completeUpload(
+        record.reportId,
+        record.uploadExpiresAt,
+      ),
+    ).rejects.toMatchObject({ code: "upload_expired" });
+    await expect(
+      harness.registry.getStatus(
+        record.reportId,
+        record.statusTokenHash,
+        record.uploadExpiresAt,
+      ),
+    ).resolves.toMatchObject({ uploadState: "failed" });
+  });
+
+  it("maps registry transport and serialization failures to service unavailable", async () => {
+    const stub: DurableObjectStub = {
+      async fetch() {
+        return new Response("not JSON", { status: 500 });
+      },
+    };
+    const harness = makeHarness();
+    const service = createDiagnosticService({
+      bucket: harness.bucket,
+      clock: () => harness.clock.now,
+      createRateLimiter: new FixedRateLimiter(),
+      maintainerToken: "maintainer-token-with-at-least-thirty-two-characters",
+      rateLimitSalt: "test-rate-limit-salt",
+      registry: new DurableObjectRegistryClient(stub),
+      serviceEnvironment: "test",
+      uploadRateLimiter: new FixedRateLimiter(),
+    });
+
+    const response = await service.fetch(
+      new Request(
+        "https://diagnostics.example.test/v1/reports/00000000-0000-4000-8000-000000000000/status",
+        {
+          headers: { authorization: "Bearer status-token" },
+          method: "GET",
+        },
+      ),
+    );
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "service_unavailable" });
   });
 });

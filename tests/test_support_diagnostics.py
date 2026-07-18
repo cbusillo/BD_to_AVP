@@ -5,11 +5,11 @@ import email.message
 import hashlib
 import io
 import json
-import tarfile
 import tempfile
 import unittest
 import urllib.error
 import urllib.request
+import zipfile
 
 from pathlib import Path
 
@@ -56,20 +56,20 @@ class CapturingOpener:
         return self.response
 
 
-def make_bundle(schema_version: int = 1) -> bytes:
+def make_bundle(schema_version: object = 1) -> bytes:
     contents = io.BytesIO()
-    payload = json.dumps({"schema_version": schema_version, "state": "complete"}).encode("utf-8")
-    with tarfile.open(fileobj=contents, mode="w:gz") as archive:
-        member = tarfile.TarInfo("diagnostic.json")
-        member.size = len(payload)
-        archive.addfile(member, io.BytesIO(payload))
+    with zipfile.ZipFile(contents, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("manifest.json", json.dumps({"schema_version": schema_version, "state": "complete"}))
+        archive.writestr("events.jsonl", json.dumps({"schema_version": 1, "source": "client"}) + "\n")
+        archive.writestr("storage.json", json.dumps({"schema_version": 1, "probes": []}))
+        archive.writestr("tool-tail.txt", "# bd_to_avp_support_tool_tail schema_version=1\n")
     return contents.getvalue()
 
 
 def bundle_headers(bundle: bytes, schema_version: int = 1) -> dict[str, str]:
     return {
         "Content-Length": str(len(bundle)),
-        "Content-Type": "application/gzip",
+        "Content-Type": "application/zip",
         "X-Diagnostic-Schema-Version": str(schema_version),
         "X-Diagnostic-SHA256": hashlib.sha256(bundle).hexdigest(),
     }
@@ -83,7 +83,7 @@ class SupportDiagnosticsCliTests(unittest.TestCase):
         bundle = make_bundle()
         opener = CapturingOpener(FakeResponse(bundle, bundle_headers(bundle)))
         with tempfile.TemporaryDirectory() as temporary_directory:
-            output = Path(temporary_directory) / "bundle.tar.gz"
+            output = Path(temporary_directory) / "bundle.zip"
             result = fetch_report(self.configuration, SUPPORT_CODE, output, opener)
 
             self.assertEqual(output.read_bytes(), bundle)
@@ -104,17 +104,29 @@ class SupportDiagnosticsCliTests(unittest.TestCase):
         headers["X-Diagnostic-SHA256"] = "0" * 64
         opener = CapturingOpener(FakeResponse(bundle, headers))
         with tempfile.TemporaryDirectory() as temporary_directory:
-            output = Path(temporary_directory) / "bundle.tar.gz"
+            output = Path(temporary_directory) / "bundle.zip"
             with self.assertRaisesRegex(SupportDiagnosticsError, "checksum"):
                 fetch_report(self.configuration, SUPPORT_CODE, output, opener)
             self.assertFalse(output.exists())
 
     def test_fetch_rejects_malformed_archive_without_writing_output(self) -> None:
-        bundle = b"not-a-gzip-tar"
+        bundle = b"not-a-zip"
         opener = CapturingOpener(FakeResponse(bundle, bundle_headers(bundle)))
         with tempfile.TemporaryDirectory() as temporary_directory:
-            output = Path(temporary_directory) / "bundle.tar.gz"
-            with self.assertRaisesRegex(SupportDiagnosticsError, "valid gzip tar"):
+            output = Path(temporary_directory) / "bundle.zip"
+            with self.assertRaisesRegex(SupportDiagnosticsError, "valid ZIP"):
+                fetch_report(self.configuration, SUPPORT_CODE, output, opener)
+            self.assertFalse(output.exists())
+
+    def test_fetch_rejects_local_and_central_header_mismatch(self) -> None:
+        bundle = bytearray(make_bundle())
+        compressed_size = int.from_bytes(bundle[18:22], "little")
+        bundle[18:22] = (compressed_size + 1).to_bytes(4, "little")
+        headers = bundle_headers(bundle)
+        opener = CapturingOpener(FakeResponse(bytes(bundle), headers))
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output = Path(temporary_directory) / "bundle.zip"
+            with self.assertRaisesRegex(SupportDiagnosticsError, "invalid archive entry"):
                 fetch_report(self.configuration, SUPPORT_CODE, output, opener)
             self.assertFalse(output.exists())
 
@@ -122,7 +134,16 @@ class SupportDiagnosticsCliTests(unittest.TestCase):
         bundle = make_bundle(schema_version=2)
         opener = CapturingOpener(FakeResponse(bundle, bundle_headers(bundle)))
         with tempfile.TemporaryDirectory() as temporary_directory:
-            output = Path(temporary_directory) / "bundle.tar.gz"
+            output = Path(temporary_directory) / "bundle.zip"
+            with self.assertRaisesRegex(SupportDiagnosticsError, "schema verification"):
+                fetch_report(self.configuration, SUPPORT_CODE, output, opener)
+            self.assertFalse(output.exists())
+
+    def test_fetch_rejects_boolean_schema_without_writing_output(self) -> None:
+        bundle = make_bundle(schema_version=True)
+        opener = CapturingOpener(FakeResponse(bundle, bundle_headers(bundle)))
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output = Path(temporary_directory) / "bundle.zip"
             with self.assertRaisesRegex(SupportDiagnosticsError, "schema verification"):
                 fetch_report(self.configuration, SUPPORT_CODE, output, opener)
             self.assertFalse(output.exists())
