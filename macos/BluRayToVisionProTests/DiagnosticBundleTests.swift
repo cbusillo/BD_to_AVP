@@ -6,6 +6,36 @@ final class DiagnosticBundleTests: XCTestCase {
     private let fixedDate = Date(timeIntervalSince1970: 1_784_323_200)
     private let fixedBundleID = UUID(uuidString: "01234567-89AB-4CDE-8F01-23456789ABCD")!
 
+    func testDiagnosticZipArchiveMatchesSharedNativeFixture() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("tests/fixtures/support_diagnostics_native_v1.b64")
+        let expectedBase64 = try String(contentsOf: fixtureURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let archive = try DiagnosticZipArchive.data(
+            entries: [
+                .init(name: "manifest.json", data: Data(#"{"schema_version":1}"#.utf8)),
+                .init(
+                    name: "events.jsonl",
+                    data: Data("{\"schema_version\":1,\"source\":\"client\"}\n".utf8)
+                ),
+                .init(
+                    name: "storage.json",
+                    data: Data(#"{"schema_version":1,"probes":[]}"#.utf8)
+                ),
+                .init(
+                    name: "tool-tail.txt",
+                    data: Data("# bd_to_avp_support_tool_tail schema_version=1\n".utf8)
+                ),
+            ],
+            modificationDate: fixedDate
+        )
+
+        XCTAssertEqual(archive.base64EncodedString(), expectedBase64)
+    }
+
     func testBoundedTextBufferRetainsTailAndReportsDroppedBytes() {
         let buffer = BoundedDiagnosticTextBuffer(maximumBytes: 16)
 

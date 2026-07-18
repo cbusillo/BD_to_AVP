@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { deflateRawSync } from "node:zlib";
+import { readFileSync } from "node:fs";
 
 import { sha256Hex } from "../src/crypto.js";
 import {
@@ -247,6 +248,33 @@ function makeDiagnosticBundle(
   );
 }
 
+function nativeSwiftDiagnosticBundle(): Uint8Array {
+  const encoded = readFileSync(
+    new URL(
+      "../../tests/fixtures/support_diagnostics_native_v1.b64",
+      import.meta.url,
+    ),
+    "utf8",
+  ).trim();
+  return new Uint8Array(Buffer.from(encoded, "base64"));
+}
+
+function withFirstEntryUncompressedSize(
+  bytes: Uint8Array,
+  size: number,
+): Uint8Array {
+  const mutated = Buffer.from(bytes);
+  const centralDirectoryOffset = mutated.indexOf(
+    Buffer.from([0x50, 0x4b, 0x01, 0x02]),
+  );
+  if (centralDirectoryOffset < 0) {
+    throw new Error("fixture is missing its central directory");
+  }
+  mutated.writeUInt32LE(size, 22);
+  mutated.writeUInt32LE(size, centralDirectoryOffset + 24);
+  return new Uint8Array(mutated);
+}
+
 class FixedRateLimiter implements RateLimitBinding {
   constructor(private readonly allowed = true) {}
 
@@ -487,9 +515,21 @@ describe("private diagnostic service", () => {
     expect((await inFlight).status).toBe(201);
   });
 
-  it("rejects non-integer manifest schema values", async () => {
+  it("defers semantic schema validation to the client and maintainer CLI", async () => {
     const harness = makeHarness();
     const bytes = makeDiagnosticBundle({ manifestSchemaVersion: true });
+    const report = await createReport(harness.service, bytes);
+
+    const uploaded = await harness.service.fetch(uploadRequest(report, bytes));
+    expect(uploaded.status).toBe(201);
+  });
+
+  it("rejects ZIP envelopes with declared expansion beyond entry limits", async () => {
+    const harness = makeHarness();
+    const bytes = withFirstEntryUncompressedSize(
+      makeDiagnosticBundle(),
+      64 * 1024 + 1,
+    );
     const report = await createReport(harness.service, bytes);
 
     const invalid = await harness.service.fetch(uploadRequest(report, bytes));
@@ -500,6 +540,15 @@ describe("private diagnostic service", () => {
   it("accepts standard ASCII ZIP entries without the UTF-8 filename flag", async () => {
     const harness = makeHarness();
     const bytes = makeDiagnosticBundle({ utf8Flag: false });
+    const report = await createReport(harness.service, bytes);
+
+    const uploaded = await harness.service.fetch(uploadRequest(report, bytes));
+    expect(uploaded.status).toBe(201);
+  });
+
+  it("accepts the native Swift diagnostic archive fixture", async () => {
+    const harness = makeHarness();
+    const bytes = nativeSwiftDiagnosticBundle();
     const report = await createReport(harness.service, bytes);
 
     const uploaded = await harness.service.fetch(uploadRequest(report, bytes));
