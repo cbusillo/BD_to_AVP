@@ -114,7 +114,7 @@
     },
     "inspection": {
       "tool": "jetbrains",
-      "ide": "PyCharm",
+      "ide": "IntelliJ IDEA",
       "scopePreference": ["changed_files", "directory", "whole_project"]
     },
     "docsRequiredWhen": [
