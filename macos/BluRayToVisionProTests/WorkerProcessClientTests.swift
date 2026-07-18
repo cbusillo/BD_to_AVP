@@ -51,6 +51,11 @@ final class WorkerProcessClientTests: XCTestCase {
             try await Task.sleep(nanoseconds: 20_000_000)
             snapshot = client.diagnosticSnapshot()
         }
+        guard snapshot.toolOutput.text.contains("TAIL-MARKER") else {
+            client.cancel()
+            _ = await task.result
+            return XCTFail("Timed out after 3 s waiting for TAIL-MARKER in stderr tail")
+        }
 
         XCTAssertTrue(snapshot.isRunning)
         XCTAssertTrue(snapshot.toolOutput.truncated)

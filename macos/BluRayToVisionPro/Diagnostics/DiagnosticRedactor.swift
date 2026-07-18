@@ -211,13 +211,17 @@ final class DiagnosticRedactor {
         registerExact(Self.shellEscapedPath(value), replacement: replacement)
     }
 
+    private static let commandRedactionRegex = try? NSRegularExpression(
+        pattern: #"(?i)(?:^|[\s\"'])(?:/(?:\\.|[^\s\"'])*/)?(ffmpeg|ffprobe|makemkvcon|mp4box|edge264(?:_test)?|pgsrip|python(?:3(?:\.\d+)?)?|ditto|unzip|zip)(?=\s)"#
+    )
+
     private func redactCommandArguments(in text: String) -> String {
+        guard let expression = Self.commandRedactionRegex else {
+            return text
+        }
         let lines = text.components(separatedBy: "\n")
         return lines.map { line in
-            guard let expression = try? NSRegularExpression(
-                pattern: #"(?i)(?:^|[\s\"'])(?:/(?:\\.|[^\s\"'])*/)?(ffmpeg|ffprobe|makemkvcon|mp4box|edge264(?:_test)?|pgsrip|python(?:3(?:\.\d+)?)?|ditto|unzip|zip)(?=\s)"#
-            ),
-                let match = expression.firstMatch(
+            guard let match = expression.firstMatch(
                     in: line,
                     range: NSRange(line.startIndex..., in: line)
                 ),

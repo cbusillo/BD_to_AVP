@@ -122,8 +122,8 @@ private enum DiagnosticSizeRounding {
     }
 }
 
-final class DiagnosticBundleBuilder: @unchecked Sendable {
-    struct Configuration {
+final class DiagnosticBundleBuilder: Sendable {
+    struct Configuration: Sendable {
         let maximumArchiveBytes: Int
         let maximumUncompressedBytes: Int
         let maximumManifestBytes: Int
@@ -141,24 +141,26 @@ final class DiagnosticBundleBuilder: @unchecked Sendable {
         )
     }
 
+    typealias ArchiveWriter = @Sendable (Data, URL) throws -> Void
+
     private let configuration: Configuration
     private let storageProbe: any DiagnosticStorageProbing
-    private let fileManager: FileManager
-    private let bundleIDProvider: () -> UUID
-    private let runtimeMetadataProvider: () -> DiagnosticRuntimeMetadata
+    private let bundleIDProvider: @Sendable () -> UUID
+    private let runtimeMetadataProvider: @Sendable () -> DiagnosticRuntimeMetadata
+    private let archiveWriter: ArchiveWriter
 
     init(
         configuration: Configuration = .production,
         storageProbe: any DiagnosticStorageProbing = FileSystemDiagnosticStorageProbe(),
-        fileManager: FileManager = .default,
-        bundleIDProvider: @escaping () -> UUID = UUID.init,
-        runtimeMetadataProvider: @escaping () -> DiagnosticRuntimeMetadata = { DiagnosticRuntimeMetadata.current() }
+        bundleIDProvider: @escaping @Sendable () -> UUID = UUID.init,
+        runtimeMetadataProvider: @escaping @Sendable () -> DiagnosticRuntimeMetadata = { DiagnosticRuntimeMetadata.current() },
+        archiveWriter: @escaping ArchiveWriter = { data, url in try data.write(to: url, options: .atomic) }
     ) {
         self.configuration = configuration
         self.storageProbe = storageProbe
-        self.fileManager = fileManager
         self.bundleIDProvider = bundleIDProvider
         self.runtimeMetadataProvider = runtimeMetadataProvider
+        self.archiveWriter = archiveWriter
     }
 
     func createBundle(
@@ -221,10 +223,26 @@ final class DiagnosticBundleBuilder: @unchecked Sendable {
         }
 
         let directory = try outputDirectory ?? defaultOutputDirectory()
+        let fileManager = FileManager.default
+        let directoryPreexisted = fileManager.fileExists(atPath: directory.path)
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         let filename = Self.suggestedFilename(createdAt: snapshot.capturedAt, bundleID: bundleID)
         let archiveURL = directory.appendingPathComponent(filename, isDirectory: false)
-        try archiveData.write(to: archiveURL, options: .atomic)
+        do {
+            try archiveWriter(archiveData, archiveURL)
+        } catch {
+            try? fileManager.removeItem(at: archiveURL)
+            if !directoryPreexisted {
+                let directoryContents = try? fileManager.contentsOfDirectory(
+                    at: directory,
+                    includingPropertiesForKeys: nil
+                )
+                if directoryContents?.isEmpty == true {
+                    try? fileManager.removeItem(at: directory)
+                }
+            }
+            throw error
+        }
 
         let privacy = Self.privacyManifest
         let files = [
@@ -535,6 +553,7 @@ final class DiagnosticBundleBuilder: @unchecked Sendable {
     }
 
     private func defaultOutputDirectory() throws -> URL {
+        let fileManager = FileManager.default
         guard let applicationSupport = fileManager.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
