@@ -46,11 +46,14 @@ class SupportDiagnosticsError(RuntimeError):
 class ResponseLike(Protocol):
     headers: Mapping[str, str]
 
-    def __enter__(self) -> ResponseLike: ...
+    def __enter__(self) -> ResponseLike:
+        raise NotImplementedError
 
-    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None: ...
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        raise NotImplementedError
 
-    def read(self, amount: int = -1) -> bytes: ...
+    def read(self, amount: int = -1) -> bytes:
+        raise NotImplementedError
 
 
 ResponseOpener = Callable[..., object]
