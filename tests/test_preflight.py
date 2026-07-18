@@ -1,9 +1,8 @@
 import sys
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from bd_to_avp import preflight
 from bd_to_avp.modules.config import Stage
@@ -169,14 +168,10 @@ class DependencyPreflightTests(unittest.TestCase):
             patch.object(preflight.config, "start_stage", Stage.CREATE_LEFT_RIGHT_FILES),
             patch.object(preflight.config, "FFMPEG_PATH", Path("/tools/ffmpeg")),
             patch(
-                "subprocess.run",
+                "bd_to_avp.preflight.run_process_capture",
                 side_effect=[
-                    subprocess.CompletedProcess(
-                        args=[],
-                        returncode=0,
-                        stdout=" V..... libsvtav1 SVT-AV1 encoder\n",
-                    ),
-                    subprocess.CompletedProcess(args=[], returncode=0, stdout="av1_metadata\n"),
+                    Mock(stdout=Mock(text=Mock(return_value=" V..... libsvtav1 SVT-AV1 encoder\n"))),
+                    Mock(stdout=Mock(text=Mock(return_value="av1_metadata\n"))),
                 ],
             ) as run,
         ):
@@ -190,8 +185,8 @@ class DependencyPreflightTests(unittest.TestCase):
             patch.object(preflight.config, "start_stage", Stage.CREATE_LEFT_RIGHT_FILES),
             patch.object(preflight.config, "FFMPEG_PATH", Path("/tools/ffmpeg")),
             patch(
-                "subprocess.run",
-                return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=" V..... libaom-av1\n"),
+                "bd_to_avp.preflight.run_process_capture",
+                return_value=Mock(stdout=Mock(text=Mock(return_value=" V..... libaom-av1\n"))),
             ),
             self.assertRaisesRegex(preflight.DependencyPreflightError, "libsvtav1"),
         ):
@@ -203,10 +198,10 @@ class DependencyPreflightTests(unittest.TestCase):
             patch.object(preflight.config, "start_stage", Stage.CREATE_LEFT_RIGHT_FILES),
             patch.object(preflight.config, "FFMPEG_PATH", Path("/tools/ffmpeg")),
             patch(
-                "subprocess.run",
+                "bd_to_avp.preflight.run_process_capture",
                 side_effect=[
-                    subprocess.CompletedProcess(args=[], returncode=0, stdout=" V..... libsvtav1\n"),
-                    subprocess.CompletedProcess(args=[], returncode=0, stdout="extract_extradata\n"),
+                    Mock(stdout=Mock(text=Mock(return_value=" V..... libsvtav1\n"))),
+                    Mock(stdout=Mock(text=Mock(return_value="extract_extradata\n"))),
                 ],
             ),
             self.assertRaisesRegex(preflight.DependencyPreflightError, "av1_metadata"),

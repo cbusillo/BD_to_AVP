@@ -149,6 +149,12 @@ class SubtitleRipOptionsTests(unittest.TestCase):
 
 
 class SubtitleStreamDetectionTests(unittest.TestCase):
+    def test_missing_streams_returns_no_subtitles(self) -> None:
+        with patch.object(sub, "run_ffprobe", return_value={}):
+            tracks = get_languages_in_mkv(Path("movie.mkv"))
+
+        self.assertIsNone(tracks)
+
     def test_language_detection_uses_only_pgs_streams(self) -> None:
         probe = {
             "streams": [
@@ -169,7 +175,7 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
             ]
         }
 
-        with patch.object(sub.ffmpeg, "probe", return_value=probe):
+        with patch.object(sub, "run_ffprobe", return_value=probe):
             tracks = get_languages_in_mkv(Path("movie.mkv"))
 
         self.assertEqual(tracks, [{"index": 3, "language": "eng", "default": 0, "forced": 1}])
@@ -187,7 +193,7 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
             ]
         }
 
-        with patch.object(sub.ffmpeg, "probe", return_value=probe):
+        with patch.object(sub, "run_ffprobe", return_value=probe):
             tracks = get_languages_in_mkv(Path("movie.mkv"))
 
         self.assertEqual(tracks, [{"index": 3, "language": "deu", "default": 0, "forced": 0}])
@@ -218,7 +224,7 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
             ]
         }
 
-        with patch.object(sub.ffmpeg, "probe", return_value=probe):
+        with patch.object(sub, "run_ffprobe", return_value=probe):
             tracks = get_languages_in_mkv(Path("movie.mkv"))
 
         self.assertEqual([track["language"] for track in tracks or []], ["und", "und", "und"])

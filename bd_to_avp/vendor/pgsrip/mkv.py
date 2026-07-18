@@ -10,6 +10,7 @@ from trakit.api import trakit
 from bd_to_avp.vendor.pgsrip.media import Media, Pgs
 from bd_to_avp.vendor.pgsrip.media_path import MediaPath
 from bd_to_avp.vendor.pgsrip.options import Options
+from bd_to_avp.modules.command import run_ffprobe
 from bd_to_avp.modules.config import config
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,7 @@ class MkvTrack:
 class Mkv(Media):
     def __init__(self, path: str):
         try:
-            metadata = ffmpeg.probe(path, cmd=config.FFPROBE_PATH.as_posix())
+            metadata = run_ffprobe(path)
         except ffmpeg.Error as error:
             raise subprocess.CalledProcessError(
                 returncode=1,

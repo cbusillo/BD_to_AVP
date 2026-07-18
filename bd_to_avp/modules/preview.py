@@ -3,9 +3,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
-import ffmpeg
-
-from bd_to_avp.modules.command import run_command
+from bd_to_avp.modules.command import run_command, run_ffprobe
 from bd_to_avp.modules.config import config
 from bd_to_avp.modules.preview_range import PreviewRange
 
@@ -125,9 +123,8 @@ def create_bounded_preview_source(
 
 
 def probe_media_timing(input_path: Path) -> MediaTiming:
-    probe = ffmpeg.probe(
-        input_path.as_posix(),
-        cmd=config.FFPROBE_PATH.as_posix(),
+    probe = run_ffprobe(
+        input_path,
         show_entries="format=start_time,duration:stream=codec_type,start_time",
     )
     format_data = probe.get("format", {})

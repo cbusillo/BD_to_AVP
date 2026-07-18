@@ -5,12 +5,10 @@ from pathlib import Path
 from threading import Event
 from typing import Callable
 
-import ffmpeg
-
 from bd_to_avp.observability import ObservabilityProgress
 from bd_to_avp.modules.config import config, is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.file import find_largest_file_with_extensions, sanitize_filename
-from bd_to_avp.modules.command import run_command
+from bd_to_avp.modules.command import run_command, run_ffprobe
 from bd_to_avp.process_runner import CaptureOverflowPolicy, ProcessArtifactProbe
 from bd_to_avp.runtime import RunContext
 
@@ -186,7 +184,11 @@ def get_disc_and_mvc_video_info(
         filename = source_path.stem
         disc_info = DiscInfo(name=filename)
 
-        probe = ffmpeg.probe(source_path.as_posix(), cmd=config.FFPROBE_PATH.as_posix())
+        probe = run_ffprobe(
+            source_path,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+        )
         streams = probe.get("streams", [])
         ffmpeg_probe_output = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
         if ffmpeg_probe_output is None:

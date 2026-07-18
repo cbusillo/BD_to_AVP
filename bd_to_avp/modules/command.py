@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -17,6 +18,11 @@ from bd_to_avp.process_runner import (
     ChildProcessRunner,
     DEFAULT_CAPTURE_LIMIT_BYTES,
     ProcessArtifactProbe,
+    ProcessCancelled,
+    ProcessExecutionError,
+    ProcessOutputSnapshot,
+    ProcessResult,
+    ProcessRunnerError,
     ProcessSpec,
 )
 from bd_to_avp.runtime import RunContext
@@ -99,6 +105,16 @@ def normalize_command_elements(command: list[Any]) -> list[str | Path | bytes]:
     return [str(item) if not isinstance(item, (str, bytes, Path)) else item for item in command if item is not None]
 
 
+def command_line_options(options: dict[str, object]) -> list[str]:
+    arguments: list[str] = []
+    for key in sorted(options):
+        arguments.append(f"-{key}")
+        value = options[key]
+        if value is not None:
+            arguments.append(str(value))
+    return arguments
+
+
 def run_command(
     commands: list[Any],
     command_name: str = "",
@@ -170,13 +186,154 @@ def default_tool_id(command: str | Path | bytes) -> str:
     return normalized
 
 
-def run_ffmpeg_print_errors(stream_spec: Any, message: str, quiet: bool = True, **kwargs) -> None:
-    kwargs["quiet"] = quiet
-    if config.output_commands:
-        output_commands_quoted = add_quotes_to_path_if_space(
-            ffmpeg.compile(stream_spec, cmd=config.FFMPEG_PATH.as_posix())
+def run_process_capture(
+    commands: list[Any],
+    command_name: str,
+    *,
+    tool_id: str,
+    merge_stderr: bool = False,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+    timeout_seconds: float | None = None,
+    capture_limit_bytes: int = DEFAULT_CAPTURE_LIMIT_BYTES,
+    capture_overflow: CaptureOverflowPolicy = CaptureOverflowPolicy.FAIL,
+    show_command: bool = True,
+) -> ProcessResult:
+    normalized_commands = normalize_command_elements(commands)
+    if show_command and config.output_commands:
+        print("Running command:\n" + " ".join(add_quotes_to_path_if_space(normalized_commands)))
+    return ChildProcessRunner().run(
+        ProcessSpec(
+            argv=tuple(normalized_commands),
+            tool_id=tool_id,
+            display_name=command_name,
+            env=os.environ.copy(),
+            merge_stderr=merge_stderr,
+            event_context=observability_context or ObservabilityContext(),
+            timeout_seconds=timeout_seconds,
+            capture_limit_bytes=capture_limit_bytes,
+            capture_overflow=capture_overflow,
+        ),
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+    )
+
+
+def ffmpeg_diagnostic_output(snapshot: ProcessOutputSnapshot | None) -> bytes:
+    if snapshot is None:
+        return b""
+    if not snapshot.truncated:
+        return snapshot.capture
+    return snapshot.capture + b"\n[... output truncated; final output follows ...]\n" + snapshot.tail
+
+
+def ffmpeg_called_process_error(error: subprocess.CalledProcessError, executable: str) -> ffmpeg.Error:
+    if isinstance(error, ProcessExecutionError):
+        stdout = ffmpeg_diagnostic_output(error.stdout_snapshot)
+        stderr = ffmpeg_diagnostic_output(error.stderr_snapshot)
+    else:
+        stdout = error.output.encode("utf-8", errors="replace") if isinstance(error.output, str) else error.output
+        stderr = error.stderr.encode("utf-8", errors="replace") if isinstance(error.stderr, str) else error.stderr
+    return ffmpeg.Error(executable, stdout or b"", stderr or b"")
+
+
+def ffmpeg_runner_error(error: ProcessRunnerError, executable: str) -> ffmpeg.Error:
+    stdout = ffmpeg_diagnostic_output(error.stdout_snapshot)
+    stderr = ffmpeg_diagnostic_output(error.stderr_snapshot)
+    message = str(error).encode("utf-8", errors="replace")
+    stderr = stderr + (b"\n" if stderr else b"") + message
+    return ffmpeg.Error(executable, stdout, stderr)
+
+
+def run_ffmpeg_capture(
+    stream_spec: Any,
+    *,
+    overwrite_output: bool = False,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> tuple[bytes, bytes]:
+    command = ffmpeg.compile(
+        stream_spec,
+        cmd=config.FFMPEG_PATH.as_posix(),
+        overwrite_output=overwrite_output,
+    )
+    try:
+        result = run_process_capture(
+            command,
+            "FFmpeg",
+            tool_id="ffmpeg",
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
         )
-        output_commands_str = " ".join(output_commands_quoted)
+    except subprocess.CalledProcessError as error:
+        raise ffmpeg_called_process_error(error, "ffmpeg") from error
+    except ProcessCancelled:
+        raise
+    except ProcessRunnerError as error:
+        raise ffmpeg_runner_error(error, "ffmpeg") from error
+    return result.stdout.capture, result.stderr.capture
+
+
+def run_ffprobe(
+    input_path: str | Path,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+    **kwargs: object,
+) -> dict[str, Any]:
+    command: list[Any] = [
+        config.FFPROBE_PATH,
+        "-show_format",
+        "-show_streams",
+        "-of",
+        "json",
+        *command_line_options(kwargs),
+        input_path,
+    ]
+    try:
+        result = run_process_capture(
+            command,
+            "FFprobe",
+            tool_id="ffprobe",
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
+    except subprocess.CalledProcessError as error:
+        raise ffmpeg_called_process_error(error, "ffprobe") from error
+    except ProcessCancelled:
+        raise
+    except ProcessRunnerError as error:
+        raise ffmpeg_runner_error(error, "ffprobe") from error
+    return cast(dict[str, Any], json.loads(result.stdout.capture.decode("utf-8")))
+
+
+def run_ffmpeg_print_errors(
+    stream_spec: Any,
+    message: str,
+    quiet: bool = True,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+    **kwargs: object,
+) -> None:
+    del quiet
+    overwrite_output = bool(kwargs.pop("overwrite_output", False))
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(f"Unsupported FFmpeg execution options: {unexpected}")
+    command = ffmpeg.compile(
+        stream_spec,
+        cmd=config.FFMPEG_PATH.as_posix(),
+        overwrite_output=overwrite_output,
+    )
+    if config.output_commands:
+        output_commands_str = " ".join(add_quotes_to_path_if_space(command))
 
         print(f"Running command:\n{output_commands_str}")
     spinner = Spinner(message)
@@ -184,11 +341,27 @@ def run_ffmpeg_print_errors(stream_spec: Any, message: str, quiet: bool = True, 
     spinner_thread = threading.Thread(target=spinner.start, args=(spinner_update_func,))
     spinner_thread.start()
     try:
-        ffmpeg.run(stream_spec, cmd=config.FFMPEG_PATH.as_posix(), **kwargs)
+        try:
+            run_process_capture(
+                command,
+                message,
+                tool_id="ffmpeg",
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                observability_context=observability_context,
+                capture_overflow=CaptureOverflowPolicy.TRUNCATE,
+                show_command=False,
+            )
+        except subprocess.CalledProcessError as error:
+            raise ffmpeg_called_process_error(error, "ffmpeg") from error
+        except ProcessCancelled:
+            raise
+        except ProcessRunnerError as error:
+            raise ffmpeg_runner_error(error, "ffmpeg") from error
     except ffmpeg.Error as e:
         print("FFmpeg Error:")
-        print("STDOUT:", e.stdout.decode("utf-8") if e.stdout else "")
-        print("STDERR:", e.stderr.decode("utf-8") if e.stderr else "")
+        print("STDOUT:", e.stdout.decode("utf-8", errors="replace") if e.stdout else "")
+        print("STDERR:", e.stderr.decode("utf-8", errors="replace") if e.stderr else "")
         raise
     finally:
         spinner.stop(spinner_update_func)

@@ -59,7 +59,18 @@ class CaptureOverflowPolicy(StrEnum):
 
 
 class ProcessRunnerError(RuntimeError):
-    pass
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.stdout_snapshot: ProcessOutputSnapshot | None = None
+        self.stderr_snapshot: ProcessOutputSnapshot | None = None
+
+    def attach_output(
+        self,
+        stdout_snapshot: ProcessOutputSnapshot,
+        stderr_snapshot: ProcessOutputSnapshot,
+    ) -> None:
+        self.stdout_snapshot = stdout_snapshot
+        self.stderr_snapshot = stderr_snapshot
 
 
 class ProcessCancelled(ProcessRunnerError):
@@ -180,6 +191,24 @@ class ProcessOutputSnapshot:
 
     def tail_text(self) -> str:
         return self.tail.decode("utf-8", errors="replace")
+
+
+class ProcessExecutionError(subprocess.CalledProcessError):
+    def __init__(
+        self,
+        returncode: int,
+        command: list[str | bytes],
+        stdout_snapshot: ProcessOutputSnapshot,
+        stderr_snapshot: ProcessOutputSnapshot,
+    ) -> None:
+        super().__init__(
+            returncode,
+            command,
+            output=stdout_snapshot.text(),
+            stderr=stderr_snapshot.text(),
+        )
+        self.stdout_snapshot = stdout_snapshot
+        self.stderr_snapshot = stderr_snapshot
 
 
 @dataclass(frozen=True)
@@ -832,6 +861,8 @@ class ChildProcessRunner:
                 terminal=True,
             )
             emitter.close()
+            if isinstance(pending_error, ProcessRunnerError):
+                pending_error.attach_output(stdout_snapshot, stderr_snapshot)
             raise pending_error
 
         if returncode != 0:
@@ -846,11 +877,11 @@ class ChildProcessRunner:
                 terminal=True,
             )
             emitter.close()
-            raise subprocess.CalledProcessError(
+            raise ProcessExecutionError(
                 returncode,
                 [os.fspath(argument) for argument in spec.argv],
-                output=stdout_snapshot.text(),
-                stderr=None if spec.merge_stderr else stderr_snapshot.text(),
+                stdout_snapshot,
+                stderr_snapshot,
             )
 
         emitter.emit("tool.completed", context=final_context, data=final_data, terminal=True)

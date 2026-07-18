@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import signal
@@ -10,8 +11,8 @@ import ffmpeg
 
 from bd_to_avp.modules.config import Stage, config, is_direct_mvc_stream_enabled
 from bd_to_avp.modules.disc import DiscInfo
-from bd_to_avp.modules.command import cleanup_process, run_command
-from bd_to_avp.process_runner import CaptureOverflowPolicy
+from bd_to_avp.modules.command import cleanup_process, run_command, run_ffmpeg_capture, run_ffprobe
+from bd_to_avp.process_runner import CaptureOverflowPolicy, ProcessRunnerError
 
 
 def has_native_mvc_splitter() -> bool:
@@ -671,16 +672,11 @@ def detect_crop_parameters(
     )
 
     try:
-        _, stdout = ffmpeg.run(
-            stream,
-            cmd=config.FFMPEG_PATH.as_posix(),
-            capture_stdout=True,
-            capture_stderr=True,
-        )
-        output = stdout.decode("utf-8").split("\n")
+        _, stderr = run_ffmpeg_capture(stream)
+        output = stderr.decode("utf-8", errors="replace").splitlines()
     except ffmpeg.Error as e:
         print("FFmpeg Error:")
-        print(e.stderr.decode("utf-8"))
+        print(e.stderr.decode("utf-8", errors="replace"))
         raise
 
     crop_params: list[tuple[int, int, int, int]] = []
@@ -752,9 +748,8 @@ def create_av1_sbs_file(
 
 def get_video_color_depth(input_path: Path) -> int:
     try:
-        probe = ffmpeg.probe(
-            str(input_path),
-            cmd=config.FFPROBE_PATH.as_posix(),
+        probe = run_ffprobe(
+            input_path,
             select_streams="v:0",
             show_entries="stream=pix_fmt",
         )
@@ -764,7 +759,7 @@ def get_video_color_depth(input_path: Path) -> int:
             if "10le" in pix_fmt or "10be" in pix_fmt:
                 return 10
             return DiscInfo.color_depth
-    except ffmpeg.Error:
+    except (ffmpeg.Error, json.JSONDecodeError, ProcessRunnerError):
         print(f"Error getting video color depth, using default of {DiscInfo.color_depth}")
     return DiscInfo.color_depth
 

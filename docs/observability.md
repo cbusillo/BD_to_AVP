@@ -91,8 +91,9 @@ single `stream_id`.
 1. Add the shared models, sinks, fixtures, and runtime context without changing
    conversion behavior.
 2. Replace fragmented child execution with one binary-safe streaming runner.
-   The ordinary command path and MakeMKV are migrated; FFmpeg probes and the
-   native MVC binary pipeline remain in the active child-tool workstream.
+   The ordinary command path, MakeMKV, FFmpeg graph execution, FFprobe metadata,
+   and FFmpeg capability checks are migrated. Binary subtitle extraction and
+   the native MVC linear pipeline remain in the active child-tool workstream.
 3. Project semantic runner activity into the worker protocol and bounded raw
    output into the diagnostic channel.
 4. Make the native diagnostic recorder and support bundle consume the shared

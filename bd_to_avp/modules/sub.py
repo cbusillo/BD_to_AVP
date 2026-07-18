@@ -4,13 +4,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-import ffmpeg
 from babelfish import Language
 from bd_to_avp.vendor.pgsrip import Mkv, Options, pgsrip
 from bd_to_avp.vendor.pgsrip.mkv import MkvPgs
 
 from bd_to_avp.modules.config import config, Stage
-from bd_to_avp.modules.command import get_spinner_update_func, Spinner
+from bd_to_avp.modules.command import get_spinner_update_func, run_ffprobe, Spinner
 from bd_to_avp.modules.languages import (
     language_alpha2,
     language_name,
@@ -200,8 +199,8 @@ def subtitle_language_alpha2(language_code: str) -> str | None:
 
 
 def get_languages_in_mkv(mkv_path: Path) -> None | list[dict[str, Any]]:
-    mkv_info = ffmpeg.probe(str(mkv_path), cmd=config.FFPROBE_PATH.as_posix())
-    streams = mkv_info["streams"]
+    mkv_info = run_ffprobe(mkv_path)
+    streams = mkv_info.get("streams") or []
     subtitle_streams = [
         stream
         for stream in streams
