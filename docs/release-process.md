@@ -1,5 +1,9 @@
 # Main-Only Release Process
 
+The version-specific preparation and operator checklist for the next candidate
+is [0.3.0 RC1 Cut Packet](0.3.0rc1-cut-packet.md). It is preparation material
+only until issue #202 records accepted physical-disc QC.
+
 ## Release Preparation
 
 Every release version and Sparkle build number is committed through a normal
@@ -35,6 +39,12 @@ release-note text; the committed project version determines RC versus Stable,
 the release tag, latest-release behavior, Sparkle channel, and whether PyPI is
 published. The GitHub Release title is the exact version tag so narrow release
 lists keep the distinguishing version visible.
+
+The workflow must be dispatched and rerun through the configured
+`shiny-code-bot` automation identity. The required approver is `cbusillo`, and
+the guarded approval helper rejects a run whose actor or triggering actor is the
+same account. Verify both run actors and the exact protected-main SHA before
+requesting approval.
 
 Generated notes use channel-aware history. An RC compares with the newest lower
 published release whose tag is an ancestor of the release commit, keeping RC
@@ -213,9 +223,10 @@ cumulative snapshot. Restore the last-good tag when updates may resume.
 Keep the live repository settings aligned with these contracts:
 
 - `macos-signing` is limited to `main`, contains only the Apple certificate,
-  identity, notarization, and keychain secrets, and is the sole environment
-  with a required maintainer review. Self-review is prevented and administrators
-  cannot bypass the protection rule. The legacy `KEYCHAIN_PASSWORD` value is the
+  identity, notarization, and keychain secrets, and is the sole reviewed
+  environment in normal release orchestration. Self-review is prevented and
+  administrators cannot bypass the protection rule. The legacy
+  `KEYCHAIN_PASSWORD` value is the
   Apple app-specific password; the workflow generates a separate ephemeral build
   keychain password for every run and derives the notarization profile
   name from `TEAM_ID`, so no `KEYCHAIN_NAME` secret is required.

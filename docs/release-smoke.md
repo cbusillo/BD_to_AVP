@@ -173,14 +173,17 @@ Before a draft GitHub Release is published, the release workflow must run:
 
 ```sh
 uv run python -m scripts.macos_release verify-app \
-  --app "macos/build/package/3D Blu-ray to Vision Pro.app"
-uv run python -m scripts.macos_release verify-app \
   --app "macos/build/package/3D Blu-ray to Vision Pro.app" \
-  --verify-signatures
+  --verify-signatures \
+  --verify-distribution \
+  --smoke-worker
 uv run python -m scripts.macos_release verify-dmg \
   --dmg dist/<release>.dmg \
   --verify-signatures \
-  --verify-distribution
+  --verify-distribution \
+  --smoke-app \
+  --smoke-tools \
+  --smoke-worker
 ```
 
 The gate must confirm the repository build number, direct-distribution metadata,
