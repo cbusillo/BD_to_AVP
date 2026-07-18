@@ -60,7 +60,8 @@ class CaptureOverflowPolicy(StrEnum):
 
 
 class CancellationSignal(Protocol):
-    def is_set(self) -> bool: ...
+    def is_set(self) -> bool:
+        raise NotImplementedError
 
 
 class ProcessRunnerError(RuntimeError):
@@ -1266,7 +1267,7 @@ class ProcessPipelineRunner:
         pipe_files = self._open_pipes(len(stages) - 1)
         try:
             connected_stages = self._connect_stages(stages, pipe_files)
-        except BaseException:
+        except (Exception, KeyboardInterrupt, SystemExit):
             self._close_pipe_files(pipe_files)
             raise
         internal_cancellation = threading.Event()
@@ -1360,7 +1361,7 @@ class ProcessPipelineRunner:
                 output_observer=state.stage.output_observer,
                 progress_parser=state.stage.progress_parser,
             )
-        except BaseException as error:
+        except (Exception, KeyboardInterrupt, SystemExit) as error:
             state.error = error
         finally:
             state.completed_at = self._monotonic_clock()
@@ -1378,7 +1379,7 @@ class ProcessPipelineRunner:
                         os.fdopen(write_descriptor, "wb", buffering=0),
                     )
                 )
-        except BaseException:
+        except (Exception, KeyboardInterrupt, SystemExit):
             ProcessPipelineRunner._close_pipe_files(pipes)
             raise
         return pipes
