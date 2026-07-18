@@ -9,6 +9,7 @@ struct BluRayToVisionProApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var viewModel: ConversionViewModel
     @StateObject private var previewViewModel: PreviewViewModel
+    @StateObject private var diagnosticReportViewModel: DiagnosticReportViewModel
     @StateObject private var updater: UpdateController
     @StateObject private var settings = AppSettings()
     @StateObject private var profileStore = ProfileStore()
@@ -19,9 +20,20 @@ struct BluRayToVisionProApp: App {
     init() {
         let viewModel = ConversionViewModel()
         let previewViewModel = PreviewViewModel()
+        let diagnosticConfiguration = DiagnosticServiceConfiguration.configured()
+        let diagnosticUploader = diagnosticConfiguration.map {
+            DiagnosticReportClient(configuration: $0)
+        }
+        let diagnosticReportViewModel = DiagnosticReportViewModel(
+            uploader: diagnosticUploader,
+            capture: { outputDirectory in
+                try await viewModel.captureDiagnosticBundle(in: outputDirectory)
+            }
+        )
         let workCoordinator = AppWorkCoordinator(conversion: viewModel, preview: previewViewModel)
         _viewModel = StateObject(wrappedValue: viewModel)
         _previewViewModel = StateObject(wrappedValue: previewViewModel)
+        _diagnosticReportViewModel = StateObject(wrappedValue: diagnosticReportViewModel)
         _updater = StateObject(wrappedValue: UpdateController(installPostponer: workCoordinator))
         self.workCoordinator = workCoordinator
     }
@@ -31,6 +43,7 @@ struct BluRayToVisionProApp: App {
             ContentView(
                 viewModel: viewModel,
                 previewViewModel: previewViewModel,
+                diagnosticReportViewModel: diagnosticReportViewModel,
                 settings: settings,
                 profileStore: profileStore,
                 capabilities: capabilities

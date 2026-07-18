@@ -189,7 +189,10 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn("MACOSX_DEPLOYMENT_TARGET=26.0", settings)
         self.assertNotIn("ARCHS=arm64", settings)
 
-        release_settings = native_build_settings("Release", {})
+        release_settings = native_build_settings(
+            "Release",
+            {"BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT": "https://support.example"},
+        )
         self.assertIn("ARCHS=arm64", release_settings)
         self.assertIn(f"CURRENT_PROJECT_VERSION={NATIVE_BUILD_VERSION}", release_settings)
         self.assertIn(f"MARKETING_VERSION={NATIVE_SHORT_VERSION}", release_settings)
@@ -201,6 +204,40 @@ class NativeAppPackagingTests(unittest.TestCase):
                 "Debug",
                 {"BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE": "latest"},
             )
+
+    def test_native_build_settings_inject_strict_https_support_endpoint(self) -> None:
+        settings = native_build_settings(
+            "Release",
+            {"BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT": "https://support.example"},
+        )
+
+        self.assertIn("BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://support.example", settings)
+
+        invalid_endpoints = (
+            "http://support.example",
+            "https://user:secret@support.example",
+            "https://support.example/custom/path",
+            "https://support.example?token=secret",
+        )
+        for endpoint in invalid_endpoints:
+            with (
+                self.subTest(endpoint=endpoint),
+                self.assertRaisesRegex(
+                    ValueError,
+                    "Invalid support diagnostics endpoint",
+                ),
+            ):
+                native_build_settings(
+                    "Release",
+                    {"BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT": endpoint},
+                )
+
+    def test_release_build_requires_support_endpoint(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "Release builds require an approved support diagnostics endpoint",
+        ):
+            native_build_settings("Release", {})
 
     def test_reads_minimum_versions_from_mach_o_build_commands(self) -> None:
         completed = subprocess.CompletedProcess(

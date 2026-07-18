@@ -26,6 +26,9 @@ struct SourceWorkspaceView: View {
     let changeSource: () -> Void
     let chooseDestination: () -> Void
     let retryAnalysis: () -> Void
+    let diagnosticsActionTitle: String
+    let canShowDiagnostics: Bool
+    let showDiagnostics: () -> Void
     let resolveRecoveryChoice: (WorkerRecoveryChoice) -> Void
     let retryBatchItem: (UUID, WorkerRecoveryChoice?) -> Void
     let selectMainTitle: () -> Void
@@ -238,6 +241,14 @@ struct SourceWorkspaceView: View {
                        state.operationKind == .inspection || state.failureCode == "title_unavailable"
                     {
                         Button("Analyze Again", action: retryAnalysis)
+                    }
+                    if canShowDiagnostics {
+                        Button(action: showDiagnostics) {
+                            Label(diagnosticsActionTitle, systemImage: "stethoscope")
+                        }
+                        .help("Capture diagnostics for this failure without changing the conversion state")
+                        .accessibilityLabel(diagnosticsActionTitle.replacingOccurrences(of: "…", with: ""))
+                        .accessibilityHint("Reviews a privacy-safe support bundle before saving or sending")
                     }
                     if state.failureCode == "makemkv_missing",
                        let downloadURL = DiscSourceDetector.makeMKVDownloadURL

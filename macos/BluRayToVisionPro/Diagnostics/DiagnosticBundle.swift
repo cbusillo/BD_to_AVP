@@ -20,13 +20,13 @@ enum DiagnosticBundleError: Error, LocalizedError {
     }
 }
 
-struct DiagnosticBundleFilePreview: Equatable {
+struct DiagnosticBundleFilePreview: Equatable, Sendable {
     let name: String
     let uncompressedBytes: Int
     let truncated: Bool
 }
 
-struct DiagnosticBundlePreview: Equatable {
+struct DiagnosticBundlePreview: Equatable, Sendable {
     let includedCategories: [String]
     let excludedCategories: [String]
     let files: [DiagnosticBundleFilePreview]
@@ -35,7 +35,7 @@ struct DiagnosticBundlePreview: Equatable {
     let maximumArchiveBytes: Int
 }
 
-struct DiagnosticBundleArtifact {
+struct DiagnosticBundleArtifact: Sendable {
     let bundleID: UUID
     let createdAt: Date
     let archiveURL: URL

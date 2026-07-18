@@ -449,6 +449,7 @@ jobs:
         id: package_artifact
         env:
           BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE: ""
+          BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: ${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}
           BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
           DEV_ID: ${{ secrets.DEV_ID }}
           PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
