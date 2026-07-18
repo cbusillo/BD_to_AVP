@@ -18,6 +18,19 @@ function bytesToBase64Url(bytes: Uint8Array): string {
     .replace(/=+$/u, "");
 }
 
+function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
+  if (
+    bytes.byteOffset === 0 &&
+    bytes.byteLength === bytes.buffer.byteLength &&
+    bytes.buffer instanceof ArrayBuffer
+  ) {
+    return bytes.buffer;
+  }
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 export async function sha256Bytes(
   value: ArrayBuffer | Uint8Array | string,
 ): Promise<Uint8Array> {
@@ -25,11 +38,7 @@ export async function sha256Bytes(
     typeof value === "string"
       ? textEncoder.encode(value).buffer
       : value instanceof Uint8Array
-        ? (() => {
-            const copy = new Uint8Array(value.byteLength);
-            copy.set(value);
-            return copy.buffer;
-          })()
+        ? arrayBufferFromBytes(value)
         : value;
   return new Uint8Array(await crypto.subtle.digest("SHA-256", source));
 }

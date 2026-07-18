@@ -374,6 +374,14 @@ function maintainerRequest(
 }
 
 describe("private diagnostic service", () => {
+  it("hashes sliced byte views without adjacent bytes", async () => {
+    const bytes = new TextEncoder().encode("xdiagnostic-bundley");
+
+    expect(await sha256Hex(bytes.subarray(1, bytes.byteLength - 1))).toBe(
+      await sha256Hex("diagnostic-bundle"),
+    );
+  });
+
   it("creates a bounded report, finalizes upload, and rejects replay", async () => {
     const harness = makeHarness();
     const bytes = makeDiagnosticBundle();
