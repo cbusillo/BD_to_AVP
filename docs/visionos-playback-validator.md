@@ -20,8 +20,8 @@ Movies selected through Files are copied into the app's cache so playback can co
 - `VTIsStereoMVHEVCDecodeSupported()` on the current device.
 - `AVPlayerItem.status == .readyToPlay` for the selected movie.
 - `VideoPlayerComponent.currentRenderingStatus == .ready`.
-- Actual stereoscopic playback, reported separately from optional spatial treatment and portal presentation.
-- Beginning, middle, and end seeks, including preservation of stereoscopic playback and any spatial treatment that was active before the seek.
+- Actual stereoscopic playback and whether the presentation matches the selected validation expectation.
+- Beginning, middle, and end seeks, including preservation of stereoscopic playback and required spatial treatment.
 - Available audio and subtitle choices for manual review under **Technical details**.
 
 After the automatic sequence, the validator asks only:
@@ -37,13 +37,22 @@ The movie, playback controls, guided instructions, observations, result, and col
 
 Technical terms such as `Stereo · Spatial · Portal` appear only under **Technical details**. The primary flow uses plain language and exposes one next action at a time.
 
+## Presentation Expectations
+
+The validator has two intentional expectations:
+
+- **Stereo release movie** is the default. A converted Blu-ray movie should report `Stereo · Screen` because its capture baseline, field of view, and disparity can vary between shots.
+- **Spatial calibration fixture** is enabled with `BD_TO_AVP_PROBE_EXPECTED_PRESENTATION=spatial`. The controlled fixture should report `Stereo · Spatial · Portal` and proves that the validator can detect RealityKit spatial treatment.
+
+Apple requires spatial metadata to describe the true, constant properties of the cameras that captured the media. Its guidance specifically notes that a movie or TV show captured with changing camera geometry may not be appropriate for spatial presentation and should remain stereo. BD to AVP therefore does not invent a camera baseline for normal Blu-ray output. See [Creating spatial photos and videos with spatial metadata](https://developer.apple.com/documentation/imageio/creating-spatial-photos-and-videos-with-spatial-metadata) and [Converting side-by-side 3D video to multiview HEVC and spatial video](https://developer.apple.com/documentation/avfoundation/converting-side-by-side-3d-video-to-multiview-hevc-and-spatial-video).
+
 ## Result Meanings
 
 - **Playback check passed**: every automatic check passed and both visible observations were **Yes**.
 - **One result needs review**: the automatic checks did not fail, but at least one observation was **Not sure** or a check did not reach a final pass state.
 - **Playback check found a problem**: an automatic check failed or either visible observation was **No**.
 
-The app automatically writes a named JSON report plus `Latest-Playback-Report.json` under its Documents directory. **Share JSON Report** sends that file as a `.json` attachment instead of untyped text. The report contains a schema version, validator version and build, visionOS version, filename, full-file SHA-256 fingerprint, file size, duration, media-option counts, actual viewing/spatial/immersive modes, automatic check details, observations, and result. It intentionally omits the source file path. The fingerprint binds release evidence to the exact movie even when an automated device transfer names it `Probe.mov`.
+The app automatically writes a named JSON report plus `Latest-Playback-Report.json` under its Documents directory. **Share JSON Report** sends that file as a `.json` attachment instead of untyped text. The schema-3 report contains the expected presentation, validator version and build, visionOS version, filename, full-file SHA-256 fingerprint, file size, duration, media-option counts, actual viewing/spatial/immersive modes, automatic check details, observations, and result. It intentionally omits the source file path. The fingerprint binds release evidence to the exact movie even when an automated device transfer names it `Probe.mov`.
 
 ## Build
 
@@ -53,7 +62,7 @@ Create a six-second finalized MV-HEVC fixture with English audio and subtitles:
 scripts/create_spatial_playback_fixture.sh
 ```
 
-The fixture contains three labeled depth markers: blue should appear behind the screen plane, green on the screen plane, and red in front. This gives the operator an unambiguous depth-order check instead of a single flat test pattern.
+The fixture contains three labeled depth markers: blue should appear behind the screen plane, green on the screen plane, and red in front. It uses controlled 64 mm, rectilinear camera metadata so RealityKit recognizes it as spatial media. This gives the operator an unambiguous depth-order check and a deterministic `Stereo · Spatial · Portal` calibration asset without changing production Blu-ray metadata.
 
 Generate the project and build for the simulator:
 
@@ -94,7 +103,7 @@ xcodebuild build \
 
 ## Automated Physical-Device Setup
 
-Install the signed app, copy a finalized movie into its Documents container as `Probe.mov`, and launch the UI test or app with `BD_TO_AVP_PROBE_AUTORUN=1`:
+Install the signed app and copy a finalized movie into its Documents container as `Probe.mov`:
 
 ```bash
 xcrun devicectl device copy to \
@@ -105,7 +114,27 @@ xcrun devicectl device copy to \
   --domain-identifier com.shinycomputers.bd-to-avp.spatial-playback-probe
 ```
 
-Autorun starts the automatic sequence after the player is ready. It stops at the two human observations; automation does not fabricate visible playback answers. The physical UI test requires all automatic checks to pass and verifies that the observation screen is presented.
+For a normal Blu-ray release movie, launch the app with the default stereo expectation:
+
+```bash
+xcrun devicectl device process launch \
+  --device <device-id> \
+  --terminate-existing \
+  --environment-variables '{"BD_TO_AVP_PROBE_ASSET":"Probe.mov","BD_TO_AVP_PROBE_AUTORUN":"1"}' \
+  com.shinycomputers.bd-to-avp.spatial-playback-probe
+```
+
+For the generated calibration fixture, require spatial portal presentation:
+
+```bash
+xcrun devicectl device process launch \
+  --device <device-id> \
+  --terminate-existing \
+  --environment-variables '{"BD_TO_AVP_PROBE_ASSET":"Probe.mov","BD_TO_AVP_PROBE_AUTORUN":"1","BD_TO_AVP_PROBE_EXPECTED_PRESENTATION":"spatial"}' \
+  com.shinycomputers.bd-to-avp.spatial-playback-probe
+```
+
+Autorun starts the automatic sequence after the player is ready. It stops at the two human observations; automation does not fabricate visible playback answers. The physical UI test uses the spatial calibration expectation, requires all automatic checks to pass, and verifies that the observation screen is presented.
 
 After the operator selects **Finish Check**, retrieve the report directly without asking them to save share-sheet text manually:
 
@@ -118,7 +147,7 @@ xcrun devicectl device copy from \
   --domain-identifier com.shinycomputers.bd-to-avp.spatial-playback-probe
 ```
 
-The synthetic `Probe.mov` is the controlled visibility, stereo, and seek smoke test. A stereo-screen pass proves visible stereoscopic playback; it does not by itself prove RealityKit spatial treatment. The report keeps those outcomes separate so a missing spatial mode does not create three misleading seek failures.
+Use both expectations before release. A normal finalized movie proves the production stereo, audio, subtitle, and seek path. The synthetic calibration fixture separately proves that the app and device can enter RealityKit spatial portal presentation. Keeping those contracts separate prevents either missing spatial treatment or fabricated camera metadata from producing misleading release evidence.
 
 ## Audio Validation Matrix
 
@@ -141,6 +170,7 @@ Structured events use the `BD_TO_AVP_PLAYBACK_PROBE` prefix. `automated_probe_co
 Physical acceptance requires:
 
 - `automated_probe_complete` with `result=pass`.
+- `expected_presentation=stereo` for normal finalized Blu-ray movies, or `expected_presentation=spatial` for the generated calibration fixture.
 - Visible video throughout beginning, middle, and end playback.
 - Comfortable, non-inverted depth.
 - A shared report whose result matches the operator's observations.

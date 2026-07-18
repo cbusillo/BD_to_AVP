@@ -2,6 +2,19 @@ import XCTest
 @testable import SpatialPlaybackProbe
 
 final class PlaybackValidationTests: XCTestCase {
+    func testPresentationExpectationDefaultsToStereoAndAcceptsSpatialOverride() {
+        XCTAssertEqual(PlaybackPresentationExpectation.resolve(environment: [:]), .stereo)
+        XCTAssertEqual(
+            PlaybackPresentationExpectation.resolve(
+                environment: [PlaybackPresentationExpectation.environmentKey: "spatial"]
+            ),
+            .spatial
+        )
+        XCTAssertTrue(PlaybackPresentationExpectation.stereo.matches(isStereo: true, isSpatial: false))
+        XCTAssertFalse(PlaybackPresentationExpectation.stereo.matches(isStereo: true, isSpatial: true))
+        XCTAssertTrue(PlaybackPresentationExpectation.spatial.matches(isStereo: true, isSpatial: true))
+    }
+
     func testPassingChecksAndObservationsProducePass() {
         let checks = PlaybackCheckID.allCases.map {
             PlaybackCheck(id: $0, status: .passed, detail: "Passed")
@@ -65,7 +78,7 @@ final class PlaybackValidationTests: XCTestCase {
 
     func testReportContainsFilenameWithoutSourcePath() throws {
         let report = PlaybackValidationReport(
-            schemaVersion: 2,
+            schemaVersion: 3,
             validatorVersion: "0.1.0",
             validatorBuild: "42",
             generatedAt: "2026-07-17T20:00:00Z",
@@ -79,6 +92,7 @@ final class PlaybackValidationTests: XCTestCase {
                 subtitleOptionCount: 1
             ),
             presentation: PlaybackPresentationSummary(
+                expectation: .stereo,
                 viewingMode: "stereo",
                 spatialVideoMode: "screen",
                 immersiveViewingMode: "none"
@@ -99,6 +113,7 @@ final class PlaybackValidationTests: XCTestCase {
         XCTAssertTrue(reportText.contains("audioOptionCount"))
         XCTAssertTrue(reportText.contains("subtitleOptionCount"))
         XCTAssertTrue(reportText.contains("spatialVideoMode"))
+        XCTAssertTrue(reportText.contains("expectation"))
         XCTAssertFalse(reportText.contains("/Users/"))
         XCTAssertFalse(reportText.contains("sourcePath"))
     }
