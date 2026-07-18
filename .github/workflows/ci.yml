@@ -30,6 +30,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: support-diagnostics/package-lock.json
+
       - name: Set up uv
         # Trusted toolchain publisher for uv; see CodeQL alert triage from 2026-07-07.
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
@@ -38,6 +45,14 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --locked --all-groups --python 3.12
+
+      - name: Install support diagnostics dependencies
+        working-directory: support-diagnostics
+        run: npm ci
+
+      - name: Validate support diagnostics service
+        working-directory: support-diagnostics
+        run: npm run check
 
       - name: Install direct SSIF prototype dependencies
         run: brew install libbluray libudfread pkgconf
