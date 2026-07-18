@@ -50,6 +50,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private var actionsWaitingForIdle: [() -> Void] = []
     private var pendingQueueIndices: [Int] = []
     private var activeQueueIndex: Int?
+    private var batchItemDiagnosticJobIDs: [UUID: UUID] = [:]
 
     init(
         clientFactory: @escaping ClientFactory = {
@@ -121,16 +122,11 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     func captureDiagnosticBundle(
         in outputDirectory: URL? = nil
-    ) throws -> DiagnosticBundleArtifact {
+    ) async throws -> DiagnosticBundleArtifact {
         let capturedAt = diagnosticClock()
         let processSnapshot = client?.diagnosticSnapshot()
             ?? diagnosticRecorder.latestProcessSnapshot
         diagnosticRecorder.updateProcessSnapshot(processSnapshot)
-        diagnosticRecorder.sampleCurrentStorage(
-            using: diagnosticStorageProbe,
-            recordedAt: capturedAt,
-            force: true
-        )
         let snapshot = diagnosticRecorder.snapshot(
             capturedAt: capturedAt,
             lifecycle: state,
@@ -138,10 +134,13 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             batchSummary: diagnosticBatchSummary,
             process: processSnapshot
         )
-        return try diagnosticBundleBuilder.createBundle(
-            from: snapshot,
-            outputDirectory: outputDirectory
-        )
+        let builder = diagnosticBundleBuilder
+        return try await Task.detached(priority: .utility) {
+            try builder.createBundle(
+                from: snapshot,
+                outputDirectory: outputDirectory
+            )
+        }.value
     }
 
     func selectSource(_ sourceURL: URL) {
@@ -207,11 +206,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 activeMode: mode.diagnosticName,
                 recordedAt: diagnosticClock()
             )
-            diagnosticRecorder.sampleCurrentStorage(
-                using: diagnosticStorageProbe,
-                recordedAt: diagnosticClock(),
-                force: true
-            )
+            trackDiagnosticJob(job.jobID, mode: mode)
+            scheduleDiagnosticStorageSample(recordedAt: diagnosticClock(), force: true)
             let client = try clientFactory()
             self.client = client
             runTask = Task { [weak self] in
@@ -223,7 +219,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                         guard let self else {
                             return
                         }
-                        try await self.receive(event)
+                        try self.receive(event)
                     }
                     self.finish(runResult)
                 } catch {
@@ -235,7 +231,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             recordDiagnosticWorkflow(
                 name: "job.launch_failed",
                 mode: mode,
-                message: error.localizedDescription
+                message: error.localizedDescription,
+                jobID: job.jobID
             )
             activeRunMode = nil
             clearActiveWorker(runDeferredActions: false)
@@ -336,11 +333,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 activeMode: mode.diagnosticName,
                 recordedAt: diagnosticClock()
             )
-            diagnosticRecorder.sampleCurrentStorage(
-                using: diagnosticStorageProbe,
-                recordedAt: diagnosticClock(),
-                force: true
-            )
+            trackDiagnosticJob(job.jobID, mode: mode)
+            scheduleDiagnosticStorageSample(recordedAt: diagnosticClock(), force: true)
             let client = try clientFactory()
             self.client = client
             runTask = Task { [weak self] in
@@ -352,7 +346,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                         guard let self else {
                             return
                         }
-                        try await self.receive(event)
+                        try self.receive(event)
                     }
                     self.finish(runResult)
                 } catch {
@@ -365,7 +359,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             recordDiagnosticWorkflow(
                 name: "job.launch_failed",
                 mode: mode,
-                message: error.localizedDescription
+                message: error.localizedDescription,
+                jobID: job.jobID
             )
             activeRunMode = nil
             clearActiveWorker(runDeferredActions: false)
@@ -435,7 +430,11 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
         if hasActiveWorker {
             state.requestStop()
-            recordDiagnosticWorkflow(name: "cancel.requested", mode: activeRunMode)
+            recordDiagnosticWorkflow(
+                name: "cancel.requested",
+                mode: activeRunMode,
+                jobID: state.jobID
+            )
             client?.cancel()
         }
     }
@@ -444,9 +443,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         guard !hasActiveWork else {
             return
         }
+        let previousJobID = state.jobID
         state.prepareForRetry()
         resetDiagnosticLog()
-        recordDiagnosticWorkflow(name: "retry.prepared")
+        recordDiagnosticWorkflow(name: "retry.prepared", jobID: previousJobID)
     }
 
     @discardableResult
@@ -459,13 +459,15 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         else {
             return false
         }
+        let decisionJobID = state.jobID
         recordDiagnosticWorkflow(
             name: "recovery.choice_selected",
-            message: choice.rawValue
+            message: choice.rawValue,
+            jobID: decisionJobID
         )
         if choice == .cancel {
             state.cancelRecoveryDecision()
-            recordDiagnosticWorkflow(name: "recovery.cancelled")
+            recordDiagnosticWorkflow(name: "recovery.cancelled", jobID: decisionJobID)
             if let activeQueueIndex {
                 queueItems[activeQueueIndex].status = .cancelled
                 self.activeQueueIndex = nil
@@ -605,7 +607,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         batchQueue = queue
         recordDiagnosticWorkflow(
             name: "batch.retry_requested",
-            message: recoveryChoice?.rawValue
+            message: recoveryChoice?.rawValue,
+            jobID: batchItemDiagnosticJobIDs[itemID]
         )
         startNextBatchItem()
     }
@@ -614,9 +617,13 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         guard canRetry else {
             return
         }
+        let previousJobID = state.jobID
         state.prepareForRetry()
         resetDiagnosticLog()
-        recordDiagnosticWorkflow(name: "retry.inspection_requested")
+        recordDiagnosticWorkflow(
+            name: "retry.inspection_requested",
+            jobID: previousJobID
+        )
         validateSelectedSourceAndStart()
     }
 
@@ -648,9 +655,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     private func receive(_ event: WorkerEvent) throws {
         let recordedAt = diagnosticClock()
-        if let processSnapshot = client?.diagnosticSnapshot() {
-            diagnosticRecorder.updateProcessSnapshot(processSnapshot)
-        }
         if event.type.isTerminal {
             diagnosticRecorder.record(
                 event: event,
@@ -658,11 +662,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 activeMode: activeRunMode?.diagnosticName,
                 recordedAt: recordedAt
             )
-            diagnosticRecorder.sampleCurrentStorage(
-                using: diagnosticStorageProbe,
-                recordedAt: recordedAt,
-                force: true
-            )
+            scheduleDiagnosticStorageSample(recordedAt: recordedAt, force: true)
             pendingTerminalEvent = event
             return
         }
@@ -679,8 +679,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             recordedAt: recordedAt
         )
         if event.type == .heartbeat || event.type == .stageStarted || event.type == .artifactReady {
-            diagnosticRecorder.sampleCurrentStorage(
-                using: diagnosticStorageProbe,
+            scheduleDiagnosticStorageSample(
                 recordedAt: recordedAt,
                 force: event.type == .artifactReady
             )
@@ -689,6 +688,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     private func finish(_ result: WorkerRunResult) {
         let completedMode = activeRunMode
+        let completedJobID = result.terminalEvent.jobID
         let processSnapshot = result.diagnosticSnapshot == .empty
             ? client?.diagnosticSnapshot() ?? .empty
             : result.diagnosticSnapshot
@@ -720,13 +720,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             lifecycle: state,
             activeMode: completedMode?.diagnosticName,
             recordedAt: diagnosticClock(),
+            jobID: completedJobID,
             exitStatus: result.exitStatus
         )
-        diagnosticRecorder.sampleCurrentStorage(
-            using: diagnosticStorageProbe,
-            recordedAt: diagnosticClock(),
-            force: true
-        )
+        scheduleDiagnosticStorageSample(recordedAt: diagnosticClock(), force: true)
         pendingTerminalEvent = nil
         activeRunMode = nil
         clearActiveWorker(runDeferredActions: false)
@@ -738,6 +735,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     private func fail(_ error: Error) {
         let completedMode = activeRunMode
+        let completedJobID = state.jobID ?? diagnosticRecorder.currentJobContext?.jobID
         if let processSnapshot = client?.diagnosticSnapshot() {
             diagnosticRecorder.updateProcessSnapshot(processSnapshot)
         }
@@ -757,13 +755,11 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             activeMode: completedMode?.diagnosticName,
             recordedAt: diagnosticClock(),
             message: error.localizedDescription,
-            details: clientError?.technicalDetails
+            details: clientError?.technicalDetails,
+            jobID: completedJobID,
+            exitStatus: clientError?.processExitStatus
         )
-        diagnosticRecorder.sampleCurrentStorage(
-            using: diagnosticStorageProbe,
-            recordedAt: diagnosticClock(),
-            force: true
-        )
+        scheduleDiagnosticStorageSample(recordedAt: diagnosticClock(), force: true)
         pendingTerminalEvent = nil
         activeRunMode = nil
         clearActiveWorker(runDeferredActions: false)
@@ -1104,6 +1100,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     private func resetDiagnosticSession() {
         diagnosticRecorder.reset()
+        batchItemDiagnosticJobIDs.removeAll(keepingCapacity: true)
         resetDiagnosticLog()
     }
 
@@ -1111,7 +1108,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         name: String,
         mode: ActiveRunMode? = nil,
         message: String? = nil,
-        details: String? = nil
+        details: String? = nil,
+        jobID: UUID? = nil
     ) {
         diagnosticRecorder.recordWorkflow(
             name: name,
@@ -1119,8 +1117,47 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             activeMode: (mode ?? activeRunMode)?.diagnosticName,
             recordedAt: diagnosticClock(),
             message: message,
-            details: details
+            details: details,
+            jobID: jobID
         )
+    }
+
+    private func trackDiagnosticJob(_ jobID: UUID, mode: ActiveRunMode) {
+        switch mode {
+        case let .batchInspection(itemID), let .batchConversion(itemID):
+            batchItemDiagnosticJobIDs[itemID] = jobID
+        case .singleInspection, .singleConversion, .titleQueueConversion:
+            break
+        }
+    }
+
+    private func scheduleDiagnosticStorageSample(recordedAt: Date, force: Bool) {
+        guard let request = diagnosticRecorder.makeStorageSampleRequest(
+            recordedAt: recordedAt,
+            force: force
+        ) else {
+            return
+        }
+        let probe = diagnosticStorageProbe
+        Task.detached(priority: .utility) { [weak self] in
+            let samples = request.targets.map { target in
+                RawDiagnosticStorageSample(
+                    probe: probe.probe(
+                        role: target.role,
+                        url: target.url,
+                        capturedAt: request.capturedAt
+                    )
+                )
+            }
+            await self?.recordDiagnosticStorageSamples(samples, for: request.jobID)
+        }
+    }
+
+    private func recordDiagnosticStorageSamples(
+        _ samples: [RawDiagnosticStorageSample],
+        for jobID: UUID
+    ) {
+        diagnosticRecorder.recordStorageSamples(samples, for: jobID)
     }
 
     private var diagnosticBatchSummary: DiagnosticBatchSummary? {

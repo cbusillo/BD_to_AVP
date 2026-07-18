@@ -122,7 +122,7 @@ private enum DiagnosticSizeRounding {
     }
 }
 
-final class DiagnosticBundleBuilder {
+final class DiagnosticBundleBuilder: @unchecked Sendable {
     struct Configuration {
         let maximumArchiveBytes: Int
         let maximumUncompressedBytes: Int
@@ -462,9 +462,14 @@ final class DiagnosticBundleBuilder {
                 workerProtocolVersion: WorkerJobSpec.protocolVersion
             ),
             worker: BundleWorker(
-                version: redactor.redact(snapshot.workerVersion),
+                version: Self.boundedRedacted(
+                    snapshot.workerVersion,
+                    maximumBytes: 512,
+                    redactor: redactor
+                ),
                 active: snapshot.process.isRunning,
-                cancellationRequested: snapshot.process.cancellationRequested
+                cancellationRequested: snapshot.process.cancellationRequested,
+                exitStatus: snapshot.processExitStatus
             ),
             lifecycle: BundleLifecycle(
                 phase: lifecycle.phase.rawValue,
@@ -476,14 +481,28 @@ final class DiagnosticBundleBuilder {
                 warning: Self.boundedRedacted(lifecycle.warningMessage, maximumBytes: 4_096, redactor: redactor),
                 elapsedSeconds: lifecycle.elapsedSeconds,
                 progress: lifecycle.progress.map(BundleProgress.init),
-                failureCode: redactor.redact(lifecycle.failureCode),
+                failureCode: Self.boundedRedacted(
+                    lifecycle.failureCode,
+                    maximumBytes: 512,
+                    redactor: redactor
+                ),
                 failureMessage: Self.boundedRedacted(lifecycle.failureMessage, maximumBytes: 4_096, redactor: redactor),
                 failureDetails: Self.boundedRedacted(lifecycle.failureDetails, maximumBytes: 8_192, redactor: redactor),
                 failureRetryable: lifecycle.failureRetryable,
                 recoveryDecision: lifecycle.recoveryDecision.map {
                     BundleRecoveryDecision(
-                        identifier: redactor.redact($0.identifier),
-                        choices: $0.choices.map { redactor.redact($0) }
+                        identifier: Self.boundedRedacted(
+                            $0.identifier,
+                            maximumBytes: 512,
+                            redactor: redactor
+                        ) ?? "<redacted>",
+                        choices: $0.choices.map {
+                            Self.boundedRedacted(
+                                $0,
+                                maximumBytes: 512,
+                                redactor: redactor
+                            ) ?? "<redacted>"
+                        }
                     )
                 }
             ),
@@ -563,7 +582,7 @@ final class DiagnosticBundleBuilder {
         return boundedUTF8Prefix(redactor.redact(value), maximumBytes: maximumBytes).value
     }
 
-    fileprivate static func boundedUTF8Prefix(
+    static func boundedUTF8Prefix(
         _ value: String,
         maximumBytes: Int
     ) -> (value: String, truncated: Bool) {
@@ -571,21 +590,32 @@ final class DiagnosticBundleBuilder {
         guard data.count > maximumBytes else {
             return (value, false)
         }
-        var count = maximumBytes
+        guard maximumBytes > 0 else {
+            return ("", true)
+        }
+        let marker = "<truncated>"
+        let markerData = Data(marker.utf8)
+        guard markerData.count < maximumBytes else {
+            return (String(decoding: markerData.prefix(maximumBytes), as: UTF8.self), true)
+        }
+        var count = maximumBytes - markerData.count
         while count > 0 {
             let prefix = Data(data.prefix(count))
             if let decoded = String(data: prefix, encoding: .utf8) {
-                return (decoded + "<truncated>", true)
+                return (decoded + marker, true)
             }
             count -= 1
         }
-        return ("<truncated>", true)
+        return (marker, true)
     }
 
     private static func boundedUTF8Suffix(_ value: String, maximumBytes: Int) -> String {
         let data = Data(value.utf8)
         guard data.count > maximumBytes else {
             return value
+        }
+        guard maximumBytes > 0 else {
+            return ""
         }
         var start = data.count - maximumBytes
         while start < data.count, data[start] & 0b1100_0000 == 0b1000_0000 {
@@ -676,6 +706,7 @@ private struct BundleWorker: Encodable {
     let version: String?
     let active: Bool
     let cancellationRequested: Bool
+    let exitStatus: Int32?
 }
 
 private struct BundleLifecycle: Encodable {

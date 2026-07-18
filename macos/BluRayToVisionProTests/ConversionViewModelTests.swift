@@ -193,6 +193,38 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testDiagnosticStorageSamplingRunsOffMainActor() async throws {
+        try await withTemporarySource { sourceURL in
+            let observation = DiagnosticProbeThreadObservation()
+            let worker = TwoPhaseWorkerClient()
+            let viewModel = ConversionViewModel(
+                clientFactory: { worker },
+                diagnosticStorageProbe: ThreadRecordingStorageProbe(observation: observation)
+            )
+
+            viewModel.selectSource(sourceURL)
+            while viewModel.hasActiveWorker { await Task.yield() }
+            let draft = ConversionDraft(
+                source: try XCTUnwrap(viewModel.source),
+                sourceDetails: try XCTUnwrap(viewModel.state.result),
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: sourceURL.deletingLastPathComponent(),
+                options: ConversionOptions()
+            )
+
+            viewModel.startConversion(draft: draft)
+            while viewModel.hasActiveWorker { await Task.yield() }
+            let deadline = Date().addingTimeInterval(2)
+            while observation.observedMainThread == nil, Date() < deadline {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+
+            XCTAssertEqual(viewModel.state.phase, .completed)
+            XCTAssertEqual(observation.observedMainThread, false)
+        }
+    }
+
+    @MainActor
     func testUnavailableDiscTitleCanBeReanalyzedBeforeRetry() async throws {
         let inspectionDone = expectation(description: "inspection done")
         inspectionDone.expectedFulfillmentCount = 2
@@ -847,6 +879,43 @@ final class ConversionViewModelTests: XCTestCase {
             XCTAssertEqual(
                 scenario.records.filter { $0.sourcePath == firstPath }.map(\.operation),
                 ["inspect_source", "convert_source", "inspect_source", "convert_source"]
+            )
+        }
+    }
+
+    @MainActor
+    func testBatchRetryDiagnosticEventUsesFailedItemsJobContext() async throws {
+        try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, sourceURLs, destinationURL in
+            let firstPath = sourceURLs[0].path
+            let scenario = BatchWorkerScenario(failConversionOnceFor: [firstPath])
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+            let failedItemID = try XCTUnwrap(viewModel.batchQueue?.items.first?.id)
+
+            viewModel.retryBatchItem(failedItemID)
+            await waitForBatchCompletion(viewModel)
+
+            let artifact = try await viewModel.captureDiagnosticBundle(in: destinationURL)
+            let events = try diagnosticEvents(from: artifact.archiveURL)
+            let failureEvent = try XCTUnwrap(events.first {
+                $0["name"] as? String == "job.failed"
+                    && $0["failure_code"] as? String == "synthetic_failure"
+            })
+            let retryEvent = try XCTUnwrap(events.first {
+                $0["name"] as? String == "batch.retry_requested"
+            })
+
+            XCTAssertNotNil(failureEvent["job_token"] as? String)
+            XCTAssertEqual(
+                retryEvent["job_token"] as? String,
+                failureEvent["job_token"] as? String
             )
         }
     }
@@ -1579,6 +1648,77 @@ final class ConversionViewModelTests: XCTestCase {
         _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8))
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         try await operation(sourceURL)
+    }
+
+    private func diagnosticEvents(from archiveURL: URL) throws -> [[String: Any]] {
+        let process = Process()
+        let output = Pipe()
+        let error = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        process.arguments = ["-p", archiveURL.path, "events.jsonl"]
+        process.standardOutput = output
+        process.standardError = error
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        let errorData = error.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw NSError(
+                domain: "ConversionViewModelTests",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: String(decoding: errorData, as: UTF8.self)]
+            )
+        }
+        return try String(decoding: data, as: UTF8.self)
+            .split(separator: "\n")
+            .map { line in
+                try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+                )
+            }
+    }
+}
+
+private final class DiagnosticProbeThreadObservation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var observations: [Bool] = []
+
+    var observedMainThread: Bool? {
+        lock.withLock {
+            guard !observations.isEmpty else {
+                return nil
+            }
+            return observations.contains(true)
+        }
+    }
+
+    func recordCurrentThread() {
+        lock.withLock {
+            observations.append(Thread.isMainThread)
+        }
+    }
+}
+
+private struct ThreadRecordingStorageProbe: DiagnosticStorageProbing {
+    let observation: DiagnosticProbeThreadObservation
+
+    func probe(role: DiagnosticStorageRole, url: URL, capturedAt: Date) -> RawDiagnosticStorageProbe {
+        observation.recordCurrentThread()
+        return RawDiagnosticStorageProbe(
+            capturedAt: capturedAt,
+            role: role,
+            url: url,
+            status: .available,
+            isDirectory: role == .destination,
+            isReadable: true,
+            isWritable: true,
+            fileSizeBytes: 0,
+            modificationAgeSeconds: 0,
+            volumeAvailableBytes: 64 * 1_024 * 1_024 * 1_024,
+            volumeTotalBytes: 128 * 1_024 * 1_024 * 1_024,
+            volumeReadOnly: false,
+            errorKind: nil
+        )
     }
 }
 

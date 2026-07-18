@@ -24,11 +24,14 @@ final class WorkerProcessClientTests: XCTestCase {
     }
 
     func testStreamsAndBoundsDiagnosticsWhileWorkerIsActive() async throws {
+        let diagnosticPayloadBytes = 4 * 1_024 * 1_024
         let client = fixtureClient(body: """
         \(readyEvent())
-        print("FIRST-MARKER", file=sys.stderr, flush=True)
-        print("x" * 600000, file=sys.stderr, flush=True)
-        print("TAIL-MARKER", file=sys.stderr, flush=True)
+        sys.stderr.buffer.write(b"FIRST-MARKER\\n")
+        for _ in range(\(diagnosticPayloadBytes / (64 * 1_024))):
+            sys.stderr.buffer.write(b"x" * (64 * 1_024))
+        sys.stderr.buffer.write(b"TAIL-MARKER\\n")
+        sys.stderr.flush()
         time.sleep(30)
         """)
         let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
@@ -51,7 +54,15 @@ final class WorkerProcessClientTests: XCTestCase {
 
         XCTAssertTrue(snapshot.isRunning)
         XCTAssertTrue(snapshot.toolOutput.truncated)
-        XCTAssertGreaterThan(snapshot.toolOutput.droppedBytes, 0)
+        XCTAssertLessThanOrEqual(snapshot.toolOutput.retainedBytes, 512 * 1_024)
+        XCTAssertEqual(
+            snapshot.toolOutput.totalBytes,
+            diagnosticPayloadBytes + Data("FIRST-MARKER\nTAIL-MARKER\n".utf8).count
+        )
+        XCTAssertEqual(
+            snapshot.toolOutput.droppedBytes,
+            snapshot.toolOutput.totalBytes - snapshot.toolOutput.retainedBytes
+        )
         XCTAssertFalse(snapshot.toolOutput.text.contains("FIRST-MARKER"))
         XCTAssertTrue(snapshot.toolOutput.text.contains("TAIL-MARKER"))
 
@@ -75,16 +86,17 @@ final class WorkerProcessClientTests: XCTestCase {
     }
 
     func testReportsMalformedEventStream() async throws {
-        let client = fixtureClient(body: "print('not-json', flush=True)")
+        let client = fixtureClient(body: "print('not-json', flush=True); sys.exit(7)")
         let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
 
         do {
             _ = try await client.run(job: job) { _ in }
             XCTFail("Expected malformed JSON to fail")
         } catch let error as WorkerClientError {
-            guard case .protocolFailure = error else {
+            guard case let .protocolFailure(_, _, exitStatus) = error else {
                 return XCTFail("Unexpected worker error: \(error)")
             }
+            XCTAssertEqual(error.processExitStatus, exitStatus)
         }
     }
 

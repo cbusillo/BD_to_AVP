@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-struct DiagnosticTextSnapshot: Equatable {
+struct DiagnosticTextSnapshot: Equatable, Sendable {
     let text: String
     let retainedBytes: Int
     let totalBytes: Int
@@ -33,9 +33,7 @@ final class BoundedDiagnosticTextBuffer: @unchecked Sendable {
             return
         }
         lock.withDiagnosticLock {
-            totalBytes += incomingData.count
-            data.append(incomingData)
-            trimToLimit()
+            appendLocked(incomingData)
         }
     }
 
@@ -47,9 +45,7 @@ final class BoundedDiagnosticTextBuffer: @unchecked Sendable {
         lock.withDiagnosticLock {
             let separator = data.isEmpty ? "" : "\n"
             let incomingData = Data((separator + trimmed).utf8)
-            totalBytes += incomingData.count
-            data.append(incomingData)
-            trimToLimit()
+            appendLocked(incomingData)
         }
     }
 
@@ -73,18 +69,39 @@ final class BoundedDiagnosticTextBuffer: @unchecked Sendable {
         }
     }
 
-    private func trimToLimit() {
-        guard data.count > maximumBytes else {
+    private func appendLocked(_ incomingData: Data) {
+        let (updatedTotal, overflowed) = totalBytes.addingReportingOverflow(incomingData.count)
+        totalBytes = overflowed ? Int.max : updatedTotal
+
+        if incomingData.count >= maximumBytes {
+            data = Self.validUTF8Suffix(incomingData, maximumBytes: maximumBytes)
             return
         }
-        data.removeFirst(data.count - maximumBytes)
+
+        let overflow = max(0, data.count + incomingData.count - maximumBytes)
+        if overflow > 0 {
+            data.removeFirst(overflow)
+            trimLeadingUTF8ContinuationBytes()
+        }
+        data.append(incomingData)
+    }
+
+    private func trimLeadingUTF8ContinuationBytes() {
         while let firstByte = data.first, firstByte & 0b1100_0000 == 0b1000_0000 {
             data.removeFirst()
         }
     }
+
+    private static func validUTF8Suffix(_ source: Data, maximumBytes: Int) -> Data {
+        var suffix = Data(source.suffix(maximumBytes))
+        while let firstByte = suffix.first, firstByte & 0b1100_0000 == 0b1000_0000 {
+            suffix.removeFirst()
+        }
+        return suffix
+    }
 }
 
-struct WorkerProcessDiagnosticSnapshot: Equatable {
+struct WorkerProcessDiagnosticSnapshot: Equatable, Sendable {
     let isRunning: Bool
     let processIdentifier: Int32?
     let processGroupIdentifier: Int32?
@@ -100,26 +117,26 @@ struct WorkerProcessDiagnosticSnapshot: Equatable {
     )
 }
 
-enum DiagnosticStorageRole: String, Codable, CaseIterable {
+enum DiagnosticStorageRole: String, Codable, CaseIterable, Sendable {
     case source
     case destination
     case output
 }
 
-enum DiagnosticStorageStatus: String, Codable {
+enum DiagnosticStorageStatus: String, Codable, Sendable {
     case available
     case missing
     case inaccessible
     case error
 }
 
-enum DiagnosticStorageErrorKind: String, Codable {
+enum DiagnosticStorageErrorKind: String, Codable, Sendable {
     case permissionDenied = "permission_denied"
     case inputOutput = "input_output"
     case unknown
 }
 
-struct RawDiagnosticStorageProbe: Equatable {
+struct RawDiagnosticStorageProbe: Equatable, Sendable {
     let capturedAt: Date
     let role: DiagnosticStorageRole
     let url: URL
@@ -135,7 +152,7 @@ struct RawDiagnosticStorageProbe: Equatable {
     let errorKind: DiagnosticStorageErrorKind?
 }
 
-struct RawDiagnosticStorageSample: Equatable {
+struct RawDiagnosticStorageSample: Equatable, Sendable {
     let capturedAt: Date
     let role: DiagnosticStorageRole
     let url: URL
@@ -155,12 +172,12 @@ struct RawDiagnosticStorageSample: Equatable {
     }
 }
 
-protocol DiagnosticStorageProbing {
+protocol DiagnosticStorageProbing: Sendable {
     func probe(role: DiagnosticStorageRole, url: URL, capturedAt: Date) -> RawDiagnosticStorageProbe
 }
 
 struct FileSystemDiagnosticStorageProbe: DiagnosticStorageProbing {
-    typealias ResourceReader = (URL, Set<URLResourceKey>) throws -> URLResourceValues
+    typealias ResourceReader = @Sendable (URL, Set<URLResourceKey>) throws -> URLResourceValues
 
     private static let itemKeys: Set<URLResourceKey> = [
         .isDirectoryKey,
@@ -178,40 +195,18 @@ struct FileSystemDiagnosticStorageProbe: DiagnosticStorageProbing {
         .volumeIsReadOnlyKey,
     ]
 
-    private let fileManager: FileManager
     private let resourceReader: ResourceReader
 
     init(
-        fileManager: FileManager = .default,
         resourceReader: @escaping ResourceReader = { url, keys in
             try url.resourceValues(forKeys: keys)
         }
     ) {
-        self.fileManager = fileManager
         self.resourceReader = resourceReader
     }
 
     func probe(role: DiagnosticStorageRole, url: URL, capturedAt: Date) -> RawDiagnosticStorageProbe {
         let normalizedURL = url.standardizedFileURL
-        guard fileManager.fileExists(atPath: normalizedURL.path) else {
-            let volumeValues = nearestVolumeValues(for: normalizedURL)
-            return RawDiagnosticStorageProbe(
-                capturedAt: capturedAt,
-                role: role,
-                url: normalizedURL,
-                status: .missing,
-                isDirectory: nil,
-                isReadable: nil,
-                isWritable: nil,
-                fileSizeBytes: nil,
-                modificationAgeSeconds: nil,
-                volumeAvailableBytes: volumeValues?.volumeAvailableCapacityForImportantUsage,
-                volumeTotalBytes: volumeValues?.volumeTotalCapacity.map(Int64.init),
-                volumeReadOnly: volumeValues?.volumeIsReadOnly,
-                errorKind: nil
-            )
-        }
-
         do {
             let values = try resourceReader(normalizedURL, Self.itemKeys)
             let modificationAge = values.contentModificationDate.map {
@@ -234,35 +229,86 @@ struct FileSystemDiagnosticStorageProbe: DiagnosticStorageProbing {
             )
         } catch {
             let errorKind = Self.errorKind(for: error)
-            let status: DiagnosticStorageStatus = errorKind == .permissionDenied ? .inaccessible : .error
-            return RawDiagnosticStorageProbe(
-                capturedAt: capturedAt,
+            if errorKind == .permissionDenied {
+                return failedProbe(
+                    role: role,
+                    url: normalizedURL,
+                    capturedAt: capturedAt,
+                    status: .inaccessible,
+                    errorKind: errorKind
+                )
+            }
+            if Self.isMissing(error) {
+                let volumeValues = nearestVolumeValues(for: normalizedURL.deletingLastPathComponent())
+                return RawDiagnosticStorageProbe(
+                    capturedAt: capturedAt,
+                    role: role,
+                    url: normalizedURL,
+                    status: .missing,
+                    isDirectory: nil,
+                    isReadable: nil,
+                    isWritable: nil,
+                    fileSizeBytes: nil,
+                    modificationAgeSeconds: nil,
+                    volumeAvailableBytes: volumeValues?.volumeAvailableCapacityForImportantUsage,
+                    volumeTotalBytes: volumeValues?.volumeTotalCapacity.map(Int64.init),
+                    volumeReadOnly: volumeValues?.volumeIsReadOnly,
+                    errorKind: nil
+                )
+            }
+            return failedProbe(
                 role: role,
                 url: normalizedURL,
-                status: status,
-                isDirectory: nil,
-                isReadable: false,
-                isWritable: false,
-                fileSizeBytes: nil,
-                modificationAgeSeconds: nil,
-                volumeAvailableBytes: nil,
-                volumeTotalBytes: nil,
-                volumeReadOnly: nil,
+                capturedAt: capturedAt,
+                status: .error,
                 errorKind: errorKind
             )
         }
     }
 
+    private func failedProbe(
+        role: DiagnosticStorageRole,
+        url: URL,
+        capturedAt: Date,
+        status: DiagnosticStorageStatus,
+        errorKind: DiagnosticStorageErrorKind
+    ) -> RawDiagnosticStorageProbe {
+        RawDiagnosticStorageProbe(
+            capturedAt: capturedAt,
+            role: role,
+            url: url,
+            status: status,
+            isDirectory: nil,
+            isReadable: false,
+            isWritable: false,
+            fileSizeBytes: nil,
+            modificationAgeSeconds: nil,
+            volumeAvailableBytes: nil,
+            volumeTotalBytes: nil,
+            volumeReadOnly: nil,
+            errorKind: errorKind
+        )
+    }
+
     private func nearestVolumeValues(for url: URL) -> URLResourceValues? {
         var candidate = url
-        while !fileManager.fileExists(atPath: candidate.path) {
+        while true {
+            do {
+                return try resourceReader(candidate, Self.volumeKeys)
+            } catch {
+                guard Self.errorKind(for: error) != .permissionDenied else {
+                    return nil
+                }
+                guard Self.isMissing(error) else {
+                    return nil
+                }
+            }
             let parent = candidate.deletingLastPathComponent()
             guard parent.path != candidate.path else {
                 return nil
             }
             candidate = parent
         }
-        return try? resourceReader(candidate, Self.volumeKeys)
     }
 
     private static func errorKind(for error: Error) -> DiagnosticStorageErrorKind {
@@ -280,7 +326,28 @@ struct FileSystemDiagnosticStorageProbe: DiagnosticStorageProbing {
         if error.domain == NSPOSIXErrorDomain, error.code == Int(EIO) {
             return .inputOutput
         }
+        if let underlyingError = error.userInfo[NSUnderlyingErrorKey] as? Error {
+            return errorKind(for: underlyingError)
+        }
         return .unknown
+    }
+
+    private static func isMissing(_ error: Error) -> Bool {
+        let error = error as NSError
+        if error.domain == NSPOSIXErrorDomain,
+           error.code == Int(ENOENT) || error.code == Int(ENOTDIR)
+        {
+            return true
+        }
+        if error.domain == NSCocoaErrorDomain,
+           error.code == NSFileNoSuchFileError || error.code == NSFileReadNoSuchFileError
+        {
+            return true
+        }
+        if let underlyingError = error.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isMissing(underlyingError)
+        }
+        return false
     }
 }
 
@@ -401,7 +468,7 @@ struct DiagnosticJobContext: Equatable {
     }
 }
 
-struct DiagnosticProgressSnapshot: Encodable, Equatable {
+struct DiagnosticProgressSnapshot: Encodable, Equatable, Sendable {
     let currentStage: Int
     let totalStages: Int
     let stageFraction: Double?
@@ -413,7 +480,7 @@ struct DiagnosticProgressSnapshot: Encodable, Equatable {
     }
 }
 
-struct DiagnosticEventRecord: Equatable {
+struct DiagnosticEventRecord: Equatable, Sendable {
     let recordedAt: Date
     let source: String
     let name: String
@@ -436,7 +503,7 @@ struct DiagnosticEventRecord: Equatable {
     let workerVersion: String?
     let exitStatus: Int32?
 
-    var approximateBytes: Int {
+    var serializedByteCount: Int {
         let strings = [
             source,
             name,
@@ -452,13 +519,36 @@ struct DiagnosticEventRecord: Equatable {
             workerVersion,
         ]
         .compactMap { $0 }
-        .reduce(0) { $0 + $1.utf8.count }
-        let choicesBytes = choices?.reduce(0) { $0 + $1.utf8.count } ?? 0
-        return 192 + strings + choicesBytes
+        .reduce(0) { $0 + DiagnosticJSONByteCount.string($1) }
+        let choicesBytes = choices?.reduce(2) {
+            $0 + DiagnosticJSONByteCount.string($1) + 1
+        } ?? 0
+        let numericBytes = [sequence, elapsedSeconds]
+            .compactMap { $0 }
+            .reduce(0) { $0 + String($1).utf8.count }
+        let progressBytes = progress.map {
+            64
+                + String($0.currentStage).utf8.count
+                + String($0.totalStages).utf8.count
+                + ($0.stageFraction.map { String($0).utf8.count } ?? 0)
+        } ?? 0
+        let resultSizeBytes = resultSizeBytes.map { String($0).utf8.count } ?? 0
+        let exitStatusBytes = exitStatus.map { String($0).utf8.count } ?? 0
+        let fixedValueBytes = (jobID == nil ? 0 : 38)
+            + (retryable == nil ? 0 : 5)
+            + 36
+        return 256
+            + strings
+            + choicesBytes
+            + numericBytes
+            + progressBytes
+            + resultSizeBytes
+            + exitStatusBytes
+            + fixedValueBytes
     }
 }
 
-struct DiagnosticEventHistorySnapshot: Equatable {
+struct DiagnosticEventHistorySnapshot: Equatable, Sendable {
     let entries: [DiagnosticEventRecord]
     let totalRecordedEntries: Int
     let droppedEntries: Int
@@ -481,12 +571,12 @@ struct DiagnosticEventHistory {
 
     mutating func append(_ entry: DiagnosticEventRecord) {
         entries.append(entry)
-        retainedBytes += entry.approximateBytes
+        retainedBytes += entry.serializedByteCount
         while entries.count > maximumEntries || retainedBytes > maximumBytes {
             let removed = entries.removeFirst()
-            retainedBytes -= removed.approximateBytes
+            retainedBytes -= removed.serializedByteCount
             droppedEntries += 1
-            droppedBytes += removed.approximateBytes
+            droppedBytes += removed.serializedByteCount
         }
     }
 
@@ -500,14 +590,25 @@ struct DiagnosticEventHistory {
     }
 }
 
-struct DiagnosticBatchSummary: Equatable {
+struct DiagnosticBatchSummary: Equatable, Sendable {
     let kind: String
     let totalItems: Int
     let activeItems: Int
     let statusCounts: [String: Int]
 }
 
-struct DiagnosticCaptureSnapshot {
+struct DiagnosticStorageSampleTarget: Equatable, Sendable {
+    let role: DiagnosticStorageRole
+    let url: URL
+}
+
+struct DiagnosticStorageSampleRequest: Equatable, Sendable {
+    let jobID: UUID
+    let capturedAt: Date
+    let targets: [DiagnosticStorageSampleTarget]
+}
+
+struct DiagnosticCaptureSnapshot: @unchecked Sendable {
     let capturedAt: Date
     let lifecycle: WorkerLifecycleState
     let activeMode: String?
@@ -515,6 +616,7 @@ struct DiagnosticCaptureSnapshot {
     let redactionContexts: [DiagnosticJobContext]
     let batchSummary: DiagnosticBatchSummary?
     let process: WorkerProcessDiagnosticSnapshot
+    let processExitStatus: Int32?
     let workerVersion: String?
     let events: DiagnosticEventHistorySnapshot
     let storageSamples: [RawDiagnosticStorageSample]
@@ -535,6 +637,7 @@ final class DiagnosticSessionRecorder {
     private var recentJobContexts: [DiagnosticJobContext] = []
     private(set) var currentJobContext: DiagnosticJobContext?
     private(set) var latestProcessSnapshot = WorkerProcessDiagnosticSnapshot.empty
+    private(set) var latestProcessExitStatus: Int32?
     private(set) var workerVersion: String?
     private(set) var latestLifecycle: WorkerLifecycleState?
 
@@ -566,6 +669,7 @@ final class DiagnosticSessionRecorder {
         recentJobContexts.removeAll(keepingCapacity: true)
         currentJobContext = nil
         latestProcessSnapshot = .empty
+        latestProcessExitStatus = nil
         workerVersion = nil
         latestLifecycle = nil
     }
@@ -583,6 +687,7 @@ final class DiagnosticSessionRecorder {
             recentJobContexts.removeFirst()
         }
         latestProcessSnapshot = .empty
+        latestProcessExitStatus = nil
         recordWorkflow(
             name: "job.launch_requested",
             lifecycle: lifecycle,
@@ -622,7 +727,7 @@ final class DiagnosticSessionRecorder {
             jobID: event.jobID,
             sequence: event.sequence,
             phase: terminalPhase ?? lifecycle.phase.rawValue,
-            operation: event.payload.operation ?? currentJobContext?.operation,
+            operation: event.payload.operation ?? context(for: event.jobID)?.operation,
             activeMode: activeMode,
             stage: event.payload.stage,
             message: event.payload.message
@@ -657,15 +762,16 @@ final class DiagnosticSessionRecorder {
         jobID: UUID? = nil,
         exitStatus: Int32? = nil
     ) {
+        let jobContext = context(for: jobID)
         history.append(
             DiagnosticEventRecord(
                 recordedAt: recordedAt,
                 source: "client",
                 name: name,
-                jobID: jobID ?? currentJobContext?.jobID,
+                jobID: jobID,
                 sequence: nil,
                 phase: lifecycle.phase.rawValue,
-                operation: currentJobContext?.operation,
+                operation: jobContext?.operation,
                 activeMode: activeMode,
                 stage: lifecycle.stageMessage,
                 message: message,
@@ -682,6 +788,9 @@ final class DiagnosticSessionRecorder {
                 exitStatus: exitStatus
             )
         )
+        if let exitStatus {
+            latestProcessExitStatus = exitStatus
+        }
         latestLifecycle = lifecycle
     }
 
@@ -689,14 +798,14 @@ final class DiagnosticSessionRecorder {
         latestProcessSnapshot = snapshot
     }
 
-    func sampleCurrentStorage(
-        using probe: any DiagnosticStorageProbing,
+    func makeStorageSampleRequest(
         recordedAt: Date,
         force: Bool = false
-    ) {
+    ) -> DiagnosticStorageSampleRequest? {
         guard let context = currentJobContext else {
-            return
+            return nil
         }
+        var targets: [DiagnosticStorageSampleTarget] = []
         for (role, url) in context.storageTargets where role != .source {
             let key = "\(role.rawValue):\(url.standardizedFileURL.path)"
             if !force,
@@ -705,13 +814,36 @@ final class DiagnosticSessionRecorder {
             {
                 continue
             }
-            let storageProbe = probe.probe(role: role, url: url, capturedAt: recordedAt)
-            storageSamples.append(RawDiagnosticStorageSample(probe: storageProbe))
             lastStorageSampleAt[key] = recordedAt
-            while storageSamples.count > maximumStorageSamples {
-                storageSamples.removeFirst()
-                droppedStorageSamples += 1
+            targets.append(DiagnosticStorageSampleTarget(role: role, url: url))
+        }
+        guard !targets.isEmpty else {
+            return nil
+        }
+        return DiagnosticStorageSampleRequest(
+            jobID: context.jobID,
+            capturedAt: recordedAt,
+            targets: targets
+        )
+    }
+
+    func recordStorageSamples(
+        _ samples: [RawDiagnosticStorageSample],
+        for jobID: UUID
+    ) {
+        guard context(for: jobID) != nil else {
+            return
+        }
+        storageSamples.append(contentsOf: samples)
+        storageSamples.sort {
+            if $0.capturedAt == $1.capturedAt {
+                return $0.role.rawValue < $1.role.rawValue
             }
+            return $0.capturedAt < $1.capturedAt
+        }
+        while storageSamples.count > maximumStorageSamples {
+            storageSamples.removeFirst()
+            droppedStorageSamples += 1
         }
     }
 
@@ -731,12 +863,45 @@ final class DiagnosticSessionRecorder {
             redactionContexts: recentJobContexts,
             batchSummary: batchSummary,
             process: process,
+            processExitStatus: latestProcessExitStatus,
             workerVersion: workerVersion,
             events: history.snapshot(),
             storageSamples: storageSamples,
             totalStorageSamples: storageSamples.count + droppedStorageSamples,
             droppedStorageSamples: droppedStorageSamples
         )
+    }
+
+    private func context(for jobID: UUID?) -> DiagnosticJobContext? {
+        guard let jobID else {
+            return nil
+        }
+        return recentJobContexts.last { $0.jobID == jobID }
+    }
+}
+
+private enum DiagnosticJSONByteCount {
+    static func string(_ value: String) -> Int {
+        2 + value.unicodeScalars.reduce(0) { count, scalar in
+            count + escapedScalar(scalar)
+        }
+    }
+
+    private static func escapedScalar(_ scalar: Unicode.Scalar) -> Int {
+        switch scalar.value {
+        case 0x08, 0x09, 0x0A, 0x0C, 0x0D, 0x22, 0x5C:
+            return 2
+        case 0x00 ... 0x1F, 0x2028, 0x2029:
+            return 6
+        case 0x00 ... 0x7F:
+            return 1
+        case 0x80 ... 0x7FF:
+            return 2
+        case 0x800 ... 0xFFFF:
+            return 3
+        default:
+            return 4
+        }
     }
 }
 

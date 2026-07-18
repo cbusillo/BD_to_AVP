@@ -5,6 +5,11 @@ worker is active or after it reaches a terminal state. Capture reads app state,
 the bounded worker-output tail, and filesystem metadata. It does not signal,
 pause, restart, or otherwise mutate the worker.
 
+The main actor first freezes an immutable lifecycle, queue, event-history, and
+active-worker snapshot. Filesystem probes, redaction, JSON encoding, DEFLATE,
+and archive file I/O then run on a utility task so capture cannot stall worker
+event delivery or stdout consumption.
+
 ## Archive Contract
 
 The archive is a ZIP file using raw DEFLATE entries. Its filename contains only
@@ -35,9 +40,10 @@ bytes.
 - `app`: App version/build, distribution channel, numeric macOS version, CPU
   architecture, and worker protocol version. No hostname, hardware model,
   serial, locale, or environment is included.
-- `worker`: Worker version, active state, and whether cancellation had already
-  been requested. Process and process-group identifiers remain in-memory for
-  worker control and are never serialized.
+- `worker`: Worker version, active state, whether cancellation had already been
+  requested, and the most recent process exit status when available. Process
+  and process-group identifiers remain in-memory for worker control and are
+  never serialized.
 - `lifecycle`: Phase, operation, active mode, elapsed time, progress, bounded
   stage/activity/warning text, failure code/message/details, retryability, and
   recovery-choice identifiers. All free text is redacted.
@@ -66,6 +72,12 @@ flag. PID and process-group fields are not present.
 Worker result objects are never serialized. Source inspection titles, output
 paths, raw job JSON, and arbitrary event payload fields are excluded. The
 history is a contiguous newest-history tail when older records must be dropped.
+Its in-memory byte budget counts JSON string escaping and serialization
+overhead rather than only the unescaped Swift strings.
+
+Client lifecycle records carry an explicit originating job token when they are
+job-specific. Batch-wide records carry no job token, and retry records use the
+retried item's last job instead of inheriting whichever job ran most recently.
 
 ## Storage Fields
 
@@ -81,7 +93,10 @@ category. File sizes use 256 MiB quanta; volume capacities use 16 GiB quanta.
 The JSON names these values `*_rounded_bytes` and the manifest records the
 quanta and rounding direction. Volume names, device paths, filesystem labels,
 filenames, exact media sizes, exact capacities, and exception descriptions are
-excluded. Missing and inaccessible paths are represented explicitly.
+excluded. Missing and inaccessible paths are represented explicitly. The probe
+uses throwing filesystem metadata reads, including underlying POSIX errors, so
+permission failures cannot be misclassified as a nonexistent path by a
+non-throwing existence check.
 
 Archive-entry sizes, truncation counters, and byte ceilings remain exact because
 they enforce the local 1,500,000-byte payload and 2,097,152-byte ZIP limits;
@@ -90,9 +105,11 @@ they do not describe host storage or media files.
 ## Tool Tail
 
 `WorkerProcessClient` continuously drains stderr while the process runs into a
-512 KiB UTF-8 tail. This prevents pipe backpressure and makes active capture
-possible. `tool-tail.txt` begins with original/retained/dropped byte counts and
-a `truncated` flag before the redacted retained text.
+512 KiB UTF-8 tail. DispatchIO callbacks append bounded chunks directly to the
+tail; there is no unbounded `AsyncThrowingStream` continuation queue between
+the pipe and the bound. This prevents pipe backpressure while preserving exact
+original/retained/dropped byte accounting. `tool-tail.txt` begins with those
+counts and a `truncated` flag before the redacted retained text.
 
 The existing UI-facing diagnostic string is separately limited to 128 KiB.
 
@@ -129,6 +146,8 @@ not use reusable hashes.
   Structured worker job UUIDs receive per-bundle job tokens.
 - ANSI escapes and unsafe control characters are removed.
 - Every free-text field is redacted and byte-bounded before JSON encoding.
+  Truncation markers are included inside, not appended beyond, each advertised
+  UTF-8 byte cap.
 
 The bundle never contains media bytes, screenshots, environment dumps, raw
 commands, source titles, raw paths, raw process identifiers, exact media/storage
@@ -136,8 +155,9 @@ sizes, serials, or reusable file fingerprints.
 
 ## Local Foundation APIs
 
-`ConversionViewModel.captureDiagnosticBundle(in:)` returns a
-`DiagnosticBundleArtifact` without changing worker state. The artifact exposes:
+`await ConversionViewModel.captureDiagnosticBundle(in:)` asynchronously returns
+a `DiagnosticBundleArtifact` without changing worker state. The artifact
+exposes:
 
 - `archiveURL` and `suggestedFilename` for an upload or save panel.
 - `preview` with exact included/excluded categories, entry sizes, archive size,

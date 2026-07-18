@@ -3,9 +3,9 @@ import Foundation
 
 enum WorkerClientError: Error, LocalizedError {
     case alreadyRunning
-    case requestEncoding(String)
+    case requestEncoding(message: String, exitStatus: Int32?)
     case launch(String)
-    case protocolFailure(message: String, diagnostics: String)
+    case protocolFailure(message: String, diagnostics: String, exitStatus: Int32)
     case missingTerminalEvent(exitStatus: Int32, diagnostics: String)
     case unexpectedExit(exitStatus: Int32, diagnostics: String)
 
@@ -28,10 +28,20 @@ enum WorkerClientError: Error, LocalizedError {
 
     var technicalDetails: String? {
         switch self {
-        case let .requestEncoding(message), let .launch(message):
+        case let .requestEncoding(message, exitStatus):
+            return [
+                message,
+                exitStatus.map { "Exit status: \($0)" },
+            ]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+        case let .launch(message):
             return message
-        case let .protocolFailure(message, diagnostics):
-            return [message, diagnostics].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        case let .protocolFailure(message, diagnostics, exitStatus):
+            return [message, "Exit status: \(exitStatus)", diagnostics]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
         case let .missingTerminalEvent(exitStatus, diagnostics),
              let .unexpectedExit(exitStatus, diagnostics):
             return ["Exit status: \(exitStatus)", diagnostics].filter { !$0.isEmpty }.joined(separator: "\n\n")
@@ -41,6 +51,19 @@ enum WorkerClientError: Error, LocalizedError {
     }
 
     var diagnostics: String? { technicalDetails }
+
+    var processExitStatus: Int32? {
+        switch self {
+        case let .requestEncoding(_, exitStatus):
+            return exitStatus
+        case let .protocolFailure(_, _, exitStatus),
+             let .missingTerminalEvent(exitStatus, _),
+             let .unexpectedExit(exitStatus, _):
+            return exitStatus
+        case .alreadyRunning, .launch:
+            return nil
+        }
+    }
 }
 
 private enum WorkerStreamError: Error, LocalizedError {
@@ -153,9 +176,10 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
             cancel()
         }
 
-        async let diagnosticsRead = Self.readDiagnostics(
-            from: standardError.fileHandleForReading,
-            into: diagnosticBuffer
+        let diagnosticsDrainer = DiagnosticPipeDrainer(
+            fileHandle: standardError.fileHandleForReading,
+            buffer: diagnosticBuffer,
+            queue: Self.ioQueue
         )
         async let processExitStatus = exitWaiter.wait()
 
@@ -166,9 +190,12 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
             try standardInput.fileHandleForWriting.close()
         } catch {
             cancel()
-            _ = await processExitStatus
-            _ = await diagnosticsRead
-            throw WorkerClientError.requestEncoding(error.localizedDescription)
+            let exitStatus = await processExitStatus
+            await diagnosticsDrainer.wait()
+            throw WorkerClientError.requestEncoding(
+                message: error.localizedDescription,
+                exitStatus: exitStatus
+            )
         }
 
         let terminalEvent: WorkerEvent
@@ -180,7 +207,7 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
                 onEvent: onEvent
             ) else {
                 let exitStatus = await processExitStatus
-                _ = await diagnosticsRead
+                await diagnosticsDrainer.wait()
                 let diagnostics = diagnosticBuffer.snapshot().text
                 throw WorkerClientError.missingTerminalEvent(exitStatus: exitStatus, diagnostics: diagnostics)
             }
@@ -190,14 +217,17 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         } catch {
             cancel()
             let exitStatus = await processExitStatus
-            _ = await diagnosticsRead
+            await diagnosticsDrainer.wait()
             let diagnostics = diagnosticBuffer.snapshot().text
-            let detail = diagnostics.isEmpty ? "worker exit status \(exitStatus)" : diagnostics
-            throw WorkerClientError.protocolFailure(message: error.localizedDescription, diagnostics: detail)
+            throw WorkerClientError.protocolFailure(
+                message: error.localizedDescription,
+                diagnostics: diagnostics,
+                exitStatus: exitStatus
+            )
         }
 
         let exitStatus = await processExitStatus
-        _ = await diagnosticsRead
+        await diagnosticsDrainer.wait()
         let finalSnapshot = processDiagnosticSnapshot(process: process, buffer: diagnosticBuffer)
         let diagnostics = finalSnapshot.toolOutput.text
         let wasCancelled = stateLock.withLock {
@@ -422,15 +452,106 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         }
     }
 
-    private static func readDiagnostics(
-        from fileHandle: FileHandle,
-        into buffer: BoundedDiagnosticTextBuffer
-    ) async {
-        do {
-            for try await chunk in chunks(from: fileHandle) {
-                buffer.append(chunk)
+}
+
+private final class DiagnosticPipeDrainer: @unchecked Sendable {
+    private static let maximumChunkBytes = 64 * 1_024
+
+    private let lock = NSLock()
+    private let completion = AsyncCompletion()
+    private var channel: DispatchIO?
+    private var finished = false
+
+    init(
+        fileHandle: FileHandle,
+        buffer: BoundedDiagnosticTextBuffer,
+        queue: DispatchQueue
+    ) {
+        let fileDescriptor = dup(fileHandle.fileDescriptor)
+        guard fileDescriptor >= 0 else {
+            completion.complete()
+            return
+        }
+        let channel = DispatchIO(
+            type: .stream,
+            fileDescriptor: fileDescriptor,
+            queue: queue
+        ) { _ in
+            close(fileDescriptor)
+        }
+        self.channel = channel
+        channel.setLimit(lowWater: 1)
+        channel.setLimit(highWater: Self.maximumChunkBytes)
+        channel.read(offset: 0, length: Int.max, queue: queue) { [weak self] done, dispatchData, errorCode in
+            guard let self else {
+                return
             }
-        } catch {}
+            if let dispatchData, !dispatchData.isEmpty {
+                buffer.append(Data(dispatchData))
+            }
+            if errorCode != 0 {
+                finish(stop: true)
+            } else if done {
+                finish(stop: false)
+            }
+        }
+    }
+
+    deinit {
+        finish(stop: true)
+    }
+
+    func wait() async {
+        await completion.wait()
+    }
+
+    private func finish(stop: Bool) {
+        let channel = lock.withLock { () -> DispatchIO? in
+            guard !finished else {
+                return nil
+            }
+            finished = true
+            defer { self.channel = nil }
+            return self.channel
+        }
+        guard let channel else {
+            return
+        }
+        channel.close(flags: stop ? .stop : [])
+        completion.complete()
+    }
+}
+
+private final class AsyncCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completed = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func complete() {
+        let waitingContinuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            guard !completed else {
+                return nil
+            }
+            completed = true
+            defer { continuation = nil }
+            return continuation
+        }
+        waitingContinuation?.resume()
+    }
+
+    func wait() async {
+        await withCheckedContinuation { waitingContinuation in
+            let isCompleted = lock.withLock { () -> Bool in
+                if completed {
+                    return true
+                }
+                continuation = waitingContinuation
+                return false
+            }
+            if isCompleted {
+                waitingContinuation.resume()
+            }
+        }
     }
 }
 

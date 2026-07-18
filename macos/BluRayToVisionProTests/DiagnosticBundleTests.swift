@@ -19,6 +19,57 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertTrue(snapshot.truncated)
     }
 
+    func testBoundedTextBufferCapsLargeChunksWithoutSplittingLeadingUTF8() {
+        let buffer = BoundedDiagnosticTextBuffer(maximumBytes: 17)
+        let input = Data((String(repeating: "old", count: 100_000) + "😀tail-marker").utf8)
+
+        buffer.append(input)
+
+        let snapshot = buffer.snapshot()
+        XCTAssertLessThanOrEqual(snapshot.retainedBytes, 17)
+        XCTAssertEqual(snapshot.totalBytes, input.count)
+        XCTAssertEqual(snapshot.droppedBytes, input.count - snapshot.retainedBytes)
+        XCTAssertTrue(snapshot.text.hasSuffix("tail-marker"))
+        XCTAssertFalse(snapshot.text.contains("�"))
+    }
+
+    func testBoundedUTF8PrefixIncludesMarkerWithinEveryByteCap() {
+        let value = String(repeating: "😀", count: 32)
+
+        for maximumBytes in [0, 1, 5, 11, 12, 16, 32] {
+            let result = DiagnosticBundleBuilder.boundedUTF8Prefix(
+                value,
+                maximumBytes: maximumBytes
+            )
+
+            XCTAssertTrue(result.truncated)
+            XCTAssertLessThanOrEqual(result.value.utf8.count, maximumBytes)
+            XCTAssertFalse(result.value.contains("�"))
+        }
+
+        let result = DiagnosticBundleBuilder.boundedUTF8Prefix(value, maximumBytes: 16)
+        XCTAssertTrue(result.value.hasSuffix("<truncated>"))
+    }
+
+    func testEventHistoryAccountsForJSONEscapingBytes() {
+        let plain = diagnosticEvent(message: String(repeating: "a", count: 256))
+        let escaped = diagnosticEvent(message: String(repeating: "\"", count: 256))
+        XCTAssertEqual(plain.message?.utf8.count, escaped.message?.utf8.count)
+        XCTAssertGreaterThan(escaped.serializedByteCount, plain.serializedByteCount)
+        var history = DiagnosticEventHistory(
+            maximumEntries: 8,
+            maximumBytes: escaped.serializedByteCount * 2 - 1
+        )
+
+        history.append(escaped)
+        history.append(escaped)
+
+        let snapshot = history.snapshot()
+        XCTAssertEqual(snapshot.entries.count, 1)
+        XCTAssertEqual(snapshot.droppedEntries, 1)
+        XCTAssertEqual(snapshot.droppedBytes, escaped.serializedByteCount)
+    }
+
     func testRedactorCorrelatesPathsAndRemovesCommandsSecretsAndIdentifiers() {
         let redactor = DiagnosticRedactor(bundleID: fixedBundleID)
         let privatePath = "/Users/alice/Movies/Secret Feature.mkv"
@@ -88,16 +139,36 @@ final class DiagnosticBundleTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let fileURL = directory.appendingPathComponent("Private Movie.mkv")
-        XCTAssertTrue(FileManager.default.createFile(atPath: fileURL.path, contents: Data()))
         defer { try? FileManager.default.removeItem(at: directory) }
         let probe = FileSystemDiagnosticStorageProbe { _, _ in
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES))
+            throw NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileReadNoSuchFileError,
+                userInfo: [
+                    NSUnderlyingErrorKey: NSError(
+                        domain: NSPOSIXErrorDomain,
+                        code: Int(EACCES)
+                    ),
+                ]
+            )
         }
 
         let result = probe.probe(role: .source, url: fileURL, capturedAt: fixedDate)
 
         XCTAssertEqual(result.status, .inaccessible)
         XCTAssertEqual(result.errorKind, .permissionDenied)
+        XCTAssertNil(result.fileSizeBytes)
+    }
+
+    func testStorageProbeClassifiesThrowingMissingMetadataSeparately() {
+        let missingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: false)
+        let probe = FileSystemDiagnosticStorageProbe()
+
+        let result = probe.probe(role: .output, url: missingURL, capturedAt: fixedDate)
+
+        XCTAssertEqual(result.status, .missing)
+        XCTAssertNil(result.errorKind)
         XCTAssertNil(result.fileSizeBytes)
     }
 
@@ -295,6 +366,124 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertEqual(snapshot.events.entries.last?.resultSizeBytes, 10)
     }
 
+    func testWorkflowAttributionUsesExplicitJobInsteadOfLatestContext() throws {
+        let firstSource = ConversionSource(
+            kind: .matroska,
+            url: URL(fileURLWithPath: "/tmp/first.mkv")
+        )
+        let secondSource = ConversionSource(
+            kind: .transportStream,
+            url: URL(fileURLWithPath: "/tmp/second.m2ts")
+        )
+        let secondDraft = ConversionDraft(
+            source: secondSource,
+            sourceDetails: SourceInspection(
+                name: "second",
+                resolution: "1920x1080",
+                frameRate: "24/1",
+                interlaced: false
+            ),
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            options: ConversionOptions()
+        )
+        let firstJobID = UUID()
+        let secondJobID = UUID()
+        var lifecycle = WorkerLifecycleState()
+        lifecycle.selectSource(firstSource.url)
+        try lifecycle.begin(jobID: firstJobID)
+        let recorder = DiagnosticSessionRecorder()
+        recorder.beginJob(
+            context: DiagnosticJobContext(jobID: firstJobID, source: firstSource),
+            lifecycle: lifecycle,
+            activeMode: "batch_inspection",
+            recordedAt: fixedDate
+        )
+        lifecycle.selectSource(secondSource.url)
+        try lifecycle.begin(jobID: secondJobID, operationKind: .conversion)
+        recorder.beginJob(
+            context: DiagnosticJobContext(jobID: secondJobID, draft: secondDraft),
+            lifecycle: lifecycle,
+            activeMode: "batch_conversion",
+            recordedAt: fixedDate.addingTimeInterval(1)
+        )
+
+        recorder.recordWorkflow(
+            name: "batch.retry_requested",
+            lifecycle: lifecycle,
+            activeMode: nil,
+            recordedAt: fixedDate.addingTimeInterval(2),
+            jobID: firstJobID
+        )
+        recorder.recordWorkflow(
+            name: "batch.finished",
+            lifecycle: lifecycle,
+            activeMode: nil,
+            recordedAt: fixedDate.addingTimeInterval(3)
+        )
+
+        let entries = recorder.snapshot(
+            capturedAt: fixedDate.addingTimeInterval(4),
+            lifecycle: lifecycle,
+            activeMode: nil,
+            batchSummary: nil,
+            process: .empty
+        ).events.entries
+        XCTAssertEqual(entries.suffix(2).map(\.jobID), [firstJobID, nil])
+        XCTAssertEqual(entries.suffix(2).map(\.operation), ["inspect_source", nil])
+    }
+
+    func testProcessExitStatusIsStructuredInManifestAndEvents() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = ConversionSource(
+            kind: .matroska,
+            url: directory.appendingPathComponent("failed.mkv")
+        )
+        let jobID = UUID()
+        var lifecycle = WorkerLifecycleState()
+        lifecycle.selectSource(source.url)
+        try lifecycle.begin(jobID: jobID)
+        lifecycle.failTransport(message: "Worker failed")
+        let recorder = DiagnosticSessionRecorder()
+        recorder.beginJob(
+            context: DiagnosticJobContext(jobID: jobID, source: source),
+            lifecycle: lifecycle,
+            activeMode: "single_inspection",
+            recordedAt: fixedDate
+        )
+        recorder.recordWorkflow(
+            name: "process.failed",
+            lifecycle: lifecycle,
+            activeMode: "single_inspection",
+            recordedAt: fixedDate.addingTimeInterval(1),
+            jobID: jobID,
+            exitStatus: 23
+        )
+        let snapshot = recorder.snapshot(
+            capturedAt: fixedDate.addingTimeInterval(2),
+            lifecycle: lifecycle,
+            activeMode: nil,
+            batchSummary: nil,
+            process: .empty
+        )
+        let builder = DiagnosticBundleBuilder(bundleIDProvider: { self.fixedBundleID })
+
+        let artifact = try builder.createBundle(from: snapshot, outputDirectory: directory)
+        let manifestData = try unzipEntry("manifest.json", from: artifact.archiveURL)
+        let eventsData = try unzipEntry("events.jsonl", from: artifact.archiveURL)
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        let eventLine = try XCTUnwrap(String(decoding: eventsData, as: UTF8.self).split(separator: "\n").last)
+        let event = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(eventLine.utf8)) as? [String: Any]
+        )
+
+        XCTAssertEqual((manifest["worker"] as? [String: Any])?["exit_status"] as? Int, 23)
+        XCTAssertEqual(event["exit_status"] as? Int, 23)
+    }
+
     func testSerializedDiagnosticsOmitProcessIdentifiersAndRoundMediaAndStorageSizes() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -367,7 +556,8 @@ final class DiagnosticBundleTests: XCTestCase {
             activeMode: "single_conversion",
             recordedAt: fixedDate.addingTimeInterval(2)
         )
-        recorder.sampleCurrentStorage(
+        recordStorageSamples(
+            recorder: recorder,
             using: probe,
             recordedAt: fixedDate.addingTimeInterval(3),
             force: true
@@ -490,13 +680,20 @@ final class DiagnosticBundleTests: XCTestCase {
             )
         }
         let storageProbe = FileSystemDiagnosticStorageProbe()
-        recorder.sampleCurrentStorage(using: storageProbe, recordedAt: fixedDate, force: true)
-        recorder.sampleCurrentStorage(
+        recordStorageSamples(
+            recorder: recorder,
+            using: storageProbe,
+            recordedAt: fixedDate,
+            force: true
+        )
+        recordStorageSamples(
+            recorder: recorder,
             using: storageProbe,
             recordedAt: fixedDate.addingTimeInterval(10),
             force: true
         )
-        recorder.sampleCurrentStorage(
+        recordStorageSamples(
+            recorder: recorder,
             using: storageProbe,
             recordedAt: fixedDate.addingTimeInterval(20),
             force: true
@@ -591,7 +788,7 @@ final class DiagnosticBundleTests: XCTestCase {
     }
 
     @MainActor
-    func testActiveViewModelCaptureDoesNotCancelOrMutateWorker() async throws {
+    func testActiveViewModelCaptureRunsOffMainAndDoesNotMutateWorker() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -600,10 +797,15 @@ final class DiagnosticBundleTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let active = expectation(description: "worker active")
         let worker = HoldingDiagnosticWorkerClient(active: active, sensitivePath: sourceURL.path)
-        let storageProbe = FileSystemDiagnosticStorageProbe()
+        let storageThread = ThreadObservation()
+        let builderThread = ThreadObservation()
+        let storageProbe = ThreadRecordingDiagnosticStorageProbe(observation: storageThread)
         let builder = DiagnosticBundleBuilder(
             storageProbe: storageProbe,
-            bundleIDProvider: { self.fixedBundleID },
+            bundleIDProvider: {
+                builderThread.recordCurrentThread()
+                return self.fixedBundleID
+            },
             runtimeMetadataProvider: {
                 DiagnosticRuntimeMetadata(
                     appVersion: "0.3.0",
@@ -625,17 +827,111 @@ final class DiagnosticBundleTests: XCTestCase {
         await fulfillment(of: [active], timeout: 2)
         let phaseBeforeCapture = viewModel.state.phase
 
-        let artifact = try viewModel.captureDiagnosticBundle(in: directory)
+        let artifact = try await viewModel.captureDiagnosticBundle(in: directory)
 
         XCTAssertEqual(viewModel.state.phase, phaseBeforeCapture)
         XCTAssertTrue(viewModel.hasActiveWorker)
         XCTAssertEqual(worker.cancelCallCount, 0)
+        XCTAssertEqual(storageThread.mainThreadObservation, false)
+        XCTAssertEqual(builderThread.mainThreadObservation, false)
         let manifestData = try unzipEntry("manifest.json", from: artifact.archiveURL)
         let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
         XCTAssertEqual((manifest["worker"] as? [String: Any])?["active"] as? Bool, true)
 
         await viewModel.stopForQuit()
         XCTAssertEqual(worker.cancelCallCount, 1)
+    }
+
+    @MainActor
+    func testSlowCaptureDoesNotBlockWorkerEventsAndUsesFrozenActiveSnapshot() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let sourceURL = directory.appendingPathComponent("Private Active Movie.mkv")
+        XCTAssertTrue(FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8)))
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let active = expectation(description: "worker active")
+        let probeStarted = expectation(description: "capture probe started")
+        let worker = HoldingDiagnosticWorkerClient(active: active, sensitivePath: sourceURL.path)
+        let storageProbe = BlockingDiagnosticStorageProbe(started: probeStarted)
+        defer { storageProbe.release() }
+        let builder = DiagnosticBundleBuilder(
+            storageProbe: storageProbe,
+            bundleIDProvider: { self.fixedBundleID }
+        )
+        let viewModel = ConversionViewModel(
+            clientFactory: { worker },
+            diagnosticClock: { self.fixedDate },
+            diagnosticStorageProbe: storageProbe,
+            diagnosticBundleBuilder: builder
+        )
+
+        viewModel.selectSource(sourceURL)
+        await fulfillment(of: [active], timeout: 2)
+        let captureTask = Task {
+            try await viewModel.captureDiagnosticBundle(in: directory)
+        }
+        await fulfillment(of: [probeStarted], timeout: 2)
+
+        await viewModel.stopForQuit()
+
+        XCTAssertEqual(viewModel.state.phase, .cancelled)
+        XCTAssertFalse(viewModel.hasActiveWorker)
+        storageProbe.release()
+        let artifact = try await captureTask.value
+        let manifestData = try unzipEntry("manifest.json", from: artifact.archiveURL)
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        XCTAssertEqual((manifest["worker"] as? [String: Any])?["active"] as? Bool, true)
+    }
+
+    private func diagnosticEvent(message: String) -> DiagnosticEventRecord {
+        DiagnosticEventRecord(
+            recordedAt: fixedDate,
+            source: "worker",
+            name: "log",
+            jobID: nil,
+            sequence: 1,
+            phase: "processing",
+            operation: "convert_source",
+            activeMode: "single_conversion",
+            stage: nil,
+            message: message,
+            details: nil,
+            level: "info",
+            elapsedSeconds: 1,
+            progress: nil,
+            warningCode: nil,
+            failureCode: nil,
+            retryable: nil,
+            choices: nil,
+            resultSizeBytes: nil,
+            workerVersion: "test",
+            exitStatus: nil
+        )
+    }
+
+    private func recordStorageSamples(
+        recorder: DiagnosticSessionRecorder,
+        using probe: any DiagnosticStorageProbing,
+        recordedAt: Date,
+        force: Bool
+    ) {
+        guard let request = recorder.makeStorageSampleRequest(
+            recordedAt: recordedAt,
+            force: force
+        ) else {
+            return XCTFail("Expected diagnostic storage targets")
+        }
+        let samples = request.targets.map { target in
+            RawDiagnosticStorageSample(
+                probe: probe.probe(
+                    role: target.role,
+                    url: target.url,
+                    capturedAt: request.capturedAt
+                )
+            )
+        }
+        recorder.recordStorageSamples(samples, for: request.jobID)
     }
 
     private func unzipEntry(_ name: String, from archiveURL: URL) throws -> Data {
@@ -658,6 +954,67 @@ final class DiagnosticBundleTests: XCTestCase {
             )
         }
         return data
+    }
+}
+
+private final class ThreadObservation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var observations: [Bool] = []
+
+    var mainThreadObservation: Bool? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !observations.isEmpty else {
+            return nil
+        }
+        return observations.contains(true)
+    }
+
+    func recordCurrentThread() {
+        lock.lock()
+        observations.append(Thread.isMainThread)
+        lock.unlock()
+    }
+}
+
+private struct ThreadRecordingDiagnosticStorageProbe: DiagnosticStorageProbing {
+    let observation: ThreadObservation
+    private let probe = FileSystemDiagnosticStorageProbe()
+
+    func probe(role: DiagnosticStorageRole, url: URL, capturedAt: Date) -> RawDiagnosticStorageProbe {
+        observation.recordCurrentThread()
+        return probe.probe(role: role, url: url, capturedAt: capturedAt)
+    }
+}
+
+private final class BlockingDiagnosticStorageProbe: DiagnosticStorageProbing, @unchecked Sendable {
+    private let started: XCTestExpectation
+    private let releaseSemaphore = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var hasBlocked = false
+    private let probe = FileSystemDiagnosticStorageProbe()
+
+    init(started: XCTestExpectation) {
+        self.started = started
+    }
+
+    func probe(role: DiagnosticStorageRole, url: URL, capturedAt: Date) -> RawDiagnosticStorageProbe {
+        let shouldBlock = lock.withLock { () -> Bool in
+            guard !hasBlocked else {
+                return false
+            }
+            hasBlocked = true
+            return true
+        }
+        if shouldBlock {
+            started.fulfill()
+            releaseSemaphore.wait()
+        }
+        return probe.probe(role: role, url: url, capturedAt: capturedAt)
+    }
+
+    func release() {
+        releaseSemaphore.signal()
     }
 }
 
