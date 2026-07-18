@@ -1,0 +1,63 @@
+{
+  "schema": "bd_to_avp.observability",
+  "schema_version": 1,
+  "emitter": "worker",
+  "stream_id": "a9ca0cb4-59d6-4c34-ac17-bb7f8f6e4c56",
+  "sequence": 37,
+  "occurred_at": "2026-07-18T16:00:00.123Z",
+  "elapsed_ms": 21647,
+  "kind": "tool.progress",
+  "severity": "info",
+  "privacy": "private",
+  "redaction": "raw",
+  "context": {
+    "correlation": {
+      "job_id": "5e8cfa5e-0475-42ee-b6f9-ad80139b77d6"
+    },
+    "stage": {
+      "id": "create_mkv",
+      "index": 4,
+      "count": 14
+    },
+    "tool": {
+      "id": "makemkvcon",
+      "run_id": "7b78e4c3-5d76-485e-9a68-cd9571eaeea2",
+      "version": "1.18.1"
+    },
+    "process": {
+      "pid": 8421,
+      "process_group_id": 8421
+    }
+  },
+  "data": {
+    "message": {
+      "value": "Ripping the selected title",
+      "privacy": "public",
+      "truncated": false
+    },
+    "progress": {
+      "fraction": 0.42,
+      "completed_units": 42.0,
+      "total_units": 100.0,
+      "unit": "percent"
+    },
+    "artifact": {
+      "role": "intermediate_mkv",
+      "state": "growing",
+      "location": {
+        "value": "/Users/example/Movies/Top Gun/temp_files/title.mkv",
+        "privacy": "private",
+        "truncated": false
+      },
+      "size_bytes": 1593835520,
+      "modification_age_seconds": 2,
+      "growth_bytes_per_second": 8388608
+    },
+    "counters": {
+      "total_bytes": 32768,
+      "retained_bytes": 32768,
+      "dropped_bytes": 0,
+      "decode_replacements": 0
+    }
+  }
+}

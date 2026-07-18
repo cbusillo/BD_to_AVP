@@ -4,6 +4,10 @@ Protocol v7 adds an explicit video output mode and software AV1 quality to the
 exact `encoding` schema. The native app and bundled Python worker ship
 atomically and both require version 7.
 
+Execution diagnostics use the separate, versioned
+[structured observability contract](observability.md). Its schema evolves
+independently from this control protocol.
+
 ## Video Output
 
 Conversion and preview requests include `video_mode` and `av1_crf`:
