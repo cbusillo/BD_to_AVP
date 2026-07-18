@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import contextlib
 import email.message
 import hashlib
@@ -24,6 +25,7 @@ from scripts.support_diagnostics import (
 
 SUPPORT_CODE = "BDAVP-0123456789ABCDEF"
 TOKEN = "maintainer-token-with-at-least-thirty-two-characters"
+NATIVE_FIXTURE = Path(__file__).parent / "fixtures" / "support_diagnostics_native_v1.b64"
 
 
 class FakeResponse:
@@ -66,6 +68,10 @@ def make_bundle(schema_version: object = 1) -> bytes:
     return contents.getvalue()
 
 
+def native_swift_bundle() -> bytes:
+    return base64.b64decode(NATIVE_FIXTURE.read_text(encoding="utf-8").strip(), validate=True)
+
+
 def bundle_headers(bundle: bytes, schema_version: int = 1) -> dict[str, str]:
     return {
         "Content-Length": str(len(bundle)),
@@ -73,6 +79,26 @@ def bundle_headers(bundle: bytes, schema_version: int = 1) -> dict[str, str]:
         "X-Diagnostic-Schema-Version": str(schema_version),
         "X-Diagnostic-SHA256": hashlib.sha256(bundle).hexdigest(),
     }
+
+
+def with_first_entry_crc(bundle: bytes, checksum: int) -> bytes:
+    mutated = bytearray(bundle)
+    central_directory_offset = mutated.find(b"PK\x01\x02")
+    if central_directory_offset < 0:
+        raise AssertionError("fixture is missing its central directory")
+    mutated[14:18] = checksum.to_bytes(4, "little")
+    mutated[central_directory_offset + 16 : central_directory_offset + 20] = checksum.to_bytes(4, "little")
+    return bytes(mutated)
+
+
+def with_first_entry_uncompressed_size(bundle: bytes, size: int) -> bytes:
+    mutated = bytearray(bundle)
+    central_directory_offset = mutated.find(b"PK\x01\x02")
+    if central_directory_offset < 0:
+        raise AssertionError("fixture is missing its central directory")
+    mutated[22:26] = size.to_bytes(4, "little")
+    mutated[central_directory_offset + 24 : central_directory_offset + 28] = size.to_bytes(4, "little")
+    return bytes(mutated)
 
 
 class SupportDiagnosticsCliTests(unittest.TestCase):
@@ -97,6 +123,15 @@ class SupportDiagnosticsCliTests(unittest.TestCase):
             request.full_url, f"https://diagnostics.example.test/private/v1/maintainer/reports/{SUPPORT_CODE}"
         )
         self.assertEqual(request.get_header("Authorization"), f"Bearer {TOKEN}")
+
+    def test_fetch_accepts_native_swift_archive_fixture(self) -> None:
+        bundle = native_swift_bundle()
+        opener = CapturingOpener(FakeResponse(bundle, bundle_headers(bundle)))
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output = Path(temporary_directory) / "bundle.zip"
+            fetch_report(self.configuration, SUPPORT_CODE, output, opener)
+
+            self.assertEqual(output.read_bytes(), bundle)
 
     def test_fetch_rejects_checksum_mismatch_without_writing_output(self) -> None:
         bundle = make_bundle()
@@ -124,6 +159,26 @@ class SupportDiagnosticsCliTests(unittest.TestCase):
         bundle[18:22] = (compressed_size + 1).to_bytes(4, "little")
         headers = bundle_headers(bundle)
         opener = CapturingOpener(FakeResponse(bytes(bundle), headers))
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output = Path(temporary_directory) / "bundle.zip"
+            with self.assertRaisesRegex(SupportDiagnosticsError, "invalid archive entry"):
+                fetch_report(self.configuration, SUPPORT_CODE, output, opener)
+            self.assertFalse(output.exists())
+
+    def test_fetch_rejects_crc_mismatch_without_writing_output(self) -> None:
+        bundle = make_bundle()
+        checksum = int.from_bytes(bundle[14:18], "little") ^ 1
+        bundle = with_first_entry_crc(bundle, checksum)
+        opener = CapturingOpener(FakeResponse(bundle, bundle_headers(bundle)))
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output = Path(temporary_directory) / "bundle.zip"
+            with self.assertRaisesRegex(SupportDiagnosticsError, "invalid archive entry"):
+                fetch_report(self.configuration, SUPPORT_CODE, output, opener)
+            self.assertFalse(output.exists())
+
+    def test_fetch_rejects_declared_expansion_without_writing_output(self) -> None:
+        bundle = with_first_entry_uncompressed_size(make_bundle(), 64 * 1024 + 1)
+        opener = CapturingOpener(FakeResponse(bundle, bundle_headers(bundle)))
         with tempfile.TemporaryDirectory() as temporary_directory:
             output = Path(temporary_directory) / "bundle.zip"
             with self.assertRaisesRegex(SupportDiagnosticsError, "invalid archive entry"):

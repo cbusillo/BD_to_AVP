@@ -14,7 +14,7 @@ import {
 } from "./protocol.js";
 import {
   InvalidDiagnosticBundleError,
-  validateDiagnosticBundle,
+  validateDiagnosticBundleEnvelope,
 } from "./bundle.js";
 import {
   constantTimeTextEqual,
@@ -266,6 +266,13 @@ async function readCreateRequest(
 }
 
 function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
+  if (
+    bytes.byteOffset === 0 &&
+    bytes.byteLength === bytes.buffer.byteLength &&
+    bytes.buffer instanceof ArrayBuffer
+  ) {
+    return bytes.buffer;
+  }
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
   return copy.buffer;
@@ -526,7 +533,7 @@ async function uploadBundle(
     if ((await sha256Hex(bytes)) !== authorized.sha256) {
       throw new PublicError("checksum_mismatch", 422);
     }
-    await validateDiagnosticBundle(bytes, record.bundleSchemaVersion);
+    validateDiagnosticBundleEnvelope(bytes);
     if (record.uploadExpiresAt <= nowFrom(dependencies)) {
       throw new PublicError("upload_expired", 410);
     }

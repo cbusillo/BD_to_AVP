@@ -26,11 +26,15 @@ bound abuse and storage exposure.
   before receiving upload authorization.
 
 The Worker validates size, content type, request checksum header, SHA-256,
-archive structure, exact member set, compression method, CRCs, decompressed
-limits, and schema markers before storage. It records the same checksum and
-expiry in R2 metadata. The maintainer CLI independently repeats the response,
-checksum, archive-safety, member, size, and schema validation before writing an
-archive to disk.
+archive structure, exact member set, compression method, matching local and
+central headers, and declared decompressed limits before storage. It does not
+inflate entries, compute ZIP CRCs, or parse bundle schemas on the public upload
+path so the service can target the Workers Free CPU budget. It
+records the checksum and expiry in R2 metadata. The trusted macOS client creates
+the bounded archive, and the maintainer CLI verifies the response, checksum,
+archive safety, actual CRCs, decompressed limits, and schema before writing an
+archive to disk. A shared native-client fixture keeps the Swift producer,
+Worker envelope validator, and Python maintainer validator aligned.
 
 ## HTTP Contract
 
@@ -94,10 +98,11 @@ this unauthenticated, abuse-bounded endpoint.
 Use the exact authorization and headers returned from creation. The successful
 `201` PUT is the finalization step. After headers match, the Worker atomically
 reserves the single-use authorization before reading the body, validates the
-bounded ZIP and its checksum, writes the private R2 object, and changes the
-Durable Object state to `uploaded`. Invalid body bytes fail the reserved report
-and require a fresh report; concurrent or later replays return
-`409 upload_consumed`.
+bounded ZIP envelope and its checksum, writes the private R2 object, and changes
+the Durable Object state to `uploaded`. Structurally invalid body bytes fail the
+reserved report and require a fresh report; concurrent or later replays return
+`409 upload_consumed`. Semantic content, CRC, and schema validation is performed
+by the maintainer CLI before any fetched archive is written to disk.
 
 `GET /v1/reports/{report_id}/status` requires the returned short-lived status
 bearer token. It returns only the opaque report ID, upload state, and retention
@@ -166,9 +171,10 @@ uv run python -m unittest tests.test_support_diagnostics
 
 The TypeScript tests use an in-memory R2 and Durable Object storage equivalent.
 They cover authorization replay, authorization expiry, support-code guessing,
-wrong content type/size/checksum, rate limits, public-read denial, maintainer
-authentication, deletion, expiry cleanup, and safe failure logging. The Python
-tests cover valid retrieval plus checksum, malformed archive, schema, delete,
+wrong content type/size/checksum, ZIP envelope and declared expansion limits,
+rate limits, public-read denial, maintainer authentication, deletion, expiry
+cleanup, and safe failure logging. The Python tests cover valid retrieval plus
+checksum, CRC, decompressed limits, malformed archive, schema, delete,
 confirmation, and HTTP-failure handling.
 
 ## Future Deployment
@@ -201,6 +207,10 @@ Worker secrets are provisioned by this repository. Before any deployment:
 
 6. Run `npm run deploy:dry-run`, review the route, binding, lifecycle, and
    secret names, then deploy only with explicit Cloudflare authorization.
+7. Submit representative and maximum-size bundles, then verify request CPU in
+   Cloudflare analytics remains within the Workers Free limit before setting
+   the production release endpoint. Do not enable a paid Workers plan as an
+   automatic fallback.
 
 The checked-in `wrangler.jsonc` declares a new SQLite Durable Object through
 the modern `exports` lifecycle block and two Worker Rate Limiting bindings.

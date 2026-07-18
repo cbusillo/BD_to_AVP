@@ -1,4 +1,4 @@
-import { API_SCHEMA_VERSION, MAX_BUNDLE_BYTES } from "./protocol.js";
+import { MAX_BUNDLE_BYTES } from "./protocol.js";
 
 const CENTRAL_DIRECTORY_SIGNATURE = 0x02014b50;
 const END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06054b50;
@@ -76,13 +76,11 @@ function findEndOfCentralDirectory(bytes: Uint8Array): number {
   if (bytes.byteLength < 22 || bytes.byteLength > MAX_BUNDLE_BYTES) {
     return invalid();
   }
-  const earliestOffset = Math.max(0, bytes.byteLength - 65_557);
-  for (let offset = bytes.byteLength - 22; offset >= earliestOffset; offset -= 1) {
-    if (readUint32(bytes, offset) === END_OF_CENTRAL_DIRECTORY_SIGNATURE) {
-      return offset;
-    }
+  const offset = bytes.byteLength - 22;
+  if (readUint32(bytes, offset) !== END_OF_CENTRAL_DIRECTORY_SIGNATURE) {
+    return invalid();
   }
-  return invalid();
+  return offset;
 }
 
 function parseCentralDirectory(bytes: Uint8Array): ZipEntry[] {
@@ -168,7 +166,7 @@ function compressedEntry(
   bytes: Uint8Array,
   entry: ZipEntry,
   centralDirectoryOffset: number,
-): { bytes: Uint8Array; rangeEnd: number; rangeStart: number } {
+): { rangeEnd: number; rangeStart: number } {
   const offset = entry.localHeaderOffset;
   requireRange(bytes, offset, 30);
   if (
@@ -199,126 +197,20 @@ function compressedEntry(
     return invalid();
   }
   return {
-    bytes: bytes.subarray(dataOffset, rangeEnd),
     rangeEnd,
     rangeStart: offset,
   };
 }
 
-async function inflateRaw(
-  compressed: Uint8Array,
-  expectedSize: number,
-): Promise<Uint8Array> {
-  const copy = new Uint8Array(compressed.byteLength);
-  copy.set(compressed);
-  const stream = new Blob([copy.buffer])
-    .stream()
-    .pipeThrough(new DecompressionStream("deflate-raw"));
-  const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) {
-        break;
-      }
-      totalBytes += chunk.value.byteLength;
-      if (totalBytes > expectedSize) {
-        await reader.cancel();
-        return invalid();
-      }
-      chunks.push(chunk.value);
-    }
-  } catch {
-    return invalid();
-  } finally {
-    reader.releaseLock();
-  }
-  if (totalBytes !== expectedSize) {
-    return invalid();
-  }
-  const result = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return result;
-}
-
-const CRC32_TABLE = new Uint32Array(256);
-for (let index = 0; index < CRC32_TABLE.length; index += 1) {
-  let value = index;
-  for (let bit = 0; bit < 8; bit += 1) {
-    value = (value & 1) === 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
-  }
-  CRC32_TABLE[index] = value >>> 0;
-}
-
-function crc32(bytes: Uint8Array): number {
-  let value = 0xffffffff;
-  for (const byte of bytes) {
-    value = CRC32_TABLE[(value ^ byte) & 0xff]! ^ (value >>> 8);
-  }
-  return (value ^ 0xffffffff) >>> 0;
-}
-
-function requireSchemaDocument(
-  bytes: Uint8Array,
-  expectedSchemaVersion: number,
-): void {
-  let value: unknown;
-  try {
-    value = JSON.parse(decodeUTF8(bytes));
-  } catch (error) {
-    if (error instanceof InvalidDiagnosticBundleError) {
-      throw error;
-    }
-    return invalid();
-  }
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value) ||
-    !Number.isSafeInteger((value as Record<string, unknown>).schema_version) ||
-    (value as Record<string, unknown>).schema_version !== expectedSchemaVersion
-  ) {
-    return invalid();
-  }
-}
-
-function requireEventStream(
-  bytes: Uint8Array,
-  expectedSchemaVersion: number,
-): void {
-  const text = decodeUTF8(bytes);
-  for (const line of text.split("\n")) {
-    if (line.length === 0) {
-      continue;
-    }
-    requireSchemaDocument(new TextEncoder().encode(line), expectedSchemaVersion);
-  }
-}
-
-export async function validateDiagnosticBundle(
-  bytes: Uint8Array,
-  expectedSchemaVersion = API_SCHEMA_VERSION,
-): Promise<void> {
+export function validateDiagnosticBundleEnvelope(bytes: Uint8Array): void {
   try {
     const entries = parseCentralDirectory(bytes);
     const endOffset = findEndOfCentralDirectory(bytes);
     const centralDirectoryOffset = readUint32(bytes, endOffset + 16);
     const ranges: Array<{ end: number; start: number }> = [];
-    const contents = new Map<string, Uint8Array>();
     for (const entry of entries) {
       const compressed = compressedEntry(bytes, entry, centralDirectoryOffset);
       ranges.push({ end: compressed.rangeEnd, start: compressed.rangeStart });
-      const content = await inflateRaw(compressed.bytes, entry.uncompressedSize);
-      if (crc32(content) !== entry.crc32) {
-        return invalid();
-      }
-      contents.set(entry.name, content);
     }
     ranges.sort((left, right) => left.start - right.start);
     if (
@@ -331,18 +223,6 @@ export async function validateDiagnosticBundle(
       if (ranges[index - 1]!.end !== ranges[index]!.start) {
         return invalid();
       }
-    }
-
-    requireSchemaDocument(contents.get("manifest.json")!, expectedSchemaVersion);
-    requireEventStream(contents.get("events.jsonl")!, expectedSchemaVersion);
-    requireSchemaDocument(contents.get("storage.json")!, expectedSchemaVersion);
-    const toolTail = decodeUTF8(contents.get("tool-tail.txt")!);
-    if (
-      !toolTail.startsWith(
-        `# bd_to_avp_support_tool_tail schema_version=${expectedSchemaVersion}\n`,
-      )
-    ) {
-      return invalid();
     }
   } catch (error) {
     if (error instanceof InvalidDiagnosticBundleError) {
