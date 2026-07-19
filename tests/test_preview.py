@@ -45,7 +45,7 @@ class PreviewSourceTests(unittest.TestCase):
             preview_range = PreviewRange(3570, 60, 7200)
             observed_command: list[object] = []
 
-            def run(command: list[object], _name: str) -> str:
+            def run(command: list[object], _name: str, **_kwargs: object) -> str:
                 observed_command.extend(command)
                 Path(command[-1]).write_bytes(b"preview")
                 return ""

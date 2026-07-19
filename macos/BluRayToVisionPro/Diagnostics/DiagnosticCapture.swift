@@ -703,6 +703,7 @@ final class DiagnosticSessionRecorder {
         activeMode: String?,
         recordedAt: Date
     ) {
+        let observabilityEvent = event.payload.observabilityEvent
         let terminalPhase: String?
         switch event.type {
         case .jobCompleted:
@@ -722,24 +723,29 @@ final class DiagnosticSessionRecorder {
             ?? event.payload.result?.sizeBytes
         let record = DiagnosticEventRecord(
             recordedAt: recordedAt,
-            source: "worker",
-            name: event.type.rawValue,
+            source: observabilityEvent?.emitter ?? "worker",
+            name: observabilityEvent?.kind ?? event.type.rawValue,
             jobID: event.jobID,
             sequence: event.sequence,
             phase: terminalPhase ?? lifecycle.phase.rawValue,
             operation: event.payload.operation ?? context(for: event.jobID)?.operation,
             activeMode: activeMode,
-            stage: event.payload.stage,
+            stage: event.payload.stage ?? observabilityEvent?.context.stage?.id,
             message: event.payload.message
                 ?? event.payload.error?.message
-                ?? event.payload.decision?.prompt,
-            details: event.payload.error?.details ?? event.payload.decision?.details,
-            level: event.payload.level,
+                ?? event.payload.decision?.prompt
+                ?? observabilityEvent?.data.message?.value,
+            details: event.payload.error?.details
+                ?? event.payload.decision?.details
+                ?? observabilityEvent?.data.detail?.value,
+            level: event.payload.level ?? observabilityEvent?.severity,
             elapsedSeconds: event.payload.elapsedSeconds,
             progress: event.payload.progress.map(DiagnosticProgressSnapshot.init),
             warningCode: event.payload.warningCode,
-            failureCode: event.payload.error?.code ?? event.payload.decision?.identifier,
-            retryable: event.payload.error?.retryable,
+            failureCode: event.payload.error?.code
+                ?? event.payload.decision?.identifier
+                ?? observabilityEvent?.data.failure?.code,
+            retryable: event.payload.error?.retryable ?? observabilityEvent?.data.failure?.retryable,
             choices: event.payload.decision?.choices,
             resultSizeBytes: resultSize,
             workerVersion: event.payload.workerVersion,

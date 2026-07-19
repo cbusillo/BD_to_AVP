@@ -7,6 +7,7 @@ from bd_to_avp.vendor.pgsrip.mkv import Mkv
 from bd_to_avp.vendor.pgsrip.options import Options
 from bd_to_avp.vendor.pgsrip.ripper import PgsToSrtRipper
 from bd_to_avp.vendor.pgsrip.sup import Sup
+from bd_to_avp.process_runner import ProcessCancelled
 
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,8 @@ def rip_pgs(pgs: Pgs, options: Options):
             srt = PgsToSrtRipper(p, options).rip(lambda t: rules.apply(t, '')[0])
             srt.save(encoding=options.encoding)
             return True
+    except ProcessCancelled:
+        raise
     except Exception as e:
         logger.warning('Error while trying to rip %s: <%s> [%s]',
                        pgs.media_path, type(e).__name__, e,

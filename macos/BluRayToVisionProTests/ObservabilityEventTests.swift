@@ -28,6 +28,26 @@ final class ObservabilityEventTests: XCTestCase {
         XCTAssertEqual(event.kind, "future.tool.signal")
     }
 
+    func testWorkerEnvelopeDecodesCanonicalEvent() throws {
+        let nestedEvent = try jsonObject(try sharedFixtureData())
+        let jobID = UUID()
+        let envelope: [String: Any] = [
+            "protocol_version": WorkerJobSpec.protocolVersion,
+            "type": "observability",
+            "job_id": jobID.uuidString.lowercased(),
+            "sequence": 2,
+            "payload": ["event": nestedEvent],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
+
+        let workerEvent = try JSONDecoder().decode(WorkerEvent.self, from: data)
+
+        XCTAssertEqual(workerEvent.type, .observability)
+        XCTAssertEqual(workerEvent.jobID, jobID)
+        XCTAssertEqual(workerEvent.payload.observabilityEvent?.kind, "tool.progress")
+        XCTAssertEqual(workerEvent.payload.observabilityEvent?.context.tool?.id, "makemkvcon")
+    }
+
     func testUnsupportedSchemaAndVersionAreRejected() throws {
         var fixture = try XCTUnwrap(try jsonObject(try sharedFixtureData()) as? [String: Any])
         fixture["schema"] = "future.observability"

@@ -19,7 +19,7 @@ class AudioPreparationTests(unittest.TestCase):
             source_path.write_bytes(b"source")
             output_folder.mkdir()
 
-            def copy_audio(_input_path: Path, output_path: Path) -> None:
+            def copy_audio(_input_path: Path, output_path: Path, **_kwargs: object) -> None:
                 output_path.write_bytes(b"copied-aac")
 
             with (
@@ -39,8 +39,19 @@ class AudioPreparationTests(unittest.TestCase):
             self.assertEqual(final_path.read_bytes(), b"copied-aac")
             self.assertFalse(temporary_path.exists())
             self.assertTrue(source_path.exists())
-            qualify.assert_called_once_with(source_path)
-            copy.assert_called_once_with(source_path, temporary_path)
+            qualify.assert_called_once_with(
+                source_path,
+                run_context=None,
+                cancellation_event=None,
+                observability_context=None,
+            )
+            copy.assert_called_once_with(
+                source_path,
+                temporary_path,
+                run_context=None,
+                cancellation_event=None,
+                observability_context=None,
+            )
             transcode.assert_not_called()
 
     def test_automatic_mixed_codecs_transcodes_whole_set_and_warns(self) -> None:
@@ -52,7 +63,7 @@ class AudioPreparationTests(unittest.TestCase):
             output_folder.mkdir()
             activity = Mock()
 
-            def write_audio(_input_path: Path, output_path: Path, _bitrate: int) -> None:
+            def write_audio(_input_path: Path, output_path: Path, _bitrate: int, **_kwargs: object) -> None:
                 output_path.write_bytes(b"aac")
 
             qualifications = [
@@ -72,9 +83,21 @@ class AudioPreparationTests(unittest.TestCase):
                 result = audio.create_prepared_audio_file(source_path, output_folder, activity)
 
             self.assertEqual(result, output_folder / "Movie_audio_AAC.m4a")
-            qualify.assert_called_once_with(source_path)
+            qualify.assert_called_once_with(
+                source_path,
+                run_context=None,
+                cancellation_event=None,
+                observability_context=None,
+            )
             copy.assert_not_called()
-            transcode.assert_called_once_with(source_path, output_folder / "Movie_audio_AAC.part.m4a", 512)
+            transcode.assert_called_once_with(
+                source_path,
+                output_folder / "Movie_audio_AAC.part.m4a",
+                512,
+                run_context=None,
+                cancellation_event=None,
+                observability_context=None,
+            )
             activity.warning.assert_called_once()
             _, kwargs = activity.warning.call_args
             self.assertEqual(kwargs["code"], "audio_automatic_fallback_to_aac")
@@ -90,7 +113,7 @@ class AudioPreparationTests(unittest.TestCase):
             source_path.write_bytes(b"source")
             output_folder.mkdir()
 
-            def write_audio(_input_path: Path, output_path: Path, _bitrate: int) -> None:
+            def write_audio(_input_path: Path, output_path: Path, _bitrate: int, **_kwargs: object) -> None:
                 output_path.write_bytes(b"aac")
 
             with (
@@ -107,7 +130,14 @@ class AudioPreparationTests(unittest.TestCase):
 
             qualify.assert_not_called()
             copy.assert_not_called()
-            transcode.assert_called_once_with(source_path, output_folder / "Movie_audio_AAC.part.m4a", 384)
+            transcode.assert_called_once_with(
+                source_path,
+                output_folder / "Movie_audio_AAC.part.m4a",
+                384,
+                run_context=None,
+                cancellation_event=None,
+                observability_context=None,
+            )
 
     def test_failed_preparation_removes_partial_output_but_preserves_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -117,7 +147,12 @@ class AudioPreparationTests(unittest.TestCase):
             source_path.write_bytes(b"source")
             output_folder.mkdir()
 
-            def fail_after_partial_write(_input_path: Path, output_path: Path, _bitrate: int) -> None:
+            def fail_after_partial_write(
+                _input_path: Path,
+                output_path: Path,
+                _bitrate: int,
+                **_kwargs: object,
+            ) -> None:
                 output_path.write_bytes(b"partial")
                 raise RuntimeError("transcode failed")
 
@@ -143,7 +178,7 @@ class AudioPreparationTests(unittest.TestCase):
             output_folder.mkdir()
             retained_source_copy.write_bytes(b"source")
 
-            def copy_audio(_input_path: Path, output_path: Path) -> None:
+            def copy_audio(_input_path: Path, output_path: Path, **_kwargs: object) -> None:
                 output_path.write_bytes(b"copied-aac")
 
             with (
@@ -171,7 +206,7 @@ class AudioPreparationTests(unittest.TestCase):
             output_folder.mkdir()
             owned_mkv_path.write_bytes(b"owned-mkv")
 
-            def copy_audio(_input_path: Path, output_path: Path) -> None:
+            def copy_audio(_input_path: Path, output_path: Path, **_kwargs: object) -> None:
                 output_path.write_bytes(b"copied-aac")
 
             with (
@@ -322,7 +357,13 @@ class AudioPreparationTests(unittest.TestCase):
         self.assertIn("-metadata:s:a:1", command)
         self.assertIn("handler_name=Alternate Stereo", command)
         self.assertNotIn("-metadata:s:a:2", command)
-        metadata_options.assert_called_once_with(Path("source.mkv"), "a")
+        metadata_options.assert_called_once_with(
+            Path("source.mkv"),
+            "a",
+            run_context=None,
+            cancellation_event=None,
+            observability_context=None,
+        )
 
 
 def audio_qualification(

@@ -9,6 +9,8 @@ from contextlib import redirect_stdout
 from typing import Callable, TextIO
 
 from bd_to_avp.modules.config import config
+from bd_to_avp.observability import ObservabilityEmitter
+from bd_to_avp.runtime import CancellationToken, ObservabilityStream, RunContext
 from bd_to_avp.worker.operations import WorkerDecisionRequired, WorkerOperationError, run_operation
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
@@ -18,6 +20,7 @@ from bd_to_avp.worker.protocol import (
     WorkerActivityReporter,
     WorkerEventEmitter,
     WorkerEventType,
+    WorkerObservabilitySink,
     WorkerProtocolError,
     bounded_detail,
 )
@@ -58,7 +61,15 @@ def run_worker(
             },
         )
         emitter.emit(WorkerEventType.JOB_STARTED, {"operation": job.operation.value})
-        activity = WorkerActivityReporter(emitter)
+        run_context = RunContext(
+            observability=ObservabilityStream(
+                ObservabilityEmitter.WORKER,
+                WorkerObservabilitySink(emitter),
+                stream_id=job.job_id,
+            ),
+            cancellation=CancellationToken(owner.cancellation_event),
+        )
+        activity = WorkerActivityReporter(emitter, run_context)
         if job.operation.value == "inspect_source":
             activity.stage_started("inspect_source", "Reading video metadata")
 

@@ -23,6 +23,25 @@ final class WorkerProcessClientTests: XCTestCase {
         XCTAssertFalse(result.diagnosticSnapshot.isRunning)
     }
 
+    func testDeliversObservabilityBetweenReadyAndTerminalEvents() async throws {
+        let client = fixtureClient(body: """
+        \(readyEvent())
+        observability = {"schema": "bd_to_avp.observability", "schema_version": 1, "emitter": "worker", "stream_id": job_id, "sequence": 0, "occurred_at": "2026-07-18T00:00:00Z", "elapsed_ms": 1, "kind": "tool.started", "severity": "info", "privacy": "private", "redaction": "raw", "context": {"correlation": {}}, "data": {}}
+        print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "observability", "job_id": job_id, "sequence": 1, "payload": {"event": observability}}), flush=True)
+        print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "job.completed", "job_id": job_id, "sequence": 2, "payload": {"result": {"name": "movie", "resolution": "1920x1080", "frame_rate": "24/1", "interlaced": False, "size_bytes": 10, "titles": []}}}), flush=True)
+        """)
+        let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
+        var events: [WorkerEvent] = []
+
+        let result = try await client.run(job: job) { event in
+            events.append(event)
+        }
+
+        XCTAssertEqual(events.map(\.type), [.workerReady, .observability, .jobCompleted])
+        XCTAssertEqual(events[1].payload.observabilityEvent?.kind, "tool.started")
+        XCTAssertEqual(result.terminalEvent.type, .jobCompleted)
+    }
+
     func testStreamsAndBoundsDiagnosticsWhileWorkerIsActive() async throws {
         let diagnosticPayloadBytes = 4 * 1_024 * 1_024
         let client = fixtureClient(body: """

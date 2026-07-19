@@ -544,6 +544,50 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertEqual(snapshot.events.entries.last?.resultSizeBytes, 10)
     }
 
+    func testRecorderProjectsCanonicalObservabilityFields() throws {
+        let observability = try JSONDecoder().decode(
+            ObservabilityEvent.self,
+            from: Data(#"{"schema":"bd_to_avp.observability","schema_version":1,"emitter":"worker","stream_id":"11111111-1111-4111-8111-111111111111","sequence":0,"occurred_at":"2026-07-18T00:00:00Z","elapsed_ms":10,"kind":"tool.failed","severity":"error","privacy":"private","redaction":"raw","context":{"correlation":{},"stage":{"id":"create_mkv"},"tool":{"id":"makemkvcon"}},"data":{"message":{"value":"MakeMKV failed","privacy":"private","truncated":false},"detail":{"value":"bounded detail","privacy":"private","truncated":false},"failure":{"code":"nonzero_exit","retryable":false}}}"#.utf8)
+        )
+        let jobID = UUID()
+        var lifecycle = WorkerLifecycleState()
+        lifecycle.selectSource(URL(fileURLWithPath: "/tmp/movie.mkv"))
+        try lifecycle.begin(jobID: jobID, operationKind: .conversion)
+        let event = WorkerEvent(
+            protocolVersion: WorkerJobSpec.protocolVersion,
+            type: .observability,
+            jobID: jobID,
+            sequence: 0,
+            payload: WorkerEventPayload(observabilityEvent: observability)
+        )
+        try lifecycle.receive(event)
+        let recorder = DiagnosticSessionRecorder()
+
+        recorder.record(
+            event: event,
+            lifecycle: lifecycle,
+            activeMode: "single_conversion",
+            recordedAt: fixedDate
+        )
+        let snapshot = recorder.snapshot(
+            capturedAt: fixedDate,
+            lifecycle: lifecycle,
+            activeMode: nil,
+            batchSummary: nil,
+            process: .empty
+        )
+
+        let record = try XCTUnwrap(snapshot.events.entries.last)
+        XCTAssertEqual(record.source, "worker")
+        XCTAssertEqual(record.name, "tool.failed")
+        XCTAssertEqual(record.stage, "create_mkv")
+        XCTAssertEqual(record.message, "MakeMKV failed")
+        XCTAssertEqual(record.details, "bounded detail")
+        XCTAssertEqual(record.level, "error")
+        XCTAssertEqual(record.failureCode, "nonzero_exit")
+        XCTAssertEqual(record.retryable, false)
+    }
+
     func testWorkflowAttributionUsesExplicitJobInsteadOfLatestContext() throws {
         let firstSource = ConversionSource(
             kind: .matroska,

@@ -113,6 +113,9 @@ class MuxCommandTests(unittest.TestCase):
                 audio_path,
                 output_folder / "Movie_AVP.mov",
                 output_folder,
+                run_context=None,
+                cancellation_event=None,
+                observability_context=None,
             )
             self.assertTrue(mv_hevc_path.exists())
             self.assertTrue(audio_path.exists())

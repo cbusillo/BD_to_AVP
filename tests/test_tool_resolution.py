@@ -98,7 +98,12 @@ class MkvToolPathTests(unittest.TestCase):
         with patch("bd_to_avp.vendor.pgsrip.mkv.run_ffprobe", return_value=metadata) as probe:
             mkv.Mkv("movie.mkv")
 
-        probe.assert_called_once_with("movie.mkv")
+        probe.assert_called_once_with(
+            "movie.mkv",
+            run_context=None,
+            cancellation_event=None,
+            observability_context=None,
+        )
 
     def test_mkv_metadata_maps_ffprobe_pgs_streams_to_existing_track_model(self) -> None:
         metadata = {

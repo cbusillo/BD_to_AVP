@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 from bd_to_avp import preflight
 from bd_to_avp.modules.config import Stage
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.process_runner import ProcessCancelled
 from bd_to_avp.vendor.pgsrip.ocr import OcrError
 
 
@@ -178,6 +179,19 @@ class DependencyPreflightTests(unittest.TestCase):
             preflight.verify_av1_encoder_ready()
 
         self.assertEqual(run.call_count, 2)
+
+    def test_av1_preflight_preserves_process_cancellation(self) -> None:
+        cancellation = ProcessCancelled("cancelled")
+        with (
+            patch.object(preflight.config, "video_mode", VideoMode.AV1_SBS),
+            patch.object(preflight.config, "start_stage", Stage.CREATE_LEFT_RIGHT_FILES),
+            patch.object(preflight.config, "FFMPEG_PATH", Path("/tools/ffmpeg")),
+            patch("bd_to_avp.preflight.run_process_capture", side_effect=cancellation),
+            self.assertRaises(ProcessCancelled) as context,
+        ):
+            preflight.verify_av1_encoder_ready()
+
+        self.assertIs(context.exception, cancellation)
 
     def test_av1_mode_rejects_ffmpeg_without_libsvtav1(self) -> None:
         with (

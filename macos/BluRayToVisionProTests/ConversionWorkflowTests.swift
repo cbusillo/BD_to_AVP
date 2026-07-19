@@ -692,7 +692,7 @@ final class ConversionWorkflowTests: XCTestCase {
         let source = try XCTUnwrap(json["source"] as? [String: Any])
 
         XCTAssertEqual(json["operation"] as? String, "convert_source")
-        XCTAssertEqual(json["protocol_version"] as? Int, 7)
+        XCTAssertEqual(json["protocol_version"] as? Int, WorkerJobSpec.protocolVersion)
         XCTAssertEqual(source["kind"] as? String, "direct_file")
         XCTAssertEqual((json["destination"] as? [String: Any])?["path"] as? String, "/Movies")
         XCTAssertEqual(encoding["mv_hevc_quality"] as? Int, 75)
@@ -805,7 +805,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(changedEncoding.audio, originalEncoding.audio)
     }
 
-    func testConversionJobSpecMatchesSharedV7WorkerFixture() throws {
+    func testConversionJobSpecMatchesSharedV8WorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic
         let draft = ConversionDraft(
@@ -821,7 +821,7 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_convert_v7.json")
+            with: sharedFixtureData(named: "native_worker_convert_v8.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
@@ -852,7 +852,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(source["title_id"] as? String, "provider:playlist-01005")
     }
 
-    func testPreviewJobSpecMatchesSharedV7WorkerFixture() throws {
+    func testPreviewJobSpecMatchesSharedV8WorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic
         let conversion = ConversionDraft(
@@ -880,13 +880,13 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_preview_v7.json")
+            with: sharedFixtureData(named: "native_worker_preview_v8.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
     }
 
-    func testPhysicalDiscJobSpecMatchesSharedV7WorkerFixture() throws {
+    func testPhysicalDiscJobSpecMatchesSharedV8WorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic
         let draft = ConversionDraft(
@@ -915,7 +915,7 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_convert_physical_disc_v7.json")
+            with: sharedFixtureData(named: "native_worker_convert_physical_disc_v8.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)

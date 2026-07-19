@@ -87,6 +87,7 @@ enum WorkerEventType: String, Decodable, Equatable {
     case log
     case warning
     case artifactReady = "artifact.ready"
+    case observability
     case jobCompleted = "job.completed"
     case jobFailed = "job.failed"
     case jobCancelled = "job.cancelled"
@@ -285,6 +286,7 @@ struct WorkerEventPayload: Decodable, Equatable {
     let previewResult: PreviewArtifact?
     let error: WorkerFailure?
     let decision: WorkerDecision?
+    let observabilityEvent: ObservabilityEvent?
 
     init(
         workerVersion: String? = nil,
@@ -301,7 +303,8 @@ struct WorkerEventPayload: Decodable, Equatable {
         artifact: PreviewArtifact? = nil,
         previewResult: PreviewArtifact? = nil,
         error: WorkerFailure? = nil,
-        decision: WorkerDecision? = nil
+        decision: WorkerDecision? = nil,
+        observabilityEvent: ObservabilityEvent? = nil
     ) {
         self.workerVersion = workerVersion
         self.processGroupID = processGroupID
@@ -318,6 +321,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         self.previewResult = previewResult
         self.error = error
         self.decision = decision
+        self.observabilityEvent = observabilityEvent
     }
 
     init(from decoder: Decoder) throws {
@@ -342,6 +346,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         previewResult = try container.decodeIfPresent(PreviewArtifact.self, forKey: .previewResult)
         error = try container.decodeIfPresent(WorkerFailure.self, forKey: .error)
         decision = try container.decodeIfPresent(WorkerDecision.self, forKey: .decision)
+        observabilityEvent = try container.decodeIfPresent(ObservabilityEvent.self, forKey: .observabilityEvent)
     }
 
     var warningCode: String? { warning?.code }
@@ -364,6 +369,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         case previewResult = "preview_result"
         case error
         case decision
+        case observabilityEvent = "event"
     }
 }
 

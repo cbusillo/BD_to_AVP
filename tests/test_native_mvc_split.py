@@ -162,7 +162,16 @@ class NativeMvcSelectionTests(unittest.TestCase):
                 )
 
         self.assertEqual(result, (Path("left.mov"), Path("right.mov")))
-        native_split.assert_called_once_with(Path("movie_mvc.h264"), Path("left.mov"), Path("right.mov"), disc_info, "")
+        native_split.assert_called_once_with(
+            Path("movie_mvc.h264"),
+            Path("left.mov"),
+            Path("right.mov"),
+            disc_info,
+            "",
+            run_context=None,
+            cancellation_event=None,
+            observability_context=None,
+        )
 
     def test_split_uses_native_helper_for_mts_sources_when_present(self) -> None:
         disc_info = DiscInfo(name="Sample")

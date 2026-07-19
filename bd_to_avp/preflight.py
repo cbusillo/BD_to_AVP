@@ -2,22 +2,34 @@ import os
 import stat
 from pathlib import Path
 from subprocess import SubprocessError
+from threading import Event
 
 from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr, OcrError
 from bd_to_avp.modules.command import run_process_capture
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.video_mode import VideoMode
-from bd_to_avp.process_runner import ProcessRunnerError
+from bd_to_avp.observability import ObservabilityContext
+from bd_to_avp.process_runner import ProcessCancelled, ProcessRunnerError
+from bd_to_avp.runtime import RunContext
 
 
 class DependencyPreflightError(RuntimeError):
     pass
 
 
-def verify_runtime_ready() -> None:
+def verify_runtime_ready(
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> None:
     missing_binaries = get_missing_dependency_binaries_for_current_job()
     if not missing_binaries:
-        verify_av1_encoder_ready()
+        verify_av1_encoder_ready(
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
         verify_apple_vision_ocr_ready()
         return
 
@@ -137,7 +149,12 @@ def ensure_native_mvc_splitter_executable() -> bool:
     return os.access(config.EDGE264_TEST_PATH, os.X_OK)
 
 
-def verify_av1_encoder_ready() -> None:
+def verify_av1_encoder_ready(
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> None:
     if config.video_mode is not VideoMode.AV1_SBS or config.start_stage.value > Stage.CREATE_LEFT_RIGHT_FILES.value:
         return
 
@@ -147,13 +164,21 @@ def verify_av1_encoder_ready() -> None:
             "Verify FFmpeg AV1 encoders",
             tool_id="ffmpeg",
             timeout_seconds=10,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
         ).stdout.text()
         bitstream_filters = run_process_capture(
             [config.FFMPEG_PATH, "-hide_banner", "-bsfs"],
             "Verify FFmpeg AV1 bitstream filters",
             tool_id="ffmpeg",
             timeout_seconds=10,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
         ).stdout.text()
+    except ProcessCancelled:
+        raise
     except (OSError, SubprocessError, ProcessRunnerError) as error:
         raise DependencyPreflightError("FFmpeg could not verify the required AV1 encoding support.") from error
     if "libsvtav1" not in encoders:

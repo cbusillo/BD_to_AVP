@@ -5,7 +5,7 @@ from pathlib import Path
 from threading import Event
 from typing import Callable
 
-from bd_to_avp.observability import ObservabilityProgress
+from bd_to_avp.observability import ObservabilityContext, ObservabilityProgress
 from bd_to_avp.modules.config import config, is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.file import find_largest_file_with_extensions, sanitize_filename
 from bd_to_avp.modules.command import run_command, run_ffprobe
@@ -175,6 +175,7 @@ def get_disc_and_mvc_video_info(
     *,
     run_context: RunContext | None = None,
     cancellation_event: Event | None = None,
+    observability_context: ObservabilityContext | None = None,
 ) -> DiscInfo:
     source_path = config.source_path
     source = source_path.as_posix() if source_path else config.source_str
@@ -188,6 +189,7 @@ def get_disc_and_mvc_video_info(
             source_path,
             run_context=run_context,
             cancellation_event=cancellation_event,
+            observability_context=observability_context,
         )
         streams = probe.get("streams", [])
         ffmpeg_probe_output = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
@@ -220,6 +222,7 @@ def get_disc_and_mvc_video_info(
         run_context=run_context,
         cancellation_event=cancellation_event,
         tool_id="makemkvcon",
+        observability_context=observability_context,
         capture_overflow=CaptureOverflowPolicy.FAIL,
     )
 
@@ -251,6 +254,7 @@ def rip_disc_to_mkv(
     *,
     run_context: RunContext | None = None,
     cancellation_event: Event | None = None,
+    observability_context: ObservabilityContext | None = None,
 ) -> None:
     custom_profile_path = output_folder / "custom_profile.mmcp.xml"
     create_custom_makemkv_profile(custom_profile_path)
@@ -307,6 +311,7 @@ def rip_disc_to_mkv(
         run_context=run_context,
         cancellation_event=cancellation_event,
         tool_id="makemkvcon",
+        observability_context=observability_context,
         artifacts=(ProcessArtifactProbe("intermediate_mkv", resolver=active_mkv),),
         capture_overflow=CaptureOverflowPolicy.FAIL,
     )
@@ -359,6 +364,7 @@ def create_mkv_file(
     *,
     run_context: RunContext | None = None,
     cancellation_event: Event | None = None,
+    observability_context: ObservabilityContext | None = None,
 ) -> Path:
     if config.source_path and config.source_path.suffix.lower() in [*config.MTS_EXTENSIONS, ".mkv"]:
         if not config.source_path.is_file():
@@ -380,6 +386,7 @@ def create_mkv_file(
             progress_callback,
             run_context=run_context,
             cancellation_event=cancellation_event,
+            observability_context=observability_context,
         )
 
     if mkv_file := find_largest_file_with_extensions(output_folder, [".mkv"]):

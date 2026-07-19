@@ -1,10 +1,12 @@
 import unittest
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import numpy as np
 
+from bd_to_avp.process_runner import ProcessCancelled
+from bd_to_avp.vendor.pgsrip.core import rip_pgs
 from bd_to_avp.vendor.pgsrip.media_path import MediaPath
 from bd_to_avp.vendor.pgsrip.media import PgsSubtitleItem
 from bd_to_avp.vendor.pgsrip.mkv import Mkv, MkvTrack
@@ -48,6 +50,18 @@ class MkvTrackOrderingTests(unittest.TestCase):
 
         selected_track_ids = [call.args[1] for call in mkv_pgs.call_args_list]
         self.assertEqual(selected_track_ids, [2, 1])
+
+
+class PgsCancellationTests(unittest.TestCase):
+    def test_process_cancellation_escapes_vendor_rip_error_handling(self) -> None:
+        cancellation = ProcessCancelled("cancelled")
+        pgs = MagicMock()
+        pgs.__enter__.side_effect = cancellation
+
+        with self.assertRaises(ProcessCancelled) as context:
+            rip_pgs(pgs, Options())
+
+        self.assertIs(context.exception, cancellation)
 
 
 class PgsSubtitleItemTimestampTests(unittest.TestCase):

@@ -20,6 +20,9 @@ from bd_to_avp.modules.disc import DiscInfo, DiscTitleInfo, MKVCreationError
 from bd_to_avp.modules.process import process_each
 from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.observability import ObservabilityEmitter
+from bd_to_avp.process_runner import ProcessCancelled
+from bd_to_avp.runtime import ObservabilityStream
 from bd_to_avp.worker.__main__ import run_worker
 from bd_to_avp.worker.operations import (
     WorkerDecisionRequired,
@@ -40,6 +43,7 @@ from bd_to_avp.worker.protocol import (
     JobSpec,
     WorkerEventEmitter,
     WorkerEventType,
+    WorkerObservabilitySink,
     WorkerOperation,
     PreviewPosition,
     WorkerProtocolError,
@@ -232,7 +236,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(context.exception.code, "invalid_source")
 
     def test_parses_shared_swift_conversion_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v7.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v8.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -261,7 +265,7 @@ class JobSpecTests(unittest.TestCase):
             JobSpec.from_json_line(json.dumps(request))
 
     def test_parses_shared_swift_physical_disc_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v7.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v8.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -271,7 +275,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertFalse(job.job.remove_original if job.job else True)
 
     def test_parses_shared_swift_preview_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v7.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v8.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -581,7 +585,7 @@ class WorkerActivityReporterTests(unittest.TestCase):
             ],
         )
 
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_fallback_warning_v7.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_fallback_warning_v8.json"
         expected = json.loads(fixture_path.read_text())
         self.assertEqual(decoded_events(output), [expected])
 
@@ -593,7 +597,7 @@ class WorkerActivityReporterTests(unittest.TestCase):
 
         activity.stage_started("configure", "Preparing conversion settings")
 
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v7.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v8.json"
         expected = json.loads(fixture_path.read_text())
         self.assertEqual(decoded_events(output), [expected])
 
@@ -700,6 +704,9 @@ class WorkerRuntimeTests(unittest.TestCase):
                 print("legacy output")
                 self.assertEqual(job.source.path, source_path)
                 activity.log("structured progress")
+                self.assertIsNotNone(activity.run_context)
+                assert activity.run_context is not None
+                activity.run_context.emit("tool.test")
                 time.sleep(0.02)
                 return {"name": "movie", "resolution": "1920x1080"}
 
@@ -718,8 +725,25 @@ class WorkerRuntimeTests(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "job.completed")
         self.assertIn("heartbeat", [event["type"] for event in events])
         self.assertIn("log", [event["type"] for event in events])
+        observability = next(event for event in events if event["type"] == "observability")
+        self.assertEqual(observability["payload"]["event"]["schema"], "bd_to_avp.observability")
+        self.assertEqual(observability["payload"]["event"]["stream_id"], events[0]["job_id"])
+        self.assertEqual(observability["payload"]["event"]["kind"], "tool.test")
+        self.assertEqual([event["sequence"] for event in events], list(range(len(events))))
         self.assertNotIn("legacy output", output.getvalue())
         self.assertIn("legacy output", diagnostics.getvalue())
+
+    def test_observability_after_terminal_is_dropped_without_corrupting_worker_stream(self) -> None:
+        output = io.StringIO()
+        emitter = WorkerEventEmitter(output, str(uuid4()))
+        stream = ObservabilityStream(ObservabilityEmitter.WORKER, WorkerObservabilitySink(emitter))
+        emitter.emit(WorkerEventType.JOB_COMPLETED, {"result": {}})
+
+        emitted = stream.emit("tool.late")
+
+        self.assertIsNotNone(emitted)
+        self.assertEqual(stream.failure_count, 1)
+        self.assertEqual(len(decoded_events(output)), 1)
 
     def test_cancellation_wins_over_completion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -748,6 +772,33 @@ class WorkerRuntimeTests(unittest.TestCase):
         self.assertEqual(exit_code, 130)
         self.assertEqual(events[-1]["type"], "job.cancelled")
         self.assertNotIn("job.completed", [event["type"] for event in events])
+
+    def test_inspection_process_cancellation_emits_cancelled_terminal_event(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source_path = Path(temporary_directory) / "movie.m2ts"
+            source_path.touch()
+            fake_ffprobe = Path(temporary_directory) / "ffprobe"
+            fake_ffprobe.touch()
+            output = io.StringIO()
+
+            with (
+                patch.object(config, "FFPROBE_PATH", fake_ffprobe),
+                patch(
+                    "bd_to_avp.worker.operations.get_disc_and_mvc_video_info",
+                    side_effect=ProcessCancelled("FFprobe was cancelled"),
+                ),
+            ):
+                exit_code = run_worker(
+                    io.StringIO(request_line(source_path)),
+                    output,
+                    io.StringIO(),
+                    establish_session=False,
+                )
+
+        events = decoded_events(output)
+        self.assertEqual(exit_code, 130)
+        self.assertEqual(events[-1]["type"], "job.cancelled")
+        self.assertNotIn("job.failed", [event["type"] for event in events])
 
     def test_malformed_request_emits_stable_failure(self) -> None:
         output = io.StringIO()
@@ -792,7 +843,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 }
             },
         )
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v7.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v8.json"
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
 
         self.assertEqual(decoded_events(output)[-1], fixture)
@@ -1073,7 +1124,7 @@ class SourceInspectionTests(unittest.TestCase):
             source_path = Path("/dev/disk9")
             observed: dict[str, object] = {}
 
-            def inspect_disc() -> DiscInfo:
+            def inspect_disc(**_kwargs: object) -> DiscInfo:
                 observed["source_path"] = config.source_path
                 observed["source_str"] = config.source_str
                 return DiscInfo(name="Physical 3D", resolution="1920x1080", frame_rate="24000/1001")
@@ -1166,7 +1217,7 @@ class SourceInspectionTests(unittest.TestCase):
             fake_makemkv.touch()
             observed: dict[str, object] = {}
 
-            def inspect_disc() -> DiscInfo:
+            def inspect_disc(**_kwargs: object) -> DiscInfo:
                 observed["source_path"] = config.source_path
                 observed["source_str"] = config.source_str
                 return DiscInfo(name="Folder 3D")
@@ -1242,7 +1293,10 @@ class SourceConversionTests(unittest.TestCase):
             self.assertEqual(preview_range.duration_seconds, 60)
             self.assertEqual(result["output_path"], final_path.as_posix())
             self.assertEqual(result["parent_job_id"], job.preview.parent_job_id if job.preview else None)
-            self.assertEqual(decoded_events(output)[-1]["type"], "artifact.ready")
+            events = decoded_events(output)
+            self.assertEqual(events[0]["type"], "stage.started")
+            self.assertEqual(events[0]["payload"]["stage"], "inspect_source")
+            self.assertEqual(events[-1]["type"], "artifact.ready")
 
     def test_iso_preview_preserves_selected_title_id_through_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

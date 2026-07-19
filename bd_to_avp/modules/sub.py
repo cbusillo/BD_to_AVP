@@ -16,6 +16,8 @@ from bd_to_avp.modules.languages import (
     normalize_language_code,
     normalize_source_language,
 )
+from bd_to_avp.observability import ObservabilityContext
+from bd_to_avp.runtime import RunContext
 
 
 class SRTCreationError(Exception):
@@ -29,26 +31,46 @@ def create_srt_from_mkv(
     mkv_path: Path,
     output_path: Path | None = None,
     warning_handler: SubtitleWarningHandler | None = None,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
 ) -> None:
     output_path = output_path or mkv_path.parent
     if config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
         if config.skip_subtitles:
             cleanup_existing_subtitle_files(output_path)
             return None
-        extract_subtitle_to_srt(mkv_path, output_path, warning_handler)
+        extract_subtitle_to_srt(
+            mkv_path,
+            output_path,
+            warning_handler,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
 
 
 def extract_subtitle_to_srt(
     mkv_path: Path,
     output_path: Path | None = None,
     warning_handler: SubtitleWarningHandler | None = None,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
 ) -> None:
     output_path = output_path or mkv_path.parent
     cleanup_existing_subtitle_files(output_path)
 
     if config.skip_subtitles:
         return None
-    subtitle_tracks = get_languages_in_mkv(mkv_path)
+    subtitle_tracks = get_languages_in_mkv(
+        mkv_path,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
+    )
 
     if not subtitle_tracks:
         message = "No PGS subtitle tracks found in source; continuing without subtitles."
@@ -66,7 +88,12 @@ def extract_subtitle_to_srt(
 
     try:
         with subtitle_source_alias(mkv_path, output_path) as subtitle_mkv_path:
-            mkv_file = Mkv(subtitle_mkv_path.as_posix())
+            mkv_file = Mkv(
+                subtitle_mkv_path.as_posix(),
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                observability_context=observability_context,
+            )
             selected_subtitle_tracks = get_selected_subtitle_tracks(mkv_file, sub_options)
 
             if config.remove_extra_languages and not selected_subtitle_tracks:
@@ -198,8 +225,19 @@ def subtitle_language_alpha2(language_code: str) -> str | None:
     return language_alpha2(language_code)
 
 
-def get_languages_in_mkv(mkv_path: Path) -> None | list[dict[str, Any]]:
-    mkv_info = run_ffprobe(mkv_path)
+def get_languages_in_mkv(
+    mkv_path: Path,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> None | list[dict[str, Any]]:
+    mkv_info = run_ffprobe(
+        mkv_path,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
+    )
     streams = mkv_info.get("streams") or []
     subtitle_streams = [
         stream

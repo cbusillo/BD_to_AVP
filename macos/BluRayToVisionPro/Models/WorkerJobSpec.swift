@@ -1,7 +1,7 @@
 import Foundation
 
 struct WorkerJobSpec: Encodable, Equatable {
-    static let protocolVersion = 7
+    static let protocolVersion = 8
 
     struct Source: Encodable, Equatable {
         enum Kind: String, Encodable {

@@ -31,6 +31,7 @@ from bd_to_avp.modules.video import (
     create_upscaled_file,
     get_video_color_depth,
 )
+from bd_to_avp.observability import ObservabilityContext, ObservabilityStage
 from bd_to_avp.process_runner import ProcessCancelled
 from bd_to_avp.runtime import RunContext
 
@@ -79,6 +80,10 @@ def normalized_cancellation_event(
     if cancellation_event is not None and cancellation_event is not context_event:
         raise ValueError("run_context and cancellation_event must share the same event")
     return context_event
+
+
+def stage_observability_context(stage: str) -> ObservabilityContext:
+    return ObservabilityContext(stage=ObservabilityStage(stage))
 
 
 def find_batch_sources(source_folder_path: Path) -> tuple[Path, ...]:
@@ -238,7 +243,11 @@ def process_each(
         )
     if activity:
         activity.stage_started("preflight", "Checking required conversion tools")
-    preflight.verify_runtime_ready()
+    preflight.verify_runtime_ready(
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=stage_observability_context("preflight"),
+    )
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("inspect_source", "Reading video metadata")
@@ -246,6 +255,7 @@ def process_each(
         selected_title_id,
         run_context=run_context,
         cancellation_event=cancellation_event,
+        observability_context=stage_observability_context("inspect_source"),
     )
     raise_if_cancelled(cancellation_event)
     if activity:
@@ -276,6 +286,7 @@ def process_each(
         progress_callback=activity.stage_progress if activity else None,
         run_context=run_context,
         cancellation_event=cancellation_event,
+        observability_context=stage_observability_context("create_mkv"),
     )
     if config.preview_range is not None:
         raise_if_cancelled(cancellation_event)
@@ -285,23 +296,44 @@ def process_each(
             mkv_output_path,
             output_folder,
             config.preview_range,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=stage_observability_context("prepare_preview_range"),
         )
         config.preview_range = aligned_preview_range
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("probe_color", "Reading video color depth")
-    disc_info.color_depth = get_video_color_depth(mkv_output_path)
+    disc_info.color_depth = get_video_color_depth(
+        mkv_output_path,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=stage_observability_context("probe_color"),
+    )
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.stage_started("detect_crop", "Checking frame crop parameters")
     crop_start_seconds = (
         min(600, max(0, int(config.preview_range.duration_seconds / 2))) if config.preview_range is not None else 600
     )
-    crop_params = detect_crop_parameters(mkv_output_path, start_seconds=crop_start_seconds)
+    crop_params = detect_crop_parameters(
+        mkv_output_path,
+        start_seconds=crop_start_seconds,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=stage_observability_context("detect_crop"),
+    )
     raise_if_cancelled(cancellation_event)
     if activity and config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
         activity.stage_started("extract_mvc_and_audio", "Extracting MVC video and audio")
-    audio_output_path, video_output_path = create_mvc_and_audio(disc_info.name, mkv_output_path, output_folder)
+    audio_output_path, video_output_path = create_mvc_and_audio(
+        disc_info.name,
+        mkv_output_path,
+        output_folder,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=stage_observability_context("extract_mvc_and_audio"),
+    )
     raise_if_cancelled(cancellation_event)
     if activity and not config.skip_subtitles and config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
         activity.stage_started("extract_subtitles", "Extracting subtitles")
@@ -309,35 +341,79 @@ def process_each(
         mkv_output_path,
         output_folder,
         (lambda message: activity.warning(message, stage="extract_subtitles") if activity else None),
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=stage_observability_context("extract_subtitles"),
     )
     raise_if_cancelled(cancellation_event)
     if config.video_mode is VideoMode.AV1_SBS:
         if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
             activity.stage_started("encode_av1_stereo", "Encoding side-by-side AV1 stereo video")
-        av1_sbs_path = create_av1_sbs_file(disc_info, output_folder, video_output_path, crop_params)
+        av1_sbs_path = create_av1_sbs_file(
+            disc_info,
+            output_folder,
+            video_output_path,
+            crop_params,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=stage_observability_context("encode_av1_stereo"),
+        )
         raise_if_cancelled(cancellation_event)
         if activity and config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
             activity.stage_started("finalize_av1_stereo", "Adding Apple stereo metadata to AV1 video")
-        video_path = create_av1_stereo_file(av1_sbs_path, output_folder, disc_info)
+        video_path = create_av1_stereo_file(
+            av1_sbs_path,
+            output_folder,
+            disc_info,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=stage_observability_context("finalize_av1_stereo"),
+        )
     else:
         if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
             activity.stage_started("create_left_right_files", "Creating left and right eye video")
         left_output_path, right_output_path = create_left_right_files(
-            disc_info, output_folder, video_output_path, crop_params
+            disc_info,
+            output_folder,
+            video_output_path,
+            crop_params,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=stage_observability_context("create_left_right_files"),
         )
         raise_if_cancelled(cancellation_event)
         if activity and config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
             activity.stage_started("combine_to_mv_hevc", "Combining stereo video into MV-HEVC")
-        video_path = create_mv_hevc_file(left_output_path, right_output_path, output_folder, disc_info)
+        video_path = create_mv_hevc_file(
+            left_output_path,
+            right_output_path,
+            output_folder,
+            disc_info,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=stage_observability_context("combine_to_mv_hevc"),
+        )
     raise_if_cancelled(cancellation_event)
     if activity and config.fx_upscale and config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
         activity.stage_started("upscale_video", "Upscaling video")
-    video_path = create_upscaled_file(video_path)
+    video_path = create_upscaled_file(
+        video_path,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=stage_observability_context("upscale_video"),
+    )
 
     raise_if_cancelled(cancellation_event)
     if activity and config.audio_mode.prepares_m4a and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
         activity.stage_started("transcode_audio", "Prepare Audio")
-    audio_output_path = create_transcoded_audio_file(audio_output_path, output_folder, activity)
+    audio_output_path = create_transcoded_audio_file(
+        audio_output_path,
+        output_folder,
+        activity,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=stage_observability_context("transcode_audio"),
+    )
     raise_if_cancelled(cancellation_event)
     if activity and config.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
         activity.stage_started("create_final_file", "Muxing final stereo video")
@@ -346,6 +422,9 @@ def process_each(
         video_path,
         output_folder,
         disc_info.name,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=stage_observability_context("create_final_file"),
     )
 
     return move_completed_conversion(muxed_output_path, tmp_folder, cancellation_event, activity)
