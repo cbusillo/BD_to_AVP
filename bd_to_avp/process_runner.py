@@ -654,7 +654,6 @@ class ChildProcessRunner:
 
         try:
             while True:
-                now = self._monotonic_clock()
                 try:
                     item = stream_queue.get(timeout=0.05)
                 except queue.Empty:
@@ -663,6 +662,7 @@ class ChildProcessRunner:
                     keyboard_interrupt = error
                     cancelled = True
                     item = None
+                now = self._monotonic_clock()
 
                 if isinstance(item, _OutputChunk) and pending_error is None:
                     try:
