@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bd_to_avp"
-version = "0.2.143"
+version = "0.3.0rc1"
 description = "Script to convert 3D Blu-ray Discs (and mts) to Apple Vision Pro (MV-HEVC) files"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -109,7 +109,7 @@ universal_build = false
 min_os_version = "14.0"
 
 [tool.briefcase.app.bd-to-avp.macOS.info]
-CFBundleVersion = "146"
+CFBundleVersion = "147"
 BDToAVPDistributionChannel = "direct"
 SUFeedURL = "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
 SUPublicEDKey = "nJv1BH0mc2KFORVIDLlSI2A9mvGpVWdLcxlmz++OODU="
