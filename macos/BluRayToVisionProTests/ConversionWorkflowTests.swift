@@ -172,10 +172,10 @@ final class ConversionWorkflowTests: XCTestCase {
     func testAudioHandlingHelpAndSummariesDescribeAllModesPrecisely() {
         XCTAssertEqual(
             AudioHandling.automatic.detail,
-            "Copies the selected audio set only when every track is qualified AAC; otherwise converts the entire set to AAC."
+            "Copies all source audio tracks when every track is qualified AAC; otherwise converts them all to AAC."
         )
-        XCTAssertEqual(AudioHandling.convertAAC.detail, "Converts the entire selected audio set to AAC.")
-        XCTAssertEqual(AudioHandling.pcm.detail, "Decodes the selected audio set to uncompressed PCM.")
+        XCTAssertEqual(AudioHandling.convertAAC.detail, "Converts all source audio tracks to AAC.")
+        XCTAssertEqual(AudioHandling.pcm.detail, "Decodes all source audio tracks to uncompressed PCM.")
         XCTAssertEqual(AudioHandling.automatic.bitrateLabel, "AAC fallback bitrate")
         XCTAssertEqual(AudioHandling.convertAAC.bitrateLabel, "AAC bitrate")
         XCTAssertNil(AudioHandling.pcm.bitrateLabel)
