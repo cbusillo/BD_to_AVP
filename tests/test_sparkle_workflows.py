@@ -1,7 +1,9 @@
 import importlib
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import unittest
 
 from pathlib import Path
@@ -92,6 +94,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_package_preserves_dmg_validation_without_write_token(self) -> None:
         workflow = load_workflow("briefcase.yml")
         package = workflow["jobs"]["package"]
+        certificate_step = next(
+            step for step in package["steps"] if step["name"] == "Install signing certificate in an ephemeral keychain"
+        )
+        certificate_script = certificate_step["run"]
+        cleanup_step = next(step for step in package["steps"] if step["name"] == "Remove temporary signing material")
+        cleanup_script = cleanup_step["run"]
 
         self.assertEqual(package["needs"], "prepare")
         self.assertEqual(package["environment"], "macos-signing")
@@ -112,6 +120,35 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("SHA256SUMS", str(package))
         self.assertIn('DMG_NAME="3D-Blu-ray-to-Vision-Pro-$PACKAGE_VERSION.dmg"', str(package))
         self.assertIn("BUILD_KEYCHAIN_PASSWORD", str(package))
+        self.assertIn("USER_KEYCHAINS_PATH=", certificate_script)
+        self.assertIn('echo "USER_KEYCHAINS_PATH=$USER_KEYCHAINS_PATH"', certificate_script)
+        self.assertIn('USER_KEYCHAINS_TMP_PATH="${USER_KEYCHAINS_PATH}.tmp"', certificate_script)
+        self.assertIn('> "$USER_KEYCHAINS_TMP_PATH"', certificate_script)
+        self.assertIn('mv "$USER_KEYCHAINS_TMP_PATH" "$USER_KEYCHAINS_PATH"', certificate_script)
+        self.assertIn("USER_KEYCHAINS=()", certificate_script)
+        self.assertIn('if [ "${#USER_KEYCHAINS[@]}" -eq 0 ]; then', certificate_script)
+        self.assertIn('security list-keychains -d user -s "$KEYCHAIN_PATH"', certificate_script)
+        self.assertIn('security list-keychains -d user -s "$KEYCHAIN_PATH" "${USER_KEYCHAINS[@]}"', certificate_script)
+        self.assertLess(
+            certificate_script.index('mv "$USER_KEYCHAINS_TMP_PATH" "$USER_KEYCHAINS_PATH"'),
+            certificate_script.index('security create-keychain -p "$BUILD_KEYCHAIN_PASSWORD"'),
+        )
+        self.assertLess(
+            certificate_script.index('security list-keychains -d user -s "$KEYCHAIN_PATH"'),
+            certificate_script.index("security find-identity"),
+        )
+        self.assertIn("restore_user_keychains", certificate_script)
+        self.assertIn("restore_user_keychains >/dev/null 2>&1 || restore_status=$?", certificate_script)
+        self.assertIn("restore_user_keychains", cleanup_script)
+        self.assertIn('if [ "${#RESTORE_KEYCHAINS[@]}" -eq 0 ]; then', cleanup_script)
+        self.assertIn("security list-keychains -d user -s", cleanup_script)
+        self.assertNotIn("restore_user_keychains >/dev/null 2>&1 || true", cleanup_script)
+        self.assertLess(
+            cleanup_script.index("if ! restore_user_keychains >/dev/null 2>&1; then"),
+            cleanup_script.index('security delete-keychain "$KEYCHAIN_PATH"'),
+        )
+        self.assertIn('security delete-keychain "$KEYCHAIN_PATH"', cleanup_script)
+        self.assertIn('exit "$cleanup_status"', cleanup_script)
         self.assertIn("APPLE_APP_PASSWORD", str(package))
         self.assertIn('NOTARY_PROFILE="bd-to-avp-release-$TEAM_ID-$GITHUB_RUN_ID"', str(package))
         self.assertIn("python scripts/native_app.py package", str(package))
@@ -121,6 +158,130 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("default-keychain", str(package))
         self.assertNotIn("KEYCHAIN_NAME", str(package))
         self.assertNotIn("SPARKLE_EDDSA_PRIVATE_KEY", str(package))
+
+    def test_keychain_search_list_empty_array_branch_is_bash_3_2_safe(self) -> None:
+        shell_script = (
+            'set -u; keychains=(); if [ "${#keychains[@]}" -eq 0 ]; '
+            'then echo empty; else printf "%s\\n" "${keychains[@]}"; fi'
+        )
+        result = subprocess.run(
+            ["/bin/bash", "-c", shell_script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "empty\n")
+
+    def test_keychain_cleanup_restores_search_list_and_removes_material(self) -> None:
+        result, state, paths = self._run_keychain_cleanup(
+            ["/Users/runner/Library/Keychains/login.keychain-db", "/tmp/Space Keychain"]
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(state, "/Users/runner/Library/Keychains/login.keychain-db\n/tmp/Space Keychain\n")
+        self.assertFalse(paths["keychain"].exists())
+        self.assertFalse(paths["certificate"].exists())
+        self.assertFalse(paths["snapshot"].exists())
+
+    def test_keychain_cleanup_restores_empty_search_list(self) -> None:
+        result, state, paths = self._run_keychain_cleanup([])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(state, "")
+        self.assertFalse(paths["snapshot"].exists())
+
+    def test_keychain_cleanup_failure_blocks_artifact_upload_and_preserves_snapshot(self) -> None:
+        result, _, paths = self._run_keychain_cleanup(["/tmp/login.keychain-db"], restore_exit=1)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Failed to restore the user keychain search list.", result.stderr)
+        self.assertTrue(paths["snapshot"].exists())
+
+    def _run_keychain_cleanup(
+        self,
+        keychains: list[str],
+        *,
+        restore_exit: int = 0,
+    ) -> tuple[subprocess.CompletedProcess[str], str, dict[str, Path]]:
+        workflow = load_workflow("briefcase.yml")
+        package = workflow["jobs"]["package"]
+        cleanup_step = next(step for step in package["steps"] if step["name"] == "Remove temporary signing material")
+        cleanup_script = cleanup_step["run"]
+
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        temporary_path = Path(temporary_directory.name)
+        fake_bin = temporary_path / "bin"
+        fake_bin.mkdir()
+        security_state = temporary_path / "security-state.txt"
+        security_calls = temporary_path / "security-calls.txt"
+        fake_security = fake_bin / "security"
+        fake_security.write_text(
+            """#!/bin/bash
+set -eu
+case "$1" in
+  list-keychains)
+    shift
+    if [ "${1:-}" = "-d" ]; then
+      shift 2
+    fi
+    if [ "${1:-}" = "-s" ]; then
+      shift
+      : > "$SECURITY_STATE_PATH"
+      for keychain in "$@"; do
+        printf '%s\\n' "$keychain" >> "$SECURITY_STATE_PATH"
+      done
+      exit "${SECURITY_RESTORE_EXIT:-0}"
+    fi
+    ;;
+  delete-keychain)
+    printf 'delete %s\\n' "$2" >> "$SECURITY_CALLS_PATH"
+    rm -f "$2"
+    ;;
+esac
+""",
+            encoding="utf-8",
+        )
+        fake_security.chmod(0o755)
+
+        snapshot = temporary_path / "user-keychains.txt"
+        snapshot.write_text("".join(f"{keychain}\n" for keychain in keychains), encoding="utf-8")
+        keychain_path = temporary_path / "ephemeral.keychain-db"
+        certificate_path = temporary_path / "certificate.p12"
+        keychain_path.touch()
+        certificate_path.touch()
+        github_env = temporary_path / "github-env.txt"
+        environment = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CERTIFICATE_PATH": str(certificate_path),
+            "GITHUB_ENV": str(github_env),
+            "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_RUN_ID": "123",
+            "KEYCHAIN_PATH": str(keychain_path),
+            "RUNNER_TEMP": str(temporary_path),
+            "SECURITY_CALLS_PATH": str(security_calls),
+            "SECURITY_RESTORE_EXIT": str(restore_exit),
+            "SECURITY_STATE_PATH": str(security_state),
+            "USER_KEYCHAINS_PATH": str(snapshot),
+        }
+        result = subprocess.run(
+            ["/bin/bash", "-c", cleanup_script],
+            cwd=REPO_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        state = security_state.read_text(encoding="utf-8") if security_state.exists() else ""
+        paths = {
+            "certificate": certificate_path,
+            "keychain": keychain_path,
+            "snapshot": snapshot,
+        }
+        return result, state, paths
 
     def test_release_is_draft_until_assets_are_redownloaded_and_verified(self) -> None:
         workflow = load_workflow("briefcase.yml")
