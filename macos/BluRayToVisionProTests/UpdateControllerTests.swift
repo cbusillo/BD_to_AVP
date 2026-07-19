@@ -3,6 +3,21 @@ import XCTest
 @testable import BluRayToVisionPro
 
 final class UpdateControllerTests: XCTestCase {
+    func testRoutesExposeExactHierarchicalSparkleChannels() {
+        XCTAssertEqual(UpdateChannelPreference.allCases.map(\.name), ["Stable", "RC", "Beta", "Alpha"])
+        XCTAssertEqual(UpdateChannelPreference.stable.sparkleChannels, [])
+        XCTAssertEqual(UpdateChannelPreference.releaseCandidate.sparkleChannels, ["rc"])
+        XCTAssertEqual(UpdateChannelPreference.beta.sparkleChannels, ["beta", "rc"])
+        XCTAssertEqual(UpdateChannelPreference.alpha.sparkleChannels, ["alpha", "beta", "rc"])
+        XCTAssertEqual(UpdateChannelPreference.storedValue(nil), .stable)
+        XCTAssertEqual(UpdateChannelPreference.storedValue("stable"), .stable)
+        XCTAssertEqual(UpdateChannelPreference.storedValue("rc"), .releaseCandidate)
+        XCTAssertEqual(UpdateChannelPreference.storedValue("releaseCandidate"), .releaseCandidate)
+        XCTAssertEqual(UpdateChannelPreference.storedValue("nightly"), .stable)
+        XCTAssertTrue(UpdateChannelPreference.noDowngradeExplanation.contains("future newer builds"))
+        XCTAssertTrue(UpdateChannelPreference.noDowngradeExplanation.contains("never downgrades"))
+    }
+
     @MainActor
     func testDebugBundleRemainsInManualUpdateMode() {
         XCTAssertEqual(UpdateEnvironment().mode, .manual)
@@ -40,13 +55,13 @@ final class UpdateControllerTests: XCTestCase {
         XCTAssertEqual(controller.updateChannel, .stable)
 
         controller.automaticallyChecksForUpdates = true
-        controller.updateChannel = .releaseCandidate
+        controller.updateChannel = .alpha
         controller.performUpdateAction()
 
         XCTAssertTrue(backend.automaticallyChecksForUpdates)
-        XCTAssertEqual(backend.updateChannel, .releaseCandidate)
+        XCTAssertEqual(backend.updateChannel, .alpha)
         XCTAssertEqual(backend.channelChangeCount, 1)
-        XCTAssertEqual(defaults.string(forKey: UpdateController.channelDefaultsKey), "rc")
+        XCTAssertEqual(defaults.string(forKey: UpdateController.channelDefaultsKey), "alpha")
         XCTAssertEqual(backend.checkCount, 1)
     }
 
@@ -114,6 +129,42 @@ final class UpdateControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testCurrentReleaseCandidateAliasMigratesToCanonicalValue() {
+        let suiteName = "UpdateControllerTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set("releaseCandidate", forKey: UpdateController.channelDefaultsKey)
+
+        let controller = UpdateController(
+            environment: directEnvironment(publicKey: nil),
+            defaults: defaults
+        )
+
+        XCTAssertEqual(controller.updateChannel, .releaseCandidate)
+        XCTAssertEqual(defaults.string(forKey: UpdateController.channelDefaultsKey), "rc")
+    }
+
+    @MainActor
+    func testRoutePreferencePersistsAcrossControllerRelaunch() {
+        let suiteName = "UpdateControllerTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let firstController = UpdateController(
+            environment: directEnvironment(publicKey: nil),
+            defaults: defaults
+        )
+        firstController.updateChannel = .beta
+
+        let relaunchedController = UpdateController(
+            environment: directEnvironment(publicKey: nil),
+            defaults: defaults
+        )
+
+        XCTAssertEqual(relaunchedController.updateChannel, .beta)
+    }
+
+    @MainActor
     func testInvalidStoredChannelFallsBackToStable() {
         let suiteName = "UpdateControllerTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -126,6 +177,7 @@ final class UpdateControllerTests: XCTestCase {
         )
 
         XCTAssertEqual(controller.updateChannel, .stable)
+        XCTAssertEqual(defaults.string(forKey: UpdateController.channelDefaultsKey), "stable")
     }
 
     @MainActor

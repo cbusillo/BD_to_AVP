@@ -4,9 +4,11 @@ This document is the normative release-identity, version, history, and update-ro
 contract for the direct-distribution application. Implementation work must fail
 closed when it cannot satisfy this contract.
 
-The current release tooling supports only the older Stable/RC model. Do not
-prepare or dispatch an Alpha or Beta release until issues #289 through #293 have
-implemented and validated this contract.
+The application preference model, release metadata/history parser, and appcast
+tooling implement this four-route contract. The guarded release entrypoints and
+Beta 3 recovery/bootstrap remain intentionally blocked on issues 290 through
+293. Do not prepare or dispatch an Alpha or Beta release until those gates have
+landed and the focused signed-install smoke has passed.
 
 ## Production Identity
 

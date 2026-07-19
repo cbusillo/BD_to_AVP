@@ -83,13 +83,19 @@ The project version and repository build counter come from `pyproject.toml`.
 `scripts/release.py prepare` updates the package version, `uv.lock`, Briefcase
 build counter, and Xcode Release metadata atomically. The package command also
 passes those canonical values directly to Xcode and rejects a bundle whose
-identity differs.
+identity differs. Release metadata separately derives the dotted public tag,
+title, and DMG name instead of treating the internal PEP 440 version as a public
+identifier.
 
-Stable is the default unchanneled Sparkle route. RC, Beta, and Alpha add the
-`rc`, `beta`, and `alpha` channel sets defined in `release-routes.md`. The next
-production-identity field build is `0.3.0b3` build `148`; current installations
-must bootstrap it through a manual download because they cannot yet select Beta
-or Alpha.
+Stable is the default unchanneled Sparkle route. The application now persists
+Stable `{}`, RC `{rc}`, Beta `{beta, rc}`, and Alpha `{alpha, beta, rc}` as exact
+additional-channel sets. Existing `stable`, `rc`, and legacy
+`releaseCandidate` preferences migrate without selecting a less stable route;
+missing or unknown values fail closed to Stable. Choosing a safer route affects
+only future newer builds and never downgrades the installed app. The next
+production-identity field build is `0.3.0b3` build `148`; currently shipped
+installations must bootstrap it through a manual download because those older
+clients cannot yet select Beta or Alpha.
 
 ## Release Workflow
 
