@@ -127,14 +127,17 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         self.assertEqual(apps["bd-to-avp"]["min_os_version"], "14.0")
 
-    def test_repository_is_prepared_for_stable_release(self) -> None:
+    def test_repository_is_prepared_for_release_candidate(self) -> None:
         metadata = release.load_release_metadata()
 
-        self.assertEqual(metadata.package_version, "0.2.143")
-        self.assertEqual(metadata.build_version, "146")
-        self.assertEqual(metadata.release_name, "v0.2.143")
-        self.assertEqual(metadata.channel, "stable")
-        self.assertTrue(metadata.publish_pypi)
+        self.assertEqual(metadata.package_version, "0.3.0rc1")
+        self.assertEqual(metadata.build_version, "147")
+        self.assertEqual(metadata.release_tag, "v0.3.0rc1")
+        self.assertEqual(metadata.release_name, "v0.3.0rc1")
+        self.assertEqual(metadata.channel, "rc")
+        self.assertTrue(metadata.prerelease)
+        self.assertFalse(metadata.make_latest)
+        self.assertFalse(metadata.publish_pypi)
 
     def test_metadata_derives_release_policy_from_committed_version(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
