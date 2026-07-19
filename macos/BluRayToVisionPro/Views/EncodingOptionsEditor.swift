@@ -139,6 +139,11 @@ struct EncodingOptionsEditor: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
+                    Text("All audio tracks from the source are included, regardless of language. Subtitle language choices do not filter audio.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
                     if let bitrateLabel = options.audioHandling.bitrateLabel {
                         LabeledContent(bitrateLabel) {
                             Stepper(value: $options.audioBitrate, in: 128 ... 1_000, step: 32) {
@@ -150,7 +155,7 @@ struct EncodingOptionsEditor: View {
                     }
                 }
 
-                Section("Subtitles and Languages") {
+                Section("Subtitles") {
                     Picker("Subtitle handling", selection: $options.subtitles.mode) {
                         ForEach(SubtitleMode.allCases) { mode in
                             Text(mode.title).tag(mode)
@@ -162,11 +167,10 @@ struct EncodingOptionsEditor: View {
                         LanguagePickerField(selection: $options.subtitles.preferredLanguage)
                     }
 
-                    Text(
-                        "\(options.subtitles.mode.detail) Source audio tracks are preserved independently of subtitle choices."
-                    )
+                    Text("\(options.subtitles.mode.detail) Subtitle language choices do not filter audio tracks.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
