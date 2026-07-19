@@ -36,6 +36,9 @@ for macOS 14 through 25.
 See [Distribution Policy](docs/distribution-policy.md) for the current GUI
 release artifact and dependency policy.
 
+See [Production Release Routes](docs/release-routes.md) for Stable, RC, Beta,
+and Alpha update eligibility, version mapping, and publication policy.
+
 See [Direct Pipeline Contracts](docs/direct-pipeline-contracts.md) for the
 automatic minimum-materialization behavior and the durable `--keep-files`
 stage contracts.

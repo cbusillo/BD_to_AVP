@@ -70,9 +70,14 @@ The Release configuration uses:
 - `Info-Release.plist`, containing the production Sparkle feed, public key, and
   user-consent policy.
 
+The same production identity is used for Stable, RC, Beta, and Alpha. The full
+identity contract also fixes the `direct` distribution value, Apple signing
+team, and approved diagnostics endpoint; see
+[Production Release Routes](release-routes.md).
+
 The Debug configuration uses a Development product and bundle identifier and
-contains no Sparkle distribution metadata. It cannot enroll in either updater
-channel.
+contains no Sparkle distribution metadata. It cannot enroll in a production
+update route.
 
 The project version and repository build counter come from `pyproject.toml`.
 `scripts/release.py prepare` updates the package version, `uv.lock`, Briefcase
@@ -80,17 +85,18 @@ build counter, and Xcode Release metadata atomically. The package command also
 passes those canonical values directly to Xcode and rejects a bundle whose
 identity differs.
 
-Stable is the default Sparkle channel. Release Candidates are visible only to
-installations that explicitly select the `rc` channel. Publishing an RC never
-adds it to the stable channel. The first production candidate for the accepted
-interface is reserved for `0.3.0rc1` with a build greater than stable build
-`146`.
+Stable is the default unchanneled Sparkle route. RC, Beta, and Alpha add the
+`rc`, `beta`, and `alpha` channel sets defined in `release-routes.md`. The next
+production-identity field build is `0.3.0b3` build `148`; current installations
+must bootstrap it through a manual download because they cannot yet select Beta
+or Alpha.
 
 ## Release Workflow
 
-`.github/workflows/briefcase.yml` remains the sole production workflow and keeps
-the stable workflow ID, PyPI Trusted Publisher binding, appcast history,
-attestation checks, and guarded environment approval contract.
+`.github/workflows/briefcase.yml` remains the current production workflow and
+the Stable/PyPI trusted-publisher identity. Issues #290 and #291 extract one
+shared release engine and add a separate Prerelease entry without duplicating
+signing, appcast, attestation, or approval logic.
 
 The package job runs on GitHub's Apple-Silicon `macos-26` runner. It selects
 Xcode 26.5 build `17F42` explicitly and installs the XcodeGen 2.45.4 release
@@ -113,23 +119,26 @@ deploy the durable feed snapshot.
 
 ## Historical Prereleases
 
-The retired side-by-side feedback lane published immutable alpha and beta
-artifacts before the interface was accepted. The tags `native-ui-preview-1`,
+The retired side-by-side feedback lane published immutable preview artifacts
+before the interface was accepted. The tags `native-ui-preview-1`,
 `v0.3.0-beta.1`, and `v0.3.0-beta.2`, their assets, and their historical release
-notes remain unchanged. They use a different bundle identifier and do not
-update into the production application.
+notes remain unchanged. They use a different bundle identifier, are not
+production Alpha/Beta route releases, and do not update into the production
+application.
 
 The separate publisher, release helper, build configuration, and workflow are
 no longer active. Genuine bounded Preview conversion jobs and implementation
 terms such as the native MVC splitter remain because they describe product
 behavior and engine architecture rather than release branding.
 
-## Remaining RC Evidence
+## Remaining Field Evidence
 
-Ship's physical-disc result still gates publishing `0.3.0rc1`. After that
-evidence is accepted, the signed installed-app test in #197 must prove that:
+The accepted physical-disc result allows the production line to proceed with
+Beta 3 so the merged observability and diagnostics can classify the reported
+follow-on issues. The signed installed-app tests must prove that:
 
-- a normal stable installation does not discover RC1;
-- a stable installation explicitly enrolled in Release Candidates can update
-  to RC1 using the production bundle identity; and
-- the final stable release can later supersede the RC for both channel choices.
+- existing Stable and RC preferences migrate without silently selecting Beta;
+- Beta 3 installs with the production identity and exposes all four routes;
+- Stable and RC exclude Beta 3 while Beta and Alpha admit it; and
+- a newer unchanneled Stable can later supersede prereleases for every route
+  without changing the saved preference.
