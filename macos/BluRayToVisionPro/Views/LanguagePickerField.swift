@@ -5,7 +5,7 @@ struct LanguagePickerField: View {
     @State private var isPresented = false
 
     var body: some View {
-        LabeledContent("Preferred language") {
+        LabeledContent("Subtitle language") {
             Button {
                 isPresented.toggle()
             } label: {
@@ -20,8 +20,8 @@ struct LanguagePickerField: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .accessibilityLabel(selection.displayName)
-            .accessibilityHint("Opens a searchable list of languages")
+            .accessibilityLabel("Subtitle language: \(selection.displayName)")
+            .accessibilityHint("Opens a searchable list of subtitle languages")
             .popover(isPresented: $isPresented, arrowEdge: .trailing) {
                 LanguagePickerPopover(selection: $selection, isPresented: $isPresented)
             }
@@ -57,10 +57,10 @@ private struct LanguagePickerPopover: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
-                TextField("Search by language or code", text: $query)
+                TextField("Search subtitle languages or code", text: $query)
                     .textFieldStyle(.plain)
                     .focused($searchIsFocused)
-                    .accessibilityLabel("Search languages")
+                    .accessibilityLabel("Search subtitle languages")
                     .onSubmit {
                         if let highlightedLanguage {
                             select(highlightedLanguage)
@@ -79,7 +79,7 @@ private struct LanguagePickerPopover: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Clear language search")
+                    .accessibilityLabel("Clear subtitle language search")
                 }
             }
             .padding(.horizontal, 12)

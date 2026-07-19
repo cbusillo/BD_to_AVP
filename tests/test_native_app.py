@@ -150,7 +150,7 @@ class NativeAppPackagingTests(unittest.TestCase):
         )
         conversion_ui = setup_view + encoding_editor + language_picker
 
-        self.assertIn(".accessibilityLabel(selection.displayName)", language_picker)
+        self.assertIn('.accessibilityLabel("Subtitle language: \\(selection.displayName)")', language_picker)
         self.assertNotIn('.accessibilityLabel("Preferred language:', language_picker)
 
         self.assertIn("Convert a 3D Blu-ray Disc", source_view)
@@ -170,8 +170,9 @@ class NativeAppPackagingTests(unittest.TestCase):
             "Crop black bars",
             "Swap left and right eyes",
             "Audio handling",
+            "All audio tracks from the source are included, regardless of language.",
             "Subtitle handling",
-            "Preferred language",
+            "Subtitle language",
             "Start stage",
             "Keep durable stage files",
             "Continue processing after recoverable errors",
@@ -181,6 +182,12 @@ class NativeAppPackagingTests(unittest.TestCase):
             "Show generated commands in activity",
         ):
             self.assertIn(label, conversion_ui)
+
+        self.assertIn('Section("Subtitles")', encoding_editor)
+        self.assertNotIn("Subtitles and Languages", encoding_editor)
+        self.assertIn("Opens a searchable list of subtitle languages", language_picker)
+        self.assertIn("Search subtitle languages", language_picker)
+        self.assertIn("Subtitle language choices do not filter audio tracks.", encoding_editor)
 
     def test_profile_settings_remain_resizable_and_scrollable_when_read_only(self) -> None:
         settings_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "SettingsView.swift").read_text(encoding="utf-8")

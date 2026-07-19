@@ -40,11 +40,11 @@ enum AudioHandling: String, CaseIterable, Codable, Identifiable {
     var detail: String {
         switch self {
         case .automatic:
-            "Copies the selected audio set only when every track is qualified AAC; otherwise converts the entire set to AAC."
+            "Copies all source audio tracks when every track is qualified AAC; otherwise converts them all to AAC."
         case .convertAAC:
-            "Converts the entire selected audio set to AAC."
+            "Converts all source audio tracks to AAC."
         case .pcm:
-            "Decodes the selected audio set to uncompressed PCM."
+            "Decodes all source audio tracks to uncompressed PCM."
         }
     }
 
