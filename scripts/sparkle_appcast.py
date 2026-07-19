@@ -25,8 +25,25 @@ SHORT_VERSION_PATTERN = re.compile(
     r"^(?P<major>0|[1-9][0-9]*)\."
     r"(?P<minor>0|[1-9][0-9]*)\."
     r"(?P<patch>0|[1-9][0-9]*)"
-    r"(?:rc(?P<rc>0|[1-9][0-9]*))?$"
+    r"(?:(?P<stage>a|b|rc)(?P<prerelease>[1-9][0-9]*))?$"
 )
+PUBLIC_TAG_PATTERN = re.compile(
+    r"^v(?P<major>0|[1-9][0-9]*)\."
+    r"(?P<minor>0|[1-9][0-9]*)\."
+    r"(?P<patch>0|[1-9][0-9]*)"
+    r"(?:-(?P<stage>alpha|beta|rc)\.(?P<prerelease>[1-9][0-9]*))?$"
+)
+LEGACY_RC_TAG_PATTERN = re.compile(
+    r"^v(?P<major>0|[1-9][0-9]*)\."
+    r"(?P<minor>0|[1-9][0-9]*)\."
+    r"(?P<patch>0|[1-9][0-9]*)"
+    r"rc(?P<prerelease>[1-9][0-9]*)$"
+)
+RETIRED_RELEASE_TAGS = frozenset({"native-ui-preview-1", "v0.3.0-beta.1", "v0.3.0-beta.2"})
+DMG_NAME_PREFIX = "3D-Blu-ray-to-Vision-Pro"
+INTERNAL_STAGE_NAMES = {"a": "alpha", "b": "beta", "rc": "rc"}
+PUBLIC_STAGE_SUFFIXES = {"alpha": "a", "beta": "b", "rc": "rc"}
+STAGE_ORDER = {"alpha": 0, "beta": 1, "rc": 2, "stable": 3}
 ET.register_namespace("sparkle", SPARKLE_NAMESPACE)
 ET.register_namespace("dc", DC_NAMESPACE)
 
@@ -47,6 +64,41 @@ class AppcastItem:
     full_release_notes_url: str
     minimum_system_version: str
     published_at: datetime
+
+
+@dataclass(frozen=True)
+class AppcastVersion:
+    short_version: str
+    major: int
+    minor: int
+    patch: int
+    stage: str
+    prerelease_number: int | None
+
+    @property
+    def channel(self) -> str | None:
+        return None if self.stage == "stable" else self.stage
+
+    @property
+    def order_key(self) -> tuple[int, int, int, int, int]:
+        return (
+            self.major,
+            self.minor,
+            self.patch,
+            STAGE_ORDER[self.stage],
+            self.prerelease_number or 0,
+        )
+
+    @property
+    def public_version(self) -> str:
+        base = f"{self.major}.{self.minor}.{self.patch}"
+        if self.stage == "stable":
+            return base
+        return f"{base}-{self.stage}.{self.prerelease_number}"
+
+    @property
+    def public_tag(self) -> str:
+        return f"v{self.public_version}"
 
 
 def load_appcast(path: Path) -> tuple[Any, ET.Element]:
@@ -81,23 +133,95 @@ def _build_number(item: ET.Element) -> int:
     return _parse_build_number(_text(item, f"{SPARKLE}version"), "sparkle:version")
 
 
-def _release_order(short_version: str) -> tuple[int, int, int, int, int]:
+def _parse_short_version(short_version: str) -> AppcastVersion:
     match = SHORT_VERSION_PATTERN.fullmatch(short_version)
     if match is None:
         raise AppcastError(f"Invalid Sparkle short version: {short_version!r}")
-    rc = int(match.group("rc")) if match.group("rc") is not None else None
-    return (
-        int(match.group("major")),
-        int(match.group("minor")),
-        int(match.group("patch")),
-        0 if rc is not None else 1,
-        rc or 0,
+    internal_stage = match.group("stage")
+    version = AppcastVersion(
+        short_version=short_version,
+        major=int(match.group("major")),
+        minor=int(match.group("minor")),
+        patch=int(match.group("patch")),
+        stage=INTERNAL_STAGE_NAMES[internal_stage] if internal_stage is not None else "stable",
+        prerelease_number=int(match.group("prerelease")) if match.group("prerelease") is not None else None,
     )
+    if version.public_tag in RETIRED_RELEASE_TAGS:
+        raise AppcastError(f"Release belongs to the retired preview identity: {version.public_tag}")
+    return version
+
+
+def _release_order(short_version: str) -> tuple[int, int, int, int, int]:
+    return _parse_short_version(short_version).order_key
 
 
 def _release_channel(short_version: str) -> str | None:
-    _release_order(short_version)
-    return "rc" if "rc" in short_version else None
+    return _parse_short_version(short_version).channel
+
+
+def _release_public_tag(short_version: str) -> str:
+    return _parse_short_version(short_version).public_tag
+
+
+def _release_asset_name(short_version: str) -> str:
+    return f"{DMG_NAME_PREFIX}-{_parse_short_version(short_version).public_version}.dmg"
+
+
+def _legacy_rc_tag(version: AppcastVersion) -> str | None:
+    return f"v{version.short_version}" if version.stage == "rc" else None
+
+
+def _legacy_rc_asset_name(version: AppcastVersion) -> str | None:
+    return f"{DMG_NAME_PREFIX}-{version.short_version}.dmg" if version.stage == "rc" else None
+
+
+def _short_version_for_release_tag(release_tag: str) -> str:
+    if release_tag in RETIRED_RELEASE_TAGS:
+        raise AppcastError(f"Release tag belongs to the retired preview identity: {release_tag}")
+
+    match = PUBLIC_TAG_PATTERN.fullmatch(release_tag)
+    if match is not None:
+        stage = match.group("stage")
+        suffix = PUBLIC_STAGE_SUFFIXES[stage] if stage is not None else ""
+        prerelease = match.group("prerelease") or ""
+        short_version = f"{match.group('major')}.{match.group('minor')}.{match.group('patch')}{suffix}{prerelease}"
+        _parse_short_version(short_version)
+        return short_version
+
+    legacy_match = LEGACY_RC_TAG_PATTERN.fullmatch(release_tag)
+    if legacy_match is not None:
+        short_version = (
+            f"{legacy_match.group('major')}.{legacy_match.group('minor')}.{legacy_match.group('patch')}"
+            f"rc{legacy_match.group('prerelease')}"
+        )
+        _parse_short_version(short_version)
+        return short_version
+
+    raise AppcastError("Release tag must use vX.Y.Z, vX.Y.Z-alpha.N, vX.Y.Z-beta.N, or vX.Y.Z-rc.N.")
+
+
+def _validate_release_identity(
+    version: AppcastVersion,
+    release_tag: str,
+    asset_name: str | None,
+    *,
+    allow_legacy_rc: bool,
+) -> None:
+    if release_tag in RETIRED_RELEASE_TAGS:
+        raise AppcastError(f"Release tag belongs to the retired preview identity: {release_tag}")
+
+    allowed_identities = {
+        version.public_tag: f"{DMG_NAME_PREFIX}-{version.public_version}.dmg",
+    }
+    if allow_legacy_rc:
+        legacy_tag = _legacy_rc_tag(version)
+        legacy_asset = _legacy_rc_asset_name(version)
+        if legacy_tag is not None and legacy_asset is not None:
+            allowed_identities[legacy_tag] = legacy_asset
+    if release_tag not in allowed_identities:
+        raise AppcastError("Appcast URLs must use the public tag mapped from sparkle:shortVersionString.")
+    if asset_name is not None and asset_name != allowed_identities[release_tag]:
+        raise AppcastError("Appcast enclosure must use the public DMG name mapped from sparkle:shortVersionString.")
 
 
 def maximum_build_version(channel: ET.Element) -> int | None:
@@ -244,21 +368,28 @@ def validate_appcast_channel(channel: ET.Element) -> None:
     download_urls: set[str] = set()
     for item in channel.findall("item"):
         build_version = _build_number(item)
-        short_version = _text(item, f"{SPARKLE}shortVersionString")
-        release_version = _release_order(short_version)
-        expected_channel = _release_channel(short_version)
-        item_channel = _text(item, f"{SPARKLE}channel") or None
-        if item_channel not in {None, "rc"}:
-            raise AppcastError(f"Unsupported Sparkle channel: {item_channel}")
-        if item_channel != expected_channel:
-            raise AppcastError(f"Release candidate channel and short version disagree for {short_version!r}.")
-
         enclosures = item.findall("enclosure")
         if len(enclosures) != 1:
             raise AppcastError("Every appcast item requires exactly one full-update enclosure.")
         enclosure = enclosures[0]
         download_url = enclosure.get("url", "")
-        download_tag, _ = _validate_release_url(download_url, "Enclosure URL", download=True)
+        download_tag, asset_name = _validate_release_url(download_url, "Enclosure URL", download=True)
+        if download_tag in RETIRED_RELEASE_TAGS:
+            raise AppcastError(f"Release tag belongs to the retired preview identity: {download_tag}")
+
+        short_version = _text(item, f"{SPARKLE}shortVersionString")
+        version = _parse_short_version(short_version)
+        release_version = version.order_key
+        expected_channel = version.channel
+        channel_elements = item.findall(f"{SPARKLE}channel")
+        if len(channel_elements) > 1:
+            raise AppcastError("Every appcast item may contain at most one sparkle:channel element.")
+        item_channel = _text(item, f"{SPARKLE}channel") if channel_elements else None
+        if item_channel not in {None, "rc", "beta", "alpha"}:
+            raise AppcastError(f"Unsupported Sparkle channel: {item_channel}")
+        if item_channel != expected_channel:
+            raise AppcastError(f"Sparkle channel and short version disagree for {short_version!r}.")
+
         length = enclosure.get("length", "")
         if not length.isdigit() or int(length) <= 0:
             raise AppcastError("Enclosure length must be a positive integer.")
@@ -267,8 +398,7 @@ def validate_appcast_channel(channel: ET.Element) -> None:
         signature = enclosure.get(f"{SPARKLE}edSignature", "")
         _validate_signature(signature)
 
-        if download_tag != f"v{short_version}":
-            raise AppcastError("Appcast URLs must use the tag derived from sparkle:shortVersionString.")
+        _validate_release_identity(version, download_tag, asset_name, allow_legacy_rc=True)
         _validate_item_release_notes(item, download_tag)
         minimum_system_version = _text(item, f"{SPARKLE}minimumSystemVersion")
         if not minimum_system_version:
@@ -309,11 +439,23 @@ def validate_empty_appcast(path: Path) -> None:
 
 def validate_release_snapshot(path: Path, short_version: str) -> None:
     validate_appcast(path)
-    _release_channel(short_version)
+    _parse_short_version(short_version)
     _, channel = load_appcast(path)
     items = channel.findall("item")
     if not items or _text(items[0], f"{SPARKLE}shortVersionString") != short_version:
         raise AppcastError(f"Appcast snapshot must start with release {short_version}.")
+
+
+def validate_release_tag_snapshot(path: Path, release_tag: str) -> None:
+    short_version = _short_version_for_release_tag(release_tag)
+    validate_release_snapshot(path, short_version)
+    _, channel = load_appcast(path)
+    enclosure = channel.find("item/enclosure")
+    if enclosure is None:
+        raise AppcastError(f"Appcast snapshot for {release_tag} is missing its enclosure.")
+    actual_tag, _ = _validate_release_url(enclosure.get("url", ""), "Enclosure URL", download=True)
+    if actual_tag != release_tag:
+        raise AppcastError(f"Appcast snapshot must start with release tag {release_tag}.")
 
 
 def verify_release_item(
@@ -353,12 +495,13 @@ def verify_release_item(
 
 def append_item(feed_path: Path, output_path: Path, item: AppcastItem) -> None:
     check_new_release(feed_path, item.build_version, item.short_version)
-    if item.channel not in {None, "rc"}:
+    if item.channel not in {None, "rc", "beta", "alpha"}:
         raise AppcastError(f"Unsupported Sparkle channel: {item.channel}")
-    expected_channel = _release_channel(item.short_version)
+    version = _parse_short_version(item.short_version)
+    expected_channel = version.channel
     if item.channel != expected_channel:
         raise AppcastError("Sparkle channel and short version disagree.")
-    download_tag, _ = _validate_release_url(item.download_url, "Enclosure URL", download=True)
+    download_tag, asset_name = _validate_release_url(item.download_url, "Enclosure URL", download=True)
     release_notes_tag, _ = _validate_release_url(
         item.full_release_notes_url,
         "Full release notes URL",
@@ -366,15 +509,14 @@ def append_item(feed_path: Path, output_path: Path, item: AppcastItem) -> None:
     )
     if release_notes_tag != download_tag:
         raise AppcastError("Full release notes and enclosure URLs must use the same release tag.")
-    if download_tag != f"v{item.short_version}":
-        raise AppcastError("Appcast URLs must use the tag derived from sparkle:shortVersionString.")
+    _validate_release_identity(version, download_tag, asset_name, allow_legacy_rc=False)
     _validate_signature(item.signature)
     if item.length <= 0:
         raise AppcastError("Enclosure length must be positive.")
 
     tree, channel = load_appcast(feed_path)
     item_element = ET.Element("item")
-    ET.SubElement(item_element, "title").text = f"Version {item.short_version}"
+    ET.SubElement(item_element, "title").text = f"Version {version.public_version}"
     ET.SubElement(item_element, "link").text = item.full_release_notes_url
     description = ET.SubElement(item_element, "description", {f"{SPARKLE}format": "markdown"})
     description.text = render_release_notes(item.release_notes_markdown, item.full_release_notes_url)
@@ -420,7 +562,7 @@ def main() -> int:
     add.add_argument("--output", type=Path, required=True)
     add.add_argument("--build-version", required=True)
     add.add_argument("--short-version", required=True)
-    add.add_argument("--channel", choices=("stable", "rc"), required=True)
+    add.add_argument("--channel", choices=("stable", "rc", "beta", "alpha"), required=True)
     add.add_argument("--download-url", required=True)
     add.add_argument("--length", type=int, required=True)
     add.add_argument("--signature", required=True)
@@ -440,7 +582,9 @@ def main() -> int:
         help="Validate a cumulative snapshot whose newest item matches a release.",
     )
     validate_snapshot.add_argument("--feed", type=Path, required=True)
-    validate_snapshot.add_argument("--short-version", required=True)
+    snapshot_version = validate_snapshot.add_mutually_exclusive_group(required=True)
+    snapshot_version.add_argument("--short-version")
+    snapshot_version.add_argument("--release-tag")
 
     check = commands.add_parser("check-build", help="Require a build number newer than the appcast.")
     check.add_argument("--feed", type=Path, required=True)
@@ -469,7 +613,10 @@ def main() -> int:
     elif args.command == "validate-empty":
         validate_empty_appcast(args.feed)
     elif args.command == "validate-snapshot":
-        validate_release_snapshot(args.feed, args.short_version)
+        if args.release_tag:
+            validate_release_tag_snapshot(args.feed, args.release_tag)
+        else:
+            validate_release_snapshot(args.feed, args.short_version)
     elif args.command == "check-build":
         check_new_build(args.feed, args.build_version)
     elif args.command == "check-release":

@@ -30,9 +30,11 @@ jobs:
     timeout-minutes: 10
     outputs:
       package_version: ${{ steps.metadata.outputs.package_version }}
+      public_version: ${{ steps.metadata.outputs.public_version }}
       build_version: ${{ steps.metadata.outputs.build_version }}
       release_tag: ${{ steps.metadata.outputs.release_tag }}
       release_name: ${{ steps.metadata.outputs.release_name }}
+      dmg_name: ${{ steps.metadata.outputs.dmg_name }}
       channel: ${{ steps.metadata.outputs.channel }}
       prerelease: ${{ steps.metadata.outputs.prerelease }}
       make_latest: ${{ steps.metadata.outputs.make_latest }}
@@ -222,7 +224,7 @@ jobs:
               --dir release-preflight/active
             python scripts/sparkle_appcast.py validate-snapshot \
               --feed release-preflight/active/appcast.xml \
-              --short-version "${BASE_SNAPSHOT_TAG#v}"
+              --release-tag "$BASE_SNAPSHOT_TAG"
             ACTIVE_SHA256=$(sha256sum release-preflight/active/appcast.xml | awk '{print $1}')
             if [ "$ACTIVE_SHA256" != "$STATE_APPCAST_SHA256" ]; then
               echo "Published Sparkle state digest differs from its durable snapshot." >&2
@@ -278,7 +280,7 @@ jobs:
               --dir release-preflight/latest
             python scripts/sparkle_appcast.py validate-snapshot \
               --feed release-preflight/latest/appcast.xml \
-              --short-version "${LATEST_SNAPSHOT_TAG#v}"
+              --release-tag "$LATEST_SNAPSHOT_TAG"
             python scripts/sparkle_appcast.py check-release \
               --feed release-preflight/latest/appcast.xml \
               --build-version "$BUILD_VERSION" \
@@ -496,6 +498,7 @@ jobs:
           BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: ${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}
           BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
           DEV_ID: ${{ secrets.DEV_ID }}
+          DMG_NAME: ${{ needs.prepare.outputs.dmg_name }}
           PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
         run: |
           set -euo pipefail
@@ -506,7 +509,6 @@ jobs:
           fi
           security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           APP_PATH="macos/build/package/3D Blu-ray to Vision Pro.app"
-          DMG_NAME="3D-Blu-ray-to-Vision-Pro-$PACKAGE_VERSION.dmg"
           DMG_PATH="dist/$DMG_NAME"
           APP_ARCHIVE="$RUNNER_TEMP/bd-to-avp-app-$GITHUB_RUN_ID.zip"
           mkdir -p dist/notary
@@ -1165,7 +1167,7 @@ jobs:
               --output appcast-site/appcast.xml
             python scripts/sparkle_appcast.py validate-snapshot \
               --feed appcast-site/appcast.xml \
-              --short-version "${BASE_SNAPSHOT_TAG#v}"
+              --release-tag "$BASE_SNAPSHOT_TAG"
           fi
           python scripts/sparkle_appcast.py validate \
             --feed appcast-site/appcast.xml

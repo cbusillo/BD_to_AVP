@@ -658,12 +658,20 @@ private struct UpdatesSettingsPane: View {
                 Toggle("Automatically check for updates", isOn: $updater.automaticallyChecksForUpdates)
                     .disabled(!updater.supportsAutomaticChecks)
 
-                Picker("Update channel", selection: $updater.updateChannel) {
+                Picker("Update route", selection: $updater.updateChannel) {
                     ForEach(UpdateChannelPreference.allCases) { channel in
                         Text(channel.name).tag(channel)
                     }
                 }
                 .disabled(!updater.supportsChannels)
+
+                Text(updater.updateChannel.explanation)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                Text(UpdateChannelPreference.noDowngradeExplanation)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
 
                 if !updater.supportsAutomaticChecks {
                     Label(updater.unavailableReason, systemImage: "info.circle")

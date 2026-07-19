@@ -30,13 +30,21 @@ def make_empty_feed(path: Path) -> None:
     )
 
 
-def item(build: str, short_version: str, channel: str | None) -> sparkle_appcast.AppcastItem:
-    tag = f"v{short_version}"
+def item(
+    build: str,
+    short_version: str,
+    channel: str | None,
+    *,
+    release_tag: str | None = None,
+    asset_name: str | None = None,
+) -> sparkle_appcast.AppcastItem:
+    tag = release_tag or sparkle_appcast._release_public_tag(short_version)
+    dmg_name = asset_name or sparkle_appcast._release_asset_name(short_version)
     return sparkle_appcast.AppcastItem(
         build_version=build,
         short_version=short_version,
         channel=channel,
-        download_url=f"https://github.com/cbusillo/BD_to_AVP/releases/download/{tag}/BD_to_AVP-{short_version}.dmg",
+        download_url=f"https://github.com/cbusillo/BD_to_AVP/releases/download/{tag}/{dmg_name}",
         length=12345,
         signature=SIGNATURE,
         release_notes_markdown=f"Version {short_version} improves conversion reliability.",
@@ -66,6 +74,7 @@ class SparkleAppcastTests(unittest.TestCase):
             ["145", "144"],
         )
         self.assertEqual(items[0].findtext(f"{sparkle_appcast.SPARKLE}channel"), "rc")
+        self.assertEqual(items[0].findtext("title"), "Version 0.2.144-rc.1")
         self.assertIsNone(items[1].find(f"{sparkle_appcast.SPARKLE}channel"))
         description = items[0].find("description")
         if description is None:
@@ -76,7 +85,7 @@ class SparkleAppcastTests(unittest.TestCase):
         self.assertIsNone(items[0].find(f"{sparkle_appcast.SPARKLE}releaseNotesLink"))
         self.assertEqual(
             items[0].findtext(f"{sparkle_appcast.SPARKLE}fullReleaseNotesLink"),
-            "https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.2.144rc1",
+            "https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.2.144-rc.1",
         )
         enclosure = items[0].find("enclosure")
         if enclosure is None:
@@ -84,6 +93,34 @@ class SparkleAppcastTests(unittest.TestCase):
         self.assertEqual(
             enclosure.get(f"{sparkle_appcast.SPARKLE}edSignature"),
             SIGNATURE,
+        )
+
+    def test_adds_all_routes_with_exact_channels_and_global_build_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            feeds = [root / f"feed-{index}.xml" for index in range(6)]
+            make_empty_feed(feeds[0])
+            releases = (
+                ("144", "1.2.2", None),
+                ("145", "1.2.3a1", "alpha"),
+                ("146", "1.2.3b1", "beta"),
+                ("147", "1.2.3rc1", "rc"),
+                ("148", "1.2.3", None),
+            )
+            for index, release_item in enumerate(releases, start=1):
+                sparkle_appcast.append_item(feeds[index - 1], feeds[index], item(*release_item))
+
+            sparkle_appcast.validate_appcast(feeds[-1])
+            _, channel = sparkle_appcast.load_appcast(feeds[-1])
+            items = channel.findall("item")
+
+        self.assertEqual(
+            [entry.findtext(f"{sparkle_appcast.SPARKLE}version") for entry in items],
+            ["148", "147", "146", "145", "144"],
+        )
+        self.assertEqual(
+            [entry.findtext(f"{sparkle_appcast.SPARKLE}channel") for entry in items],
+            [None, "rc", "beta", "alpha", None],
         )
 
     def test_rejects_non_monotonic_build(self) -> None:
@@ -135,7 +172,15 @@ class SparkleAppcastTests(unittest.TestCase):
             sparkle_appcast.validate_appcast(stable_feed)
 
     def test_rejects_noncanonical_short_versions(self) -> None:
-        for short_version in ("01.2.3", "1.02.3", "1.2.03", "1.2.3rc01"):
+        for short_version in (
+            "01.2.3",
+            "1.02.3",
+            "1.2.03",
+            "1.2.3a0",
+            "1.2.3b01",
+            "1.2.3rc0",
+            "1.2.3rc01",
+        ):
             with (
                 self.subTest(short_version=short_version),
                 self.assertRaisesRegex(
@@ -170,6 +215,92 @@ class SparkleAppcastTests(unittest.TestCase):
 
             with self.assertRaisesRegex(sparkle_appcast.AppcastError, "channel and short version disagree"):
                 sparkle_appcast.append_item(feed, Path(temp_dir) / "output.xml", item("144", "0.2.144", "rc"))
+
+    def test_rejects_alpha_beta_and_unknown_channel_mismatches(self) -> None:
+        cases = (
+            ("1.2.3a1", "beta"),
+            ("1.2.3b1", "alpha"),
+            ("1.2.3rc1", "beta"),
+            ("1.2.3", "nightly"),
+        )
+        for short_version, channel in cases:
+            with self.subTest(short_version=short_version, channel=channel), tempfile.TemporaryDirectory() as temp_dir:
+                feed = Path(temp_dir) / "appcast.xml"
+                make_empty_feed(feed)
+
+                with self.assertRaises(sparkle_appcast.AppcastError):
+                    sparkle_appcast.append_item(
+                        feed,
+                        Path(temp_dir) / "output.xml",
+                        item("144", short_version, channel),
+                    )
+
+    def test_rejects_empty_or_duplicate_channel_elements(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            empty_feed = root / "empty.xml"
+            feed = root / "appcast.xml"
+            make_empty_feed(empty_feed)
+            sparkle_appcast.append_item(empty_feed, feed, item("144", "1.2.3", None))
+
+            tree = ET.parse(feed)
+            appcast_item = tree.getroot().find("channel/item")
+            if appcast_item is None:
+                self.fail("Test appcast is missing its item")
+            ET.SubElement(appcast_item, f"{sparkle_appcast.SPARKLE}channel")
+            tree.write(feed, encoding="utf-8", xml_declaration=True)
+            with self.assertRaisesRegex(sparkle_appcast.AppcastError, "Unsupported Sparkle channel"):
+                sparkle_appcast.validate_appcast(feed)
+
+            ET.SubElement(appcast_item, f"{sparkle_appcast.SPARKLE}channel").text = "rc"
+            tree.write(feed, encoding="utf-8", xml_declaration=True)
+            with self.assertRaisesRegex(sparkle_appcast.AppcastError, "at most one"):
+                sparkle_appcast.validate_appcast(feed)
+
+    def test_rejects_retired_beta_releases_before_appcast_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            feed = Path(temp_dir) / "appcast.xml"
+            make_empty_feed(feed)
+
+            for short_version in ("0.3.0b1", "0.3.0b2"):
+                with (
+                    self.subTest(short_version=short_version),
+                    self.assertRaisesRegex(
+                        sparkle_appcast.AppcastError,
+                        "retired preview identity",
+                    ),
+                ):
+                    sparkle_appcast.append_item(
+                        feed,
+                        Path(temp_dir) / "output.xml",
+                        item("148", short_version, "beta"),
+                    )
+
+    def test_rejects_retired_tag_before_short_version_parsing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            empty_feed = root / "empty.xml"
+            feed = root / "appcast.xml"
+            make_empty_feed(empty_feed)
+            sparkle_appcast.append_item(empty_feed, feed, item("148", "1.2.3", None))
+            tree = ET.parse(feed)
+            appcast_item = tree.getroot().find("channel/item")
+            if appcast_item is None:
+                self.fail("Test appcast is missing its item")
+            short_version = appcast_item.find(f"{sparkle_appcast.SPARKLE}shortVersionString")
+            enclosure = appcast_item.find("enclosure")
+            if short_version is None or enclosure is None:
+                self.fail("Test appcast is missing version metadata")
+            short_version.text = "not-a-version"
+            enclosure.set(
+                "url",
+                "https://github.com/cbusillo/BD_to_AVP/releases/download/"
+                "v0.3.0-beta.1/3D-Blu-ray-to-Vision-Pro-0.3.0-beta.1.dmg",
+            )
+            tree.write(feed, encoding="utf-8", xml_declaration=True)
+
+            with self.assertRaisesRegex(sparkle_appcast.AppcastError, "retired preview identity"):
+                sparkle_appcast.validate_appcast(feed)
 
     def test_rejects_delta_enclosures(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -225,7 +356,21 @@ class SparkleAppcastTests(unittest.TestCase):
             feed = Path(temp_dir) / "appcast.xml"
             make_empty_feed(feed)
 
-            with self.assertRaisesRegex(sparkle_appcast.AppcastError, "derived from"):
+            with self.assertRaisesRegex(sparkle_appcast.AppcastError, "public tag mapped"):
+                sparkle_appcast.append_item(feed, Path(temp_dir) / "output.xml", invalid_item)
+
+    def test_rejects_dmg_name_using_internal_prerelease_syntax(self) -> None:
+        invalid_item = item(
+            "148",
+            "1.2.3b1",
+            "beta",
+            asset_name="3D-Blu-ray-to-Vision-Pro-1.2.3b1.dmg",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            feed = Path(temp_dir) / "appcast.xml"
+            make_empty_feed(feed)
+
+            with self.assertRaisesRegex(sparkle_appcast.AppcastError, "public DMG name mapped"):
                 sparkle_appcast.append_item(feed, Path(temp_dir) / "output.xml", invalid_item)
 
     def test_rejects_non_dmg_enclosure(self) -> None:
@@ -322,6 +467,54 @@ class SparkleAppcastTests(unittest.TestCase):
             sparkle_appcast.append_item(stable_feed, rc_feed, item("145", "0.2.144rc1", "rc"))
             sparkle_appcast.validate_appcast(rc_feed)
 
+    def test_accepts_immutable_compact_rc_history_without_emitting_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            empty_feed = root / "empty.xml"
+            feed = root / "appcast.xml"
+            make_empty_feed(empty_feed)
+            sparkle_appcast.append_item(empty_feed, feed, item("145", "0.2.143rc5", "rc"))
+            feed_text = feed.read_text(encoding="utf-8")
+            feed_text = feed_text.replace(
+                "3D-Blu-ray-to-Vision-Pro-0.2.143-rc.5.dmg",
+                "3D-Blu-ray-to-Vision-Pro-0.2.143rc5.dmg",
+            ).replace("v0.2.143-rc.5", "v0.2.143rc5")
+            feed.write_text(feed_text, encoding="utf-8")
+
+            sparkle_appcast.validate_appcast(feed)
+            sparkle_appcast.validate_release_tag_snapshot(feed, "v0.2.143rc5")
+
+            with self.assertRaisesRegex(sparkle_appcast.AppcastError, "public tag mapped"):
+                sparkle_appcast.append_item(
+                    empty_feed,
+                    root / "new.xml",
+                    item(
+                        "145",
+                        "0.2.143rc5",
+                        "rc",
+                        release_tag="v0.2.143rc5",
+                        asset_name="3D-Blu-ray-to-Vision-Pro-0.2.143rc5.dmg",
+                    ),
+                )
+
+    def test_rejects_mixed_canonical_and_legacy_rc_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            empty_feed = root / "empty.xml"
+            feed = root / "appcast.xml"
+            make_empty_feed(empty_feed)
+            sparkle_appcast.append_item(empty_feed, feed, item("145", "0.2.143rc5", "rc"))
+            feed.write_text(
+                feed.read_text(encoding="utf-8").replace(
+                    "3D-Blu-ray-to-Vision-Pro-0.2.143-rc.5.dmg",
+                    "3D-Blu-ray-to-Vision-Pro-0.2.143rc5.dmg",
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(sparkle_appcast.AppcastError, "public DMG name mapped"):
+                sparkle_appcast.validate_appcast(feed)
+
     def test_rejects_ambiguous_embedded_and_external_release_notes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -388,8 +581,11 @@ class SparkleAppcastTests(unittest.TestCase):
             sparkle_appcast.append_item(stable_feed, rc_feed, item("145", "0.2.144rc1", "rc"))
 
             sparkle_appcast.validate_release_snapshot(rc_feed, "0.2.144rc1")
+            sparkle_appcast.validate_release_tag_snapshot(rc_feed, "v0.2.144-rc.1")
             with self.assertRaisesRegex(sparkle_appcast.AppcastError, "must start"):
                 sparkle_appcast.validate_release_snapshot(rc_feed, "0.2.143")
+            with self.assertRaisesRegex(sparkle_appcast.AppcastError, "must start"):
+                sparkle_appcast.validate_release_tag_snapshot(rc_feed, "v0.2.143")
 
 
 if __name__ == "__main__":

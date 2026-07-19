@@ -131,26 +131,42 @@ class ReleaseMetadataTests(unittest.TestCase):
         metadata = release.load_release_metadata()
 
         self.assertEqual(metadata.package_version, "0.3.0rc1")
+        self.assertEqual(metadata.public_version, "0.3.0-rc.1")
         self.assertEqual(metadata.build_version, "147")
-        self.assertEqual(metadata.release_tag, "v0.3.0rc1")
-        self.assertEqual(metadata.release_name, "v0.3.0rc1")
+        self.assertEqual(metadata.release_tag, "v0.3.0-rc.1")
+        self.assertEqual(metadata.release_name, "v0.3.0-rc.1")
+        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.1.dmg")
         self.assertEqual(metadata.channel, "rc")
         self.assertTrue(metadata.prerelease)
         self.assertFalse(metadata.make_latest)
         self.assertFalse(metadata.publish_pypi)
 
-    def test_metadata_derives_release_policy_from_committed_version(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            pyproject_path, lock_path = make_release_files(Path(temp_dir), version="1.2.4rc2", build="11")
+    def test_metadata_maps_internal_versions_to_public_release_identity(self) -> None:
+        cases = (
+            ("1.2.4a1", "1.2.4-alpha.1", "alpha", True),
+            ("1.2.4b2", "1.2.4-beta.2", "beta", True),
+            ("1.2.4rc3", "1.2.4-rc.3", "rc", True),
+            ("1.2.4", "1.2.4", "stable", False),
+        )
+        for package_version, public_version, channel, prerelease in cases:
+            with self.subTest(package_version=package_version), tempfile.TemporaryDirectory() as temp_dir:
+                pyproject_path, lock_path = make_release_files(
+                    Path(temp_dir),
+                    version=package_version,
+                    build="11",
+                )
 
-            metadata = release.load_release_metadata(pyproject_path, lock_path)
+                metadata = release.load_release_metadata(pyproject_path, lock_path)
 
-        self.assertEqual(metadata.release_tag, "v1.2.4rc2")
-        self.assertEqual(metadata.release_name, "v1.2.4rc2")
-        self.assertEqual(metadata.channel, "rc")
-        self.assertTrue(metadata.prerelease)
-        self.assertFalse(metadata.make_latest)
-        self.assertFalse(metadata.publish_pypi)
+            self.assertEqual(metadata.package_version, package_version)
+            self.assertEqual(metadata.public_version, public_version)
+            self.assertEqual(metadata.release_tag, f"v{public_version}")
+            self.assertEqual(metadata.release_name, f"v{public_version}")
+            self.assertEqual(metadata.dmg_name, f"3D-Blu-ray-to-Vision-Pro-{public_version}.dmg")
+            self.assertEqual(metadata.channel, channel)
+            self.assertEqual(metadata.prerelease, prerelease)
+            self.assertEqual(metadata.make_latest, not prerelease)
+            self.assertEqual(metadata.publish_pypi, not prerelease)
 
     def test_metadata_rejects_lockfile_version_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -175,9 +191,33 @@ class ReleaseMetadataTests(unittest.TestCase):
                 release.load_release_metadata(pyproject_path, lock_path, macos_project_path)
 
     def test_metadata_rejects_noncanonical_release_versions(self) -> None:
-        for value in ("1.2", "1.2.3.post1", "01.2.3", "1.2.3RC1"):
+        for value in (
+            "1.2",
+            "1.2.3.post1",
+            "01.2.3",
+            "1.2.3RC1",
+            "1.2.3a0",
+            "1.2.3b01",
+            "1.2.3rc0",
+        ):
             with self.subTest(value=value), self.assertRaises(release.ReleaseError):
                 release.parse_release_version(value)
+
+    def test_release_tags_use_public_syntax_and_accept_legacy_rc_history(self) -> None:
+        self.assertEqual(release.parse_release_tag("v1.2.3-alpha.1").text, "1.2.3a1")
+        self.assertEqual(release.parse_release_tag("v1.2.3-beta.2").text, "1.2.3b2")
+        self.assertEqual(release.parse_release_tag("v1.2.3-rc.3").text, "1.2.3rc3")
+        self.assertEqual(release.parse_release_tag("v0.2.143rc5").text, "0.2.143rc5")
+        with self.assertRaises(release.ReleaseError):
+            release.parse_release_tag("v1.2.3rc3", allow_legacy_rc=False)
+
+    def test_metadata_rejects_retired_preview_versions(self) -> None:
+        for version in ("0.3.0b1", "0.3.0b2"):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temp_dir:
+                pyproject_path, lock_path = make_release_files(Path(temp_dir), version=version)
+
+                with self.assertRaisesRegex(release.ReleaseError, "retired preview identity"):
+                    release.load_release_metadata(pyproject_path, lock_path)
 
 
 class ReleaseNotesBaseTests(unittest.TestCase):
@@ -206,20 +246,20 @@ class ReleaseNotesBaseTests(unittest.TestCase):
     def test_rc_uses_latest_published_ancestor(self) -> None:
         history = [
             published_release("v1.2.3"),
-            published_release("v1.2.4rc1", prerelease=True),
-            published_release("v1.2.4rc2", prerelease=True),
+            published_release("v1.2.4-rc.1", prerelease=True),
+            published_release("v1.2.4-rc.2", prerelease=True),
         ]
-        ancestors = {"v1.2.3", "v1.2.4rc1"}
+        ancestors = {"v1.2.3", "v1.2.4-rc.1"}
 
         selected = release.select_release_notes_base(
-            "v1.2.4rc3",
+            "v1.2.4-rc.3",
             history,
             "rc-head",
             tag_exists=lambda _tag_name: True,
             is_ancestor=lambda tag_name, _head_ref: tag_name in ancestors,
         )
 
-        self.assertEqual(selected, "v1.2.4rc1")
+        self.assertEqual(selected, "v1.2.4-rc.1")
 
     def test_first_rc_after_stable_uses_stable_ancestor(self) -> None:
         history = [
@@ -228,7 +268,7 @@ class ReleaseNotesBaseTests(unittest.TestCase):
         ]
 
         selected = release.select_release_notes_base(
-            "v1.2.4rc1",
+            "v1.2.4-rc.1",
             history,
             "rc-head",
             tag_exists=lambda _tag_name: True,
@@ -236,6 +276,25 @@ class ReleaseNotesBaseTests(unittest.TestCase):
         )
 
         self.assertEqual(selected, "v1.2.3")
+
+    def test_prerelease_history_excludes_retired_preview_tags_before_ordering(self) -> None:
+        history = [
+            published_release("v0.2.143"),
+            published_release("native-ui-preview-1", prerelease=True),
+            published_release("v0.3.0-beta.1", prerelease=True),
+            published_release("v0.3.0-beta.2", prerelease=True),
+            published_release("v0.3.0-beta.2", prerelease=True),
+        ]
+
+        selected = release.select_release_notes_base(
+            "v0.3.0-beta.3",
+            history,
+            "beta-head",
+            tag_exists=lambda tag_name: tag_name == "v0.2.143",
+            is_ancestor=lambda tag_name, _head_ref: tag_name == "v0.2.143",
+        )
+
+        self.assertEqual(selected, "v0.2.143")
 
     def test_selection_ignores_drafts_and_non_project_tags(self) -> None:
         history = [
@@ -375,35 +434,51 @@ class ReleasePreparationTests(unittest.TestCase):
                     lock_runner=fake_lock_runner,
                 )
 
-    def test_prepare_supports_rc_to_rc_to_stable_but_not_back_to_rc(self) -> None:
+    def test_prepare_supports_forward_alpha_beta_rc_stable_train(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             pyproject_path, lock_path = make_release_files(
                 Path(temp_dir),
-                version="1.2.4rc1",
+                version="1.2.4a1",
                 build="11",
             )
 
-            rc2 = release.prepare_release(
-                "1.2.4rc2",
+            alpha2 = release.prepare_release(
+                "1.2.4a2",
                 "12",
+                pyproject_path=pyproject_path,
+                lock_path=lock_path,
+                lock_runner=fake_lock_runner,
+            )
+            beta1 = release.prepare_release(
+                "1.2.4b1",
+                "13",
+                pyproject_path=pyproject_path,
+                lock_path=lock_path,
+                lock_runner=fake_lock_runner,
+            )
+            rc1 = release.prepare_release(
+                "1.2.4rc1",
+                "14",
                 pyproject_path=pyproject_path,
                 lock_path=lock_path,
                 lock_runner=fake_lock_runner,
             )
             stable = release.prepare_release(
                 "1.2.4",
-                "13",
+                "15",
                 pyproject_path=pyproject_path,
                 lock_path=lock_path,
                 lock_runner=fake_lock_runner,
             )
 
-            self.assertEqual(rc2.package_version, "1.2.4rc2")
+            self.assertEqual(alpha2.public_version, "1.2.4-alpha.2")
+            self.assertEqual(beta1.public_version, "1.2.4-beta.1")
+            self.assertEqual(rc1.public_version, "1.2.4-rc.1")
             self.assertEqual(stable.package_version, "1.2.4")
             with self.assertRaisesRegex(release.ReleaseError, "must be newer"):
                 release.prepare_release(
-                    "1.2.4rc3",
-                    "14",
+                    "1.2.4a3",
+                    "16",
                     pyproject_path=pyproject_path,
                     lock_path=lock_path,
                     lock_runner=fake_lock_runner,

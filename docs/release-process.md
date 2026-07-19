@@ -6,12 +6,14 @@ boundary, and publication policy are defined in
 
 The next planned production-identity field build is `v0.3.0-beta.3`, internal
 version `0.3.0b3`, build `148`. The committed `0.3.0rc1` build `147` attempt
-failed before publication and its build number is permanently burned. Issue
-#293 owns the focused recovery and Beta 3 cut packet.
+failed before publication and its build number is permanently burned. The
+focused recovery and Beta 3 cut packet are owned by issue #293.
 
-The current release implementation still supports only Stable and RC. Do not
-prepare or dispatch Alpha or Beta until #289 through #293 have implemented and
-validated the four-route contract.
+Issue #289 implements the four-route updater preference, release metadata,
+production-history filtering, and appcast validation described here. The
+guarded Stable/Prerelease entrypoints and Beta 3 recovery/bootstrap remain owned
+by issues #290, #291, #292, and #293, so Alpha and Beta preparation and dispatch
+stay blocked until those gates and the focused signed-install smoke have landed.
 
 ## Release Preparation
 
@@ -24,8 +26,12 @@ uv run python scripts/release.py prepare \
   --build <next-global-build>
 ```
 
-The internal version, public tag/title, release stage, Sparkle channel, and
-publication effects must match the mapping in `release-routes.md`. The numeric
+The internal version, public version, tag/title, DMG name, release stage,
+Sparkle channel, and publication effects are derived independently by
+`scripts/release.py metadata` from the mapping in `release-routes.md`. For
+example, internal `0.3.0b3` maps to public `0.3.0-beta.3`, tag/title
+`v0.3.0-beta.3`, and DMG
+`3D-Blu-ray-to-Vision-Pro-0.3.0-beta.3.dmg`. The numeric
 `CFBundleVersion` must increase for every production-identity build across all
 routes, including failed unpublished attempts. The command stages a refreshed
 `uv.lock`, validates the staged metadata, and updates `pyproject.toml`,
@@ -50,11 +56,13 @@ or from a stale main commit.
 > `scripts/release.py metadata` reports the reviewed `0.3.0b3` build `148`
 > target. Publishing build `147` is prohibited.
 
-Dispatch `Release from protected main` from `main`. The only optional input is
-release-note text; the committed project version determines RC versus Stable,
-the release tag, latest-release behavior, Sparkle channel, and whether PyPI is
-published. The GitHub Release title is the exact version tag so narrow release
-lists keep the distinguishing version visible.
+Dispatch `Release from protected main` from `main` only when the release freeze
+above has been lifted. The only optional input is release-note text; the
+committed project version determines Alpha, Beta, RC, or Stable metadata, the
+separate public release tag/title and DMG name, latest-release behavior, Sparkle
+channel, and whether PyPI is published. The GitHub Release title is the exact
+public version tag so narrow release lists keep the distinguishing version
+visible.
 
 The workflow must be dispatched and rerun through the configured
 `shiny-code-bot` automation identity. The required approver is `cbusillo`, and
@@ -154,14 +162,15 @@ The workflow performs these ordered boundaries:
    The release body is hashed again immediately before and after publication so
    edits cannot silently diverge from the updater notes. Stable releases then
    publish separately built Python distributions through PyPI Trusted
-   Publishing with PEP 740 attestations; RC releases never publish to PyPI.
+   Publishing with PEP 740 attestations; Alpha, Beta, and RC releases never
+   publish to PyPI.
 9. Deploy the durable `appcast.xml` release asset to GitHub Pages. A deployment
    failure can be retried without rebuilding, retagging, or re-signing.
 10. The separate `cbusillo/homebrew-tap` repository checks the latest stable
    GitHub Release on a schedule and by manual dispatch. Homebrew opens a formula
    update pull request when the version changes; tap CI must pass formula audit,
-   source installation, command tests, and linkage checks before merge. RC
-   releases do not update the formula.
+   source installation, command tests, and linkage checks before merge.
+   Prereleases do not update the formula.
 
 For Stable releases, PyPI publication, Sparkle Pages deployment, and the
 Homebrew tap update are independent post-publication jobs. Each channel can be
