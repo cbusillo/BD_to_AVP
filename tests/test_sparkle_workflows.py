@@ -499,6 +499,8 @@ esac
         self.assertIn("Verify Python distribution transfer", str(publish))
         self.assertIn("shasum -a 256 --check SHA256SUMS", str(publish))
         self.assertIn("PYTHON_ARTIFACT_DIGEST", str(publish))
+        self.assertIn("git/ref/heads/main", str(publish))
+        self.assertIn("Protected main moved before PyPI publication", str(publish))
         self.assertIn("actions/artifacts/$PYTHON_ARTIFACT_ID", str(publish))
         self.assertIn("sha256:$PYTHON_ARTIFACT_DIGEST", str(publish))
         download = next(step for step in publish["steps"] if "actions/download-artifact@" in step.get("uses", ""))

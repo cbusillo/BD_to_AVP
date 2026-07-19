@@ -170,9 +170,9 @@ The workflow performs these ordered boundaries:
 9. Deploy the durable `appcast.xml` release asset to GitHub Pages. A deployment
    failure can be retried without rebuilding, retagging, or re-signing.
 10. After the complete reusable engine succeeds, the Stable operator
-    revalidates the operator/engine policy evidence, GitHub artifact digest, and
-    every distribution checksum, then publishes through the pinned PyPI Trusted
-    Publisher with PEP 740 attestations. The publisher remains in
+    revalidates the current protected-main SHA, operator/engine policy evidence,
+    GitHub artifact digest, and every distribution checksum, then publishes
+    through the pinned PyPI Trusted Publisher with PEP 740 attestations. The publisher remains in
     `briefcase.yml` and the `pypi` environment so its existing OIDC identity does
     not change.
 11. The separate `cbusillo/homebrew-tap` repository checks the latest stable

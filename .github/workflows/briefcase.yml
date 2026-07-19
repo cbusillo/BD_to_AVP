@@ -85,6 +85,11 @@ jobs:
           case "$PYTHON_ARTIFACT_ID" in
             (*[!0-9]*|'') echo "Invalid Python artifact ID." >&2; exit 1 ;;
           esac
+          MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [ "$MAIN_SHA" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved before PyPI publication." >&2
+            exit 1
+          fi
           ARTIFACT_DIGEST=$(gh api \
             "repos/$GITHUB_REPOSITORY/actions/artifacts/$PYTHON_ARTIFACT_ID" \
             --jq .digest)
