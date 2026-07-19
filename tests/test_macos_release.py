@@ -206,7 +206,7 @@ class MacOSReleaseArtifactTests(unittest.TestCase):
 
 class MacOSReleaseWorkflowTests(unittest.TestCase):
     def test_production_workflow_owns_macos_packaging_and_compatibility(self) -> None:
-        workflow_path = REPO_ROOT / ".github" / "workflows" / "briefcase.yml"
+        workflow_path = REPO_ROOT / ".github" / "workflows" / "release-engine.yml"
         workflow = yaml.load(workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
         package = workflow["jobs"]["package"]
         compatibility = workflow["jobs"]["compatibility"]

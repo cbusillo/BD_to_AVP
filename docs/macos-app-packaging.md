@@ -99,12 +99,16 @@ clients cannot yet select Beta or Alpha.
 
 ## Release Workflow
 
-`.github/workflows/briefcase.yml` remains the current production workflow and
-the Stable/PyPI trusted-publisher identity. Issues #290 and #291 extract one
-shared release engine and add a separate Prerelease entry without duplicating
-signing, appcast, attestation, or approval logic.
+`.github/workflows/briefcase.yml` remains the Stable operator and PyPI
+trusted-publisher identity. It owns the single repository-wide `release`
+concurrency lock and calls `.github/workflows/release-engine.yml`, which owns the
+shared packaging, signing, notarization, appcast, attestation, publication, and
+cleanup path. The reusable engine binds its OIDC `job_workflow_ref` and
+`job_workflow_sha` claims to the exact operator run, then revalidates that policy
+fingerprint after the `macos-signing` approval gate. Issue #291 can add the
+Prerelease operator without duplicating those boundaries.
 
-The package job runs on GitHub's Apple-Silicon `macos-26` runner. It selects
+The engine's package job runs on GitHub's Apple-Silicon `macos-26` runner. It selects
 Xcode 26.5 build `17F42` explicitly and installs the XcodeGen 2.45.4 release
 artifact only after verifying its committed SHA-256 digest. It:
 
@@ -116,12 +120,14 @@ artifact only after verifying its committed SHA-256 digest. It:
    bundled tools, and worker execution; and
 6. uploads the exact DMG and `SHA256SUMS` for GitHub-hosted attestation.
 
-A separate `macos-26` job downloads that exact notarized artifact and repeats
+A separate engine-owned `macos-26` job downloads that exact notarized artifact and repeats
 checksum, Gatekeeper, startup, bundled-tool, and worker validation before a
-draft GitHub Release can be created. The existing downstream jobs then build
-the channel-aware appcast, re-download and verify every release boundary,
-publish the GitHub Release, optionally publish stable Python distributions, and
-deploy the durable feed snapshot.
+draft GitHub Release can be created. The engine's downstream jobs then build the
+channel-aware appcast, re-download and verify every release boundary, publish
+the GitHub Release, and deploy the durable feed snapshot. Stable Python
+distributions return to the `briefcase.yml` caller by immutable artifact ID,
+GitHub-recorded digest, and checksum manifest; the caller verifies that boundary
+before invoking the pinned PyPI publisher in the existing `pypi` environment.
 
 ## Historical Prereleases
 

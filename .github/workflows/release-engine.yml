@@ -1,0 +1,1800 @@
+---
+name: Signed release engine
+
+"on":
+  workflow_call:
+    inputs:
+      release_notes:
+        description: Optional notes prepended to the generated GitHub release notes
+        required: false
+        type: string
+      release_sha:
+        description: Exact protected-main commit authorized by the operator entry
+        required: true
+        type: string
+      operator_workflow_ref:
+        description: Fully qualified operator workflow ref from the caller context
+        required: true
+        type: string
+      operator_workflow_sha:
+        description: Commit containing the operator workflow definition
+        required: true
+        type: string
+      operator_run_id:
+        description: Operator workflow run ID
+        required: true
+        type: string
+      operator_run_attempt:
+        description: Operator workflow run attempt
+        required: true
+        type: string
+      operator_actor:
+        description: Account that dispatched the operator workflow
+        required: true
+        type: string
+      operator_triggering_actor:
+        description: Account that triggered this run attempt
+        required: true
+        type: string
+    outputs:
+      package_version:
+        description: Validated Python package version
+        value: ${{ jobs.prepare.outputs.package_version }}
+      public_version:
+        description: Validated public release version
+        value: ${{ jobs.prepare.outputs.public_version }}
+      build_version:
+        description: Validated global application build number
+        value: ${{ jobs.prepare.outputs.build_version }}
+      release_tag:
+        description: Validated public release tag
+        value: ${{ jobs.prepare.outputs.release_tag }}
+      release_name:
+        description: Validated public release title
+        value: ${{ jobs.prepare.outputs.release_name }}
+      dmg_name:
+        description: Validated public DMG asset name
+        value: ${{ jobs.prepare.outputs.dmg_name }}
+      channel:
+        description: Validated Sparkle release channel
+        value: ${{ jobs.prepare.outputs.channel }}
+      prerelease:
+        description: Whether the release is a GitHub prerelease
+        value: ${{ jobs.prepare.outputs.prerelease }}
+      make_latest:
+        description: GitHub latest-release policy
+        value: ${{ jobs.prepare.outputs.make_latest }}
+      publish_pypi:
+        description: Whether the Stable operator must publish to PyPI
+        value: ${{ jobs.prepare.outputs.publish_pypi }}
+      python_artifact_digest:
+        description: GitHub artifact digest for the checksummed Python distributions
+        value: ${{ jobs.build-python.outputs.artifact_digest }}
+      python_artifact_id:
+        description: Immutable GitHub artifact ID for the checksummed Python distributions
+        value: ${{ jobs.build-python.outputs.artifact_id }}
+      release_policy_fingerprint:
+        description: Fingerprint binding the operator run to this engine execution
+        value: ${{ jobs.policy.outputs.policy_fingerprint }}
+      operator_workflow_ref:
+        description: Validated operator workflow ref
+        value: ${{ jobs.policy.outputs.operator_workflow_ref }}
+      operator_workflow_sha:
+        description: Validated operator workflow definition commit
+        value: ${{ jobs.policy.outputs.operator_workflow_sha }}
+      engine_workflow_ref:
+        description: Validated reusable engine workflow ref
+        value: ${{ jobs.policy.outputs.engine_workflow_ref }}
+      engine_workflow_sha:
+        description: Validated reusable engine workflow definition commit
+        value: ${{ jobs.policy.outputs.engine_workflow_sha }}
+      release_sha:
+        description: Validated protected-main release commit
+        value: ${{ jobs.policy.outputs.release_sha }}
+
+permissions:
+  contents: read
+
+env:
+  GH_REPO: ${{ github.repository }}
+  XCODEGEN_VERSION: 2.45.4
+  XCODEGEN_SHA256: 090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef
+  XCODE_VERSION: "26.5"
+  XCODE_BUILD_VERSION: 17F42
+
+jobs:
+  policy:
+    name: Bind operator and reusable workflow identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      policy_fingerprint: ${{ steps.policy.outputs.policy_fingerprint }}
+      operator_workflow_ref: ${{ steps.policy.outputs.operator_workflow_ref }}
+      operator_workflow_sha: ${{ steps.policy.outputs.operator_workflow_sha }}
+      engine_workflow_ref: ${{ steps.policy.outputs.engine_workflow_ref }}
+      engine_workflow_sha: ${{ steps.policy.outputs.engine_workflow_sha }}
+      release_sha: ${{ steps.policy.outputs.release_sha }}
+    steps:
+      - name: Require the protected Stable operator context
+        env:
+          ACTUAL_REPOSITORY: ${{ github.repository }}
+          ACTUAL_EVENT_NAME: ${{ github.event_name }}
+          ACTUAL_REF: ${{ github.ref }}
+          ACTUAL_SHA: ${{ github.sha }}
+          ACTUAL_OPERATOR_WORKFLOW_REF: ${{ github.workflow_ref }}
+          ACTUAL_OPERATOR_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          ACTUAL_RUN_ID: ${{ github.run_id }}
+          ACTUAL_RUN_ATTEMPT: ${{ github.run_attempt }}
+          ACTUAL_ACTOR: ${{ github.actor }}
+          ACTUAL_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          INPUT_RELEASE_SHA: ${{ inputs.release_sha }}
+          INPUT_OPERATOR_WORKFLOW_REF: ${{ inputs.operator_workflow_ref }}
+          INPUT_OPERATOR_WORKFLOW_SHA: ${{ inputs.operator_workflow_sha }}
+          INPUT_OPERATOR_RUN_ID: ${{ inputs.operator_run_id }}
+          INPUT_OPERATOR_RUN_ATTEMPT: ${{ inputs.operator_run_attempt }}
+          INPUT_OPERATOR_ACTOR: ${{ inputs.operator_actor }}
+          INPUT_OPERATOR_TRIGGERING_ACTOR: ${{ inputs.operator_triggering_actor }}
+        run: |
+          set -euo pipefail
+          EXPECTED_OPERATOR_REF="cbusillo/BD_to_AVP/.github/workflows/briefcase.yml@refs/heads/main"
+          test "$ACTUAL_REPOSITORY" = "cbusillo/BD_to_AVP"
+          test "$ACTUAL_EVENT_NAME" = "workflow_dispatch"
+          test "$ACTUAL_REF" = "refs/heads/main"
+          test "$ACTUAL_OPERATOR_WORKFLOW_REF" = "$EXPECTED_OPERATOR_REF"
+          test "$ACTUAL_OPERATOR_WORKFLOW_SHA" = "$ACTUAL_SHA"
+          test "$ACTUAL_ACTOR" = "shiny-code-bot"
+          test "$ACTUAL_TRIGGERING_ACTOR" = "shiny-code-bot"
+          test "$INPUT_RELEASE_SHA" = "$ACTUAL_SHA"
+          test "$INPUT_OPERATOR_WORKFLOW_REF" = "$ACTUAL_OPERATOR_WORKFLOW_REF"
+          test "$INPUT_OPERATOR_WORKFLOW_SHA" = "$ACTUAL_OPERATOR_WORKFLOW_SHA"
+          test "$INPUT_OPERATOR_RUN_ID" = "$ACTUAL_RUN_ID"
+          test "$INPUT_OPERATOR_RUN_ATTEMPT" = "$ACTUAL_RUN_ATTEMPT"
+          test "$INPUT_OPERATOR_ACTOR" = "$ACTUAL_ACTOR"
+          test "$INPUT_OPERATOR_TRIGGERING_ACTOR" = "$ACTUAL_TRIGGERING_ACTOR"
+
+      - name: Checkout release policy from the authorized commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Reject direct invocation or operator policy bypass
+        id: policy
+        env:
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_EVENT_NAME: ${{ github.event_name }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_OPERATOR_WORKFLOW_REF: ${{ github.workflow_ref }}
+          RELEASE_OPERATOR_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RELEASE_RUN_ID: ${{ github.run_id }}
+          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELEASE_ACTOR: ${{ github.actor }}
+          RELEASE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          INPUT_RELEASE_SHA: ${{ inputs.release_sha }}
+          INPUT_OPERATOR_WORKFLOW_REF: ${{ inputs.operator_workflow_ref }}
+          INPUT_OPERATOR_WORKFLOW_SHA: ${{ inputs.operator_workflow_sha }}
+          INPUT_OPERATOR_RUN_ID: ${{ inputs.operator_run_id }}
+          INPUT_OPERATOR_RUN_ATTEMPT: ${{ inputs.operator_run_attempt }}
+          INPUT_OPERATOR_ACTOR: ${{ inputs.operator_actor }}
+          INPUT_OPERATOR_TRIGGERING_ACTOR: ${{ inputs.operator_triggering_actor }}
+        run: python3 scripts/release_workflow_policy.py engine --github-output "$GITHUB_OUTPUT"
+
+  prepare:
+    name: Validate release source and metadata
+    needs: policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      package_version: ${{ steps.metadata.outputs.package_version }}
+      public_version: ${{ steps.metadata.outputs.public_version }}
+      build_version: ${{ steps.metadata.outputs.build_version }}
+      release_tag: ${{ steps.metadata.outputs.release_tag }}
+      release_name: ${{ steps.metadata.outputs.release_name }}
+      dmg_name: ${{ steps.metadata.outputs.dmg_name }}
+      channel: ${{ steps.metadata.outputs.channel }}
+      prerelease: ${{ steps.metadata.outputs.prerelease }}
+      make_latest: ${{ steps.metadata.outputs.make_latest }}
+      publish_pypi: ${{ steps.metadata.outputs.publish_pypi }}
+      previous_release_tag: ${{ steps.release_history.outputs.previous_release_tag }}
+      base_snapshot_tag: ${{ steps.feed_state.outputs.base_snapshot_tag }}
+    steps:
+      - name: Checkout dispatch commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Require the current protected main commit
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Releases must be dispatched from protected main." >&2
+            exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" != "$EXPECTED_SHA" ]; then
+            echo "Checkout does not match github.sha." >&2
+            exit 1
+          fi
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$EXPECTED_SHA" ]; then
+            echo "The dispatch commit is no longer the current main HEAD." >&2
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Derive committed release metadata
+        id: metadata
+        run: python scripts/release.py metadata --github-output "$GITHUB_OUTPUT"
+
+      - name: Reject existing release identity
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ steps.metadata.outputs.prerelease }}
+          RELEASE_NAME: ${{ steps.metadata.outputs.release_name }}
+          RELEASE_TAG: ${{ steps.metadata.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          TAG_REFS=$(git ls-remote --tags origin \
+            "refs/tags/$RELEASE_TAG" \
+            "refs/tags/$RELEASE_TAG^{}")
+          TAG_SHA=$(awk '
+            $2 ~ /\^\{\}$/ { peeled = $1 }
+            $2 !~ /\^\{\}$/ { direct = $1 }
+            END { print peeled != "" ? peeled : direct }
+          ' <<< "$TAG_REFS")
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --paginate --slurp > release-identities.json
+          RELEASE_COUNT=$(jq -r --arg tag "$RELEASE_TAG" \
+            '[.[][] | select(.tag_name == $tag)] | length' \
+            release-identities.json)
+          if [ "$RELEASE_COUNT" = "0" ]; then
+            if [ -n "$TAG_SHA" ]; then
+              echo "Release tag already exists without a resumable draft: $RELEASE_TAG" >&2
+              exit 1
+            fi
+          elif [ "$RELEASE_COUNT" = "1" ]; then
+            RELEASE_JSON=$(jq -c --arg tag "$RELEASE_TAG" \
+              '.[][] | select(.tag_name == $tag)' \
+              release-identities.json)
+            if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ] \
+              || [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$EXPECTED_SHA" ] \
+              || [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "$PRERELEASE" ] \
+              || [ "$(jq -r .name <<< "$RELEASE_JSON")" != "$RELEASE_NAME" ]; then
+              echo "Existing release cannot be safely resumed: $RELEASE_TAG" >&2
+              exit 1
+            fi
+            if [ -n "$TAG_SHA" ] && [ "$TAG_SHA" != "$EXPECTED_SHA" ]; then
+              echo "Existing draft tag does not target the dispatch commit." >&2
+              exit 1
+            fi
+          else
+            echo "Multiple GitHub Releases use tag $RELEASE_TAG." >&2
+            exit 1
+          fi
+
+      - name: Resolve channel-aware base for generated notes
+        id: release_history
+        env:
+          RELEASE_TAG: ${{ steps.metadata.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          python scripts/release.py notes-base \
+            --release-tag "$RELEASE_TAG" \
+            --releases-json release-identities.json \
+            --head-ref "$GITHUB_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Resolve active and durable appcast state
+        id: feed_state
+        env:
+          BUILD_VERSION: ${{ steps.metadata.outputs.build_version }}
+          GH_TOKEN: ${{ github.token }}
+          SHORT_VERSION: ${{ steps.metadata.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-preflight/active release-preflight/latest
+
+          fetch_url() {
+            local url="$1"
+            local output="$2"
+            local status
+            local exit_code
+            set +e
+            status=$(curl --location --silent --show-error \
+              --retry 3 --retry-delay 2 --retry-all-errors \
+              --connect-timeout 10 --max-time 45 \
+              --output "$output" --write-out '%{http_code}' "$url")
+            exit_code=$?
+            set -e
+            if [ "$exit_code" -ne 0 ]; then
+              rm -f "$output"
+              printf '000\n'
+            else
+              printf '%s\n' "$status"
+            fi
+          }
+
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --paginate --slurp > release-preflight/releases.json
+          LATEST_SNAPSHOT_TAG=$(jq -r '
+            [
+              .[][]
+              | select(.draft == false)
+              | select(any(.assets[]?; .name == "appcast.xml"))
+            ]
+            | sort_by(.published_at)
+            | reverse
+            | .[0].tag_name // empty
+          ' release-preflight/releases.json)
+
+          CACHE_KEY="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          STATE_STATUS=$(fetch_url \
+            "https://cbusillo.github.io/BD_to_AVP/appcast-state.json?run=$CACHE_KEY" \
+            release-preflight/appcast-state.json)
+          if [ "$STATE_STATUS" = "200" ]; then
+            if ! jq -e '
+              type == "object"
+              and .schema == 1
+              and (
+                .status == "disabled"
+                or (
+                  .status == "enabled"
+                  and (.release_tag | type == "string")
+                  and (.appcast_sha256 | test("^[0-9a-f]{64}$"))
+                )
+              )
+            ' release-preflight/appcast-state.json >/dev/null; then
+              echo "Published Sparkle state is invalid; restore a known-good snapshot." >&2
+              exit 1
+            fi
+            if [ "$(jq -r .status release-preflight/appcast-state.json)" = "disabled" ]; then
+              echo "Sparkle updates are disabled; restore a known-good snapshot before releasing." >&2
+              exit 1
+            fi
+
+            BASE_SNAPSHOT_TAG=$(jq -r .release_tag release-preflight/appcast-state.json)
+            STATE_APPCAST_SHA256=$(jq -r .appcast_sha256 release-preflight/appcast-state.json)
+            python scripts/release.py validate-tag "$BASE_SNAPSHOT_TAG" >/dev/null
+            BASE_RELEASE_COUNT=$(jq -r --arg tag "$BASE_SNAPSHOT_TAG" '
+              [
+                .[][]
+                | select(.draft == false and .tag_name == $tag)
+                | select(any(.assets[]?; .name == "appcast.xml"))
+              ]
+              | length
+            ' release-preflight/releases.json)
+            if [ "$BASE_RELEASE_COUNT" != "1" ]; then
+              echo "Published Sparkle state does not name one durable release snapshot." >&2
+              exit 1
+            fi
+            gh release download "$BASE_SNAPSHOT_TAG" \
+              --pattern appcast.xml \
+              --dir release-preflight/active
+            python scripts/sparkle_appcast.py validate-snapshot \
+              --feed release-preflight/active/appcast.xml \
+              --release-tag "$BASE_SNAPSHOT_TAG"
+            ACTIVE_SHA256=$(sha256sum release-preflight/active/appcast.xml | awk '{print $1}')
+            if [ "$ACTIVE_SHA256" != "$STATE_APPCAST_SHA256" ]; then
+              echo "Published Sparkle state digest differs from its durable snapshot." >&2
+              exit 1
+            fi
+
+            LIVE_STATUS=$(fetch_url \
+              "https://cbusillo.github.io/BD_to_AVP/appcast.xml?run=$CACHE_KEY" \
+              release-preflight/live-appcast.xml)
+            if [ "$LIVE_STATUS" != "200" ]; then
+              echo "Unable to verify the active Sparkle feed; HTTP $LIVE_STATUS." >&2
+              exit 1
+            fi
+            python scripts/sparkle_appcast.py validate \
+              --feed release-preflight/live-appcast.xml
+            LIVE_SHA256=$(sha256sum release-preflight/live-appcast.xml | awk '{print $1}')
+            if [ "$LIVE_SHA256" != "$STATE_APPCAST_SHA256" ]; then
+              echo "Live Sparkle feed differs from the active durable snapshot." >&2
+              exit 1
+            fi
+          elif [ "$STATE_STATUS" = "404" ]; then
+            if [ -n "$LATEST_SNAPSHOT_TAG" ]; then
+              echo "Sparkle state is missing despite durable snapshots; restore one before releasing." >&2
+              exit 1
+            fi
+            BASE_SNAPSHOT_TAG=bootstrap
+            LIVE_STATUS=$(fetch_url \
+              "https://cbusillo.github.io/BD_to_AVP/appcast.xml?run=$CACHE_KEY" \
+              release-preflight/active/appcast.xml)
+            if [ "$LIVE_STATUS" = "200" ]; then
+              python scripts/sparkle_appcast.py validate-empty \
+                --feed release-preflight/active/appcast.xml
+            elif [ "$LIVE_STATUS" = "404" ]; then
+              cp sparkle-feed/appcast.xml release-preflight/active/appcast.xml
+            else
+              echo "Unable to verify bootstrap Sparkle feed; HTTP $LIVE_STATUS." >&2
+              exit 1
+            fi
+          else
+            echo "Unable to verify Sparkle deployment state; HTTP $STATE_STATUS." >&2
+            exit 1
+          fi
+
+          python scripts/sparkle_appcast.py check-release \
+            --feed release-preflight/active/appcast.xml \
+            --build-version "$BUILD_VERSION" \
+            --short-version "$SHORT_VERSION"
+
+          if [ -n "$LATEST_SNAPSHOT_TAG" ] \
+            && [ "$LATEST_SNAPSHOT_TAG" != "$BASE_SNAPSHOT_TAG" ]; then
+            gh release download "$LATEST_SNAPSHOT_TAG" \
+              --pattern appcast.xml \
+              --dir release-preflight/latest
+            python scripts/sparkle_appcast.py validate-snapshot \
+              --feed release-preflight/latest/appcast.xml \
+              --release-tag "$LATEST_SNAPSHOT_TAG"
+            python scripts/sparkle_appcast.py check-release \
+              --feed release-preflight/latest/appcast.xml \
+              --build-version "$BUILD_VERSION" \
+              --short-version "$SHORT_VERSION"
+          fi
+          echo "base_snapshot_tag=$BASE_SNAPSHOT_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Reject an existing stable PyPI version
+        if: steps.metadata.outputs.publish_pypi == 'true'
+        env:
+          PACKAGE_VERSION: ${{ steps.metadata.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          STATUS=$(curl --location --silent --output /dev/null --write-out '%{http_code}' \
+            "https://pypi.org/pypi/bd-to-avp/$PACKAGE_VERSION/json")
+          case "$STATUS" in
+            404) ;;
+            200)
+              echo "PyPI version already exists: $PACKAGE_VERSION" >&2
+              exit 1
+              ;;
+            *)
+              echo "Unable to verify PyPI version availability; HTTP $STATUS." >&2
+              exit 1
+              ;;
+          esac
+
+  package:
+    name: Build, sign, notarize, and validate DMG
+    needs:
+      - policy
+      - prepare
+    runs-on: macos-26
+    timeout-minutes: 180
+    environment: macos-signing
+    permissions:
+      contents: read
+    outputs:
+      dmg_name: ${{ steps.package_artifact.outputs.dmg_name }}
+      dmg_sha256: ${{ steps.package_artifact.outputs.dmg_sha256 }}
+      dmg_size: ${{ steps.package_artifact.outputs.dmg_size }}
+    steps:
+      - name: Checkout validated main commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Verify release runner and checkout
+        env:
+          EXPECTED_POLICY_FINGERPRINT: ${{ needs.policy.outputs.policy_fingerprint }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_EVENT_NAME: ${{ github.event_name }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_OPERATOR_WORKFLOW_REF: ${{ github.workflow_ref }}
+          RELEASE_OPERATOR_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RELEASE_ENGINE_WORKFLOW_REF: ${{ needs.policy.outputs.engine_workflow_ref }}
+          RELEASE_ENGINE_WORKFLOW_SHA: ${{ needs.policy.outputs.engine_workflow_sha }}
+          RELEASE_ENGINE_WORKFLOW_REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN_ID: ${{ github.run_id }}
+          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELEASE_ACTOR: ${{ github.actor }}
+          RELEASE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          INPUT_RELEASE_SHA: ${{ inputs.release_sha }}
+          INPUT_OPERATOR_WORKFLOW_REF: ${{ inputs.operator_workflow_ref }}
+          INPUT_OPERATOR_WORKFLOW_SHA: ${{ inputs.operator_workflow_sha }}
+          INPUT_OPERATOR_RUN_ID: ${{ inputs.operator_run_id }}
+          INPUT_OPERATOR_RUN_ATTEMPT: ${{ inputs.operator_run_attempt }}
+          INPUT_OPERATOR_ACTOR: ${{ inputs.operator_actor }}
+          INPUT_OPERATOR_TRIGGERING_ACTOR: ${{ inputs.operator_triggering_actor }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_workflow_policy.py engine \
+            --expected-fingerprint "$EXPECTED_POLICY_FINGERPRINT"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved after signing approval." >&2
+            exit 1
+          fi
+          test "$(uname -m)" = "arm64"
+          test "$(sw_vers -productVersion | cut -d. -f1)" = "26"
+          XCODE_PATH="/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+          if [ ! -d "$XCODE_PATH" ]; then
+            echo "Pinned Xcode path is unavailable: $XCODE_PATH" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_PATH"
+          test "$(xcodebuild -version | sed -n '1p')" = "Xcode $XCODE_VERSION"
+          test "$(xcodebuild -version | sed -n '2p')" = "Build version $XCODE_BUILD_VERSION"
+          if [ -n "${BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE:-}" ]; then
+            echo "Release builds must not override the macOS 26 deployment target." >&2
+            exit 1
+          fi
+
+      - name: Install pinned XcodeGen
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/xcodegen.zip"
+          curl --fail --location --silent --show-error \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip" \
+            --output "$ARCHIVE"
+          printf '%s  %s\n' "$XCODEGEN_SHA256" "$ARCHIVE" | shasum -a 256 --check
+          ditto -x -k "$ARCHIVE" "$RUNNER_TEMP"
+          test "$("$RUNNER_TEMP/xcodegen/bin/xcodegen" --version)" = "Version: $XCODEGEN_VERSION"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install Python and locked dependencies
+        run: |
+          uv python install 3.12
+          uv sync --locked --all-groups --python 3.12
+
+      - name: Install signing certificate in an ephemeral keychain
+        env:
+          CERTIFICATE: ${{ secrets.CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+          DEV_ID: ${{ secrets.DEV_ID }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved immediately before certificate use." >&2
+            exit 1
+          fi
+          case "$DEV_ID" in
+            "Developer ID Application:"*) ;;
+            *) echo "DEV_ID must name a Developer ID Application identity." >&2; exit 1 ;;
+          esac
+
+          BUILD_KEYCHAIN_PASSWORD=$(openssl rand -hex 32)
+          KEYCHAIN_PATH="$RUNNER_TEMP/bd-to-avp-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.keychain-db"
+          CERTIFICATE_PATH="$RUNNER_TEMP/bd-to-avp-$GITHUB_RUN_ID.p12"
+          USER_KEYCHAINS_PATH="$RUNNER_TEMP/bd-to-avp-user-keychains-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.txt"
+          USER_KEYCHAINS_TMP_PATH="${USER_KEYCHAINS_PATH}.tmp"
+          echo "::add-mask::$BUILD_KEYCHAIN_PASSWORD"
+
+          {
+            echo "BUILD_KEYCHAIN_PASSWORD=$BUILD_KEYCHAIN_PASSWORD"
+            echo "CERTIFICATE_PATH=$CERTIFICATE_PATH"
+            echo "KEYCHAIN_PATH=$KEYCHAIN_PATH"
+            echo "USER_KEYCHAINS_PATH=$USER_KEYCHAINS_PATH"
+          } >> "$GITHUB_ENV"
+
+          restore_user_keychains() {
+            if [ ! -f "$USER_KEYCHAINS_PATH" ]; then
+              return 0
+            fi
+            RESTORE_KEYCHAINS=()
+            while IFS= read -r keychain; do
+              if [ -n "$keychain" ]; then
+                RESTORE_KEYCHAINS+=("$keychain")
+              fi
+            done < "$USER_KEYCHAINS_PATH"
+            if [ "${#RESTORE_KEYCHAINS[@]}" -eq 0 ]; then
+              security list-keychains -d user -s
+            else
+              security list-keychains -d user -s "${RESTORE_KEYCHAINS[@]}"
+            fi
+          }
+
+          cleanup_on_failure() {
+            status=$?
+            trap - EXIT
+            if [ "$status" -ne 0 ]; then
+              restore_status=0
+              restore_user_keychains >/dev/null 2>&1 || restore_status=$?
+              if [ -e "$KEYCHAIN_PATH" ]; then
+                security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
+              fi
+              rm -f "$CERTIFICATE_PATH" "$USER_KEYCHAINS_TMP_PATH" || true
+              if [ "$restore_status" -eq 0 ]; then
+                rm -f "$USER_KEYCHAINS_PATH" || true
+              fi
+            fi
+            exit "$status"
+          }
+          trap cleanup_on_failure EXIT
+
+          rm -f "$USER_KEYCHAINS_PATH" "$USER_KEYCHAINS_TMP_PATH"
+          security list-keychains -d user \
+            | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' \
+            > "$USER_KEYCHAINS_TMP_PATH"
+          mv "$USER_KEYCHAINS_TMP_PATH" "$USER_KEYCHAINS_PATH"
+          security create-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          USER_KEYCHAINS=()
+          while IFS= read -r keychain; do
+            if [ -n "$keychain" ]; then
+              USER_KEYCHAINS+=("$keychain")
+            fi
+          done < "$USER_KEYCHAINS_PATH"
+          if [ "${#USER_KEYCHAINS[@]}" -eq 0 ]; then
+            security list-keychains -d user -s "$KEYCHAIN_PATH"
+          else
+            security list-keychains -d user -s "$KEYCHAIN_PATH" "${USER_KEYCHAINS[@]}"
+          fi
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH"
+          security import "$CERTIFICATE_PATH" -k "$KEYCHAIN_PATH" -P "$CERTIFICATE_PASSWORD" \
+            -T "/usr/bin/codesign"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user | grep -F "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F "$DEV_ID"
+          trap - EXIT
+
+      - name: Store notarization credentials in the ephemeral keychain
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved immediately before notarization credential use." >&2
+            exit 1
+          fi
+          NOTARY_PROFILE="bd-to-avp-release-$TEAM_ID-$GITHUB_RUN_ID"
+          security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          xcrun notarytool store-credentials "$NOTARY_PROFILE" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$TEAM_ID" \
+            --keychain "$KEYCHAIN_PATH"
+          echo "NOTARY_PROFILE=$NOTARY_PROFILE" >> "$GITHUB_ENV"
+
+      - name: Package application for GitHub
+        id: package_artifact
+        env:
+          BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE: ""
+          BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: ${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}
+          BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
+          DEV_ID: ${{ secrets.DEV_ID }}
+          DMG_NAME: ${{ needs.prepare.outputs.dmg_name }}
+          PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved immediately before package signing." >&2
+            exit 1
+          fi
+          security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          APP_PATH="macos/build/package/3D Blu-ray to Vision Pro.app"
+          DMG_PATH="dist/$DMG_NAME"
+          APP_ARCHIVE="$RUNNER_TEMP/bd-to-avp-app-$GITHUB_RUN_ID.zip"
+          mkdir -p dist/notary
+
+          uv run python scripts/native_app.py package \
+            --sign-identity "$DEV_ID" \
+            --sign-keychain "$KEYCHAIN_PATH"
+          uv run python -m scripts.macos_release verify-app \
+            --app "$APP_PATH" \
+            --verify-signatures \
+            > dist/macos-app-metadata.json
+          if [ "$(jq -r .short_version dist/macos-app-metadata.json)" != "$PACKAGE_VERSION" ]; then
+            echo "Built app version does not match $PACKAGE_VERSION." >&2
+            exit 1
+          fi
+          if [ "$(jq -r .build_version dist/macos-app-metadata.json)" != "$BUILD_VERSION" ]; then
+            echo "Built app build does not match $BUILD_VERSION." >&2
+            exit 1
+          fi
+
+          ditto -c -k --keepParent "$APP_PATH" "$APP_ARCHIVE"
+          uv run python -m scripts.macos_release notarize \
+            --submission "$APP_ARCHIVE" \
+            --staple "$APP_PATH" \
+            --keychain-profile "$NOTARY_PROFILE" \
+            --keychain "$KEYCHAIN_PATH" \
+            --log dist/notary/app-notary.json
+          uv run python -m scripts.macos_release verify-app \
+            --app "$APP_PATH" \
+            --verify-signatures \
+            --verify-distribution \
+            --smoke-worker \
+            > dist/macos-app-metadata.json
+
+          uv run python -m scripts.macos_release create-dmg \
+            --app "$APP_PATH" \
+            --output "$DMG_PATH"
+          codesign --force --timestamp --sign "$DEV_ID" --keychain "$KEYCHAIN_PATH" "$DMG_PATH"
+          uv run python -m scripts.macos_release notarize \
+            --submission "$DMG_PATH" \
+            --staple "$DMG_PATH" \
+            --keychain-profile "$NOTARY_PROFILE" \
+            --keychain "$KEYCHAIN_PATH" \
+            --log dist/notary/dmg-notary.json
+          uv run python -m scripts.macos_release verify-dmg \
+            --dmg "$DMG_PATH" \
+            --verify-signatures \
+            --verify-distribution \
+            --smoke-worker \
+            > dist/macos-release-metadata.json
+          if [ "$(jq -r .short_version dist/macos-release-metadata.json)" != "$PACKAGE_VERSION" ]; then
+            echo "Packaged DMG version does not match $PACKAGE_VERSION." >&2
+            exit 1
+          fi
+          if [ "$(jq -r .build_version dist/macos-release-metadata.json)" != "$BUILD_VERSION" ]; then
+            echo "Packaged DMG build does not match $BUILD_VERSION." >&2
+            exit 1
+          fi
+          DMG_SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
+          DMG_SIZE=$(stat -f %z "$DMG_PATH")
+          printf '%s  %s\n' "$DMG_SHA256" "$DMG_NAME" > dist/SHA256SUMS
+          {
+            echo "dmg_name=$DMG_NAME"
+            echo "dmg_sha256=$DMG_SHA256"
+            echo "dmg_size=$DMG_SIZE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload log on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-release-diagnostics
+          path: |
+            dist/notary/*.json
+            logs/briefcase.*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Remove temporary signing material
+        if: always()
+        run: |
+          set +e
+          cleanup_status=0
+          restore_status=0
+          KEYCHAIN_PATH="${KEYCHAIN_PATH:-$RUNNER_TEMP/bd-to-avp-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.keychain-db}"
+          CERTIFICATE_PATH="${CERTIFICATE_PATH:-$RUNNER_TEMP/bd-to-avp-$GITHUB_RUN_ID.p12}"
+          USER_KEYCHAINS_PATH="${USER_KEYCHAINS_PATH:-$RUNNER_TEMP/bd-to-avp-user-keychains-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.txt}"
+          USER_KEYCHAINS_TMP_PATH="${USER_KEYCHAINS_PATH}.tmp"
+          restore_user_keychains() {
+            if [ ! -f "$USER_KEYCHAINS_PATH" ]; then
+              return 0
+            fi
+            RESTORE_KEYCHAINS=()
+            while IFS= read -r keychain; do
+              if [ -n "$keychain" ]; then
+                RESTORE_KEYCHAINS+=("$keychain")
+              fi
+            done < "$USER_KEYCHAINS_PATH"
+            if [ "${#RESTORE_KEYCHAINS[@]}" -eq 0 ]; then
+              security list-keychains -d user -s
+            else
+              security list-keychains -d user -s "${RESTORE_KEYCHAINS[@]}"
+            fi
+          }
+          if ! restore_user_keychains >/dev/null 2>&1; then
+            echo "Failed to restore the user keychain search list." >&2
+            restore_status=1
+            cleanup_status=1
+          fi
+          if [ -e "$KEYCHAIN_PATH" ] && ! security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1; then
+            echo "Failed to delete the ephemeral signing keychain." >&2
+            cleanup_status=1
+          fi
+          if ! rm -f \
+            "${CERTIFICATE_PATH:-}" \
+            "$USER_KEYCHAINS_TMP_PATH" \
+            "$RUNNER_TEMP/bd-to-avp-app-$GITHUB_RUN_ID.zip"
+          then
+            echo "Failed to remove temporary signing files." >&2
+            cleanup_status=1
+          fi
+          if [ "$restore_status" -eq 0 ] && ! rm -f "$USER_KEYCHAINS_PATH"; then
+            echo "Failed to remove the keychain search-list snapshot." >&2
+            cleanup_status=1
+          fi
+          {
+            echo "BUILD_KEYCHAIN_PASSWORD="
+            echo "CERTIFICATE_PATH="
+            echo "KEYCHAIN_PATH="
+            echo "NOTARY_PROFILE="
+            echo "USER_KEYCHAINS_PATH="
+          } >> "$GITHUB_ENV" || cleanup_status=1
+          exit "$cleanup_status"
+
+      - name: Upload verified release package
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-package
+          path: |
+            dist/*.dmg
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  attest-package:
+    name: Attest verified release package
+    needs:
+      - prepare
+      - package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Download verified release package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-package
+          path: release-package
+
+      - name: Verify package identity before attestation
+        env:
+          EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
+          EXPECTED_DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
+          EXPECTED_DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
+        run: |
+          set -euo pipefail
+          DMG_PATH="release-package/$EXPECTED_DMG_NAME"
+          test -f "$DMG_PATH"
+          test "$(sha256sum "$DMG_PATH" | awk '{print $1}')" = "$EXPECTED_DMG_SHA256"
+          test "$(stat -c %s "$DMG_PATH")" = "$EXPECTED_DMG_SIZE"
+          test "$(cat release-package/SHA256SUMS)" = \
+            "$EXPECTED_DMG_SHA256  $EXPECTED_DMG_NAME"
+          (cd release-package && sha256sum --check SHA256SUMS)
+
+      - name: Attest package provenance
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
+        with:
+          subject-path: release-package/${{ needs.package.outputs.dmg_name }}
+
+  compatibility:
+    name: Verify notarized package on macOS 26
+    needs:
+      - package
+    runs-on: macos-26
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout released commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Download verified release package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-package
+          path: release-package
+
+      - name: Validate the packaged app on macOS 26
+        env:
+          EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
+          EXPECTED_DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(sw_vers -productVersion | cut -d. -f1)" = "26"
+          DMG_PATH="release-package/$EXPECTED_DMG_NAME"
+          test "$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')" = "$EXPECTED_DMG_SHA256"
+          python -m scripts.macos_release verify-dmg \
+            --dmg "$DMG_PATH" \
+            --verify-signatures \
+            --verify-distribution \
+            --smoke-app \
+            --smoke-tools \
+            --smoke-worker
+
+  build-python:
+    name: Build stable Python distributions
+    needs: prepare
+    if: needs.prepare.outputs.publish_pypi == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      artifact_digest: ${{ steps.python_artifact.outputs.artifact-digest }}
+      artifact_id: ${{ steps.python_artifact.outputs.artifact-id }}
+    steps:
+      - name: Checkout released commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+
+      - name: Validate and build distributions
+        run: |
+          set -euo pipefail
+          python scripts/release.py validate
+          uv build
+          mkdir -p python-distributions
+          mv dist python-distributions/
+          (
+            cd python-distributions
+            find dist -type f -print | LC_ALL=C sort | while IFS= read -r file; do
+              shasum -a 256 "$file"
+            done > SHA256SUMS
+            test -s SHA256SUMS
+          )
+
+      - name: Upload Python distributions
+        id: python_artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: python-distributions
+          path: python-distributions
+          if-no-files-found: error
+          retention-days: 7
+
+  create-draft:
+    name: Create draft GitHub Release
+    needs:
+      - prepare
+      - package
+      - attest-package
+      - compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      release_created_at: ${{ steps.draft_release.outputs.release_created_at }}
+      release_id: ${{ steps.draft_release.outputs.release_id }}
+      release_notes_sha256: ${{ steps.draft_release.outputs.release_notes_sha256 }}
+    steps:
+      - name: Download verified release package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-package
+          path: release-package
+
+      - name: Verify artifact transfer
+        env:
+          EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
+          EXPECTED_DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
+          EXPECTED_DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
+        run: |
+          set -euo pipefail
+          DMG_PATH="release-package/$EXPECTED_DMG_NAME"
+          if [ ! -f "$DMG_PATH" ]; then
+            echo "Expected DMG is missing from the workflow artifact." >&2
+            exit 1
+          fi
+          if [ "$(sha256sum "$DMG_PATH" | awk '{print $1}')" != "$EXPECTED_DMG_SHA256" ]; then
+            echo "Workflow artifact DMG digest mismatch." >&2
+            exit 1
+          fi
+          if [ "$(stat -c %s "$DMG_PATH")" != "$EXPECTED_DMG_SIZE" ]; then
+            echo "Workflow artifact DMG size mismatch." >&2
+            exit 1
+          fi
+          EXPECTED_SUM="$EXPECTED_DMG_SHA256  $EXPECTED_DMG_NAME"
+          if [ "$(cat release-package/SHA256SUMS)" != "$EXPECTED_SUM" ]; then
+            echo "SHA256SUMS does not exactly describe the validated DMG." >&2
+            exit 1
+          fi
+          (cd release-package && sha256sum --check SHA256SUMS)
+
+      - name: Create or resume immutable-intent draft
+        id: draft_release
+        env:
+          EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
+          GH_TOKEN: ${{ github.token }}
+          MAKE_LATEST: ${{ needs.prepare.outputs.make_latest }}
+          PREVIOUS_RELEASE_TAG: ${{ needs.prepare.outputs.previous_release_tag }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
+          RELEASE_NOTES_INPUT: ${{ inputs.release_notes }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [ "$MAIN_SHA" != "$GITHUB_SHA" ]; then
+            echo "main advanced after release validation; refusing to create a draft." >&2
+            exit 1
+          fi
+          {
+            if [ -n "$RELEASE_NOTES_INPUT" ]; then
+              printf '%s\n\n' "$RELEASE_NOTES_INPUT"
+            fi
+            cat <<'NOTES'
+          The GUI app does not install Homebrew or command-line dependencies
+          on first launch. Install MakeMKV separately before converting Blu-ray
+          discs. Power users who use the terminal/PyPI version should follow
+          the manual dependency instructions in the README.
+
+          NOTES
+          } > release-notes-prefix.md
+
+          resolve_release_id() {
+            gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --paginate --slurp \
+              | jq -r --arg tag "$RELEASE_TAG" '
+                [.[][] | select(.tag_name == $tag)]
+                | if length == 0 then
+                    ""
+                  elif length == 1 then
+                    .[0].id
+                  else
+                    error("Multiple releases use tag " + $tag)
+                  end
+              '
+          }
+
+          RELEASE_ID=$(resolve_release_id)
+          if [ -z "$RELEASE_ID" ]; then
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" \
+              >/dev/null 2>&1; then
+              echo "Git tag already exists without a resumable draft: $RELEASE_TAG" >&2
+              exit 1
+            fi
+            RELEASE_ARGS=(
+              "$RELEASE_TAG"
+              --draft
+              --latest=false
+              --notes-file release-notes-prefix.md
+              --target "$GITHUB_SHA"
+              --title "$RELEASE_NAME"
+            )
+            if [ -n "$PREVIOUS_RELEASE_TAG" ]; then
+              RELEASE_ARGS+=(
+                --generate-notes
+                --notes-start-tag "$PREVIOUS_RELEASE_TAG"
+              )
+            fi
+            if [ "$PRERELEASE" = "true" ]; then
+              RELEASE_ARGS+=(--prerelease)
+            fi
+            gh release create "${RELEASE_ARGS[@]}"
+            for attempt in {1..12}; do
+              RELEASE_ID=$(resolve_release_id)
+              if [ -n "$RELEASE_ID" ]; then
+                break
+              fi
+              if [ "$attempt" -eq 12 ]; then
+                echo "Draft release did not become visible through the API." >&2
+                exit 1
+              fi
+              sleep 2
+            done
+          fi
+
+          if ! [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]; then
+            echo "Unable to resolve the draft release ID." >&2
+            exit 1
+          fi
+          RELEASE_JSON=$(gh api \
+            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+          if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ] \
+            || [ "$(jq -r .tag_name <<< "$RELEASE_JSON")" != "$RELEASE_TAG" ] \
+            || [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ] \
+            || [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "$PRERELEASE" ] \
+            || [ "$(jq -r .name <<< "$RELEASE_JSON")" != "$RELEASE_NAME" ]; then
+            echo "Existing release cannot be safely resumed." >&2
+            exit 1
+          fi
+
+          mkdir -p existing-package-assets
+          for ASSET_NAME in "$EXPECTED_DMG_NAME" SHA256SUMS; do
+            ASSET_PATH="release-package/$ASSET_NAME"
+            RELEASE_JSON=$(gh api \
+              "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+            ASSET_COUNT=$(jq -r --arg name "$ASSET_NAME" \
+              '[.assets[] | select(.name == $name)] | length' \
+              <<< "$RELEASE_JSON")
+            case "$ASSET_COUNT" in
+              0)
+                ASSET_NAME_ENCODED=$(jq -rn --arg value "$ASSET_NAME" '$value | @uri')
+                UPLOADED_ASSET=$(gh api --method POST \
+                  "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$ASSET_NAME_ENCODED" \
+                  -H "Content-Type: application/octet-stream" \
+                  --input "$ASSET_PATH")
+                if [ "$(jq -r .name <<< "$UPLOADED_ASSET")" != "$ASSET_NAME" ]; then
+                  echo "GitHub changed the uploaded asset name for $ASSET_NAME." >&2
+                  exit 1
+                fi
+                ;;
+              1)
+                rm -f "existing-package-assets/$ASSET_NAME"
+                ASSET_ID=$(jq -r --arg name "$ASSET_NAME" \
+                  '.assets[] | select(.name == $name) | .id' \
+                  <<< "$RELEASE_JSON")
+                gh api "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID" \
+                  -H "Accept: application/octet-stream" \
+                  > "existing-package-assets/$ASSET_NAME"
+                if [ "$(sha256sum "$ASSET_PATH" | awk '{print $1}')" \
+                  != "$(sha256sum "existing-package-assets/$ASSET_NAME" | awk '{print $1}')" ]; then
+                  echo "Existing draft asset differs from $ASSET_NAME." >&2
+                  exit 1
+                fi
+                ;;
+              *)
+                echo "Draft release contains duplicate assets named $ASSET_NAME." >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          for attempt in {1..12}; do
+            RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+            DMG_ASSET_COUNT=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
+              '[.assets[] | select(.name == $name)] | length' \
+              <<< "$RELEASE_JSON")
+            CHECKSUM_ASSET_COUNT=$(jq \
+              '[.assets[] | select(.name == "SHA256SUMS")] | length' \
+              <<< "$RELEASE_JSON")
+            APPCAST_ASSET_COUNT=$(jq \
+              '[.assets[] | select(.name == "appcast.xml")] | length' \
+              <<< "$RELEASE_JSON")
+            TOTAL_ASSET_COUNT=$(jq '.assets | length' <<< "$RELEASE_JSON")
+            EXPECTED_TOTAL_ASSET_COUNT=$((2 + APPCAST_ASSET_COUNT))
+            if [ "$DMG_ASSET_COUNT" = "1" ] \
+              && [ "$CHECKSUM_ASSET_COUNT" = "1" ] \
+              && { [ "$APPCAST_ASSET_COUNT" = "0" ] || [ "$APPCAST_ASSET_COUNT" = "1" ]; } \
+              && [ "$TOTAL_ASSET_COUNT" = "$EXPECTED_TOTAL_ASSET_COUNT" ]; then
+              break
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "Draft must contain one DMG, checksum, and at most one appcast asset." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ]; then
+            echo "Release must remain a draft until all assets are verified." >&2
+            exit 1
+          fi
+          if [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ]; then
+            echo "Draft release does not target github.sha." >&2
+            exit 1
+          fi
+          if [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "$PRERELEASE" ]; then
+            echo "Draft prerelease state does not match the committed version." >&2
+            exit 1
+          fi
+          if [ "$MAKE_LATEST" = "true" ] && [ "$PRERELEASE" = "true" ]; then
+            echo "A prerelease cannot be marked latest." >&2
+            exit 1
+          fi
+          if ! jq -e '.body | type == "string" and test("\\S")' <<< "$RELEASE_JSON" >/dev/null; then
+            echo "Draft release notes must contain a version-specific summary." >&2
+            exit 1
+          fi
+          jq -j '.body' <<< "$RELEASE_JSON" > draft-release-notes.md
+          {
+            echo "release_created_at=$(jq -r .created_at <<< "$RELEASE_JSON")"
+            echo "release_id=$RELEASE_ID"
+            echo "release_notes_sha256=$(sha256sum draft-release-notes.md | awk '{print $1}')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable draft release notes
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-notes-source
+          path: draft-release-notes.md
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-appcast:
+    name: Build signed cumulative appcast snapshot
+    needs:
+      - prepare
+      - package
+      - create-draft
+    runs-on: macos-15
+    timeout-minutes: 30
+    environment: sparkle-release
+    permissions:
+      contents: read
+    outputs:
+      appcast_sha256: ${{ steps.sign_appcast.outputs.appcast_sha256 }}
+      appcast_size: ${{ steps.sign_appcast.outputs.appcast_size }}
+    steps:
+      - name: Checkout protected release tooling
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Download verified release package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-package
+          path: release-assets
+
+      - name: Download immutable draft release notes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-notes-source
+          path: release-notes-source
+
+      - name: Verify transferred release DMG
+        id: release_asset
+        env:
+          EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
+          EXPECTED_DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
+          EXPECTED_DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
+          RELEASE_CREATED_AT: ${{ needs.create-draft.outputs.release_created_at }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p appcast-site
+          DMG_PATH="release-assets/$EXPECTED_DMG_NAME"
+          if [ ! -f "$DMG_PATH" ]; then
+            echo "Expected release DMG is missing from the workflow artifact." >&2
+            exit 1
+          fi
+          ACTUAL_SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
+          if [ "$ACTUAL_SHA256" != "$EXPECTED_DMG_SHA256" ]; then
+            echo "Transferred DMG digest does not match the validated package." >&2
+            exit 1
+          fi
+          ACTUAL_SIZE=$(stat -f %z "$DMG_PATH")
+          if [ "$ACTUAL_SIZE" != "$EXPECTED_DMG_SIZE" ]; then
+            echo "Transferred DMG size does not match the validated package." >&2
+            exit 1
+          fi
+          EXPECTED_SUM="$EXPECTED_DMG_SHA256  $EXPECTED_DMG_NAME"
+          if [ "$(cat release-assets/SHA256SUMS)" != "$EXPECTED_SUM" ]; then
+            echo "Transferred checksum manifest mismatch." >&2
+            exit 1
+          fi
+          (cd release-assets && shasum -a 256 --check SHA256SUMS)
+          if [ -z "$RELEASE_CREATED_AT" ]; then
+            echo "Draft release creation time is missing." >&2
+            exit 1
+          fi
+          python -c \
+            'import datetime, sys; datetime.datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))' \
+            "$RELEASE_CREATED_AT"
+          ASSET_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$EXPECTED_DMG_NAME"
+          {
+            echo "dmg_path=$DMG_PATH"
+            echo "asset_url=$ASSET_URL"
+            echo "asset_size=$EXPECTED_DMG_SIZE"
+            echo "created_at=$RELEASE_CREATED_AT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify immutable draft release notes
+        env:
+          EXPECTED_RELEASE_NOTES_SHA256: ${{ needs.create-draft.outputs.release_notes_sha256 }}
+        run: |
+          set -euo pipefail
+          RELEASE_NOTES_FILE=release-notes-source/draft-release-notes.md
+          if [ ! -f "$RELEASE_NOTES_FILE" ]; then
+            echo "Immutable draft release notes artifact is missing." >&2
+            exit 1
+          fi
+          if [ "$(shasum -a 256 "$RELEASE_NOTES_FILE" | awk '{print $1}')" \
+            != "$EXPECTED_RELEASE_NOTES_SHA256" ]; then
+            echo "Draft release notes artifact digest mismatch." >&2
+            exit 1
+          fi
+
+      - name: Inspect draft DMG
+        id: bundle
+        env:
+          DMG_PATH: ${{ steps.release_asset.outputs.dmg_path }}
+          EXPECTED_BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
+          EXPECTED_SHORT_VERSION: ${{ needs.prepare.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          python -m scripts.sparkle_bundle \
+            --dmg "$DMG_PATH" \
+            --release-artifact \
+            --verify-signatures \
+            --verify-distribution \
+            > bundle-metadata.json
+          if [ "$(jq -r .short_version bundle-metadata.json)" != "$EXPECTED_SHORT_VERSION" ]; then
+            echo "Draft DMG short version does not match the committed version." >&2
+            exit 1
+          fi
+          if [ "$(jq -r .build_version bundle-metadata.json)" != "$EXPECTED_BUILD_VERSION" ]; then
+            echo "Draft DMG build version does not match the committed build." >&2
+            exit 1
+          fi
+          {
+            echo "build_version=$(jq -r .build_version bundle-metadata.json)"
+            echo "short_version=$(jq -r .short_version bundle-metadata.json)"
+            echo "minimum_system_version=$(jq -r .minimum_system_version bundle-metadata.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Load active durable appcast snapshot
+        env:
+          BASE_SNAPSHOT_TAG: ${{ needs.prepare.outputs.base_snapshot_tag }}
+          BUILD_VERSION: ${{ steps.bundle.outputs.build_version }}
+          SHORT_VERSION: ${{ steps.bundle.outputs.short_version }}
+        run: |
+          set -euo pipefail
+          if [ "$BASE_SNAPSHOT_TAG" = "bootstrap" ]; then
+            cp sparkle-feed/appcast.xml appcast-site/appcast.xml
+          else
+            python scripts/release.py validate-tag "$BASE_SNAPSHOT_TAG" >/dev/null
+            curl --fail --location --silent --show-error \
+              --retry 3 --retry-delay 2 --retry-all-errors \
+              --connect-timeout 10 --max-time 60 \
+              "https://github.com/$GITHUB_REPOSITORY/releases/download/$BASE_SNAPSHOT_TAG/appcast.xml" \
+              --output appcast-site/appcast.xml
+            python scripts/sparkle_appcast.py validate-snapshot \
+              --feed appcast-site/appcast.xml \
+              --release-tag "$BASE_SNAPSHOT_TAG"
+          fi
+          python scripts/sparkle_appcast.py validate \
+            --feed appcast-site/appcast.xml
+          python scripts/sparkle_appcast.py check-release \
+            --feed appcast-site/appcast.xml \
+            --build-version "$BUILD_VERSION" \
+            --short-version "$SHORT_VERSION"
+
+      - name: Sign DMG and build appcast
+        id: sign_appcast
+        env:
+          ASSET_SIZE: ${{ steps.release_asset.outputs.asset_size }}
+          ASSET_URL: ${{ steps.release_asset.outputs.asset_url }}
+          BUILD_VERSION: ${{ steps.bundle.outputs.build_version }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+          DMG_PATH: ${{ steps.release_asset.outputs.dmg_path }}
+          MINIMUM_SYSTEM_VERSION: ${{ steps.bundle.outputs.minimum_system_version }}
+          RELEASE_CREATED_AT: ${{ steps.release_asset.outputs.created_at }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          RELEASE_NOTES_FILE: release-notes-source/draft-release-notes.md
+          SHORT_VERSION: ${{ steps.bundle.outputs.short_version }}
+          SPARKLE_EDDSA_PRIVATE_KEY: ${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          set +x
+          SIGN_UPDATE=$(python scripts/sparkle_macos.py --tool sign_update)
+          SIGNATURE=$(printf '%s\n' "$SPARKLE_EDDSA_PRIVATE_KEY" | \
+            "$SIGN_UPDATE" --ed-key-file - -p "$DMG_PATH")
+          if [ -z "$SIGNATURE" ]; then
+            echo "Sparkle did not produce an EdDSA signature." >&2
+            exit 1
+          fi
+          printf '%s\n' "$SPARKLE_EDDSA_PRIVATE_KEY" | \
+            "$SIGN_UPDATE" --verify --ed-key-file - "$DMG_PATH" "$SIGNATURE"
+          python scripts/sparkle_appcast.py add \
+            --feed appcast-site/appcast.xml \
+            --output appcast-site/appcast.xml \
+            --build-version "$BUILD_VERSION" \
+            --short-version "$SHORT_VERSION" \
+            --channel "$CHANNEL" \
+            --download-url "$ASSET_URL" \
+            --length "$ASSET_SIZE" \
+            --signature "$SIGNATURE" \
+            --release-notes-file "$RELEASE_NOTES_FILE" \
+            --full-release-notes-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG" \
+            --minimum-system-version "$MINIMUM_SYSTEM_VERSION" \
+            --published-at "$RELEASE_CREATED_AT"
+          python scripts/sparkle_appcast.py validate-snapshot \
+            --feed appcast-site/appcast.xml \
+            --short-version "$SHORT_VERSION"
+          {
+            echo "appcast_sha256=$(shasum -a 256 appcast-site/appcast.xml | awk '{print $1}')"
+            echo "appcast_size=$(stat -f %z appcast-site/appcast.xml)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload signed appcast for verification
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: signed-appcast
+          path: appcast-site/appcast.xml
+          if-no-files-found: error
+          retention-days: 7
+
+  verify-draft:
+    name: Upload, re-download, and verify draft assets
+    needs:
+      - prepare
+      - package
+      - create-draft
+      - publish-appcast
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      attestations: read
+      contents: write
+    steps:
+      - name: Checkout protected verification tooling
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Download signed appcast
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: signed-appcast
+          path: signed-appcast
+
+      - name: Upload appcast snapshot to draft
+        env:
+          EXPECTED_APPCAST_SHA256: ${{ needs.publish-appcast.outputs.appcast_sha256 }}
+          EXPECTED_APPCAST_SIZE: ${{ needs.publish-appcast.outputs.appcast_size }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          LOCAL_APPCAST=signed-appcast/appcast.xml
+          if [ "$(shasum -a 256 "$LOCAL_APPCAST" | awk '{print $1}')" != "$EXPECTED_APPCAST_SHA256" ]; then
+            echo "Signed appcast workflow artifact digest mismatch." >&2
+            exit 1
+          fi
+          if [ "$(stat -f %z "$LOCAL_APPCAST")" != "$EXPECTED_APPCAST_SIZE" ]; then
+            echo "Signed appcast workflow artifact size mismatch." >&2
+            exit 1
+          fi
+
+          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+          if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ]; then
+            echo "Release was published before appcast verification." >&2
+            exit 1
+          fi
+          APPCAST_COUNT=$(jq '[.assets[] | select(.name == "appcast.xml")] | length' <<< "$RELEASE_JSON")
+          case "$APPCAST_COUNT" in
+            0)
+              UPLOADED_APPCAST=$(gh api --method POST \
+                "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=appcast.xml" \
+                -H "Content-Type: application/xml" \
+                --input "$LOCAL_APPCAST")
+              if [ "$(jq -r .name <<< "$UPLOADED_APPCAST")" != "appcast.xml" ]; then
+                echo "GitHub changed the uploaded appcast asset name." >&2
+                exit 1
+              fi
+              ;;
+            1)
+              mkdir -p existing-appcast
+              APPCAST_ASSET_ID=$(jq -r \
+                '.assets[] | select(.name == "appcast.xml") | .id' \
+                <<< "$RELEASE_JSON")
+              gh api "repos/$GITHUB_REPOSITORY/releases/assets/$APPCAST_ASSET_ID" \
+                -H "Accept: application/octet-stream" \
+                > existing-appcast/appcast.xml
+              if [ "$(shasum -a 256 existing-appcast/appcast.xml | awk '{print $1}')" \
+                != "$EXPECTED_APPCAST_SHA256" ]; then
+                echo "Existing draft appcast asset differs from the signed snapshot." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Draft release contains duplicate appcast assets." >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Re-download and verify every release boundary
+        env:
+          EXPECTED_APPCAST_SHA256: ${{ needs.publish-appcast.outputs.appcast_sha256 }}
+          EXPECTED_APPCAST_SIZE: ${{ needs.publish-appcast.outputs.appcast_size }}
+          EXPECTED_BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
+          EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
+          EXPECTED_DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
+          EXPECTED_DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
+          EXPECTED_RELEASE_NOTES_SHA256: ${{ needs.create-draft.outputs.release_notes_sha256 }}
+          EXPECTED_SHORT_VERSION: ${{ needs.prepare.outputs.package_version }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p verified-assets
+          for attempt in {1..12}; do
+            RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+            DMG_ASSET_COUNT=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
+              '[.assets[] | select(.name == $name)] | length' <<< "$RELEASE_JSON")
+            APPCAST_ASSET_COUNT=$(jq \
+              '[.assets[] | select(.name == "appcast.xml")] | length' \
+              <<< "$RELEASE_JSON")
+            CHECKSUM_ASSET_COUNT=$(jq \
+              '[.assets[] | select(.name == "SHA256SUMS")] | length' \
+              <<< "$RELEASE_JSON")
+            TOTAL_ASSET_COUNT=$(jq '.assets | length' <<< "$RELEASE_JSON")
+            if [ "$DMG_ASSET_COUNT" = "1" ] \
+              && [ "$APPCAST_ASSET_COUNT" = "1" ] \
+              && [ "$CHECKSUM_ASSET_COUNT" = "1" ] \
+              && [ "$TOTAL_ASSET_COUNT" = "3" ]; then
+              break
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "Draft release must contain only one DMG, checksum, and appcast asset." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ]; then
+            echo "Release must still be a draft during final verification." >&2
+            exit 1
+          fi
+          if [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ]; then
+            echo "Draft target changed after creation." >&2
+            exit 1
+          fi
+          if ! jq -e '.body | type == "string" and test("\\S")' <<< "$RELEASE_JSON" >/dev/null; then
+            echo "Draft release notes became empty before final verification." >&2
+            exit 1
+          fi
+          jq -j '.body' <<< "$RELEASE_JSON" > verified-assets/release-notes.md
+          if [ "$(shasum -a 256 verified-assets/release-notes.md | awk '{print $1}')" \
+            != "$EXPECTED_RELEASE_NOTES_SHA256" ]; then
+            echo "Draft release notes changed after appcast construction." >&2
+            exit 1
+          fi
+          ASSET_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$EXPECTED_DMG_NAME"
+          ASSET_SIZE=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
+            '.assets[] | select(.name == $name) | .size' <<< "$RELEASE_JSON")
+          if [ "$ASSET_SIZE" != "$EXPECTED_DMG_SIZE" ]; then
+            echo "GitHub DMG asset size changed after upload." >&2
+            exit 1
+          fi
+          DMG_ASSET_ID=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
+            '.assets[] | select(.name == $name) | .id' <<< "$RELEASE_JSON")
+          CHECKSUM_ASSET_ID=$(jq -r \
+            '.assets[] | select(.name == "SHA256SUMS") | .id' \
+            <<< "$RELEASE_JSON")
+          APPCAST_ASSET_ID=$(jq -r \
+            '.assets[] | select(.name == "appcast.xml") | .id' \
+            <<< "$RELEASE_JSON")
+
+          DMG_PATH="verified-assets/$EXPECTED_DMG_NAME"
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$DMG_ASSET_ID" \
+            -H "Accept: application/octet-stream" > "$DMG_PATH"
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$CHECKSUM_ASSET_ID" \
+            -H "Accept: application/octet-stream" > verified-assets/SHA256SUMS
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$APPCAST_ASSET_ID" \
+            -H "Accept: application/octet-stream" > verified-assets/appcast.xml
+
+          if [ "$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')" != "$EXPECTED_DMG_SHA256" ]; then
+            echo "Re-downloaded DMG digest mismatch." >&2
+            exit 1
+          fi
+          if [ "$(stat -f %z "$DMG_PATH")" != "$EXPECTED_DMG_SIZE" ]; then
+            echo "Re-downloaded DMG size mismatch." >&2
+            exit 1
+          fi
+          EXPECTED_SUM="$EXPECTED_DMG_SHA256  $EXPECTED_DMG_NAME"
+          if [ "$(cat verified-assets/SHA256SUMS)" != "$EXPECTED_SUM" ]; then
+            echo "Re-downloaded checksum manifest mismatch." >&2
+            exit 1
+          fi
+          (cd verified-assets && shasum -a 256 --check SHA256SUMS)
+          gh attestation verify "$DMG_PATH" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-engine.yml" \
+            --signer-digest "$GITHUB_SHA" \
+            --source-digest "$GITHUB_SHA" \
+            --source-ref refs/heads/main \
+            --deny-self-hosted-runners
+          if [ "$(shasum -a 256 verified-assets/appcast.xml | awk '{print $1}')" \
+            != "$EXPECTED_APPCAST_SHA256" ]; then
+            echo "Re-downloaded appcast digest mismatch." >&2
+            exit 1
+          fi
+          if [ "$(stat -f %z verified-assets/appcast.xml)" != "$EXPECTED_APPCAST_SIZE" ]; then
+            echo "Re-downloaded appcast size mismatch." >&2
+            exit 1
+          fi
+
+          python -m scripts.sparkle_bundle \
+            --dmg "$DMG_PATH" \
+            --release-artifact \
+            --verify-signatures \
+            --verify-distribution \
+            > verified-bundle.json
+          if [ "$(jq -r .short_version verified-bundle.json)" != "$EXPECTED_SHORT_VERSION" ] \
+            || [ "$(jq -r .build_version verified-bundle.json)" != "$EXPECTED_BUILD_VERSION" ]; then
+            echo "Re-downloaded DMG version metadata mismatch." >&2
+            exit 1
+          fi
+          python scripts/sparkle_appcast.py validate-snapshot \
+            --feed verified-assets/appcast.xml \
+            --short-version "$EXPECTED_SHORT_VERSION"
+          python scripts/sparkle_appcast.py verify-release \
+            --feed verified-assets/appcast.xml \
+            --build-version "$EXPECTED_BUILD_VERSION" \
+            --short-version "$EXPECTED_SHORT_VERSION" \
+            --download-url "$ASSET_URL" \
+            --length "$ASSET_SIZE" \
+            --release-notes-file verified-assets/release-notes.md \
+            --full-release-notes-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+
+  publish-release:
+    name: Publish verified GitHub Release
+    needs:
+      - build-python
+      - create-draft
+      - prepare
+      - package
+      - verify-draft
+    if: >-
+      !cancelled() &&
+      needs.create-draft.result == 'success' &&
+      needs.prepare.result == 'success' &&
+      needs.package.result == 'success' &&
+      needs.verify-draft.result == 'success' &&
+      (
+        needs.prepare.outputs.publish_pypi != 'true' ||
+        needs.build-python.result == 'success'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Publish only the verified main release
+        env:
+          EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
+          GH_TOKEN: ${{ github.token }}
+          MAKE_LATEST: ${{ needs.prepare.outputs.make_latest }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          EXPECTED_RELEASE_NOTES_SHA256: ${{ needs.create-draft.outputs.release_notes_sha256 }}
+          RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
+          RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          case "$PRERELEASE:$MAKE_LATEST" in
+            true:false|false:true)
+              ;;
+            *)
+              echo "Release channel metadata is inconsistent." >&2
+              exit 1
+              ;;
+          esac
+          verify_release_notes_body() {
+            local release_json="$1"
+            if ! jq -e '.body | type == "string" and test("\\S")' <<< "$release_json" >/dev/null; then
+              echo "Release notes became empty before publication." >&2
+              exit 1
+            fi
+            jq -j '.body' <<< "$release_json" > release-notes.md
+            if [ "$(sha256sum release-notes.md | awk '{print $1}')" \
+              != "$EXPECTED_RELEASE_NOTES_SHA256" ]; then
+              echo "Release notes changed after appcast verification." >&2
+              exit 1
+            fi
+          }
+          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+          verify_release_notes_body "$RELEASE_JSON"
+          if [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ]; then
+            echo "Release target no longer matches github.sha." >&2
+            exit 1
+          fi
+          if [ "$(jq -r .draft <<< "$RELEASE_JSON")" = "true" ]; then
+            jq -n \
+              --rawfile body release-notes.md \
+              --argjson prerelease "$PRERELEASE" \
+              --arg make_latest "$MAKE_LATEST" \
+              '{
+                body: $body,
+                draft: false,
+                prerelease: $prerelease,
+                make_latest: $make_latest
+              }' > publish-release.json
+            MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+            if [ "$MAIN_SHA" != "$GITHUB_SHA" ]; then
+              echo "main advanced immediately before publication; leaving the verified release as a draft." >&2
+              exit 1
+            fi
+            gh api --method PATCH \
+              "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+              --input publish-release.json >/dev/null
+            RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+            verify_release_notes_body "$RELEASE_JSON"
+          fi
+
+          if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "false" ]; then
+            echo "Release publication did not complete." >&2
+            exit 1
+          fi
+          if [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "$PRERELEASE" ]; then
+            echo "Published release channel does not match the committed version." >&2
+            exit 1
+          fi
+          if [ "$(jq -r .name <<< "$RELEASE_JSON")" != "$RELEASE_NAME" ]; then
+            echo "Published release title does not match the committed version." >&2
+            exit 1
+          fi
+          if [ "$(jq -r .published_at <<< "$RELEASE_JSON")" = "null" ]; then
+            echo "Published release is missing published_at." >&2
+            exit 1
+          fi
+          TAG_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.sha)
+          if [ "$TAG_SHA" != "$GITHUB_SHA" ]; then
+            echo "Published tag does not resolve to github.sha." >&2
+            exit 1
+          fi
+          ASSET_URL=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
+            '.assets[] | select(.name == $name) | .browser_download_url' <<< "$RELEASE_JSON")
+          EXPECTED_ASSET_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$EXPECTED_DMG_NAME"
+          if [ "$ASSET_URL" != "$EXPECTED_ASSET_URL" ]; then
+            echo "Published DMG asset URL does not match the immutable tag URL." >&2
+            exit 1
+          fi
+          for attempt in {1..12}; do
+            if curl --fail --location --silent --show-error --range 0-0 \
+              "$ASSET_URL" --output /dev/null; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "Published DMG did not become publicly downloadable." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+  deploy-appcast:
+    name: Deploy verified appcast snapshot
+    needs:
+      - prepare
+      - publish-appcast
+      - publish-release
+    if: >-
+      !cancelled() &&
+      needs.prepare.result == 'success' &&
+      needs.publish-appcast.result == 'success' &&
+      needs.publish-release.result == 'success'
+    uses: ./.github/workflows/sparkle-pages.yml
+    with:
+      operation: deploy
+      release_tag: ${{ needs.prepare.outputs.release_tag }}
+      expected_appcast_sha256: ${{ needs.publish-appcast.outputs.appcast_sha256 }}
+      expected_base_release_tag: ${{ needs.prepare.outputs.base_snapshot_tag }}
+    permissions:
+      contents: read
+      id-token: write
+      pages: write
