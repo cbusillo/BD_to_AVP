@@ -15,11 +15,23 @@ from PySide6.QtWidgets import QMessageBox, QWidget
 
 RELEASES_URL = "https://github.com/cbusillo/BD_to_AVP/releases"
 CHANNEL_SETTINGS_KEY = "BDToAVPUpdateChannel"
+LEGACY_CHANNEL_SETTINGS_KEY = "native.updateChannel"
 
 
 class UpdateChannel(StrEnum):
     STABLE = "stable"
     RELEASE_CANDIDATES = "rc"
+    BETA = "beta"
+    ALPHA = "alpha"
+
+    @property
+    def display_name(self) -> str:
+        return {
+            UpdateChannel.STABLE: "Stable",
+            UpdateChannel.RELEASE_CANDIDATES: "RC",
+            UpdateChannel.BETA: "Beta",
+            UpdateChannel.ALPHA: "Alpha",
+        }[self]
 
 
 class UpdateMode(StrEnum):
@@ -55,47 +67,83 @@ def resolve_update_mode(environment: UpdaterEnvironment) -> UpdateMode:
 
 
 def allowed_sparkle_channels(channel: UpdateChannel) -> frozenset[str]:
-    if channel is UpdateChannel.RELEASE_CANDIDATES:
-        return frozenset({"rc"})
-    return frozenset()
+    return {
+        UpdateChannel.STABLE: frozenset(),
+        UpdateChannel.RELEASE_CANDIDATES: frozenset({"rc"}),
+        UpdateChannel.BETA: frozenset({"beta", "rc"}),
+        UpdateChannel.ALPHA: frozenset({"alpha", "beta", "rc"}),
+    }[channel]
 
 
 class UpdatePreferences:
     def __init__(self, settings: Any | None = None) -> None:
         if settings is not None:
             self._settings = settings
-            return
-        try:
-            foundation = importlib.import_module("Foundation")
-            self._settings = foundation.NSUserDefaults.standardUserDefaults()
-        except ImportError:
-            self._settings = QSettings()
+        else:
+            try:
+                foundation = importlib.import_module("Foundation")
+                self._settings = foundation.NSUserDefaults.standardUserDefaults()
+            except ImportError:
+                self._settings = QSettings()
+        self._migrate_stored_channel()
 
-    def _value(self) -> object:
+    def _value(self, key: str) -> object:
         if hasattr(self._settings, "objectForKey_"):
-            return self._settings.objectForKey_(CHANNEL_SETTINGS_KEY)
-        return self._settings.value(CHANNEL_SETTINGS_KEY, UpdateChannel.STABLE.value)
+            return self._settings.objectForKey_(key)
+        return self._settings.value(key)
 
-    def _set_value(self, value: str) -> None:
+    def _set_value(self, value: str, key: str = CHANNEL_SETTINGS_KEY) -> None:
         if hasattr(self._settings, "setObject_forKey_"):
-            self._settings.setObject_forKey_(value, CHANNEL_SETTINGS_KEY)
+            self._settings.setObject_forKey_(value, key)
+            return
+        self._settings.setValue(key, value)
+
+    def _remove_value(self, key: str) -> None:
+        if hasattr(self._settings, "removeObjectForKey_"):
+            self._settings.removeObjectForKey_(key)
+            return
+        self._settings.remove(key)
+
+    def _synchronize(self) -> None:
+        if hasattr(self._settings, "synchronize"):
             self._settings.synchronize()
             return
-        self._settings.setValue(CHANNEL_SETTINGS_KEY, value)
         self._settings.sync()
 
-    @property
-    def channel(self) -> UpdateChannel:
-        stored_value = self._value()
+    @staticmethod
+    def _channel_for_value(stored_value: object) -> UpdateChannel:
         value = str(stored_value) if stored_value is not None else UpdateChannel.STABLE.value
+        if value == "releaseCandidate":
+            return UpdateChannel.RELEASE_CANDIDATES
         try:
             return UpdateChannel(value)
         except ValueError:
             return UpdateChannel.STABLE
 
+    def _migrate_stored_channel(self) -> None:
+        current_value = self._value(CHANNEL_SETTINGS_KEY)
+        legacy_value = self._value(LEGACY_CHANNEL_SETTINGS_KEY)
+        if current_value is None and legacy_value is None:
+            return
+        channel = self._channel_for_value(current_value if current_value is not None else legacy_value)
+        changed = False
+        if current_value != channel.value:
+            self._set_value(channel.value)
+            changed = True
+        if legacy_value is not None:
+            self._remove_value(LEGACY_CHANNEL_SETTINGS_KEY)
+            changed = True
+        if changed:
+            self._synchronize()
+
+    @property
+    def channel(self) -> UpdateChannel:
+        return self._channel_for_value(self._value(CHANNEL_SETTINGS_KEY))
+
     @channel.setter
     def channel(self, channel: UpdateChannel) -> None:
         self._set_value(channel.value)
+        self._synchronize()
 
 
 class InstallationPostponement:

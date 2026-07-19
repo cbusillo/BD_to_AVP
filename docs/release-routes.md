@@ -4,9 +4,11 @@ This document is the normative release-identity, version, history, and update-ro
 contract for the direct-distribution application. Implementation work must fail
 closed when it cannot satisfy this contract.
 
-The current release tooling supports only the older Stable/RC model. Do not
-prepare or dispatch an Alpha or Beta release until issues #289 through #293 have
-implemented and validated this contract.
+The application preference model, release metadata/history parser, and appcast
+tooling implement this four-route contract. The guarded release entrypoints and
+Beta 3 recovery/bootstrap remain intentionally blocked on issues 290 through
+293. Do not prepare or dispatch an Alpha or Beta release until those gates have
+landed and the focused signed-install smoke has passed.
 
 ## Production Identity
 
@@ -73,6 +75,10 @@ recovery exception. Build `147` is permanently burned. Because no tag, release,
 appcast item, Pages state, Latest change, or PyPI artifact was published, a
 focused migration may replace the repository metadata with `0.3.0b3` build
 `148`; normal forward-only enforcement resumes immediately afterward.
+The normal release preparation command intentionally rejects that backward
+stage move. The recovery must use a dedicated audited migration that first
+reconfirms the failed RC attempt left no tag, release, appcast, Pages, Latest,
+or PyPI residue; generic release preparation remains fail-closed.
 
 ## Sparkle Route Eligibility
 

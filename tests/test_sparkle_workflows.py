@@ -139,6 +139,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("python scripts/release.py metadata", str(prepare))
         self.assertNotIn("awk -v version", str(workflow))
         self.assertNotIn("release_tag_suffix", str(workflow))
+        self.assertIn("public_version", prepare["outputs"])
+        self.assertIn("dmg_name", prepare["outputs"])
         self.assertIn("publish_pypi", prepare["outputs"])
         self.assertIn("previous_release_tag", prepare["outputs"])
         self.assertIn("python scripts/release.py notes-base", str(release_history))
@@ -149,6 +151,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("LATEST_SNAPSHOT_TAG", str(prepare))
         self.assertIn("base_snapshot_tag", prepare["outputs"])
         self.assertIn("appcast-state.json", str(prepare))
+        self.assertNotIn("${BASE_SNAPSHOT_TAG#v}", str(prepare))
+        self.assertNotIn("${LATEST_SNAPSHOT_TAG#v}", str(prepare))
+        self.assertIn('--release-tag "$BASE_SNAPSHOT_TAG"', str(prepare))
+        self.assertIn('--release-tag "$LATEST_SNAPSHOT_TAG"', str(prepare))
 
     def test_package_preserves_dmg_validation_without_write_token(self) -> None:
         workflow = load_release_engine()
@@ -159,6 +165,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         certificate_script = certificate_step["run"]
         cleanup_step = next(step for step in package["steps"] if step["name"] == "Remove temporary signing material")
         cleanup_script = cleanup_step["run"]
+        package_step = next(step for step in package["steps"] if step["name"] == "Package application for GitHub")
 
         self.assertEqual(set(package["needs"]), {"policy", "prepare"})
         self.assertEqual(package["environment"], "macos-signing")
@@ -177,7 +184,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("dmg_sha256", package["outputs"])
         self.assertIn("dmg_size", package["outputs"])
         self.assertIn("SHA256SUMS", str(package))
-        self.assertIn('DMG_NAME="3D-Blu-ray-to-Vision-Pro-$PACKAGE_VERSION.dmg"', str(package))
+        self.assertEqual(package_step["env"]["DMG_NAME"], "${{ needs.prepare.outputs.dmg_name }}")
+        self.assertNotIn('DMG_NAME="3D-Blu-ray-to-Vision-Pro-$PACKAGE_VERSION.dmg"', str(package))
         self.assertIn("BUILD_KEYCHAIN_PASSWORD", str(package))
         self.assertIn("USER_KEYCHAINS_PATH=", certificate_script)
         self.assertIn('echo "USER_KEYCHAINS_PATH=$USER_KEYCHAINS_PATH"', certificate_script)
@@ -381,6 +389,15 @@ esac
         self.assertIn("make_latest: $make_latest", str(jobs["publish-release"]))
         self.assertIn("prerelease: $prerelease", str(jobs["publish-release"]))
         self.assertIn("Published release title does not match", str(jobs["publish-release"]))
+        publish_script = jobs["publish-release"]["steps"][0]["run"]
+        payload_index = publish_script.index("}' > publish-release.json")
+        freshness_index = publish_script.index(
+            'MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)'
+        )
+        publication_index = publish_script.index("gh api --method PATCH")
+        self.assertLess(payload_index, freshness_index)
+        self.assertLess(freshness_index, publication_index)
+        self.assertIn("main advanced immediately before publication", publish_script)
         self.assertNotIn("releases/tags/$RELEASE_TAG", str(workflow))
         self.assertIn("releases/$RELEASE_ID", str(workflow))
         self.assertIn("uploads.github.com", str(workflow))
@@ -503,6 +520,21 @@ esac
         self.assertIn("Protected main moved before PyPI publication", str(publish))
         self.assertIn("actions/artifacts/$PYTHON_ARTIFACT_ID", str(publish))
         self.assertIn("sha256:$PYTHON_ARTIFACT_DIGEST", str(publish))
+        steps = publish["steps"]
+        transfer_index = next(
+            index for index, step in enumerate(steps) if step["name"] == "Verify Python distribution transfer"
+        )
+        freshness_index = next(
+            index
+            for index, step in enumerate(steps)
+            if step["name"] == "Reconfirm protected main before PyPI publication"
+        )
+        publisher_index = next(
+            index for index, step in enumerate(steps) if "pypa/gh-action-pypi-publish@" in step.get("uses", "")
+        )
+        self.assertLess(transfer_index, freshness_index)
+        self.assertEqual(freshness_index + 1, publisher_index)
+        self.assertIn("Protected main moved immediately before PyPI publication", str(steps[freshness_index]))
         download = next(step for step in publish["steps"] if "actions/download-artifact@" in step.get("uses", ""))
         self.assertEqual(download["with"]["artifact-ids"], "${{ needs.release.outputs.python_artifact_id }}")
         self.assertEqual(download["with"]["merge-multiple"], "true")
@@ -627,6 +659,8 @@ class SparklePagesWorkflowTests(unittest.TestCase):
         self.assertIn("validate-empty", str(prepare))
         self.assertIn("gh release download", str(prepare))
         self.assertIn("validate-snapshot", str(prepare))
+        self.assertIn('--release-tag "$RELEASE_TAG"', str(prepare))
+        self.assertNotIn("${RELEASE_TAG#v}", str(prepare))
         self.assertIn("appcast-state.json", str(prepare))
         self.assertIn('status: "disabled"', str(prepare))
         self.assertIn('status: "enabled"', str(prepare))

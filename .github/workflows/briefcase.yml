@@ -117,6 +117,17 @@ jobs:
             exit 1
           fi
 
+      - name: Reconfirm protected main before PyPI publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [ "$MAIN_SHA" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved immediately before PyPI publication." >&2
+            exit 1
+          fi
+
       - name: Publish with PyPI trusted publishing and attestations
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:

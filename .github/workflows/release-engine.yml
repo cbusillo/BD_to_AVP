@@ -40,6 +40,9 @@ name: Signed release engine
       package_version:
         description: Validated Python package version
         value: ${{ jobs.prepare.outputs.package_version }}
+      public_version:
+        description: Validated public release version
+        value: ${{ jobs.prepare.outputs.public_version }}
       build_version:
         description: Validated global application build number
         value: ${{ jobs.prepare.outputs.build_version }}
@@ -49,6 +52,9 @@ name: Signed release engine
       release_name:
         description: Validated public release title
         value: ${{ jobs.prepare.outputs.release_name }}
+      dmg_name:
+        description: Validated public DMG asset name
+        value: ${{ jobs.prepare.outputs.dmg_name }}
       channel:
         description: Validated Sparkle release channel
         value: ${{ jobs.prepare.outputs.channel }}
@@ -184,9 +190,11 @@ jobs:
     timeout-minutes: 10
     outputs:
       package_version: ${{ steps.metadata.outputs.package_version }}
+      public_version: ${{ steps.metadata.outputs.public_version }}
       build_version: ${{ steps.metadata.outputs.build_version }}
       release_tag: ${{ steps.metadata.outputs.release_tag }}
       release_name: ${{ steps.metadata.outputs.release_name }}
+      dmg_name: ${{ steps.metadata.outputs.dmg_name }}
       channel: ${{ steps.metadata.outputs.channel }}
       prerelease: ${{ steps.metadata.outputs.prerelease }}
       make_latest: ${{ steps.metadata.outputs.make_latest }}
@@ -376,7 +384,7 @@ jobs:
               --dir release-preflight/active
             python scripts/sparkle_appcast.py validate-snapshot \
               --feed release-preflight/active/appcast.xml \
-              --short-version "${BASE_SNAPSHOT_TAG#v}"
+              --release-tag "$BASE_SNAPSHOT_TAG"
             ACTIVE_SHA256=$(sha256sum release-preflight/active/appcast.xml | awk '{print $1}')
             if [ "$ACTIVE_SHA256" != "$STATE_APPCAST_SHA256" ]; then
               echo "Published Sparkle state digest differs from its durable snapshot." >&2
@@ -432,7 +440,7 @@ jobs:
               --dir release-preflight/latest
             python scripts/sparkle_appcast.py validate-snapshot \
               --feed release-preflight/latest/appcast.xml \
-              --short-version "${LATEST_SNAPSHOT_TAG#v}"
+              --release-tag "$LATEST_SNAPSHOT_TAG"
             python scripts/sparkle_appcast.py check-release \
               --feed release-preflight/latest/appcast.xml \
               --build-version "$BUILD_VERSION" \
@@ -676,6 +684,7 @@ jobs:
           BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: ${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}
           BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
           DEV_ID: ${{ secrets.DEV_ID }}
+          DMG_NAME: ${{ needs.prepare.outputs.dmg_name }}
           PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
         run: |
           set -euo pipefail
@@ -686,7 +695,6 @@ jobs:
           fi
           security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           APP_PATH="macos/build/package/3D Blu-ray to Vision Pro.app"
-          DMG_NAME="3D-Blu-ray-to-Vision-Pro-$PACKAGE_VERSION.dmg"
           DMG_PATH="dist/$DMG_NAME"
           APP_ARCHIVE="$RUNNER_TEMP/bd-to-avp-app-$GITHUB_RUN_ID.zip"
           mkdir -p dist/notary
@@ -1359,7 +1367,7 @@ jobs:
               --output appcast-site/appcast.xml
             python scripts/sparkle_appcast.py validate-snapshot \
               --feed appcast-site/appcast.xml \
-              --short-version "${BASE_SNAPSHOT_TAG#v}"
+              --release-tag "$BASE_SNAPSHOT_TAG"
           fi
           python scripts/sparkle_appcast.py validate \
             --feed appcast-site/appcast.xml
@@ -1706,11 +1714,6 @@ jobs:
             exit 1
           fi
           if [ "$(jq -r .draft <<< "$RELEASE_JSON")" = "true" ]; then
-            MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
-            if [ "$MAIN_SHA" != "$GITHUB_SHA" ]; then
-              echo "main advanced before publication; leaving the verified release as a draft." >&2
-              exit 1
-            fi
             jq -n \
               --rawfile body release-notes.md \
               --argjson prerelease "$PRERELEASE" \
@@ -1721,6 +1724,11 @@ jobs:
                 prerelease: $prerelease,
                 make_latest: $make_latest
               }' > publish-release.json
+            MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+            if [ "$MAIN_SHA" != "$GITHUB_SHA" ]; then
+              echo "main advanced immediately before publication; leaving the verified release as a draft." >&2
+              exit 1
+            fi
             gh api --method PATCH \
               "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
               --input publish-release.json >/dev/null

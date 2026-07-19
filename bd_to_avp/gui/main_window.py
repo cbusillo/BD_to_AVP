@@ -296,11 +296,8 @@ class MainWindow(QMainWindow):
             channel_menu = help_menu.addMenu("Update Channel")
             channel_actions = QActionGroup(self)
             channel_actions.setExclusive(True)
-            for channel, label in (
-                (UpdateChannel.STABLE, "Stable"),
-                (UpdateChannel.RELEASE_CANDIDATES, "Release Candidates"),
-            ):
-                action = QAction(label, self)
+            for channel in UpdateChannel:
+                action = QAction(channel.display_name, self)
                 action.setCheckable(True)
                 action.setChecked(self.updater_manager.channel is channel)
                 action.triggered.connect(partial(self.set_update_channel, channel))
