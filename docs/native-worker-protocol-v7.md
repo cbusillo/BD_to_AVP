@@ -1,5 +1,8 @@
 # Native Worker Protocol v7
 
+> Historical protocol. The current contract is
+> [Native Worker Protocol v8](native-worker-protocol-v8.md).
+
 Protocol v7 adds an explicit video output mode and software AV1 quality to the
 exact `encoding` schema. The native app and bundled Python worker ship
 atomically and both require version 7.

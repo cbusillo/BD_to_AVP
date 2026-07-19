@@ -349,7 +349,7 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
                 Path(str(mkv_file.media_path)).with_suffix(".en.srt").write_text("subtitle", encoding="utf-8")
 
             with patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=write_srt) as rip:
-                mkv_class.side_effect = lambda path: type("MkvStub", (), {"media_path": Path(path)})()
+                mkv_class.side_effect = lambda path, **_kwargs: type("MkvStub", (), {"media_path": Path(path)})()
 
                 extract_subtitle_to_srt(source_mkv, output_folder)
 

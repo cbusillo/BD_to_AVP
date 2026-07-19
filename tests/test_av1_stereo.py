@@ -93,6 +93,9 @@ class Av1StereoTests(unittest.TestCase):
             run_command.assert_called_once_with(
                 [Path("/tools/MP4Box"), "-patch", patch_path, input_path, "-out", output_path],
                 "add Apple stereo packing metadata to AV1 video.",
+                run_context=None,
+                cancellation_event=None,
+                observability_context=None,
             )
             self.assertFalse(patch_path.exists())
 

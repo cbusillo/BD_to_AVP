@@ -18,6 +18,7 @@ from bd_to_avp.process_runner import (
     CaptureOverflowPolicy,
     ChildProcessRunner,
     ProcessArtifactProbe,
+    ProcessCancelled,
     ProcessExecutionError,
     ProcessPipelineError,
     ProcessPipelineRunner,
@@ -557,7 +558,11 @@ def split_mvc_to_stereo(
     right_output_path: Path,
     disc_info: DiscInfo,
     crop_params: str,
-):
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> tuple[Path, Path]:
     if can_use_native_mvc_splitter(disc_info):
         result = split_mvc_to_stereo_native(
             video_input_path,
@@ -565,6 +570,9 @@ def split_mvc_to_stereo(
             right_output_path,
             disc_info,
             crop_params,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
         )
         if not config.keep_files:
             if not should_stream_mvc_from_container(video_input_path):
@@ -579,9 +587,21 @@ def encode_mvc_to_av1_sbs(
     output_path: Path,
     disc_info: DiscInfo,
     crop_params: str,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
 ) -> Path:
     if can_use_native_mvc_splitter(disc_info):
-        result = encode_mvc_to_av1_sbs_native(video_input_path, output_path, disc_info, crop_params)
+        result = encode_mvc_to_av1_sbs_native(
+            video_input_path,
+            output_path,
+            disc_info,
+            crop_params,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
         if not config.keep_files:
             if not should_stream_mvc_from_container(video_input_path):
                 video_input_path.unlink(missing_ok=True)
@@ -602,7 +622,14 @@ def av1_stereo_patch_xml() -> str:
     )
 
 
-def add_av1_stereo_metadata(input_path: Path, output_path: Path) -> None:
+def add_av1_stereo_metadata(
+    input_path: Path,
+    output_path: Path,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> None:
     output_path.unlink(missing_ok=True)
     file_descriptor, patch_name = tempfile.mkstemp(prefix="bd-to-avp-av1-stereo-", suffix=".xml")
     os.close(file_descriptor)
@@ -612,6 +639,9 @@ def add_av1_stereo_metadata(input_path: Path, output_path: Path) -> None:
         run_command(
             [config.MP4BOX_PATH, "-patch", patch_path, input_path, "-out", output_path],
             "add Apple stereo packing metadata to AV1 video.",
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
         )
     finally:
         patch_path.unlink(missing_ok=True)
@@ -622,6 +652,10 @@ def combine_to_mv_hevc(
     right_video_path: Path,
     output_path: Path,
     color_depth: int,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
 ) -> None:
     output_path.unlink(missing_ok=True)
     command = [
@@ -647,6 +681,9 @@ def combine_to_mv_hevc(
         command,
         "combine stereo HEVC streams to MV-HEVC.",
         capture_overflow=CaptureOverflowPolicy.FAIL,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
     )
     if "left and right input resolutions do not match. aborting!" in output:
         raise RuntimeError("Left and right input resolutions do not match.")
@@ -665,6 +702,10 @@ def detect_crop_parameters(
     video_path: Path,
     start_seconds: int = 600,
     num_frames: int = 300,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
 ) -> str:
     print("Detecting crop parameters...")
     if not config.crop_black_bars:
@@ -680,7 +721,12 @@ def detect_crop_parameters(
     )
 
     try:
-        _, stderr = run_ffmpeg_capture(stream)
+        _, stderr = run_ffmpeg_capture(
+            stream,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
         output = stderr.decode("utf-8", errors="replace").splitlines()
     except ffmpeg.Error as e:
         print("FFmpeg Error:")
@@ -709,14 +755,26 @@ def detect_crop_parameters(
     return composite_crop
 
 
-def upscale_file(input_path: Path) -> None:
+def upscale_file(
+    input_path: Path,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> None:
     upscale_command = [
         config.FX_UPSCALE_PATH,
         "--bitrate-scaling-factor",
         config.upscale_quality / 100,
         input_path,
     ]
-    run_command(upscale_command, "Upscale video with FX Upscale plugin.")
+    run_command(
+        upscale_command,
+        "Upscale video with FX Upscale plugin.",
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
+    )
 
     if not config.keep_files:
         input_path.unlink(missing_ok=True)
@@ -727,6 +785,10 @@ def create_left_right_files(
     output_folder: Path,
     mvc_video: Path,
     crop_params: str,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
 ) -> tuple[Path, Path]:
     left_eye_output_path = output_folder / f"{disc_info.name}_left_movie.mov"
     right_eye_output_path = output_folder / f"{disc_info.name}_right_movie.mov"
@@ -737,6 +799,9 @@ def create_left_right_files(
             right_eye_output_path,
             disc_info,
             crop_params,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
         )
 
     return left_eye_output_path, right_eye_output_path
@@ -747,17 +812,38 @@ def create_av1_sbs_file(
     output_folder: Path,
     mvc_video: Path,
     crop_params: str,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
 ) -> Path:
     output_path = output_folder / f"{disc_info.name}_AV1-SBS-unmarked.mp4"
     if config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
-        encode_mvc_to_av1_sbs(mvc_video, output_path, disc_info, crop_params)
+        encode_mvc_to_av1_sbs(
+            mvc_video,
+            output_path,
+            disc_info,
+            crop_params,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
     return output_path
 
 
-def get_video_color_depth(input_path: Path) -> int:
+def get_video_color_depth(
+    input_path: Path,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> int:
     try:
         probe = run_ffprobe(
             input_path,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
             select_streams="v:0",
             show_entries="stream=pix_fmt",
         )
@@ -767,17 +853,34 @@ def get_video_color_depth(input_path: Path) -> int:
             if "10le" in pix_fmt or "10be" in pix_fmt:
                 return 10
             return DiscInfo.color_depth
+    except ProcessCancelled:
+        raise
     except (ffmpeg.Error, json.JSONDecodeError, ProcessRunnerError, UnicodeDecodeError):
         print(f"Error getting video color depth, using default of {DiscInfo.color_depth}")
     return DiscInfo.color_depth
 
 
 def create_mv_hevc_file(
-    left_video_path: Path, right_video_path: Path, output_folder: Path, disc_info: DiscInfo
+    left_video_path: Path,
+    right_video_path: Path,
+    output_folder: Path,
+    disc_info: DiscInfo,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
 ) -> Path:
     mv_hevc_path = output_folder / f"{disc_info.name}_MV-HEVC.mov"
     if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
-        combine_to_mv_hevc(left_video_path, right_video_path, mv_hevc_path, disc_info.color_depth)
+        combine_to_mv_hevc(
+            left_video_path,
+            right_video_path,
+            mv_hevc_path,
+            disc_info.color_depth,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
 
     if not config.keep_files:
         left_video_path.unlink(missing_ok=True)
@@ -785,19 +888,44 @@ def create_mv_hevc_file(
     return mv_hevc_path
 
 
-def create_av1_stereo_file(input_path: Path, output_folder: Path, disc_info: DiscInfo) -> Path:
+def create_av1_stereo_file(
+    input_path: Path,
+    output_folder: Path,
+    disc_info: DiscInfo,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> Path:
     output_path = output_folder / f"{disc_info.name}_AV1-Stereo.mp4"
     if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
-        add_av1_stereo_metadata(input_path, output_path)
+        add_av1_stereo_metadata(
+            input_path,
+            output_path,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
     if not config.keep_files:
         input_path.unlink(missing_ok=True)
     return output_path
 
 
-def create_upscaled_file(input_path: Path) -> Path:
+def create_upscaled_file(
+    input_path: Path,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> Path:
     if config.fx_upscale:
         if config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
-            upscale_file(input_path)
+            upscale_file(
+                input_path,
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                observability_context=observability_context,
+            )
 
         upscaled_path = input_path.with_stem(f"{input_path.stem} Upscaled")
         if not upscaled_path.exists():

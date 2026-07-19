@@ -1,3 +1,5 @@
+import threading
+
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +15,8 @@ from bd_to_avp.modules.command import run_command, run_ffmpeg_print_errors, run_
 from bd_to_avp.modules.languages import language_name, normalize_source_language
 from bd_to_avp.modules.util import sorted_files_by_creation_filtered_on_suffix
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.observability import ObservabilityContext
+from bd_to_avp.runtime import RunContext
 
 
 AUDIO_CHANNEL_LAYOUT_NAMES = {
@@ -26,6 +30,10 @@ def extract_mvc_and_audio(
     input_path: Path,
     video_output_path: Path | None,
     audio_output_path: Path | None,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
 ) -> None:
     stream = ffmpeg.input(str(input_path))
 
@@ -41,13 +49,25 @@ def extract_mvc_and_audio(
                 stream["a"],
                 f"file:{audio_output_path}",
                 c="pcm_s24le",
-                **audio_handler_metadata_options(input_path),
+                **audio_handler_metadata_options(
+                    input_path,
+                    run_context=run_context,
+                    cancellation_event=cancellation_event,
+                    observability_context=observability_context,
+                ),
             )
         )
 
     if output_streams:
         output_message = "ffmpeg to extract MVC video and audio from source"
-        run_ffmpeg_print_errors(output_streams, output_message, overwrite_output=True)
+        run_ffmpeg_print_errors(
+            output_streams,
+            output_message,
+            overwrite_output=True,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
 
 
 def create_muxed_file(
@@ -55,10 +75,22 @@ def create_muxed_file(
     video_path: Path,
     output_folder: Path,
     disc_name: str,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
 ) -> Path:
     muxed_path = output_folder / f"{disc_name}{config.final_file_tag}.mov"
     if config.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
-        mux_video_audio_subs(video_path, audio_path, muxed_path, output_folder)
+        mux_video_audio_subs(
+            video_path,
+            audio_path,
+            muxed_path,
+            output_folder,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
     return muxed_path
 
 
@@ -66,6 +98,10 @@ def create_mvc_and_audio(
     disc_name: str,
     mkv_output_path: Path,
     output_folder: Path,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
 ) -> tuple[Path, Path]:
     video_output_path = output_folder / f"{disc_name}_mvc.h264"
     audio_output_path = output_folder / f"{disc_name}_audio_PCM.mov"
@@ -77,6 +113,9 @@ def create_mvc_and_audio(
             mkv_output_path,
             None if direct_mvc_stream else video_output_path,
             None if m4a_audio_preparation else audio_output_path,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
         )
 
     return (
@@ -85,8 +124,22 @@ def create_mvc_and_audio(
     )
 
 
-def mux_video_audio_subs(video_path: Path, audio_path: Path, muxed_path: Path, output_folder: Path) -> None:
-    audio_streams = get_audio_stream_data(audio_path)
+def mux_video_audio_subs(
+    video_path: Path,
+    audio_path: Path,
+    muxed_path: Path,
+    output_folder: Path,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> None:
+    audio_streams = get_audio_stream_data(
+        audio_path,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
+    )
     has_declared_audio_default = any(
         int(stream.get("disposition", {}).get("default", 0) or 0) == 1 for stream in audio_streams
     )
@@ -142,7 +195,13 @@ def mux_video_audio_subs(video_path: Path, audio_path: Path, muxed_path: Path, o
         output_track_index += 1
 
     command += [muxed_path]
-    run_command(command, "mux video, audio, and subtitles.")
+    run_command(
+        command,
+        "mux video, audio, and subtitles.",
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
+    )
 
 
 def audio_channel_layout_name(stream: dict[str, Any]) -> str:
@@ -178,8 +237,20 @@ def audio_track_title(stream: dict[str, Any]) -> str | None:
     return None
 
 
-def audio_handler_metadata_options(input_path: Path, audio_selector: str = "a") -> dict[str, str]:
-    streams = get_audio_stream_data(input_path)
+def audio_handler_metadata_options(
+    input_path: Path,
+    audio_selector: str = "a",
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> dict[str, str]:
+    streams = get_audio_stream_data(
+        input_path,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
+    )
     if audio_selector != "a":
         stream_type, separator, stream_index = audio_selector.partition(":")
         if stream_type != "a" or not separator or not stream_index.isdigit():
@@ -200,8 +271,19 @@ def normalize_track_language(language_code: object) -> tuple[str, str]:
     return canonical_code, language_name(canonical_code)
 
 
-def get_audio_stream_data(file_path: Path) -> list[dict[str, Any]]:
-    probe = run_ffprobe(file_path)
+def get_audio_stream_data(
+    file_path: Path,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> list[dict[str, Any]]:
+    probe = run_ffprobe(
+        file_path,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
+    )
     if not probe or "streams" not in probe:
         return []
     audio_streams = [stream for stream in probe["streams"] if stream["codec_type"] == "audio"]

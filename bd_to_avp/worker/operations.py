@@ -16,8 +16,15 @@ from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.disc import DiscTitleSelectionError, get_disc_and_mvc_video_info, MKVCreationError
 from bd_to_avp.modules.file import path_is_relative_to
 from bd_to_avp.modules.preview import PreviewRange, resolve_preview_range
-from bd_to_avp.modules.process import ProcessingCancelled, conversion_stage_plan, start_process
+from bd_to_avp.modules.process import (
+    ProcessingCancelled,
+    conversion_stage_plan,
+    stage_observability_context,
+    start_process,
+)
 from bd_to_avp.modules.sub import SRTCreationError
+from bd_to_avp.process_runner import ProcessCancelled
+from bd_to_avp.runtime import RunContext
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
     JobSource,
@@ -89,8 +96,9 @@ def run_operation(
     owner: WorkerProcessOwner,
     activity: WorkerActivityReporter | None = None,
 ) -> dict[str, object]:
+    run_context = activity.run_context if activity is not None else None
     if job.operation is WorkerOperation.INSPECT_SOURCE:
-        return inspect_source(job.source, owner)
+        return inspect_source(job.source, owner, run_context=run_context)
     if job.operation is WorkerOperation.CONVERT_SOURCE:
         if activity is None:
             raise WorkerOperationError("internal_error", "Conversion requires an activity reporter.")
@@ -102,7 +110,12 @@ def run_operation(
     raise WorkerOperationError("unsupported_operation", f"Unsupported worker operation: {job.operation.value}.")
 
 
-def inspect_source(source: JobSource, owner: WorkerProcessOwner) -> dict[str, object]:
+def inspect_source(
+    source: JobSource,
+    owner: WorkerProcessOwner,
+    *,
+    run_context: RunContext | None = None,
+) -> dict[str, object]:
     source_path = validate_source(source)
     if (
         source.kind
@@ -125,10 +138,21 @@ def inspect_source(source: JobSource, owner: WorkerProcessOwner) -> dict[str, ob
     try:
         with configured_source(source, source_path):
             disc_info = (
-                get_disc_and_mvc_video_info(source.title_id)
+                get_disc_and_mvc_video_info(
+                    source.title_id,
+                    run_context=run_context,
+                    cancellation_event=owner.cancellation_event,
+                    observability_context=stage_observability_context("inspect_source"),
+                )
                 if source.title_id is not None
-                else get_disc_and_mvc_video_info()
+                else get_disc_and_mvc_video_info(
+                    run_context=run_context,
+                    cancellation_event=owner.cancellation_event,
+                    observability_context=stage_observability_context("inspect_source"),
+                )
             )
+    except ProcessCancelled as error:
+        raise WorkerCancelled("The source inspection was cancelled.") from error
     except ffmpeg.Error as error:
         if owner.cancellation_event.is_set():
             raise WorkerCancelled("The source inspection was cancelled.") from error
@@ -200,7 +224,8 @@ def preview_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActi
     if preview is None:
         raise WorkerOperationError("invalid_request", "Preview requests require preview options.")
 
-    inspection = inspect_source(job.source, owner)
+    activity.stage_started("inspect_source", "Reading video metadata")
+    inspection = inspect_source(job.source, owner, run_context=activity.run_context)
     try:
         duration_value = inspection["duration_seconds"]
         if isinstance(duration_value, bool) or not isinstance(duration_value, (int, float)):
@@ -268,6 +293,7 @@ def _convert_source(
                 cancellation_event=owner.cancellation_event,
                 activity=activity,
                 selected_title_id=job.source.title_id,
+                run_context=activity.run_context,
             )
             resolved_preview_range = config.preview_range
             owner.check_cancelled()

@@ -102,10 +102,10 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertNil(state.progress)
     }
 
-    func testSharedV6ProgressFixtureDecodes() throws {
+    func testSharedV8ProgressFixtureDecodes() throws {
         let event = try JSONDecoder().decode(
             WorkerEvent.self,
-            from: sharedFixtureData(named: "native_worker_stage_started_progress_v7.json")
+            from: sharedFixtureData(named: "native_worker_stage_started_progress_v8.json")
         )
 
         XCTAssertEqual(event.payload.progress, WorkerProgress(currentStage: 1, totalStages: 2, stageFraction: nil))
@@ -130,7 +130,7 @@ final class WorkerLifecycleTests: XCTestCase {
     func testStructuredAudioFallbackWarningExposesCodecsAndActualAction() throws {
         let event = try JSONDecoder().decode(
             WorkerEvent.self,
-            from: sharedFixtureData(named: "native_worker_audio_fallback_warning_v7.json")
+            from: sharedFixtureData(named: "native_worker_audio_fallback_warning_v8.json")
         )
 
         XCTAssertEqual(event.payload.warningCode, "audio_automatic_fallback_to_aac")
@@ -339,10 +339,10 @@ final class WorkerLifecycleTests: XCTestCase {
         }
     }
 
-    func testDecodesAndAppliesSharedV6ConversionCompletionFixture() throws {
+    func testDecodesAndAppliesSharedV8ConversionCompletionFixture() throws {
         let completed = try JSONDecoder().decode(
             WorkerEvent.self,
-            from: sharedFixtureData(named: "native_worker_conversion_completed_v7.json")
+            from: sharedFixtureData(named: "native_worker_conversion_completed_v8.json")
         )
         let fixtureJobID = try XCTUnwrap(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
         var state = WorkerLifecycleState()
@@ -369,6 +369,21 @@ final class WorkerLifecycleTests: XCTestCase {
                 .unexpectedSequence(expected: 0, received: 2)
             )
         }
+    }
+
+    func testObservabilityAdvancesSequenceWithoutChangingLifecycleState() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID, operationKind: .conversion)
+        try state.receive(event(.workerReady, sequence: 0))
+        let phase = state.phase
+        let stageMessage = state.stageMessage
+
+        try state.receive(event(.observability, sequence: 1))
+
+        XCTAssertEqual(state.phase, phase)
+        XCTAssertEqual(state.stageMessage, stageMessage)
+        XCTAssertEqual(state.lastSequence, 1)
     }
 
     private func event(

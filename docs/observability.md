@@ -28,8 +28,10 @@ rather than being copied into observability events.
 
 The native worker preserves two independent channels:
 
-- Standard output contains low-volume JSONL control and semantic lifecycle
-  events only.
+- Standard output contains low-volume JSONL control, semantic lifecycle, and
+  canonical observability envelopes. An observability envelope uses worker
+  type `observability` and nests the unchanged schema-v1 event under
+  `payload.event`; worker and observability sequence numbers remain independent.
 - Standard error contains continuously drained, bounded raw child-tool
   diagnostics.
 
@@ -37,6 +39,17 @@ High-volume MakeMKV, FFmpeg, or splitter output must not be copied into worker
 protocol events. Structured events identify the active tool, stage, recent
 activity, process outcome, and active artifact while the bounded diagnostic tail
 retains recent raw evidence.
+
+The macOS client decodes canonical events with the shared Swift model, advances
+the worker transport sequence without changing lifecycle progress, and projects
+their stable kind, stage, severity, message, detail, and failure fields into the
+existing bounded diagnostic history. Unsupported schemas, secret privacy, and
+oversized text fail decoding rather than falling back to unredacted strings.
+
+Worker conversion stages pass the same `RunContext` and cancellation token into
+every child-tool wrapper. Canonical child-process events therefore retain the
+active stage identifier across preflight, preview preparation, probing, MVC/AV1
+encoding, subtitles, audio preparation, upscale, and final muxing.
 
 ## Child Processes
 

@@ -13,8 +13,10 @@ from uuid import UUID
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.languages import LanguageCodeError, normalize_language_code
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.observability import ObservabilityEvent
+from bd_to_avp.runtime import RunContext
 
-PROTOCOL_VERSION = 7
+PROTOCOL_VERSION = 8
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_DETAIL_BYTES = 64 * 1024
@@ -57,6 +59,7 @@ class WorkerEventType(StrEnum):
     LOG = "log"
     WARNING = "warning"
     ARTIFACT_READY = "artifact.ready"
+    OBSERVABILITY = "observability"
     JOB_COMPLETED = "job.completed"
     JOB_FAILED = "job.failed"
     JOB_CANCELLED = "job.cancelled"
@@ -725,13 +728,18 @@ class JobSpec:
 
 
 class WorkerActivityReporter:
-    def __init__(self, emitter: "WorkerEventEmitter") -> None:
+    def __init__(self, emitter: "WorkerEventEmitter", run_context: RunContext | None = None) -> None:
         self._emitter = emitter
+        self._run_context = run_context
         self._current_stage: str | None = None
         self._stage_plan: tuple[str, ...] = ()
         self._stage_index: int | None = None
         self._stage_fraction: float | None = None
         self._lock = threading.Lock()
+
+    @property
+    def run_context(self) -> RunContext | None:
+        return self._run_context
 
     def set_stage_plan(self, stages: Sequence[str]) -> None:
         stage_plan = tuple(stage for stage in stages if stage)
@@ -865,3 +873,11 @@ class WorkerEventEmitter:
         if details:
             error["details"] = bounded_detail(details)
         self.emit(WorkerEventType.JOB_FAILED, {"error": error})
+
+
+class WorkerObservabilitySink:
+    def __init__(self, emitter: WorkerEventEmitter) -> None:
+        self._emitter = emitter
+
+    def emit(self, event: ObservabilityEvent) -> None:
+        self._emitter.emit(WorkerEventType.OBSERVABILITY, {"event": event.to_dict()})

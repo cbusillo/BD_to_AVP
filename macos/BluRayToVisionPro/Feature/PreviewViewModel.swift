@@ -217,6 +217,8 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
                 throw WorkerLifecycleError.missingPayload(event: event.type)
             }
             try accept(artifact)
+        case .observability:
+            break
         case .jobCompleted, .jobFailed, .jobCancelled, .jobDecisionRequired:
             break
         }
@@ -279,7 +281,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
             phase = .failed
             stageMessage = "Preview Failed"
             clearActiveWorker(preserveDirectory: false)
-        case .workerReady, .jobStarted, .stageStarted, .heartbeat, .log, .warning, .artifactReady:
+        case .workerReady, .jobStarted, .stageStarted, .heartbeat, .log, .warning, .artifactReady, .observability:
             failTransport("The preview engine returned an invalid terminal event.")
         }
     }

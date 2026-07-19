@@ -8,10 +8,153 @@ from bd_to_avp.modules import process
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import Stage
 from bd_to_avp.modules.disc import DiscInfo
+from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.observability import ObservabilityEmitter
+from bd_to_avp.runtime import ObservabilityStream, RunContext
 
 
 class ProcessAudioWiringTests(unittest.TestCase):
+    def test_process_each_threads_run_context_and_stage_context_to_every_tool_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_path = temp_path / "source.mkv"
+            source_path.write_bytes(b"source")
+            output_folder = temp_path / "Movie"
+            output_folder.mkdir()
+            preview_range = PreviewRange(0, 60, 120)
+            run_context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER))
+            stage_mocks: list[tuple[object, str]] = []
+
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(process.config, "source_path", source_path))
+                stack.enter_context(patch.object(process.config, "source_str", None))
+                stack.enter_context(patch.object(process.config, "output_root_path", temp_path))
+                stack.enter_context(patch.object(process.config, "overwrite", True))
+                stack.enter_context(patch.object(process.config, "keep_files", True))
+                stack.enter_context(patch.object(process.config, "audio_mode", AudioMode.CONVERT_AAC))
+                stack.enter_context(patch.object(process.config, "video_mode", VideoMode.MV_HEVC))
+                stack.enter_context(patch.object(process.config, "fx_upscale", True))
+                stack.enter_context(patch.object(process.config, "skip_subtitles", False))
+                stack.enter_context(patch.object(process.config, "start_stage", Stage.CREATE_MKV))
+                stack.enter_context(patch.object(process.config, "preview_range", preview_range))
+                stack.enter_context(patch.object(process.config, "remove_original", False))
+                stage_mocks.append(
+                    (stack.enter_context(patch.object(process.preflight, "verify_runtime_ready")), "preflight")
+                )
+                stage_mocks.append(
+                    (
+                        stack.enter_context(
+                            patch.object(
+                                process,
+                                "get_disc_and_mvc_video_info",
+                                return_value=DiscInfo(name="Movie"),
+                            )
+                        ),
+                        "inspect_source",
+                    )
+                )
+                stack.enter_context(
+                    patch.object(process, "prepare_output_folder_for_source", return_value=output_folder)
+                )
+                stack.enter_context(patch.object(process, "file_exists_normalized", return_value=False))
+                stage_mocks.append(
+                    (
+                        stack.enter_context(patch.object(process, "create_mkv_file", return_value=source_path)),
+                        "create_mkv",
+                    )
+                )
+                stage_mocks.append(
+                    (
+                        stack.enter_context(
+                            patch.object(
+                                process,
+                                "create_bounded_preview_source",
+                                return_value=(source_path, preview_range),
+                            )
+                        ),
+                        "prepare_preview_range",
+                    )
+                )
+                stage_mocks.append(
+                    (stack.enter_context(patch.object(process, "get_video_color_depth", return_value=8)), "probe_color")
+                )
+                stage_mocks.append(
+                    (
+                        stack.enter_context(patch.object(process, "detect_crop_parameters", return_value="")),
+                        "detect_crop",
+                    )
+                )
+                audio_path = output_folder / "audio.mov"
+                mvc_path = output_folder / "mvc.h264"
+                stage_mocks.append(
+                    (
+                        stack.enter_context(
+                            patch.object(process, "create_mvc_and_audio", return_value=(audio_path, mvc_path))
+                        ),
+                        "extract_mvc_and_audio",
+                    )
+                )
+                stage_mocks.append(
+                    (stack.enter_context(patch.object(process, "create_srt_from_mkv")), "extract_subtitles")
+                )
+                left_path = output_folder / "left.mov"
+                right_path = output_folder / "right.mov"
+                stage_mocks.append(
+                    (
+                        stack.enter_context(
+                            patch.object(process, "create_left_right_files", return_value=(left_path, right_path))
+                        ),
+                        "create_left_right_files",
+                    )
+                )
+                mv_hevc_path = output_folder / "mv-hevc.mov"
+                stage_mocks.append(
+                    (
+                        stack.enter_context(patch.object(process, "create_mv_hevc_file", return_value=mv_hevc_path)),
+                        "combine_to_mv_hevc",
+                    )
+                )
+                upscaled_path = output_folder / "upscaled.mov"
+                stage_mocks.append(
+                    (
+                        stack.enter_context(patch.object(process, "create_upscaled_file", return_value=upscaled_path)),
+                        "upscale_video",
+                    )
+                )
+                prepared_audio_path = output_folder / "audio.m4a"
+                stage_mocks.append(
+                    (
+                        stack.enter_context(
+                            patch.object(
+                                process,
+                                "create_transcoded_audio_file",
+                                return_value=prepared_audio_path,
+                            )
+                        ),
+                        "transcode_audio",
+                    )
+                )
+                muxed_path = output_folder / "Movie_AVP.mov"
+                stage_mocks.append(
+                    (
+                        stack.enter_context(patch.object(process, "create_muxed_file", return_value=muxed_path)),
+                        "create_final_file",
+                    )
+                )
+                stack.enter_context(
+                    patch.object(process, "move_completed_conversion", return_value=temp_path / "Movie_AVP.mov")
+                )
+                stack.enter_context(patch.dict(process.os.environ, {}, clear=False))
+
+                process.process_each(run_context=run_context)
+
+            for stage_mock, stage_id in stage_mocks:
+                call = stage_mock.call_args
+                self.assertIs(call.kwargs["run_context"], run_context)
+                self.assertIs(call.kwargs["cancellation_event"], run_context.cancellation.event)
+                self.assertEqual(call.kwargs["observability_context"].stage.id, stage_id)
+
     def test_move_files_resume_skips_prior_processing_stages(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -141,7 +284,8 @@ class ProcessAudioWiringTests(unittest.TestCase):
                 process.process_each()
 
                 self.assertEqual(prepare_audio.call_args.args[:2], (source_path, output_folder))
-                mux.assert_called_once_with(aac_path, mv_hevc_path, output_folder, "Movie")
+                self.assertEqual(mux.call_args.args, (aac_path, mv_hevc_path, output_folder, "Movie"))
+                self.assertEqual(mux.call_args.kwargs["observability_context"].stage.id, "create_final_file")
                 self.assertFalse(source_path.exists())
 
     def test_prepare_audio_stage_preserves_stage_id_with_new_message(self) -> None:
@@ -268,11 +412,20 @@ class ProcessAudioWiringTests(unittest.TestCase):
 
                 process.process_each()
 
-            create_sbs.assert_called_once_with(DiscInfo(name="Movie", color_depth=8), output_folder, mvc_path, None)
-            finalize.assert_called_once_with(unmarked_path, output_folder, DiscInfo(name="Movie", color_depth=8))
+            self.assertEqual(
+                create_sbs.call_args.args,
+                (DiscInfo(name="Movie", color_depth=8), output_folder, mvc_path, None),
+            )
+            self.assertEqual(create_sbs.call_args.kwargs["observability_context"].stage.id, "encode_av1_stereo")
+            self.assertEqual(
+                finalize.call_args.args,
+                (unmarked_path, output_folder, DiscInfo(name="Movie", color_depth=8)),
+            )
+            self.assertEqual(finalize.call_args.kwargs["observability_context"].stage.id, "finalize_av1_stereo")
             create_left_right.assert_not_called()
             create_mv_hevc.assert_not_called()
-            mux.assert_called_once_with(audio_path, stereo_path, output_folder, "Movie")
+            self.assertEqual(mux.call_args.args, (audio_path, stereo_path, output_folder, "Movie"))
+            self.assertEqual(mux.call_args.kwargs["observability_context"].stage.id, "create_final_file")
 
 
 if __name__ == "__main__":

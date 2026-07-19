@@ -3,6 +3,7 @@ import logging
 import subprocess
 import typing
 from pathlib import Path
+from threading import Event
 
 import ffmpeg
 from babelfish import Language
@@ -14,7 +15,9 @@ from bd_to_avp.vendor.pgsrip.media_path import MediaPath
 from bd_to_avp.vendor.pgsrip.options import Options
 from bd_to_avp.modules.command import run_ffprobe, run_process_capture
 from bd_to_avp.modules.config import config
+from bd_to_avp.observability import ObservabilityContext
 from bd_to_avp.process_runner import ProcessArtifactProbe
+from bd_to_avp.runtime import RunContext
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +28,16 @@ class MkvPgs(Pgs):
         return media_path.translate(language=language, number=number, extension="srt")
 
     @classmethod
-    def read_data(cls, media_path: MediaPath, track_id: int, temp_folder: str):
+    def read_data(
+        cls,
+        media_path: MediaPath,
+        track_id: int,
+        temp_folder: str,
+        *,
+        run_context: RunContext | None = None,
+        cancellation_event: Event | None = None,
+        observability_context: ObservabilityContext | None = None,
+    ):
         command = [
             config.FFMPEG_PATH,
             "-hide_banner",
@@ -50,15 +62,36 @@ class MkvPgs(Pgs):
                 tool_id="ffmpeg",
                 stdout=output_file,
                 artifacts=(ProcessArtifactProbe("subtitle_payload", path=output_path),),
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                observability_context=observability_context,
             )
         return output_path.read_bytes()
 
-    def __init__(self, media_path: MediaPath, track_id: int, language: Language, number: int, options: Options):
+    def __init__(
+        self,
+        media_path: MediaPath,
+        track_id: int,
+        language: Language,
+        number: int,
+        options: Options,
+        *,
+        run_context: RunContext | None = None,
+        cancellation_event: Event | None = None,
+        observability_context: ObservabilityContext | None = None,
+    ):
         temp_folder = media_path.create_temp_folder()
         super().__init__(
             media_path=media_path.translate(language=language, number=number),
             options=options,
-            data_reader=lambda: self.read_data(media_path=media_path, track_id=track_id, temp_folder=temp_folder),
+            data_reader=lambda: self.read_data(
+                media_path=media_path,
+                track_id=track_id,
+                temp_folder=temp_folder,
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                observability_context=observability_context,
+            ),
             temp_folder=temp_folder,
         )
         self.track_id = track_id
@@ -130,9 +163,21 @@ class MkvTrack:
 
 
 class Mkv(Media):
-    def __init__(self, path: str):
+    def __init__(
+        self,
+        path: str,
+        *,
+        run_context: RunContext | None = None,
+        cancellation_event: Event | None = None,
+        observability_context: ObservabilityContext | None = None,
+    ):
         try:
-            metadata = run_ffprobe(path)
+            metadata = run_ffprobe(
+                path,
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                observability_context=observability_context,
+            )
         except ffmpeg.Error as error:
             raise subprocess.CalledProcessError(
                 returncode=1,
@@ -149,6 +194,9 @@ class Mkv(Media):
         tracks = [MkvTrack.from_ffprobe_stream(t) for t in metadata.get("streams", [])]
         super().__init__(MediaPath(path), languages={t.language for t in tracks if t.type == "subtitles"})
         self.tracks = tracks
+        self.run_context = run_context
+        self.cancellation_event = cancellation_event
+        self.observability_context = observability_context
 
     def get_selected_pgs_tracks(self, options: Options):
         tracks = [t for t in self.tracks if t.type == "subtitles" and t.codec == "HDMV PGS" and t.enabled]
@@ -185,7 +233,16 @@ class Mkv(Media):
 
     def get_selected_pgs_medias(self, options: Options):
         for t, language, number in self.get_selected_pgs_tracks(options):
-            pgs = MkvPgs(self.media_path, t.id, language, number, options=options)
+            pgs = MkvPgs(
+                self.media_path,
+                t.id,
+                language,
+                number,
+                options=options,
+                run_context=getattr(self, "run_context", None),
+                cancellation_event=getattr(self, "cancellation_event", None),
+                observability_context=getattr(self, "observability_context", None),
+            )
             if pgs.matches(options):
                 logger.debug("Selecting track %s:%s in %s", t.id, language, self)
                 yield t, pgs

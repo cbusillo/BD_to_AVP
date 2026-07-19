@@ -1,4 +1,5 @@
 import math
+import threading
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -6,6 +7,8 @@ from pathlib import Path
 from bd_to_avp.modules.command import run_command, run_ffprobe
 from bd_to_avp.modules.config import config
 from bd_to_avp.modules.preview_range import PreviewRange
+from bd_to_avp.observability import ObservabilityContext
+from bd_to_avp.runtime import RunContext
 
 
 @dataclass(frozen=True)
@@ -45,8 +48,17 @@ def create_bounded_preview_source(
     input_path: Path,
     output_folder: Path,
     preview_range: PreviewRange,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
 ) -> tuple[Path, PreviewRange]:
-    source_timing = probe_media_timing(input_path)
+    source_timing = probe_media_timing(
+        input_path,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
+    )
     requested_end = min(
         preview_range.source_duration_seconds,
         preview_range.start_seconds + preview_range.duration_seconds,
@@ -97,14 +109,36 @@ def create_bounded_preview_source(
         temporary_path,
     ]
     try:
-        run_command(range_command, "Create bounded preview source")
-        ranged_timing = probe_media_timing(ranged_path)
+        run_command(
+            range_command,
+            "Create bounded preview source",
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
+        ranged_timing = probe_media_timing(
+            ranged_path,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
         actual_start = max(0.0, ranged_timing.start_seconds - source_timing.start_seconds)
         if actual_start > preview_range.start_seconds + 0.25:
             raise RuntimeError("The bounded preview started after the selected source range.")
 
-        run_command(normalize_command, "Normalize bounded preview timestamps")
-        final_timing = probe_media_timing(temporary_path)
+        run_command(
+            normalize_command,
+            "Normalize bounded preview timestamps",
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
+        final_timing = probe_media_timing(
+            temporary_path,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
         minimum_duration = requested_end - actual_start
         if final_timing.duration_seconds + 0.25 < minimum_duration:
             raise RuntimeError("The bounded preview did not cover the selected source range.")
@@ -122,9 +156,18 @@ def create_bounded_preview_source(
     )
 
 
-def probe_media_timing(input_path: Path) -> MediaTiming:
+def probe_media_timing(
+    input_path: Path,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> MediaTiming:
     probe = run_ffprobe(
         input_path,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
         show_entries="format=start_time,duration:stream=codec_type,start_time",
     )
     format_data = probe.get("format", {})

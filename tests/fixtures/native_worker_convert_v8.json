@@ -1,12 +1,11 @@
 {
-  "protocol_version": 7,
+  "protocol_version": 8,
   "type": "job.start",
   "job_id": "11111111-1111-4111-8111-111111111111",
   "operation": "convert_source",
   "source": {
-    "kind": "physical_disc",
-    "path": "/dev/disk9",
-    "title_id": "makemkv:0"
+    "kind": "direct_file",
+    "path": "/tmp/movie.mkv"
   },
   "destination": {
     "path": "/tmp/output"
