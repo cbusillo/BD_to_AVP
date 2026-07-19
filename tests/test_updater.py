@@ -34,6 +34,9 @@ class FakeUserDefaults:
     def setObject_forKey_(self, value: str, key: str) -> None:
         self.values[key] = value
 
+    def removeObjectForKey_(self, key: str) -> None:
+        self.values.pop(key, None)
+
     def synchronize(self) -> None:
         self.synchronize_calls += 1
 
@@ -75,35 +78,66 @@ class UpdaterDecisionTests(unittest.TestCase):
             updater.allowed_sparkle_channels(updater.UpdateChannel.RELEASE_CANDIDATES),
             frozenset({"rc"}),
         )
+        self.assertEqual(
+            updater.allowed_sparkle_channels(updater.UpdateChannel.BETA),
+            frozenset({"beta", "rc"}),
+        )
+        self.assertEqual(
+            updater.allowed_sparkle_channels(updater.UpdateChannel.ALPHA),
+            frozenset({"alpha", "beta", "rc"}),
+        )
 
-    def test_preferences_default_to_stable_and_persist_rc(self) -> None:
+    def test_preferences_default_to_stable_and_persist_route(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = QSettings((Path(temp_dir) / "updates.ini").as_posix(), QSettings.Format.IniFormat)
             preferences = updater.UpdatePreferences(settings)
 
             self.assertEqual(preferences.channel, updater.UpdateChannel.STABLE)
-            preferences.channel = updater.UpdateChannel.RELEASE_CANDIDATES
+            preferences.channel = updater.UpdateChannel.BETA
 
             reloaded = updater.UpdatePreferences(
                 QSettings((Path(temp_dir) / "updates.ini").as_posix(), QSettings.Format.IniFormat)
             )
-            self.assertEqual(reloaded.channel, updater.UpdateChannel.RELEASE_CANDIDATES)
+            self.assertEqual(reloaded.channel, updater.UpdateChannel.BETA)
 
     def test_invalid_persisted_channel_falls_back_to_stable(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = QSettings((Path(temp_dir) / "updates.ini").as_posix(), QSettings.Format.IniFormat)
             settings.setValue(updater.CHANNEL_SETTINGS_KEY, "nightly")
 
-            self.assertEqual(updater.UpdatePreferences(settings).channel, updater.UpdateChannel.STABLE)
+            preferences = updater.UpdatePreferences(settings)
+
+            self.assertEqual(preferences.channel, updater.UpdateChannel.STABLE)
+            self.assertEqual(settings.value(updater.CHANNEL_SETTINGS_KEY), "stable")
+
+    def test_legacy_release_candidate_preference_migrates(self) -> None:
+        settings = FakeUserDefaults()
+        settings.values[updater.LEGACY_CHANNEL_SETTINGS_KEY] = "releaseCandidate"
+
+        preferences = updater.UpdatePreferences(settings)
+
+        self.assertEqual(preferences.channel, updater.UpdateChannel.RELEASE_CANDIDATES)
+        self.assertEqual(settings.values[updater.CHANNEL_SETTINGS_KEY], "rc")
+        self.assertNotIn(updater.LEGACY_CHANNEL_SETTINGS_KEY, settings.values)
+        self.assertEqual(settings.synchronize_calls, 1)
+
+    def test_current_release_candidate_alias_migrates(self) -> None:
+        settings = FakeUserDefaults()
+        settings.values[updater.CHANNEL_SETTINGS_KEY] = "releaseCandidate"
+
+        preferences = updater.UpdatePreferences(settings)
+
+        self.assertEqual(preferences.channel, updater.UpdateChannel.RELEASE_CANDIDATES)
+        self.assertEqual(settings.values[updater.CHANNEL_SETTINGS_KEY], "rc")
 
     def test_preferences_support_app_user_defaults(self) -> None:
         settings = FakeUserDefaults()
         preferences = updater.UpdatePreferences(settings)
 
         self.assertEqual(preferences.channel, updater.UpdateChannel.STABLE)
-        preferences.channel = updater.UpdateChannel.RELEASE_CANDIDATES
+        preferences.channel = updater.UpdateChannel.ALPHA
 
-        self.assertEqual(preferences.channel, updater.UpdateChannel.RELEASE_CANDIDATES)
+        self.assertEqual(preferences.channel, updater.UpdateChannel.ALPHA)
         self.assertEqual(settings.synchronize_calls, 1)
 
 
@@ -168,7 +202,7 @@ class UpdaterManagerTests(unittest.TestCase):
         manager._sparkle_controller = Mock()
         manager._sparkle_controller.updater.return_value = sparkle_updater
 
-        manager.set_channel(updater.UpdateChannel.RELEASE_CANDIDATES)
+        manager.set_channel(updater.UpdateChannel.BETA)
 
         sparkle_updater.resetUpdateCycleAfterShortDelay.assert_called_once_with()
 
@@ -194,10 +228,10 @@ class UpdaterGuiTests(unittest.TestCase):
 
         self.assertEqual(window.update_action.text(), "Check for Updates…")
         channel_actions = {action.text(): action for action in window.update_channel_actions.actions()}
-        self.assertEqual(set(channel_actions), {"Stable", "Release Candidates"})
+        self.assertEqual(set(channel_actions), {"Stable", "RC", "Beta", "Alpha"})
         self.assertTrue(channel_actions["Stable"].isChecked())
-        channel_actions["Release Candidates"].trigger()
-        fake_manager.set_channel.assert_called_once_with(updater.UpdateChannel.RELEASE_CANDIDATES)
+        channel_actions["Beta"].trigger()
+        fake_manager.set_channel.assert_called_once_with(updater.UpdateChannel.BETA)
         window.close()
 
     def test_about_dialog_has_no_legacy_network_checker(self) -> None:

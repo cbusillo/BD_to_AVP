@@ -22,8 +22,25 @@ VERSION_PATTERN = re.compile(
     r"^(?P<major>0|[1-9][0-9]*)\."
     r"(?P<minor>0|[1-9][0-9]*)\."
     r"(?P<patch>0|[1-9][0-9]*)"
-    r"(?:rc(?P<rc>0|[1-9][0-9]*))?$"
+    r"(?:(?P<stage>a|b|rc)(?P<prerelease>[1-9][0-9]*))?$"
 )
+PUBLIC_TAG_PATTERN = re.compile(
+    r"^v(?P<major>0|[1-9][0-9]*)\."
+    r"(?P<minor>0|[1-9][0-9]*)\."
+    r"(?P<patch>0|[1-9][0-9]*)"
+    r"(?:-(?P<stage>alpha|beta|rc)\.(?P<prerelease>[1-9][0-9]*))?$"
+)
+LEGACY_RC_TAG_PATTERN = re.compile(
+    r"^v(?P<major>0|[1-9][0-9]*)\."
+    r"(?P<minor>0|[1-9][0-9]*)\."
+    r"(?P<patch>0|[1-9][0-9]*)"
+    r"rc(?P<prerelease>[1-9][0-9]*)$"
+)
+RETIRED_RELEASE_TAGS = frozenset({"native-ui-preview-1", "v0.3.0-beta.1", "v0.3.0-beta.2"})
+DMG_NAME_PREFIX = "3D-Blu-ray-to-Vision-Pro"
+INTERNAL_STAGE_NAMES = {"a": "alpha", "b": "beta", "rc": "rc"}
+PUBLIC_STAGE_SUFFIXES = {"alpha": "a", "beta": "b", "rc": "rc"}
+STAGE_ORDER = {"alpha": 0, "beta": 1, "rc": 2, "stable": 3}
 
 
 class ReleaseError(RuntimeError):
@@ -36,23 +53,51 @@ class ReleaseVersion:
     major: int
     minor: int
     patch: int
-    rc: int | None
+    stage: str
+    prerelease_number: int | None
 
     @property
     def prerelease(self) -> bool:
-        return self.rc is not None
+        return self.stage != "stable"
+
+    @property
+    def rc(self) -> int | None:
+        return self.prerelease_number if self.stage == "rc" else None
+
+    @property
+    def public_version(self) -> str:
+        base = f"{self.major}.{self.minor}.{self.patch}"
+        if not self.prerelease:
+            return base
+        return f"{base}-{self.stage}.{self.prerelease_number}"
+
+    @property
+    def release_tag(self) -> str:
+        return f"v{self.public_version}"
+
+    @property
+    def channel(self) -> str:
+        return self.stage if self.prerelease else "stable"
 
     @property
     def order_key(self) -> tuple[int, int, int, int, int]:
-        return (self.major, self.minor, self.patch, 0 if self.prerelease else 1, self.rc or 0)
+        return (
+            self.major,
+            self.minor,
+            self.patch,
+            STAGE_ORDER[self.stage],
+            self.prerelease_number or 0,
+        )
 
 
 @dataclass(frozen=True)
 class ReleaseMetadata:
     package_version: str
+    public_version: str
     build_version: str
     release_tag: str
     release_name: str
+    dmg_name: str
     channel: str
     prerelease: bool
     make_latest: bool
@@ -78,15 +123,15 @@ AncestorCheck = Callable[[str, str], bool]
 def parse_release_version(value: str) -> ReleaseVersion:
     match = VERSION_PATTERN.fullmatch(value)
     if match is None:
-        raise ReleaseError(
-            "Release version must be a canonical three-part PEP 440 version, optionally ending in rc<number>."
-        )
+        raise ReleaseError("Release version must be a canonical three-part PEP 440 Stable, Alpha, Beta, or RC version.")
+    internal_stage = match.group("stage")
     return ReleaseVersion(
         text=value,
         major=int(match.group("major")),
         minor=int(match.group("minor")),
         patch=int(match.group("patch")),
-        rc=int(match.group("rc")) if match.group("rc") is not None else None,
+        stage=INTERNAL_STAGE_NAMES[internal_stage] if internal_stage is not None else "stable",
+        prerelease_number=int(match.group("prerelease")) if match.group("prerelease") is not None else None,
     )
 
 
@@ -96,13 +141,33 @@ def parse_build_version(value: str) -> int:
     return int(value)
 
 
-def parse_release_tag(value: str) -> ReleaseVersion:
-    if not value.startswith("v"):
-        raise ReleaseError("Release tag must start with v.")
-    version = parse_release_version(value[1:])
-    if value != f"v{version.text}":
-        raise ReleaseError("Release tag must be the canonical v-prefixed project version.")
-    return version
+def parse_release_tag(value: str, *, allow_legacy_rc: bool = True) -> ReleaseVersion:
+    if value in RETIRED_RELEASE_TAGS:
+        raise ReleaseError(f"Release tag belongs to the retired preview identity: {value}")
+
+    match = PUBLIC_TAG_PATTERN.fullmatch(value)
+    if match is not None:
+        stage = match.group("stage")
+        suffix = PUBLIC_STAGE_SUFFIXES[stage] if stage is not None else ""
+        prerelease = match.group("prerelease") or ""
+        return parse_release_version(
+            f"{match.group('major')}.{match.group('minor')}.{match.group('patch')}{suffix}{prerelease}"
+        )
+
+    if allow_legacy_rc:
+        legacy_match = LEGACY_RC_TAG_PATTERN.fullmatch(value)
+        if legacy_match is not None:
+            return parse_release_version(
+                f"{legacy_match.group('major')}.{legacy_match.group('minor')}.{legacy_match.group('patch')}"
+                f"rc{legacy_match.group('prerelease')}"
+            )
+
+    raise ReleaseError("Release tag must use vX.Y.Z, vX.Y.Z-alpha.N, vX.Y.Z-beta.N, or vX.Y.Z-rc.N.")
+
+
+def _validate_production_version(version: ReleaseVersion) -> None:
+    if version.release_tag in RETIRED_RELEASE_TAGS:
+        raise ReleaseError(f"Release version belongs to the retired preview identity: {version.text}")
 
 
 def _release_records(release_history: Any) -> list[dict[str, Any]]:
@@ -121,10 +186,13 @@ def _release_records(release_history: Any) -> list[dict[str, Any]]:
 def _published_releases(release_history: Any) -> list[PublishedRelease]:
     releases: list[PublishedRelease] = []
     seen_tags: set[str] = set()
+    seen_versions: set[str] = set()
     for record in _release_records(release_history):
         if record.get("draft") is not False or not record.get("published_at"):
             continue
         tag_name = record.get("tag_name")
+        if isinstance(tag_name, str) and tag_name in RETIRED_RELEASE_TAGS:
+            continue
         prerelease = record.get("prerelease")
         if not isinstance(tag_name, str) or not isinstance(prerelease, bool):
             raise ReleaseError("Published GitHub release metadata is incomplete.")
@@ -132,9 +200,14 @@ def _published_releases(release_history: Any) -> list[PublishedRelease]:
             version = parse_release_tag(tag_name)
         except ReleaseError:
             continue
+        if prerelease != version.prerelease:
+            raise ReleaseError(f"Published GitHub Release prerelease state disagrees with tag {tag_name}.")
         if tag_name in seen_tags:
             raise ReleaseError(f"Multiple published GitHub Releases use tag {tag_name}.")
+        if version.text in seen_versions:
+            raise ReleaseError(f"Multiple published GitHub Releases use version {version.text}.")
         seen_tags.add(tag_name)
+        seen_versions.add(version.text)
         releases.append(PublishedRelease(tag_name=tag_name, version=version, prerelease=prerelease))
     return releases
 
@@ -171,7 +244,7 @@ def select_release_notes_base(
     tag_exists: TagExists = _git_tag_exists,
     is_ancestor: AncestorCheck = _git_tag_is_ancestor,
 ) -> str:
-    current_version = parse_release_tag(current_tag)
+    current_version = parse_release_tag(current_tag, allow_legacy_rc=False)
     candidates = sorted(
         (
             release
@@ -262,9 +335,9 @@ def _replace_yaml_mapping_value(text: str, path: tuple[str, ...], key: str, valu
         joined_path = ".".join((*path, key))
         raise ReleaseError(f"Expected exactly one {joined_path} entry in the macOS project; found {len(matches)}.")
     index = matches[0]
-    indentation = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+    prefix = lines[index][: len(lines[index]) - len(lines[index].lstrip())]
     newline = "\n" if lines[index].endswith("\n") else ""
-    lines[index] = f"{indentation}{key}: {value}{newline}"
+    lines[index] = f"{prefix}{key}: {value}{newline}"
     return "".join(lines)
 
 
@@ -313,6 +386,7 @@ def load_release_metadata(
         raise ReleaseError("Remove duplicate [tool.briefcase].version; Briefcase must inherit [project].version.")
 
     version = parse_release_version(str(project.get("version", "")))
+    _validate_production_version(version)
     build_version = str(info.get("CFBundleVersion", ""))
     parse_build_version(build_version)
     locked_version = _locked_project_version(lock_path)
@@ -327,10 +401,12 @@ def load_release_metadata(
 
     return ReleaseMetadata(
         package_version=version.text,
+        public_version=version.public_version,
         build_version=build_version,
-        release_tag=f"v{version.text}",
-        release_name=f"v{version.text}",
-        channel="rc" if version.prerelease else "stable",
+        release_tag=version.release_tag,
+        release_name=version.release_tag,
+        dmg_name=f"{DMG_NAME_PREFIX}-{version.public_version}.dmg",
+        channel=version.channel,
         prerelease=version.prerelease,
         make_latest=not version.prerelease,
         publish_pypi=not version.prerelease,
@@ -394,6 +470,7 @@ def prepare_release(
     current = load_release_metadata(pyproject_path, lock_path, macos_project_path)
     current_version = parse_release_version(current.package_version)
     next_version = parse_release_version(version_value)
+    _validate_production_version(next_version)
     current_build = parse_build_version(current.build_version)
     next_build = parse_build_version(build_value)
     if next_version.order_key <= current_version.order_key:

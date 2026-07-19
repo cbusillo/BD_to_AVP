@@ -80,6 +80,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("python scripts/release.py metadata", str(prepare))
         self.assertNotIn("awk -v version", str(workflow))
         self.assertNotIn("release_tag_suffix", str(workflow))
+        self.assertIn("public_version", prepare["outputs"])
+        self.assertIn("dmg_name", prepare["outputs"])
         self.assertIn("publish_pypi", prepare["outputs"])
         self.assertIn("previous_release_tag", prepare["outputs"])
         self.assertIn("python scripts/release.py notes-base", str(release_history))
@@ -90,6 +92,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("LATEST_SNAPSHOT_TAG", str(prepare))
         self.assertIn("base_snapshot_tag", prepare["outputs"])
         self.assertIn("appcast-state.json", str(prepare))
+        self.assertNotIn("${BASE_SNAPSHOT_TAG#v}", str(prepare))
+        self.assertNotIn("${LATEST_SNAPSHOT_TAG#v}", str(prepare))
+        self.assertIn('--release-tag "$BASE_SNAPSHOT_TAG"', str(prepare))
+        self.assertIn('--release-tag "$LATEST_SNAPSHOT_TAG"', str(prepare))
 
     def test_package_preserves_dmg_validation_without_write_token(self) -> None:
         workflow = load_workflow("briefcase.yml")
@@ -100,6 +106,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         certificate_script = certificate_step["run"]
         cleanup_step = next(step for step in package["steps"] if step["name"] == "Remove temporary signing material")
         cleanup_script = cleanup_step["run"]
+        package_step = next(step for step in package["steps"] if step["name"] == "Package application for GitHub")
 
         self.assertEqual(package["needs"], "prepare")
         self.assertEqual(package["environment"], "macos-signing")
@@ -118,7 +125,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("dmg_sha256", package["outputs"])
         self.assertIn("dmg_size", package["outputs"])
         self.assertIn("SHA256SUMS", str(package))
-        self.assertIn('DMG_NAME="3D-Blu-ray-to-Vision-Pro-$PACKAGE_VERSION.dmg"', str(package))
+        self.assertEqual(package_step["env"]["DMG_NAME"], "${{ needs.prepare.outputs.dmg_name }}")
+        self.assertNotIn('DMG_NAME="3D-Blu-ray-to-Vision-Pro-$PACKAGE_VERSION.dmg"', str(package))
         self.assertIn("BUILD_KEYCHAIN_PASSWORD", str(package))
         self.assertIn("USER_KEYCHAINS_PATH=", certificate_script)
         self.assertIn('echo "USER_KEYCHAINS_PATH=$USER_KEYCHAINS_PATH"', certificate_script)
@@ -540,6 +548,8 @@ class SparklePagesWorkflowTests(unittest.TestCase):
         self.assertIn("validate-empty", str(prepare))
         self.assertIn("gh release download", str(prepare))
         self.assertIn("validate-snapshot", str(prepare))
+        self.assertIn('--release-tag "$RELEASE_TAG"', str(prepare))
+        self.assertNotIn("${RELEASE_TAG#v}", str(prepare))
         self.assertIn("appcast-state.json", str(prepare))
         self.assertIn('status: "disabled"', str(prepare))
         self.assertIn('status: "enabled"', str(prepare))

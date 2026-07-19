@@ -210,7 +210,7 @@ jobs:
               --dir appcast-site
             python scripts/sparkle_appcast.py validate-snapshot \
               --feed appcast-site/appcast.xml \
-              --short-version "${RELEASE_TAG#v}"
+              --release-tag "$RELEASE_TAG"
             ACTUAL_SHA256=$(sha256sum appcast-site/appcast.xml | awk '{print $1}')
             if [ -n "$EXPECTED_APPCAST_SHA256" ]; then
               if [ "$ACTUAL_SHA256" != "$EXPECTED_APPCAST_SHA256" ]; then

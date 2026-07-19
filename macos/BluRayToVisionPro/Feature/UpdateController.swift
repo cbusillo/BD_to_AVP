@@ -4,6 +4,11 @@ import Foundation
 enum UpdateChannelPreference: String, CaseIterable, Identifiable {
     case stable
     case releaseCandidate = "rc"
+    case beta
+    case alpha
+
+    static let noDowngradeExplanation =
+        "Choosing a safer route affects only future newer builds. It never downgrades the version already installed."
 
     var id: String { rawValue }
 
@@ -12,7 +17,24 @@ enum UpdateChannelPreference: String, CaseIterable, Identifiable {
         case .stable:
             "Stable"
         case .releaseCandidate:
-            "Release Candidates"
+            "RC"
+        case .beta:
+            "Beta"
+        case .alpha:
+            "Alpha"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .stable:
+            "Offers Stable releases."
+        case .releaseCandidate:
+            "Offers Stable and RC releases."
+        case .beta:
+            "Offers Stable, RC, and Beta releases."
+        case .alpha:
+            "Offers Stable, RC, Beta, and Alpha releases."
         }
     }
 
@@ -22,6 +44,10 @@ enum UpdateChannelPreference: String, CaseIterable, Identifiable {
             []
         case .releaseCandidate:
             ["rc"]
+        case .beta:
+            ["beta", "rc"]
+        case .alpha:
+            ["alpha", "beta", "rc"]
         }
     }
 
@@ -204,7 +230,7 @@ final class UpdateController: ObservableObject {
         mode = environment.mode
         automaticallyChecksForUpdates = false
         updateChannel = Self.readChannel(from: defaults)
-        migrateLegacyChannelIfNeeded(defaults: defaults, channel: updateChannel)
+        migrateStoredChannel(defaults: defaults, channel: updateChannel)
     }
 
     var supportsAutomaticChecks: Bool {
@@ -297,12 +323,17 @@ final class UpdateController: ObservableObject {
         return .storedValue(defaults.string(forKey: legacyChannelDefaultsKey))
     }
 
-    private func migrateLegacyChannelIfNeeded(defaults: UserDefaults, channel: UpdateChannelPreference) {
-        guard defaults.string(forKey: Self.channelDefaultsKey) == nil,
-              defaults.string(forKey: Self.legacyChannelDefaultsKey) != nil else {
+    private func migrateStoredChannel(defaults: UserDefaults, channel: UpdateChannelPreference) {
+        let currentValue = defaults.string(forKey: Self.channelDefaultsKey)
+        let legacyValue = defaults.string(forKey: Self.legacyChannelDefaultsKey)
+        guard currentValue != nil || legacyValue != nil else {
             return
         }
-        defaults.set(channel.rawValue, forKey: Self.channelDefaultsKey)
-        defaults.removeObject(forKey: Self.legacyChannelDefaultsKey)
+        if currentValue != channel.rawValue {
+            defaults.set(channel.rawValue, forKey: Self.channelDefaultsKey)
+        }
+        if legacyValue != nil {
+            defaults.removeObject(forKey: Self.legacyChannelDefaultsKey)
+        }
     }
 }

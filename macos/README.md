@@ -27,6 +27,20 @@ never start Sparkle, and retain the manual GitHub Releases fallback. The Release
 configuration uses the production identity and `Info-Release.plist` for the
 policy-checked direct appcast metadata.
 
+Release builds expose four persisted update routes on that one production feed:
+
+| Route | Additional Sparkle channels |
+| --- | --- |
+| Stable | none (`{}`) |
+| RC | `{rc}` |
+| Beta | `{beta, rc}` |
+| Alpha | `{alpha, beta, rc}` |
+
+Stable is the default for missing or unknown values. Existing Stable/RC values,
+including the legacy `releaseCandidate` spelling, migrate to the canonical
+preference. Selecting a safer route applies only to future newer builds;
+Sparkle never downgrades the currently installed version.
+
 Create an ad-hoc signed package containing the Briefcase-managed Python
 runtime and conversion engine with:
 
