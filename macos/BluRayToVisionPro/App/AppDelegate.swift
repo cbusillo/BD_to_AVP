@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     nonisolated static let startupSmokeArgument = "--startup-smoke"
 
     weak var workCoordinator: AppWorkCoordinator?
+    var observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared
     private weak var managedWindow: NSWindow?
     private var originalWindowDelegate: NSWindowDelegate?
     private var allowManagedWindowClose = false
@@ -68,7 +69,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return .terminateLater
         }
         guard let workCoordinator, workCoordinator.hasActiveWorker else {
-            return .terminateNow
+            isStoppingForTermination = true
+            Task {
+                await flushObservabilityStoreWithDeadline()
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+            return .terminateLater
         }
 
         let alert = stopAlert(action: "quit", buttonTitle: "Stop and Quit")
@@ -80,6 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         isStoppingForTermination = true
         Task {
             await workCoordinator.stopForQuit()
+            await flushObservabilityStoreWithDeadline()
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
@@ -93,6 +100,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         alert.addButton(withTitle: buttonTitle)
         alert.addButton(withTitle: "Cancel")
         return alert
+    }
+
+    private func flushObservabilityStoreWithDeadline() async {
+        let store = observabilityEventStore
+        let completions = AsyncStream<Void> { continuation in
+            Task {
+                await store.flush()
+                continuation.yield()
+                continuation.finish()
+            }
+            Task {
+                try? await Task.sleep(for: .milliseconds(250))
+                continuation.yield()
+                continuation.finish()
+            }
+        }
+        for await _ in completions {
+            return
+        }
     }
 
     override func responds(to selector: Selector!) -> Bool {

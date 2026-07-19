@@ -547,7 +547,7 @@ final class DiagnosticBundleTests: XCTestCase {
     func testRecorderProjectsCanonicalObservabilityFields() throws {
         let observability = try JSONDecoder().decode(
             ObservabilityEvent.self,
-            from: Data(#"{"schema":"bd_to_avp.observability","schema_version":1,"emitter":"worker","stream_id":"11111111-1111-4111-8111-111111111111","sequence":0,"occurred_at":"2026-07-18T00:00:00Z","elapsed_ms":10,"kind":"tool.failed","severity":"error","privacy":"private","redaction":"raw","context":{"correlation":{},"stage":{"id":"create_mkv"},"tool":{"id":"makemkvcon"}},"data":{"message":{"value":"MakeMKV failed","privacy":"private","truncated":false},"detail":{"value":"bounded detail","privacy":"private","truncated":false},"failure":{"code":"nonzero_exit","retryable":false}}}"#.utf8)
+            from: Data(#"{"schema":"bd_to_avp.observability","schema_version":1,"emitter":"worker","stream_id":"11111111-1111-4111-8111-111111111111","sequence":0,"occurred_at":"2026-07-18T00:00:00Z","elapsed_ms":10,"kind":"tool.failed","severity":"error","privacy":"private","redaction":"raw","context":{"correlation":{},"stage":{"id":"create_mkv"},"tool":{"id":"makemkvcon"},"process":{"pid":42,"exit_code":1}},"data":{"message":{"value":"MakeMKV failed","privacy":"private","truncated":false},"detail":{"value":"bounded detail","privacy":"private","truncated":false},"artifact":{"role":"intermediate","state":"growing","location":{"value":"/private/output/movie.mkv","privacy":"private","truncated":false},"size_bytes":536870912,"modification_age_seconds":2,"growth_bytes_per_second":1048576},"failure":{"code":"nonzero_exit","retryable":false},"activity":{"last_output_age_seconds":31}}}"#.utf8)
         )
         let jobID = UUID()
         var lifecycle = WorkerLifecycleState()
@@ -581,11 +581,93 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertEqual(record.source, "worker")
         XCTAssertEqual(record.name, "tool.failed")
         XCTAssertEqual(record.stage, "create_mkv")
+        XCTAssertEqual(record.tool, "makemkvcon")
+        XCTAssertEqual(record.processState, "failed")
+        XCTAssertEqual(record.lastOutputAgeSeconds, 31)
+        XCTAssertEqual(record.artifactRole, "intermediate")
+        XCTAssertEqual(record.artifactState, "growing")
+        XCTAssertEqual(record.artifactSizeBytes, 536_870_912)
+        XCTAssertEqual(record.artifactModificationAgeSeconds, 2)
+        XCTAssertEqual(record.artifactGrowthBytesPerSecond, 1_048_576)
+        XCTAssertEqual(record.privacy, "private")
+        XCTAssertEqual(record.redaction, "raw")
+        XCTAssertEqual(record.messagePrivacy, "private")
+        XCTAssertEqual(record.detailsPrivacy, "private")
         XCTAssertEqual(record.message, "MakeMKV failed")
         XCTAssertEqual(record.details, "bounded detail")
         XCTAssertEqual(record.level, "error")
         XCTAssertEqual(record.failureCode, "nonzero_exit")
         XCTAssertEqual(record.retryable, false)
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let artifact = try DiagnosticBundleBuilder(
+            bundleIDProvider: { self.fixedBundleID }
+        ).createBundle(from: snapshot, outputDirectory: directory)
+        let eventsData = try unzipEntry("events.jsonl", from: artifact.archiveURL)
+        let exported = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: eventsData.split(separator: 0x0A)[0])
+                as? [String: Any]
+        )
+        XCTAssertEqual(exported["tool"] as? String, "makemkvcon")
+        XCTAssertEqual(exported["process_state"] as? String, "failed")
+        XCTAssertEqual(exported["last_output_age_seconds"] as? Int, 31)
+        XCTAssertEqual(exported["artifact_role"] as? String, "intermediate")
+        XCTAssertEqual(exported["privacy"] as? String, "private")
+        XCTAssertEqual(exported["redaction"] as? String, "raw")
+        XCTAssertEqual(exported["message_privacy"] as? String, "private")
+        XCTAssertEqual(exported["details_privacy"] as? String, "private")
+        XCTAssertEqual(
+            (exported["artifact_size_rounded_bytes"] as? NSNumber)?.int64Value,
+            536_870_912
+        )
+        XCTAssertEqual(
+            (exported["artifact_growth_rounded_bytes_per_second"] as? NSNumber)?.int64Value,
+            1_048_576
+        )
+        XCTAssertFalse(String(decoding: eventsData, as: UTF8.self).contains("/private/output"))
+    }
+
+    func testRecorderOmitsCanonicalTextMarkedOmitted() throws {
+        let observability = try JSONDecoder().decode(
+            ObservabilityEvent.self,
+            from: Data(#"{"schema":"bd_to_avp.observability","schema_version":1,"emitter":"worker","stream_id":"11111111-1111-4111-8111-111111111111","sequence":0,"occurred_at":"2026-07-19T00:00:00Z","kind":"tool.failed","severity":"error","privacy":"private","redaction":"omitted","context":{"correlation":{}},"data":{"message":{"value":"private message","privacy":"private","truncated":false},"detail":{"value":"private detail","privacy":"private","truncated":false}}}"#.utf8)
+        )
+        let jobID = UUID()
+        var lifecycle = WorkerLifecycleState()
+        lifecycle.selectSource(URL(fileURLWithPath: "/tmp/movie.mkv"))
+        try lifecycle.begin(jobID: jobID, operationKind: .conversion)
+        let event = WorkerEvent(
+            protocolVersion: WorkerJobSpec.protocolVersion,
+            type: .observability,
+            jobID: jobID,
+            sequence: 0,
+            payload: WorkerEventPayload(observabilityEvent: observability)
+        )
+        try lifecycle.receive(event)
+        let recorder = DiagnosticSessionRecorder()
+
+        recorder.record(
+            event: event,
+            lifecycle: lifecycle,
+            activeMode: "single_conversion",
+            recordedAt: fixedDate
+        )
+
+        let record = try XCTUnwrap(
+            recorder.snapshot(
+                capturedAt: fixedDate,
+                lifecycle: lifecycle,
+                activeMode: nil,
+                batchSummary: nil,
+                process: .empty
+            ).events.entries.last
+        )
+        XCTAssertEqual(record.redaction, "omitted")
+        XCTAssertNil(record.message)
+        XCTAssertNil(record.details)
     }
 
     func testWorkflowAttributionUsesExplicitJobInsteadOfLatestContext() throws {
@@ -833,10 +915,14 @@ final class DiagnosticBundleTests: XCTestCase {
         )
         XCTAssertEqual((sourceProbe["volume_total_rounded_bytes"] as? NSNumber)?.int64Value, volumeQuantum * 63)
         XCTAssertTrue(samples.allSatisfy { $0["file_size_bytes"] == nil && $0["volume_available_bytes"] == nil })
-        XCTAssertEqual(privacy["rules_version"] as? Int, 2)
+        XCTAssertEqual(privacy["rules_version"] as? Int, 3)
         XCTAssertEqual(privacy["size_rounding_mode"] as? String, "down")
         XCTAssertEqual((privacy["file_size_quantum_bytes"] as? NSNumber)?.int64Value, fileQuantum)
         XCTAssertEqual((privacy["volume_capacity_quantum_bytes"] as? NSNumber)?.int64Value, volumeQuantum)
+        XCTAssertEqual(
+            (privacy["byte_rate_quantum_bytes_per_second"] as? NSNumber)?.int64Value,
+            1_024 * 1_024
+        )
         XCTAssertFalse(serializedText.contains(String(rawFileSize)))
         XCTAssertFalse(serializedText.contains(String(rawAvailableSize)))
         XCTAssertFalse(serializedText.contains(String(rawTotalSize)))
@@ -949,7 +1035,19 @@ final class DiagnosticBundleTests: XCTestCase {
                 activeItems: 1,
                 statusCounts: ["completed": 1, "converting": 1, "pending": 2]
             ),
-            process: process
+            process: process,
+            observabilityPersistence: ObservabilityEventPersistenceSnapshot(
+                enabled: true,
+                maximumFileBytes: 4 * 1_024 * 1_024,
+                maximumTotalBytes: 12 * 1_024 * 1_024,
+                maximumPendingBytes: 4 * 1_024 * 1_024,
+                pendingBytes: 1_024,
+                writtenEvents: 30,
+                writtenBytes: 65_536,
+                droppedEvents: 2,
+                droppedBytes: 4_096,
+                failureCount: 1
+            )
         )
         let builder = DiagnosticBundleBuilder(
             storageProbe: storageProbe,
@@ -983,6 +1081,12 @@ final class DiagnosticBundleTests: XCTestCase {
 
         XCTAssertEqual(manifest["schema_version"] as? Int, 1)
         XCTAssertEqual((manifest["archive"] as? [String: Any])?["maximum_compressed_bytes"] as? Int, 2 * 1_024 * 1_024)
+        let localStore = try XCTUnwrap(manifest["local_observability_store"] as? [String: Any])
+        XCTAssertEqual(localStore["enabled"] as? Bool, true)
+        XCTAssertEqual(localStore["maximum_total_bytes"] as? Int, 12 * 1_024 * 1_024)
+        XCTAssertEqual(localStore["written_events"] as? Int, 30)
+        XCTAssertEqual(localStore["dropped_events"] as? Int, 2)
+        XCTAssertNil(localStore["location"])
         XCTAssertLessThanOrEqual(artifact.preview.archiveBytes, artifact.preview.maximumArchiveBytes)
         XCTAssertEqual(artifact.sharingItems, [artifact.archiveURL])
         XCTAssertTrue(artifact.preview.truncationNotices.contains("Older diagnostic events were omitted."))
@@ -1117,6 +1221,18 @@ final class DiagnosticBundleTests: XCTestCase {
             operation: "convert_source",
             activeMode: "single_conversion",
             stage: nil,
+            tool: nil,
+            processState: nil,
+            lastOutputAgeSeconds: nil,
+            artifactRole: nil,
+            artifactState: nil,
+            artifactSizeBytes: nil,
+            artifactModificationAgeSeconds: nil,
+            artifactGrowthBytesPerSecond: nil,
+            privacy: nil,
+            redaction: nil,
+            messagePrivacy: nil,
+            detailsPrivacy: nil,
             message: message,
             details: nil,
             level: "info",

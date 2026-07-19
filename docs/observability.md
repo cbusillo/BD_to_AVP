@@ -96,6 +96,9 @@ Local raw records may contain private paths needed for active-file sampling.
 User-created support bundles apply a second redaction boundary that replaces
 paths and job identifiers with bundle-scoped tokens, removes process IDs and
 command details, redacts credential-like text, and coarsens sizes.
+Public and private classifications are retained in exported event metadata;
+private text is eligible for export only after that second redaction pass.
+Events marked `redaction=omitted` never project their message or detail text.
 
 ## Retention
 
@@ -105,6 +108,18 @@ written through an owner-only directory, use inter-process locking, reject
 symlinks, and are created with mode `0600`. Sink failures and retention limits
 must never fail or block a conversion. Sequence order is authoritative within a
 single `stream_id`.
+
+The macOS app persists canonical events under its Application Support container
+in an owner-only `Observability` directory. It retains at most three `4 MiB`
+JSONL segments (`12 MiB` total) and bounds pending writes to `4 MiB`; when that
+queue is full, the oldest pending records are dropped so recent failure evidence
+survives. Writes run on a utility queue and use a nonblocking inter-process lock.
+Directory and file ACLs are cleared in addition to enforcing modes `0700` and
+`0600`. Startup writes repair crash-truncated JSONL tails and remove segments
+outside the current retention policy. Normal app termination gives pending
+writes a bounded drain window. Raw local segments are never copied into support
+bundles. Bundles include only the existing redacted event projection plus
+path-free retention counters.
 
 ## Migration
 

@@ -31,6 +31,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var source: ConversionSource?
     @Published private(set) var state = WorkerLifecycleState()
     @Published private(set) var diagnosticLog = ""
+    @Published private(set) var liveObservabilityStatus = LiveObservabilityStatus.empty
     @Published private(set) var batchQueue: SourceFolderQueueState?
     @Published private(set) var queueItems: [ConversionQueueItem] = []
     @Published private(set) var completedBatchResults: [ConversionResult]?
@@ -39,6 +40,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private let diagnosticClock: () -> Date
     private let diagnosticStorageProbe: any DiagnosticStorageProbing
     private let diagnosticBundleBuilder: DiagnosticBundleBuilder
+    private let observabilityEventStore: any ObservabilityEventPersisting
     private let diagnosticRecorder = DiagnosticSessionRecorder()
     private let diagnosticLogBuffer = BoundedDiagnosticTextBuffer(maximumBytes: 128 * 1_024)
     private var client: (any WorkerProcessRunning)?
@@ -58,13 +60,15 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         },
         diagnosticClock: @escaping () -> Date = Date.init,
         diagnosticStorageProbe: any DiagnosticStorageProbing = FileSystemDiagnosticStorageProbe(),
-        diagnosticBundleBuilder: DiagnosticBundleBuilder? = nil
+        diagnosticBundleBuilder: DiagnosticBundleBuilder? = nil,
+        observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared
     ) {
         self.clientFactory = clientFactory
         self.diagnosticClock = diagnosticClock
         self.diagnosticStorageProbe = diagnosticStorageProbe
         self.diagnosticBundleBuilder = diagnosticBundleBuilder
             ?? DiagnosticBundleBuilder(storageProbe: diagnosticStorageProbe)
+        self.observabilityEventStore = observabilityEventStore
     }
 
     var isRunning: Bool {
@@ -132,7 +136,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             lifecycle: state,
             activeMode: activeRunMode?.diagnosticName,
             batchSummary: diagnosticBatchSummary,
-            process: processSnapshot
+            process: processSnapshot,
+            observabilityPersistence: observabilityEventStore.snapshot()
         )
         let builder = diagnosticBundleBuilder
         return try await Task.detached(priority: .utility) {
@@ -198,6 +203,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         let job = WorkerJobSpec(source: source)
         do {
             try state.begin(jobID: job.jobID)
+            liveObservabilityStatus = .empty
             pendingTerminalEvent = nil
             activeRunMode = mode
             diagnosticRecorder.beginJob(
@@ -318,6 +324,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         let job = WorkerJobSpec(draft: draft, jobID: jobID)
         do {
             try state.begin(jobID: job.jobID, operationKind: .conversion)
+            liveObservabilityStatus = .empty
             switch mode {
             case .singleConversion, .titleQueueConversion:
                 lastConversionDraft = draft
@@ -655,6 +662,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     private func receive(_ event: WorkerEvent) throws {
         let recordedAt = diagnosticClock()
+        if let observabilityEvent = event.payload.observabilityEvent {
+            observabilityEventStore.append(observabilityEvent)
+            liveObservabilityStatus.receive(observabilityEvent, receivedAt: recordedAt)
+        }
         if event.type.isTerminal {
             diagnosticRecorder.record(
                 event: event,
@@ -1101,6 +1112,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private func resetDiagnosticSession() {
         diagnosticRecorder.reset()
         batchItemDiagnosticJobIDs.removeAll(keepingCapacity: true)
+        liveObservabilityStatus = .empty
         resetDiagnosticLog()
     }
 

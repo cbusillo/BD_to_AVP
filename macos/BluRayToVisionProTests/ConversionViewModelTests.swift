@@ -5,6 +5,33 @@ import XCTest
 
 final class ConversionViewModelTests: XCTestCase {
     @MainActor
+    func testCanonicalObservabilityUpdatesLiveStatusAndPersists() async throws {
+        let terminalDelivered = expectation(description: "terminal delivered")
+        let observabilityEvent = try makeTestObservabilityEvent(kind: "tool.started")
+        let worker = ControlledWorkerClient(
+            terminalDelivered: terminalDelivered,
+            observabilityEvent: observabilityEvent
+        )
+        let store = RecordingObservabilityEventStore()
+        let viewModel = ConversionViewModel(
+            clientFactory: { worker },
+            observabilityEventStore: store
+        )
+
+        try await withTemporarySource { sourceURL in
+            viewModel.selectSource(sourceURL)
+            await fulfillment(of: [terminalDelivered], timeout: 2)
+
+            XCTAssertEqual(store.events, [observabilityEvent])
+            XCTAssertEqual(viewModel.liveObservabilityStatus.stageID, "create_mkv")
+            XCTAssertEqual(viewModel.liveObservabilityStatus.toolID, "makemkvcon")
+            XCTAssertEqual(viewModel.liveObservabilityStatus.processState, .running)
+
+            await viewModel.stopForQuit()
+        }
+    }
+
+    @MainActor
     func testUpdateInstallRelaunchWaitsForActiveWorker() async throws {
         let terminalDelivered = expectation(description: "terminal delivered")
         let worker = ControlledWorkerClient(terminalDelivered: terminalDelivered)
@@ -1879,12 +1906,17 @@ private final class TwoPhaseWorkerClient: WorkerProcessRunning, @unchecked Senda
 
 private final class ControlledWorkerClient: WorkerProcessRunning, @unchecked Sendable {
     private let terminalDelivered: XCTestExpectation
+    private let observabilityEvent: ObservabilityEvent?
     private let lock = NSLock()
     private var cancellationContinuation: CheckedContinuation<Void, Never>?
     private var cancellationRequested = false
 
-    init(terminalDelivered: XCTestExpectation) {
+    init(
+        terminalDelivered: XCTestExpectation,
+        observabilityEvent: ObservabilityEvent? = nil
+    ) {
         self.terminalDelivered = terminalDelivered
+        self.observabilityEvent = observabilityEvent
     }
 
     func run(
@@ -1898,11 +1930,20 @@ private final class ControlledWorkerClient: WorkerProcessRunning, @unchecked Sen
             sequence: 0,
             payload: WorkerEventPayload(workerVersion: "test", processGroupID: 1)
         )
+        let observability = observabilityEvent.map {
+            WorkerEvent(
+                protocolVersion: WorkerJobSpec.protocolVersion,
+                type: .observability,
+                jobID: job.jobID,
+                sequence: 1,
+                payload: WorkerEventPayload(observabilityEvent: $0)
+            )
+        }
         let completed = WorkerEvent(
             protocolVersion: WorkerJobSpec.protocolVersion,
             type: .jobCompleted,
             jobID: job.jobID,
-            sequence: 1,
+            sequence: observability == nil ? 1 : 2,
             payload: WorkerEventPayload(
                 result: SourceInspection(
                     name: "movie",
@@ -1915,6 +1956,9 @@ private final class ControlledWorkerClient: WorkerProcessRunning, @unchecked Sen
         )
 
         try await onEvent(ready)
+        if let observability {
+            try await onEvent(observability)
+        }
         try await onEvent(completed)
         terminalDelivered.fulfill()
         await waitForCancellation()
@@ -1943,6 +1987,47 @@ private final class ControlledWorkerClient: WorkerProcessRunning, @unchecked Sen
             lock.unlock()
         }
     }
+}
+
+private final class RecordingObservabilityEventStore: ObservabilityEventPersisting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedEvents: [ObservabilityEvent] = []
+
+    var events: [ObservabilityEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedEvents
+    }
+
+    func append(_ event: ObservabilityEvent) {
+        lock.lock()
+        recordedEvents.append(event)
+        lock.unlock()
+    }
+
+    func snapshot() -> ObservabilityEventPersistenceSnapshot {
+        .disabled
+    }
+}
+
+private func makeTestObservabilityEvent(kind: String) throws -> ObservabilityEvent {
+    let fixtureURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("tests/fixtures/observability_event_v1.json")
+    let fixtureData = try XCTUnwrap(FileManager.default.contents(atPath: fixtureURL.path))
+    var fixture = try XCTUnwrap(
+        JSONSerialization.jsonObject(with: fixtureData) as? [String: Any]
+    )
+    fixture["kind"] = kind
+    var context = try XCTUnwrap(fixture["context"] as? [String: Any])
+    context["process"] = ["pid": 42, "process_group_id": 42]
+    fixture["context"] = context
+    return try JSONDecoder().decode(
+        ObservabilityEvent.self,
+        from: JSONSerialization.data(withJSONObject: fixture, options: [.sortedKeys])
+    )
 }
 
 private struct BatchJobRecord: Equatable {

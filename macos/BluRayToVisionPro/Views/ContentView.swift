@@ -123,7 +123,7 @@ struct ContentView: View {
                 Divider()
                 ActivityDrawer(
                     state: viewModel.state,
-                    diagnosticLog: viewModel.diagnosticLog,
+                    observabilityStatus: viewModel.liveObservabilityStatus,
                     showTechnicalDetails: settings.showTechnicalDetails
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -980,11 +980,11 @@ private struct SaveProfileSheet: View {
 
 private struct ActivityDrawer: View {
     let state: WorkerLifecycleState
-    let diagnosticLog: String
+    let observabilityStatus: LiveObservabilityStatus
     let showTechnicalDetails: Bool
 
     private var activityText: String {
-        var entries = [
+        let entries = [
             state.stageMessage,
             state.activityMessage,
             state.warningMessage,
@@ -993,23 +993,90 @@ private struct ActivityDrawer: View {
         ]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
-        if showTechnicalDetails, !diagnosticLog.isEmpty, !entries.contains(diagnosticLog) {
-            entries.append(diagnosticLog)
-        }
         return entries.isEmpty ? "Activity will appear here when source analysis or conversion begins." : entries.joined(separator: "\n")
     }
 
     var body: some View {
         ScrollView {
-            Text(activityText)
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(12)
+            VStack(alignment: .leading, spacing: 10) {
+                Text(activityText)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+
+                if showTechnicalDetails, observabilityStatus.hasDetails {
+                    Divider()
+                    LiveObservabilityStatusView(status: observabilityStatus)
+                }
+            }
+            .padding(12)
         }
         .frame(height: 145)
         .background(Color(nsColor: .textBackgroundColor))
         .accessibilityLabel("Activity details")
+    }
+}
+
+private struct LiveObservabilityStatusView: View {
+    let status: LiveObservabilityStatus
+
+    @State private var now = Date()
+    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    private var processState: String? {
+        status.processState?.rawValue.capitalized
+    }
+
+    private var lastOutput: String? {
+        status.currentLastOutputAgeSeconds(at: now).map { "\($0)s ago" }
+    }
+
+    private var artifactDescription: String? {
+        let identity = [status.artifactRole, status.artifactState]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+        let size = status.artifactSizeBytes.map {
+            ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+        }
+        let growth = status.artifactGrowthBytesPerSecond.map {
+            "+\(ByteCountFormatter.string(fromByteCount: $0, countStyle: .file))/s"
+        }
+        let values = [identity.isEmpty ? nil : identity, size, growth].compactMap { $0 }
+        return values.isEmpty ? nil : values.joined(separator: " · ")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Live Tool Status")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            if status.isStalled(at: now) {
+                Label("No recent tool output", systemImage: "clock.badge.exclamationmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+            }
+
+            statusRow("Stage", value: status.stageID)
+            statusRow("Tool", value: status.toolID)
+            statusRow("Process", value: processState)
+            statusRow("Last output", value: lastOutput)
+            statusRow("Artifact", value: artifactDescription)
+        }
+        .font(.caption.monospaced())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Live tool status")
+        .accessibilityValue(status.isStalled(at: now) ? "No recent tool output" : "Active")
+        .onReceive(timer) { now = $0 }
+    }
+
+    @ViewBuilder
+    private func statusRow(_ label: String, value: String?) -> some View {
+        if let value {
+            LabeledContent(label, value: value)
+                .textSelection(.enabled)
+        }
     }
 }

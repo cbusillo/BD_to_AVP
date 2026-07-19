@@ -490,6 +490,18 @@ struct DiagnosticEventRecord: Equatable, Sendable {
     let operation: String?
     let activeMode: String?
     let stage: String?
+    let tool: String?
+    let processState: String?
+    let lastOutputAgeSeconds: Int64?
+    let artifactRole: String?
+    let artifactState: String?
+    let artifactSizeBytes: Int64?
+    let artifactModificationAgeSeconds: Int64?
+    let artifactGrowthBytesPerSecond: Int64?
+    let privacy: String?
+    let redaction: String?
+    let messagePrivacy: String?
+    let detailsPrivacy: String?
     let message: String?
     let details: String?
     let level: String?
@@ -511,6 +523,14 @@ struct DiagnosticEventRecord: Equatable, Sendable {
             operation,
             activeMode,
             stage,
+            tool,
+            processState,
+            artifactRole,
+            artifactState,
+            privacy,
+            redaction,
+            messagePrivacy,
+            detailsPrivacy,
             message,
             details,
             level,
@@ -532,6 +552,14 @@ struct DiagnosticEventRecord: Equatable, Sendable {
                 + String($0.totalStages).utf8.count
                 + ($0.stageFraction.map { String($0).utf8.count } ?? 0)
         } ?? 0
+        let observabilityNumericBytes = [
+            lastOutputAgeSeconds,
+            artifactSizeBytes,
+            artifactModificationAgeSeconds,
+            artifactGrowthBytesPerSecond,
+        ]
+        .compactMap { $0 }
+        .reduce(0) { $0 + String($1).utf8.count }
         let resultSizeBytes = resultSizeBytes.map { String($0).utf8.count } ?? 0
         let exitStatusBytes = exitStatus.map { String($0).utf8.count } ?? 0
         let fixedValueBytes = (jobID == nil ? 0 : 38)
@@ -541,6 +569,7 @@ struct DiagnosticEventRecord: Equatable, Sendable {
             + strings
             + choicesBytes
             + numericBytes
+            + observabilityNumericBytes
             + progressBytes
             + resultSizeBytes
             + exitStatusBytes
@@ -622,6 +651,7 @@ struct DiagnosticCaptureSnapshot: @unchecked Sendable {
     let storageSamples: [RawDiagnosticStorageSample]
     let totalStorageSamples: Int
     let droppedStorageSamples: Int
+    let observabilityPersistence: ObservabilityEventPersistenceSnapshot
 }
 
 final class DiagnosticSessionRecorder {
@@ -704,6 +734,7 @@ final class DiagnosticSessionRecorder {
         recordedAt: Date
     ) {
         let observabilityEvent = event.payload.observabilityEvent
+        let observabilityTextIsOmitted = observabilityEvent?.redaction == "omitted"
         let terminalPhase: String?
         switch event.type {
         case .jobCompleted:
@@ -731,13 +762,27 @@ final class DiagnosticSessionRecorder {
             operation: event.payload.operation ?? context(for: event.jobID)?.operation,
             activeMode: activeMode,
             stage: event.payload.stage ?? observabilityEvent?.context.stage?.id,
+            tool: observabilityEvent?.context.tool?.id,
+            processState: observabilityEvent.flatMap {
+                LiveObservabilityStatus.processState(for: $0)?.rawValue
+            },
+            lastOutputAgeSeconds: observabilityEvent?.data.activity?.lastOutputAgeSeconds,
+            artifactRole: observabilityEvent?.data.artifact?.role,
+            artifactState: observabilityEvent?.data.artifact?.state,
+            artifactSizeBytes: observabilityEvent?.data.artifact?.sizeBytes,
+            artifactModificationAgeSeconds: observabilityEvent?.data.artifact?.modificationAgeSeconds,
+            artifactGrowthBytesPerSecond: observabilityEvent?.data.artifact?.growthBytesPerSecond,
+            privacy: observabilityEvent?.privacy,
+            redaction: observabilityEvent?.redaction,
+            messagePrivacy: observabilityEvent?.data.message?.privacy,
+            detailsPrivacy: observabilityEvent?.data.detail?.privacy,
             message: event.payload.message
                 ?? event.payload.error?.message
                 ?? event.payload.decision?.prompt
-                ?? observabilityEvent?.data.message?.value,
+                ?? (observabilityTextIsOmitted ? nil : observabilityEvent?.data.message?.value),
             details: event.payload.error?.details
                 ?? event.payload.decision?.details
-                ?? observabilityEvent?.data.detail?.value,
+                ?? (observabilityTextIsOmitted ? nil : observabilityEvent?.data.detail?.value),
             level: event.payload.level ?? observabilityEvent?.severity,
             elapsedSeconds: event.payload.elapsedSeconds,
             progress: event.payload.progress.map(DiagnosticProgressSnapshot.init),
@@ -780,6 +825,18 @@ final class DiagnosticSessionRecorder {
                 operation: jobContext?.operation,
                 activeMode: activeMode,
                 stage: lifecycle.stageMessage,
+                tool: nil,
+                processState: nil,
+                lastOutputAgeSeconds: nil,
+                artifactRole: nil,
+                artifactState: nil,
+                artifactSizeBytes: nil,
+                artifactModificationAgeSeconds: nil,
+                artifactGrowthBytesPerSecond: nil,
+                privacy: nil,
+                redaction: nil,
+                messagePrivacy: nil,
+                detailsPrivacy: nil,
                 message: message,
                 details: details,
                 level: nil,
@@ -858,7 +915,8 @@ final class DiagnosticSessionRecorder {
         lifecycle: WorkerLifecycleState,
         activeMode: String?,
         batchSummary: DiagnosticBatchSummary?,
-        process: WorkerProcessDiagnosticSnapshot
+        process: WorkerProcessDiagnosticSnapshot,
+        observabilityPersistence: ObservabilityEventPersistenceSnapshot = .disabled
     ) -> DiagnosticCaptureSnapshot {
         let meaningfulLifecycle = lifecycle.phase == .empty ? latestLifecycle ?? lifecycle : lifecycle
         return DiagnosticCaptureSnapshot(
@@ -874,7 +932,8 @@ final class DiagnosticSessionRecorder {
             events: history.snapshot(),
             storageSamples: storageSamples,
             totalStorageSamples: storageSamples.count + droppedStorageSamples,
-            droppedStorageSamples: droppedStorageSamples
+            droppedStorageSamples: droppedStorageSamples,
+            observabilityPersistence: observabilityPersistence
         )
     }
 
