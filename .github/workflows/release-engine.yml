@@ -1614,7 +1614,8 @@ jobs:
           (cd verified-assets && shasum -a 256 --check SHA256SUMS)
           gh attestation verify "$DMG_PATH" \
             --repo "$GITHUB_REPOSITORY" \
-            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/briefcase.yml" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-engine.yml" \
+            --signer-digest "$GITHUB_SHA" \
             --source-digest "$GITHUB_SHA" \
             --source-ref refs/heads/main \
             --deny-self-hosted-runners

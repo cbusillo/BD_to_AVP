@@ -450,6 +450,15 @@ esac
         self.assertNotIn("release-package/*", str(attest))
         self.assertEqual(verify["permissions"]["attestations"], "read")
         self.assertIn("gh attestation verify", str(verify))
+        self.assertIn(
+            '--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-engine.yml"',
+            str(verify),
+        )
+        self.assertIn('--signer-digest "$GITHUB_SHA"', str(verify))
+        self.assertNotIn(
+            '--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/briefcase.yml"',
+            str(verify),
+        )
         self.assertIn('--source-digest "$GITHUB_SHA"', str(verify))
         self.assertIn("--deny-self-hosted-runners", str(verify))
         self.assertIn("TOTAL_ASSET_COUNT", str(verify))
