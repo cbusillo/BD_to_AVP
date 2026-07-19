@@ -197,37 +197,49 @@ checksum are re-downloaded and verified before the draft is published.
 
 ## Sparkle Update Smoke (After Enablement)
 
-This is the acceptance smoke for #165. Do not begin it until #162 through #164
-have provided the production key/feed, packaged framework, and runtime
-integration described in [sparkle-updates.md](sparkle-updates.md).
+This is the installed-app acceptance smoke for the route contract in
+[Production Release Routes](release-routes.md).
 
-1. Install an older signed/notarized DMG build in `/Applications` and launch it
-   from there. Do not test the update while running from the mounted DMG.
-2. Confirm Help > `Update Channel` defaults to Stable. With an RC newer than the
-   installed build in the appcast, confirm `Check for Updates…` does not select
-   it.
-3. Select Release Candidates, run `Check for Updates…`, and confirm Sparkle's
-   standard update UI selects the RC item.
-4. Inspect the selected appcast item and confirm its `sparkle:version`,
-   `sparkle:shortVersionString`, Markdown `description`,
-   `sparkle:fullReleaseNotesLink`, enclosure URL, and enclosure length match the
-   candidate, digest-bound draft body, and published GitHub Release DMG, and that
-   its `sparkle:edSignature` is present and non-empty.
-5. Confirm Sparkle's update UI begins at the candidate summary, contains no
-   GitHub page chrome, adapts to light and dark appearance, and opens issue, PR,
-   comparison, and full-release links in the default browser.
+1. Install an older signed/notarized production DMG in `/Applications` and
+   launch it from there. Do not test updates while running from a mounted DMG.
+2. Confirm a missing, unknown, or new update preference selects Stable. Confirm
+   the legacy `releaseCandidate` value migrates to RC.
+3. Validate route persistence across relaunch and the exact eligibility matrix:
+
+   | Saved route | Additional allowed channels | Must exclude | May select when newer |
+   | --- | --- | --- | --- |
+   | Stable | none | Alpha, Beta, RC | Stable |
+   | RC | `rc` | Alpha, Beta | Stable, RC |
+   | Beta | `beta`, `rc` | Alpha | Stable, RC, Beta |
+   | Alpha | `alpha`, `beta`, `rc` | none | Stable, RC, Beta, Alpha |
+
+4. For each selected item, confirm `sparkle:version`,
+   `sparkle:shortVersionString`, channel presence or absence, Markdown
+   `description`, `sparkle:fullReleaseNotesLink`, enclosure URL, enclosure
+   length, and `sparkle:edSignature` match the immutable release artifact and
+   digest-bound notes.
+5. Confirm the update UI begins at the offered summary, contains no GitHub page
+   chrome, adapts to light and dark appearance, and opens issue, PR, comparison,
+   and full-release links in the default browser.
 6. Block GitHub Release page access after the appcast is fetched and confirm the
    embedded notes remain useful rather than becoming blank or an error page.
-7. Install the update, relaunch, and confirm the displayed and packaged versions
-   match the candidate.
-8. Publish or stage a newer unchanneled production item and confirm the
-   Release Candidates client selects it without changing its preference.
-9. Repeat with an unavailable feed and an intentionally invalid test signature;
-   the installed app must remain unchanged.
-10. Start media processing and confirm installation/relaunch is postponed until
-   processing is idle.
-11. Verify the manual GitHub Releases download remains usable as the recovery
+7. Install an eligible update, relaunch, and confirm product identity, internal
+   version, public release identity, and global build match the candidate.
+8. Change from Alpha to Beta, RC, and Stable after installing the newest
+   prerelease. Confirm no route offers or installs an older build.
+9. Stage a newer unchanneled Stable item and confirm every saved route selects it
+   without changing its preference.
+10. Repeat with an unavailable feed and an intentionally invalid test signature;
+    the installed app must remain unchanged.
+11. Start media processing and confirm installation/relaunch is postponed until
+    processing is idle.
+12. Verify the manual GitHub Releases download remains usable as the recovery
     path.
+13. For the Beta 3 bootstrap, install the manual production-identity DMG because
+    older clients cannot select Beta. Confirm Beta 3 exposes all four routes,
+    remains present in the one cumulative appcast but is eligible/offered only
+    to Beta/Alpha, preserves an existing Stable/RC preference, and can discover
+    the next eligible build after explicit Beta or Alpha selection.
 
 ## Follow-Up Routing
 

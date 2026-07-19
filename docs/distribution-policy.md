@@ -7,6 +7,8 @@ command-line tools.
 
 This policy keeps the app predictable on clean Macs and makes distribution
 decisions explicit instead of hiding dependency installation behind first launch.
+The normative production identity, version, and Sparkle route matrix are in
+[Production Release Routes](release-routes.md).
 
 ## Current GUI Channel
 
@@ -82,15 +84,23 @@ document it as an external dependency with preflight behavior.
   production GUI path. The protected-main release workflow builds that app with
   the production name and bundle identifier on a pinned GitHub-hosted macOS 26
   toolchain, then verifies the exact DMG again in a separate macOS 26 job.
-- The first candidate on that path is reserved for `0.3.0rc1` after Ship's
-  physical-disc evidence is accepted. RC visibility remains explicit opt-in;
-  normal stable installations must not discover it.
+- The next planned production-identity field build is `v0.3.0-beta.3`, internal
+  version `0.3.0b3`, build `148`. It is a manual-download seed because currently
+  shipped clients cannot select Beta or Alpha, but its immutable appcast item is
+  visible to those routes after the new selector is installed.
+- Stable, RC, Beta, and Alpha are routes for the same product, bundle identifier,
+  feed, Sparkle key, signing team, and diagnostics endpoint. Stable is default;
+  broader routes include progressively earlier stages without permitting
+  downgrade.
 - The former side-by-side feedback lane is retired. Its immutable historical
   tags and assets—`native-ui-preview-1`, `v0.3.0-beta.1`, and
-  `v0.3.0-beta.2`—remain outside Sparkle, GitHub latest, and PyPI.
+  `v0.3.0-beta.2`—remain outside production Sparkle and release history. Their
+  tag syntax does not make them production Alpha/Beta route releases.
+- Stable alone may become GitHub Latest or publish to PyPI/Homebrew. Alpha,
+  Beta, and RC releases are GitHub prereleases and never publish packages.
 - PKG artifact policy is tracked in #118. Until that issue decides otherwise,
   PKG output is not the normal-user release path.
-- The Sparkle direct-DMG implementation and Stable/Release Candidates policy is
+- The Sparkle direct-DMG implementation and four-route policy is
   documented in [sparkle-updates.md](sparkle-updates.md) and tracked through
   #162 through #165.
 - App Store feasibility and sandbox constraints are tracked in #121.
@@ -108,9 +118,11 @@ Before promoting a GUI release beyond tester/RC use:
 4. The app launches without Homebrew, Python, virtualenv, or repo checkout state.
 5. Missing MakeMKV produces the expected external-dependency recovery path.
 6. Installed MakeMKV clears the preflight blocker.
-7. A tester or maintainer records at least one media-path smoke result for the
-   release candidate when test media is available.
+7. A tester or maintainer records at least one media-path smoke result for a
+   prerelease when test media is available.
 8. If a Sparkle appcast is promoted for normal users, an installed-app upgrade
    smoke and appcast validation pass first.
-9. Stable-channel smoke excludes RC items, and Release Candidates smoke proves
-   the client can later select the unchanneled production release.
+9. Route smoke proves Stable admits only Stable; RC admits Stable/RC; Beta admits
+   Stable/RC/Beta; Alpha admits Stable/RC/Beta/Alpha; and every route can later
+   select a newer unchanneled Stable item.
+10. Switching to a safer route never offers or installs an older build.
