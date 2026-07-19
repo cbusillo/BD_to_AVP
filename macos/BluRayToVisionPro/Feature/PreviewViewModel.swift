@@ -33,6 +33,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
 
     private let clientFactory: ClientFactory
     private let cache: PreviewCache
+    private let observabilityEventStore: any ObservabilityEventPersisting
     private var client: (any WorkerProcessRunning)?
     private var runTask: Task<Void, Never>?
     private var activeDraft: PreviewDraft?
@@ -44,10 +45,12 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         clientFactory: @escaping ClientFactory = {
             WorkerProcessClient(configuration: try WorkerLaunchConfiguration.automatic())
         },
-        cache: PreviewCache = .automatic()
+        cache: PreviewCache = .automatic(),
+        observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared
     ) {
         self.clientFactory = clientFactory
         self.cache = cache
+        self.observabilityEventStore = observabilityEventStore
         cache.removeExpired()
     }
 
@@ -179,6 +182,9 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     private func receive(_ event: WorkerEvent) throws {
+        if let observabilityEvent = event.payload.observabilityEvent {
+            observabilityEventStore.append(observabilityEvent)
+        }
         if event.type.isTerminal {
             pendingTerminalEvent = event
             return

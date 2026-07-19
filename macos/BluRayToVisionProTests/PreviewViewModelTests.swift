@@ -3,6 +3,31 @@ import XCTest
 
 final class PreviewViewModelTests: XCTestCase {
     @MainActor
+    func testCanonicalObservabilityPersistsDuringPreview() async throws {
+        try await withTemporaryPreviewEnvironment { sourceURL, cache in
+            let completed = expectation(description: "preview completed")
+            let observabilityEvent = try makePreviewObservabilityEvent()
+            let worker = PreviewWorkerClient(
+                observabilityEvent: observabilityEvent,
+                onCompleted: { completed.fulfill() }
+            )
+            let store = PreviewRecordingObservabilityEventStore()
+            let viewModel = PreviewViewModel(
+                clientFactory: { worker },
+                cache: cache,
+                observabilityEventStore: store
+            )
+            let previewDraft = try XCTUnwrap(makePreviewDraft(sourceURL: sourceURL))
+
+            viewModel.startPreview(previewDraft)
+            await fulfillment(of: [completed], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+
+            XCTAssertEqual(store.events, [observabilityEvent])
+        }
+    }
+
+    @MainActor
     func testCompletedPreviewOwnsArtifactUntilDiscarded() async throws {
         try await withTemporaryPreviewEnvironment { sourceURL, cache in
             let completed = expectation(description: "preview completed")
@@ -214,6 +239,7 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
     private let lock = NSLock()
     private let initialStage: String
     private let initialStageMessage: String
+    private let observabilityEvent: ObservabilityEvent?
     private let waitsForCancellation: Bool
     private let onStarted: (() -> Void)?
     private let onCancellationEventsDelivered: (() -> Void)?
@@ -228,6 +254,7 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
     init(
         initialStage: String = "create_left_right_files",
         initialStageMessage: String = "Encoding Preview",
+        observabilityEvent: ObservabilityEvent? = nil,
         waitsForCancellation: Bool = false,
         onStarted: (() -> Void)? = nil,
         onCancellationEventsDelivered: (() -> Void)? = nil,
@@ -235,6 +262,7 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
     ) {
         self.initialStage = initialStage
         self.initialStageMessage = initialStageMessage
+        self.observabilityEvent = observabilityEvent
         self.waitsForCancellation = waitsForCancellation
         self.onStarted = onStarted
         self.onCancellationEventsDelivered = onCancellationEventsDelivered
@@ -280,6 +308,21 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
             )
         )
         try await onEvent(heartbeat)
+        let observabilityOffset: Int
+        if let observabilityEvent {
+            try await onEvent(
+                WorkerEvent(
+                    protocolVersion: WorkerJobSpec.protocolVersion,
+                    type: .observability,
+                    jobID: job.jobID,
+                    sequence: 3,
+                    payload: WorkerEventPayload(observabilityEvent: observabilityEvent)
+                )
+            )
+            observabilityOffset = 1
+        } else {
+            observabilityOffset = 0
+        }
         onStarted?()
 
         let destinationURL = URL(fileURLWithPath: job.destination!.path, isDirectory: true)
@@ -293,7 +336,7 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
                 protocolVersion: WorkerJobSpec.protocolVersion,
                 type: .stageStarted,
                 jobID: job.jobID,
-                sequence: 3,
+                sequence: 3 + observabilityOffset,
                 payload: WorkerEventPayload(
                     stage: "combine_to_mv_hevc",
                     message: "Combining stereo video into MV-HEVC",
@@ -305,7 +348,7 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
                 protocolVersion: WorkerJobSpec.protocolVersion,
                 type: .heartbeat,
                 jobID: job.jobID,
-                sequence: 4,
+                sequence: 4 + observabilityOffset,
                 payload: WorkerEventPayload(
                     elapsedSeconds: 66,
                     progress: WorkerProgress(currentStage: 10, totalStages: 13, stageFraction: 0.2)
@@ -320,7 +363,7 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
                 protocolVersion: WorkerJobSpec.protocolVersion,
                 type: .jobCancelled,
                 jobID: job.jobID,
-                sequence: 5,
+                sequence: 5 + observabilityOffset,
                 payload: WorkerEventPayload(message: "Preview stopped.")
             )
             try await onEvent(cancelled)
@@ -345,7 +388,7 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
             protocolVersion: WorkerJobSpec.protocolVersion,
             type: .artifactReady,
             jobID: job.jobID,
-            sequence: 3,
+            sequence: 3 + observabilityOffset,
             payload: WorkerEventPayload(artifact: artifact)
         )
         try await onEvent(artifactReady)
@@ -354,7 +397,7 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
             protocolVersion: WorkerJobSpec.protocolVersion,
             type: .jobCompleted,
             jobID: job.jobID,
-            sequence: 4,
+            sequence: 4 + observabilityOffset,
             payload: WorkerEventPayload(previewResult: artifact)
         )
         try await onEvent(completed)
@@ -410,4 +453,35 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
             }
         }
     }
+}
+
+private final class PreviewRecordingObservabilityEventStore: ObservabilityEventPersisting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedEvents: [ObservabilityEvent] = []
+
+    var events: [ObservabilityEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedEvents
+    }
+
+    func append(_ event: ObservabilityEvent) {
+        lock.lock()
+        recordedEvents.append(event)
+        lock.unlock()
+    }
+
+    func snapshot() -> ObservabilityEventPersistenceSnapshot {
+        .disabled
+    }
+}
+
+private func makePreviewObservabilityEvent() throws -> ObservabilityEvent {
+    let fixtureURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("tests/fixtures/observability_event_v1.json")
+    let fixtureData = try XCTUnwrap(FileManager.default.contents(atPath: fixtureURL.path))
+    return try JSONDecoder().decode(ObservabilityEvent.self, from: fixtureData)
 }

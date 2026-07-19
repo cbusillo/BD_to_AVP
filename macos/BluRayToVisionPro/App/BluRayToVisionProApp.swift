@@ -16,10 +16,12 @@ struct BluRayToVisionProApp: App {
 
     private let capabilities = AppCapabilities.current
     private let workCoordinator: AppWorkCoordinator
+    private let observabilityEventStore: any ObservabilityEventPersisting
 
     init() {
-        let viewModel = ConversionViewModel()
-        let previewViewModel = PreviewViewModel()
+        let observabilityEventStore = ObservabilityEventStore.automatic()
+        let viewModel = ConversionViewModel(observabilityEventStore: observabilityEventStore)
+        let previewViewModel = PreviewViewModel(observabilityEventStore: observabilityEventStore)
         let diagnosticConfiguration = DiagnosticServiceConfiguration.configured()
         let diagnosticUploader = diagnosticConfiguration.map {
             DiagnosticReportClient(configuration: $0)
@@ -36,6 +38,8 @@ struct BluRayToVisionProApp: App {
         _diagnosticReportViewModel = StateObject(wrappedValue: diagnosticReportViewModel)
         _updater = StateObject(wrappedValue: UpdateController(installPostponer: workCoordinator))
         self.workCoordinator = workCoordinator
+        self.observabilityEventStore = observabilityEventStore
+        appDelegate.observabilityEventStore = observabilityEventStore
     }
 
     var body: some Scene {

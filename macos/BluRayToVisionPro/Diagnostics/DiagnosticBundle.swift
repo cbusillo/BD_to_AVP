@@ -105,6 +105,7 @@ struct DiagnosticRuntimeMetadata: Equatable {
 private enum DiagnosticSizeRounding {
     static let fileSizeQuantumBytes: Int64 = 256 * 1_024 * 1_024
     static let volumeCapacityQuantumBytes: Int64 = 16 * 1_024 * 1_024 * 1_024
+    static let byteRateQuantum: Int64 = 1 * 1_024 * 1_024
 
     static func fileSize(_ bytes: Int64?) -> Int64? {
         roundedDown(bytes, quantum: fileSizeQuantumBytes)
@@ -112,6 +113,10 @@ private enum DiagnosticSizeRounding {
 
     static func volumeCapacity(_ bytes: Int64?) -> Int64? {
         roundedDown(bytes, quantum: volumeCapacityQuantumBytes)
+    }
+
+    static func byteRate(_ bytes: Int64?) -> Int64? {
+        roundedDown(bytes, quantum: byteRateQuantum)
     }
 
     private static func roundedDown(_ bytes: Int64?, quantum: Int64) -> Int64? {
@@ -526,6 +531,9 @@ final class DiagnosticBundleBuilder: Sendable {
             ),
             job: job,
             batch: snapshot.batchSummary.map(BundleBatch.init),
+            localObservabilityStore: BundleLocalObservabilityStore(
+                snapshot.observabilityPersistence
+            ),
             files: [
                 BundleFile(
                     name: "events.jsonl",
@@ -644,14 +652,16 @@ final class DiagnosticBundleBuilder: Sendable {
     }
 
     private static let privacyManifest = BundlePrivacy(
-        rulesVersion: 2,
+        rulesVersion: 3,
         pathTokenScope: "bundle",
         sizeRoundingMode: "down",
         fileSizeQuantumBytes: DiagnosticSizeRounding.fileSizeQuantumBytes,
         volumeCapacityQuantumBytes: DiagnosticSizeRounding.volumeCapacityQuantumBytes,
+        byteRateQuantumBytesPerSecond: DiagnosticSizeRounding.byteRateQuantum,
         included: [
             "app/build and worker protocol versions",
             "worker lifecycle, stage, heartbeat, progress, warnings, and terminal state",
+            "path-free active tool, process state, last-output age, and coarsened artifact growth",
             "selected non-identifying conversion settings",
             "source kind and per-bundle path correlation tokens",
             "coarsely rounded destination capacity and artifact size, accessibility, and modification age",
@@ -665,6 +675,7 @@ final class DiagnosticBundleBuilder: Sendable {
             "raw job requests and command arguments",
             "environment variables and credentials",
             "raw process identifiers",
+            "raw local observability JSONL segments",
             "hardware serial numbers and reusable file hashes",
         ]
     )
@@ -700,6 +711,7 @@ private struct BundleManifest: Encodable {
     let lifecycle: BundleLifecycle
     let job: BundleJob?
     let batch: BundleBatch?
+    let localObservabilityStore: BundleLocalObservabilityStore
     let files: [BundleFile]
     let truncation: BundleTruncation
     let privacy: BundlePrivacy
@@ -786,6 +798,32 @@ private struct BundleBatch: Encodable {
     }
 }
 
+private struct BundleLocalObservabilityStore: Encodable {
+    let enabled: Bool
+    let maximumFileBytes: Int
+    let maximumTotalBytes: Int
+    let maximumPendingBytes: Int
+    let pendingBytes: Int
+    let writtenEvents: Int
+    let writtenBytes: Int
+    let droppedEvents: Int
+    let droppedBytes: Int
+    let failureCount: Int
+
+    init(_ snapshot: ObservabilityEventPersistenceSnapshot) {
+        enabled = snapshot.enabled
+        maximumFileBytes = snapshot.maximumFileBytes
+        maximumTotalBytes = snapshot.maximumTotalBytes
+        maximumPendingBytes = snapshot.maximumPendingBytes
+        pendingBytes = snapshot.pendingBytes
+        writtenEvents = snapshot.writtenEvents
+        writtenBytes = snapshot.writtenBytes
+        droppedEvents = snapshot.droppedEvents
+        droppedBytes = snapshot.droppedBytes
+        failureCount = snapshot.failureCount
+    }
+}
+
 private struct BundleFile: Encodable {
     let name: String
     let uncompressedBytes: Int
@@ -830,6 +868,7 @@ private struct BundlePrivacy: Encodable {
     let sizeRoundingMode: String
     let fileSizeQuantumBytes: Int64
     let volumeCapacityQuantumBytes: Int64
+    let byteRateQuantumBytesPerSecond: Int64
     let included: [String]
     let excluded: [String]
 }
@@ -845,6 +884,18 @@ private struct BundleEvent: Encodable {
     let operation: String?
     let activeMode: String?
     let stage: String?
+    let tool: String?
+    let processState: String?
+    let lastOutputAgeSeconds: Int64?
+    let artifactRole: String?
+    let artifactState: String?
+    let artifactSizeRoundedBytes: Int64?
+    let artifactModificationAgeSeconds: Int64?
+    let artifactGrowthRoundedBytesPerSecond: Int64?
+    let privacy: String?
+    let redaction: String?
+    let messagePrivacy: String?
+    let detailsPrivacy: String?
     let message: String?
     let details: String?
     let level: String?
@@ -882,6 +933,20 @@ private struct BundleEvent: Encodable {
         operation = bounded(event.operation, maximumBytes: 256)
         activeMode = bounded(event.activeMode, maximumBytes: 256)
         stage = bounded(event.stage, maximumBytes: 1_024)
+        tool = bounded(event.tool, maximumBytes: 512)
+        processState = bounded(event.processState, maximumBytes: 128)
+        lastOutputAgeSeconds = event.lastOutputAgeSeconds
+        artifactRole = bounded(event.artifactRole, maximumBytes: 512)
+        artifactState = bounded(event.artifactState, maximumBytes: 128)
+        artifactSizeRoundedBytes = DiagnosticSizeRounding.fileSize(event.artifactSizeBytes)
+        artifactModificationAgeSeconds = event.artifactModificationAgeSeconds
+        artifactGrowthRoundedBytesPerSecond = DiagnosticSizeRounding.byteRate(
+            event.artifactGrowthBytesPerSecond
+        )
+        privacy = bounded(event.privacy, maximumBytes: 128)
+        redaction = bounded(event.redaction, maximumBytes: 128)
+        messagePrivacy = bounded(event.messagePrivacy, maximumBytes: 128)
+        detailsPrivacy = bounded(event.detailsPrivacy, maximumBytes: 128)
         message = bounded(event.message, maximumBytes: 4_096)
         details = bounded(event.details, maximumBytes: 8_192)
         level = bounded(event.level, maximumBytes: 128)
