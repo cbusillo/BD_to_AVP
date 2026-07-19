@@ -5,6 +5,26 @@ from unittest.mock import patch
 
 from bd_to_avp.modules import disc
 from bd_to_avp.modules.config import Stage
+from bd_to_avp.process_runner import ProcessOutputSnapshot, ProcessResult
+
+
+def process_result(output: str = "", stderr: str = "") -> ProcessResult:
+    payload = output.encode("utf-8")
+    stderr_payload = stderr.encode("utf-8")
+    return ProcessResult(
+        tool_run_id="run-id",
+        returncode=0,
+        elapsed_ms=1,
+        stdout=ProcessOutputSnapshot(payload, b"", len(payload), len(payload), 0, 0),
+        stderr=ProcessOutputSnapshot(
+            stderr_payload,
+            b"",
+            len(stderr_payload),
+            len(stderr_payload),
+            0,
+            0,
+        ),
+    )
 
 
 class DiscStageArtifactTests(unittest.TestCase):
@@ -36,13 +56,13 @@ class DiscStageArtifactTests(unittest.TestCase):
     def test_rip_requests_progress_and_reports_robot_updates(self) -> None:
         progress_updates: list[tuple[float, float]] = []
 
-        def run_command(
+        def run_process_capture(
             command: list[object],
             _name: str,
             *,
             line_handler: object,
             **kwargs: object,
-        ) -> str:
+        ) -> ProcessResult:
             assert callable(line_handler)
             line_handler("PRGV:5,25,100")
             line_handler("MSG:1005,0,1,Finished")
@@ -50,10 +70,11 @@ class DiscStageArtifactTests(unittest.TestCase):
             self.assertIn("--robot", command)
             self.assertIn("--progress=-same", command)
             self.assertEqual(kwargs["tool_id"], "makemkvcon")
+            self.assertFalse(kwargs["merge_stderr"])
             self.assertTrue(callable(kwargs["progress_parser"]))
             self.assertEqual(len(kwargs["artifacts"]), 1)
             self.assertEqual(kwargs["capture_overflow"], disc.CaptureOverflowPolicy.FAIL)
-            return ""
+            return process_result()
 
         with tempfile.TemporaryDirectory() as temp_dir:
             output_folder = Path(temp_dir)
@@ -63,7 +84,7 @@ class DiscStageArtifactTests(unittest.TestCase):
                 patch.object(disc.config, "IMAGE_EXTENSIONS", [".iso"]),
                 patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
                 patch.object(disc, "create_custom_makemkv_profile"),
-                patch.object(disc, "run_command", side_effect=run_command),
+                patch.object(disc, "run_process_capture", side_effect=run_process_capture),
             ):
                 disc.rip_disc_to_mkv(
                     output_folder,
@@ -88,7 +109,7 @@ class DiscStageArtifactTests(unittest.TestCase):
             patch.object(disc.config, "source_str", "disc:0"),
             patch.object(disc.config, "IMAGE_EXTENSIONS", [".iso"]),
             patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
-            patch.object(disc, "run_command", return_value=makemkv_output) as run_command,
+            patch.object(disc, "run_process_capture", return_value=process_result(makemkv_output)) as run_command,
         ):
             result = disc.get_disc_and_mvc_video_info()
 
@@ -99,6 +120,7 @@ class DiscStageArtifactTests(unittest.TestCase):
         self.assertTrue(result.titles[0].main_feature)
         self.assertIn("--minlength=0", run_command.call_args.args[0])
         self.assertIn("iso:/Movies/Feature.iso", run_command.call_args.args[0])
+        self.assertFalse(run_command.call_args.kwargs["merge_stderr"])
 
     def test_disc_info_exposes_all_mvc_titles_and_selects_requested_video(self) -> None:
         makemkv_output = "\n".join(
@@ -119,7 +141,7 @@ class DiscStageArtifactTests(unittest.TestCase):
             patch.object(disc.config, "source_str", None),
             patch.object(disc.config, "IMAGE_EXTENSIONS", [".iso"]),
             patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
-            patch.object(disc, "run_command", return_value=makemkv_output),
+            patch.object(disc, "run_process_capture", return_value=process_result(makemkv_output)),
         ):
             result = disc.get_disc_and_mvc_video_info("makemkv:2")
 
@@ -151,7 +173,7 @@ class DiscStageArtifactTests(unittest.TestCase):
             patch.object(disc.config, "source_str", None),
             patch.object(disc.config, "IMAGE_EXTENSIONS", [".iso"]),
             patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
-            patch.object(disc, "run_command", return_value=makemkv_output),
+            patch.object(disc, "run_process_capture", return_value=process_result(makemkv_output)),
             self.assertRaises(disc.DiscTitleSelectionError),
         ):
             disc.get_disc_and_mvc_video_info("makemkv:0")
@@ -183,7 +205,7 @@ class DiscStageArtifactTests(unittest.TestCase):
                 patch.object(disc.config, "source_path", source_path),
                 patch.object(disc.config, "source_str", f"file:{source_path}"),
                 patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
-                patch.object(disc, "run_command", return_value=makemkv_output) as run_command,
+                patch.object(disc, "run_process_capture", return_value=process_result(makemkv_output)) as run_command,
             ):
                 result = disc.get_disc_and_mvc_video_info()
 
@@ -217,7 +239,7 @@ class DiscStageArtifactTests(unittest.TestCase):
             patch.object(disc.config, "source_path", None),
             patch.object(disc.config, "source_str", "dev:/dev/disk9"),
             patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
-            patch.object(disc, "run_command", return_value=makemkv_output) as run_command,
+            patch.object(disc, "run_process_capture", return_value=process_result(makemkv_output)) as run_command,
         ):
             result = disc.get_disc_and_mvc_video_info()
 
@@ -235,13 +257,36 @@ class DiscStageArtifactTests(unittest.TestCase):
                 patch.object(disc.config, "source_str", None),
                 patch.object(disc.config, "IMAGE_EXTENSIONS", [".iso"]),
                 patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
-                patch.object(disc, "run_command", return_value="") as run_command,
+                patch.object(disc, "run_process_capture", return_value=process_result()) as run_command,
             ):
                 disc.rip_disc_to_mkv(output_folder, disc.DiscInfo(main_title_number=2))
 
         command = run_command.call_args.args[0]
         self.assertIn("--minlength=0", command)
         self.assertIn(2, command)
+
+    def test_disc_rip_detects_makemkv_error_from_stderr(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_folder = Path(temp_dir)
+            with (
+                patch.object(disc.config, "source_path", Path("/Movies/Feature.iso")),
+                patch.object(disc.config, "source_str", None),
+                patch.object(disc.config, "IMAGE_EXTENSIONS", [".iso"]),
+                patch.object(disc.config, "MAKEMKVCON_PATH", Path("/Applications/MakeMKV/makemkvcon")),
+                patch.object(disc.config, "continue_on_error", False),
+                patch.object(disc.config, "MKV_ERROR_CODES", ["FAILED"]),
+                patch.object(disc.config, "MKV_ERROR_FILTERS", []),
+                patch.object(disc, "create_custom_makemkv_profile"),
+                patch.object(
+                    disc,
+                    "run_process_capture",
+                    return_value=process_result(stderr="FAILED to save title\n"),
+                ) as run_command,
+                self.assertRaises(disc.MKVCreationError),
+            ):
+                disc.rip_disc_to_mkv(output_folder, disc.DiscInfo(main_title_number=2))
+
+        self.assertFalse(run_command.call_args.kwargs["merge_stderr"])
 
     def test_keep_files_copies_mkv_source_to_output_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

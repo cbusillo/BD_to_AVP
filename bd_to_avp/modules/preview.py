@@ -4,10 +4,11 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from bd_to_avp.modules.command import run_command, run_ffprobe
+from bd_to_avp.modules.command import run_ffprobe, run_process_capture
 from bd_to_avp.modules.config import config
 from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.observability import ObservabilityContext
+from bd_to_avp.process_runner import CaptureOverflowPolicy
 from bd_to_avp.runtime import RunContext
 
 
@@ -109,12 +110,15 @@ def create_bounded_preview_source(
         temporary_path,
     ]
     try:
-        run_command(
+        run_process_capture(
             range_command,
             "Create bounded preview source",
+            tool_id="ffmpeg",
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=observability_context,
+            capture_overflow=CaptureOverflowPolicy.TRUNCATE,
+            show_spinner=True,
         )
         ranged_timing = probe_media_timing(
             ranged_path,
@@ -126,12 +130,15 @@ def create_bounded_preview_source(
         if actual_start > preview_range.start_seconds + 0.25:
             raise RuntimeError("The bounded preview started after the selected source range.")
 
-        run_command(
+        run_process_capture(
             normalize_command,
             "Normalize bounded preview timestamps",
+            tool_id="ffmpeg",
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=observability_context,
+            capture_overflow=CaptureOverflowPolicy.TRUNCATE,
+            show_spinner=True,
         )
         final_timing = probe_media_timing(
             temporary_path,

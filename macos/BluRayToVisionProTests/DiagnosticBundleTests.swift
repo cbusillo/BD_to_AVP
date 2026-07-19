@@ -186,6 +186,40 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(output.components(separatedBy: "<path:01234567:").count - 1, 4)
     }
 
+    func testRedactorRemovesArbitraryMediaMetadataValues() {
+        let redactor = DiagnosticRedactor(bundleID: fixedBundleID)
+        let text = """
+        Input #0, mov, from '<path:redacted>':
+          Metadata:
+            artist          : Private Artist
+            custom_tag      : personally identifying value
+          Duration: 00:10:00.00
+        frame=1
+        """
+
+        let output = redactor.redact(text)
+
+        XCTAssertFalse(output.contains("Private Artist"))
+        XCTAssertFalse(output.contains("personally identifying value"))
+        XCTAssertTrue(output.contains("artist: <metadata:redacted>"))
+        XCTAssertTrue(output.contains("custom_tag: <metadata:redacted>"))
+        XCTAssertTrue(output.contains("Duration: 00:10:00.00"))
+        XCTAssertTrue(output.contains("frame=1"))
+    }
+
+    func testRedactorRemovesCRLFAndMultilineMetadataValues() {
+        let redactor = DiagnosticRedactor(bundleID: fixedBundleID)
+        let text = "Input #0:\r\n  Metadata:\r\n    comment: first private line\r\n    : second private line\r\n  Duration: 00:10:00.00\r\n"
+
+        let output = redactor.redact(text)
+
+        XCTAssertFalse(output.contains("first private line"))
+        XCTAssertFalse(output.contains("second private line"))
+        XCTAssertTrue(output.contains("comment: <metadata:redacted>"))
+        XCTAssertTrue(output.contains(": <metadata:redacted>"))
+        XCTAssertTrue(output.contains("Duration: 00:10:00.00"))
+    }
+
     func testStorageProbeClassifiesInaccessibleMetadataWithoutLeakingPath() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -17,6 +17,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from bd_to_avp.observability import ObservabilityEvent
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -546,6 +547,25 @@ def validate_smoke_events(events: list[object], job_id: str) -> None:
         raise ValueError("Worker smoke lifecycle prefix was incomplete.")
     if event_types[-1] != "job.completed":
         raise ValueError("Worker smoke did not complete.")
+
+    observed_ffprobe = False
+    for event in typed_events:
+        if event.get("type") != "observability":
+            continue
+        payload = event.get("payload")
+        canonical_event = payload.get("event") if isinstance(payload, Mapping) else None
+        if not isinstance(canonical_event, Mapping):
+            raise ValueError("Worker smoke observability payload was missing.")
+        try:
+            parsed_event = ObservabilityEvent.from_dict(dict(canonical_event))
+        except (KeyError, OverflowError, TypeError, ValueError) as error:
+            raise ValueError("Worker smoke emitted invalid canonical observability.") from error
+        tool = parsed_event.context.tool
+        observed_ffprobe = observed_ffprobe or (
+            parsed_event.kind in {"tool.started", "tool.completed"} and tool is not None and tool.id == "ffprobe"
+        )
+    if not observed_ffprobe:
+        raise ValueError("Worker smoke did not emit canonical FFprobe observability.")
 
     terminal_payload = typed_events[-1].get("payload")
     if not isinstance(terminal_payload, Mapping):

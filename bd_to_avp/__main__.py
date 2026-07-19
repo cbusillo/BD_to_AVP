@@ -1,7 +1,4 @@
-import atexit
 import signal
-
-import psutil
 
 from bd_to_avp.modules.process import start_process
 from bd_to_avp.modules.config import config
@@ -22,23 +19,6 @@ def _start_gui() -> None:
         raise SystemExit(GUI_DEPENDENCY_MESSAGE) from None
 
     start_gui()
-
-
-def kill_child_processes() -> None:
-    current_process = psutil.Process()
-    child_processes = current_process.children(recursive=True)
-
-    for child in child_processes:
-        if "pycharm" not in child.name().lower() and "code" not in child.name().lower():
-            child.terminate()
-
-    _, alive = psutil.wait_procs(child_processes, timeout=3)
-    for p in alive:
-        if "pycharm" not in p.name().lower() and "code" not in p.name().lower():
-            p.kill()
-
-
-atexit.register(kill_child_processes)
 
 
 def main() -> None:

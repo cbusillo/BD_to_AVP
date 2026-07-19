@@ -4,6 +4,7 @@ import os
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -21,7 +22,7 @@ from bd_to_avp.modules.process import process_each
 from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.observability import ObservabilityEmitter
-from bd_to_avp.process_runner import ProcessCancelled
+from bd_to_avp.process_runner import ChildProcessRunner, ProcessCancelled, ProcessSpec
 from bd_to_avp.runtime import ObservabilityStream
 from bd_to_avp.worker.__main__ import run_worker
 from bd_to_avp.worker.operations import (
@@ -649,9 +650,22 @@ class WorkerRuntimeTests(unittest.TestCase):
             def operation(
                 _job: JobSpec,
                 _owner: WorkerProcessOwner,
-                _activity: WorkerActivityReporter,
+                activity: WorkerActivityReporter,
             ) -> dict[str, object]:
-                print("live tool output", flush=True)
+                assert activity.run_context is not None
+                ChildProcessRunner().run(
+                    ProcessSpec(
+                        argv=(
+                            sys.executable,
+                            "-c",
+                            "import sys; print('live tool output', file=sys.stderr, flush=True)",
+                        ),
+                        tool_id="python-test-tool",
+                        display_name="test tool",
+                        merge_stderr=False,
+                    ),
+                    run_context=activity.run_context,
+                )
                 self.assertTrue(release_operation.wait(timeout=2))
                 return {
                     "name": "movie",
@@ -689,7 +703,7 @@ class WorkerRuntimeTests(unittest.TestCase):
         self.assertIn("live tool output", diagnostic.getvalue())
         self.assertEqual(decoded_events(output)[-1]["type"], "job.completed")
 
-    def test_success_emits_structured_terminal_event_and_redirects_prints(self) -> None:
+    def test_success_emits_structured_terminal_event_and_relays_child_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             source_path = Path(temporary_directory) / "movie.m2ts"
             source_path.touch()
@@ -701,11 +715,19 @@ class WorkerRuntimeTests(unittest.TestCase):
                 _owner: WorkerProcessOwner,
                 activity: WorkerActivityReporter,
             ) -> dict[str, object]:
-                print("legacy output")
                 self.assertEqual(job.source.path, source_path)
                 activity.log("structured progress")
                 self.assertIsNotNone(activity.run_context)
                 assert activity.run_context is not None
+                ChildProcessRunner().run(
+                    ProcessSpec(
+                        argv=(sys.executable, "-c", "import sys; print('child output', file=sys.stderr)"),
+                        tool_id="python-test-tool",
+                        display_name="test tool",
+                        merge_stderr=False,
+                    ),
+                    run_context=activity.run_context,
+                )
                 activity.run_context.emit("tool.test")
                 time.sleep(0.02)
                 return {"name": "movie", "resolution": "1920x1080"}
@@ -725,13 +747,60 @@ class WorkerRuntimeTests(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "job.completed")
         self.assertIn("heartbeat", [event["type"] for event in events])
         self.assertIn("log", [event["type"] for event in events])
-        observability = next(event for event in events if event["type"] == "observability")
+        observability = next(
+            event
+            for event in events
+            if event["type"] == "observability" and event["payload"]["event"]["kind"] == "tool.test"
+        )
         self.assertEqual(observability["payload"]["event"]["schema"], "bd_to_avp.observability")
         self.assertEqual(observability["payload"]["event"]["stream_id"], events[0]["job_id"])
         self.assertEqual(observability["payload"]["event"]["kind"], "tool.test")
         self.assertEqual([event["sequence"] for event in events], list(range(len(events))))
-        self.assertNotIn("legacy output", output.getvalue())
-        self.assertIn("legacy output", diagnostics.getvalue())
+        self.assertNotIn("child output", output.getvalue())
+        self.assertIn("child output", diagnostics.getvalue())
+
+    def test_blocked_diagnostic_stream_emits_truncation_warning_without_blocking_job(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source_path = Path(temporary_directory) / "movie.m2ts"
+            source_path.touch()
+            output = io.StringIO()
+            diagnostics = BlockingDiagnosticStream()
+
+            def operation(
+                _job: JobSpec,
+                _owner: WorkerProcessOwner,
+                activity: WorkerActivityReporter,
+            ) -> dict[str, object]:
+                assert activity.run_context is not None
+                ChildProcessRunner().run(
+                    ProcessSpec(
+                        argv=(sys.executable, "-c", "import sys; print('blocked child output', file=sys.stderr)"),
+                        tool_id="python-test-tool",
+                        display_name="test tool",
+                        merge_stderr=False,
+                    ),
+                    run_context=activity.run_context,
+                )
+                return {"name": "movie", "resolution": "1920x1080"}
+
+            exit_code = run_worker(
+                io.StringIO(request_line(source_path)),
+                output,
+                diagnostics,
+                establish_session=False,
+                operation_runner=operation,
+            )
+            diagnostics.release_write.set()
+
+        events = decoded_events(output)
+        warning = next(
+            event
+            for event in events
+            if event["type"] == "warning" and event["payload"].get("code") == "diagnostic_output_truncated"
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertGreater(warning["payload"]["pending_bytes"], 0)
+        self.assertEqual(events[-1]["type"], "job.completed")
 
     def test_observability_after_terminal_is_dropped_without_corrupting_worker_stream(self) -> None:
         output = io.StringIO()
@@ -972,6 +1041,18 @@ class SignalingTextStream(io.StringIO):
         return written
 
 
+class BlockingDiagnosticStream(io.StringIO):
+    def __init__(self) -> None:
+        super().__init__()
+        self.write_started = threading.Event()
+        self.release_write = threading.Event()
+
+    def write(self, value: str) -> int:
+        self.write_started.set()
+        self.release_write.wait(timeout=2)
+        return super().write(value)
+
+
 class SourceInspectionTests(unittest.TestCase):
     def test_inspects_direct_video_sources_with_production_probe_path(self) -> None:
         for extension in (".m2ts", ".mkv"):
@@ -1116,6 +1197,35 @@ class SourceInspectionTests(unittest.TestCase):
             self.assertEqual(context.exception.code, "disc_inspection_failed")
             self.assertEqual(context.exception.details, "Disc metadata could not be read.\n")
             self.assertTrue(context.exception.retryable)
+
+    def test_iso_inspection_preserves_stderr_only_failure_details(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.iso"
+            source_path.touch()
+            fake_makemkv = temporary_path / "makemkvcon"
+            fake_makemkv.touch()
+
+            with (
+                patch.object(config, "MAKEMKVCON_PATH", fake_makemkv),
+                patch(
+                    "bd_to_avp.worker.operations.get_disc_and_mvc_video_info",
+                    side_effect=subprocess.CalledProcessError(
+                        returncode=1,
+                        cmd=[fake_makemkv],
+                        output="",
+                        stderr="MakeMKV could not open the source.\n",
+                    ),
+                ),
+                self.assertRaises(WorkerOperationError) as context,
+            ):
+                inspect_source(
+                    JobSource(kind=WorkerSourceKind.DISC_IMAGE, path=source_path),
+                    WorkerProcessOwner(),
+                )
+
+            self.assertEqual(context.exception.code, "disc_inspection_failed")
+            self.assertEqual(context.exception.details, "MakeMKV could not open the source.\n")
 
     def test_inspects_physical_disc_through_device_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -1,12 +1,8 @@
-import logging
 from typing import Iterable
 
 from bd_to_avp.vendor.pgsrip.media import Media, Pgs
 from bd_to_avp.vendor.pgsrip.media_path import MediaPath
 from bd_to_avp.vendor.pgsrip.options import Options
-
-logger = logging.getLogger(__name__)
-
 
 class Sup(Media):
 

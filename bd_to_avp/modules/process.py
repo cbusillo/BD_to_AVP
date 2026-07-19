@@ -33,6 +33,7 @@ from bd_to_avp.modules.video import (
 )
 from bd_to_avp.observability import ObservabilityContext, ObservabilityStage
 from bd_to_avp.process_runner import ProcessCancelled
+from bd_to_avp.presentation import cli_message
 from bd_to_avp.runtime import RunContext
 
 
@@ -227,7 +228,7 @@ def process_each(
         raise ValueError("AV1 stereo export does not support AI FX upscale.")
     if config.video_mode is VideoMode.AV1_SBS and config.resolution:
         raise ValueError("AV1 stereo export always preserves full source resolution per eye.")
-    print(f"\nProcessing {config.source_path or config.source_str}")
+    cli_message(f"\nProcessing {config.source_path or config.source_str}", run_context=run_context)
     if config.start_stage is Stage.MOVE_FILES:
         muxed_output_path = completed_mux_path_for_move()
         completed_path = config.output_root_path / muxed_output_path.name
@@ -240,6 +241,7 @@ def process_each(
             config.output_root_path / "temp_files",
             cancellation_event,
             activity,
+            run_context,
         )
     if activity:
         activity.stage_started("preflight", "Checking required conversion tools")
@@ -269,7 +271,7 @@ def process_each(
     if not tmp_folder.exists():
         raise RuntimeError(f"Failed to create temporary folder: {tmp_folder}")
 
-    print(f"Using temporary folder: {os.environ['TMPDIR']}")
+    cli_message(f"Using temporary folder: {os.environ['TMPDIR']}", run_context=run_context)
     if activity:
         activity.log("Temporary workspace ready", stage="inspect_source", path=os.environ["TMPDIR"])
 
@@ -337,10 +339,13 @@ def process_each(
     raise_if_cancelled(cancellation_event)
     if activity and not config.skip_subtitles and config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
         activity.stage_started("extract_subtitles", "Extracting subtitles")
+    subtitle_warning_handler = (
+        (lambda message: activity.warning(message, stage="extract_subtitles")) if activity else None
+    )
     create_srt_from_mkv(
         mkv_output_path,
         output_folder,
-        (lambda message: activity.warning(message, stage="extract_subtitles") if activity else None),
+        subtitle_warning_handler,
         run_context=run_context,
         cancellation_event=cancellation_event,
         observability_context=stage_observability_context("extract_subtitles"),
@@ -427,7 +432,13 @@ def process_each(
         observability_context=stage_observability_context("create_final_file"),
     )
 
-    return move_completed_conversion(muxed_output_path, tmp_folder, cancellation_event, activity)
+    return move_completed_conversion(
+        muxed_output_path,
+        tmp_folder,
+        cancellation_event,
+        activity,
+        run_context,
+    )
 
 
 def completed_mux_path_for_move() -> Path:
@@ -463,6 +474,7 @@ def move_completed_conversion(
     tmp_folder: Path,
     cancellation_event: Event | None,
     activity: ActivityReporter | None,
+    run_context: RunContext | None = None,
 ) -> Path:
     raise_if_cancelled(cancellation_event)
     if activity:
@@ -475,18 +487,27 @@ def move_completed_conversion(
 
     raise_if_cancelled(cancellation_event)
     if config.remove_original:
-        remove_original_source(final_output_path)
+        removed_original = remove_original_source(final_output_path, run_context=run_context)
+        if not removed_original and activity:
+            activity.warning(
+                "The original source was kept because it could not be removed safely.",
+                stage="move_files",
+                code="source_removal_refused",
+            )
 
     return final_output_path
 
 
-def remove_original_source(completed_path: Path) -> bool:
+def remove_original_source(completed_path: Path, *, run_context: RunContext | None = None) -> bool:
     source_path = config.source_path
     if not source_path:
         return False
     if source_path.is_dir():
         if path_is_relative_to(completed_path, source_path):
-            print(f"Refusing to remove source directory containing final output: {source_path}")
+            cli_message(
+                f"Refusing to remove source directory containing final output: {source_path}",
+                run_context=run_context,
+            )
             return False
         remove_folder_if_exists(source_path)
     else:

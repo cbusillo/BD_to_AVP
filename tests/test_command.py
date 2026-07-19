@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from bd_to_avp.modules import command
 from bd_to_avp.process_runner import (
+    CaptureOverflowPolicy,
     ProcessCancelled,
     ProcessExecutionError,
     ProcessOutputLimitError,
@@ -15,7 +16,7 @@ from bd_to_avp.process_runner import (
 )
 
 
-class RunCommandTests(unittest.TestCase):
+class RunProcessCaptureTests(unittest.TestCase):
     def test_line_handler_receives_streamed_output(self) -> None:
         lines: list[str] = []
 
@@ -35,10 +36,15 @@ class RunCommandTests(unittest.TestCase):
             patch.object(command.Spinner, "start"),
             patch.object(command.Spinner, "stop"),
         ):
-            output = command.run_command(["tool"], line_handler=lines.append)
+            result = command.run_process_capture(
+                ["tool"],
+                "test tool",
+                tool_id="tool",
+                line_handler=lines.append,
+            )
 
         self.assertEqual(lines, ["first", "second"])
-        self.assertEqual(output, "first\nsecond\r\n")
+        self.assertEqual(result.stdout.text(), "first\nsecond\r\n")
 
     def test_line_handler_failure_terminates_running_process(self) -> None:
         def fail(_line: str) -> None:
@@ -49,8 +55,10 @@ class RunCommandTests(unittest.TestCase):
             patch.object(command.Spinner, "stop"),
             self.assertRaisesRegex(RuntimeError, "bad progress parser"),
         ):
-            command.run_command(
+            command.run_process_capture(
                 [sys.executable, "-c", "import time; print('progress', flush=True); time.sleep(30)"],
+                "test tool",
+                tool_id="python",
                 line_handler=fail,
             )
 
@@ -63,26 +71,27 @@ class RunCommandTests(unittest.TestCase):
             patch.object(command.Spinner, "stop"),
             self.assertRaises(KeyboardInterrupt),
         ):
-            command.run_command(
+            command.run_process_capture(
                 [sys.executable, "-c", "import time; print('progress', flush=True); time.sleep(30)"],
+                "test tool",
+                tool_id="python",
                 line_handler=interrupt,
             )
-
-    def test_default_tool_id_uses_executable_name_without_path(self) -> None:
-        self.assertEqual(command.default_tool_id("/Applications/Tool Suite/bin/MakeMKVCon"), "makemkvcon")
-        self.assertEqual(command.default_tool_id("***"), "external_tool")
 
     def test_large_ignored_output_is_truncated_without_failing_command(self) -> None:
         with (
             patch.object(command.Spinner, "start"),
             patch.object(command.Spinner, "stop"),
         ):
-            output = command.run_command(
+            result = command.run_process_capture(
                 [sys.executable, "-c", "import os; os.write(1, b'x' * 100000)"],
+                "test tool",
+                tool_id="python",
                 capture_limit_bytes=4096,
+                capture_overflow=CaptureOverflowPolicy.TRUNCATE,
             )
 
-        self.assertEqual(len(output), 4096)
+        self.assertEqual(len(result.stdout.capture), 4096)
 
     def test_ffprobe_uses_configured_binary_and_keyword_options(self) -> None:
         result = ProcessResult(
@@ -230,6 +239,28 @@ class RunCommandTests(unittest.TestCase):
 
         self.assertIs(run.call_args.kwargs["run_context"], run_context)
         self.assertIs(run.call_args.kwargs["cancellation_event"], cancellation_event)
+
+    def test_ffmpeg_spinner_wrapper_presents_bounded_stderr_for_cli(self) -> None:
+        stderr = b"x" * 20_000 + b"terminal failure"
+        error = ProcessExecutionError(
+            1,
+            ["ffmpeg"],
+            ProcessOutputSnapshot(b"", b"", 0, 0, 0, 0),
+            ProcessOutputSnapshot(stderr, b"", len(stderr), len(stderr), 0, 0),
+        )
+        with (
+            patch.object(command.ffmpeg, "compile", return_value=["ffmpeg"]),
+            patch.object(command, "run_process_capture", side_effect=error),
+            patch.object(command, "cli_message") as present,
+            self.assertRaises(command.ffmpeg.Error),
+        ):
+            command.run_ffmpeg_print_errors("stream", "encode")
+
+        message = present.call_args.args[0]
+        self.assertIn("earlier FFmpeg output omitted", message)
+        self.assertTrue(message.endswith("terminal failure"))
+        self.assertLessEqual(len(message.encode("utf-8")), 17 * 1024)
+        self.assertIsNone(present.call_args.kwargs["run_context"])
 
 
 if __name__ == "__main__":

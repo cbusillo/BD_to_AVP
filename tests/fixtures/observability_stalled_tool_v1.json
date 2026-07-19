@@ -1,0 +1,48 @@
+{
+  "schema": "bd_to_avp.observability",
+  "schema_version": 1,
+  "emitter": "worker",
+  "stream_id": "a9ca0cb4-59d6-4c34-ac17-bb7f8f6e4c56",
+  "sequence": 41,
+  "occurred_at": "2026-07-19T04:01:00.000Z",
+  "elapsed_ms": 3660000,
+  "kind": "tool.heartbeat",
+  "severity": "warning",
+  "privacy": "private",
+  "redaction": "raw",
+  "context": {
+    "correlation": {
+      "job_id": "5e8cfa5e-0475-42ee-b6f9-ad80139b77d6"
+    },
+    "stage": {
+      "id": "create_mkv",
+      "index": 4,
+      "count": 14
+    },
+    "tool": {
+      "id": "makemkvcon",
+      "run_id": "7b78e4c3-5d76-485e-9a68-cd9571eaeea2"
+    },
+    "process": {
+      "pid": 8421,
+      "process_group_id": 8421
+    }
+  },
+  "data": {
+    "artifact": {
+      "role": "intermediate_mkv",
+      "state": "growing",
+      "location": {
+        "value": "/Users/example/Movies/Feature/temp_files/title.mkv",
+        "privacy": "private",
+        "truncated": false
+      },
+      "size_bytes": 1593835520,
+      "modification_age_seconds": 61,
+      "growth_bytes_per_second": 0
+    },
+    "activity": {
+      "last_output_age_seconds": 61
+    }
+  }
+}

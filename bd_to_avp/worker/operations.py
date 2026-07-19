@@ -161,11 +161,12 @@ def inspect_source(
     except subprocess.CalledProcessError as error:
         if owner.cancellation_event.is_set():
             raise WorkerCancelled("The source inspection was cancelled.") from error
+        raw_details = error.stderr or error.output
         details: str | None
-        if isinstance(error.output, bytes):
-            details = error.output.decode("utf-8", errors="replace")
+        if isinstance(raw_details, bytes):
+            details = raw_details.decode("utf-8", errors="replace")
         else:
-            details = error.output if isinstance(error.output, str) else None
+            details = raw_details if isinstance(raw_details, str) else None
         message = (
             "MakeMKV could not read the selected Blu-ray disc. Confirm it is inserted, "
             "wait for the drive to finish spinning up, and try again."
@@ -350,7 +351,12 @@ def _convert_source(
         except subprocess.CalledProcessError as error:
             if owner.cancellation_event.is_set():
                 raise WorkerCancelled("The conversion was cancelled.") from error
-            details = error.output if isinstance(error.output, str) else None
+            raw_details = error.stderr or error.output
+            details: str | None
+            if isinstance(raw_details, bytes):
+                details = raw_details.decode("utf-8", errors="replace")
+            else:
+                details = raw_details if isinstance(raw_details, str) else None
             raise WorkerOperationError(
                 "tool_failed",
                 "A conversion helper failed.",

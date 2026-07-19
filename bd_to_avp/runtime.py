@@ -20,6 +20,9 @@ from bd_to_avp.observability import (
 )
 
 
+DiagnosticObserver = Callable[[str, bytes], object]
+
+
 class CancellationToken:
     def __init__(self, event: threading.Event | None = None) -> None:
         self._event = event or threading.Event()
@@ -117,6 +120,15 @@ class ObservabilityStream:
 class RunContext:
     observability: ObservabilityStream
     cancellation: CancellationToken = field(default_factory=CancellationToken)
+    diagnostic_observer: DiagnosticObserver | None = field(default=None, compare=False, repr=False)
 
     def emit(self, kind: str, **kwargs: Any) -> ObservabilityEvent | None:
         return self.observability.emit(kind, **kwargs)
+
+    def observe_diagnostic_output(self, stream: str, payload: bytes) -> None:
+        if self.diagnostic_observer is None:
+            return
+        try:
+            self.diagnostic_observer(stream, payload)
+        except Exception:
+            return

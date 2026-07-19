@@ -17,6 +17,7 @@ from bd_to_avp.modules.languages import (
     normalize_source_language,
 )
 from bd_to_avp.observability import ObservabilityContext
+from bd_to_avp.presentation import cli_message
 from bd_to_avp.runtime import RunContext
 
 
@@ -25,6 +26,13 @@ class SRTCreationError(Exception):
 
 
 SubtitleWarningHandler = Callable[[str], None]
+
+
+def report_subtitle_warning(message: str, warning_handler: SubtitleWarningHandler | None) -> None:
+    if warning_handler is not None:
+        warning_handler(message)
+    else:
+        cli_message(message)
 
 
 def create_srt_from_mkv(
@@ -67,6 +75,7 @@ def extract_subtitle_to_srt(
         return None
     subtitle_tracks = get_languages_in_mkv(
         mkv_path,
+        warning_handler=warning_handler,
         run_context=run_context,
         cancellation_event=cancellation_event,
         observability_context=observability_context,
@@ -74,17 +83,17 @@ def extract_subtitle_to_srt(
 
     if not subtitle_tracks:
         message = "No PGS subtitle tracks found in source; continuing without subtitles."
-        print(message)
-        if warning_handler:
-            warning_handler(message)
+        report_subtitle_warning(message, warning_handler)
         return None
 
     sub_options = subtitle_rip_options()
 
-    spinner = Spinner("Sup subtitles extraction and SRT conversion")
-    spinner_update_func = get_spinner_update_func()
-    spinner_thread = threading.Thread(target=spinner.start, args=(spinner_update_func,))
-    spinner_thread.start()
+    spinner = Spinner("Sup subtitles extraction and SRT conversion") if run_context is None else None
+    spinner_update_func = get_spinner_update_func() if spinner is not None else None
+    spinner_thread: threading.Thread | None = None
+    if spinner is not None:
+        spinner_thread = threading.Thread(target=spinner.start, args=(spinner_update_func,))
+        spinner_thread.start()
 
     try:
         with subtitle_source_alias(mkv_path, output_path) as subtitle_mkv_path:
@@ -102,9 +111,7 @@ def extract_subtitle_to_srt(
                     "No PGS subtitle tracks matched the preferred language "
                     f"{language_name(preferred_language)} ({preferred_language}); continuing without subtitles."
                 )
-                print(message)
-                if warning_handler:
-                    warning_handler(message)
+                report_subtitle_warning(message, warning_handler)
                 return None
 
             pgsrip.rip(mkv_file, sub_options)
@@ -116,10 +123,11 @@ def extract_subtitle_to_srt(
             if not any(output_path.glob("*.srt")) and not config.continue_on_error:
                 raise SRTCreationError("No SRT subtitle files with data created.")
 
-            mark_forced_srt_files(selected_subtitle_tracks)
+            mark_forced_srt_files(selected_subtitle_tracks, warning_handler)
     finally:
-        spinner.stop(spinner_update_func)
-        spinner_thread.join()
+        if spinner is not None and spinner_thread is not None:
+            spinner.stop(spinner_update_func)
+            spinner_thread.join()
 
 
 @contextmanager
@@ -195,14 +203,20 @@ def get_selected_subtitle_tracks(mkv_file: Mkv, sub_options: Options) -> list[di
     return selected_tracks
 
 
-def mark_forced_srt_files(subtitle_tracks: list[dict[str, Any]]) -> None:
+def mark_forced_srt_files(
+    subtitle_tracks: list[dict[str, Any]],
+    warning_handler: SubtitleWarningHandler | None = None,
+) -> None:
     for track in subtitle_tracks:
         if track["forced"] != 1:
             continue
 
         forced_srt_file = track["srt_path"]
         if not forced_srt_file.exists():
-            print(f"Forced subtitle track {track['index']} did not create an SRT file.")
+            report_subtitle_warning(
+                f"Forced subtitle track {track['index']} did not create an SRT file.",
+                warning_handler,
+            )
             continue
 
         if ".forced." in forced_srt_file.stem:
@@ -228,6 +242,7 @@ def subtitle_language_alpha2(language_code: str) -> str | None:
 def get_languages_in_mkv(
     mkv_path: Path,
     *,
+    warning_handler: SubtitleWarningHandler | None = None,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
@@ -245,7 +260,6 @@ def get_languages_in_mkv(
         if stream["codec_type"] == "subtitle" and stream.get("codec_name") == "hdmv_pgs_subtitle"
     ]
     if not subtitle_streams:
-        print("No PGS subtitle streams found in MKV.")
         return None
     subtitle_info = []
     for stream in subtitle_streams:
@@ -254,7 +268,10 @@ def get_languages_in_mkv(
         if canonical_language == "und" and (
             not isinstance(source_language, str) or source_language.casefold() != "und"
         ):
-            print(f"Unrecognized subtitle language metadata {source_language!r}; treating it as undetermined.")
+            report_subtitle_warning(
+                f"Unrecognized subtitle language metadata {source_language!r}; treating it as undetermined.",
+                warning_handler,
+            )
         info = {
             "index": stream["index"],
             "language": canonical_language,

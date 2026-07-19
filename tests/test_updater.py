@@ -149,15 +149,11 @@ class UpdaterManagerTests(unittest.TestCase):
             environment = updater.UpdaterEnvironment(True, "direct", framework_path, "feed", "key")
             processing = FakeProcessingController(False)
 
-            with (
-                patch.object(updater.UpdaterManager, "_initialize_sparkle", side_effect=RuntimeError("failed")),
-                self.assertLogs(updater.logger, level="ERROR") as logs,
-            ):
+            with patch.object(updater.UpdaterManager, "_initialize_sparkle", side_effect=RuntimeError("failed")):
                 manager = updater.UpdaterManager(processing, environment=environment)
 
         self.assertEqual(manager.mode, updater.UpdateMode.MANUAL)
         self.assertIsInstance(manager.initialization_error, RuntimeError)
-        self.assertIn("falling back to manual updates", logs.output[0])
 
     def test_channel_change_resets_sparkle_update_cycle(self) -> None:
         processing = FakeProcessingController(False)

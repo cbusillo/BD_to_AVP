@@ -1,4 +1,3 @@
-import os
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -317,11 +316,9 @@ class MainWindow(QMainWindow):
     def check_for_updates(self, _checked: bool = False) -> None:
         self.updater_manager.check_for_updates(self)
 
-    def notify_user_with_sound(self, sound_name: str) -> None:
+    def notify_user_with_sound(self, _sound_name: str) -> None:
         if self.play_sound_checkbox.isChecked():
-            sound_path = Path("/System/Library/Sounds") / f"{sound_name}.aiff"
-            if sound_path.exists():
-                os.system(f"afplay /System/Library/Sounds/{sound_name}.aiff")
+            QApplication.beep()
 
     def handle_processing_error(self, _request: ProcessingRequest, error: Exception) -> None:
         self.notify_user_with_sound("Sosumi")

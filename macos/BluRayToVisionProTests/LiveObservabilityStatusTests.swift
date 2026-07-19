@@ -70,6 +70,32 @@ final class LiveObservabilityStatusTests: XCTestCase {
         )
     }
 
+    func testSharedLongRunningFixturesDistinguishHealthyWorkFromStall() throws {
+        let receivedAt = Date(timeIntervalSince1970: 100)
+        var active = LiveObservabilityStatus.empty
+        active.receive(
+            try JSONDecoder().decode(
+                ObservabilityEvent.self,
+                from: try sharedFixtureData(named: "observability_long_running_tool_v1.json")
+            ),
+            receivedAt: receivedAt
+        )
+        var stalled = LiveObservabilityStatus.empty
+        stalled.receive(
+            try JSONDecoder().decode(
+                ObservabilityEvent.self,
+                from: try sharedFixtureData(named: "observability_stalled_tool_v1.json")
+            ),
+            receivedAt: receivedAt
+        )
+
+        XCTAssertFalse(active.isStalled(at: receivedAt))
+        XCTAssertEqual(active.artifactGrowthBytesPerSecond, 8_388_608)
+        XCTAssertTrue(stalled.isStalled(at: receivedAt))
+        XCTAssertEqual(stalled.artifactGrowthBytesPerSecond, 0)
+        XCTAssertEqual(stalled.artifactModificationAgeSeconds, 61)
+    }
+
     func testTerminalToolEventUpdatesProcessState() throws {
         var status = LiveObservabilityStatus.empty
         status.receive(
@@ -154,11 +180,15 @@ final class LiveObservabilityStatusTests: XCTestCase {
     }
 
     private func sharedFixtureData() throws -> Data {
+        try sharedFixtureData(named: "observability_event_v1.json")
+    }
+
+    private func sharedFixtureData(named fixtureName: String) throws -> Data {
         let fixtureURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/observability_event_v1.json")
+            .appendingPathComponent("tests/fixtures/\(fixtureName)")
         return try XCTUnwrap(FileManager.default.contents(atPath: fixtureURL.path))
     }
 }

@@ -83,6 +83,7 @@ final class DiagnosticRedactor {
 
     func redact(_ value: String) -> String {
         var redacted = Self.removingUnsafeControlCharacters(from: value)
+        redacted = redactMediaMetadataBlocks(in: redacted)
         redacted = redactCommandArguments(in: redacted)
         redacted = redactTitleArguments(in: redacted)
         for (sensitiveValue, replacement) in exactReplacements.sorted(by: { $0.key.count > $1.key.count }) {
@@ -186,6 +187,42 @@ final class DiagnosticRedactor {
             in: redacted
         ) { _ in "<network:redacted>" }
         return redacted
+    }
+
+    private func redactMediaMetadataBlocks(in text: String) -> String {
+        var metadataIndent: Int?
+        return text.components(separatedBy: "\n").map { line in
+            let indentation = line.prefix { character in
+                character == " " || character == "\t"
+            }
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.caseInsensitiveCompare("Metadata:") == .orderedSame {
+                metadataIndent = indentation.count
+                return line
+            }
+            guard let blockIndent = metadataIndent else {
+                return line
+            }
+            if trimmed.isEmpty {
+                return line
+            }
+            if indentation.count <= blockIndent {
+                metadataIndent = nil
+                return line
+            }
+            guard let separator = trimmed.firstIndex(of: ":") else {
+                return "\(indentation)<metadata:redacted>"
+            }
+            if separator == trimmed.startIndex {
+                return "\(indentation): <metadata:redacted>"
+            }
+            let key = trimmed[..<separator].trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty else {
+                return line
+            }
+            return "\(indentation)\(key): <metadata:redacted>"
+        }
+        .joined(separator: "\n")
     }
 
     private func identifierToken(for identifier: String) -> String {

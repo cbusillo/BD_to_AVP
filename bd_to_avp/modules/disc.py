@@ -8,7 +8,7 @@ from typing import Callable
 from bd_to_avp.observability import ObservabilityContext, ObservabilityProgress
 from bd_to_avp.modules.config import config, is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.file import find_largest_file_with_extensions, sanitize_filename
-from bd_to_avp.modules.command import run_command, run_ffprobe
+from bd_to_avp.modules.command import combined_process_output, run_ffprobe, run_process_capture
 from bd_to_avp.process_runner import CaptureOverflowPolicy, ProcessArtifactProbe
 from bd_to_avp.runtime import RunContext
 
@@ -216,15 +216,18 @@ def get_disc_and_mvc_video_info(
         "info",
         source,
     ]
-    output = run_command(
+    process_result = run_process_capture(
         command,
         "Get disc and MVC video properties",
+        tool_id="makemkvcon",
+        merge_stderr=False,
         run_context=run_context,
         cancellation_event=cancellation_event,
-        tool_id="makemkvcon",
         observability_context=observability_context,
         capture_overflow=CaptureOverflowPolicy.FAIL,
+        show_spinner=True,
     )
+    output = combined_process_output(process_result)
 
     disc_name, raw_titles = parse_makemkv_output(output)
     try:
@@ -303,18 +306,21 @@ def rip_disc_to_mkv(
             return None
         return max(candidates)[1]
 
-    mkv_output = run_command(
+    process_result = run_process_capture(
         command,
         "Rip disc to MKV file.",
+        tool_id="makemkvcon",
+        merge_stderr=False,
         line_handler=report_progress,
         progress_parser=parse_makemkv_observability_progress,
         run_context=run_context,
         cancellation_event=cancellation_event,
-        tool_id="makemkvcon",
         observability_context=observability_context,
         artifacts=(ProcessArtifactProbe("intermediate_mkv", resolver=active_mkv),),
         capture_overflow=CaptureOverflowPolicy.FAIL,
+        show_spinner=True,
     )
+    mkv_output = combined_process_output(process_result)
     if config.continue_on_error or all(error not in mkv_output for error in config.MKV_ERROR_CODES):
         return
     filtered_output = filter_lines_from_output(mkv_output, config.MKV_ERROR_FILTERS)
@@ -354,7 +360,6 @@ def create_custom_makemkv_profile(custom_profile_path: Path) -> None:
     custom_profile_content = template_profile_path.read_text()
 
     custom_profile_path.write_text(custom_profile_content)
-    print(f"Custom MakeMKV profile created at {custom_profile_path}")
 
 
 def create_mkv_file(

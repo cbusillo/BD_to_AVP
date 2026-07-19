@@ -338,24 +338,41 @@ class _AsyncRunEmitter:
             context=context,
             data=data or ObservabilityData(),
         )
-        try:
-            self._queue.put_nowait(pending_event)
-        except queue.Full:
-            if terminal:
-                try:
-                    self._queue.get_nowait()
-                except queue.Empty:
-                    pass
-                else:
-                    with self._lock:
+        with self._lock:
+            try:
+                queued_event = (
+                    self._with_drop_notice(pending_event) if terminal and self._dropped > 0 else pending_event
+                )
+                self._queue.put_nowait(queued_event)
+            except queue.Full:
+                if terminal:
+                    try:
+                        self._queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    else:
                         self._dropped += 1
-                try:
-                    self._queue.put_nowait(pending_event)
-                    return
-                except queue.Full:
-                    pass
-            with self._lock:
+                    pending_event = self._with_drop_notice(pending_event)
+                    try:
+                        self._queue.put_nowait(pending_event)
+                        return
+                    except queue.Full:
+                        pass
                 self._dropped += 1
+
+    def _with_drop_notice(self, pending_event: _PendingEvent) -> _PendingEvent:
+        notice = ObservabilityText.bounded(
+            f"{self._dropped} observability event(s) were dropped before delivery.",
+            privacy=ObservabilityPrivacy.PUBLIC,
+        )
+        data = pending_event.data
+        if data.detail is None:
+            return replace(pending_event, data=replace(data, detail=notice))
+        combined_detail = ObservabilityText.bounded(
+            f"{data.detail.value}\n{notice.value}",
+            privacy=data.detail.privacy,
+        )
+        return replace(pending_event, data=replace(data, detail=combined_detail))
 
     def close(self) -> None:
         if self._thread is None:
@@ -511,8 +528,10 @@ class _LineFramer:
             return end
         lead = value[lead_index]
         expected_bytes = 4 if lead & 0xF8 == 0xF0 else 3 if lead & 0xF0 == 0xE0 else 2 if lead & 0xE0 == 0xC0 else 1
-        if expected_bytes > end - lead_index and lead_index > 0:
-            return lead_index
+        if expected_bytes > end - lead_index:
+            if lead_index > 0:
+                return lead_index
+            return min(len(value), expected_bytes)
         return end
 
 
@@ -647,6 +666,8 @@ class ChildProcessRunner:
 
                 if isinstance(item, _OutputChunk) and pending_error is None:
                     try:
+                        if run_context is not None and item.stream is ProcessStream.STDERR:
+                            run_context.observe_diagnostic_output(item.stream.value, item.payload)
                         if output_observer is not None:
                             output_observer(item.stream, item.payload)
                         for record in framers[item.stream].feed(item.payload):

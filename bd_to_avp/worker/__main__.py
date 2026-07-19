@@ -5,13 +5,13 @@ import threading
 import time
 import traceback
 
-from contextlib import redirect_stdout
 from typing import Callable, TextIO
 
 from bd_to_avp.modules.config import config
 from bd_to_avp.observability import ObservabilityEmitter
 from bd_to_avp.runtime import CancellationToken, ObservabilityStream, RunContext
 from bd_to_avp.worker.operations import WorkerDecisionRequired, WorkerOperationError, run_operation
+from bd_to_avp.worker.diagnostics import WorkerDiagnosticRelay
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
 from bd_to_avp.worker.protocol import (
     MAX_REQUEST_BYTES,
@@ -61,6 +61,7 @@ def run_worker(
             },
         )
         emitter.emit(WorkerEventType.JOB_STARTED, {"operation": job.operation.value})
+        diagnostic_relay = WorkerDiagnosticRelay(diagnostic_stream)
         run_context = RunContext(
             observability=ObservabilityStream(
                 ObservabilityEmitter.WORKER,
@@ -68,6 +69,7 @@ def run_worker(
                 stream_id=job.job_id,
             ),
             cancellation=CancellationToken(owner.cancellation_event),
+            diagnostic_observer=diagnostic_relay.emit,
         )
         activity = WorkerActivityReporter(emitter, run_context)
         if job.operation.value == "inspect_source":
@@ -81,9 +83,22 @@ def run_worker(
         )
         heartbeat_thread.start()
         try:
-            with redirect_stdout(diagnostic_stream):
-                result = operation_runner(job, owner, activity)
+            result = operation_runner(job, owner, activity)
         finally:
+            diagnostic_snapshot = diagnostic_relay.close()
+            if not emitter.terminal_emitted and (
+                diagnostic_snapshot.dropped_bytes > 0
+                or diagnostic_snapshot.failure_count > 0
+                or diagnostic_snapshot.pending_bytes > 0
+            ):
+                activity.warning(
+                    "Child diagnostic output was truncated.",
+                    code="diagnostic_output_truncated",
+                    dropped_bytes=diagnostic_snapshot.dropped_bytes,
+                    dropped_chunks=diagnostic_snapshot.dropped_chunks,
+                    pending_bytes=diagnostic_snapshot.pending_bytes,
+                    relay_failures=diagnostic_snapshot.failure_count,
+                )
             heartbeat_stop.set()
             heartbeat_thread.join(timeout=max(heartbeat_interval * 2, 0.2))
 

@@ -101,6 +101,7 @@
       "default": "uv run mypy bd_to_avp"
     },
     "test": {
+      "observabilityMigration": "uv run python scripts/validate_observability_migration.py",
       "unitSmoke": "uv run python -m unittest discover -s tests -t .",
       "macosApp": "uv run python scripts/native_app.py test",
       "importSmoke": "uv run python -c 'import bd_to_avp; import bd_to_avp.__main__; import bd_to_avp.app'",

@@ -84,7 +84,7 @@ class Av1StereoTests(unittest.TestCase):
             with (
                 patch.object(video.tempfile, "mkstemp", return_value=(42, str(patch_path))),
                 patch.object(video.os, "close") as close,
-                patch.object(video, "run_command") as run_command,
+                patch.object(video, "run_process_capture") as run_command,
                 patch.object(video.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
             ):
                 video.add_av1_stereo_metadata(input_path, output_path)
@@ -93,9 +93,12 @@ class Av1StereoTests(unittest.TestCase):
             run_command.assert_called_once_with(
                 [Path("/tools/MP4Box"), "-patch", patch_path, input_path, "-out", output_path],
                 "add Apple stereo packing metadata to AV1 video.",
+                tool_id="mp4box",
                 run_context=None,
                 cancellation_event=None,
                 observability_context=None,
+                capture_overflow=video.CaptureOverflowPolicy.TRUNCATE,
+                show_spinner=True,
             )
             self.assertFalse(patch_path.exists())
 

@@ -1,16 +1,10 @@
 from __future__ import annotations
 
-import fcntl
 import json
 import math
-import os
-import stat
-import threading
-from collections import deque
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime
 from enum import StrEnum
-from pathlib import Path
 from typing import Any, Protocol, cast
 
 OBSERVABILITY_SCHEMA = "bd_to_avp.observability"
@@ -412,7 +406,6 @@ class ObservabilityEvent:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> ObservabilityEvent:
         context_value = value.get("context") or {}
-        correlation_value = context_value["correlation"]
         data_value = value.get("data") or {}
         return cls(
             schema=value.get("schema", ""),
@@ -427,7 +420,7 @@ class ObservabilityEvent:
             privacy=ObservabilityPrivacy(value["privacy"]),
             redaction=ObservabilityRedaction(value["redaction"]),
             context=ObservabilityContext(
-                correlation=_required_dataclass(ObservabilityCorrelation, correlation_value),
+                correlation=_required_dataclass(ObservabilityCorrelation, context_value.get("correlation")),
                 stage=_optional_dataclass(ObservabilityStage, context_value.get("stage")),
                 tool=_optional_dataclass(ObservabilityTool, context_value.get("tool")),
                 process=_optional_dataclass(ObservabilityProcess, context_value.get("process")),
@@ -480,7 +473,7 @@ def _optional_dataclass[T](kind: type[T], value: dict[str, Any] | None) -> T | N
     return kind(**{name: field_value for name, field_value in value.items() if name in allowed_fields})
 
 
-def _required_dataclass[T](kind: type[T], value: dict[str, Any]) -> T:
+def _required_dataclass[T](kind: type[T], value: dict[str, Any] | None) -> T:
     result = _optional_dataclass(kind, value)
     if result is None:
         raise ValueError("required observability object is missing")
@@ -534,280 +527,3 @@ class EventSink(Protocol):
 class NullEventSink:
     def emit(self, event: ObservabilityEvent) -> None:
         pass
-
-
-class CompositeEventSink:
-    def __init__(self, *sinks: EventSink) -> None:
-        self._sinks = sinks
-        self._lock = threading.Lock()
-        self._failure_count = 0
-
-    @property
-    def failure_count(self) -> int:
-        with self._lock:
-            return self._failure_count
-
-    def emit(self, event: ObservabilityEvent) -> None:
-        failures = 0
-        for sink in self._sinks:
-            try:
-                sink.emit(event)
-            except Exception:
-                failures += 1
-        if failures:
-            with self._lock:
-                self._failure_count += failures
-
-
-@dataclass(frozen=True)
-class EventBufferSnapshot:
-    events: tuple[ObservabilityEvent, ...]
-    retained_bytes: int
-    total_events: int
-    dropped_events: int
-    dropped_bytes: int
-    failure_count: int
-
-
-class BoundedEventSink:
-    def __init__(self, maximum_events: int = 512, maximum_bytes: int = 384 * 1024) -> None:
-        if maximum_events <= 0 or maximum_bytes <= 0:
-            raise ValueError("event bounds must be positive")
-        self._maximum_events = maximum_events
-        self._maximum_bytes = maximum_bytes
-        self._lock = threading.Lock()
-        self._entries: deque[tuple[ObservabilityEvent, int]] = deque()
-        self._retained_bytes = 0
-        self._total_events = 0
-        self._dropped_events = 0
-        self._dropped_bytes = 0
-        self._failure_count = 0
-
-    def emit(self, event: ObservabilityEvent) -> None:
-        try:
-            size = len(event.to_json_line().encode("utf-8")) + 1
-        except (TypeError, ValueError, UnicodeError):
-            with self._lock:
-                self._failure_count += 1
-            return
-        with self._lock:
-            self._total_events += 1
-            if size > self._maximum_bytes:
-                self._dropped_events += 1
-                self._dropped_bytes += size
-                return
-            self._entries.append((event, size))
-            self._retained_bytes += size
-            while len(self._entries) > self._maximum_events or self._retained_bytes > self._maximum_bytes:
-                _, removed_size = self._entries.popleft()
-                self._retained_bytes -= removed_size
-                self._dropped_events += 1
-                self._dropped_bytes += removed_size
-
-    def snapshot(self) -> EventBufferSnapshot:
-        with self._lock:
-            return EventBufferSnapshot(
-                events=tuple(event for event, _ in self._entries),
-                retained_bytes=self._retained_bytes,
-                total_events=self._total_events,
-                dropped_events=self._dropped_events,
-                dropped_bytes=self._dropped_bytes,
-                failure_count=self._failure_count,
-            )
-
-
-@dataclass(frozen=True)
-class JSONLSinkSnapshot:
-    written_events: int
-    dropped_events: int
-    dropped_bytes: int
-    failure_count: int
-
-
-class RotatingJSONLEventSink:
-    def __init__(self, path: Path, *, maximum_bytes: int = 4 * 1024 * 1024, backups: int = 2) -> None:
-        if maximum_bytes <= 0:
-            raise ValueError("maximum_bytes must be positive")
-        if backups < 0:
-            raise ValueError("backups must be non-negative")
-        self._path = path.absolute()
-        self._lock_name = f".{self._path.name}.lock"
-        self._maximum_bytes = maximum_bytes
-        self._backups = backups
-        self._lock = threading.Lock()
-        self._written_events = 0
-        self._dropped_events = 0
-        self._dropped_bytes = 0
-        self._failure_count = 0
-
-    def emit(self, event: ObservabilityEvent) -> None:
-        with self._lock:
-            try:
-                payload = (event.to_json_line() + "\n").encode("utf-8")
-                if len(payload) > self._maximum_bytes:
-                    self._dropped_events += 1
-                    self._dropped_bytes += len(payload)
-                    return
-                directory_descriptor = self._open_private_directory()
-                try:
-                    lock_descriptor = self._open_private_file(
-                        self._lock_name,
-                        os.O_CREAT | os.O_RDWR,
-                        directory_descriptor,
-                    )
-                    locked = False
-                    try:
-                        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
-                        locked = True
-                        self._write_payload(payload, directory_descriptor)
-                    finally:
-                        if locked:
-                            fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
-                        os.close(lock_descriptor)
-                finally:
-                    os.close(directory_descriptor)
-                self._written_events += 1
-            except (OSError, TypeError, ValueError, UnicodeError):
-                self._failure_count += 1
-
-    def snapshot(self) -> JSONLSinkSnapshot:
-        with self._lock:
-            return JSONLSinkSnapshot(
-                written_events=self._written_events,
-                dropped_events=self._dropped_events,
-                dropped_bytes=self._dropped_bytes,
-                failure_count=self._failure_count,
-            )
-
-    def _rotate(self, directory_descriptor: int) -> None:
-        if self._backups == 0:
-            self._unlink_if_exists(self._path.name, directory_descriptor)
-            return
-        oldest = self._backup_name(self._backups)
-        self._validate_existing_regular_file(oldest, directory_descriptor)
-        self._unlink_if_exists(oldest, directory_descriptor)
-        for index in range(self._backups - 1, 0, -1):
-            source = self._backup_name(index)
-            if self._path_exists(source, directory_descriptor):
-                self._validate_existing_regular_file(source, directory_descriptor)
-                os.replace(
-                    source,
-                    self._backup_name(index + 1),
-                    src_dir_fd=directory_descriptor,
-                    dst_dir_fd=directory_descriptor,
-                )
-        if self._path_exists(self._path.name, directory_descriptor):
-            self._validate_existing_regular_file(self._path.name, directory_descriptor)
-            os.replace(
-                self._path.name,
-                self._backup_name(1),
-                src_dir_fd=directory_descriptor,
-                dst_dir_fd=directory_descriptor,
-            )
-
-    def _backup_name(self, index: int) -> str:
-        return f"{self._path.name}.{index}"
-
-    def _open_private_directory(self) -> int:
-        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
-        no_follow = getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(self._path.anchor, directory_flags)
-        try:
-            for component in self._path.parent.parts[1:]:
-                try:
-                    next_descriptor = os.open(component, directory_flags | no_follow, dir_fd=descriptor)
-                except FileNotFoundError:
-                    os.mkdir(component, mode=0o700, dir_fd=descriptor)
-                    next_descriptor = os.open(component, directory_flags | no_follow, dir_fd=descriptor)
-                os.close(descriptor)
-                descriptor = next_descriptor
-        except BaseException:
-            os.close(descriptor)
-            raise
-        directory_status = os.fstat(descriptor)
-        if not stat.S_ISDIR(directory_status.st_mode):
-            os.close(descriptor)
-            raise NotADirectoryError(self._path.parent)
-        if stat.S_IMODE(directory_status.st_mode) & 0o077:
-            os.close(descriptor)
-            raise PermissionError("observability log directory must not be accessible by group or other users")
-        return descriptor
-
-    def _open_private_file(self, name: str, flags: int, directory_descriptor: int) -> int:
-        no_follow = getattr(os, "O_NOFOLLOW", 0)
-        close_on_exec = getattr(os, "O_CLOEXEC", 0)
-        descriptor = os.open(name, flags | no_follow | close_on_exec, 0o600, dir_fd=directory_descriptor)
-        try:
-            file_status = os.fstat(descriptor)
-            if not stat.S_ISREG(file_status.st_mode):
-                raise OSError(f"observability sink path is not a regular file: {name}")
-            if file_status.st_nlink != 1:
-                raise OSError(f"observability sink path must not have hard links: {name}")
-            os.fchmod(descriptor, 0o600)
-        except BaseException:
-            os.close(descriptor)
-            raise
-        return descriptor
-
-    def _write_payload(self, payload: bytes, directory_descriptor: int) -> None:
-        descriptor = self._open_private_file(
-            self._path.name,
-            os.O_APPEND | os.O_CREAT | os.O_WRONLY,
-            directory_descriptor,
-        )
-        original_size = os.fstat(descriptor).st_size
-        if original_size and original_size + len(payload) > self._maximum_bytes:
-            os.close(descriptor)
-            self._rotate(directory_descriptor)
-            descriptor = self._open_private_file(
-                self._path.name,
-                os.O_APPEND | os.O_CREAT | os.O_WRONLY,
-                directory_descriptor,
-            )
-            original_size = 0
-        rollback_failed = False
-        try:
-            remaining = memoryview(payload)
-            while remaining:
-                written = os.write(descriptor, remaining)
-                if written <= 0:
-                    raise OSError("observability sink made no write progress")
-                remaining = remaining[written:]
-        except BaseException:
-            try:
-                os.ftruncate(descriptor, original_size)
-            except OSError:
-                rollback_failed = True
-            raise
-        finally:
-            os.close(descriptor)
-            if rollback_failed:
-                self._unlink_if_exists(self._path.name, directory_descriptor)
-
-    @staticmethod
-    def _validate_existing_regular_file(name: str, directory_descriptor: int) -> None:
-        try:
-            file_status = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
-        except FileNotFoundError:
-            return
-        if not stat.S_ISREG(file_status.st_mode):
-            raise OSError(f"observability sink path is not a regular file: {name}")
-        if file_status.st_nlink != 1:
-            raise OSError(f"observability sink path must not have hard links: {name}")
-        if stat.S_IMODE(file_status.st_mode) & 0o077:
-            raise PermissionError(f"observability sink path is not private: {name}")
-
-    @staticmethod
-    def _path_exists(name: str, directory_descriptor: int) -> bool:
-        try:
-            os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
-        except FileNotFoundError:
-            return False
-        return True
-
-    @staticmethod
-    def _unlink_if_exists(name: str, directory_descriptor: int) -> None:
-        try:
-            os.unlink(name, dir_fd=directory_descriptor)
-        except FileNotFoundError:
-            return

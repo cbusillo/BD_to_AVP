@@ -93,7 +93,6 @@ struct SourceFolderQueueItem: Identifiable, Equatable {
     var failureDetails: String?
     var failureRetryable: Bool
     var recoveryDecision: WorkerDecision?
-    var diagnosticLog: String
 
     init(id: UUID = UUID(), source: ConversionSource) {
         self.id = id
@@ -106,7 +105,6 @@ struct SourceFolderQueueItem: Identifiable, Equatable {
         failureDetails = nil
         failureRetryable = false
         recoveryDecision = nil
-        diagnosticLog = ""
     }
 
     var canRetry: Bool {
@@ -237,7 +235,6 @@ struct SourceFolderQueueState: Equatable {
             items[index].failureDetails = nil
             items[index].failureRetryable = false
             items[index].recoveryDecision = nil
-            items[index].diagnosticLog = ""
 
             guard let draft = items[index].draft else {
                 continue

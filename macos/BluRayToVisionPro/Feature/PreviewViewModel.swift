@@ -25,7 +25,6 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var stageMessage = "Choose a preview range."
     @Published private(set) var activityMessage: String?
     @Published private(set) var failureMessage: String?
-    @Published private(set) var diagnosticLog = ""
     @Published private(set) var artifactLease: PreviewArtifactLease?
     @Published private(set) var reviewedDraft: PreviewDraft?
     @Published private(set) var elapsedSeconds = 0
@@ -87,7 +86,6 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         }
 
         releaseArtifact()
-        diagnosticLog = ""
         failureMessage = nil
         activityMessage = nil
         reviewedDraft = nil
@@ -216,7 +214,6 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         case .log, .warning:
             if let message = event.payload.message {
                 activityMessage = message
-                appendDiagnostic(message)
             }
         case .artifactReady:
             guard let artifact = event.payload.artifact else {
@@ -252,7 +249,6 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     private func finish(_ result: WorkerRunResult) {
-        appendDiagnostic(result.diagnostics)
         guard let terminalEvent = pendingTerminalEvent else {
             failTransport("The preview ended before a playable artifact was available.")
             return
@@ -271,9 +267,6 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         case .jobFailed:
             let failure = terminalEvent.payload.error
             failureMessage = failure?.message ?? "The preview could not be created."
-            if let details = failure?.details {
-                appendDiagnostic(details)
-            }
             phase = .failed
             stageMessage = "Preview Failed"
             clearActiveWorker(preserveDirectory: false)
@@ -293,8 +286,6 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     private func fail(_ error: Error) {
-        let clientError = error as? WorkerClientError
-        appendDiagnostic(clientError?.technicalDetails ?? "")
         if phase == .stopping {
             phase = .idle
             stageMessage = "Preview Stopped"
@@ -339,18 +330,6 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
 
     private func releaseArtifact() {
         artifactLease = nil
-    }
-
-    private func appendDiagnostic(_ message: String) {
-        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return
-        }
-        if diagnosticLog.isEmpty {
-            diagnosticLog = trimmed
-        } else {
-            diagnosticLog += "\n\(trimmed)"
-        }
     }
 
     private static let encodingStages: Set<String> = [
