@@ -79,6 +79,7 @@
     "overview": "README.md",
     "packageManifest": "pyproject.toml",
     "lockfile": "uv.lock",
+    "releaseRoutes": "docs/release-routes.md",
     "releaseProcess": "docs/release-process.md",
     "releaseWorkflows": [
       ".github/workflows/briefcase.yml",

@@ -17,8 +17,12 @@ validation can be reviewed independently.
 - GitHub Pages will host a stable HTTPS appcast. Appcast enclosures will point
   to versioned DMG assets on GitHub Releases that release policy treats as
   immutable after publication.
-- Stable is the default update channel. Release Candidates are an explicit
-  opt-in and use Sparkle's `rc` channel in the same appcast.
+- One cumulative appcast serves Stable, RC, Beta, and Alpha routes for the same
+  production identity. Stable is default and unchanneled; RC, Beta, and Alpha
+  use `rc`, `beta`, and `alpha` channel tokens.
+- Route eligibility is cumulative: Stable `{}`, RC `{rc}`, Beta `{beta, rc}`,
+  and Alpha `{alpha, beta, rc}`. Sparkle implicitly includes unchanneled Stable
+  items for every route.
 - Sparkle's standard user interface will own download, signature verification,
   installation, and relaunch. BD_to_AVP will expose `Check for Updates…` and
   will not silently install updates.
@@ -36,8 +40,10 @@ GitHub Releases link and never initialize Sparkle.
 
 The production SwiftUI project exact-pins the same Sparkle 2.9.4 package. A
 single observable update controller owns Sparkle's automatic-check preference,
-the shared `BDToAVPUpdateChannel` Stable/`rc` selection, check availability,
-Settings controls, and Help commands. It starts Sparkle only when the bundle has
+the shared `BDToAVPUpdateChannel` selection, check availability, Settings
+controls, and Help commands. The current implementation exposes Stable and RC;
+issue #289 expands it to the four routes in
+[Production Release Routes](release-routes.md). It starts Sparkle only when the bundle has
 the complete direct-distribution policy: `direct` channel, HTTPS feed, public
 key, automatic installation disabled, extraction verification enabled, and no
 forced `SUEnableAutomaticChecks` value. Missing or invalid metadata fails closed
@@ -47,7 +53,7 @@ conversion worker is active and resumes after the worker becomes idle.
 Debug builds use a separate Development identity, omit all update metadata, and
 do not initialize Sparkle, although the single-target SPM build embeds the
 dormant signed framework. The Release configuration uses the production bundle
-identifier and updater policy. Signed installed-app upgrades, Stable/RC feed
+identifier and updater policy. Signed installed-app upgrades, four-route feed
 behavior, permission prompting, and final rendered-note appearance remain
 release-cycle validation for #197.
 
@@ -66,7 +72,7 @@ The live feed remains empty until the first enabled release is published. See
 [release-process.md](release-process.md) for the operator sequence.
 
 Stable `0.2.143` remains compatible with macOS 14. The production SwiftUI line
-starting with `0.3.0rc1` requires Apple Silicon and macOS 26. Sparkle's minimum
+starting with `0.3.0b3` requires Apple Silicon and macOS 26. Sparkle's minimum
 system version prevents older systems from being offered an incompatible item;
 those installations remain on the last compatible stable build.
 
@@ -132,25 +138,32 @@ Python runtime entitlements.
 
 ## Build Versioning
 
-`CFBundleShortVersionString` remains the human release version, such as
-`0.3.0` or `0.3.0rc1`.
+`CFBundleShortVersionString` remains the canonical internal PEP 440 version,
+such as `0.3.0b3`, `0.3.0rc1`, or `0.3.0`. Public tags, titles, and DMG names
+use the separate readable forms defined in `release-routes.md`; tooling must not
+derive one form by adding or removing `v`.
+
+PEP 440 prerelease strings are an intentional direct-DMG exception to Apple's
+numeric marketing-version guidance. They have no App Store compatibility
+guarantee and must pass packaging, notarization, Gatekeeper, and installed-app
+update smoke for every stage form.
 
 `CFBundleVersion` must be a repository-tracked monotonic integer string. The
 canonical value remains in the macOS Info.plist map used by runtime staging:
 
 ```toml
 [tool.briefcase.app.bd-to-avp.macOS.info]
-CFBundleVersion = "147"
+CFBundleVersion = "<next-global-build>"
 ```
 
-It must increment for every published direct-DMG build, including RCs,
-independently of the human version. The Xcode Release target must use the same
-value.
+It must increment globally for every production-identity build across Alpha,
+Beta, RC, and Stable, including failed unpublished attempts. The Xcode Release
+target and Sparkle `sparkle:version` must use the same value.
 
-Briefcase staging and the Xcode package both inherit the human version from
+Briefcase staging and the Xcode package both inherit the internal version from
 `[project].version`; the duplicate `[tool.briefcase].version` key is
-intentionally absent. Full RC and Stable versions are committed before release.
-Prepare the human version, monotonic build counter, `uv.lock`, and Xcode Release
+intentionally absent. Full release metadata is committed before release.
+Prepare the internal version, monotonic build counter, `uv.lock`, and Xcode Release
 metadata with:
 
 ```sh
@@ -227,19 +240,25 @@ unpublished draft and the existing feed remains unchanged. If Pages deployment
 fails after publication, the durable release snapshot can be deployed again
 without rebuilding or retagging.
 
-## Stable and Prerelease Policy
+## Stable And Prerelease Policy
 
-One appcast serves both release policies:
+One appcast serves all four routes:
 
-- production items omit `sparkle:channel` and are therefore on Sparkle's default
-  channel;
-- release candidates include `<sparkle:channel>rc</sparkle:channel>`;
-- every installation defaults to Stable; and
-- users who opt into Release Candidates allow `rc` while Sparkle continues to
-  include the default channel automatically.
+- Stable items omit `sparkle:channel`;
+- RC, Beta, and Alpha items use `rc`, `beta`, and `alpha` respectively;
+- every new or unknown preference defaults to Stable;
+- existing `releaseCandidate` preferences migrate to RC; and
+- allowed-channel sets are `{}`, `{rc}`, `{beta, rc}`, and
+  `{alpha, beta, rc}` from Stable through Alpha.
 
-This guarantees that Stable users never select RC items and RC users can later
-receive the production release without changing feeds.
+Sparkle continues to include default Stable items automatically. The updater
+selects the greatest eligible global build, so choosing a safer route affects
+future updates only and never downgrades the installed application.
+
+Beta 3 is an immutable `beta` item in the cumulative feed. It is also a manual
+download seed because currently shipped builds cannot select Beta or Alpha.
+After installing it, testers explicitly select Beta or Alpha for future
+prereleases.
 
 ## Runtime Integration and UX
 
@@ -251,12 +270,13 @@ A live packaged-app test must prove that Qt's macOS event loop delivers
 Sparkle's timers, windows, and delegate callbacks. Resolving the Objective-C
 class alone is not sufficient evidence.
 
-The direct-DMG user experience is:
+After #289 implements the four-route selector, the target direct-DMG user
+experience is:
 
 - Help contains `Check for Updates…`.
-- Help contains an `Update Channel` submenu with Stable and Release Candidates;
-  the preference is persisted in the app's `NSUserDefaults` domain and defaults
-  to Stable.
+- Help contains an `Update Route` submenu with Stable, RC, Beta, and Alpha; the
+  preference is persisted in the app's `NSUserDefaults` domain and defaults to
+  Stable.
 - Sparkle uses its standard permission and update windows.
 - Automatic checks may be enabled only through Sparkle's normal consent path.
 - Downloaded updates require user approval to install and relaunch.
@@ -311,8 +331,9 @@ Before enabling the appcast for normal users:
   build version, `SUAllowsAutomaticUpdates = false`, and
   `SUVerifyUpdateBeforeExtraction = true`;
 - the appcast enclosure URL, size, build version, and EdDSA signature validate;
-- Stable clients reject RC items, while RC clients remain eligible for both RC
-  and default-channel production items;
+- the complete matrix in `release-smoke.md` proves Stable, RC, Beta, and Alpha
+  eligibility, Beta 3 exclusion from Stable/RC selection, legacy-preview
+  exclusion, and no downgrade after a safer route change;
 - the appcast contains no delta enclosures;
 - Sparkle timers, windows, and delegate callbacks work under the packaged Qt
   event loop;

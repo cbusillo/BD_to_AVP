@@ -1,8 +1,17 @@
-# Main-Only Release Process
+# Protected-Main Release Process
 
-The version-specific preparation and operator checklist for the next candidate
-is [0.3.0 RC1 Cut Packet](0.3.0rc1-cut-packet.md). It is preparation material
-only until issue #202 records accepted physical-disc QC.
+The normative production identity, version mapping, update routes, history
+boundary, and publication policy are defined in
+[Production Release Routes](release-routes.md).
+
+The next planned production-identity field build is `v0.3.0-beta.3`, internal
+version `0.3.0b3`, build `148`. The committed `0.3.0rc1` build `147` attempt
+failed before publication and its build number is permanently burned. Issue
+#293 owns the focused recovery and Beta 3 cut packet.
+
+The current release implementation still supports only Stable and RC. Do not
+prepare or dispatch Alpha or Beta until #289 through #293 have implemented and
+validated the four-route contract.
 
 ## Release Preparation
 
@@ -11,16 +20,17 @@ pull request before release orchestration runs. Use the repository command:
 
 ```sh
 uv run python scripts/release.py prepare \
-  --version 0.3.0rc1 \
-  --build 147
+  --version <internal-pep440-version> \
+  --build <next-global-build>
 ```
 
-The version must be a canonical three-part stable version or release candidate,
-such as `0.3.0` or `0.3.0rc1`. The numeric `CFBundleVersion` must increase
-for every RC and Stable DMG. The command stages a refreshed `uv.lock`, validates
-the staged metadata, and updates `pyproject.toml`, `uv.lock`, and the Xcode
-Release version/build together only after every check succeeds. A lock refresh
-or metadata failure leaves all three files unchanged.
+The internal version, public tag/title, release stage, Sparkle channel, and
+publication effects must match the mapping in `release-routes.md`. The numeric
+`CFBundleVersion` must increase for every production-identity build across all
+routes, including failed unpublished attempts. The command stages a refreshed
+`uv.lock`, validates the staged metadata, and updates `pyproject.toml`,
+`uv.lock`, and the Xcode Release version/build together only after every check
+succeeds. A lock refresh or metadata failure leaves all three files unchanged.
 
 The initial main-only Sparkle migration used `0.2.143rc4` build `144` and
 `0.2.143rc5` build `145` to prove a real RC-to-RC updater path. Stable
@@ -34,6 +44,12 @@ or from a stale main commit.
 
 ## Release Orchestration
 
+> **Release dispatch is frozen.** Protected `main` still contains the burned
+> `0.3.0rc1` build `147` metadata. Do not dispatch `Release from protected main`
+> or any replacement release entry until #289 through #293 have landed and
+> `scripts/release.py metadata` reports the reviewed `0.3.0b3` build `148`
+> target. Publishing build `147` is prohibited.
+
 Dispatch `Release from protected main` from `main`. The only optional input is
 release-note text; the committed project version determines RC versus Stable,
 the release tag, latest-release behavior, Sparkle channel, and whether PyPI is
@@ -46,12 +62,13 @@ the guarded approval helper rejects a run whose actor or triggering actor is the
 same account. Verify both run actors and the exact protected-main SHA before
 requesting approval.
 
-Generated notes use channel-aware history. An RC compares with the newest lower
-published release whose tag is an ancestor of the release commit, keeping RC
-notes incremental. A Stable release compares with the newest lower published
-Stable tag rather than the latest RC, so its notes summarize the complete change
-set since the previous Stable. Stable history is a product-version boundary and
-may cross the retired legacy release branch; RC history remains ancestry-bound.
+Generated notes use production-stage-aware history. An Alpha, Beta, or RC
+compares with the newest lower published production release whose tag is an
+ancestor of the release commit, keeping prerelease notes incremental. A Stable
+release compares with the newest lower published production Stable tag rather
+than the latest prerelease, so its notes summarize the complete change set since
+the previous Stable. The retired preview tags are excluded before parsing or
+history selection.
 
 GitHub requests one maintainer approval when the run reaches the
 `macos-signing` environment. That approval authorizes the release intent for the
@@ -172,10 +189,17 @@ artifact must then pass a separate fresh-runner macOS 26 compatibility job
 before the existing production draft, appcast, PyPI, Pages, and publication
 boundaries can proceed.
 
-RC items remain isolated through Sparkle's `rc` channel. Normal stable
-installations do not discover an RC; only installations that explicitly select
-Release Candidates can do so. The final stable item is unchanneled and can later
-supersede the RC for both channel choices.
+Stable items remain unchanneled. RC, Beta, and Alpha items use `rc`, `beta`, and
+`alpha` respectively. The application supplies cumulative allowed-channel sets
+for Stable, RC, Beta, and Alpha exactly as defined in `release-routes.md`, while
+Sparkle implicitly includes default Stable items for every route. Moving to a
+safer route affects only future newer builds and never downgrades the installed
+application.
+
+Beta 3 is appended to the cumulative feed on channel `beta`, but currently
+shipped clients cannot select that channel. Testers bootstrap it by manual
+GitHub Release download, then explicitly choose Beta or Alpha for future
+prereleases.
 
 The retired side-by-side feedback releases remain immutable historical
 evidence. Their tags include `native-ui-preview-1`, `v0.3.0-beta.1`, and
