@@ -95,9 +95,8 @@ class ProcessAudioWiringTests(unittest.TestCase):
                         "extract_mvc_and_audio",
                     )
                 )
-                stage_mocks.append(
-                    (stack.enter_context(patch.object(process, "create_srt_from_mkv")), "extract_subtitles")
-                )
+                subtitle_stage = stack.enter_context(patch.object(process, "create_srt_from_mkv"))
+                stage_mocks.append((subtitle_stage, "extract_subtitles"))
                 left_path = output_folder / "left.mov"
                 right_path = output_folder / "right.mov"
                 stage_mocks.append(
@@ -154,6 +153,7 @@ class ProcessAudioWiringTests(unittest.TestCase):
                 self.assertIs(call.kwargs["run_context"], run_context)
                 self.assertIs(call.kwargs["cancellation_event"], run_context.cancellation.event)
                 self.assertEqual(call.kwargs["observability_context"].stage.id, stage_id)
+            self.assertIsNone(subtitle_stage.call_args.args[2])
 
     def test_move_files_resume_skips_prior_processing_stages(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

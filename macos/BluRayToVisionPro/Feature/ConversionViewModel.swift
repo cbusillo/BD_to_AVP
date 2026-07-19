@@ -30,7 +30,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     @Published private(set) var source: ConversionSource?
     @Published private(set) var state = WorkerLifecycleState()
-    @Published private(set) var diagnosticLog = ""
     @Published private(set) var liveObservabilityStatus = LiveObservabilityStatus.empty
     @Published private(set) var batchQueue: SourceFolderQueueState?
     @Published private(set) var queueItems: [ConversionQueueItem] = []
@@ -42,7 +41,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private let diagnosticBundleBuilder: DiagnosticBundleBuilder
     private let observabilityEventStore: any ObservabilityEventPersisting
     private let diagnosticRecorder = DiagnosticSessionRecorder()
-    private let diagnosticLogBuffer = BoundedDiagnosticTextBuffer(maximumBytes: 128 * 1_024)
     private var client: (any WorkerProcessRunning)?
     private var runTask: Task<Void, Never>?
     private var pendingTerminalEvent: WorkerEvent?
@@ -332,7 +330,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 break
             }
             pendingTerminalEvent = nil
-            resetDiagnosticLog()
             activeRunMode = mode
             diagnosticRecorder.beginJob(
                 context: DiagnosticJobContext(jobID: job.jobID, draft: draft),
@@ -452,7 +449,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
         let previousJobID = state.jobID
         state.prepareForRetry()
-        resetDiagnosticLog()
         recordDiagnosticWorkflow(name: "retry.prepared", jobID: previousJobID)
     }
 
@@ -610,7 +606,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         queue.items[itemIndex].failureDetails = nil
         queue.items[itemIndex].failureRetryable = false
         queue.items[itemIndex].recoveryDecision = nil
-        queue.items[itemIndex].diagnosticLog = ""
         batchQueue = queue
         recordDiagnosticWorkflow(
             name: "batch.retry_requested",
@@ -626,7 +621,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
         let previousJobID = state.jobID
         state.prepareForRetry()
-        resetDiagnosticLog()
         recordDiagnosticWorkflow(
             name: "retry.inspection_requested",
             jobID: previousJobID
@@ -677,9 +671,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             pendingTerminalEvent = event
             return
         }
-        if event.type == .log || event.type == .warning, let message = event.payload.message {
-            appendDiagnostic(message)
-        }
         var nextState = state
         try nextState.receive(event)
         state = nextState
@@ -704,7 +695,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             ? client?.diagnosticSnapshot() ?? .empty
             : result.diagnosticSnapshot
         diagnosticRecorder.updateProcessSnapshot(processSnapshot)
-        appendDiagnostic(result.diagnostics)
         if let pendingTerminalEvent {
             do {
                 var nextState = state
@@ -751,7 +741,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             diagnosticRecorder.updateProcessSnapshot(processSnapshot)
         }
         let clientError = error as? WorkerClientError
-        appendDiagnostic(clientError?.technicalDetails ?? "")
         if state.phase == .stopping {
             state.completeStop()
         } else {
@@ -841,7 +830,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return
         }
 
-        queue.items[itemIndex].diagnosticLog = diagnosticLog
         if queue.stopRequested || state.phase == .cancelled {
             queue.items[itemIndex].status = .stopped
             queue.activeItemID = nil
@@ -911,7 +899,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
         queue.items[itemIndex].status = .converting
         batchQueue = queue
-        resetDiagnosticLog()
         startConversion(
             draft: inspectedDraft,
             mode: .batchConversion(itemID: itemID)
@@ -924,11 +911,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         else {
             return
         }
-
-        let itemDiagnosticBuffer = BoundedDiagnosticTextBuffer(maximumBytes: 128 * 1_024)
-        itemDiagnosticBuffer.appendLine(queue.items[itemIndex].diagnosticLog)
-        itemDiagnosticBuffer.appendLine(diagnosticLog)
-        queue.items[itemIndex].diagnosticLog = itemDiagnosticBuffer.snapshot().text
 
         if state.phase == .completed, let conversionResult = state.conversionResult {
             queue.items[itemIndex].status = .completed
@@ -987,7 +969,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
         state.clear()
         state.selectSource(itemSource.url)
-        resetDiagnosticLog()
         startInspection(
             source: itemSource,
             mode: .batchInspection(itemID: itemID)
@@ -1006,7 +987,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         batchQueue = queue
         recordDiagnosticWorkflow(name: "batch.finished")
         state.clear()
-        resetDiagnosticLog()
     }
 
     private func runDeferredActionsIfIdle() {
@@ -1099,21 +1079,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         completedBatchResults = nil
     }
 
-    private func appendDiagnostic(_ message: String) {
-        diagnosticLogBuffer.appendLine(message)
-        diagnosticLog = diagnosticLogBuffer.snapshot().text
-    }
-
-    private func resetDiagnosticLog() {
-        diagnosticLogBuffer.reset()
-        diagnosticLog = ""
-    }
-
     private func resetDiagnosticSession() {
         diagnosticRecorder.reset()
         batchItemDiagnosticJobIDs.removeAll(keepingCapacity: true)
         liveObservabilityStatus = .empty
-        resetDiagnosticLog()
     }
 
     private func recordDiagnosticWorkflow(

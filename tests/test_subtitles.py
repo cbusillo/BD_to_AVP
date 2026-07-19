@@ -272,14 +272,10 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
             patch("bd_to_avp.modules.sub.Mkv"),
             patch("bd_to_avp.modules.sub.get_selected_subtitle_tracks", return_value=[]),
             patch("bd_to_avp.modules.sub.pgsrip.rip") as rip,
-            patch("builtins.print") as output,
         ):
             extract_subtitle_to_srt(Path(temp_dir) / "movie.mkv", warning_handler=warnings.append)
 
         rip.assert_not_called()
-        output.assert_any_call(
-            "No PGS subtitle tracks matched the preferred language Dutch (nld); continuing without subtitles."
-        )
         self.assertEqual(
             warnings,
             ["No PGS subtitle tracks matched the preferred language Dutch (nld); continuing without subtitles."],
@@ -359,7 +355,7 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
             self.assertFalse((source_folder / "movie.en.srt").exists())
             self.assertFalse((output_folder / "movie.mkv").exists())
             rip.assert_called_once()
-            mark_forced.assert_called_once_with([])
+            mark_forced.assert_called_once_with([], None)
 
     def test_subtitle_source_alias_uses_absolute_target_for_relative_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

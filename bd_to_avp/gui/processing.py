@@ -8,7 +8,7 @@ from typing import Callable, Iterable, Protocol
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
-from bd_to_avp.modules.command import Spinner, terminate_process
+from bd_to_avp.modules.command import Spinner
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.disc import MKVCreationError
 from bd_to_avp.modules.process import BatchProcessingError, start_process
@@ -148,8 +148,7 @@ class ProcessingOutcome:
     batch_sources: tuple[Path, ...] | None = None
 
 
-ProcessRunner = Callable[[ProcessingRequest], None]
-StopRunner = Callable[[], None]
+ProcessRunner = Callable[[ProcessingRequest, Event], None]
 
 
 def run_processing_request(request: ProcessingRequest, cancellation_event: Event) -> None:
@@ -171,14 +170,12 @@ class ProcessingThread(QThread):
         parent: QObject | None = None,
         *,
         process_runner: ProcessRunner | None = None,
-        stop_runner: StopRunner | None = None,
     ) -> None:
         super().__init__(parent)
         self.request = request
         self.outcome: ProcessingOutcome | None = None
         self.output_handler = OutputHandler(self.progress_updated.emit)
         self._process_runner = process_runner
-        self._stop_runner = stop_runner or terminate_process
         self._cancellation_event = Event()
 
     @property
@@ -193,10 +190,8 @@ class ProcessingThread(QThread):
             if self.cancel_requested:
                 self.outcome = ProcessingOutcome(ProcessingOutcomeKind.CANCELLED)
                 return
-            if self._process_runner is None:
-                run_processing_request(self.request, self._cancellation_event)
-            else:
-                self._process_runner(self.request)
+            runner = self._process_runner or run_processing_request
+            runner(self.request, self._cancellation_event)
             outcome_kind = ProcessingOutcomeKind.CANCELLED if self.cancel_requested else ProcessingOutcomeKind.COMPLETED
             self.outcome = ProcessingOutcome(outcome_kind)
         except Exception as error:
@@ -214,7 +209,6 @@ class ProcessingThread(QThread):
             return
         self._cancellation_event.set()
         self.requestInterruption()
-        self._stop_runner()
 
     def _outcome_for_error(self, error: BaseException) -> ProcessingOutcome:
         source_path = None

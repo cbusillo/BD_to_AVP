@@ -1,4 +1,5 @@
 import os
+import queue
 import signal
 import subprocess
 import sys
@@ -6,10 +7,17 @@ import tempfile
 import threading
 import time
 import unittest
+from dataclasses import dataclass
 from pathlib import Path
 
-from bd_to_avp.observability import BoundedEventSink, ObservabilityEmitter, ObservabilityProgress
+from bd_to_avp.observability import (
+    ObservabilityContext,
+    ObservabilityEmitter,
+    ObservabilityEvent,
+    ObservabilityProgress,
+)
 from bd_to_avp.process_runner import (
+    EVENT_QUEUE_LIMIT,
     CaptureOverflowPolicy,
     ChildProcessRunner,
     ProcessArtifactProbe,
@@ -23,13 +31,33 @@ from bd_to_avp.process_runner import (
     ProcessRunnerError,
     ProcessSpec,
     ProcessStream,
+    _AsyncRunEmitter,
 )
 from bd_to_avp.runtime import CancellationToken, ObservabilityStream, RunContext
 
 
+@dataclass(frozen=True)
+class RecordingSnapshot:
+    events: tuple[ObservabilityEvent, ...]
+
+
+class RecordingSink:
+    def __init__(self) -> None:
+        self._events: list[ObservabilityEvent] = []
+        self._lock = threading.Lock()
+
+    def emit(self, event: ObservabilityEvent) -> None:
+        with self._lock:
+            self._events.append(event)
+
+    def snapshot(self) -> RecordingSnapshot:
+        with self._lock:
+            return RecordingSnapshot(tuple(self._events))
+
+
 class ChildProcessRunnerTests(unittest.TestCase):
     def test_streams_output_and_emits_lifecycle_events(self) -> None:
-        sink = BoundedEventSink(maximum_events=50, maximum_bytes=100_000)
+        sink = RecordingSink()
         context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER, sink))
         lines: list[tuple[ProcessStream, str]] = []
 
@@ -83,6 +111,17 @@ class ChildProcessRunnerTests(unittest.TestCase):
         )
 
         self.assertEqual("".join(lines), "a" * 15 + "€")
+        self.assertNotIn("�", "".join(lines))
+
+    def test_line_limit_smaller_than_codepoint_preserves_utf8(self) -> None:
+        lines: list[str] = []
+
+        ChildProcessRunner().run(
+            self.spec("print('€a')", line_limit_bytes=1),
+            line_handler=lambda _stream, line: lines.append(line),
+        )
+
+        self.assertEqual("".join(lines), "€a")
         self.assertNotIn("�", "".join(lines))
 
     def test_carriage_return_only_progress_is_framed(self) -> None:
@@ -158,7 +197,7 @@ class ChildProcessRunnerTests(unittest.TestCase):
                 self.spec("pass", stdout=output_file)
 
     def test_pipeline_streams_high_volume_binary_output_with_backpressure(self) -> None:
-        sink = BoundedEventSink(maximum_events=100, maximum_bytes=200_000)
+        sink = RecordingSink()
         context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER, sink))
         payload_size = 5 * 1024 * 1024
         stages = (
@@ -297,7 +336,7 @@ class ChildProcessRunnerTests(unittest.TestCase):
         self.assertEqual(result.stdout.dropped_bytes, 100003 - 4096)
 
     def test_silent_process_emits_heartbeat_with_output_age(self) -> None:
-        sink = BoundedEventSink(maximum_events=50, maximum_bytes=100_000)
+        sink = RecordingSink()
         context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER, sink))
 
         ChildProcessRunner().run(
@@ -314,7 +353,7 @@ class ChildProcessRunnerTests(unittest.TestCase):
         self.assertGreaterEqual(heartbeats[-1].data.activity.last_output_age_seconds, 0)
 
     def test_progress_parser_emits_structured_progress(self) -> None:
-        sink = BoundedEventSink(maximum_events=50, maximum_bytes=100_000)
+        sink = RecordingSink()
         context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER, sink))
 
         def parse_progress(_stream: ProcessStream, line: str) -> ObservabilityProgress | None:
@@ -350,7 +389,7 @@ class ChildProcessRunnerTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 3)
 
     def test_cancellation_escalates_when_process_ignores_sigterm(self) -> None:
-        sink = BoundedEventSink(maximum_events=50, maximum_bytes=100_000)
+        sink = RecordingSink()
         cancellation = CancellationToken()
         context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER, sink), cancellation)
         timer = threading.Timer(0.1, cancellation.cancel)
@@ -388,7 +427,7 @@ class ChildProcessRunnerTests(unittest.TestCase):
         self.assertEqual(result.stderr.total_bytes, 500000)
 
     def test_artifact_growth_is_sampled_without_affecting_process(self) -> None:
-        sink = BoundedEventSink(maximum_events=100, maximum_bytes=200_000)
+        sink = RecordingSink()
         context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER, sink))
         with tempfile.TemporaryDirectory() as directory:
             artifact = Path(directory) / "output.bin"
@@ -434,10 +473,10 @@ class ChildProcessRunnerTests(unittest.TestCase):
 
     def test_terminal_event_survives_saturated_async_queue(self) -> None:
         release_sink = threading.Event()
-        events: list[object] = []
+        events: list[ObservabilityEvent] = []
 
         class BlockingRecordingSink:
-            def emit(self, event: object) -> None:
+            def emit(self, event: ObservabilityEvent) -> None:
                 events.append(event)
                 if len(events) == 1:
                     release_sink.wait(timeout=5)
@@ -461,7 +500,98 @@ class ChildProcessRunnerTests(unittest.TestCase):
             getattr(event, "kind", None) == "tool.completed" for event in events
         ):
             time.sleep(0.01)
-        self.assertTrue(any(getattr(event, "kind", None) == "tool.completed" for event in events))
+        terminal_event = next(event for event in events if event.kind == "tool.completed")
+        self.assertIsNotNone(terminal_event.data.detail)
+        assert terminal_event.data.detail is not None
+        self.assertIn("observability event(s) were dropped", terminal_event.data.detail.value)
+
+    def test_terminal_enqueue_is_atomic_against_concurrent_producers(self) -> None:
+        sink_started = threading.Event()
+        release_sink = threading.Event()
+        events: list[ObservabilityEvent] = []
+
+        class BlockingSink:
+            def emit(self, event: ObservabilityEvent) -> None:
+                events.append(event)
+                if event.kind == "initial":
+                    sink_started.set()
+                    release_sink.wait(timeout=2)
+
+        class CoordinatedQueue(queue.Queue[object]):
+            def __init__(self) -> None:
+                super().__init__(maxsize=EVENT_QUEUE_LIMIT)
+                self.eviction_started = threading.Event()
+                self.producer_started = threading.Event()
+                self.coordinated = False
+
+            def get_nowait(self) -> object:
+                item = super().get_nowait()
+                if not self.coordinated:
+                    self.coordinated = True
+                    self.eviction_started.set()
+                    self.producer_started.wait(timeout=1)
+                return item
+
+        context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER, BlockingSink()))
+        emitter = _AsyncRunEmitter(context)
+        event_context = ObservabilityContext()
+        emitter.emit("initial", context=event_context)
+        self.assertTrue(sink_started.wait(timeout=1))
+
+        coordinated_queue = CoordinatedQueue()
+        emitter._queue = coordinated_queue  # type: ignore[assignment]
+        for index in range(EVENT_QUEUE_LIMIT):
+            emitter.emit(f"queued.{index}", context=event_context)
+
+        def emit_racer() -> None:
+            coordinated_queue.eviction_started.wait(timeout=1)
+            coordinated_queue.producer_started.set()
+            emitter.emit("racer", context=event_context)
+
+        producer = threading.Thread(target=emit_racer)
+        producer.start()
+        emitter.emit("terminal", context=event_context, terminal=True)
+        producer.join(timeout=1)
+        release_sink.set()
+        emitter.close()
+
+        self.assertFalse(producer.is_alive())
+        self.assertTrue(any(event.kind == "terminal" for event in events))
+
+    def test_diagnostic_observer_receives_only_stderr(self) -> None:
+        diagnostics: list[tuple[str, bytes]] = []
+        context = RunContext(
+            observability=ObservabilityStream(ObservabilityEmitter.WORKER, RecordingSink()),
+            diagnostic_observer=lambda stream, payload: diagnostics.append((stream, payload)),
+        )
+
+        ChildProcessRunner().run(
+            self.spec(
+                "import sys; print('private metadata'); print('diagnostic', file=sys.stderr)",
+                merge_stderr=False,
+            ),
+            run_context=context,
+        )
+
+        self.assertEqual({stream for stream, _payload in diagnostics}, {"stderr"})
+        self.assertEqual(b"".join(payload for _stream, payload in diagnostics), b"diagnostic\n")
+
+    def test_diagnostic_observer_failure_does_not_fail_process(self) -> None:
+        def fail_diagnostic_observer(_stream: str, _payload: bytes) -> None:
+            raise OSError("diagnostic sink unavailable")
+
+        context = RunContext(
+            observability=ObservabilityStream(ObservabilityEmitter.WORKER, RecordingSink()),
+            diagnostic_observer=fail_diagnostic_observer,
+        )
+
+        result = ChildProcessRunner().run(
+            self.spec("import sys; print('diagnostic', file=sys.stderr)", merge_stderr=False),
+            run_context=context,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stderr.text(), "diagnostic\n")
 
     def test_output_observer_failure_terminates_and_reraises(self) -> None:
         def fail(_stream: ProcessStream, _payload: bytes) -> None:
@@ -543,7 +673,7 @@ class ChildProcessRunnerTests(unittest.TestCase):
                     os.kill(descendant_pid, 0)
 
     def test_artifact_resolver_failure_emits_one_warning(self) -> None:
-        sink = BoundedEventSink(maximum_events=50, maximum_bytes=100_000)
+        sink = RecordingSink()
         context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER, sink))
 
         def fail() -> Path | None:
@@ -580,7 +710,7 @@ class ChildProcessRunnerTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 3)
 
     def test_artifact_growth_resets_when_resolver_switches_files(self) -> None:
-        sink = BoundedEventSink(maximum_events=100, maximum_bytes=200_000)
+        sink = RecordingSink()
         context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER, sink))
         with tempfile.TemporaryDirectory() as directory:
             first = Path(directory) / "first.bin"

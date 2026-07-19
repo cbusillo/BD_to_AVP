@@ -113,13 +113,18 @@ class NativeMvcCommandTests(unittest.TestCase):
             patch.object(video.config, "SPATIAL_MEDIA_PATH", Path("/tools/spatial-media-kit-tool")),
             patch.object(video.config, "mv_hevc_quality", 75),
             patch.object(video.config, "fov", 90),
-            patch.object(video, "run_command", return_value="") as run_command,
+            patch.object(
+                video,
+                "run_process_capture",
+                return_value=process_result("spatial_media_kit_tool"),
+            ) as run_command,
         ):
             video.combine_to_mv_hevc(Path("left.mov"), Path("right.mov"), Path(temp_dir) / "spatial.mov", 8)
 
         command = run_command.call_args.args[0]
         disparity_option = command.index("--horizontal-disparity-adjustment")
         self.assertEqual(str(command[disparity_option + 1]), "0")
+        self.assertFalse(run_command.call_args.kwargs["merge_stderr"])
 
 
 class NativeMvcSelectionTests(unittest.TestCase):

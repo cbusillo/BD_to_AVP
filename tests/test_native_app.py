@@ -43,6 +43,26 @@ from scripts.native_app import (
 yaml = importlib.import_module("yaml")
 
 
+def canonical_ffprobe_event(job_id: str) -> dict[str, object]:
+    return {
+        "schema": "bd_to_avp.observability",
+        "schema_version": 1,
+        "emitter": "worker",
+        "stream_id": job_id,
+        "sequence": 0,
+        "occurred_at": "2026-07-19T00:00:00.000Z",
+        "kind": "tool.started",
+        "severity": "info",
+        "privacy": "private",
+        "redaction": "raw",
+        "context": {
+            "correlation": {"job_id": job_id},
+            "tool": {"id": "ffprobe"},
+        },
+        "data": {},
+    }
+
+
 class NativeAppPackagingTests(unittest.TestCase):
     def test_worker_smoke_uses_current_protocol_version(self) -> None:
         self.assertEqual(WORKER_PROTOCOL_VERSION, PROTOCOL_VERSION)
@@ -477,9 +497,16 @@ Load command 3
             },
             {
                 "protocol_version": WORKER_PROTOCOL_VERSION,
-                "type": "job.completed",
+                "type": "observability",
                 "job_id": job_id,
                 "sequence": 3,
+                "payload": {"event": canonical_ffprobe_event(job_id)},
+            },
+            {
+                "protocol_version": WORKER_PROTOCOL_VERSION,
+                "type": "job.completed",
+                "job_id": job_id,
+                "sequence": 4,
                 "payload": {
                     "result": {
                         "resolution": "160x90",
@@ -495,24 +522,29 @@ Load command 3
 
     def test_worker_smoke_resolves_relative_app_path_before_changing_directory(self) -> None:
         job_id = "97456c4a-f3c5-44e4-a548-0bd833ead4bb"
+        event_types = ["worker.ready", "job.started", "stage.started", "observability", "job.completed"]
         events = [
             {
                 "protocol_version": WORKER_PROTOCOL_VERSION,
                 "type": event_type,
                 "job_id": job_id,
                 "sequence": sequence,
-                "payload": {
-                    "result": {
-                        "resolution": "160x90",
-                        "frame_rate": "24/1",
-                        "interlaced": False,
-                        "size_bytes": 1024,
+                "payload": (
+                    {
+                        "result": {
+                            "resolution": "160x90",
+                            "frame_rate": "24/1",
+                            "interlaced": False,
+                            "size_bytes": 1024,
+                        }
                     }
-                }
-                if event_type == "job.completed"
-                else {},
+                    if event_type == "job.completed"
+                    else {"event": canonical_ffprobe_event(job_id)}
+                    if event_type == "observability"
+                    else {}
+                ),
             }
-            for sequence, event_type in enumerate(["worker.ready", "job.started", "stage.started", "job.completed"])
+            for sequence, event_type in enumerate(event_types)
         ]
         completed = subprocess.CompletedProcess(
             args=[],
@@ -541,6 +573,52 @@ Load command 3
                 [str(resolved_app_path / "Contents" / "MacOS" / "BluRayToVisionProEngine")],
             )
             self.assertEqual(run_mock.call_args.kwargs["cwd"], resolved_app_path)
+
+    def test_rejects_incomplete_observability_event(self) -> None:
+        job_id = "97456c4a-f3c5-44e4-a548-0bd833ead4bb"
+        event_types = [
+            "worker.ready",
+            "job.started",
+            "stage.started",
+            "observability",
+            "observability",
+            "job.completed",
+        ]
+        events = [
+            {
+                "protocol_version": WORKER_PROTOCOL_VERSION,
+                "type": event_type,
+                "job_id": job_id,
+                "sequence": sequence,
+                "payload": (
+                    {
+                        "result": {
+                            "resolution": "160x90",
+                            "frame_rate": "24/1",
+                            "interlaced": False,
+                            "size_bytes": 1024,
+                        }
+                    }
+                    if event_type == "job.completed"
+                    else {"event": canonical_ffprobe_event(job_id)}
+                    if event_type == "observability" and sequence == 3
+                    else {
+                        "event": {
+                            "schema": "bd_to_avp.observability",
+                            "schema_version": 1,
+                            "kind": "tool.completed",
+                            "context": {"tool": {"id": "ffprobe"}},
+                        }
+                    }
+                    if event_type == "observability"
+                    else {}
+                ),
+            }
+            for sequence, event_type in enumerate(event_types)
+        ]
+
+        with self.assertRaisesRegex(ValueError, "invalid canonical observability"):
+            validate_smoke_events(events, job_id)
 
     def test_native_startup_smoke_uses_the_signed_packaged_app(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -583,6 +661,31 @@ Load command 3
 
         with self.assertRaises(ValueError):
             validate_smoke_events(events, "expected-job")
+
+    def test_rejects_worker_smoke_without_canonical_tool_observability(self) -> None:
+        job_id = "97456c4a-f3c5-44e4-a548-0bd833ead4bb"
+        events: list[object] = [
+            {
+                "protocol_version": WORKER_PROTOCOL_VERSION,
+                "type": event_type,
+                "job_id": job_id,
+                "sequence": sequence,
+                "payload": {
+                    "result": {
+                        "resolution": "160x90",
+                        "frame_rate": "24/1",
+                        "interlaced": False,
+                        "size_bytes": 1024,
+                    }
+                }
+                if event_type == "job.completed"
+                else {},
+            }
+            for sequence, event_type in enumerate(["worker.ready", "job.started", "stage.started", "job.completed"])
+        ]
+
+        with self.assertRaisesRegex(ValueError, "canonical FFprobe observability"):
+            validate_smoke_events(events, job_id)
 
 
 if __name__ == "__main__":

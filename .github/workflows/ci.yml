@@ -67,6 +67,9 @@ jobs:
       - name: Validate committed release metadata
         run: uv run python scripts/release.py validate
 
+      - name: Validate observability migration
+        run: uv run python scripts/validate_observability_migration.py
+
       - name: Check formatting
         run: uv run ruff format --check .
 

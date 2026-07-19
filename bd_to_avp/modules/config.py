@@ -147,14 +147,6 @@ class Config:
             except PackageNotFoundError:
                 return "0.0.0"
 
-    PROCESS_NAMES_TO_KILL: ClassVar[list[str]] = [
-        "ffmpeg",
-        "edge264_test",
-        "makemkvcon",
-        "spatial-media-kit-tool",
-        "MP4Box",
-        "fx-upscale",
-    ]
     MKV_ERROR_CODES: ClassVar[list[str]] = [
         "corrupt or invalid",
         "video frame timecode differs",

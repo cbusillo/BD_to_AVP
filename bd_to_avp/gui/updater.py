@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib
-import logging
 import types
 
 from dataclasses import dataclass
@@ -16,7 +15,6 @@ from PySide6.QtWidgets import QMessageBox, QWidget
 
 RELEASES_URL = "https://github.com/cbusillo/BD_to_AVP/releases"
 CHANNEL_SETTINGS_KEY = "BDToAVPUpdateChannel"
-logger = logging.getLogger(__name__)
 
 
 class UpdateChannel(StrEnum):
@@ -213,7 +211,6 @@ class UpdaterManager(QObject):
                 self._initialize_sparkle()
             except Exception as error:
                 self.initialization_error = error
-                logger.error("Sparkle initialization failed; falling back to manual updates: %s", error)
                 self.mode = UpdateMode.MANUAL
 
     @property

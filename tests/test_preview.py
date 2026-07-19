@@ -45,13 +45,13 @@ class PreviewSourceTests(unittest.TestCase):
             preview_range = PreviewRange(3570, 60, 7200)
             observed_command: list[object] = []
 
-            def run(command: list[object], _name: str, **_kwargs: object) -> str:
+            def run(command: list[object], _name: str, **_kwargs: object) -> object:
                 observed_command.extend(command)
                 Path(command[-1]).write_bytes(b"preview")
-                return ""
+                return object()
 
             with (
-                patch("bd_to_avp.modules.preview.run_command", side_effect=run),
+                patch("bd_to_avp.modules.preview.run_process_capture", side_effect=run),
                 patch(
                     "bd_to_avp.modules.preview.run_ffprobe",
                     side_effect=[

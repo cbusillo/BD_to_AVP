@@ -1,12 +1,8 @@
-import logging
 import typing
 
 from bd_to_avp.vendor.pgsrip import core
 from bd_to_avp.vendor.pgsrip.media import Media, Pgs
 from bd_to_avp.vendor.pgsrip.options import Options
-
-
-logger = logging.getLogger(__name__)
 
 
 def scan_path(path: str, options: typing.Optional[Options] = None):

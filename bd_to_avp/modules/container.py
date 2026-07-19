@@ -11,11 +11,12 @@ from bd_to_avp.modules.config import (
     is_audio_m4a_preparation_enabled,
     is_direct_mvc_stream_enabled,
 )
-from bd_to_avp.modules.command import run_command, run_ffmpeg_print_errors, run_ffprobe
+from bd_to_avp.modules.command import run_ffmpeg_print_errors, run_ffprobe, run_process_capture
 from bd_to_avp.modules.languages import language_name, normalize_source_language
 from bd_to_avp.modules.util import sorted_files_by_creation_filtered_on_suffix
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.observability import ObservabilityContext
+from bd_to_avp.process_runner import CaptureOverflowPolicy
 from bd_to_avp.runtime import RunContext
 
 
@@ -195,12 +196,15 @@ def mux_video_audio_subs(
         output_track_index += 1
 
     command += [muxed_path]
-    run_command(
+    run_process_capture(
         command,
         "mux video, audio, and subtitles.",
+        tool_id="mp4box",
         run_context=run_context,
         cancellation_event=cancellation_event,
         observability_context=observability_context,
+        capture_overflow=CaptureOverflowPolicy.TRUNCATE,
+        show_spinner=True,
     )
 
 

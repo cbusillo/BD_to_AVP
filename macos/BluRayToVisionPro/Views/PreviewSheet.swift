@@ -176,16 +176,6 @@ struct PreviewSheet: View {
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(statusAccessibilityLabel)
 
-                    if !viewModel.diagnosticLog.isEmpty, viewModel.phase == .failed {
-                        DisclosureGroup("Technical Details") {
-                            Text(viewModel.diagnosticLog)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.top, 6)
-                        }
-                    }
                 }
                 .padding(4)
             } label: {

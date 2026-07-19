@@ -13,6 +13,7 @@ from bd_to_avp.modules.command import run_ffmpeg_print_errors
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.container import audio_handler_metadata_options, get_audio_stream_data
 from bd_to_avp.observability import ObservabilityContext
+from bd_to_avp.presentation import cli_message
 from bd_to_avp.runtime import RunContext
 
 
@@ -395,7 +396,7 @@ def emit_automatic_fallback_warning(
     unqualified = [qualification for qualification in qualifications if not qualification.qualified]
     message = "Automatic audio selected AAC conversion because one or more selected tracks are not qualified AAC."
     if activity is None:
-        print(message)
+        cli_message(message)
         return
 
     activity.warning(

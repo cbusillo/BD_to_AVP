@@ -45,8 +45,11 @@ uv run python scripts/native_app.py package
 `Release` configuration, copies the Python runtime into the production bundle,
 signs nested Mach-O content from the inside out, verifies the complete
 signature, launches the packaged app through `--startup-smoke`, and runs a real
-`inspect_source` request through the embedded worker. Briefcase remains a
-runtime assembler; its Python GUI is no longer the shipping interface.
+`inspect_source` request through the embedded worker. The worker smoke also
+requires canonical schema-v1 FFprobe observability in the protocol stream, so a
+package cannot pass while silently falling back to a legacy child-process path.
+Briefcase remains a runtime assembler; its Python GUI is no longer the shipping
+interface.
 
 Ad-hoc packaging is the default for local validation. Developer ID packaging
 passes `--sign-identity` and `--sign-keychain`. Ad-hoc packages omit Hardened

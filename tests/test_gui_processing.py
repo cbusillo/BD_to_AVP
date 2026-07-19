@@ -115,12 +115,14 @@ class ProcessingThreadTests(unittest.TestCase):
     def test_thread_runs_explicit_request_and_restores_stdout(self) -> None:
         runner = Mock()
         previous_stdout = sys.stdout
-        thread = ProcessingThread(self.request, process_runner=runner, stop_runner=Mock())
+        thread = ProcessingThread(self.request, process_runner=runner)
 
         with patch("bd_to_avp.gui.processing.Spinner.stop_all"):
             thread.run()
 
-        runner.assert_called_once_with(self.request)
+        runner.assert_called_once()
+        self.assertIs(runner.call_args.args[0], self.request)
+        self.assertIsInstance(runner.call_args.args[1], threading.Event)
         self.assertEqual(thread.outcome, ProcessingOutcome(ProcessingOutcomeKind.COMPLETED))
         self.assertIs(sys.stdout, previous_stdout)
 
@@ -129,7 +131,6 @@ class ProcessingThreadTests(unittest.TestCase):
         thread = ProcessingThread(
             self.request,
             process_runner=Mock(side_effect=error),
-            stop_runner=Mock(),
         )
 
         with patch("bd_to_avp.gui.processing.Spinner.stop_all"):
@@ -149,7 +150,6 @@ class ProcessingThreadTests(unittest.TestCase):
                 thread = ProcessingThread(
                     self.request,
                     process_runner=Mock(side_effect=error),
-                    stop_runner=Mock(),
                 )
                 with patch("bd_to_avp.gui.processing.Spinner.stop_all"):
                     thread.run()
@@ -162,7 +162,6 @@ class ProcessingThreadTests(unittest.TestCase):
         thread = ProcessingThread(
             self.request,
             process_runner=Mock(side_effect=BatchProcessingError(source_path, error, batch_sources)),
-            stop_runner=Mock(),
         )
 
         with patch("bd_to_avp.gui.processing.Spinner.stop_all"):
@@ -178,7 +177,6 @@ class ProcessingThreadTests(unittest.TestCase):
         thread = ProcessingThread(
             self.request,
             process_runner=Mock(side_effect=error),
-            stop_runner=Mock(),
         )
 
         with patch("bd_to_avp.gui.processing.Spinner.stop_all"):
@@ -188,27 +186,24 @@ class ProcessingThreadTests(unittest.TestCase):
 
     def test_cancel_requests_cooperative_stop_without_running_work(self) -> None:
         runner = Mock()
-        stop_runner = Mock()
-        thread = ProcessingThread(self.request, process_runner=runner, stop_runner=stop_runner)
+        thread = ProcessingThread(self.request, process_runner=runner)
 
         thread.request_cancel()
         thread.request_cancel()
         with patch("bd_to_avp.gui.processing.Spinner.stop_all"):
             thread.run()
 
-        stop_runner.assert_called_once_with()
         runner.assert_not_called()
         self.assertEqual(thread.outcome, ProcessingOutcome(ProcessingOutcomeKind.CANCELLED))
 
     def test_cancel_during_real_thread_run_wins_over_completion(self) -> None:
         started = threading.Event()
-        release = threading.Event()
 
-        def runner(_request: ProcessingRequest) -> None:
+        def runner(_request: ProcessingRequest, cancellation_event: threading.Event) -> None:
             started.set()
-            release.wait(timeout=2)
+            cancellation_event.wait(timeout=2)
 
-        thread = ProcessingThread(self.request, process_runner=runner, stop_runner=release.set)
+        thread = ProcessingThread(self.request, process_runner=runner)
         thread.start()
         self.assertTrue(started.wait(timeout=1))
 
@@ -413,14 +408,13 @@ class ProcessingControllerTests(unittest.TestCase):
 
     def test_real_controller_cancel_clears_active_thread(self) -> None:
         started = threading.Event()
-        release = threading.Event()
 
-        def runner(_request: ProcessingRequest) -> None:
+        def runner(_request: ProcessingRequest, cancellation_event: threading.Event) -> None:
             started.set()
-            release.wait(timeout=2)
+            cancellation_event.wait(timeout=2)
 
         def make_real_thread(request: ProcessingRequest, parent: QObject | None = None) -> ProcessingThread:
-            return ProcessingThread(request, parent, process_runner=runner, stop_runner=release.set)
+            return ProcessingThread(request, parent, process_runner=runner)
 
         controller = ProcessingController()
         cancellations: list[ProcessingRequest] = []
@@ -518,14 +512,13 @@ class MainWindowProcessingLifecycleTests(unittest.TestCase):
 
     def test_process_button_stops_real_active_attempt(self) -> None:
         started = threading.Event()
-        release = threading.Event()
 
-        def runner(_request: ProcessingRequest) -> None:
+        def runner(_request: ProcessingRequest, cancellation_event: threading.Event) -> None:
             started.set()
-            release.wait(timeout=2)
+            cancellation_event.wait(timeout=2)
 
         def make_thread(request: ProcessingRequest, parent: QObject | None = None) -> ProcessingThread:
-            return ProcessingThread(request, parent, process_runner=runner, stop_runner=release.set)
+            return ProcessingThread(request, parent, process_runner=runner)
 
         with patch("bd_to_avp.gui.processing.ProcessingThread", side_effect=make_thread):
             self.window.process_start_time = datetime.now()

@@ -346,6 +346,29 @@ class ProcessPreflightTests(unittest.TestCase):
             self.assertFalse(source_path.exists())
             self.assertEqual(sibling_path.read_bytes(), b"notes")
 
+    def test_move_completed_conversion_reports_refused_source_removal(self) -> None:
+        activity = Mock()
+        final_path = Path("/output/Movie_AVP.mov")
+        with (
+            patch.object(process.config, "keep_files", True),
+            patch.object(process.config, "remove_original", True),
+            patch.object(process, "move_file_to_output_root_folder", return_value=final_path),
+            patch.object(process, "remove_original_source", return_value=False),
+        ):
+            result = process.move_completed_conversion(
+                Path("/temporary/Movie_AVP.mov"),
+                Path("/temporary"),
+                None,
+                activity,
+            )
+
+        self.assertEqual(result, final_path)
+        activity.warning.assert_called_once_with(
+            "The original source was kept because it could not be removed safely.",
+            stage="move_files",
+            code="source_removal_refused",
+        )
+
     def test_output_move_preserves_folder_containing_direct_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_root = Path(temp_dir)

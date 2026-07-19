@@ -13,7 +13,7 @@ import ffmpeg
 from bd_to_avp.observability import ObservabilityContext
 from bd_to_avp.modules.config import Stage, config, is_direct_mvc_stream_enabled
 from bd_to_avp.modules.disc import DiscInfo
-from bd_to_avp.modules.command import run_command, run_ffmpeg_capture, run_ffprobe
+from bd_to_avp.modules.command import combined_process_output, run_ffmpeg_capture, run_ffprobe, run_process_capture
 from bd_to_avp.process_runner import (
     CaptureOverflowPolicy,
     ChildProcessRunner,
@@ -27,6 +27,7 @@ from bd_to_avp.process_runner import (
     ProcessSpec,
     ProcessTimeoutError,
 )
+from bd_to_avp.presentation import cli_message
 from bd_to_avp.runtime import RunContext
 
 
@@ -302,7 +303,10 @@ def run_native_mvc_encoding(
     try:
         skip_multithreaded_attempt = False
         if not stream_from_container and should_probe_native_multithread_splitter():
-            print("Checking native MVC splitter with a short multi-threaded probe.")
+            cli_message(
+                "Checking native MVC splitter with a short multi-threaded probe.",
+                run_context=run_context,
+            )
             skip_multithreaded_attempt = native_multithread_splitter_probe_crashed(
                 native_input_path,
                 run_context=run_context,
@@ -310,11 +314,17 @@ def run_native_mvc_encoding(
                 observability_context=observability_context,
             )
             if not skip_multithreaded_attempt:
-                print("Native MVC splitter probe passed; proceeding with multi-threaded mode.")
+                cli_message(
+                    "Native MVC splitter probe passed; proceeding with multi-threaded mode.",
+                    run_context=run_context,
+                )
 
         try:
             if skip_multithreaded_attempt:
-                print("Native MVC splitter probe crashed; using slower single-threaded mode.")
+                cli_message(
+                    "Native MVC splitter probe crashed; using slower single-threaded mode.",
+                    run_context=run_context,
+                )
                 run_native_mvc_split_attempt(
                     native_input_path,
                     ffmpeg_command,
@@ -340,7 +350,10 @@ def run_native_mvc_encoding(
             if not native_splitter_died_by_signal(error):
                 raise
 
-            print("Native MVC splitter crashed; retrying once in single-threaded mode.")
+            cli_message(
+                "Native MVC splitter crashed; retrying once in single-threaded mode.",
+                run_context=run_context,
+            )
             for output_path in output_paths:
                 output_path.unlink(missing_ok=True)
             run_native_mvc_split_attempt(
@@ -408,16 +421,16 @@ def run_native_mvc_split_attempt(
 ) -> None:
     splitter_command = generate_native_mvc_splitter_command(native_input_path, single_threaded=single_threaded)
     attempt_name = "single-threaded" if single_threaded else "multi-threaded"
-    print(f"Running native MVC split and encode ({attempt_name}).")
+    cli_message(f"Running native MVC split and encode ({attempt_name}).", run_context=run_context)
 
-    if config.output_commands:
+    if config.output_commands and run_context is None:
         splitter_command_text = " ".join(str(command) for command in splitter_command)
         ffmpeg_command_text = " ".join(ffmpeg_command)
         command_text = f"{splitter_command_text} | {ffmpeg_command_text}"
         if producer_command:
             producer_command_text = " ".join(str(command) for command in producer_command)
             command_text = f"{producer_command_text} | {command_text}"
-        print(f"Running command:\n{command_text}")
+        cli_message(f"Running command:\n{command_text}")
 
     event_context = observability_context or ObservabilityContext()
     stages: list[ProcessPipelineStage] = []
@@ -636,12 +649,15 @@ def add_av1_stereo_metadata(
     patch_path = Path(patch_name)
     try:
         patch_path.write_text(av1_stereo_patch_xml(), encoding="utf-8")
-        run_command(
+        run_process_capture(
             [config.MP4BOX_PATH, "-patch", patch_path, input_path, "-out", output_path],
             "add Apple stereo packing metadata to AV1 video.",
+            tool_id="mp4box",
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=observability_context,
+            capture_overflow=CaptureOverflowPolicy.TRUNCATE,
+            show_spinner=True,
         )
     finally:
         patch_path.unlink(missing_ok=True)
@@ -677,14 +693,18 @@ def combine_to_mv_hevc(
         "--output-file",
         output_path,
     ]
-    output = run_command(
+    process_result = run_process_capture(
         command,
         "combine stereo HEVC streams to MV-HEVC.",
+        tool_id="spatial_media_kit_tool",
+        merge_stderr=False,
         capture_overflow=CaptureOverflowPolicy.FAIL,
         run_context=run_context,
         cancellation_event=cancellation_event,
         observability_context=observability_context,
+        show_spinner=True,
     )
+    output = combined_process_output(process_result)
     if "left and right input resolutions do not match. aborting!" in output:
         raise RuntimeError("Left and right input resolutions do not match.")
     elif "aborting!" in output:
@@ -707,7 +727,7 @@ def detect_crop_parameters(
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
 ) -> str:
-    print("Detecting crop parameters...")
+    cli_message("Detecting crop parameters...", run_context=run_context)
     if not config.crop_black_bars:
         return ""
 
@@ -729,8 +749,8 @@ def detect_crop_parameters(
         )
         output = stderr.decode("utf-8", errors="replace").splitlines()
     except ffmpeg.Error as e:
-        print("FFmpeg Error:")
-        print(e.stderr.decode("utf-8", errors="replace"))
+        cli_message("FFmpeg Error:", run_context=run_context)
+        cli_message(e.stderr.decode("utf-8", errors="replace"), run_context=run_context)
         raise
 
     crop_params: list[tuple[int, int, int, int]] = []
@@ -768,12 +788,15 @@ def upscale_file(
         config.upscale_quality / 100,
         input_path,
     ]
-    run_command(
+    run_process_capture(
         upscale_command,
         "Upscale video with FX Upscale plugin.",
+        tool_id="fx_upscale",
         run_context=run_context,
         cancellation_event=cancellation_event,
         observability_context=observability_context,
+        capture_overflow=CaptureOverflowPolicy.TRUNCATE,
+        show_spinner=True,
     )
 
     if not config.keep_files:
@@ -856,7 +879,10 @@ def get_video_color_depth(
     except ProcessCancelled:
         raise
     except (ffmpeg.Error, json.JSONDecodeError, ProcessRunnerError, UnicodeDecodeError):
-        print(f"Error getting video color depth, using default of {DiscInfo.color_depth}")
+        cli_message(
+            f"Error getting video color depth, using default of {DiscInfo.color_depth}",
+            run_context=run_context,
+        )
     return DiscInfo.color_depth
 
 

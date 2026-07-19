@@ -151,7 +151,7 @@ class MuxCommandTests(unittest.TestCase):
                 return_value=[{"index": 0, "tags": {"language": "eng"}, "channel_layout": "7.1"}],
             ),
             patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
-            patch.object(container, "run_command") as run_command,
+            patch.object(container, "run_process_capture") as run_command,
         ):
             container.mux_video_audio_subs(
                 Path("movie_MV-HEVC.mov"),
@@ -171,7 +171,7 @@ class MuxCommandTests(unittest.TestCase):
             patch.object(container.config, "video_mode", VideoMode.AV1_SBS),
             patch.object(container, "get_audio_stream_data", return_value=[]),
             patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
-            patch.object(container, "run_command") as run_command,
+            patch.object(container, "run_process_capture") as run_command,
         ):
             container.mux_video_audio_subs(
                 Path("movie_AV1-Stereo.mp4"),
@@ -195,7 +195,7 @@ class MuxCommandTests(unittest.TestCase):
                 ],
             ),
             patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
-            patch.object(container, "run_command") as run_command,
+            patch.object(container, "run_process_capture") as run_command,
         ):
             container.mux_video_audio_subs(
                 Path("movie_MV-HEVC.mov"),
@@ -230,7 +230,7 @@ class MuxCommandTests(unittest.TestCase):
                 ],
             ),
             patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
-            patch.object(container, "run_command") as run_command,
+            patch.object(container, "run_process_capture") as run_command,
         ):
             container.mux_video_audio_subs(
                 Path("movie_MV-HEVC.mov"),
@@ -260,7 +260,7 @@ class MuxCommandTests(unittest.TestCase):
                 ],
             ),
             patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
-            patch.object(container, "run_command") as run_command,
+            patch.object(container, "run_process_capture") as run_command,
         ):
             container.mux_video_audio_subs(
                 Path("movie_MV-HEVC.mov"),
@@ -287,7 +287,7 @@ class MuxCommandTests(unittest.TestCase):
                 ],
             ),
             patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
-            patch.object(container, "run_command") as run_command,
+            patch.object(container, "run_process_capture") as run_command,
         ):
             container.mux_video_audio_subs(
                 Path("movie_MV-HEVC.mov"),
@@ -314,7 +314,7 @@ class MuxCommandTests(unittest.TestCase):
                 ],
             ),
             patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
-            patch.object(container, "run_command") as run_command,
+            patch.object(container, "run_process_capture") as run_command,
         ):
             container.mux_video_audio_subs(
                 Path("movie_MV-HEVC.mov"),
@@ -335,7 +335,7 @@ class MuxCommandTests(unittest.TestCase):
                 return_value=[{"index": 0, "tags": {"language": "ger"}, "channel_layout": "5.1"}],
             ),
             patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
-            patch.object(container, "run_command") as run_command,
+            patch.object(container, "run_process_capture") as run_command,
         ):
             container.mux_video_audio_subs(
                 Path("movie_MV-HEVC.mov"),
@@ -357,7 +357,7 @@ class MuxCommandTests(unittest.TestCase):
                 return_value=[{"index": 0, "tags": {"language": "xxx"}, "channel_layout": "stereo"}],
             ),
             patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
-            patch.object(container, "run_command") as run_command,
+            patch.object(container, "run_process_capture") as run_command,
         ):
             container.mux_video_audio_subs(
                 Path("movie_MV-HEVC.mov"),
@@ -379,7 +379,7 @@ class MuxCommandTests(unittest.TestCase):
                 return_value=[{"index": 0, "channel_layout": "stereo"}],
             ),
             patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
-            patch.object(container, "run_command") as run_command,
+            patch.object(container, "run_process_capture") as run_command,
         ):
             container.mux_video_audio_subs(
                 Path("movie_MV-HEVC.mov"),
@@ -405,7 +405,7 @@ class MuxCommandTests(unittest.TestCase):
                 "sorted_files_by_creation_filtered_on_suffix",
                 return_value=[Path("movie.forced.en.srt"), Path("movie.en.srt")],
             ),
-            patch.object(container, "run_command") as run_command,
+            patch.object(container, "run_process_capture") as run_command,
         ):
             container.mux_video_audio_subs(
                 Path("movie_MV-HEVC.mov"),
@@ -432,7 +432,7 @@ class MuxCommandTests(unittest.TestCase):
                 "sorted_files_by_creation_filtered_on_suffix",
                 return_value=[Path("movie.ace.srt")],
             ),
-            patch.object(container, "run_command") as run_command,
+            patch.object(container, "run_process_capture") as run_command,
         ):
             container.mux_video_audio_subs(
                 Path("movie_MV-HEVC.mov"),
