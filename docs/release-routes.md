@@ -75,6 +75,10 @@ recovery exception. Build `147` is permanently burned. Because no tag, release,
 appcast item, Pages state, Latest change, or PyPI artifact was published, a
 focused migration may replace the repository metadata with `0.3.0b3` build
 `148`; normal forward-only enforcement resumes immediately afterward.
+The normal release preparation command intentionally rejects that backward
+stage move. The recovery must use a dedicated audited migration that first
+reconfirms the failed RC attempt left no tag, release, appcast, Pages, Latest,
+or PyPI residue; generic release preparation remains fail-closed.
 
 ## Sparkle Route Eligibility
 

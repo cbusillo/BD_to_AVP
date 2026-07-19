@@ -323,6 +323,26 @@ class ReleaseNotesBaseTests(unittest.TestCase):
                 is_ancestor=lambda _tag_name, _head_ref: False,
             )
 
+    def test_selection_rejects_prerelease_flag_that_disagrees_with_tag(self) -> None:
+        for tag_name, prerelease in (
+            ("v1.2.3-beta.1", False),
+            ("v1.2.3", True),
+        ):
+            with (
+                self.subTest(tag_name=tag_name),
+                self.assertRaisesRegex(
+                    release.ReleaseError,
+                    "prerelease state disagrees",
+                ),
+            ):
+                release.select_release_notes_base(
+                    "v1.2.4",
+                    [published_release(tag_name, prerelease=prerelease)],
+                    "stable-head",
+                    tag_exists=lambda _tag_name: True,
+                    is_ancestor=lambda _tag_name, _head_ref: True,
+                )
+
         duplicate_history = [published_release("v1.2.3"), published_release("v1.2.3")]
         with self.assertRaisesRegex(release.ReleaseError, "Multiple published GitHub Releases"):
             release.select_release_notes_base(
@@ -479,6 +499,23 @@ class ReleasePreparationTests(unittest.TestCase):
                 release.prepare_release(
                     "1.2.4a3",
                     "16",
+                    pyproject_path=pyproject_path,
+                    lock_path=lock_path,
+                    lock_runner=fake_lock_runner,
+                )
+
+    def test_prepare_fails_closed_on_burned_rc_to_beta_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pyproject_path, lock_path = make_release_files(
+                Path(temp_dir),
+                version="0.3.0rc1",
+                build="147",
+            )
+
+            with self.assertRaisesRegex(release.ReleaseError, "must be newer"):
+                release.prepare_release(
+                    "0.3.0b3",
+                    "148",
                     pyproject_path=pyproject_path,
                     lock_path=lock_path,
                     lock_runner=fake_lock_runner,

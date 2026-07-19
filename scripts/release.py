@@ -200,6 +200,8 @@ def _published_releases(release_history: Any) -> list[PublishedRelease]:
             version = parse_release_tag(tag_name)
         except ReleaseError:
             continue
+        if prerelease != version.prerelease:
+            raise ReleaseError(f"Published GitHub Release prerelease state disagrees with tag {tag_name}.")
         if tag_name in seen_tags:
             raise ReleaseError(f"Multiple published GitHub Releases use tag {tag_name}.")
         if version.text in seen_versions:
