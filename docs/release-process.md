@@ -56,11 +56,21 @@ the release tag, latest-release behavior, Sparkle channel, and whether PyPI is
 published. The GitHub Release title is the exact version tag so narrow release
 lists keep the distinguishing version visible.
 
+`.github/workflows/briefcase.yml` is the Stable operator entry and the sole
+owner of the repository-wide `release` concurrency group. It calls the guarded
+`.github/workflows/release-engine.yml` reusable workflow, which owns source and
+metadata validation, macOS packaging, signing, notarization, compatibility,
+attestation, draft creation and verification, cumulative appcast mutation,
+GitHub Release publication, Pages deployment, and signing-material cleanup.
+The engine intentionally has no `release` concurrency declaration, preventing
+the caller and called workflow from competing with or canceling the same run.
+
 The workflow must be dispatched and rerun through the configured
 `shiny-code-bot` automation identity. The required approver is `cbusillo`, and
 the guarded approval helper rejects a run whose actor or triggering actor is the
 same account. Verify both run actors and the exact protected-main SHA before
-requesting approval.
+requesting approval. The reusable engine independently requires both run actors
+to be `shiny-code-bot` before release work begins.
 
 Generated notes use production-stage-aware history. An Alpha, Beta, or RC
 compares with the newest lower published production release whose tag is an
@@ -95,8 +105,9 @@ The helper validates the repository, workflow, event, branch, and full commit
 SHA on every poll. It also checks that protected `main` has not moved. Exit code
 `20` emits an `approval_required` JSON event immediately after querying GitHub's
 pending deployments, including a fingerprint bound to the repository, run,
-exact workflow path and ID, run attempt, commit, actors, environment ID, and
-reviewer. The fingerprint is a non-secret identity checksum, not evidence of
+exact operator workflow path and ID, reusable engine path, both workflow refs
+and definition SHAs, run attempt, commit, actors, environment ID, and reviewer.
+The fingerprint is a non-secret identity checksum, not evidence of
 human authorization. Obtain explicit maintainer authorization in the active
 conversation, then approve through the guarded command rather than a raw API
 call:
@@ -152,19 +163,27 @@ The workflow performs these ordered boundaries:
    checks.
 8. Publish the verified draft only if it still targets the current `main` HEAD.
    The release body is hashed again immediately before and after publication so
-   edits cannot silently diverge from the updater notes. Stable releases then
-   publish separately built Python distributions through PyPI Trusted
-   Publishing with PEP 740 attestations; RC releases never publish to PyPI.
+   edits cannot silently diverge from the updater notes. The reusable engine
+   returns Stable Python distributions only as an immutable workflow artifact
+   ID and GitHub-recorded digest containing an exact `SHA256SUMS` manifest; RC
+   releases return no Python artifact.
 9. Deploy the durable `appcast.xml` release asset to GitHub Pages. A deployment
    failure can be retried without rebuilding, retagging, or re-signing.
-10. The separate `cbusillo/homebrew-tap` repository checks the latest stable
+10. After the complete reusable engine succeeds, the Stable operator
+    revalidates the current protected-main SHA, operator/engine policy evidence,
+    GitHub artifact digest, and every distribution checksum, then publishes
+    through the pinned PyPI Trusted Publisher with PEP 740 attestations. The publisher remains in
+    `briefcase.yml` and the `pypi` environment so its existing OIDC identity does
+    not change.
+11. The separate `cbusillo/homebrew-tap` repository checks the latest stable
    GitHub Release on a schedule and by manual dispatch. Homebrew opens a formula
    update pull request when the version changes; tap CI must pass formula audit,
    source installation, command tests, and linkage checks before merge. RC
    releases do not update the formula.
 
-For Stable releases, PyPI publication, Sparkle Pages deployment, and the
-Homebrew tap update are independent post-publication jobs. Each channel can be
+For Stable releases, PyPI publication and the Homebrew tap update remain
+independent post-publication operations. PyPI starts only after the reusable
+engine, including Sparkle Pages deployment, succeeds; a failed PyPI job can be
 retried without rebuilding or changing the published GitHub Release. The tap
 uses its own repository token and requires no cross-repository release secret.
 
@@ -175,11 +194,12 @@ or embedded HTML for information required in the Sparkle dialog.
 
 ### Production macOS Application
 
-The accepted SwiftUI/AppKit interface is packaged by the existing
-`.github/workflows/briefcase.yml` production workflow. Briefcase remains the
-staging mechanism for the embedded Python engine, but its Python GUI is not the
-shipping interface. The Xcode `Release` configuration owns the production name,
-bundle identifier, macOS 26 deployment target, and Sparkle metadata.
+The accepted SwiftUI/AppKit interface is packaged by the reusable
+`.github/workflows/release-engine.yml` production engine, called by the Stable
+`.github/workflows/briefcase.yml` operator entry. Briefcase remains the staging
+mechanism for the embedded Python engine, but its Python GUI is not the shipping
+interface. The Xcode `Release` configuration owns the production name, bundle
+identifier, macOS 26 deployment target, and Sparkle metadata.
 
 The signing job runs on GitHub's Apple-Silicon `macos-26` image, selects Xcode
 26.5 build `17F42`, and installs XcodeGen 2.45.4 from its digest-pinned release
@@ -263,7 +283,10 @@ Keep the live repository settings aligned with these contracts:
 - `pypi` is limited to `main`, has no required-review rule, and is authorized by
   the PyPI Trusted Publisher for repository `cbusillo/BD_to_AVP`, workflow
   `briefcase.yml`, environment `pypi`, and project `bd_to_avp`. No
-  `PYPI_TOKEN` exists.
+  `PYPI_TOKEN` exists. The publisher job deliberately remains in the operator
+  workflow because PyPI does not accept a reusable workflow as the configured
+  publisher workflow; no trusted-publisher migration is required by the engine
+  extraction.
 - `github-pages` is Actions-managed, limited to `main`, and has no additional
   required-review rule.
 - Immutable GitHub Releases remain enabled; drafts are resumable while

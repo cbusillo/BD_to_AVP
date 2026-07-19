@@ -25,6 +25,7 @@ from scripts.github_release_run import (
     parse_args,
     watch_release_run,
 )
+from scripts.release_workflow_policy import ENGINE_WORKFLOW_PATH, OPERATOR_WORKFLOW_PATH, REQUIRED_ACTOR
 
 
 REPOSITORY = "cbusillo/BD_to_AVP"
@@ -143,6 +144,16 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
         self.assertFalse(events[0]["current_user_can_approve"])
         self.assertEqual(events[0]["approval_fingerprint"], approval_fingerprint())
         self.assertEqual(events[0]["run_attempt"], 1)
+        self.assertEqual(
+            events[0]["operator_workflow_ref"],
+            f"{REPOSITORY}/{OPERATOR_WORKFLOW_PATH}@refs/heads/main",
+        )
+        self.assertEqual(events[0]["operator_workflow_sha"], HEAD_SHA)
+        self.assertEqual(
+            events[0]["engine_workflow_ref"],
+            f"{REPOSITORY}/{ENGINE_WORKFLOW_PATH}@refs/heads/main",
+        )
+        self.assertEqual(events[0]["engine_workflow_sha"], HEAD_SHA)
 
     def test_waiting_run_rejects_additional_pending_environment(self) -> None:
         client = FakeGitHubAPI()
@@ -191,6 +202,29 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
         )
 
         self.assertNotEqual(first, second)
+
+    def test_approval_fingerprint_binds_reusable_engine_path(self) -> None:
+        trusted = approval_fingerprint()
+        substituted = build_approval_fingerprint(
+            expectation(engine_workflow_path=".github/workflows/untrusted-engine.yml"),
+            environment_id=ENVIRONMENT_ID,
+            run_attempt=1,
+            run_actor="shiny-code-bot",
+            triggering_actor="shiny-code-bot",
+        )
+
+        self.assertNotEqual(trusted, substituted)
+
+    def test_unexpected_engine_workflow_path_is_rejected_before_github_access(self) -> None:
+        client = FakeGitHubAPI()
+
+        with self.assertRaisesRegex(ReleaseRunError, "engine workflow path"):
+            watch_release_run(
+                expectation(engine_workflow_path=".github/workflows/untrusted-engine.yml"),
+                client,
+            )
+
+        self.assertEqual(client.get_calls, [])
 
     def test_nonterminal_run_fails_immediately_when_main_moves(self) -> None:
         client = FakeGitHubAPI()
@@ -369,6 +403,10 @@ class GitHubReleaseRunApprovalTests(unittest.TestCase):
         self.assertTrue(active_auth)
         self.assertEqual(events[0]["event"], "approved")
         self.assertEqual(events[0]["actor"], "cbusillo")
+        self.assertEqual(
+            events[0]["engine_workflow_ref"],
+            f"{REPOSITORY}/{ENGINE_WORKFLOW_PATH}@refs/heads/main",
+        )
 
     def test_wrong_confirmation_sha_fails_before_github_access(self) -> None:
         client = FakeGitHubAPI()
@@ -613,10 +651,12 @@ class GitHubReleaseRunContractTests(unittest.TestCase):
         self.assertEqual(operations["approvalRequiredExitCode"], EXIT_APPROVAL_REQUIRED)
         self.assertEqual(operations["safetyErrorExitCode"], EXIT_SAFETY_ERROR)
         self.assertEqual(operations["repository"], REPOSITORY)
+        self.assertEqual(operations["releaseActor"], REQUIRED_ACTOR)
         self.assertEqual(operations["approvalActor"], "cbusillo")
         self.assertEqual(operations["requiredBranch"], "main")
         self.assertEqual(operations["requiredEvent"], "workflow_dispatch")
         self.assertEqual(operations["approvalEnvironment"], "macos-signing")
+        self.assertEqual(operations["engineWorkflowPath"], ENGINE_WORKFLOW_PATH)
         self.assertEqual(
             operations["workflows"],
             {
