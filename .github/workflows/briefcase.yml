@@ -393,26 +393,69 @@ jobs:
           BUILD_KEYCHAIN_PASSWORD=$(openssl rand -hex 32)
           KEYCHAIN_PATH="$RUNNER_TEMP/bd-to-avp-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.keychain-db"
           CERTIFICATE_PATH="$RUNNER_TEMP/bd-to-avp-$GITHUB_RUN_ID.p12"
+          USER_KEYCHAINS_PATH="$RUNNER_TEMP/bd-to-avp-user-keychains-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.txt"
+          USER_KEYCHAINS_TMP_PATH="${USER_KEYCHAINS_PATH}.tmp"
           echo "::add-mask::$BUILD_KEYCHAIN_PASSWORD"
 
           {
             echo "BUILD_KEYCHAIN_PASSWORD=$BUILD_KEYCHAIN_PASSWORD"
             echo "CERTIFICATE_PATH=$CERTIFICATE_PATH"
             echo "KEYCHAIN_PATH=$KEYCHAIN_PATH"
+            echo "USER_KEYCHAINS_PATH=$USER_KEYCHAINS_PATH"
           } >> "$GITHUB_ENV"
+
+          restore_user_keychains() {
+            if [ ! -f "$USER_KEYCHAINS_PATH" ]; then
+              return 0
+            fi
+            RESTORE_KEYCHAINS=()
+            while IFS= read -r keychain; do
+              if [ -n "$keychain" ]; then
+                RESTORE_KEYCHAINS+=("$keychain")
+              fi
+            done < "$USER_KEYCHAINS_PATH"
+            if [ "${#RESTORE_KEYCHAINS[@]}" -eq 0 ]; then
+              security list-keychains -d user -s
+            else
+              security list-keychains -d user -s "${RESTORE_KEYCHAINS[@]}"
+            fi
+          }
 
           cleanup_on_failure() {
             status=$?
             trap - EXIT
             if [ "$status" -ne 0 ]; then
-              security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
-              rm -f "$CERTIFICATE_PATH"
+              restore_status=0
+              restore_user_keychains >/dev/null 2>&1 || restore_status=$?
+              if [ -e "$KEYCHAIN_PATH" ]; then
+                security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
+              fi
+              rm -f "$CERTIFICATE_PATH" "$USER_KEYCHAINS_TMP_PATH" || true
+              if [ "$restore_status" -eq 0 ]; then
+                rm -f "$USER_KEYCHAINS_PATH" || true
+              fi
             fi
             exit "$status"
           }
           trap cleanup_on_failure EXIT
 
+          rm -f "$USER_KEYCHAINS_PATH" "$USER_KEYCHAINS_TMP_PATH"
+          security list-keychains -d user \
+            | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//' \
+            > "$USER_KEYCHAINS_TMP_PATH"
+          mv "$USER_KEYCHAINS_TMP_PATH" "$USER_KEYCHAINS_PATH"
           security create-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          USER_KEYCHAINS=()
+          while IFS= read -r keychain; do
+            if [ -n "$keychain" ]; then
+              USER_KEYCHAINS+=("$keychain")
+            fi
+          done < "$USER_KEYCHAINS_PATH"
+          if [ "${#USER_KEYCHAINS[@]}" -eq 0 ]; then
+            security list-keychains -d user -s "$KEYCHAIN_PATH"
+          else
+            security list-keychains -d user -s "$KEYCHAIN_PATH" "${USER_KEYCHAINS[@]}"
+          fi
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           printf '%s' "$CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH"
@@ -421,6 +464,7 @@ jobs:
           security set-key-partition-list \
             -S apple-tool:,apple:,codesign: \
             -s -k "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user | grep -F "$KEYCHAIN_PATH"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F "$DEV_ID"
           trap - EXIT
 
@@ -545,16 +589,57 @@ jobs:
         if: always()
         run: |
           set +e
-          if [ -n "${KEYCHAIN_PATH:-}" ]; then
-            security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
+          cleanup_status=0
+          restore_status=0
+          KEYCHAIN_PATH="${KEYCHAIN_PATH:-$RUNNER_TEMP/bd-to-avp-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.keychain-db}"
+          CERTIFICATE_PATH="${CERTIFICATE_PATH:-$RUNNER_TEMP/bd-to-avp-$GITHUB_RUN_ID.p12}"
+          USER_KEYCHAINS_PATH="${USER_KEYCHAINS_PATH:-$RUNNER_TEMP/bd-to-avp-user-keychains-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.txt}"
+          USER_KEYCHAINS_TMP_PATH="${USER_KEYCHAINS_PATH}.tmp"
+          restore_user_keychains() {
+            if [ ! -f "$USER_KEYCHAINS_PATH" ]; then
+              return 0
+            fi
+            RESTORE_KEYCHAINS=()
+            while IFS= read -r keychain; do
+              if [ -n "$keychain" ]; then
+                RESTORE_KEYCHAINS+=("$keychain")
+              fi
+            done < "$USER_KEYCHAINS_PATH"
+            if [ "${#RESTORE_KEYCHAINS[@]}" -eq 0 ]; then
+              security list-keychains -d user -s
+            else
+              security list-keychains -d user -s "${RESTORE_KEYCHAINS[@]}"
+            fi
+          }
+          if ! restore_user_keychains >/dev/null 2>&1; then
+            echo "Failed to restore the user keychain search list." >&2
+            restore_status=1
+            cleanup_status=1
           fi
-          rm -f "${CERTIFICATE_PATH:-}" "$RUNNER_TEMP/bd-to-avp-app-$GITHUB_RUN_ID.zip"
+          if [ -e "$KEYCHAIN_PATH" ] && ! security delete-keychain "$KEYCHAIN_PATH" >/dev/null 2>&1; then
+            echo "Failed to delete the ephemeral signing keychain." >&2
+            cleanup_status=1
+          fi
+          if ! rm -f \
+            "${CERTIFICATE_PATH:-}" \
+            "$USER_KEYCHAINS_TMP_PATH" \
+            "$RUNNER_TEMP/bd-to-avp-app-$GITHUB_RUN_ID.zip"
+          then
+            echo "Failed to remove temporary signing files." >&2
+            cleanup_status=1
+          fi
+          if [ "$restore_status" -eq 0 ] && ! rm -f "$USER_KEYCHAINS_PATH"; then
+            echo "Failed to remove the keychain search-list snapshot." >&2
+            cleanup_status=1
+          fi
           {
             echo "BUILD_KEYCHAIN_PASSWORD="
             echo "CERTIFICATE_PATH="
             echo "KEYCHAIN_PATH="
             echo "NOTARY_PROFILE="
-          } >> "$GITHUB_ENV"
+            echo "USER_KEYCHAINS_PATH="
+          } >> "$GITHUB_ENV" || cleanup_status=1
+          exit "$cleanup_status"
 
       - name: Upload verified release package
         if: success()
