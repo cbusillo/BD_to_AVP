@@ -23,9 +23,13 @@ def load_github_config() -> dict:
         return json.load(handle)
 
 
+def load_release_engine() -> dict:
+    return load_workflow("release-engine.yml")
+
+
 class ReleaseWorkflowTests(unittest.TestCase):
     def test_sparkle_bundle_uses_importable_module_entrypoint(self) -> None:
-        workflow = load_workflow("briefcase.yml")
+        workflow = load_release_engine()
         workflow_text = str(workflow)
         ci_text = str(load_workflow("ci.yml"))
         smoke_text = (REPO_ROOT / "docs" / "release-smoke.md").read_text(encoding="utf-8")
@@ -48,15 +52,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_release_is_manual_only_and_packages_github_sha_from_main(self) -> None:
-        workflow = load_workflow("briefcase.yml")
+        operator = load_workflow("briefcase.yml")
+        workflow = load_release_engine()
         prepare = workflow["jobs"]["prepare"]
         package = workflow["jobs"]["package"]
 
-        self.assertEqual(set(workflow["on"]), {"workflow_dispatch"})
+        self.assertEqual(set(operator["on"]), {"workflow_dispatch"})
+        self.assertEqual(set(workflow["on"]), {"workflow_call"})
         self.assertEqual(workflow["env"]["GH_REPO"], "${{ github.repository }}")
-        self.assertNotIn("source_ref", str(workflow))
-        self.assertEqual(workflow["concurrency"]["group"], "release")
-        self.assertEqual(workflow["concurrency"]["cancel-in-progress"], "false")
+        self.assertNotIn("source_ref", str(operator) + str(workflow))
+        self.assertEqual(operator["concurrency"]["group"], "release")
+        self.assertEqual(operator["concurrency"]["cancel-in-progress"], "false")
+        self.assertNotIn("concurrency", workflow)
         checkout = prepare["steps"][0]
         self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
         self.assertEqual(checkout["with"]["persist-credentials"], "false")
@@ -72,8 +79,60 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("jq -r .name", str(prepare))
         self.assertNotIn("refs/heads/release", str(workflow))
 
+    def test_reusable_engine_rejects_direct_invocation_and_policy_bypass(self) -> None:
+        operator = load_workflow("briefcase.yml")
+        workflow = load_release_engine()
+        release = operator["jobs"]["release"]
+        call = workflow["on"]["workflow_call"]
+        policy = workflow["jobs"]["policy"]
+        entry_guard = policy["steps"][0]
+        policy_checkout = policy["steps"][1]
+        policy_step = next(step for step in policy["steps"] if step.get("id") == "policy")
+
+        self.assertEqual(set(operator["jobs"]), {"release", "publish-pypi"})
+        self.assertEqual(release["uses"], "./.github/workflows/release-engine.yml")
+        self.assertNotIn("secrets", release)
+        self.assertEqual(
+            release["permissions"],
+            {"attestations": "write", "contents": "write", "id-token": "write", "pages": "write"},
+        )
+        self.assertEqual(release["with"]["release_sha"], "${{ github.sha }}")
+        self.assertEqual(release["with"]["operator_workflow_ref"], "${{ github.workflow_ref }}")
+        self.assertEqual(release["with"]["operator_workflow_sha"], "${{ github.workflow_sha }}")
+        self.assertEqual(release["with"]["operator_actor"], "${{ github.actor }}")
+        self.assertEqual(release["with"]["operator_triggering_actor"], "${{ github.triggering_actor }}")
+        self.assertEqual(
+            {name for name, definition in call["inputs"].items() if definition.get("required") == "true"},
+            {
+                "release_sha",
+                "operator_workflow_ref",
+                "operator_workflow_sha",
+                "operator_run_id",
+                "operator_run_attempt",
+                "operator_actor",
+                "operator_triggering_actor",
+            },
+        )
+        self.assertEqual(policy["permissions"], {"contents": "read", "id-token": "write"})
+        self.assertEqual(entry_guard["name"], "Require the protected Stable operator context")
+        self.assertNotIn("uses", entry_guard)
+        self.assertIn("cbusillo/BD_to_AVP/.github/workflows/briefcase.yml@refs/heads/main", entry_guard["run"])
+        self.assertIn('test "$ACTUAL_REF" = "refs/heads/main"', entry_guard["run"])
+        self.assertIn('test "$ACTUAL_ACTOR" = "shiny-code-bot"', entry_guard["run"])
+        self.assertEqual(policy_checkout["with"]["ref"], "${{ github.sha }}")
+        self.assertEqual(policy_checkout["with"]["persist-credentials"], "false")
+        self.assertIn("Reject direct invocation or operator policy bypass", str(policy))
+        self.assertEqual(policy_step["env"]["RELEASE_OPERATOR_WORKFLOW_REF"], "${{ github.workflow_ref }}")
+        self.assertNotIn("RELEASE_ENGINE_WORKFLOW_REF", policy_step["env"])
+        self.assertNotIn("RELEASE_ENGINE_WORKFLOW_SHA", policy_step["env"])
+        self.assertIn("release_workflow_policy.py engine", policy_step["run"])
+        self.assertEqual(workflow["jobs"]["prepare"]["needs"], "policy")
+        self.assertEqual(set(workflow["jobs"]["package"]["needs"]), {"policy", "prepare"})
+        self.assertIn("--expected-fingerprint", str(workflow["jobs"]["package"]))
+        self.assertIn("needs.policy.outputs.engine_workflow_ref", str(workflow["jobs"]["package"]))
+
     def test_release_metadata_is_derived_by_tested_python(self) -> None:
-        workflow = load_workflow("briefcase.yml")
+        workflow = load_release_engine()
         prepare = workflow["jobs"]["prepare"]
         release_history = next(step for step in prepare["steps"] if step.get("id") == "release_history")
 
@@ -92,7 +151,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("appcast-state.json", str(prepare))
 
     def test_package_preserves_dmg_validation_without_write_token(self) -> None:
-        workflow = load_workflow("briefcase.yml")
+        workflow = load_release_engine()
         package = workflow["jobs"]["package"]
         certificate_step = next(
             step for step in package["steps"] if step["name"] == "Install signing certificate in an ephemeral keychain"
@@ -101,7 +160,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         cleanup_step = next(step for step in package["steps"] if step["name"] == "Remove temporary signing material")
         cleanup_script = cleanup_step["run"]
 
-        self.assertEqual(package["needs"], "prepare")
+        self.assertEqual(set(package["needs"]), {"policy", "prepare"})
         self.assertEqual(package["environment"], "macos-signing")
         self.assertEqual(package["permissions"]["contents"], "read")
         self.assertEqual(package["runs-on"], "macos-26")
@@ -205,7 +264,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         *,
         restore_exit: int = 0,
     ) -> tuple[subprocess.CompletedProcess[str], str, dict[str, Path]]:
-        workflow = load_workflow("briefcase.yml")
+        workflow = load_release_engine()
         package = workflow["jobs"]["package"]
         cleanup_step = next(step for step in package["steps"] if step["name"] == "Remove temporary signing material")
         cleanup_script = cleanup_step["run"]
@@ -284,7 +343,7 @@ esac
         return result, state, paths
 
     def test_release_is_draft_until_assets_are_redownloaded_and_verified(self) -> None:
-        workflow = load_workflow("briefcase.yml")
+        workflow = load_release_engine()
         jobs = workflow["jobs"]
 
         self.assertEqual(
@@ -334,7 +393,7 @@ esac
         self.assertIn('[ "$TOTAL_ASSET_COUNT" = "3" ]', str(jobs["verify-draft"]))
 
     def test_release_notes_are_frozen_embedded_and_reverified(self) -> None:
-        workflow = load_workflow("briefcase.yml")
+        workflow = load_release_engine()
         jobs = workflow["jobs"]
         create_draft = jobs["create-draft"]
         publish_appcast = jobs["publish-appcast"]
@@ -364,7 +423,7 @@ esac
         self.assertIn("body: $body", str(publish_release))
 
     def test_release_package_provenance_is_attested_and_verified(self) -> None:
-        workflow = load_workflow("briefcase.yml")
+        workflow = load_release_engine()
         attest = workflow["jobs"]["attest-package"]
         verify = workflow["jobs"]["verify-draft"]
 
@@ -379,7 +438,7 @@ esac
         self.assertIn("TOTAL_ASSET_COUNT", str(verify))
 
     def test_private_key_is_only_exposed_to_read_only_signing_step(self) -> None:
-        workflow = load_workflow("briefcase.yml")
+        workflow = load_release_engine()
         publish = workflow["jobs"]["publish-appcast"]
         secret_expression = "${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}"
         matching_steps = [step for step in publish["steps"] if secret_expression in str(step)]
@@ -398,7 +457,7 @@ esac
         self.assertNotIn(secret_expression, str(workflow["jobs"]["deploy-appcast"]))
 
     def test_cumulative_appcast_is_a_durable_release_asset(self) -> None:
-        workflow = load_workflow("briefcase.yml")
+        workflow = load_release_engine()
         publish = workflow["jobs"]["publish-appcast"]
         verify = workflow["jobs"]["verify-draft"]
 
@@ -411,25 +470,51 @@ esac
         self.assertIn("verify-release", str(verify))
 
     def test_stable_pypi_publish_uses_oidc_trusted_publishing(self) -> None:
-        workflow = load_workflow("briefcase.yml")
+        operator = load_workflow("briefcase.yml")
+        workflow = load_release_engine()
         build = workflow["jobs"]["build-python"]
-        publish = workflow["jobs"]["publish-pypi"]
+        publish = operator["jobs"]["publish-pypi"]
+        release_operations = load_github_config()["releaseOperations"]
 
         self.assertFalse((REPO_ROOT / ".github" / "workflows" / "publish-to-pypi.yml").exists())
-        self.assertIn("needs.build-python.result == 'success'", publish["if"])
-        self.assertIn("needs.publish-release.result == 'success'", publish["if"])
-        self.assertIn("needs.prepare.outputs.publish_pypi == 'true'", publish["if"])
+        self.assertEqual(publish["needs"], "release")
+        self.assertIn("needs.release.result == 'success'", publish["if"])
+        self.assertIn("needs.release.outputs.publish_pypi == 'true'", publish["if"])
         self.assertEqual(publish["environment"]["name"], "pypi")
+        self.assertEqual(publish["permissions"]["actions"], "read")
         self.assertEqual(publish["permissions"]["id-token"], "write")
-        self.assertEqual(set(publish["needs"]), {"build-python", "prepare", "publish-release"})
         self.assertIn("uv build", str(build))
         self.assertNotIn("uv build", str(publish))
         self.assertIn("pypa/gh-action-pypi-publish@", str(publish))
         self.assertIn("attestations", str(publish))
-        self.assertNotIn("PYPI_TOKEN", str(workflow))
+        self.assertEqual(
+            next(step for step in publish["steps"] if "pypa/gh-action-pypi-publish@" in step.get("uses", ""))["with"][
+                "packages-dir"
+            ],
+            "python-distributions/dist",
+        )
+        self.assertIn("SHA256SUMS", str(build))
+        self.assertIn("artifact_digest", build["outputs"])
+        self.assertIn("artifact_id", build["outputs"])
+        self.assertIn("Verify Python distribution transfer", str(publish))
+        self.assertIn("shasum -a 256 --check SHA256SUMS", str(publish))
+        self.assertIn("PYTHON_ARTIFACT_DIGEST", str(publish))
+        self.assertIn("actions/artifacts/$PYTHON_ARTIFACT_ID", str(publish))
+        self.assertIn("sha256:$PYTHON_ARTIFACT_DIGEST", str(publish))
+        download = next(step for step in publish["steps"] if "actions/download-artifact@" in step.get("uses", ""))
+        self.assertEqual(download["with"]["artifact-ids"], "${{ needs.release.outputs.python_artifact_id }}")
+        self.assertEqual(download["with"]["merge-multiple"], "true")
+        self.assertNotIn("publish-pypi", workflow["jobs"])
+        self.assertNotIn("pypa/gh-action-pypi-publish@", str(workflow))
+        self.assertNotIn("PYPI_TOKEN", str(operator) + str(workflow))
+        self.assertEqual(
+            release_operations["workflows"]["Release from protected main"]["path"],
+            ".github/workflows/briefcase.yml",
+        )
+        self.assertEqual(release_operations["engineWorkflowPath"], ".github/workflows/release-engine.yml")
 
     def test_release_deploy_uses_resumable_pages_workflow(self) -> None:
-        workflow = load_workflow("briefcase.yml")
+        workflow = load_release_engine()
         deploy = workflow["jobs"]["deploy-appcast"]
 
         self.assertEqual(set(deploy["needs"]), {"prepare", "publish-appcast", "publish-release"})
@@ -451,7 +536,7 @@ esac
         )
 
     def test_all_release_checkouts_use_dispatch_sha(self) -> None:
-        workflow = load_workflow("briefcase.yml")
+        workflow = load_release_engine()
         checkouts = [
             step
             for job in workflow["jobs"].values()
@@ -465,7 +550,7 @@ esac
             self.assertEqual(checkout["with"]["persist-credentials"], "false")
 
     def test_release_actions_are_pinned_to_commit_shas(self) -> None:
-        for workflow_name in ("briefcase.yml", "sparkle-pages.yml"):
+        for workflow_name in ("briefcase.yml", "release-engine.yml", "sparkle-pages.yml"):
             workflow = load_workflow(workflow_name)
             action_uses = [
                 step["uses"]

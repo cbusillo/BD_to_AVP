@@ -151,6 +151,26 @@ exact `macos-signing` approval contract. The workflow choice authorizes intent;
 committed metadata alone determines stage, public identity, Sparkle channel,
 Latest behavior, and package publication.
 
+The Stable operator remains `.github/workflows/briefcase.yml`. It alone owns the
+repository-wide `release` concurrency lock and calls
+`.github/workflows/release-engine.yml`; the reusable engine must not declare the
+same lock because caller/callee concurrency can otherwise cancel or indefinitely
+queue the same release run. Before any release work, the engine verifies the
+exact operator workflow ref and definition SHA, its own OIDC
+`job_workflow_ref` and `job_workflow_sha` claims, the run ID and attempt, the
+protected-main SHA, the dispatch event, and both configured automation actors.
+It revalidates the resulting policy fingerprint after the `macos-signing`
+approval gate and before using any Apple credential.
+
+PyPI is the deliberate caller-side exception to engine job ownership. PyPI
+Trusted Publishing does not accept a reusable workflow as the configured
+publisher workflow, so Stable Python distributions cross back from the engine
+as an immutable artifact ID and GitHub-recorded digest with an exact
+`SHA256SUMS` manifest. The pinned publisher action remains in `briefcase.yml`,
+in the `pypi` environment, after the complete reusable engine succeeds. This
+preserves the existing `job_workflow_ref`, OIDC provenance, environment, and
+project identity without a live trusted-publisher migration.
+
 Published assets and cumulative appcast snapshots are immutable. A failed
 pre-publication run may resume its matching draft. A post-publication problem
 uses the documented feed disable/restore path and never replaces assets.

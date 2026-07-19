@@ -64,10 +64,12 @@
     "approvalRequiredExitCode": 20,
     "safetyErrorExitCode": 21,
     "repository": "cbusillo/BD_to_AVP",
+    "releaseActor": "shiny-code-bot",
     "approvalActor": "cbusillo",
     "requiredBranch": "main",
     "requiredEvent": "workflow_dispatch",
     "approvalEnvironment": "macos-signing",
+    "engineWorkflowPath": ".github/workflows/release-engine.yml",
     "workflows": {
       "Release from protected main": {
         "path": ".github/workflows/briefcase.yml",
@@ -83,6 +85,7 @@
     "releaseProcess": "docs/release-process.md",
     "releaseWorkflows": [
       ".github/workflows/briefcase.yml",
+      ".github/workflows/release-engine.yml",
       ".github/workflows/sparkle-pages.yml",
       ".github/workflows/manage-sparkle-pages.yml"
     ]

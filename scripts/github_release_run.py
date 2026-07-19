@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol, cast
 from urllib.parse import quote
 
+from scripts.release_workflow_policy import ENGINE_WORKFLOW_PATH, OPERATOR_WORKFLOW_PATH
+
 
 EXIT_SUCCESS = 0
 EXIT_FAILED = 1
@@ -24,7 +26,7 @@ REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 NONTERMINAL_STATUSES = {"in_progress", "pending", "queued", "requested"}
 REPOSITORY = "cbusillo/BD_to_AVP"
 WORKFLOW_POLICIES = {
-    "Release from protected main": (".github/workflows/briefcase.yml", 101_708_423),
+    "Release from protected main": (OPERATOR_WORKFLOW_PATH, 101_708_423),
 }
 ALLOWED_WORKFLOWS = tuple(WORKFLOW_POLICIES)
 REQUIRED_BRANCH = "main"
@@ -156,6 +158,7 @@ class RunExpectation:
     branch: str = REQUIRED_BRANCH
     event: str = REQUIRED_EVENT
     environment: str = REQUIRED_ENVIRONMENT
+    engine_workflow_path: str = ENGINE_WORKFLOW_PATH
 
     @property
     def run_endpoint(self) -> str:
@@ -176,6 +179,14 @@ class RunExpectation:
     @property
     def workflow_id(self) -> int:
         return WORKFLOW_POLICIES[self.workflow][1]
+
+    @property
+    def operator_workflow_ref(self) -> str:
+        return f"{self.repository}/{self.workflow_path}@refs/heads/{self.branch}"
+
+    @property
+    def engine_workflow_ref(self) -> str:
+        return f"{self.repository}/{self.engine_workflow_path}@refs/heads/{self.branch}"
 
 
 Emitter = Callable[[dict[str, object]], None]
@@ -221,6 +232,8 @@ def validate_expectation(expectation: RunExpectation) -> None:
         raise ReleaseRunError(f"Release guard requires event {REQUIRED_EVENT!r}.")
     if expectation.environment != REQUIRED_ENVIRONMENT:
         raise ReleaseRunError(f"Release guard requires environment {REQUIRED_ENVIRONMENT!r}.")
+    if expectation.engine_workflow_path != ENGINE_WORKFLOW_PATH:
+        raise ReleaseRunError(f"Release guard requires engine workflow path {ENGINE_WORKFLOW_PATH!r}.")
 
 
 def validate_run_identity(run: Mapping[str, Any], expectation: RunExpectation) -> tuple[str, str, str, str, int]:
@@ -282,6 +295,11 @@ def build_approval_fingerprint(
             "workflow": expectation.workflow,
             "workflow_path": expectation.workflow_path,
             "workflow_id": expectation.workflow_id,
+            "operator_workflow_ref": expectation.operator_workflow_ref,
+            "operator_workflow_sha": expectation.head_sha,
+            "engine_workflow_path": expectation.engine_workflow_path,
+            "engine_workflow_ref": expectation.engine_workflow_ref,
+            "engine_workflow_sha": expectation.head_sha,
             "head_sha": expectation.head_sha,
             "branch": expectation.branch,
             "event": expectation.event,
@@ -422,6 +440,10 @@ def watch_release_run(
                     "branch": expectation.branch,
                     "environment": expectation.environment,
                     "environment_id": environment_id,
+                    "operator_workflow_ref": expectation.operator_workflow_ref,
+                    "operator_workflow_sha": expectation.head_sha,
+                    "engine_workflow_ref": expectation.engine_workflow_ref,
+                    "engine_workflow_sha": expectation.head_sha,
                     "reviewers": reviewers,
                     "current_user_can_approve": can_approve,
                     "run_actor": run_actor,
@@ -538,6 +560,10 @@ def approve_release_run(
             "branch": expectation.branch,
             "environment": expectation.environment,
             "environment_id": environment_id,
+            "operator_workflow_ref": expectation.operator_workflow_ref,
+            "operator_workflow_sha": expectation.head_sha,
+            "engine_workflow_ref": expectation.engine_workflow_ref,
+            "engine_workflow_sha": expectation.head_sha,
             "actor": APPROVAL_ACTOR,
             "run_actor": run_actor,
             "triggering_actor": triggering_actor,
