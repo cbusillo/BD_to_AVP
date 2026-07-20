@@ -28,6 +28,14 @@ jobs:
       operator_run_attempt: ${{ github.run_attempt }}
       operator_actor: ${{ github.actor }}
       operator_triggering_actor: ${{ github.triggering_actor }}
+    secrets:
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      CERTIFICATE: ${{ secrets.CERTIFICATE }}
+      CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+      DEV_ID: ${{ secrets.DEV_ID }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      SPARKLE_EDDSA_PRIVATE_KEY: ${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}
+      TEAM_ID: ${{ secrets.TEAM_ID }}
     permissions:
       actions: read
       attestations: write
