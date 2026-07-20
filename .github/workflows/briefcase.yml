@@ -1,5 +1,5 @@
 ---
-name: Release from protected main
+name: Stable
 
 "on":
   workflow_dispatch:
@@ -55,7 +55,9 @@ jobs:
         env:
           ENGINE_WORKFLOW_REF: ${{ needs.release.outputs.engine_workflow_ref }}
           ENGINE_WORKFLOW_SHA: ${{ needs.release.outputs.engine_workflow_sha }}
+          RELEASE_ROUTE: ${{ needs.release.outputs.release_route }}
           OPERATOR_WORKFLOW_REF: ${{ needs.release.outputs.operator_workflow_ref }}
+          OPERATOR_WORKFLOW_PATH: ${{ needs.release.outputs.operator_workflow_path }}
           OPERATOR_WORKFLOW_SHA: ${{ needs.release.outputs.operator_workflow_sha }}
           RELEASE_POLICY_FINGERPRINT: ${{ needs.release.outputs.release_policy_fingerprint }}
           RELEASE_SHA: ${{ needs.release.outputs.release_sha }}
@@ -68,6 +70,8 @@ jobs:
           EXPECTED_ENGINE_REF="$GITHUB_REPOSITORY/.github/workflows/release-engine.yml@refs/heads/main"
           test "$GITHUB_REF" = "refs/heads/main"
           test "$GITHUB_SHA" = "$RELEASE_SHA"
+          test "$RELEASE_ROUTE" = "stable"
+          test "$OPERATOR_WORKFLOW_PATH" = ".github/workflows/briefcase.yml"
           test "$OPERATOR_WORKFLOW_REF" = "$EXPECTED_OPERATOR_REF"
           test "$OPERATOR_WORKFLOW_SHA" = "$GITHUB_SHA"
           test "$ENGINE_WORKFLOW_REF" = "$EXPECTED_ENGINE_REF"

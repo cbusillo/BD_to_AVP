@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol, cast
 from urllib.parse import quote
 
-from scripts.release_workflow_policy import ENGINE_WORKFLOW_PATH, OPERATOR_WORKFLOW_PATH
+from scripts.release_workflow_policy import ENGINE_WORKFLOW_PATH, OPERATOR_WORKFLOWS, REQUIRED_ACTOR
 
 
 EXIT_SUCCESS = 0
@@ -25,9 +25,7 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 NONTERMINAL_STATUSES = {"in_progress", "pending", "queued", "requested"}
 REPOSITORY = "cbusillo/BD_to_AVP"
-WORKFLOW_POLICIES = {
-    "Release from protected main": (OPERATOR_WORKFLOW_PATH, 101_708_423),
-}
+WORKFLOW_POLICIES = OPERATOR_WORKFLOWS
 ALLOWED_WORKFLOWS = tuple(WORKFLOW_POLICIES)
 REQUIRED_BRANCH = "main"
 REQUIRED_EVENT = "workflow_dispatch"
@@ -174,11 +172,11 @@ class RunExpectation:
 
     @property
     def workflow_path(self) -> str:
-        return WORKFLOW_POLICIES[self.workflow][0]
+        return WORKFLOW_POLICIES[self.workflow].path
 
     @property
-    def workflow_id(self) -> int:
-        return WORKFLOW_POLICIES[self.workflow][1]
+    def route(self) -> str:
+        return WORKFLOW_POLICIES[self.workflow].route
 
     @property
     def operator_workflow_ref(self) -> str:
@@ -187,6 +185,16 @@ class RunExpectation:
     @property
     def engine_workflow_ref(self) -> str:
         return f"{self.repository}/{self.engine_workflow_path}@refs/heads/{self.branch}"
+
+
+@dataclass(frozen=True)
+class ValidatedRunIdentity:
+    status: str
+    conclusion: str
+    run_actor: str
+    triggering_actor: str
+    run_attempt: int
+    workflow_id: int
 
 
 Emitter = Callable[[dict[str, object]], None]
@@ -236,7 +244,7 @@ def validate_expectation(expectation: RunExpectation) -> None:
         raise ReleaseRunError(f"Release guard requires engine workflow path {ENGINE_WORKFLOW_PATH!r}.")
 
 
-def validate_run_identity(run: Mapping[str, Any], expectation: RunExpectation) -> tuple[str, str, str, str, int]:
+def validate_run_identity(run: Mapping[str, Any], expectation: RunExpectation) -> ValidatedRunIdentity:
     actual = {
         "workflow": _string(run, "name", "Workflow run"),
         "workflow_path": _string(run, "path", "Workflow run"),
@@ -257,10 +265,8 @@ def validate_run_identity(run: Mapping[str, Any], expectation: RunExpectation) -
     if mismatches:
         raise ReleaseRunError("Workflow run identity mismatch: " + ", ".join(mismatches))
     workflow_id = run.get("workflow_id")
-    if workflow_id != expectation.workflow_id:
-        raise ReleaseRunError(
-            f"Workflow run ID {workflow_id!r} does not match expected workflow ID {expectation.workflow_id!r}."
-        )
+    if isinstance(workflow_id, bool) or not isinstance(workflow_id, int) or workflow_id <= 0:
+        raise ReleaseRunError("Workflow run workflow ID must be a positive integer returned by GitHub.")
     status = _string(run, "status", "Workflow run")
     conclusion = run.get("conclusion")
     if conclusion is None:
@@ -273,28 +279,45 @@ def validate_run_identity(run: Mapping[str, Any], expectation: RunExpectation) -
     actor_login = _string(actor, "login", "Workflow run actor")
     triggering_actor = _mapping(run.get("triggering_actor"), "Workflow run triggering actor")
     triggering_actor_login = _string(triggering_actor, "login", "Workflow run triggering actor")
+    if actor_login != REQUIRED_ACTOR:
+        raise ReleaseRunError(f"Workflow run actor must be {REQUIRED_ACTOR!r}, not {actor_login!r}.")
+    if triggering_actor_login != REQUIRED_ACTOR:
+        raise ReleaseRunError(
+            f"Workflow run triggering actor must be {REQUIRED_ACTOR!r}, not {triggering_actor_login!r}."
+        )
     run_attempt = run.get("run_attempt")
     if not isinstance(run_attempt, int) or run_attempt <= 0:
         raise ReleaseRunError("Workflow run attempt must be a positive integer.")
-    return status, conclusion_text, actor_login, triggering_actor_login, run_attempt
+    return ValidatedRunIdentity(
+        status=status,
+        conclusion=conclusion_text,
+        run_actor=actor_login,
+        triggering_actor=triggering_actor_login,
+        run_attempt=run_attempt,
+        workflow_id=workflow_id,
+    )
 
 
 def build_approval_fingerprint(
     expectation: RunExpectation,
     *,
+    workflow_id: int,
     environment_id: int,
     run_attempt: int,
     run_actor: str,
     triggering_actor: str,
     reviewer: str = APPROVAL_ACTOR,
 ) -> str:
+    if isinstance(workflow_id, bool) or not isinstance(workflow_id, int) or workflow_id <= 0:
+        raise ReleaseRunError("Workflow ID must be a positive integer returned by GitHub.")
     payload = json.dumps(
         {
             "repository": expectation.repository,
             "run_id": expectation.run_id,
             "workflow": expectation.workflow,
             "workflow_path": expectation.workflow_path,
-            "workflow_id": expectation.workflow_id,
+            "workflow_id": workflow_id,
+            "release_route": expectation.route,
             "operator_workflow_ref": expectation.operator_workflow_ref,
             "operator_workflow_sha": expectation.head_sha,
             "engine_workflow_path": expectation.engine_workflow_path,
@@ -377,22 +400,25 @@ def watch_release_run(
     previous_snapshot: tuple[str, str] | None = None
     while True:
         run = _mapping(client.get_json(expectation.run_endpoint), "Workflow run")
-        status, conclusion, run_actor, triggering_actor, run_attempt = validate_run_identity(run, expectation)
-        if status == "completed":
-            event = "succeeded" if conclusion == "success" else "failed"
+        identity = validate_run_identity(run, expectation)
+        if identity.status == "completed":
+            event = "succeeded" if identity.conclusion == "success" else "failed"
             emit(
                 {
                     "event": event,
                     "run_id": expectation.run_id,
                     "workflow": expectation.workflow,
+                    "workflow_id": identity.workflow_id,
+                    "workflow_path": expectation.workflow_path,
+                    "release_route": expectation.route,
                     "head_sha": expectation.head_sha,
-                    "conclusion": conclusion,
-                    "run_actor": run_actor,
-                    "triggering_actor": triggering_actor,
-                    "run_attempt": run_attempt,
+                    "conclusion": identity.conclusion,
+                    "run_actor": identity.run_actor,
+                    "triggering_actor": identity.triggering_actor,
+                    "run_attempt": identity.run_attempt,
                 }
             )
-            return EXIT_SUCCESS if conclusion == "success" else EXIT_FAILED
+            return EXIT_SUCCESS if identity.conclusion == "success" else EXIT_FAILED
 
         branch_sha = current_branch_sha(client, expectation)
         if branch_sha != expectation.head_sha:
@@ -408,7 +434,7 @@ def watch_release_run(
             )
             return EXIT_SAFETY_ERROR
 
-        if status == "waiting":
+        if identity.status == "waiting":
             deployment = expected_pending_deployment(
                 client.get_json(expectation.pending_deployments_endpoint), expectation
             )
@@ -426,16 +452,20 @@ def watch_release_run(
                 )
             fingerprint = build_approval_fingerprint(
                 expectation,
+                workflow_id=identity.workflow_id,
                 environment_id=environment_id,
-                run_attempt=run_attempt,
-                run_actor=run_actor,
-                triggering_actor=triggering_actor,
+                run_attempt=identity.run_attempt,
+                run_actor=identity.run_actor,
+                triggering_actor=identity.triggering_actor,
             )
             emit(
                 {
                     "event": "approval_required",
                     "run_id": expectation.run_id,
                     "workflow": expectation.workflow,
+                    "workflow_id": identity.workflow_id,
+                    "workflow_path": expectation.workflow_path,
+                    "release_route": expectation.route,
                     "head_sha": expectation.head_sha,
                     "branch": expectation.branch,
                     "environment": expectation.environment,
@@ -446,26 +476,29 @@ def watch_release_run(
                     "engine_workflow_sha": expectation.head_sha,
                     "reviewers": reviewers,
                     "current_user_can_approve": can_approve,
-                    "run_actor": run_actor,
-                    "triggering_actor": triggering_actor,
-                    "run_attempt": run_attempt,
+                    "run_actor": identity.run_actor,
+                    "triggering_actor": identity.triggering_actor,
+                    "run_attempt": identity.run_attempt,
                     "approval_fingerprint": fingerprint,
                 }
             )
             return EXIT_APPROVAL_REQUIRED
 
-        if status not in NONTERMINAL_STATUSES:
-            raise ReleaseRunError(f"Unexpected workflow run status: {status!r}.")
-        snapshot = (status, conclusion)
+        if identity.status not in NONTERMINAL_STATUSES:
+            raise ReleaseRunError(f"Unexpected workflow run status: {identity.status!r}.")
+        snapshot = (identity.status, identity.conclusion)
         if snapshot != previous_snapshot:
             emit(
                 {
                     "event": "running",
                     "run_id": expectation.run_id,
                     "workflow": expectation.workflow,
+                    "workflow_id": identity.workflow_id,
+                    "workflow_path": expectation.workflow_path,
+                    "release_route": expectation.route,
                     "head_sha": expectation.head_sha,
                     "branch": expectation.branch,
-                    "status": status,
+                    "status": identity.status,
                 }
             )
             previous_snapshot = snapshot
@@ -506,10 +539,10 @@ def approve_release_run(
         )
 
     run = _mapping(client.get_json(expectation.run_endpoint, active_auth=True), "Workflow run")
-    status, _, run_actor, triggering_actor, run_attempt = validate_run_identity(run, expectation)
-    if status != "waiting":
-        raise ReleaseRunError(f"Workflow run must be waiting for approval, not {status!r}.")
-    if run_actor == APPROVAL_ACTOR or triggering_actor == APPROVAL_ACTOR:
+    identity = validate_run_identity(run, expectation)
+    if identity.status != "waiting":
+        raise ReleaseRunError(f"Workflow run must be waiting for approval, not {identity.status!r}.")
+    if identity.run_actor == APPROVAL_ACTOR or identity.triggering_actor == APPROVAL_ACTOR:
         raise ReleaseRunError("Approval actor must not approve a workflow run dispatched by the same account.")
     branch_sha = current_branch_sha(client, expectation, active_auth=True)
     if branch_sha != expectation.head_sha:
@@ -534,10 +567,11 @@ def approve_release_run(
         raise ReleaseRunError("Pending deployment environment ID must be a positive integer.")
     expected_fingerprint = build_approval_fingerprint(
         expectation,
+        workflow_id=identity.workflow_id,
         environment_id=environment_id,
-        run_attempt=run_attempt,
-        run_actor=run_actor,
-        triggering_actor=triggering_actor,
+        run_attempt=identity.run_attempt,
+        run_actor=identity.run_actor,
+        triggering_actor=identity.triggering_actor,
     )
     if approval_fingerprint != expected_fingerprint:
         raise ReleaseRunError("Approval fingerprint does not match the pending deployment.")
@@ -556,6 +590,9 @@ def approve_release_run(
             "event": "approved",
             "run_id": expectation.run_id,
             "workflow": expectation.workflow,
+            "workflow_id": identity.workflow_id,
+            "workflow_path": expectation.workflow_path,
+            "release_route": expectation.route,
             "head_sha": expectation.head_sha,
             "branch": expectation.branch,
             "environment": expectation.environment,
@@ -565,9 +602,9 @@ def approve_release_run(
             "engine_workflow_ref": expectation.engine_workflow_ref,
             "engine_workflow_sha": expectation.head_sha,
             "actor": APPROVAL_ACTOR,
-            "run_actor": run_actor,
-            "triggering_actor": triggering_actor,
-            "run_attempt": run_attempt,
+            "run_actor": identity.run_actor,
+            "triggering_actor": identity.triggering_actor,
+            "run_attempt": identity.run_attempt,
             "approval_fingerprint": expected_fingerprint,
         }
     )

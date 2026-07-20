@@ -18,7 +18,6 @@ from urllib.request import Request, urlopen
 
 
 REPOSITORY = "cbusillo/BD_to_AVP"
-OPERATOR_WORKFLOW_PATH = ".github/workflows/briefcase.yml"
 ENGINE_WORKFLOW_PATH = ".github/workflows/release-engine.yml"
 REQUIRED_REF = "refs/heads/main"
 REQUIRED_EVENT = "workflow_dispatch"
@@ -26,6 +25,34 @@ REQUIRED_ACTOR = "shiny-code-bot"
 APPROVAL_ENVIRONMENT = "macos-signing"
 OIDC_AUDIENCE = "bd-to-avp-release-engine"
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+STABLE_ROUTE = "stable"
+PRERELEASE_ROUTE = "prerelease"
+STABLE_WORKFLOW_NAME = "Stable"
+PRERELEASE_WORKFLOW_NAME = "Prerelease"
+STABLE_OPERATOR_WORKFLOW_PATH = ".github/workflows/briefcase.yml"
+PRERELEASE_OPERATOR_WORKFLOW_PATH = ".github/workflows/prerelease.yml"
+
+
+@dataclass(frozen=True)
+class OperatorWorkflowPolicy:
+    name: str
+    path: str
+    route: str
+
+
+OPERATOR_WORKFLOWS = {
+    STABLE_WORKFLOW_NAME: OperatorWorkflowPolicy(
+        name=STABLE_WORKFLOW_NAME,
+        path=STABLE_OPERATOR_WORKFLOW_PATH,
+        route=STABLE_ROUTE,
+    ),
+    PRERELEASE_WORKFLOW_NAME: OperatorWorkflowPolicy(
+        name=PRERELEASE_WORKFLOW_NAME,
+        path=PRERELEASE_OPERATOR_WORKFLOW_PATH,
+        route=PRERELEASE_ROUTE,
+    ),
+}
+OPERATOR_ROUTES = {policy.route: policy for policy in OPERATOR_WORKFLOWS.values()}
 
 
 class ReleaseWorkflowPolicyError(RuntimeError):
@@ -51,10 +78,29 @@ def _full_sha(value: str, description: str) -> str:
     return value
 
 
+def _boolean(value: str, description: str) -> bool:
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise ReleaseWorkflowPolicyError(f"{description} must be 'true' or 'false'.")
+
+
 def _mapping(value: object, description: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ReleaseWorkflowPolicyError(f"{description} must be a JSON object.")
     return cast(Mapping[str, Any], value)
+
+
+def _operator_policy_from_ref(workflow_ref: str) -> OperatorWorkflowPolicy:
+    for policy in OPERATOR_WORKFLOWS.values():
+        expected_ref = f"{REPOSITORY}/{policy.path}@{REQUIRED_REF}"
+        if workflow_ref == expected_ref:
+            return policy
+    expected = tuple(f"{REPOSITORY}/{policy.path}@{REQUIRED_REF}" for policy in OPERATOR_WORKFLOWS.values())
+    raise ReleaseWorkflowPolicyError(
+        f"Release operator workflow ref {workflow_ref!r} does not match an approved operator workflow: {expected!r}."
+    )
 
 
 def _decode_oidc_claims(token: str) -> Mapping[str, Any]:
@@ -142,6 +188,7 @@ class ReleaseWorkflowEvidence:
     event_name: str
     ref: str
     release_sha: str
+    operator_route: str
     operator_workflow_ref: str
     operator_workflow_sha: str
     engine_workflow_ref: str
@@ -153,8 +200,12 @@ class ReleaseWorkflowEvidence:
     triggering_actor: str
 
     @property
+    def operator_workflow_path(self) -> str:
+        return OPERATOR_ROUTES[self.operator_route].path
+
+    @property
     def expected_operator_workflow_ref(self) -> str:
-        return f"{REPOSITORY}/{OPERATOR_WORKFLOW_PATH}@{REQUIRED_REF}"
+        return f"{REPOSITORY}/{self.operator_workflow_path}@{REQUIRED_REF}"
 
     @property
     def expected_engine_workflow_ref(self) -> str:
@@ -169,7 +220,9 @@ class ReleaseWorkflowEvidence:
                 "engine_workflow_sha": self.engine_workflow_sha,
                 "event": self.event_name,
                 "head_sha": self.release_sha,
+                "operator_route": self.operator_route,
                 "operator_workflow_ref": self.operator_workflow_ref,
+                "operator_workflow_path": self.operator_workflow_path,
                 "operator_workflow_sha": self.operator_workflow_sha,
                 "ref": self.ref,
                 "repository": self.repository,
@@ -183,13 +236,45 @@ class ReleaseWorkflowEvidence:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+@dataclass(frozen=True)
+class ReleaseRouteMetadata:
+    operator_name: str
+    operator_route: str
+    operator_workflow_path: str
+    channel: str
+    prerelease: bool
+    make_latest: bool
+    publish_pypi: bool
+
+    def summary(self) -> str:
+        yes_no = {True: "Yes", False: "No"}
+        return "\n".join(
+            (
+                "### Validated release route",
+                "",
+                "| Field | Validated value |",
+                "| --- | --- |",
+                f"| Operator route | {self.operator_name} |",
+                f"| Operator workflow | `{self.operator_workflow_path}` |",
+                f"| Committed release stage | `{self.channel}` |",
+                f"| GitHub prerelease | {yes_no[self.prerelease]} |",
+                f"| GitHub Latest | {yes_no[self.make_latest]} |",
+                f"| PyPI publication | {yes_no[self.publish_pypi]} |",
+                "",
+            )
+        )
+
+
 def validate_engine_environment(environment: Mapping[str, str]) -> ReleaseWorkflowEvidence:
+    operator_workflow_ref = _required(environment, "RELEASE_OPERATOR_WORKFLOW_REF")
+    operator_policy = _operator_policy_from_ref(operator_workflow_ref)
     evidence = ReleaseWorkflowEvidence(
         repository=_required(environment, "RELEASE_REPOSITORY"),
         event_name=_required(environment, "RELEASE_EVENT_NAME"),
         ref=_required(environment, "RELEASE_REF"),
         release_sha=_full_sha(_required(environment, "RELEASE_SHA"), "Release SHA"),
-        operator_workflow_ref=_required(environment, "RELEASE_OPERATOR_WORKFLOW_REF"),
+        operator_route=operator_policy.route,
+        operator_workflow_ref=operator_workflow_ref,
         operator_workflow_sha=_full_sha(
             _required(environment, "RELEASE_OPERATOR_WORKFLOW_SHA"),
             "Operator workflow SHA",
@@ -276,9 +361,44 @@ def validate_engine_environment(environment: Mapping[str, str]) -> ReleaseWorkfl
     return evidence
 
 
+def validate_release_metadata(environment: Mapping[str, str]) -> ReleaseRouteMetadata:
+    operator_policy = _operator_policy_from_ref(_required(environment, "RELEASE_OPERATOR_WORKFLOW_REF"))
+    metadata = ReleaseRouteMetadata(
+        operator_name=operator_policy.name,
+        operator_route=operator_policy.route,
+        operator_workflow_path=operator_policy.path,
+        channel=_required(environment, "RELEASE_CHANNEL"),
+        prerelease=_boolean(_required(environment, "RELEASE_PRERELEASE"), "GitHub prerelease policy"),
+        make_latest=_boolean(_required(environment, "RELEASE_MAKE_LATEST"), "GitHub Latest policy"),
+        publish_pypi=_boolean(_required(environment, "RELEASE_PUBLISH_PYPI"), "PyPI publication policy"),
+    )
+    if metadata.operator_route == STABLE_ROUTE:
+        valid = (
+            metadata.channel == "stable" and not metadata.prerelease and metadata.make_latest and metadata.publish_pypi
+        )
+        requirement = "stable, non-prerelease, Latest, and PyPI-enabled"
+    else:
+        valid = (
+            metadata.channel in {"alpha", "beta", "rc"}
+            and metadata.prerelease
+            and not metadata.make_latest
+            and not metadata.publish_pypi
+        )
+        requirement = "alpha, beta, or rc; prerelease; non-Latest; and PyPI-disabled"
+    if not valid:
+        raise ReleaseWorkflowPolicyError(
+            f"{metadata.operator_name} operator requires committed metadata that is {requirement}; received "
+            f"channel={metadata.channel!r}, prerelease={metadata.prerelease!r}, "
+            f"make_latest={metadata.make_latest!r}, publish_pypi={metadata.publish_pypi!r}."
+        )
+    return metadata
+
+
 def _write_github_output(path: Path, evidence: ReleaseWorkflowEvidence) -> None:
     outputs = {
         "policy_fingerprint": evidence.fingerprint(),
+        "release_route": evidence.operator_route,
+        "operator_workflow_path": evidence.operator_workflow_path,
         "operator_workflow_ref": evidence.operator_workflow_ref,
         "operator_workflow_sha": evidence.operator_workflow_sha,
         "engine_workflow_ref": evidence.engine_workflow_ref,
@@ -293,20 +413,29 @@ def _write_github_output(path: Path, evidence: ReleaseWorkflowEvidence) -> None:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate the guarded release workflow call boundary.")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    engine = subparsers.add_parser("engine", help="Validate the Stable operator and reusable engine identities.")
+    engine = subparsers.add_parser("engine", help="Validate an operator route and reusable engine identity.")
     engine.add_argument("--github-output", type=Path)
     engine.add_argument("--expected-fingerprint")
+    metadata = subparsers.add_parser("metadata", help="Validate committed metadata for the trusted operator route.")
+    metadata.add_argument("--github-step-summary", type=Path)
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None, *, environment: Mapping[str, str] | None = None) -> int:
     args = parse_args(argv)
-    evidence = validate_engine_environment(_with_oidc_workflow_identity(environment or os.environ))
-    fingerprint = evidence.fingerprint()
-    if args.expected_fingerprint is not None and not hmac.compare_digest(args.expected_fingerprint, fingerprint):
-        raise ReleaseWorkflowPolicyError("Release policy fingerprint changed across the approval boundary.")
-    if args.github_output is not None:
-        _write_github_output(args.github_output, evidence)
+    values = os.environ if environment is None else environment
+    if args.command == "engine":
+        evidence = validate_engine_environment(_with_oidc_workflow_identity(values))
+        fingerprint = evidence.fingerprint()
+        if args.expected_fingerprint is not None and not hmac.compare_digest(args.expected_fingerprint, fingerprint):
+            raise ReleaseWorkflowPolicyError("Release policy fingerprint changed across the approval boundary.")
+        if args.github_output is not None:
+            _write_github_output(args.github_output, evidence)
+    else:
+        metadata = validate_release_metadata(values)
+        if args.github_step_summary is not None:
+            with args.github_step_summary.open("a", encoding="utf-8") as handle:
+                handle.write(metadata.summary())
     return 0
 
 

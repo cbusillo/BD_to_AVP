@@ -1,0 +1,35 @@
+---
+name: Prerelease
+
+"on":
+  workflow_dispatch:
+    inputs:
+      release_notes:
+        description: Optional notes prepended to the generated GitHub release notes
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Run guarded signed-release engine
+    uses: ./.github/workflows/release-engine.yml
+    with:
+      release_notes: ${{ inputs.release_notes }}
+      release_sha: ${{ github.sha }}
+      operator_workflow_ref: ${{ github.workflow_ref }}
+      operator_workflow_sha: ${{ github.workflow_sha }}
+      operator_run_id: ${{ github.run_id }}
+      operator_run_attempt: ${{ github.run_attempt }}
+      operator_actor: ${{ github.actor }}
+      operator_triggering_actor: ${{ github.triggering_actor }}
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+      pages: write

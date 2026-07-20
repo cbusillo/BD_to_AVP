@@ -76,6 +76,12 @@ name: Signed release engine
       release_policy_fingerprint:
         description: Fingerprint binding the operator run to this engine execution
         value: ${{ jobs.policy.outputs.policy_fingerprint }}
+      release_route:
+        description: Trusted Stable or Prerelease route derived from the operator workflow path
+        value: ${{ jobs.policy.outputs.release_route }}
+      operator_workflow_path:
+        description: Validated operator workflow path
+        value: ${{ jobs.policy.outputs.operator_workflow_path }}
       operator_workflow_ref:
         description: Validated operator workflow ref
         value: ${{ jobs.policy.outputs.operator_workflow_ref }}
@@ -112,13 +118,15 @@ jobs:
       id-token: write
     outputs:
       policy_fingerprint: ${{ steps.policy.outputs.policy_fingerprint }}
+      release_route: ${{ steps.policy.outputs.release_route }}
+      operator_workflow_path: ${{ steps.policy.outputs.operator_workflow_path }}
       operator_workflow_ref: ${{ steps.policy.outputs.operator_workflow_ref }}
       operator_workflow_sha: ${{ steps.policy.outputs.operator_workflow_sha }}
       engine_workflow_ref: ${{ steps.policy.outputs.engine_workflow_ref }}
       engine_workflow_sha: ${{ steps.policy.outputs.engine_workflow_sha }}
       release_sha: ${{ steps.policy.outputs.release_sha }}
     steps:
-      - name: Require the protected Stable operator context
+      - name: Require a protected release operator context
         env:
           ACTUAL_REPOSITORY: ${{ github.repository }}
           ACTUAL_EVENT_NAME: ${{ github.event_name }}
@@ -139,11 +147,15 @@ jobs:
           INPUT_OPERATOR_TRIGGERING_ACTOR: ${{ inputs.operator_triggering_actor }}
         run: |
           set -euo pipefail
-          EXPECTED_OPERATOR_REF="cbusillo/BD_to_AVP/.github/workflows/briefcase.yml@refs/heads/main"
+          STABLE_OPERATOR_REF="cbusillo/BD_to_AVP/.github/workflows/briefcase.yml@refs/heads/main"
+          PRERELEASE_OPERATOR_REF="cbusillo/BD_to_AVP/.github/workflows/prerelease.yml@refs/heads/main"
           test "$ACTUAL_REPOSITORY" = "cbusillo/BD_to_AVP"
           test "$ACTUAL_EVENT_NAME" = "workflow_dispatch"
           test "$ACTUAL_REF" = "refs/heads/main"
-          test "$ACTUAL_OPERATOR_WORKFLOW_REF" = "$EXPECTED_OPERATOR_REF"
+          case "$ACTUAL_OPERATOR_WORKFLOW_REF" in
+            "$STABLE_OPERATOR_REF"|"$PRERELEASE_OPERATOR_REF") ;;
+            *) echo "Unapproved release operator workflow." >&2; exit 1 ;;
+          esac
           test "$ACTUAL_OPERATOR_WORKFLOW_SHA" = "$ACTUAL_SHA"
           test "$ACTUAL_ACTOR" = "shiny-code-bot"
           test "$ACTUAL_TRIGGERING_ACTOR" = "shiny-code-bot"
@@ -236,6 +248,17 @@ jobs:
       - name: Derive committed release metadata
         id: metadata
         run: python scripts/release.py metadata --github-output "$GITHUB_OUTPUT"
+
+      - name: Validate route and summarize publication effects
+        env:
+          RELEASE_OPERATOR_WORKFLOW_REF: ${{ needs.policy.outputs.operator_workflow_ref }}
+          RELEASE_CHANNEL: ${{ steps.metadata.outputs.channel }}
+          RELEASE_PRERELEASE: ${{ steps.metadata.outputs.prerelease }}
+          RELEASE_MAKE_LATEST: ${{ steps.metadata.outputs.make_latest }}
+          RELEASE_PUBLISH_PYPI: ${{ steps.metadata.outputs.publish_pypi }}
+        run: >-
+          python scripts/release_workflow_policy.py metadata
+          --github-step-summary "$GITHUB_STEP_SUMMARY"
 
       - name: Reject existing release identity
         env:
