@@ -141,6 +141,25 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertFalse(metadata.make_latest)
         self.assertFalse(metadata.publish_pypi)
 
+    def test_beta3_seed_metadata_uses_the_production_beta_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root, version="0.3.0b3", build="148")
+            macos_project_path = make_macos_project(root, version="0.3.0b3", build="148")
+
+            metadata = release.load_release_metadata(pyproject_path, lock_path, macos_project_path)
+
+        self.assertEqual(metadata.package_version, "0.3.0b3")
+        self.assertEqual(metadata.public_version, "0.3.0-beta.3")
+        self.assertEqual(metadata.build_version, "148")
+        self.assertEqual(metadata.release_tag, "v0.3.0-beta.3")
+        self.assertEqual(metadata.release_name, "v0.3.0-beta.3")
+        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.3.dmg")
+        self.assertEqual(metadata.channel, "beta")
+        self.assertTrue(metadata.prerelease)
+        self.assertFalse(metadata.make_latest)
+        self.assertFalse(metadata.publish_pypi)
+
     def test_metadata_maps_internal_versions_to_public_release_identity(self) -> None:
         cases = (
             ("1.2.4a1", "1.2.4-alpha.1", "alpha", True),

@@ -123,6 +123,54 @@ class SparkleAppcastTests(unittest.TestCase):
             [None, "rc", "beta", "alpha", None],
         )
 
+    def test_beta3_seed_uses_a_cumulative_production_beta_item_without_retired_previews(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            empty_feed = root / "empty.xml"
+            stable_feed = root / "stable.xml"
+            beta3_feed = root / "beta3.xml"
+            make_empty_feed(empty_feed)
+
+            for retired_short_version in ("0.3.0b1", "0.3.0b2"):
+                with (
+                    self.subTest(retired_short_version=retired_short_version),
+                    self.assertRaisesRegex(sparkle_appcast.AppcastError, "retired preview identity"),
+                ):
+                    sparkle_appcast.append_item(
+                        empty_feed,
+                        root / f"{retired_short_version}.xml",
+                        item("147", retired_short_version, "beta"),
+                    )
+
+            sparkle_appcast.append_item(empty_feed, stable_feed, item("146", "0.2.143", None))
+            sparkle_appcast.append_item(stable_feed, beta3_feed, item("148", "0.3.0b3", "beta"))
+            sparkle_appcast.validate_release_snapshot(beta3_feed, "0.3.0b3")
+            sparkle_appcast.validate_release_tag_snapshot(beta3_feed, "v0.3.0-beta.3")
+            _, channel = sparkle_appcast.load_appcast(beta3_feed)
+            items = channel.findall("item")
+            beta3_item = items[0]
+            beta3_enclosure = beta3_item.find("enclosure")
+            if beta3_enclosure is None:
+                self.fail("Beta 3 appcast item is missing its enclosure")
+            appcast_text = beta3_feed.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [entry.findtext(f"{sparkle_appcast.SPARKLE}version") for entry in items],
+            ["148", "146"],
+        )
+        self.assertEqual(
+            [entry.findtext(f"{sparkle_appcast.SPARKLE}shortVersionString") for entry in items],
+            ["0.3.0b3", "0.2.143"],
+        )
+        self.assertEqual(beta3_item.findtext(f"{sparkle_appcast.SPARKLE}channel"), "beta")
+        self.assertEqual(
+            beta3_enclosure.get("url"),
+            "https://github.com/cbusillo/BD_to_AVP/releases/download/"
+            "v0.3.0-beta.3/3D-Blu-ray-to-Vision-Pro-0.3.0-beta.3.dmg",
+        )
+        self.assertNotIn("v0.3.0-beta.1", appcast_text)
+        self.assertNotIn("v0.3.0-beta.2", appcast_text)
+
     def test_rejects_non_monotonic_build(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
