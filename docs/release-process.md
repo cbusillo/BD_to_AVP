@@ -113,7 +113,9 @@ ancestor of the release commit, keeping prerelease notes incremental. A Stable
 release compares with the newest lower published production Stable tag rather
 than the latest prerelease, so its notes summarize the complete change set since
 the previous Stable. The retired preview tags are excluded before parsing or
-history selection.
+history selection. Stable-form tags through `v0.2.139`, plus the pulled
+`v0.2.141`, retain their historical GitHub prerelease classification; all other
+production tag and prerelease-flag mismatches fail closed.
 
 GitHub requests one maintainer approval when the run reaches the
 `macos-signing` environment. That approval authorizes the release intent for the
