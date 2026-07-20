@@ -1,16 +1,36 @@
 import copy
 import json
+import os
 import tempfile
 import unittest
 
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import quote
 
 from scripts import beta3_recovery_evidence as recovery_evidence
 
 
+EXPECTED_PRODUCTION_REPOSITORY = "cbusillo/BD_to_AVP"
+EXPECTED_PRERELEASE_WORKFLOW_REF = "cbusillo/BD_to_AVP/.github/workflows/prerelease.yml@refs/heads/main"
+
+
 def json_response(value: object) -> recovery_evidence.RemoteResponse:
     return recovery_evidence.RemoteResponse(status=200, body=json.dumps(value).encode("utf-8"))
+
+
+def github_actions_publication_environment(expected_sha: str) -> dict[str, str]:
+    return {
+        "GITHUB_ACTIONS": "true",
+        "GITHUB_REPOSITORY": EXPECTED_PRODUCTION_REPOSITORY,
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_REF_PROTECTED": "true",
+        "GITHUB_SHA": expected_sha,
+        "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "GITHUB_WORKFLOW_REF": EXPECTED_PRERELEASE_WORKFLOW_REF,
+        "GITHUB_ACTOR": "shiny-code-bot",
+        "GITHUB_TRIGGERING_ACTOR": "shiny-code-bot",
+    }
 
 
 class FakeFetcher:
@@ -141,6 +161,8 @@ class Beta3RecoveryEvidenceTests(unittest.TestCase):
         self.evidence = recovery_evidence.load_beta3_recovery_evidence()
 
     def test_reviewed_receipt_and_appcast_capture_are_digest_pinned(self) -> None:
+        self.assertEqual(recovery_evidence.PRODUCTION_REPOSITORY, EXPECTED_PRODUCTION_REPOSITORY)
+        self.assertEqual(recovery_evidence.PRERELEASE_WORKFLOW_REF, EXPECTED_PRERELEASE_WORKFLOW_REF)
         self.assertEqual(self.evidence["schema_version"], 2)
         self.assertEqual(self.evidence["repository_identity"]["id"], 771225421)
         self.assertEqual(self.evidence["pages"]["release_tag"], "v0.2.143")
@@ -183,6 +205,65 @@ class Beta3RecoveryEvidenceTests(unittest.TestCase):
             "push visibility",
         ):
             recovery_evidence.verify_beta3_remote_state(self.evidence, fetcher=FakeFetcher(responses))
+
+    def test_github_actions_contents_write_token_can_prove_draft_absence(self) -> None:
+        expected_sha = "a" * 40
+        responses = make_responses(self.evidence)
+        repository = str(self.evidence["repository"])
+        repository_url = f"{recovery_evidence.GITHUB_API_ROOT}/repos/{repository}"
+        repository_identity = json.loads(responses[repository_url].body)
+        repository_identity["permissions"] = {"push": False}
+        responses[repository_url] = json_response(repository_identity)
+
+        with patch.dict(os.environ, github_actions_publication_environment(expected_sha), clear=True):
+            recovery_evidence.verify_beta3_remote_state(
+                self.evidence,
+                fetcher=FakeFetcher(responses),
+                allow_beta3_draft=True,
+                expected_sha=expected_sha,
+                allow_github_actions_contents_write_token=True,
+            )
+
+    def test_github_actions_token_allowance_rejects_context_drift(self) -> None:
+        expected_sha = "a" * 40
+        expected_environment = github_actions_publication_environment(expected_sha)
+        for name in expected_environment:
+            for change in ("changed", "missing"):
+                with self.subTest(name=name, change=change):
+                    environment = dict(expected_environment)
+                    if change == "changed":
+                        environment[name] = "__wrong__"
+                    else:
+                        del environment[name]
+                    with patch.dict(os.environ, environment, clear=True):
+                        with self.assertRaisesRegex(
+                            recovery_evidence.Beta3RecoveryEvidenceError,
+                            "publication context mismatch",
+                        ):
+                            recovery_evidence.verify_beta3_remote_state(
+                                self.evidence,
+                                fetcher=FakeFetcher(make_responses(self.evidence)),
+                                allow_beta3_draft=True,
+                                expected_sha=expected_sha,
+                                allow_github_actions_contents_write_token=True,
+                            )
+
+    def test_github_actions_token_allowance_requires_publication_preflight(self) -> None:
+        with self.assertRaisesRegex(
+            recovery_evidence.Beta3RecoveryEvidenceError,
+            "valid only for publication preflight",
+        ):
+            recovery_evidence.verify_beta3_remote_state(
+                self.evidence,
+                fetcher=FakeFetcher(make_responses(self.evidence)),
+                allow_github_actions_contents_write_token=True,
+            )
+
+        with self.assertRaisesRegex(
+            recovery_evidence.Beta3RecoveryEvidenceError,
+            "requires --allow-beta3-draft",
+        ):
+            recovery_evidence.main(["--allow-github-actions-contents-write-token"])
 
     def test_live_remote_verifier_rejects_new_tag_or_artifact_state(self) -> None:
         repository = str(self.evidence["repository"])

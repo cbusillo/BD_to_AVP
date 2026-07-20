@@ -221,7 +221,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         recovery_step = next(step for step in prepare_steps if step["name"] == "Revalidate Beta 3 recovery premise")
         self.assertEqual(recovery_step["if"], "steps.metadata.outputs.release_tag == 'v0.3.0-beta.3'")
+        self.assertEqual(recovery_step["env"]["GH_TOKEN"], "${{ github.token }}")
         self.assertIn("--allow-beta3-draft", recovery_step["run"])
+        self.assertIn("--allow-github-actions-contents-write-token", recovery_step["run"])
         self.assertIn('--expected-sha "$GITHUB_SHA"', recovery_step["run"])
 
     def test_every_release_artifact_inspection_pins_the_diagnostics_endpoint(self) -> None:

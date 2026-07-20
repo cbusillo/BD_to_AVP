@@ -319,6 +319,7 @@ jobs:
         run: >-
           python -m scripts.beta3_recovery_evidence
           --allow-beta3-draft
+          --allow-github-actions-contents-write-token
           --expected-sha "$GITHUB_SHA"
 
       - name: Resolve channel-aware base for generated notes
