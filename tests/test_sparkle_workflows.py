@@ -258,6 +258,82 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("KEYCHAIN_NAME", str(package))
         self.assertNotIn("SPARKLE_EDDSA_PRIVATE_KEY", str(package))
 
+    def test_certificate_install_binds_developer_id_identity_to_team_id(self) -> None:
+        workflow = load_release_engine()
+        package = workflow["jobs"]["package"]
+        certificate_step = next(
+            step for step in package["steps"] if step["name"] == "Install signing certificate in an ephemeral keychain"
+        )
+        certificate_script = certificate_step["run"]
+
+        self.assertEqual(certificate_step["env"]["TEAM_ID"], "${{ secrets.TEAM_ID }}")
+        self.assertIn('case "$TEAM_ID" in', certificate_script)
+        self.assertIn('if [ "${#TEAM_ID}" -ne 10 ]; then', certificate_script)
+        self.assertIn('DEV_ID_PREFIX="Developer ID Application: "', certificate_script)
+        self.assertIn('DEV_ID_SUFFIX=" ($TEAM_ID)"', certificate_script)
+        self.assertIn('DEV_ID_NAME=${DEV_ID#"$DEV_ID_PREFIX"}', certificate_script)
+        self.assertIn('DEV_ID_NAME=${DEV_ID_NAME%"$DEV_ID_SUFFIX"}', certificate_script)
+        self.assertIn('if [ -z "$DEV_ID_NAME" ]; then', certificate_script)
+        self.assertIn("$2 == identity", certificate_script)
+        self.assertNotIn('grep -F "$DEV_ID"', certificate_script)
+        self.assertLess(certificate_script.index('case "$TEAM_ID" in'), certificate_script.index("security import"))
+        self.assertLess(
+            certificate_script.index('DEV_ID_SUFFIX=" ($TEAM_ID)"'), certificate_script.index("security import")
+        )
+        self.assertLess(certificate_script.index("security import"), certificate_script.index("security find-identity"))
+
+        validation_script = certificate_script[
+            certificate_script.index('case "$TEAM_ID" in') : certificate_script.index("BUILD_KEYCHAIN_PASSWORD=")
+        ]
+        self._assert_signing_identity_validation(validation_script)
+
+    def test_package_inspects_signed_app_and_dmg_identity_metadata(self) -> None:
+        workflow = load_release_engine()
+        package = workflow["jobs"]["package"]
+        package_step = next(step for step in package["steps"] if step["name"] == "Package application for GitHub")
+        package_script = package_step["run"]
+
+        self.assertEqual(package_step["env"]["TEAM_ID"], "${{ secrets.TEAM_ID }}")
+        self.assertIn("verify_codesign_metadata()", package_script)
+        self.assertIn('codesign -dv --verbose=4 "$signed_path"', package_script)
+        self.assertIn('$1 == "Authority"', package_script)
+        self.assertIn('$1 == "TeamIdentifier"', package_script)
+        self.assertIn('[ "$signing_authority" != "$DEV_ID" ]', package_script)
+        self.assertIn('[ "$team_identifier" != "$TEAM_ID" ]', package_script)
+        self.assertIn("validate_signing_identity()", package_script)
+        self.assertLess(
+            package_script.index("git fetch --no-tags origin"), package_script.rindex("validate_signing_identity")
+        )
+        self.assertLess(
+            package_script.rindex("validate_signing_identity"), package_script.index("security unlock-keychain")
+        )
+
+        package_command_index = package_script.index("uv run python scripts/native_app.py package")
+        app_metadata_index = package_script.index('"$RUNNER_TEMP/bd-to-avp-app-codesign-$GITHUB_RUN_ID.txt"')
+        app_notary_index = package_script.index("--log dist/notary/app-notary.json")
+        dmg_sign_index = package_script.index('codesign --force --timestamp --sign "$DEV_ID"')
+        dmg_metadata_index = package_script.index('"$RUNNER_TEMP/bd-to-avp-dmg-codesign-$GITHUB_RUN_ID.txt"')
+        dmg_notary_index = package_script.index("--log dist/notary/dmg-notary.json")
+        self.assertLess(package_command_index, app_metadata_index)
+        self.assertLess(app_metadata_index, app_notary_index)
+        self.assertLess(dmg_sign_index, dmg_metadata_index)
+        self.assertLess(dmg_metadata_index, dmg_notary_index)
+
+        identity_validation = (
+            package_script[
+                package_script.index("validate_signing_identity() {") : package_script.index(
+                    "git fetch --no-tags origin"
+                )
+            ]
+            + "\nvalidate_signing_identity\n"
+        )
+        self._assert_signing_identity_validation(identity_validation)
+
+        metadata_validation = package_script[
+            package_script.index("verify_codesign_metadata() {") : package_script.index("validate_signing_identity() {")
+        ]
+        self._assert_codesign_metadata_validation(metadata_validation)
+
     def test_keychain_search_list_empty_array_branch_is_bash_3_2_safe(self) -> None:
         shell_script = (
             'set -u; keychains=(); if [ "${#keychains[@]}" -eq 0 ]; '
@@ -381,6 +457,118 @@ esac
             "snapshot": snapshot,
         }
         return result, state, paths
+
+    def _assert_signing_identity_validation(self, validation_script: str) -> None:
+        valid = self._run_release_shell_fragment(
+            validation_script,
+            {
+                "DEV_ID": "Developer ID Application: Shiny Computers, LLC (ABCDE12345)",
+                "TEAM_ID": "ABCDE12345",
+            },
+        )
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+
+        invalid_cases = [
+            ("", "Developer ID Application: Shiny Computers, LLC (ABCDE12345)"),
+            ("ABCDE1234", "Developer ID Application: Shiny Computers, LLC (ABCDE1234)"),
+            ("ABCDE12345", "Apple Distribution: Shiny Computers, LLC (ABCDE12345)"),
+            ("ABCDE12345", "Developer ID Application:  (ABCDE12345)"),
+            ("ABCDE12345", "Developer ID Application: Shiny Computers, LLC (ZZZZZ12345)"),
+            ("ABCDE12345", "Developer ID Application: Shiny Computers, LLC (ABCDE12345) extra"),
+            ("ABCDE12345", "prefix Developer ID Application: Shiny Computers, LLC (ABCDE12345)"),
+            ("ABCDE12345", "Developer ID Application: Shiny Computers, LLC (ABCDE12345) (ZZZZZ12345)"),
+        ]
+        for team_id, dev_id in invalid_cases:
+            with self.subTest(team_id=team_id, dev_id=dev_id):
+                result = self._run_release_shell_fragment(
+                    validation_script,
+                    {"DEV_ID": dev_id, "TEAM_ID": team_id},
+                )
+                self.assertNotEqual(result.returncode, 0)
+
+    def _assert_codesign_metadata_validation(self, metadata_script: str) -> None:
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        temporary_path = Path(temporary_directory.name)
+        metadata_path = temporary_path / "codesign.txt"
+        fake_bin = temporary_path / "bin"
+        fake_bin.mkdir()
+        fake_codesign = fake_bin / "codesign"
+        fake_codesign.write_text(
+            """#!/bin/bash
+set -eu
+printf '%s' "$CODESIGN_METADATA"
+""",
+            encoding="utf-8",
+        )
+        fake_codesign.chmod(0o755)
+        signed_path = temporary_path / "Signed.app"
+        signed_path.touch()
+        invocation = f'{metadata_script}\nverify_codesign_metadata "{signed_path}" "Test app" "{metadata_path}"\n'
+
+        valid_metadata = "".join(
+            [
+                "Executable=/tmp/Test.app/Contents/MacOS/Test\n",
+                "Authority=Developer ID Application: Shiny Computers, LLC (ABCDE12345)\n",
+                "Authority=Developer ID Certification Authority\n",
+                "TeamIdentifier=ABCDE12345\n",
+            ]
+        )
+        valid = self._run_release_shell_fragment(
+            invocation,
+            {
+                "CODESIGN_METADATA": valid_metadata,
+                "DEV_ID": "Developer ID Application: Shiny Computers, LLC (ABCDE12345)",
+                "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                "TEAM_ID": "ABCDE12345",
+            },
+        )
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+
+        invalid_cases = [
+            "TeamIdentifier=ABCDE12345\n",
+            "Authority=Developer ID Application: Shiny Computers, LLC (ABCDE12345)\n",
+            ("Authority=Developer ID Application: Other Company (ABCDE12345)\nTeamIdentifier=ABCDE12345\n"),
+            (
+                "Authority=Developer ID Application: Shiny Computers, LLC (ABCDE12345) extra\n"
+                "TeamIdentifier=ABCDE12345\n"
+            ),
+            ("Authority=Developer ID Application: Shiny Computers, LLC (ABCDE12345)\nTeamIdentifier=ZZZZZ12345\n"),
+            (
+                "NotAuthority=Developer ID Application: Shiny Computers, LLC (ABCDE12345)\n"
+                "NotTeamIdentifier=ABCDE12345\n"
+            ),
+        ]
+        for metadata in invalid_cases:
+            with self.subTest(metadata=metadata):
+                result = self._run_release_shell_fragment(
+                    invocation,
+                    {
+                        "CODESIGN_METADATA": metadata,
+                        "DEV_ID": "Developer ID Application: Shiny Computers, LLC (ABCDE12345)",
+                        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                        "TEAM_ID": "ABCDE12345",
+                    },
+                )
+                self.assertNotEqual(result.returncode, 0)
+
+    def _run_release_shell_fragment(
+        self,
+        shell_script: str,
+        environment_overrides: dict[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        temporary_path = Path(temporary_directory.name)
+        environment = {**os.environ, **environment_overrides}
+        return subprocess.run(
+            ["/bin/bash", "-c", shell_script],
+            cwd=temporary_path,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
     def test_release_is_draft_until_assets_are_redownloaded_and_verified(self) -> None:
         workflow = load_release_engine()

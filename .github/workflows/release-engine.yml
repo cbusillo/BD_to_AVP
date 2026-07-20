@@ -589,6 +589,7 @@ jobs:
           CERTIFICATE: ${{ secrets.CERTIFICATE }}
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
           DEV_ID: ${{ secrets.DEV_ID }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
@@ -596,10 +597,31 @@ jobs:
             echo "Protected main moved immediately before certificate use." >&2
             exit 1
           fi
-          case "$DEV_ID" in
-            "Developer ID Application:"*) ;;
-            *) echo "DEV_ID must name a Developer ID Application identity." >&2; exit 1 ;;
+          case "$TEAM_ID" in
+            ""|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789]*)
+              echo "TEAM_ID must be a 10-character Apple Team ID." >&2
+              exit 1
+              ;;
           esac
+          if [ "${#TEAM_ID}" -ne 10 ]; then
+            echo "TEAM_ID must be a 10-character Apple Team ID." >&2
+            exit 1
+          fi
+          DEV_ID_PREFIX="Developer ID Application: "
+          DEV_ID_SUFFIX=" ($TEAM_ID)"
+          case "$DEV_ID" in
+            "$DEV_ID_PREFIX"*"$DEV_ID_SUFFIX") ;;
+            *)
+              echo "DEV_ID must be a Developer ID Application identity ending in ($TEAM_ID)." >&2
+              exit 1
+              ;;
+          esac
+          DEV_ID_NAME=${DEV_ID#"$DEV_ID_PREFIX"}
+          DEV_ID_NAME=${DEV_ID_NAME%"$DEV_ID_SUFFIX"}
+          if [ -z "$DEV_ID_NAME" ]; then
+            echo "DEV_ID must include a non-empty Developer ID subject." >&2
+            exit 1
+          fi
 
           BUILD_KEYCHAIN_PASSWORD=$(openssl rand -hex 32)
           KEYCHAIN_PATH="$RUNNER_TEMP/bd-to-avp-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.keychain-db"
@@ -676,7 +698,11 @@ jobs:
             -S apple-tool:,apple:,codesign: \
             -s -k "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user | grep -F "$KEYCHAIN_PATH"
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F "$DEV_ID"
+          if ! security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | awk -F '"' -v identity="$DEV_ID" '$2 == identity { found=1 } END { exit found ? 0 : 1 }'; then
+            echo "Configured Developer ID identity was not found in the ephemeral keychain." >&2
+            exit 1
+          fi
           trap - EXIT
 
       - name: Store notarization credentials in the ephemeral keychain
@@ -709,13 +735,71 @@ jobs:
           DEV_ID: ${{ secrets.DEV_ID }}
           DMG_NAME: ${{ needs.prepare.outputs.dmg_name }}
           PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
         run: |
           set -euo pipefail
+          verify_codesign_metadata() {
+            signed_path=$1
+            signed_label=$2
+            metadata_path=$3
+            if ! codesign -dv --verbose=4 "$signed_path" > "$metadata_path" 2>&1; then
+              echo "$signed_label code-signature metadata inspection failed." >&2
+              exit 1
+            fi
+            signing_authority=$(awk -F= '$1 == "Authority" { print substr($0, index($0, "=") + 1); exit }' "$metadata_path")
+            team_identifier=$(awk -F= '$1 == "TeamIdentifier" { print substr($0, index($0, "=") + 1); exit }' "$metadata_path")
+            if [ -z "$signing_authority" ]; then
+              echo "$signed_label code signature did not report a signing authority." >&2
+              exit 1
+            fi
+            if [ "$signing_authority" != "$DEV_ID" ]; then
+              echo "$signed_label signing authority does not match the configured Developer ID identity." >&2
+              exit 1
+            fi
+            if [ -z "$team_identifier" ]; then
+              echo "$signed_label code signature did not report a TeamIdentifier." >&2
+              exit 1
+            fi
+            if [ "$team_identifier" != "$TEAM_ID" ]; then
+              echo "$signed_label TeamIdentifier does not match the configured Team ID." >&2
+              exit 1
+            fi
+          }
+
+          validate_signing_identity() {
+            case "$TEAM_ID" in
+              ""|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789]*)
+                echo "TEAM_ID must be a 10-character Apple Team ID." >&2
+                exit 1
+                ;;
+            esac
+            if [ "${#TEAM_ID}" -ne 10 ]; then
+              echo "TEAM_ID must be a 10-character Apple Team ID." >&2
+              exit 1
+            fi
+            DEV_ID_PREFIX="Developer ID Application: "
+            DEV_ID_SUFFIX=" ($TEAM_ID)"
+            case "$DEV_ID" in
+              "$DEV_ID_PREFIX"*"$DEV_ID_SUFFIX") ;;
+              *)
+                echo "DEV_ID must be a Developer ID Application identity ending in ($TEAM_ID)." >&2
+                exit 1
+                ;;
+            esac
+            DEV_ID_NAME=${DEV_ID#"$DEV_ID_PREFIX"}
+            DEV_ID_NAME=${DEV_ID_NAME%"$DEV_ID_SUFFIX"}
+            if [ -z "$DEV_ID_NAME" ]; then
+              echo "DEV_ID must include a non-empty Developer ID subject." >&2
+              exit 1
+            fi
+          }
+
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
             echo "Protected main moved immediately before package signing." >&2
             exit 1
           fi
+          validate_signing_identity
           security unlock-keychain -p "$BUILD_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           APP_PATH="macos/build/package/3D Blu-ray to Vision Pro.app"
           DMG_PATH="dist/$DMG_NAME"
@@ -725,6 +809,10 @@ jobs:
           uv run python scripts/native_app.py package \
             --sign-identity "$DEV_ID" \
             --sign-keychain "$KEYCHAIN_PATH"
+          verify_codesign_metadata \
+            "$APP_PATH" \
+            "Containing app" \
+            "$RUNNER_TEMP/bd-to-avp-app-codesign-$GITHUB_RUN_ID.txt"
           uv run python -m scripts.macos_release verify-app \
             --app "$APP_PATH" \
             --verify-signatures \
@@ -756,6 +844,10 @@ jobs:
             --app "$APP_PATH" \
             --output "$DMG_PATH"
           codesign --force --timestamp --sign "$DEV_ID" --keychain "$KEYCHAIN_PATH" "$DMG_PATH"
+          verify_codesign_metadata \
+            "$DMG_PATH" \
+            "DMG" \
+            "$RUNNER_TEMP/bd-to-avp-dmg-codesign-$GITHUB_RUN_ID.txt"
           uv run python -m scripts.macos_release notarize \
             --submission "$DMG_PATH" \
             --staple "$DMG_PATH" \
