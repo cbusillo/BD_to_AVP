@@ -130,10 +130,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(set(prerelease["jobs"]), {"release"})
         self.assertEqual(prerelease["jobs"]["release"], release)
         self.assertEqual(release["uses"], "./.github/workflows/release-engine.yml")
-        self.assertNotIn("secrets", release)
         self.assertEqual(declared_secret_names, macos_secret_names | sparkle_secret_names)
         self.assertEqual(declared_secret_names, referenced_secret_names)
         self.assertTrue(all(definition["required"] == "false" for definition in call["secrets"].values()))
+        self.assertEqual(
+            release["secrets"],
+            {name: f"${{{{ secrets.{name} }}}}" for name in declared_secret_names},
+        )
         self.assertTrue(all("secrets: inherit" not in source for source in workflow_sources))
         self.assertEqual(
             set(
