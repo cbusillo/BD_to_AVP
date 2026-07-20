@@ -18,6 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 LOCK_PATH = REPO_ROOT / "uv.lock"
 MACOS_PROJECT_PATH = REPO_ROOT / "macos" / "project.yml"
+BETA3_RECOVERY_EVIDENCE_PATH = REPO_ROOT / "docs" / "release-evidence" / "v0.3.0-beta.3-recovery.json"
 VERSION_PATTERN = re.compile(
     r"^(?P<major>0|[1-9][0-9]*)\."
     r"(?P<minor>0|[1-9][0-9]*)\."
@@ -41,6 +42,120 @@ DMG_NAME_PREFIX = "3D-Blu-ray-to-Vision-Pro"
 INTERNAL_STAGE_NAMES = {"a": "alpha", "b": "beta", "rc": "rc"}
 PUBLIC_STAGE_SUFFIXES = {"alpha": "a", "beta": "b", "rc": "rc"}
 STAGE_ORDER = {"alpha": 0, "beta": 1, "rc": 2, "stable": 3}
+BETA3_RECOVERY_SOURCE_VERSION = "0.3.0rc1"
+BETA3_RECOVERY_SOURCE_BUILD = "147"
+BETA3_RECOVERY_TARGET_VERSION = "0.3.0b3"
+BETA3_RECOVERY_TARGET_BUILD = "148"
+BETA3_RECOVERY_EVIDENCE: dict[str, Any] = {
+    "schema": "bd_to_avp.release_recovery",
+    "schema_version": 1,
+    "observed_at": "2026-07-20T02:28:48Z",
+    "repository": "cbusillo/BD_to_AVP",
+    "transition": {
+        "source": {
+            "package_version": BETA3_RECOVERY_SOURCE_VERSION,
+            "public_version": "0.3.0-rc.1",
+            "build": BETA3_RECOVERY_SOURCE_BUILD,
+        },
+        "target": {
+            "package_version": BETA3_RECOVERY_TARGET_VERSION,
+            "public_version": "0.3.0-beta.3",
+            "release_tag": "v0.3.0-beta.3",
+            "build": BETA3_RECOVERY_TARGET_BUILD,
+        },
+    },
+    "failed_run": {
+        "id": 29693513480,
+        "head_sha": "438991f07fa19cd2ae2df4d3ec14716bc0371f8d",
+        "conclusion": "failure",
+        "skipped_boundaries": {
+            "package_upload": "skipped",
+            "draft": "skipped",
+            "appcast": "skipped",
+            "pypi": "skipped",
+            "release": "skipped",
+            "pages": "skipped",
+        },
+        "artifact_count": 0,
+    },
+    "absent_github_state": {
+        "tags": ["v0.3.0rc1", "v0.3.0-rc.1", "v0.3.0-beta.3"],
+        "releases": ["v0.3.0rc1", "v0.3.0-rc.1", "v0.3.0-beta.3"],
+        "drafts": ["v0.3.0rc1", "v0.3.0-rc.1", "v0.3.0-beta.3"],
+    },
+    "github_latest": {"release_tag": "v0.2.143"},
+    "pages": {
+        "status": "enabled",
+        "release_tag": "v0.2.143",
+        "appcast_sha256": "d231c47d69606bc6f28113bb396c0ac9d24f656cbe0930c770259e0739f9904e",
+    },
+    "pypi": {
+        "latest_version": "0.2.143",
+        "absent_versions": ["0.3.0rc1", "0.3.0b3"],
+    },
+    "retired_preview_releases": [
+        {
+            "tag": "native-ui-preview-1",
+            "immutable": True,
+            "release_id": 352841376,
+            "target_sha": "e1e4f851096cfeae70da1c56a88acef9c5e61055",
+            "assets": [
+                {
+                    "asset_id": 474714228,
+                    "name": "3D-Blu-ray-to-Vision-Pro-Native-Preview-0.3.0-1.dmg",
+                    "size": 406585971,
+                    "digest": "sha256:119a86f829c0bc8962deaea5f1a8fb92ffbcd48002d062a0ac59cccffe61af71",
+                },
+                {
+                    "asset_id": 474714389,
+                    "name": "SHA256SUMS",
+                    "size": 118,
+                    "digest": "sha256:1b142e59fea4ee0e0f734ae5cdf34815583765d2d0895a9ec25217436d52336e",
+                },
+            ],
+        },
+        {
+            "tag": "v0.3.0-beta.1",
+            "immutable": True,
+            "release_id": 353900273,
+            "target_sha": "2378b46345185f05611f15a39658217bac7c6960",
+            "assets": [
+                {
+                    "asset_id": 476861235,
+                    "name": "3D-Blu-ray-to-Vision-Pro-Native-Preview-0.3.0-beta.1.dmg",
+                    "size": 407183981,
+                    "digest": "sha256:b611dca7de660efed218a0e2fc5c4ed9d6e5e652a54da938e13d40a6bd994bed",
+                },
+                {
+                    "asset_id": 476861481,
+                    "name": "SHA256SUMS",
+                    "size": 123,
+                    "digest": "sha256:17eead4e3faf2ffd3110a9bf200d39f0ebfba78546f40aa0fa868fd3afb53b5b",
+                },
+            ],
+        },
+        {
+            "tag": "v0.3.0-beta.2",
+            "immutable": True,
+            "release_id": 355845653,
+            "target_sha": "9e9a38c715dbbe5df97e6d3a8ba715731607db6a",
+            "assets": [
+                {
+                    "asset_id": 480668646,
+                    "name": "3D-Blu-ray-to-Vision-Pro-Native-Preview-0.3.0-beta.2.dmg",
+                    "size": 408158527,
+                    "digest": "sha256:e2e8a20c9fd4517076189e56598ff6b32cd1adc544c6ad0618f5a46f55dcae24",
+                },
+                {
+                    "asset_id": 480668779,
+                    "name": "SHA256SUMS",
+                    "size": 123,
+                    "digest": "sha256:ab387b19cef2af5923b112735a10253d42f4fc37f002e6983deb44a5a17b7fb0",
+                },
+            ],
+        },
+    ],
+}
 
 
 class ReleaseError(RuntimeError):
@@ -273,6 +388,55 @@ def _load_toml(path: Path) -> dict[str, Any]:
         raise ReleaseError(f"Unable to load {path}: {error}") from error
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ReleaseError(f"Recovery evidence contains duplicate key {key!r}.")
+        result[key] = value
+    return result
+
+
+def _validate_exact_evidence_value(actual: Any, expected: Any, location: str) -> None:
+    if type(actual) is not type(expected):
+        raise ReleaseError(f"Recovery evidence {location} has the wrong type.")
+    if isinstance(expected, dict):
+        missing = sorted(set(expected) - set(actual))
+        extra = sorted(set(actual) - set(expected))
+        if missing or extra:
+            details: list[str] = []
+            if missing:
+                details.append(f"missing {missing}")
+            if extra:
+                details.append(f"unexpected {extra}")
+            raise ReleaseError(f"Recovery evidence {location} has invalid keys: {', '.join(details)}.")
+        for key, expected_value in expected.items():
+            _validate_exact_evidence_value(actual[key], expected_value, f"{location}.{key}")
+        return
+    if isinstance(expected, list):
+        if len(actual) != len(expected):
+            raise ReleaseError(f"Recovery evidence {location} has the wrong number of entries.")
+        for index, (actual_value, expected_value) in enumerate(zip(actual, expected, strict=True)):
+            _validate_exact_evidence_value(actual_value, expected_value, f"{location}[{index}]")
+        return
+    if actual != expected:
+        raise ReleaseError(f"Recovery evidence {location} does not match the audited value.")
+
+
+def validate_beta3_recovery_evidence(
+    evidence_path: Path = BETA3_RECOVERY_EVIDENCE_PATH,
+) -> dict[str, Any]:
+    try:
+        evidence = json.loads(
+            evidence_path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ReleaseError(f"Unable to load Beta 3 recovery evidence from {evidence_path}: {error}") from error
+    _validate_exact_evidence_value(evidence, BETA3_RECOVERY_EVIDENCE, "$")
+    return evidence
+
+
 def _locked_project_version(lock_path: Path) -> str:
     lock = _load_toml(lock_path)
     packages = lock.get("package")
@@ -455,32 +619,33 @@ def _atomic_write(path: Path, content: bytes) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
-def prepare_release(
-    version_value: str,
-    build_value: str,
-    *,
-    pyproject_path: Path = PYPROJECT_PATH,
-    lock_path: Path = LOCK_PATH,
-    macos_project_path: Path | None = None,
-    uv_executable: str = "uv",
-    lock_runner: LockRunner = refresh_uv_lock,
-) -> ReleaseMetadata:
+def _resolve_macos_project_path(
+    pyproject_path: Path,
+    lock_path: Path,
+    macos_project_path: Path | None,
+) -> Path | None:
     if macos_project_path is None and pyproject_path == PYPROJECT_PATH and lock_path == LOCK_PATH:
-        macos_project_path = MACOS_PROJECT_PATH
-    current = load_release_metadata(pyproject_path, lock_path, macos_project_path)
-    current_version = parse_release_version(current.package_version)
-    next_version = parse_release_version(version_value)
-    _validate_production_version(next_version)
-    current_build = parse_build_version(current.build_version)
-    next_build = parse_build_version(build_value)
-    if next_version.order_key <= current_version.order_key:
-        raise ReleaseError(f"Release version {version_value} must be newer than {current.package_version}.")
-    if next_build <= current_build:
-        raise ReleaseError(f"CFBundleVersion {build_value} must be greater than {current.build_version}.")
+        return MACOS_PROJECT_PATH
+    return macos_project_path
 
+
+def _write_release_metadata(
+    next_version: ReleaseVersion,
+    next_build: int,
+    current: ReleaseMetadata,
+    *,
+    pyproject_path: Path,
+    lock_path: Path,
+    macos_project_path: Path | None,
+    uv_executable: str,
+    lock_runner: LockRunner,
+) -> ReleaseMetadata:
     original_pyproject = pyproject_path.read_bytes()
     original_lock = lock_path.read_bytes()
     original_macos_project = macos_project_path.read_bytes() if macos_project_path is not None else None
+    if load_release_metadata(pyproject_path, lock_path, macos_project_path) != current:
+        raise ReleaseError("Release files changed before release preparation; no updates were applied.")
+
     updated_pyproject = _replace_section_value(
         original_pyproject.decode("utf-8"),
         "project",
@@ -540,13 +705,79 @@ def prepare_release(
         _atomic_write(lock_path, staged_lock_content)
         if macos_project_path is not None and updated_macos_project is not None:
             _atomic_write(macos_project_path, updated_macos_project.encode("utf-8"))
+        metadata = load_release_metadata(pyproject_path, lock_path, macos_project_path)
     except Exception:
         _atomic_write(pyproject_path, original_pyproject)
         _atomic_write(lock_path, original_lock)
         if macos_project_path is not None and original_macos_project is not None:
             _atomic_write(macos_project_path, original_macos_project)
         raise
-    return load_release_metadata(pyproject_path, lock_path, macos_project_path)
+    return metadata
+
+
+def prepare_release(
+    version_value: str,
+    build_value: str,
+    *,
+    pyproject_path: Path = PYPROJECT_PATH,
+    lock_path: Path = LOCK_PATH,
+    macos_project_path: Path | None = None,
+    uv_executable: str = "uv",
+    lock_runner: LockRunner = refresh_uv_lock,
+) -> ReleaseMetadata:
+    macos_project_path = _resolve_macos_project_path(pyproject_path, lock_path, macos_project_path)
+    current = load_release_metadata(pyproject_path, lock_path, macos_project_path)
+    current_version = parse_release_version(current.package_version)
+    next_version = parse_release_version(version_value)
+    _validate_production_version(next_version)
+    current_build = parse_build_version(current.build_version)
+    next_build = parse_build_version(build_value)
+    if next_version.order_key <= current_version.order_key:
+        raise ReleaseError(f"Release version {version_value} must be newer than {current.package_version}.")
+    if next_build <= current_build:
+        raise ReleaseError(f"CFBundleVersion {build_value} must be greater than {current.build_version}.")
+    return _write_release_metadata(
+        next_version,
+        next_build,
+        current,
+        pyproject_path=pyproject_path,
+        lock_path=lock_path,
+        macos_project_path=macos_project_path,
+        uv_executable=uv_executable,
+        lock_runner=lock_runner,
+    )
+
+
+def recover_beta3(
+    *,
+    pyproject_path: Path = PYPROJECT_PATH,
+    lock_path: Path = LOCK_PATH,
+    macos_project_path: Path | None = None,
+    evidence_path: Path = BETA3_RECOVERY_EVIDENCE_PATH,
+    uv_executable: str = "uv",
+    lock_runner: LockRunner = refresh_uv_lock,
+) -> ReleaseMetadata:
+    validate_beta3_recovery_evidence(evidence_path)
+    macos_project_path = _resolve_macos_project_path(pyproject_path, lock_path, macos_project_path)
+    current = load_release_metadata(pyproject_path, lock_path, macos_project_path)
+    if current.package_version != BETA3_RECOVERY_SOURCE_VERSION or current.build_version != BETA3_RECOVERY_SOURCE_BUILD:
+        raise ReleaseError(
+            "Beta 3 recovery requires exact source metadata "
+            f"{BETA3_RECOVERY_SOURCE_VERSION} build {BETA3_RECOVERY_SOURCE_BUILD}; "
+            f"found {current.package_version} build {current.build_version}."
+        )
+    target_version = parse_release_version(BETA3_RECOVERY_TARGET_VERSION)
+    target_build = parse_build_version(BETA3_RECOVERY_TARGET_BUILD)
+    return _write_release_metadata(
+        target_version,
+        target_build,
+        current,
+        pyproject_path=pyproject_path,
+        lock_path=lock_path,
+        macos_project_path=macos_project_path,
+        uv_executable=uv_executable,
+        lock_runner=lock_runner,
+    )
 
 
 def _add_paths(parser: argparse.ArgumentParser) -> None:
@@ -581,6 +812,13 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--build", required=True)
     prepare.add_argument("--uv", default="uv")
 
+    recover_beta3_parser = commands.add_parser(
+        "recover-beta3",
+        help="Apply the audited one-time 0.3.0rc1 build 147 to 0.3.0b3 build 148 recovery.",
+    )
+    _add_paths(recover_beta3_parser)
+    recover_beta3_parser.add_argument("--uv", default="uv")
+
     validate_tag = commands.add_parser("validate-tag", help="Validate a v-prefixed release tag.")
     validate_tag.add_argument("tag")
     return parser
@@ -610,6 +848,13 @@ def main(argv: list[str] | None = None) -> int:
         metadata = prepare_release(
             args.version,
             args.build,
+            pyproject_path=args.pyproject,
+            lock_path=args.lock,
+            macos_project_path=args.macos_project,
+            uv_executable=args.uv,
+        )
+    elif args.command == "recover-beta3":
+        metadata = recover_beta3(
             pyproject_path=args.pyproject,
             lock_path=args.lock,
             macos_project_path=args.macos_project,

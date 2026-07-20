@@ -4,17 +4,19 @@ The normative production identity, version mapping, update routes, history
 boundary, and publication policy are defined in
 [Production Release Routes](release-routes.md).
 
-The next planned production-identity field build is `v0.3.0-beta.3`, internal
-version `0.3.0b3`, build `148`. The committed `0.3.0rc1` build `147` attempt
-failed before publication and its build number is permanently burned. The
-focused recovery and Beta 3 cut packet are owned by issue #293.
+The repository now carries the reviewed `v0.3.0-beta.3` metadata: internal
+version `0.3.0b3`, build `148`. The failed, unpublished `0.3.0rc1` build `147`
+attempt is preserved in the checked-in recovery evidence and its build number
+is permanently burned. The exact recovery and
+[Beta 3 cut packet](0.3.0-beta.3-cut-packet.md) are complete; they do not assert
+that any Beta 3 public artifact exists.
 
 The four-route updater preference, release metadata, production-history
-filtering, appcast validation, reusable engine, and guarded Stable/Prerelease
-entrypoints are implemented. The Beta 3 manual-bootstrap contract is documented
-and regression-covered here. Its focused metadata migration and recovery remain
-owned by issue #293, so Alpha and Beta preparation and dispatch stay blocked
-until that gate and the focused signed-install smoke have landed.
+filtering, appcast validation, reusable engine, guarded Stable/Prerelease
+entrypoints, Beta 3 bootstrap contract, and one-time metadata recovery are
+implemented and regression-covered. Publication remains frozen for issue #294,
+which exclusively owns the exact-SHA dispatch, approval, signing, publication,
+and verification work.
 
 ## Release Preparation
 
@@ -39,6 +41,14 @@ routes, including failed unpublished attempts. The command stages a refreshed
 `uv.lock`, and the Xcode Release version/build together only after every check
 succeeds. A lock refresh or metadata failure leaves all three files unchanged.
 
+The one-time `0.3.0rc1` build `147` to `0.3.0b3` build `148` correction used
+`scripts/release.py recover-beta3` and the exact checked-in evidence in
+[v0.3.0-beta.3-recovery.json](release-evidence/v0.3.0-beta.3-recovery.json).
+The command has no version, build, stage, or publication override. It rejects
+any other source or evidence and rejects a rerun after the target state exists.
+Ordinary `prepare` continues to reject RC-to-Beta movement; do not reuse or
+generalize the recovery path.
+
 The initial main-only Sparkle migration used `0.2.143rc4` build `144` and
 `0.2.143rc5` build `145` to prove a real RC-to-RC updater path. Stable
 `0.2.143` build `146` follows only after that smoke passes. Future releases
@@ -51,11 +61,12 @@ or from a stale main commit.
 
 ## Release Orchestration
 
-> **Release dispatch is frozen.** Protected `main` still contains the burned
-> `0.3.0rc1` build `147` metadata. Do not dispatch `Stable` or `Prerelease`
-> until issues #292 and #293 have landed and
-> `scripts/release.py metadata` reports the reviewed `0.3.0b3` build `148`
-> target. Publishing build `147` is prohibited.
+> **Release publication is frozen.** The repository metadata is the reviewed
+> `0.3.0b3` build `148` target and build `147` remains permanently burned. Do
+> not dispatch `Stable` or `Prerelease`, request environment approval, sign,
+> publish, or mutate the feed or Pages under this metadata-recovery work. Issue
+> #294 exclusively owns those actions after exact-SHA post-merge gates pass.
+> No Beta 3 public artifact is claimed by issue #293.
 
 Dispatch `Stable` from `main` only for reviewed committed Stable metadata, or
 dispatch `Prerelease` only for reviewed committed Alpha, Beta, or RC metadata,
