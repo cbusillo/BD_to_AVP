@@ -93,20 +93,29 @@ additional-channel sets. Existing `stable`, `rc`, and legacy
 `releaseCandidate` preferences migrate without selecting a less stable route;
 missing or unknown values fail closed to Stable. Choosing a safer route affects
 only future newer builds and never downgrades the installed app. The next
-production-identity field build is `0.3.0b3` build `148`; currently shipped
-installations must bootstrap it through a manual download because those older
-clients cannot yet select Beta or Alpha.
+production-identity field build is `0.3.0b3` build `148`. It will be published
+as `v0.3.0-beta.3`. It is a manual-download seed: currently shipped Stable and RC
+installations cannot select Beta, so they cannot discover it with Sparkle. Before
+installing it, quit the production app and all retired Preview variants, then
+copy `~/Library/Application Support/3D Blu-ray to Vision Pro/profiles.json` to a
+safe location outside that folder if it exists. Bundle separation does not
+isolate this shared profile path; do not edit it from a retired Preview app after
+Beta 3 installation. The manual DMG replaces the production
+`com.shinycomputers.bd-to-avp` app; after launch, it exposes all four routes.
+Its Beta 3 item is visible only to Beta and Alpha, while persisted Stable and RC
+remain unchanged until explicit selection and never downgrade an installed Beta.
 
 ## Release Workflow
 
 `.github/workflows/briefcase.yml` remains the Stable operator and PyPI
-trusted-publisher identity. It owns the single repository-wide `release`
-concurrency lock and calls `.github/workflows/release-engine.yml`, which owns the
-shared packaging, signing, notarization, appcast, attestation, publication, and
-cleanup path. The reusable engine binds its OIDC `job_workflow_ref` and
-`job_workflow_sha` claims to the exact operator run, then revalidates that policy
-fingerprint after the `macos-signing` approval gate. Issue #291 can add the
-Prerelease operator without duplicating those boundaries.
+trusted-publisher identity, while `.github/workflows/prerelease.yml` is the
+Prerelease operator. Both declare the same repository-wide `release` concurrency
+group and call `.github/workflows/release-engine.yml`; the reusable engine owns
+the shared packaging, signing, notarization, appcast, attestation, publication,
+and cleanup path without declaring a competing concurrency group. The engine
+binds its OIDC `job_workflow_ref` and `job_workflow_sha` claims to the exact
+operator run, then revalidates that policy fingerprint after the `macos-signing`
+approval gate.
 
 The engine's package job runs on GitHub's Apple-Silicon `macos-26` runner. It selects
 Xcode 26.5 build `17F42` explicitly and installs the XcodeGen 2.45.4 release
@@ -136,7 +145,8 @@ before the interface was accepted. The tags `native-ui-preview-1`,
 `v0.3.0-beta.1`, and `v0.3.0-beta.2`, their assets, and their historical release
 notes remain unchanged. They use a different bundle identifier, are not
 production Alpha/Beta route releases, and do not update into the production
-application.
+application. They cannot Sparkle-upgrade into Beta 3 or replace the production
+app.
 
 The separate publisher, release helper, build configuration, and workflow are
 no longer active. Genuine bounded Preview conversion jobs and implementation

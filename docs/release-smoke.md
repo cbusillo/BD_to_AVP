@@ -235,11 +235,37 @@ This is the installed-app acceptance smoke for the route contract in
     processing is idle.
 12. Verify the manual GitHub Releases download remains usable as the recovery
     path.
-13. For the Beta 3 bootstrap, install the manual production-identity DMG because
-    older clients cannot select Beta. Confirm Beta 3 exposes all four routes,
-    remains present in the one cumulative appcast but is eligible/offered only
-    to Beta/Alpha, preserves an existing Stable/RC preference, and can discover
-    the next eligible build after explicit Beta or Alpha selection.
+
+### Beta 3 Manual-Bootstrap Smoke
+
+Run this separately from the normal update path; it proves the first production
+Beta without pretending the current Stable or RC client can discover it.
+
+1. Start with an installed signed production Stable or RC app. Confirm its
+   route UI exposes only Stable and RC and that it does not offer
+   `v0.3.0-beta.3` through Sparkle.
+2. Quit the production app and every retired Preview variant. If it exists, copy
+   `~/Library/Application Support/3D Blu-ray to Vision Pro/profiles.json` to a
+   safe location outside that folder before replacing the app. The separate
+   bundle identities share this profile path, so keep every variant closed while
+   copying or restoring it.
+3. Download the exact `v0.3.0-beta.3` DMG from GitHub Releases; do not use an
+   updater offer. Drag the app to `/Applications` and confirm it replaces the
+   production `com.shinycomputers.bd-to-avp` app.
+4. Launch Beta 3 and confirm the profile library is present or can be recovered
+   from the backup. Confirm Update Route now offers Stable, RC, Beta, and Alpha.
+5. Inspect the cumulative appcast and route configuration: Beta 3 is a
+   `beta`-channel, build-`148` item, eligible only to Beta and Alpha and excluded
+   from Stable and RC. Do not treat the already-installed same build as an
+   updater offer.
+6. Repeat from saved Stable and RC preferences. Confirm each remains unchanged
+   until the tester explicitly selects Beta or Alpha, then verify a later
+   eligible prerelease can be discovered on that route.
+7. Select Stable after installing Beta 3 and confirm no older build is offered
+   or installed; it waits for a newer unchanneled Stable item. Confirm the
+   retired `native-ui-preview-1`, `v0.3.0-beta.1`, and `v0.3.0-beta.2` Preview
+   apps remain separate and cannot Sparkle-update into the production app. Do
+   not reopen them to edit the shared profile library after Beta 3 installation.
 
 ## Follow-Up Routing
 

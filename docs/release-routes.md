@@ -102,24 +102,38 @@ currently installed application.
 The updater selects the greatest eligible global build. Installing a
 prerelease must not silently change an existing route preference.
 
-## Beta 3 Bootstrap
+## Beta 3 Manual-Download Seed
 
-`v0.3.0-beta.3` is the first Beta on the production identity:
+When published, `v0.3.0-beta.3` is the first Beta on the production identity
+and the one-time manual-download seed:
 
 - internal version `0.3.0b3`;
 - public tag and title `v0.3.0-beta.3`;
 - global build `148`;
 - Sparkle channel `beta` in the cumulative appcast;
 - GitHub prerelease, never Latest, PyPI, or Homebrew; and
-- the normal production bundle, feed, key, signing team, and diagnostics endpoint.
+- the normal production bundle, feed, key, signing team, and diagnostics endpoint;
+- bundle identifier `com.shinycomputers.bd-to-avp`; and
+- a production-app replacement rather than a side-by-side Preview install.
 
-The currently shipped app exposes only Stable and RC, so no installed production
-build can discover Beta 3 automatically. Testers obtain Beta 3 through its manual
-GitHub Release download. Installing it replaces the production application
-because the bundle identity is intentionally the same. Beta 3 then exposes all
-four routes; testers explicitly choose Beta or Alpha to receive future eligible
-prereleases. Beta 3 remains in the appcast as immutable production/feed history
-even though it is not discoverable by older clients.
+Currently shipped Stable and RC clients expose only Stable and RC. They cannot
+select Beta, so they cannot discover Beta 3 through Sparkle; release or support
+guidance must never claim otherwise. Testers obtain the exact Beta 3 DMG through
+its GitHub Release and drag it into `/Applications`, replacing the production
+app because the bundle identity is intentionally the same. Before doing so, copy
+`~/Library/Application Support/3D Blu-ray to Vision Pro/profiles.json` to a safe
+location outside that folder if it exists. Quit the production app and every
+retired Preview variant before copying or restoring it. Bundle-identity
+separation does not isolate this file: both production and historical Preview
+builds can read and write the same profile library, so do not edit it from a
+retired Preview app after installing Beta 3.
+
+After Beta 3 is installed, it exposes Stable, RC, Beta, and Alpha. Its `beta`
+appcast item is eligible only on the Beta and Alpha routes; Stable and RC exclude
+it. Existing Stable or RC preferences persist until a tester explicitly changes
+the route. Testers explicitly choose Beta or Alpha to receive future eligible
+prereleases. Beta 3 remains immutable production/feed history in the cumulative
+appcast even though older clients cannot discover it.
 
 Selecting Stable after installing Beta 3 does not downgrade to `0.2.143`; the
 client waits for a newer eligible Stable build. The next production build is at
@@ -137,7 +151,9 @@ are not members of the production train:
 Their tags, assets, notes, product name, and bundle identifier remain immutable.
 Release tooling must exclude them before version parsing, ordering, ancestry,
 duplicate detection, release-note base selection, and appcast history. Their
-public tag syntax does not grant them production Beta status.
+public tag syntax does not grant them production Beta status. They cannot
+Sparkle-update into Beta 3: their retired Preview identities remain separate from
+the production bundle and its feed.
 
 Production release-note history includes published production Alpha, Beta, RC,
 and Stable releases. Prerelease notes compare with the newest lower production
