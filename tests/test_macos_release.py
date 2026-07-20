@@ -33,6 +33,7 @@ def release_metadata(app_path: Path) -> SparkleBundleMetadata:
         build_version="146",
         short_version="0.2.143",
         distribution_channel="direct",
+        support_diagnostics_endpoint="https://support.example",
         feed_url="https://cbusillo.github.io/BD_to_AVP/appcast.xml",
         minimum_system_version="26.0",
         public_key="test-key",

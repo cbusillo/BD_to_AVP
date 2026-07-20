@@ -7,18 +7,20 @@ import re
 import subprocess
 import tomllib
 
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterator
 
+from scripts.native_app import verify_support_diagnostics_endpoint
+from scripts.release import RETIRED_RELEASE_TAGS, ReleaseError, parse_release_version
 from scripts.sparkle_macos import FRAMEWORK_RELATIVE_PATH, REPO_ROOT, load_release, verify_framework_layout
 
 
 INFO_PLIST_RELATIVE_PATH = Path("Contents/Info.plist")
 PUBLIC_KEY_PATH = REPO_ROOT / "sparkle-public-ed-key.txt"
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
-SHORT_VERSION_PATTERN = re.compile(r"^[0-9]+(?:\.[0-9]+){2}(?:rc[0-9]+)?$")
 SYSTEM_VERSION_PATTERN = re.compile(r"^[0-9]+(?:\.[0-9]+){1,2}$")
 
 
@@ -33,6 +35,7 @@ class SparkleBundleMetadata:
     build_version: str
     short_version: str
     distribution_channel: str
+    support_diagnostics_endpoint: str
     feed_url: str
     minimum_system_version: str
     public_key: str
@@ -55,6 +58,18 @@ def _require_equal(info: dict[str, object], key: str, expected: object) -> objec
     if actual != expected:
         raise SparkleBundleError(f"Info.plist {key} must be {expected!r}; found {actual!r}.")
     return actual
+
+
+def _parse_short_version(value: str) -> str:
+    try:
+        version = parse_release_version(value)
+    except ReleaseError as error:
+        raise SparkleBundleError(
+            "CFBundleShortVersionString must be a canonical three-part PEP 440 Stable, Alpha, Beta, or RC version."
+        ) from error
+    if version.release_tag in RETIRED_RELEASE_TAGS:
+        raise SparkleBundleError("CFBundleShortVersionString belongs to a retired preview identity.")
+    return version.text
 
 
 def verify_code_signatures(app_path: Path) -> None:
@@ -120,6 +135,7 @@ def inspect_app_bundle(
     expected_info: dict[str, object] | None = None,
     verify_signatures: bool = False,
     require_repository_build: bool = True,
+    environment: Mapping[str, str] | None = None,
 ) -> SparkleBundleMetadata:
     info_path = app_path / INFO_PLIST_RELATIVE_PATH
     if not info_path.is_file():
@@ -148,12 +164,14 @@ def inspect_app_bundle(
     build_number = int(build_version)
     if build_number <= 1 or str(build_number) != build_version:
         raise SparkleBundleError("CFBundleVersion must be a canonical numeric repository counter greater than 1.")
-    short_version = str(info.get("CFBundleShortVersionString", "")).strip()
-    if SHORT_VERSION_PATTERN.fullmatch(short_version) is None:
-        raise SparkleBundleError("CFBundleShortVersionString must be a three-part version with an optional rc suffix.")
+    short_version = _parse_short_version(str(info.get("CFBundleShortVersionString", "")))
     minimum_system_version = str(info.get("LSMinimumSystemVersion", "")).strip()
     if SYSTEM_VERSION_PATTERN.fullmatch(minimum_system_version) is None:
         raise SparkleBundleError("LSMinimumSystemVersion must be a numeric dotted version.")
+    try:
+        support_diagnostics_endpoint = verify_support_diagnostics_endpoint(info, environment=environment)
+    except ValueError as error:
+        raise SparkleBundleError(str(error)) from error
 
     framework_path = app_path / FRAMEWORK_RELATIVE_PATH
     verify_framework_layout(framework_path, expected_version=load_release().version)
@@ -166,6 +184,7 @@ def inspect_app_bundle(
         build_version=build_version,
         short_version=short_version,
         distribution_channel=str(info["BDToAVPDistributionChannel"]),
+        support_diagnostics_endpoint=support_diagnostics_endpoint,
         feed_url=str(info["SUFeedURL"]),
         minimum_system_version=minimum_system_version,
         public_key=str(info["SUPublicEDKey"]),
@@ -198,6 +217,7 @@ def inspect_dmg(
     verify_signatures: bool = False,
     require_repository_build: bool = True,
     verify_distribution: bool = False,
+    environment: Mapping[str, str] | None = None,
 ) -> SparkleBundleMetadata:
     if verify_distribution:
         verify_dmg_distribution(dmg_path)
@@ -209,6 +229,7 @@ def inspect_dmg(
             app_paths[0],
             verify_signatures=verify_signatures,
             require_repository_build=require_repository_build,
+            environment=environment,
         )
         if verify_distribution:
             verify_app_distribution(app_paths[0])
