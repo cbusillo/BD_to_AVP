@@ -227,9 +227,16 @@ This prevents a signed build from silently shipping without online reporting.
 
 The native client uses an ephemeral `URLSession` with no cache, cookie store, or
 credential store. It sends the v1 `application/zip` metadata request to
-`POST /v1/reports`, validates the returned schema, support code, expiry,
-authorization methods, required headers, and exact report paths, then sends the
-same immutable ZIP bytes with the returned PUT headers.
+`POST /v1/reports`, including privacy rules version `4`. The service rejects
+missing or older privacy-rules versions before issuing upload credentials. The
+client validates the returned schema, support code, expiry, authorization
+methods, required headers, and exact report paths, then sends the same immutable
+ZIP bytes with the returned PUT headers.
+
+The version field is a fail-closed compatibility signal for official app
+clients, not authentication or content attestation for arbitrary callers. The
+service binds it to the short-lived upload authorization and checks it again on
+PUT, which also revokes authorizations created before the v4 admission gate.
 
 Both returned upload and status URLs must remain HTTPS and match the configured
 scheme, host, and effective port. Redirects are rejected for both requests, so

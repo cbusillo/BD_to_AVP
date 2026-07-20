@@ -188,6 +188,7 @@ final class DiagnosticReportClient: DiagnosticReportUploading, @unchecked Sendab
         let payload = CreateReportRequest(
             bundleSchemaVersion: 1,
             contentType: Self.contentType,
+            privacyRulesVersion: DiagnosticPrivacyRules.currentVersion,
             sha256: checksum,
             sizeBytes: sizeBytes
         )
@@ -560,12 +561,14 @@ private final class DiagnosticRequestTaskDelegate: NSObject, URLSessionTaskDeleg
 private struct CreateReportRequest: Encodable {
     let bundleSchemaVersion: Int
     let contentType: String
+    let privacyRulesVersion: Int
     let sha256: String
     let sizeBytes: Int
 
     enum CodingKeys: String, CodingKey {
         case bundleSchemaVersion = "bundle_schema_version"
         case contentType = "content_type"
+        case privacyRulesVersion = "privacy_rules_version"
         case sha256
         case sizeBytes = "size_bytes"
     }
