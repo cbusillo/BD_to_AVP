@@ -33,6 +33,28 @@ The production interface starting with the `0.3.0` release line requires Apple
 Silicon and macOS 26 or later. Stable `0.2.143` remains the last desktop build
 for macOS 14 through 25.
 
+### Beta 3 manual bootstrap
+
+When published, `v0.3.0-beta.3` is a one-time manual-download seed, not an
+update that currently shipped Stable or RC clients can discover. Those clients
+can select only Stable or RC, so they cannot select the Beta route or receive
+Beta 3 through Sparkle. Download that exact GitHub Release DMG, drag it into
+`/Applications`, and replace the existing production app.
+
+Before replacing the app, copy
+`~/Library/Application Support/3D Blu-ray to Vision Pro/profiles.json` to a safe
+location if it exists. The DMG uses the production bundle identifier
+`com.shinycomputers.bd-to-avp`, so it replaces/upgrades the production app
+rather than creating another app beside it. The retired Beta 1 and Beta 2
+Preview apps use separate immutable identities; they remain separate and cannot
+Sparkle-update into Beta 3.
+
+After Beta 3 is installed, its Update Route control offers Stable, RC, Beta,
+and Alpha. The Beta 3 appcast item is eligible only on Beta and Alpha; Stable
+and RC exclude it. Existing Stable or RC selections remain in place until you
+explicitly choose another route. Choosing Stable later does not downgrade the
+installed Beta 3 app—it waits for a newer eligible Stable build.
+
 See [Distribution Policy](docs/distribution-policy.md) for the current GUI
 release artifact and dependency policy.
 

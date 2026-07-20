@@ -41,14 +41,15 @@ GitHub Releases link and never initialize Sparkle.
 The production SwiftUI project exact-pins the same Sparkle 2.9.4 package. A
 single observable update controller owns Sparkle's automatic-check preference,
 the shared `BDToAVPUpdateChannel` selection, check availability, Settings
-controls, and Help commands. The current implementation exposes Stable and RC;
-issue #289 expands it to the four routes in
-[Production Release Routes](release-routes.md). It starts Sparkle only when the bundle has
-the complete direct-distribution policy: `direct` channel, HTTPS feed, public
-key, automatic installation disabled, extraction verification enabled, and no
-forced `SUEnableAutomaticChecks` value. Missing or invalid metadata fails closed
-to the GitHub Releases fallback. Sparkle relaunch is postponed while the
-conversion worker is active and resumes after the worker becomes idle.
+controls, and Help commands. It exposes Stable, RC, Beta, and Alpha using the
+four routes in [Production Release Routes](release-routes.md). Existing Stable
+and RC preferences stay at those routes until an explicit selection changes
+them. It starts Sparkle only when the bundle has the complete
+direct-distribution policy: `direct` channel, HTTPS feed, public key, automatic
+installation disabled, extraction verification enabled, and no forced
+`SUEnableAutomaticChecks` value. Missing or invalid metadata fails closed to the
+GitHub Releases fallback. Sparkle relaunch is postponed while the conversion
+worker is active and resumes after the worker becomes idle.
 
 Debug builds use a separate Development identity, omit all update metadata, and
 do not initialize Sparkle, although the single-target SPM build embeds the
@@ -253,12 +254,16 @@ One appcast serves all four routes:
 
 Sparkle continues to include default Stable items automatically. The updater
 selects the greatest eligible global build, so choosing a safer route affects
-future updates only and never downgrades the installed application.
-
-Beta 3 is an immutable `beta` item in the cumulative feed. It is also a manual
-download seed because currently shipped builds cannot select Beta or Alpha.
-After installing it, testers explicitly select Beta or Alpha for future
-prereleases.
+future updates only and never downgrades the installed application. When
+published, `v0.3.0-beta.3` (`0.3.0b3`, build `148`) is an immutable `beta` item
+in the cumulative feed and a manual-download seed. Currently shipped Stable and
+RC clients cannot select Beta, so they cannot discover it through Sparkle; do
+not claim otherwise. Its `beta` item is eligible only to Beta and Alpha, not
+Stable or RC. After manually installing the production
+`com.shinycomputers.bd-to-avp` DMG, testers see all four routes and explicitly
+select Beta or Alpha for future prereleases. Retired `v0.3.0-beta.1` and
+`v0.3.0-beta.2` Preview identities remain separate, immutable, and unable to
+Sparkle-upgrade into Beta 3.
 
 ## Runtime Integration and UX
 
@@ -295,6 +300,10 @@ removed from application and Briefcase requirements.
 
 ## Failure and Recovery
 
+- Before publication, a failed Beta 3 preparation leaves the live feed and all
+  published assets unchanged. Keep a matching draft only for an exact retry or
+  stop the release before publication; do not claim a draft has become
+  discoverable.
 - An unreachable feed or invalid EdDSA signature must fail closed without
   replacing the installed app.
 - A bad feed publication is recovered by redeploying the previous release's
@@ -307,6 +316,9 @@ removed from application and Briefcase requirements.
 - A bad application release is fixed by publishing a newer build number;
   automatic downgrade is not part of the initial design.
 - Previous signed DMGs remain available for manual recovery.
+- Published GitHub Release DMGs and appcast assets are never replaced. For a
+  severe post-publication withdrawal, disable the feed, then restore a
+  last-good published snapshot when updates may resume.
 - Losing the EdDSA private key requires a manual app release with a new public
   key before automatic updates can resume.
 - Sparkle cannot be enabled for wider users until update smoke succeeds from an

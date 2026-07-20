@@ -238,15 +238,20 @@ Sparkle implicitly includes default Stable items for every route. Moving to a
 safer route affects only future newer builds and never downgrades the installed
 application.
 
-Beta 3 is appended to the cumulative feed on channel `beta`, but currently
-shipped clients cannot select that channel. Testers bootstrap it by manual
-GitHub Release download, then explicitly choose Beta or Alpha for future
-prereleases.
+When published, `v0.3.0-beta.3` (`0.3.0b3`, build `148`) is appended to the
+cumulative feed on channel `beta`, but currently shipped Stable and RC clients
+cannot select that channel. It is therefore a manual-download seed, not a
+Sparkle-discoverable update from those installations. Testers download the exact
+GitHub Release DMG, replace the production
+`com.shinycomputers.bd-to-avp` app in `/Applications`, and then explicitly
+choose Beta or Alpha for future prereleases. The installation exposes all four
+routes, while the Beta 3 item remains excluded from Stable and RC.
 
 The retired side-by-side feedback releases remain immutable historical
 evidence. Their tags include `native-ui-preview-1`, `v0.3.0-beta.1`, and
 `v0.3.0-beta.2`. Do not replace those assets, repurpose their bundle identifier,
-or add them to the production appcast.
+or add them to the production appcast. Those retired Preview identities cannot
+Sparkle-upgrade into Beta 3.
 
 The cumulative `appcast.xml` attached to every published GitHub Release is the
 recovery source of truth, including the publication-time Markdown shown in the
@@ -262,6 +267,14 @@ again. A matching draft and its byte-identical assets resume safely; a
 conflicting draft or tag fails closed. Never replace a published DMG or appcast
 asset. If the Pages job fails after publication, rerun the failed job or dispatch
 `Manage Sparkle Pages` from `main` with `deploy` and the release tag.
+
+For the Beta 3 seed, a pre-publication failure leaves the existing feed and all
+published assets unchanged: retain the matching draft for an exact retry or stop
+the release before publication. After publication, do not upload a replacement
+DMG or appcast asset. If the feed must be withdrawn for severity, use the Pages
+`disable` operation; use `restore` with a last-good published release tag when
+updates may resume. Correct an application defect with a newer build, never by
+asking Sparkle to downgrade an installed app.
 
 The draft release body becomes immutable for that run once the appcast is
 constructed. Editing it afterward causes verification and publication to fail

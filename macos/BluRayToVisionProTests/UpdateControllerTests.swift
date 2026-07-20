@@ -18,6 +18,14 @@ final class UpdateControllerTests: XCTestCase {
         XCTAssertTrue(UpdateChannelPreference.noDowngradeExplanation.contains("never downgrades"))
     }
 
+    func testOnlyBetaAndAlphaRoutesIncludeTheBetaChannel() {
+        let routesIncludingBeta = UpdateChannelPreference.allCases.filter { preference in
+            preference.sparkleChannels.contains("beta")
+        }
+
+        XCTAssertEqual(routesIncludingBeta, [.beta, .alpha])
+    }
+
     @MainActor
     func testDebugBundleRemainsInManualUpdateMode() {
         XCTAssertEqual(UpdateEnvironment().mode, .manual)
@@ -162,6 +170,47 @@ final class UpdateControllerTests: XCTestCase {
         )
 
         XCTAssertEqual(relaunchedController.updateChannel, .beta)
+    }
+
+    @MainActor
+    func testPersistedStableAndRCStayUnchangedUntilExplicitRouteSelection() {
+        let cases: [(rawValue: String, preference: UpdateChannelPreference)] = [
+            ("stable", .stable),
+            ("rc", .releaseCandidate),
+        ]
+
+        for testCase in cases {
+            let defaults = isolatedDefaults()
+            let backend = FakeUpdateBackend()
+            var initializedChannel: UpdateChannelPreference?
+            defaults.set(testCase.rawValue, forKey: UpdateController.channelDefaultsKey)
+
+            let controller = UpdateController(
+                environment: directEnvironment(),
+                defaults: defaults,
+                backendFactory: { channel, _ in
+                    initializedChannel = channel
+                    return backend
+                }
+            )
+            controller.startIfNeeded()
+
+            XCTAssertEqual(controller.updateChannel, testCase.preference)
+            XCTAssertEqual(initializedChannel, testCase.preference)
+            XCTAssertEqual(defaults.string(forKey: UpdateController.channelDefaultsKey), testCase.rawValue)
+            XCTAssertEqual(backend.channelChangeCount, 0)
+
+            let relaunchedController = UpdateController(
+                environment: directEnvironment(publicKey: nil),
+                defaults: defaults
+            )
+            XCTAssertEqual(relaunchedController.updateChannel, testCase.preference)
+
+            controller.updateChannel = .beta
+
+            XCTAssertEqual(defaults.string(forKey: UpdateController.channelDefaultsKey), "beta")
+            XCTAssertEqual(backend.channelChangeCount, 1)
+        }
     }
 
     @MainActor
