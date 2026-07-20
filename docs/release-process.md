@@ -14,9 +14,10 @@ that any Beta 3 public artifact exists.
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
 entrypoints, Beta 3 bootstrap contract, and one-time metadata recovery are
-implemented and regression-covered. Publication remains frozen for issue #294,
-which exclusively owns the exact-SHA dispatch, approval, signing, publication,
-and verification work.
+implemented and regression-covered. Issue #294 has authorized publication by
+removing the Beta 3 release-freeze entry through protected-main review and now
+exclusively owns the exact-SHA dispatch, approval, signing, publication, and
+verification work.
 
 ## Release Preparation
 
@@ -69,19 +70,17 @@ or from a stale main commit.
 
 ## Release Orchestration
 
-> **Release publication is frozen.** The repository metadata is the reviewed
-> `0.3.0b3` build `148` target and build `147` remains permanently burned. Do
-> not dispatch `Stable` or `Prerelease`, request environment approval, sign,
-> publish, or mutate the feed or Pages under this metadata-recovery work. Issue
-> #294 exclusively owns those actions after exact-SHA post-merge gates pass.
-> No Beta 3 public artifact is claimed by issue #293. The committed
-> `.github/release-freezes.json` entry makes the shared engine reject
-> `v0.3.0-beta.3` before package or release construction until #294 removes it
-> through protected-main review.
+> **Beta 3 publication is authorized only through issue #294.** The repository
+> metadata is the reviewed `0.3.0b3` build `148` target and build `147` remains
+> permanently burned. The Beta 3 entry has been removed from
+> `.github/release-freezes.json` through protected-main review. Do not dispatch
+> until the exact unfreeze merge SHA has green post-merge CI and CodeQL. Only
+> the guarded `Prerelease` workflow may request `macos-signing` approval, sign,
+> publish, append the cumulative appcast, or deploy Pages for this release.
 
 Dispatch `Stable` from `main` only for reviewed committed Stable metadata, or
 dispatch `Prerelease` only for reviewed committed Alpha, Beta, or RC metadata,
-after the release freeze above has been lifted. The only optional input to
+after any applicable release-freeze entry has been lifted. The only optional input to
 either workflow is release-note text. There is no route or mode override: the
 committed project version determines the public release tag/title and DMG name,
 Latest behavior, Sparkle channel, and whether PyPI is published. A workflow and

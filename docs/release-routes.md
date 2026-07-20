@@ -7,12 +7,11 @@ closed when it cannot satisfy this contract.
 The application preference model, release metadata/history parser, appcast
 tooling, reusable release engine, and guarded operator entrypoints implement
 this four-route contract. The exact Beta 3 metadata migration and bootstrap are
-complete at `0.3.0b3` build `148`, with build `147` permanently burned.
-Publication remains frozen: issue #294 exclusively owns exact-SHA dispatch,
-approval, signing, publication, and public verification. The recovery work
-makes no public-artifact claim. `.github/release-freezes.json` rejects the Beta
-3 tag before package or release construction until #294 removes that entry
-through protected-main review.
+complete at `0.3.0b3` build `148`, with build `147` permanently burned. Issue
+#294 has removed the Beta 3 release-freeze entry through protected-main review
+and exclusively owns exact-SHA dispatch, approval, signing, publication, and
+public verification. No public-artifact claim exists until that guarded flow
+completes and its public state is independently verified.
 
 ## Production Identity
 
