@@ -1,7 +1,7 @@
 {
   "schema": "bd_to_avp.release_recovery",
   "schema_version": 2,
-  "observed_at": "2026-07-20T03:18:20Z",
+  "observed_at": "2026-07-20T04:59:47Z",
   "repository": "cbusillo/BD_to_AVP",
   "repository_identity": {
     "id": 771225421,

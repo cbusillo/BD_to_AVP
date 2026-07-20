@@ -19,7 +19,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BETA3_RECOVERY_EVIDENCE_PATH = REPO_ROOT / "docs" / "release-evidence" / "v0.3.0-beta.3-recovery.json"
-BETA3_RECOVERY_EVIDENCE_SHA256 = "4b9c546c1de98c9da63a8776fa7232dc3463c84af5f325b4404fb6f1e80b61ea"
+BETA3_RECOVERY_EVIDENCE_SHA256 = "31bb6aba336eeca2400501c469c99b2682c6f1ff768dd43e54fa1cb230ba6a0a"
 GITHUB_API_ROOT = "https://api.github.com"
 PYPI_URL = "https://pypi.org/pypi/bd-to-avp/json"
 PAGES_APPCAST_URL = "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
