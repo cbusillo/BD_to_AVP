@@ -162,7 +162,12 @@ Production release-note history includes published production Alpha, Beta, RC,
 and Stable releases. Prerelease notes compare with the newest lower production
 release that is an ancestor of the release commit. Stable notes compare with the
 newest lower production Stable release so they summarize the complete change
-set since the previous Stable.
+set since the previous Stable. Stable-form tags through `v0.2.139`, plus the
+pulled `v0.2.141`, are bounded pre-contract exceptions that GitHub records as
+prereleases. Release-note selection retains that GitHub prerelease
+classification while still parsing their versions and detecting duplicates.
+Starting with `v0.2.140`, every other production tag must agree with the GitHub
+prerelease flag; prerelease-form tags marked Stable are never accepted.
 
 ## Operator Boundaries
 
