@@ -1,6 +1,7 @@
 import importlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -106,6 +107,20 @@ class ReleaseWorkflowTests(unittest.TestCase):
         workflow = load_release_engine()
         release = stable["jobs"]["release"]
         call = workflow["on"]["workflow_call"]
+        configured_environments = load_github_config()["releaseEnvironments"]
+        macos_secret_names = set(configured_environments["macos-signing"]["secrets"])
+        sparkle_secret_names = set(configured_environments["sparkle-release"]["secrets"])
+        declared_secret_names = set(call["secrets"])
+        workflow_sources = [
+            (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+            for name in ("briefcase.yml", "prerelease.yml", "release-engine.yml")
+        ]
+        referenced_secret_names = set(
+            re.findall(
+                r"\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}",
+                (REPO_ROOT / ".github" / "workflows" / "release-engine.yml").read_text(encoding="utf-8"),
+            )
+        )
         policy = workflow["jobs"]["policy"]
         entry_guard = policy["steps"][0]
         policy_checkout = policy["steps"][1]
@@ -116,6 +131,31 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(prerelease["jobs"]["release"], release)
         self.assertEqual(release["uses"], "./.github/workflows/release-engine.yml")
         self.assertNotIn("secrets", release)
+        self.assertEqual(declared_secret_names, macos_secret_names | sparkle_secret_names)
+        self.assertEqual(declared_secret_names, referenced_secret_names)
+        self.assertTrue(all(definition["required"] == "false" for definition in call["secrets"].values()))
+        self.assertTrue(all("secrets: inherit" not in source for source in workflow_sources))
+        self.assertEqual(
+            set(
+                re.findall(
+                    r"\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}",
+                    json.dumps(workflow["jobs"]["package"]),
+                )
+            ),
+            macos_secret_names,
+        )
+        self.assertEqual(
+            set(
+                re.findall(
+                    r"\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}",
+                    json.dumps(workflow["jobs"]["publish-appcast"]),
+                )
+            ),
+            sparkle_secret_names,
+        )
+        for job_name, job in workflow["jobs"].items():
+            if job_name not in {"package", "publish-appcast"}:
+                self.assertNotIn("secrets.", json.dumps(job))
         self.assertEqual(
             release["permissions"],
             {
@@ -221,7 +261,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         recovery_step = next(step for step in prepare_steps if step["name"] == "Revalidate Beta 3 recovery premise")
         self.assertEqual(recovery_step["if"], "steps.metadata.outputs.release_tag == 'v0.3.0-beta.3'")
+        self.assertEqual(recovery_step["env"]["GH_TOKEN"], "${{ github.token }}")
         self.assertIn("--allow-beta3-draft", recovery_step["run"])
+        self.assertIn("--allow-github-actions-contents-write-token", recovery_step["run"])
         self.assertIn('--expected-sha "$GITHUB_SHA"', recovery_step["run"])
 
     def test_every_release_artifact_inspection_pins_the_diagnostics_endpoint(self) -> None:
@@ -314,6 +356,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('exit "$cleanup_status"', cleanup_script)
         self.assertIn("APPLE_APP_PASSWORD", str(package))
         self.assertIn('NOTARY_PROFILE="bd-to-avp-release-$TEAM_ID-$GITHUB_RUN_ID"', str(package))
+        notarization_step = next(
+            step
+            for step in package["steps"]
+            if step["name"] == "Store notarization credentials in the ephemeral keychain"
+        )
+        self.assertIn("Missing required macos-signing notarization secrets:", notarization_step["run"])
+        self.assertIn('MISSING_SECRETS+=("KEYCHAIN_PASSWORD")', notarization_step["run"])
+        self.assertNotIn('MISSING_SECRETS+=("APPLE_APP_PASSWORD")', notarization_step["run"])
         self.assertIn("python scripts/native_app.py package", str(package))
         self.assertIn("python -m scripts.macos_release", str(package))
         self.assertNotIn("python -m scripts.briefcase_app package", str(package))
@@ -333,6 +383,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(certificate_step["env"]["TEAM_ID"], "${{ secrets.TEAM_ID }}")
         self.assertEqual(certificate_step["env"]["PRODUCTION_TEAM_ID"], PRODUCTION_TEAM_ID)
         self.assertEqual(certificate_step["env"]["PRODUCTION_DEV_ID"], PRODUCTION_DEVELOPER_IDENTITY)
+        self.assertIn("Missing required macos-signing certificate secrets:", certificate_script)
         self.assertIn('case "$TEAM_ID" in', certificate_script)
         self.assertIn('if [ "${#TEAM_ID}" -ne 10 ]; then', certificate_script)
         self.assertIn('DEV_ID_PREFIX="Developer ID Application: "', certificate_script)
@@ -770,6 +821,7 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertNotIn("RELEASE_ID", str(publish))
         self.assertEqual(len(matching_steps), 1)
         self.assertEqual(matching_steps[0]["name"], "Sign DMG and build appcast")
+        self.assertIn("Missing required sparkle-release secret: SPARKLE_EDDSA_PRIVATE_KEY", matching_steps[0]["run"])
         self.assertIn("--verify --ed-key-file -", str(matching_steps[0]))
         self.assertNotIn(secret_expression, str(workflow["jobs"]["verify-draft"]))
         self.assertNotIn(secret_expression, str(workflow["jobs"]["deploy-appcast"]))

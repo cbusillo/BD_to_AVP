@@ -289,6 +289,31 @@ class ReleaseMetadataTests(unittest.TestCase):
 
 
 class ReleaseNotesBaseTests(unittest.TestCase):
+    def test_legacy_stable_form_prereleases_keep_their_github_classification(self) -> None:
+        history = [
+            published_release("v0.2.137"),
+            published_release("v0.2.139", prerelease=True),
+            published_release("v0.2.141", prerelease=True),
+        ]
+
+        stable_base = release.select_release_notes_base(
+            "v0.2.142",
+            history,
+            "stable-head",
+            tag_exists=lambda _tag_name: True,
+            is_ancestor=lambda _tag_name, _head_ref: True,
+        )
+        prerelease_base = release.select_release_notes_base(
+            "v0.2.140-rc.1",
+            history,
+            "rc-head",
+            tag_exists=lambda _tag_name: True,
+            is_ancestor=lambda _tag_name, _head_ref: True,
+        )
+
+        self.assertEqual(stable_base, "v0.2.137")
+        self.assertEqual(prerelease_base, "v0.2.139")
+
     def test_stable_uses_previous_stable_even_when_legacy_history_diverged(self) -> None:
         history = [
             [
@@ -345,8 +370,12 @@ class ReleaseNotesBaseTests(unittest.TestCase):
 
         self.assertEqual(selected, "v1.2.3")
 
-    def test_prerelease_history_excludes_retired_preview_tags_before_ordering(self) -> None:
+    def test_beta3_live_history_shape_selects_latest_production_ancestor(self) -> None:
         history = [
+            published_release("v0.2.139", prerelease=True),
+            published_release("v0.2.140"),
+            published_release("v0.2.141", prerelease=True),
+            published_release("v0.2.142"),
             published_release("v0.2.143"),
             published_release("native-ui-preview-1", prerelease=True),
             published_release("v0.3.0-beta.1", prerelease=True),
@@ -395,6 +424,8 @@ class ReleaseNotesBaseTests(unittest.TestCase):
         for tag_name, prerelease in (
             ("v1.2.3-beta.1", False),
             ("v1.2.3", True),
+            ("v0.2.140", True),
+            ("v0.2.142", True),
         ):
             with (
                 self.subTest(tag_name=tag_name),
@@ -410,6 +441,19 @@ class ReleaseNotesBaseTests(unittest.TestCase):
                     tag_exists=lambda _tag_name: True,
                     is_ancestor=lambda _tag_name, _head_ref: True,
                 )
+
+        legacy_duplicate_history = [
+            published_release("v0.2.139", prerelease=True),
+            published_release("v0.2.139", prerelease=True),
+        ]
+        with self.assertRaisesRegex(release.ReleaseError, "Multiple published GitHub Releases"):
+            release.select_release_notes_base(
+                "v0.2.140-rc.1",
+                legacy_duplicate_history,
+                "rc-head",
+                tag_exists=lambda _tag_name: True,
+                is_ancestor=lambda _tag_name, _head_ref: True,
+            )
 
         duplicate_history = [published_release("v1.2.3"), published_release("v1.2.3")]
         with self.assertRaisesRegex(release.ReleaseError, "Multiple published GitHub Releases"):

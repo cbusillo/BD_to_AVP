@@ -162,7 +162,12 @@ Production release-note history includes published production Alpha, Beta, RC,
 and Stable releases. Prerelease notes compare with the newest lower production
 release that is an ancestor of the release commit. Stable notes compare with the
 newest lower production Stable release so they summarize the complete change
-set since the previous Stable.
+set since the previous Stable. Stable-form tags through `v0.2.139`, plus the
+pulled `v0.2.141`, are bounded pre-contract exceptions that GitHub records as
+prereleases. Release-note selection retains that GitHub prerelease
+classification while still parsing their versions and detecting duplicates.
+Starting with `v0.2.140`, every other production tag must agree with the GitHub
+prerelease flag; prerelease-form tags marked Stable are never accepted.
 
 ## Operator Boundaries
 
@@ -187,7 +192,9 @@ Before any release work, the engine verifies the exact operator workflow ref and
 definition SHA, derives Stable or Prerelease authority from that validated path,
 verifies its own OIDC `job_workflow_ref` and `job_workflow_sha` claims, and binds
 the run ID, attempt, protected-main SHA, dispatch event, and both configured
-automation actors. Stable authority accepts only committed stable, Latest,
+automation actors. The reusable interface declares the Apple and Sparkle secret
+names as optional so the job-level reviewed environments can supply them; the
+operator callers neither pass nor inherit secrets. Stable authority accepts only committed stable, Latest,
 PyPI-enabled metadata. Prerelease authority accepts only committed Alpha, Beta,
 or RC metadata that is a non-Latest GitHub prerelease with PyPI disabled. The
 engine records the validated route and publication effects in the shared step

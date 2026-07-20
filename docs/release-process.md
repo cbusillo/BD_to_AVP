@@ -97,8 +97,12 @@ compatibility, attestation, draft creation and verification, cumulative appcast
 mutation, GitHub Release publication, Pages deployment, and signing-material
 cleanup. The engine intentionally has no `release` concurrency declaration,
 preventing a caller and its called workflow from competing with or canceling
-the same run. It derives the trusted route from the exact validated caller path
-and writes the validated route and publication effects to the run summary.
+the same run. It declares each environment-secret name as an optional
+`workflow_call` secret so GitHub can resolve the values from the job-level
+`macos-signing` and `sparkle-release` environments. The operator callers pass
+and inherit no secrets. The engine derives the trusted route from the exact
+validated caller path and writes the validated route and publication effects to
+the run summary.
 
 The workflow must be dispatched and rerun through the configured
 `shiny-code-bot` automation identity. The required approver is `cbusillo`, and
@@ -113,7 +117,9 @@ ancestor of the release commit, keeping prerelease notes incremental. A Stable
 release compares with the newest lower published production Stable tag rather
 than the latest prerelease, so its notes summarize the complete change set since
 the previous Stable. The retired preview tags are excluded before parsing or
-history selection.
+history selection. Stable-form tags through `v0.2.139`, plus the pulled
+`v0.2.141`, retain their historical GitHub prerelease classification; all other
+production tag and prerelease-flag mismatches fail closed.
 
 GitHub requests one maintainer approval when the run reaches the
 `macos-signing` environment. That approval authorizes the release intent for the

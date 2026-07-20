@@ -64,6 +64,8 @@ LEGACY_RC_TAG_PATTERN = re.compile(
     r"rc(?P<prerelease>[1-9][0-9]*)$"
 )
 RETIRED_RELEASE_TAGS = frozenset({"native-ui-preview-1", "v0.3.0-beta.1", "v0.3.0-beta.2"})
+PRE_CONTRACT_PRERELEASE_STABLE_MAX_VERSION = (0, 2, 139)
+PULLED_PRERELEASE_STABLE_TAGS = frozenset({"v0.2.141"})
 DMG_NAME_PREFIX = "3D-Blu-ray-to-Vision-Pro"
 INTERNAL_STAGE_NAMES = {"a": "alpha", "b": "beta", "rc": "rc"}
 PUBLIC_STAGE_SUFFIXES = {"alpha": "a", "beta": "b", "rc": "rc"}
@@ -231,6 +233,19 @@ def _release_records(release_history: Any) -> list[dict[str, Any]]:
     return records
 
 
+def _allows_legacy_prerelease_stable_tag(
+    tag_name: str,
+    version: ReleaseVersion,
+    prerelease: bool,
+) -> bool:
+    core_version = (version.major, version.minor, version.patch)
+    return (
+        prerelease
+        and not version.prerelease
+        and (core_version <= PRE_CONTRACT_PRERELEASE_STABLE_MAX_VERSION or tag_name in PULLED_PRERELEASE_STABLE_TAGS)
+    )
+
+
 def _published_releases(release_history: Any) -> list[PublishedRelease]:
     releases: list[PublishedRelease] = []
     seen_tags: set[str] = set()
@@ -248,7 +263,11 @@ def _published_releases(release_history: Any) -> list[PublishedRelease]:
             version = parse_release_tag(tag_name)
         except ReleaseError:
             continue
-        if prerelease != version.prerelease:
+        if prerelease != version.prerelease and not _allows_legacy_prerelease_stable_tag(
+            tag_name,
+            version,
+            prerelease,
+        ):
             raise ReleaseError(f"Published GitHub Release prerelease state disagrees with tag {tag_name}.")
         if tag_name in seen_tags:
             raise ReleaseError(f"Multiple published GitHub Releases use tag {tag_name}.")
