@@ -10,10 +10,12 @@ failed before publication and its build number is permanently burned. The
 focused recovery and Beta 3 cut packet are owned by issue #293.
 
 Issue #289 implements the four-route updater preference, release metadata,
-production-history filtering, and appcast validation described here. The
-guarded Stable/Prerelease entrypoints and Beta 3 recovery/bootstrap remain owned
-by issues #290, #291, #292, and #293, so Alpha and Beta preparation and dispatch
-stay blocked until those gates and the focused signed-install smoke have landed.
+production-history filtering, and appcast validation described here. Issue #290
+provides the reusable engine, and issue #291 provides the guarded
+Stable/Prerelease entrypoints. The Beta 3 metadata migration and
+recovery/bootstrap remain owned by issues #292 and #293, so Alpha and Beta
+preparation and dispatch stay blocked until those gates and the focused
+signed-install smoke have landed.
 
 ## Release Preparation
 
@@ -51,27 +53,32 @@ or from a stale main commit.
 ## Release Orchestration
 
 > **Release dispatch is frozen.** Protected `main` still contains the burned
-> `0.3.0rc1` build `147` metadata. Do not dispatch `Release from protected main`
-> or any replacement release entry until #289 through #293 have landed and
+> `0.3.0rc1` build `147` metadata. Do not dispatch `Stable` or `Prerelease`
+> until issues #292 and #293 have landed and
 > `scripts/release.py metadata` reports the reviewed `0.3.0b3` build `148`
 > target. Publishing build `147` is prohibited.
 
-Dispatch `Release from protected main` from `main` only when the release freeze
-above has been lifted. The only optional input is release-note text; the
-committed project version determines Alpha, Beta, RC, or Stable metadata, the
-separate public release tag/title and DMG name, latest-release behavior, Sparkle
-channel, and whether PyPI is published. The GitHub Release title is the exact
-public version tag so narrow release lists keep the distinguishing version
-visible.
+Dispatch `Stable` from `main` only for reviewed committed Stable metadata, or
+dispatch `Prerelease` only for reviewed committed Alpha, Beta, or RC metadata,
+after the release freeze above has been lifted. The only optional input to
+either workflow is release-note text. There is no route or mode override: the
+committed project version determines the public release tag/title and DMG name,
+Latest behavior, Sparkle channel, and whether PyPI is published. A workflow and
+committed-metadata mismatch fails before release construction. The GitHub
+Release title is the exact public version tag so narrow release lists keep the
+distinguishing version visible.
 
-`.github/workflows/briefcase.yml` is the Stable operator entry and the sole
-owner of the repository-wide `release` concurrency group. It calls the guarded
-`.github/workflows/release-engine.yml` reusable workflow, which owns source and
-metadata validation, macOS packaging, signing, notarization, compatibility,
-attestation, draft creation and verification, cumulative appcast mutation,
-GitHub Release publication, Pages deployment, and signing-material cleanup.
-The engine intentionally has no `release` concurrency declaration, preventing
-the caller and called workflow from competing with or canceling the same run.
+`.github/workflows/briefcase.yml` is the Stable operator entry and
+`.github/workflows/prerelease.yml` is the Prerelease operator entry. Both callers
+declare the same repository-wide `release` concurrency group and call the
+guarded `.github/workflows/release-engine.yml` reusable workflow, which owns
+source and metadata validation, macOS packaging, signing, notarization,
+compatibility, attestation, draft creation and verification, cumulative appcast
+mutation, GitHub Release publication, Pages deployment, and signing-material
+cleanup. The engine intentionally has no `release` concurrency declaration,
+preventing a caller and its called workflow from competing with or canceling
+the same run. It derives the trusted route from the exact validated caller path
+and writes the validated route and publication effects to the run summary.
 
 The workflow must be dispatched and rerun through the configured
 `shiny-code-bot` automation identity. The required approver is `cbusillo`, and
@@ -105,16 +112,21 @@ and exact protected-main SHA, then use the repository helper:
 ```sh
 uv run python -m scripts.github_release_run watch \
   --run-id "$RUN_ID" \
-  --workflow "Release from protected main" \
+  --workflow "$WORKFLOW" \
   --head-sha "$MAIN_SHA"
 ```
+
+Set `WORKFLOW` to exactly `Stable` or `Prerelease`; retired workflow names are
+rejected.
 
 The helper validates the repository, workflow, event, branch, and full commit
 SHA on every poll. It also checks that protected `main` has not moved. Exit code
 `20` emits an `approval_required` JSON event immediately after querying GitHub's
 pending deployments, including a fingerprint bound to the repository, run,
 exact operator workflow path and ID, reusable engine path, both workflow refs
-and definition SHAs, run attempt, commit, actors, environment ID, and reviewer.
+and definition SHAs, validated route, run attempt, commit, actors, environment
+ID, and reviewer. The workflow ID is the positive value returned by GitHub for
+the run rather than a locally invented identifier.
 The fingerprint is a non-secret identity checksum, not evidence of
 human authorization. Obtain explicit maintainer authorization in the active
 conversation, then approve through the guarded command rather than a raw API
@@ -123,7 +135,7 @@ call:
 ```sh
 uv run python -m scripts.github_release_run approve \
   --run-id "$RUN_ID" \
-  --workflow "Release from protected main" \
+  --workflow "$WORKFLOW" \
   --head-sha "$MAIN_SHA" \
   --confirm-sha "$MAIN_SHA" \
   --approval-fingerprint "$APPROVAL_FINGERPRINT" \

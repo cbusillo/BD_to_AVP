@@ -4,11 +4,12 @@ This document is the normative release-identity, version, history, and update-ro
 contract for the direct-distribution application. Implementation work must fail
 closed when it cannot satisfy this contract.
 
-The application preference model, release metadata/history parser, and appcast
-tooling implement this four-route contract. The guarded release entrypoints and
-Beta 3 recovery/bootstrap remain intentionally blocked on issues 290 through
-293. Do not prepare or dispatch an Alpha or Beta release until those gates have
-landed and the focused signed-install smoke has passed.
+The application preference model, release metadata/history parser, appcast
+tooling, reusable release engine, and guarded operator entrypoints implement
+this four-route contract. The Beta 3 metadata migration and bootstrap remain
+intentionally blocked on issues 292 and 293. Do not prepare or dispatch an Alpha
+or Beta release until those gates have landed and the focused signed-install
+smoke has passed.
 
 ## Production Identity
 
@@ -151,21 +152,27 @@ Operators receive two manual entry workflows:
 - **Stable**, which accepts only committed Stable metadata; and
 - **Prerelease**, which accepts committed Alpha, Beta, or RC metadata.
 
-Both call one guarded release engine, share one repository-wide `release`
-concurrency lock, require protected `main`, reject stale SHAs, and preserve the
+Both call one guarded release engine, share the same repository-wide `release`
+concurrency group, require protected `main`, reject stale SHAs, and preserve the
 exact `macos-signing` approval contract. The workflow choice authorizes intent;
 committed metadata alone determines stage, public identity, Sparkle channel,
-Latest behavior, and package publication.
+Latest behavior, and package publication. Neither entrypoint nor the reusable
+engine accepts a route, mode, stage, or publication override.
 
-The Stable operator remains `.github/workflows/briefcase.yml`. It alone owns the
-repository-wide `release` concurrency lock and calls
-`.github/workflows/release-engine.yml`; the reusable engine must not declare the
-same lock because caller/callee concurrency can otherwise cancel or indefinitely
-queue the same release run. Before any release work, the engine verifies the
-exact operator workflow ref and definition SHA, its own OIDC
-`job_workflow_ref` and `job_workflow_sha` claims, the run ID and attempt, the
-protected-main SHA, the dispatch event, and both configured automation actors.
-It revalidates the resulting policy fingerprint after the `macos-signing`
+The `Stable` operator remains `.github/workflows/briefcase.yml`; the
+`Prerelease` operator is `.github/workflows/prerelease.yml`. Each caller declares
+the same `release` concurrency group, while
+`.github/workflows/release-engine.yml` declares no concurrency group so a
+caller and its reusable job cannot cancel or indefinitely queue each other.
+Before any release work, the engine verifies the exact operator workflow ref and
+definition SHA, derives Stable or Prerelease authority from that validated path,
+verifies its own OIDC `job_workflow_ref` and `job_workflow_sha` claims, and binds
+the run ID, attempt, protected-main SHA, dispatch event, and both configured
+automation actors. Stable authority accepts only committed stable, Latest,
+PyPI-enabled metadata. Prerelease authority accepts only committed Alpha, Beta,
+or RC metadata that is a non-Latest GitHub prerelease with PyPI disabled. The
+engine records the validated route and publication effects in the shared step
+summary, then revalidates the policy fingerprint after the `macos-signing`
 approval gate and before using any Apple credential.
 
 PyPI is the deliberate caller-side exception to engine job ownership. PyPI

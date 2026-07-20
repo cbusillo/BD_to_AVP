@@ -71,9 +71,13 @@
     "approvalEnvironment": "macos-signing",
     "engineWorkflowPath": ".github/workflows/release-engine.yml",
     "workflows": {
-      "Release from protected main": {
+      "Stable": {
         "path": ".github/workflows/briefcase.yml",
-        "id": 101708423
+        "route": "stable"
+      },
+      "Prerelease": {
+        "path": ".github/workflows/prerelease.yml",
+        "route": "prerelease"
       }
     }
   },
@@ -85,6 +89,7 @@
     "releaseProcess": "docs/release-process.md",
     "releaseWorkflows": [
       ".github/workflows/briefcase.yml",
+      ".github/workflows/prerelease.yml",
       ".github/workflows/release-engine.yml",
       ".github/workflows/sparkle-pages.yml",
       ".github/workflows/manage-sparkle-pages.yml"
@@ -135,7 +140,8 @@
   "importantWorkflows": [
     "CI",
     "CodeQL",
-    "Release from protected main",
+    "Stable",
+    "Prerelease",
     "Manage Sparkle Pages",
     "Update FFmpeg Vendor Pins"
   ],

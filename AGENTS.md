@@ -1,6 +1,6 @@
 # Release Operations
 
-- For `Release from protected main`, use
+- For either `Stable` or `Prerelease`, use
   `uv run python -m scripts.github_release_run watch` as the release-run monitor.
   A generic `gh run watch` or run waiter is not sufficient on its own.
 - The watcher exit code `20` means a GitHub environment approval is required.

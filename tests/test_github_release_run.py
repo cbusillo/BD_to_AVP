@@ -25,13 +25,25 @@ from scripts.github_release_run import (
     parse_args,
     watch_release_run,
 )
-from scripts.release_workflow_policy import ENGINE_WORKFLOW_PATH, OPERATOR_WORKFLOW_PATH, REQUIRED_ACTOR
+from scripts.release_workflow_policy import (
+    ENGINE_WORKFLOW_PATH,
+    OPERATOR_WORKFLOWS,
+    PRERELEASE_OPERATOR_WORKFLOW_PATH,
+    PRERELEASE_ROUTE,
+    PRERELEASE_WORKFLOW_NAME,
+    REQUIRED_ACTOR,
+    STABLE_OPERATOR_WORKFLOW_PATH,
+    STABLE_ROUTE,
+    STABLE_WORKFLOW_NAME,
+)
 
 
 REPOSITORY = "cbusillo/BD_to_AVP"
 RUN_ID = 29597548980
 HEAD_SHA = "9e9a38c715dbbe5df97e6d3a8ba715731607db6a"
-WORKFLOW = "Release from protected main"
+WORKFLOW = STABLE_WORKFLOW_NAME
+WORKFLOW_ID = 101_708_423
+PRERELEASE_WORKFLOW_ID = 222_333_444
 ENVIRONMENT_ID = 17_971_370_694
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUN_ENDPOINT = f"repos/{REPOSITORY}/actions/runs/{RUN_ID}"
@@ -77,8 +89,8 @@ def expectation(**overrides: Any) -> RunExpectation:
 def workflow_run(*, status: str, conclusion: str | None = None, **overrides: Any) -> dict[str, object]:
     values: dict[str, object] = {
         "name": WORKFLOW,
-        "path": ".github/workflows/briefcase.yml",
-        "workflow_id": 101_708_423,
+        "path": STABLE_OPERATOR_WORKFLOW_PATH,
+        "workflow_id": WORKFLOW_ID,
         "head_sha": HEAD_SHA,
         "head_branch": "main",
         "event": "workflow_dispatch",
@@ -112,9 +124,14 @@ def pending_deployments(
     ]
 
 
-def approval_fingerprint() -> str:
+def approval_fingerprint(
+    *,
+    workflow: str = WORKFLOW,
+    workflow_id: int = WORKFLOW_ID,
+) -> str:
     return build_approval_fingerprint(
-        expectation(),
+        expectation(workflow=workflow),
+        workflow_id=workflow_id,
         environment_id=ENVIRONMENT_ID,
         run_attempt=1,
         run_actor="shiny-code-bot",
@@ -146,7 +163,7 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
         self.assertEqual(events[0]["run_attempt"], 1)
         self.assertEqual(
             events[0]["operator_workflow_ref"],
-            f"{REPOSITORY}/{OPERATOR_WORKFLOW_PATH}@refs/heads/main",
+            f"{REPOSITORY}/{STABLE_OPERATOR_WORKFLOW_PATH}@refs/heads/main",
         )
         self.assertEqual(events[0]["operator_workflow_sha"], HEAD_SHA)
         self.assertEqual(
@@ -188,6 +205,7 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
     def test_approval_fingerprint_changes_between_run_attempts(self) -> None:
         first = build_approval_fingerprint(
             expectation(),
+            workflow_id=WORKFLOW_ID,
             environment_id=ENVIRONMENT_ID,
             run_attempt=1,
             run_actor="shiny-code-bot",
@@ -195,6 +213,7 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
         )
         second = build_approval_fingerprint(
             expectation(),
+            workflow_id=WORKFLOW_ID,
             environment_id=ENVIRONMENT_ID,
             run_attempt=2,
             run_actor="shiny-code-bot",
@@ -207,6 +226,7 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
         trusted = approval_fingerprint()
         substituted = build_approval_fingerprint(
             expectation(engine_workflow_path=".github/workflows/untrusted-engine.yml"),
+            workflow_id=WORKFLOW_ID,
             environment_id=ENVIRONMENT_ID,
             run_attempt=1,
             run_actor="shiny-code-bot",
@@ -214,6 +234,39 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
         )
 
         self.assertNotEqual(trusted, substituted)
+
+    def test_approval_fingerprint_binds_returned_workflow_id_path_and_route(self) -> None:
+        stable = approval_fingerprint()
+        different_id = build_approval_fingerprint(
+            expectation(),
+            workflow_id=WORKFLOW_ID + 1,
+            environment_id=ENVIRONMENT_ID,
+            run_attempt=1,
+            run_actor=REQUIRED_ACTOR,
+            triggering_actor=REQUIRED_ACTOR,
+        )
+        prerelease = build_approval_fingerprint(
+            expectation(workflow=PRERELEASE_WORKFLOW_NAME),
+            workflow_id=PRERELEASE_WORKFLOW_ID,
+            environment_id=ENVIRONMENT_ID,
+            run_attempt=1,
+            run_actor=REQUIRED_ACTOR,
+            triggering_actor=REQUIRED_ACTOR,
+        )
+
+        self.assertNotEqual(stable, different_id)
+        self.assertNotEqual(stable, prerelease)
+
+    def test_approval_fingerprint_rejects_an_unvalidated_workflow_id(self) -> None:
+        with self.assertRaisesRegex(ReleaseRunError, "positive integer returned by GitHub"):
+            build_approval_fingerprint(
+                expectation(),
+                workflow_id=0,
+                environment_id=ENVIRONMENT_ID,
+                run_attempt=1,
+                run_actor=REQUIRED_ACTOR,
+                triggering_actor=REQUIRED_ACTOR,
+            )
 
     def test_unexpected_engine_workflow_path_is_rejected_before_github_access(self) -> None:
         client = FakeGitHubAPI()
@@ -258,6 +311,27 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
 
         self.assertEqual(result, EXIT_FAILED)
         self.assertEqual(events[0]["event"], "failed")
+
+    def test_prerelease_workflow_is_supported_with_its_validated_route(self) -> None:
+        client = FakeGitHubAPI()
+        client.add(
+            RUN_ENDPOINT,
+            workflow_run(
+                status="completed",
+                conclusion="success",
+                name=PRERELEASE_WORKFLOW_NAME,
+                path=PRERELEASE_OPERATOR_WORKFLOW_PATH,
+                workflow_id=PRERELEASE_WORKFLOW_ID,
+            ),
+        )
+        events: list[dict[str, object]] = []
+
+        result = watch_release_run(expectation(workflow=PRERELEASE_WORKFLOW_NAME), client, emit=events.append)
+
+        self.assertEqual(result, EXIT_SUCCESS)
+        self.assertEqual(events[0]["workflow_id"], PRERELEASE_WORKFLOW_ID)
+        self.assertEqual(events[0]["workflow_path"], PRERELEASE_OPERATOR_WORKFLOW_PATH)
+        self.assertEqual(events[0]["release_route"], PRERELEASE_ROUTE)
 
     def test_watch_polls_until_success(self) -> None:
         client = FakeGitHubAPI()
@@ -324,33 +398,64 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
         self.assertEqual(result, EXIT_SAFETY_ERROR)
         self.assertIn("workflow_path", str(events[0]["message"]))
 
-    def test_wrong_workflow_id_is_a_safety_error(self) -> None:
-        client = FakeGitHubAPI()
-        client.add(RUN_ENDPOINT, workflow_run(status="in_progress", workflow_id=123))
-        events: list[dict[str, object]] = []
+    def test_nonpositive_or_noninteger_returned_workflow_id_is_a_safety_error(self) -> None:
+        for workflow_id in (0, -1, "123", True):
+            with self.subTest(workflow_id=workflow_id):
+                client = FakeGitHubAPI()
+                client.add(RUN_ENDPOINT, workflow_run(status="in_progress", workflow_id=workflow_id))
+                events: list[dict[str, object]] = []
 
-        result = main(
-            [
-                "watch",
-                "--run-id",
-                str(RUN_ID),
-                "--workflow",
-                WORKFLOW,
-                "--head-sha",
-                HEAD_SHA,
-            ],
-            client=client,
-            emit=events.append,
-        )
+                result = main(
+                    [
+                        "watch",
+                        "--run-id",
+                        str(RUN_ID),
+                        "--workflow",
+                        WORKFLOW,
+                        "--head-sha",
+                        HEAD_SHA,
+                    ],
+                    client=client,
+                    emit=events.append,
+                )
 
-        self.assertEqual(result, EXIT_SAFETY_ERROR)
-        self.assertIn("workflow ID", str(events[0]["message"]))
+                self.assertEqual(result, EXIT_SAFETY_ERROR)
+                self.assertIn("positive integer returned by GitHub", str(events[0]["message"]))
+
+    def test_both_run_actors_must_be_release_automation(self) -> None:
+        for actor_field in ("actor", "triggering_actor"):
+            with self.subTest(actor_field=actor_field):
+                client = FakeGitHubAPI()
+                client.add(
+                    RUN_ENDPOINT,
+                    workflow_run(status="completed", conclusion="success", **{actor_field: {"login": "cbusillo"}}),
+                )
+                events: list[dict[str, object]] = []
+
+                result = main(
+                    [
+                        "watch",
+                        "--run-id",
+                        str(RUN_ID),
+                        "--workflow",
+                        WORKFLOW,
+                        "--head-sha",
+                        HEAD_SHA,
+                    ],
+                    client=client,
+                    emit=events.append,
+                )
+
+                self.assertEqual(result, EXIT_SAFETY_ERROR)
+                self.assertIn(REQUIRED_ACTOR, str(events[0]["message"]))
 
 
 class GitHubReleaseRunApprovalTests(unittest.TestCase):
     def approval_client(
         self,
         *,
+        workflow: str = WORKFLOW,
+        workflow_id: int = WORKFLOW_ID,
         can_approve: bool = True,
         environment: str = "macos-signing",
         run_actor: str = "shiny-code-bot",
@@ -363,6 +468,9 @@ class GitHubReleaseRunApprovalTests(unittest.TestCase):
             RUN_ENDPOINT,
             workflow_run(
                 status="waiting",
+                name=workflow,
+                path=OPERATOR_WORKFLOWS[workflow].path,
+                workflow_id=workflow_id,
                 actor={"login": run_actor},
                 triggering_actor={"login": triggering_actor},
             ),
@@ -407,6 +515,31 @@ class GitHubReleaseRunApprovalTests(unittest.TestCase):
             events[0]["engine_workflow_ref"],
             f"{REPOSITORY}/{ENGINE_WORKFLOW_PATH}@refs/heads/main",
         )
+
+    def test_prerelease_approval_uses_returned_workflow_identity_and_route(self) -> None:
+        client = self.approval_client(
+            workflow=PRERELEASE_WORKFLOW_NAME,
+            workflow_id=PRERELEASE_WORKFLOW_ID,
+        )
+        events: list[dict[str, object]] = []
+
+        result = approve_release_run(
+            expectation(workflow=PRERELEASE_WORKFLOW_NAME),
+            client,
+            confirm_sha=HEAD_SHA,
+            approval_fingerprint=approval_fingerprint(
+                workflow=PRERELEASE_WORKFLOW_NAME,
+                workflow_id=PRERELEASE_WORKFLOW_ID,
+            ),
+            comment="Approved after explicit prerelease authorization.",
+            emit=events.append,
+        )
+
+        self.assertEqual(result, EXIT_SUCCESS)
+        self.assertEqual(events[0]["workflow"], PRERELEASE_WORKFLOW_NAME)
+        self.assertEqual(events[0]["workflow_id"], PRERELEASE_WORKFLOW_ID)
+        self.assertEqual(events[0]["workflow_path"], PRERELEASE_OPERATOR_WORKFLOW_PATH)
+        self.assertEqual(events[0]["release_route"], PRERELEASE_ROUTE)
 
     def test_wrong_confirmation_sha_fails_before_github_access(self) -> None:
         client = FakeGitHubAPI()
@@ -548,7 +681,7 @@ class GitHubReleaseRunApprovalTests(unittest.TestCase):
         self.assertIn("fingerprint", str(events[0]["message"]))
         self.assertEqual(client.post_calls, [])
 
-    def test_approval_actor_cannot_self_approve_own_dispatch(self) -> None:
+    def test_approval_rejects_dispatch_by_non_automation_actor(self) -> None:
         client = self.approval_client(run_actor="cbusillo")
         events: list[dict[str, object]] = []
 
@@ -573,10 +706,11 @@ class GitHubReleaseRunApprovalTests(unittest.TestCase):
         )
 
         self.assertEqual(result, EXIT_SAFETY_ERROR)
-        self.assertIn("must not approve", str(events[0]["message"]))
+        self.assertIn("actor must be", str(events[0]["message"]))
+        self.assertIn(REQUIRED_ACTOR, str(events[0]["message"]))
         self.assertEqual(client.post_calls, [])
 
-    def test_approval_actor_cannot_self_approve_own_rerun(self) -> None:
+    def test_approval_rejects_rerun_by_non_automation_actor(self) -> None:
         client = self.approval_client(triggering_actor="cbusillo")
         events: list[dict[str, object]] = []
 
@@ -601,7 +735,8 @@ class GitHubReleaseRunApprovalTests(unittest.TestCase):
         )
 
         self.assertEqual(result, EXIT_SAFETY_ERROR)
-        self.assertIn("must not approve", str(events[0]["message"]))
+        self.assertIn("triggering actor must be", str(events[0]["message"]))
+        self.assertIn(REQUIRED_ACTOR, str(events[0]["message"]))
         self.assertEqual(client.post_calls, [])
 
     def test_additional_reviewer_is_rejected(self) -> None:
@@ -641,6 +776,14 @@ class GitHubReleaseRunContractTests(unittest.TestCase):
         self.assertEqual(context.exception.code, 2)
         self.assertNotEqual(context.exception.code, EXIT_APPROVAL_REQUIRED)
 
+    def test_retired_release_workflow_name_is_rejected(self) -> None:
+        client = FakeGitHubAPI()
+
+        with self.assertRaisesRegex(ReleaseRunError, "Workflow must be one of"):
+            watch_release_run(expectation(workflow="Release from protected main"), client)
+
+        self.assertEqual(client.get_calls, [])
+
     def test_operator_commands_and_reviewer_are_discoverable(self) -> None:
         config = json.loads((REPO_ROOT / ".github" / "github.json").read_text(encoding="utf-8"))
         operations = config["releaseOperations"]
@@ -660,12 +803,18 @@ class GitHubReleaseRunContractTests(unittest.TestCase):
         self.assertEqual(
             operations["workflows"],
             {
-                "Release from protected main": {
-                    "path": ".github/workflows/briefcase.yml",
-                    "id": 101_708_423,
+                STABLE_WORKFLOW_NAME: {
+                    "path": STABLE_OPERATOR_WORKFLOW_PATH,
+                    "route": STABLE_ROUTE,
+                },
+                PRERELEASE_WORKFLOW_NAME: {
+                    "path": PRERELEASE_OPERATOR_WORKFLOW_PATH,
+                    "route": PRERELEASE_ROUTE,
                 },
             },
         )
+        self.assertEqual(set(operations["workflows"]), set(OPERATOR_WORKFLOWS))
+        self.assertTrue(all("id" not in policy for policy in operations["workflows"].values()))
         self.assertTrue(signing["requiredReview"])
         self.assertEqual(signing["reviewers"], ["cbusillo"])
         self.assertTrue(signing["preventSelfReview"])
