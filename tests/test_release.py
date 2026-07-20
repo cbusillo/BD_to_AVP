@@ -843,6 +843,36 @@ class Beta3RecoveryTests(unittest.TestCase):
                     remote_verifier=mutate_source,
                 )
 
+    def test_recovery_rejects_target_drift_during_commit_point_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
+            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
+            evidence_path = make_recovery_evidence(root)
+            originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
+            verification_count = 0
+
+            def mutate_target_at_commit(_evidence: object) -> None:
+                nonlocal verification_count
+                verification_count += 1
+                if verification_count == 2:
+                    pyproject_path.write_bytes(originals[pyproject_path])
+
+            with self.assertRaisesRegex(release.ReleaseError, "changed during final validation"):
+                release.recover_beta3(
+                    pyproject_path=pyproject_path,
+                    lock_path=lock_path,
+                    macos_project_path=macos_project_path,
+                    evidence_path=evidence_path,
+                    lock_runner=fake_lock_runner,
+                    remote_verifier=mutate_target_at_commit,
+                )
+
+            self.assertEqual(verification_count, 2)
+            for path, original in originals.items():
+                self.assertEqual(path.read_bytes(), original)
+            self.assertFalse((root / release.TRANSACTION_JOURNAL_NAME).exists())
+
     def test_recovery_rejects_production_identity_drift(self) -> None:
         cases = (
             ("feed", "pyproject.toml", "https://cbusillo.github.io/BD_to_AVP/appcast.xml", "https://example.test/feed"),

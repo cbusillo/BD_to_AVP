@@ -144,6 +144,9 @@ class Beta3RecoveryEvidenceTests(unittest.TestCase):
         self.assertEqual(self.evidence["schema_version"], 2)
         self.assertEqual(self.evidence["repository_identity"]["id"], 771225421)
         self.assertEqual(self.evidence["pages"]["release_tag"], "v0.2.143")
+        cut_packet = (recovery_evidence.REPO_ROOT / "docs" / "0.3.0-beta.3-cut-packet.md").read_text(encoding="utf-8")
+        self.assertIn(str(self.evidence["observed_at"]), cut_packet)
+        self.assertIn(recovery_evidence.BETA3_RECOVERY_EVIDENCE_SHA256, cut_packet)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             changed = Path(temp_dir) / "evidence.json"

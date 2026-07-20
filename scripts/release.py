@@ -854,6 +854,9 @@ def _apply_metadata_transaction(
         metadata = validate()
         if precommit_validator is not None:
             precommit_validator()
+        for file in files:
+            if file.path.read_bytes() != file.target:
+                raise ReleaseError(f"Release file changed during final validation: {file.path}")
         _write_transaction_journal(journal_path, _transaction_payload(files, "committed"))
         if observer is not None:
             observer("journal-committed", journal_path)
