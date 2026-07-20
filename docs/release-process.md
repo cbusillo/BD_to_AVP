@@ -97,8 +97,12 @@ compatibility, attestation, draft creation and verification, cumulative appcast
 mutation, GitHub Release publication, Pages deployment, and signing-material
 cleanup. The engine intentionally has no `release` concurrency declaration,
 preventing a caller and its called workflow from competing with or canceling
-the same run. It derives the trusted route from the exact validated caller path
-and writes the validated route and publication effects to the run summary.
+the same run. It declares each environment-secret name as an optional
+`workflow_call` secret so GitHub can resolve the values from the job-level
+`macos-signing` and `sparkle-release` environments. The operator callers pass
+and inherit no secrets. The engine derives the trusted route from the exact
+validated caller path and writes the validated route and publication effects to
+the run summary.
 
 The workflow must be dispatched and rerun through the configured
 `shiny-code-bot` automation identity. The required approver is `cbusillo`, and
