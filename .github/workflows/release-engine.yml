@@ -36,6 +36,28 @@ name: Signed release engine
         description: Account that triggered this run attempt
         required: true
         type: string
+    secrets:
+      APPLE_ID:
+        description: Apple ID supplied by the macos-signing environment
+        required: false
+      CERTIFICATE:
+        description: Base64 PKCS#12 identity supplied by the macos-signing environment
+        required: false
+      CERTIFICATE_PASSWORD:
+        description: PKCS#12 password supplied by the macos-signing environment
+        required: false
+      DEV_ID:
+        description: Developer ID identity supplied by the macos-signing environment
+        required: false
+      KEYCHAIN_PASSWORD:
+        description: Apple app-specific password supplied by the macos-signing environment
+        required: false
+      SPARKLE_EDDSA_PRIVATE_KEY:
+        description: Sparkle signing key supplied by the sparkle-release environment
+        required: false
+      TEAM_ID:
+        description: Apple team ID supplied by the macos-signing environment
+        required: false
     outputs:
       package_version:
         description: Validated Python package version
@@ -609,6 +631,16 @@ jobs:
           TEAM_ID: ${{ secrets.TEAM_ID }}
         run: |
           set -euo pipefail
+          MISSING_SECRETS=()
+          for secret_name in CERTIFICATE CERTIFICATE_PASSWORD DEV_ID TEAM_ID; do
+            if [ -z "${!secret_name:-}" ]; then
+              MISSING_SECRETS+=("$secret_name")
+            fi
+          done
+          if [ "${#MISSING_SECRETS[@]}" -ne 0 ]; then
+            printf 'Missing required macos-signing certificate secrets: %s\n' "${MISSING_SECRETS[*]}" >&2
+            exit 1
+          fi
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
             echo "Protected main moved immediately before certificate use." >&2
@@ -737,6 +769,20 @@ jobs:
           TEAM_ID: ${{ secrets.TEAM_ID }}
         run: |
           set -euo pipefail
+          MISSING_SECRETS=()
+          if [ -z "$APPLE_ID" ]; then
+            MISSING_SECRETS+=("APPLE_ID")
+          fi
+          if [ -z "$APPLE_APP_PASSWORD" ]; then
+            MISSING_SECRETS+=("KEYCHAIN_PASSWORD")
+          fi
+          if [ -z "$TEAM_ID" ]; then
+            MISSING_SECRETS+=("TEAM_ID")
+          fi
+          if [ "${#MISSING_SECRETS[@]}" -ne 0 ]; then
+            printf 'Missing required macos-signing notarization secrets: %s\n' "${MISSING_SECRETS[*]}" >&2
+            exit 1
+          fi
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
             echo "Protected main moved immediately before notarization credential use." >&2
@@ -1545,6 +1591,10 @@ jobs:
         run: |
           set -euo pipefail
           set +x
+          if [ -z "$SPARKLE_EDDSA_PRIVATE_KEY" ]; then
+            echo "Missing required sparkle-release secret: SPARKLE_EDDSA_PRIVATE_KEY" >&2
+            exit 1
+          fi
           SIGN_UPDATE=$(python scripts/sparkle_macos.py --tool sign_update)
           SIGNATURE=$(printf '%s\n' "$SPARKLE_EDDSA_PRIVATE_KEY" | \
             "$SIGN_UPDATE" --ed-key-file - -p "$DMG_PATH")
