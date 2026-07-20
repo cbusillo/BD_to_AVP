@@ -26,6 +26,8 @@ PAGES_APPCAST_URL = "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
 SPARKLE_NAMESPACE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 MAX_REMOTE_BODY_BYTES = 16 * 1024 * 1024
 ALLOWED_REMOTE_HOSTS = frozenset({"api.github.com", "pypi.org", "cbusillo.github.io"})
+PRODUCTION_REPOSITORY = "cbusillo/BD_to_AVP"
+PRERELEASE_WORKFLOW_REF = f"{PRODUCTION_REPOSITORY}/.github/workflows/prerelease.yml@refs/heads/main"
 
 
 class Beta3RecoveryEvidenceError(RuntimeError):
@@ -264,7 +266,13 @@ def _expect_fields(actual: Mapping[str, Any], expected: Mapping[str, Any], descr
         raise Beta3RecoveryEvidenceError(f"{description} mismatch: {', '.join(mismatches)}")
 
 
-def _verify_repository_identity(fetcher: RemoteFetcher, repository: str, evidence: Mapping[str, Any]) -> None:
+def _verify_repository_identity(
+    fetcher: RemoteFetcher,
+    repository: str,
+    evidence: Mapping[str, Any],
+    *,
+    allow_github_actions_contents_write_token: bool,
+) -> None:
     expected = _mapping(evidence.get("repository_identity"), "Repository identity")
     actual = _mapping(
         _json_response(fetcher, f"{GITHUB_API_ROOT}/repos/{repository}", "GitHub repository identity"),
@@ -272,10 +280,33 @@ def _verify_repository_identity(fetcher: RemoteFetcher, repository: str, evidenc
     )
     _expect_fields(actual, expected, "GitHub repository identity")
     permissions = _mapping(actual.get("permissions"), "GitHub repository token permissions")
-    if permissions.get("push") is not True:
+    if permissions.get("push") is not True and not allow_github_actions_contents_write_token:
         raise Beta3RecoveryEvidenceError(
             "GitHub repository token must have push visibility so draft-release absence is authoritative."
         )
+
+
+def _validate_github_actions_publication_context(repository: str, expected_sha: str | None) -> None:
+    expected_context = {
+        "GITHUB_ACTIONS": "true",
+        "GITHUB_REPOSITORY": PRODUCTION_REPOSITORY,
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_REF_PROTECTED": "true",
+        "GITHUB_SHA": expected_sha,
+        "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "GITHUB_WORKFLOW_REF": PRERELEASE_WORKFLOW_REF,
+        "GITHUB_ACTOR": "shiny-code-bot",
+        "GITHUB_TRIGGERING_ACTOR": "shiny-code-bot",
+    }
+    mismatches = [
+        f"{name}={os.environ.get(name)!r}, expected {expected!r}"
+        for name, expected in expected_context.items()
+        if os.environ.get(name) != expected
+    ]
+    if repository != PRODUCTION_REPOSITORY:
+        mismatches.append(f"repository={repository!r}, expected {PRODUCTION_REPOSITORY!r}")
+    if mismatches:
+        raise Beta3RecoveryEvidenceError("GitHub Actions publication context mismatch: " + ", ".join(mismatches))
 
 
 def _verify_failed_run(fetcher: RemoteFetcher, repository: str, evidence: Mapping[str, Any]) -> None:
@@ -604,6 +635,7 @@ def verify_beta3_remote_state(
     fetcher: RemoteFetcher = fetch_remote,
     allow_beta3_draft: bool = False,
     expected_sha: str | None = None,
+    allow_github_actions_contents_write_token: bool = False,
 ) -> None:
     repository = _string(evidence, "repository", "Beta 3 recovery evidence")
     valid_expected_sha = (
@@ -613,7 +645,18 @@ def verify_beta3_remote_state(
     )
     if allow_beta3_draft and not valid_expected_sha:
         raise Beta3RecoveryEvidenceError("Expected protected-main SHA must be a full lowercase Git SHA.")
-    _verify_repository_identity(fetcher, repository, evidence)
+    if allow_github_actions_contents_write_token:
+        if not allow_beta3_draft:
+            raise Beta3RecoveryEvidenceError(
+                "GitHub Actions contents-write token allowance is valid only for publication preflight."
+            )
+        _validate_github_actions_publication_context(repository, expected_sha)
+    _verify_repository_identity(
+        fetcher,
+        repository,
+        evidence,
+        allow_github_actions_contents_write_token=allow_github_actions_contents_write_token,
+    )
     _verify_failed_run(fetcher, repository, evidence)
     _verify_release_absence(
         fetcher,
@@ -630,6 +673,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Verify the live remote premises for the Beta 3 recovery.")
     parser.add_argument("--evidence", type=Path, default=BETA3_RECOVERY_EVIDENCE_PATH)
     parser.add_argument("--allow-beta3-draft", action="store_true")
+    parser.add_argument("--allow-github-actions-contents-write-token", action="store_true")
     parser.add_argument("--expected-sha")
     return parser
 
@@ -638,11 +682,14 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.allow_beta3_draft and not args.expected_sha:
         raise Beta3RecoveryEvidenceError("--expected-sha is required with --allow-beta3-draft.")
+    if args.allow_github_actions_contents_write_token and not args.allow_beta3_draft:
+        raise Beta3RecoveryEvidenceError("--allow-github-actions-contents-write-token requires --allow-beta3-draft.")
     evidence = load_beta3_recovery_evidence(args.evidence)
     verify_beta3_remote_state(
         evidence,
         allow_beta3_draft=args.allow_beta3_draft,
         expected_sha=args.expected_sha,
+        allow_github_actions_contents_write_token=args.allow_github_actions_contents_write_token,
     )
     print(
         json.dumps(
