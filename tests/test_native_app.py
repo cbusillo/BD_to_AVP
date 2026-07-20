@@ -21,6 +21,8 @@ from scripts.native_app import (
     NATIVE_PRODUCT_NAME,
     NATIVE_SHORT_VERSION,
     NATIVE_UPDATE_INFO,
+    SUPPORT_DIAGNOSTICS_ENDPOINT_ENV,
+    SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY,
     WORKER_PROTOCOL_VERSION,
     MACOS_ROOT,
     PROJECT_PATH,
@@ -63,6 +65,22 @@ def canonical_ffprobe_event(job_id: str) -> dict[str, object]:
     }
 
 
+def production_info(*, support_diagnostics_endpoint: object = "https://support.example") -> dict[str, object]:
+    return {
+        "CFBundleDisplayName": NATIVE_PRODUCT_NAME,
+        "CFBundleName": NATIVE_PRODUCT_NAME,
+        "CFBundleExecutable": NATIVE_EXECUTABLE_NAME,
+        "CFBundleIdentifier": NATIVE_BUNDLE_IDENTIFIER,
+        "CFBundleShortVersionString": NATIVE_SHORT_VERSION,
+        "CFBundleVersion": NATIVE_BUILD_VERSION,
+        "LSMinimumSystemVersion": NATIVE_MINIMUM_SYSTEM_VERSION,
+        "MainModule": "bd_to_avp.worker",
+        "BluRayToVisionProEngineBundled": True,
+        **NATIVE_UPDATE_INFO,
+        SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY: support_diagnostics_endpoint,
+    }
+
+
 class NativeAppPackagingTests(unittest.TestCase):
     def test_worker_smoke_uses_current_protocol_version(self) -> None:
         self.assertEqual(WORKER_PROTOCOL_VERSION, PROTOCOL_VERSION)
@@ -74,8 +92,8 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertEqual(NATIVE_APP_NAME, "3D Blu-ray to Vision Pro.app")
         self.assertEqual(NATIVE_EXECUTABLE_NAME, NATIVE_PRODUCT_NAME)
         self.assertEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp")
-        self.assertEqual(NATIVE_SHORT_VERSION, "0.3.0rc1")
-        self.assertEqual(NATIVE_BUILD_VERSION, "147")
+        self.assertEqual(NATIVE_SHORT_VERSION, "0.3.0b3")
+        self.assertEqual(NATIVE_BUILD_VERSION, "148")
         self.assertEqual(NATIVE_MINIMUM_SYSTEM_VERSION, "26.0")
 
     def test_uses_one_native_settings_scene_and_release_grade_source_groups(self) -> None:
@@ -406,23 +424,53 @@ Load command 3
             info_path = app_path / "Contents" / "Info.plist"
             info_path.parent.mkdir(parents=True)
             with info_path.open("wb") as info_file:
+                plistlib.dump(production_info(), info_file)
+
+            verify_product_identity(
+                app_path,
+                environment={SUPPORT_DIAGNOSTICS_ENDPOINT_ENV: "https://support.example"},
+            )
+
+    def test_rejects_missing_support_diagnostics_endpoint_in_release_app(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app_path = Path(temporary_directory) / NATIVE_APP_NAME
+            info_path = app_path / "Contents" / "Info.plist"
+            info_path.parent.mkdir(parents=True)
+            info = production_info()
+            del info[SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY]
+            with info_path.open("wb") as info_file:
+                plistlib.dump(info, info_file)
+
+            with self.assertRaisesRegex(RuntimeError, "must be a non-empty valid HTTPS endpoint"):
+                verify_product_identity(app_path, environment={})
+
+    def test_rejects_invalid_support_diagnostics_endpoint_in_release_app(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app_path = Path(temporary_directory) / NATIVE_APP_NAME
+            info_path = app_path / "Contents" / "Info.plist"
+            info_path.parent.mkdir(parents=True)
+            with info_path.open("wb") as info_file:
                 plistlib.dump(
-                    {
-                        "CFBundleDisplayName": NATIVE_PRODUCT_NAME,
-                        "CFBundleName": NATIVE_PRODUCT_NAME,
-                        "CFBundleExecutable": NATIVE_EXECUTABLE_NAME,
-                        "CFBundleIdentifier": NATIVE_BUNDLE_IDENTIFIER,
-                        "CFBundleShortVersionString": NATIVE_SHORT_VERSION,
-                        "CFBundleVersion": NATIVE_BUILD_VERSION,
-                        "LSMinimumSystemVersion": NATIVE_MINIMUM_SYSTEM_VERSION,
-                        "MainModule": "bd_to_avp.worker",
-                        "BluRayToVisionProEngineBundled": True,
-                        **NATIVE_UPDATE_INFO,
-                    },
+                    production_info(support_diagnostics_endpoint="https://support.example/diagnostics"),
                     info_file,
                 )
 
-            verify_product_identity(app_path)
+            with self.assertRaisesRegex(RuntimeError, "must be a non-empty valid HTTPS endpoint"):
+                verify_product_identity(app_path, environment={})
+
+    def test_rejects_mismatched_support_diagnostics_endpoint_in_release_app(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app_path = Path(temporary_directory) / NATIVE_APP_NAME
+            info_path = app_path / "Contents" / "Info.plist"
+            info_path.parent.mkdir(parents=True)
+            with info_path.open("wb") as info_file:
+                plistlib.dump(production_info(), info_file)
+
+            with self.assertRaisesRegex(RuntimeError, "must exactly match the approved"):
+                verify_product_identity(
+                    app_path,
+                    environment={SUPPORT_DIAGNOSTICS_ENDPOINT_ENV: "https://other-support.example"},
+                )
 
     def test_rejects_development_metadata_in_release_app(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -432,23 +480,14 @@ Load command 3
             with info_path.open("wb") as info_file:
                 plistlib.dump(
                     {
-                        "CFBundleDisplayName": NATIVE_PRODUCT_NAME,
-                        "CFBundleName": NATIVE_PRODUCT_NAME,
-                        "CFBundleExecutable": NATIVE_EXECUTABLE_NAME,
-                        "CFBundleIdentifier": NATIVE_BUNDLE_IDENTIFIER,
-                        "CFBundleShortVersionString": NATIVE_SHORT_VERSION,
-                        "CFBundleVersion": NATIVE_BUILD_VERSION,
-                        "LSMinimumSystemVersion": NATIVE_MINIMUM_SYSTEM_VERSION,
-                        "MainModule": "bd_to_avp.worker",
-                        "BluRayToVisionProEngineBundled": True,
-                        **NATIVE_UPDATE_INFO,
+                        **production_info(),
                         "BDToAVPDevelopmentRepositoryRoot": "/private/tmp/source",
                     },
                     info_file,
                 )
 
             with self.assertRaisesRegex(RuntimeError, "development repository metadata"):
-                verify_product_identity(app_path)
+                verify_product_identity(app_path, environment={})
 
     def test_rejects_repository_documents_in_release_app(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -456,27 +495,13 @@ Load command 3
             info_path = app_path / "Contents" / "Info.plist"
             info_path.parent.mkdir(parents=True)
             with info_path.open("wb") as info_file:
-                plistlib.dump(
-                    {
-                        "CFBundleDisplayName": NATIVE_PRODUCT_NAME,
-                        "CFBundleName": NATIVE_PRODUCT_NAME,
-                        "CFBundleExecutable": NATIVE_EXECUTABLE_NAME,
-                        "CFBundleIdentifier": NATIVE_BUNDLE_IDENTIFIER,
-                        "CFBundleShortVersionString": NATIVE_SHORT_VERSION,
-                        "CFBundleVersion": NATIVE_BUILD_VERSION,
-                        "LSMinimumSystemVersion": NATIVE_MINIMUM_SYSTEM_VERSION,
-                        "MainModule": "bd_to_avp.worker",
-                        "BluRayToVisionProEngineBundled": True,
-                        **NATIVE_UPDATE_INFO,
-                    },
-                    info_file,
-                )
+                plistlib.dump(production_info(), info_file)
             internal_document = app_path / "Contents" / "Resources" / "app" / "README.md"
             internal_document.parent.mkdir(parents=True)
             internal_document.write_text("internal", encoding="utf-8")
 
             with self.assertRaisesRegex(RuntimeError, "repository-only documents"):
-                verify_product_identity(app_path)
+                verify_product_identity(app_path, environment={})
 
     def test_accepts_complete_worker_smoke_contract(self) -> None:
         job_id = "97456c4a-f3c5-44e4-a548-0bd833ead4bb"

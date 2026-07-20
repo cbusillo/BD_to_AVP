@@ -1,6 +1,9 @@
+import hashlib
 import importlib
 import re
+import stat
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -8,6 +11,8 @@ import unittest
 from pathlib import Path
 
 from scripts import briefcase_macos_signing, release
+from scripts.beta3_recovery_evidence import BETA3_RECOVERY_EVIDENCE_PATH, Beta3RecoveryEvidenceError
+from scripts.production_identity import PRODUCTION_SPARKLE_PUBLIC_KEY
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -26,17 +31,23 @@ name = "bd_to_avp"
 version = "{version}"
 
 [tool.briefcase]
-project_name = "Test"
+project_name = "3D Blu-ray to Vision Pro"
 bundle = "com.shinycomputers"
 
 [tool.briefcase.app.bd-to-avp]
-formal_name = "Test"
+formal_name = "3D Blu-ray to Vision Pro"
 
 [tool.briefcase.app.bd-to-avp.macOS.info]
 CFBundleVersion = "{build}"
+BDToAVPDistributionChannel = "direct"
+SUFeedURL = "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
+SUPublicEDKey = "{PRODUCTION_SPARKLE_PUBLIC_KEY}"
+SUAllowsAutomaticUpdates = false
+SUVerifyUpdateBeforeExtraction = true
 """,
         encoding="utf-8",
     )
+    (root / "sparkle-public-ed-key.txt").write_text(f"{PRODUCTION_SPARKLE_PUBLIC_KEY}\n", encoding="utf-8")
     lock_path.write_text(
         f"""\
 version = 1
@@ -60,9 +71,10 @@ targets:
     settings:
       base:
         CURRENT_PROJECT_VERSION: {build}
+        BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: ""
         MARKETING_VERSION: {version}
         PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp
-        PRODUCT_NAME: Test
+        PRODUCT_NAME: 3D Blu-ray to Vision Pro
       configs:
         Release:
           INFOPLIST_FILE: BluRayToVisionPro/Info-Release.plist
@@ -93,6 +105,16 @@ def fake_lock_runner(stage_root: Path, _uv_executable: str) -> None:
         count=1,
     )
     lock_path.write_text(lock_text, encoding="utf-8")
+
+
+def make_recovery_evidence(root: Path, content: bytes | None = None) -> Path:
+    evidence_path = root / "v0.3.0-beta.3-recovery.json"
+    evidence_path.write_bytes(content if content is not None else BETA3_RECOVERY_EVIDENCE_PATH.read_bytes())
+    return evidence_path
+
+
+def skip_remote_verification(_evidence: object) -> None:
+    return None
 
 
 class ReleaseMetadataTests(unittest.TestCase):
@@ -127,19 +149,46 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         self.assertEqual(apps["bd-to-avp"]["min_os_version"], "14.0")
 
-    def test_repository_is_prepared_for_release_candidate(self) -> None:
+    def test_repository_is_prepared_for_beta3(self) -> None:
         metadata = release.load_release_metadata()
 
-        self.assertEqual(metadata.package_version, "0.3.0rc1")
-        self.assertEqual(metadata.public_version, "0.3.0-rc.1")
-        self.assertEqual(metadata.build_version, "147")
-        self.assertEqual(metadata.release_tag, "v0.3.0-rc.1")
-        self.assertEqual(metadata.release_name, "v0.3.0-rc.1")
-        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.1.dmg")
-        self.assertEqual(metadata.channel, "rc")
+        self.assertEqual(metadata.package_version, "0.3.0b3")
+        self.assertEqual(metadata.public_version, "0.3.0-beta.3")
+        self.assertEqual(metadata.build_version, "148")
+        self.assertEqual(metadata.release_tag, "v0.3.0-beta.3")
+        self.assertEqual(metadata.release_name, "v0.3.0-beta.3")
+        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.3.dmg")
+        self.assertEqual(metadata.channel, "beta")
         self.assertTrue(metadata.prerelease)
         self.assertFalse(metadata.make_latest)
         self.assertFalse(metadata.publish_pypi)
+
+    def test_repository_beta3_recovery_evidence_is_exact(self) -> None:
+        evidence = release.validate_beta3_recovery_evidence()
+
+        self.assertEqual(evidence["schema_version"], 2)
+        self.assertEqual(evidence["repository"], "cbusillo/BD_to_AVP")
+        self.assertEqual(evidence["transition"]["target"]["release_tag"], "v0.3.0-beta.3")
+
+    def test_reviewed_source_identity_matches_the_pre_recovery_base_commit(self) -> None:
+        evidence = release.validate_beta3_recovery_evidence()
+        source_identity = evidence["source_identity"]
+        base_commit = source_identity["base_commit"]
+
+        self.assertEqual(
+            subprocess.check_output(
+                ["git", "show", "-s", "--format=%T", base_commit],
+                cwd=REPO_ROOT,
+                text=True,
+            ).strip(),
+            source_identity["tree"],
+        )
+        for relative_path, expected_digest in source_identity["files"].items():
+            content = subprocess.check_output(
+                ["git", "show", f"{base_commit}:{relative_path}"],
+                cwd=REPO_ROOT,
+            )
+            self.assertEqual(hashlib.sha256(content).hexdigest(), expected_digest)
 
     def test_beta3_seed_metadata_uses_the_production_beta_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -385,6 +434,17 @@ class ReleaseNotesBaseTests(unittest.TestCase):
 
 
 class ReleasePreparationTests(unittest.TestCase):
+    def test_atomic_write_preserves_existing_file_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "metadata.toml"
+            path.write_text("before\n", encoding="utf-8")
+            path.chmod(0o640)
+
+            release._atomic_write(path, b"after\n")
+
+            self.assertEqual(path.read_bytes(), b"after\n")
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o640)
+
     def test_prepare_updates_version_build_and_lock_together(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             pyproject_path, lock_path = make_release_files(Path(temp_dir))
@@ -539,6 +599,458 @@ class ReleasePreparationTests(unittest.TestCase):
                     lock_path=lock_path,
                     lock_runner=fake_lock_runner,
                 )
+
+
+class Beta3RecoveryTests(unittest.TestCase):
+    def test_release_cli_runs_as_a_module_from_a_clean_checkout_root(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "-m", "scripts.release", "--help"],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("recover-beta3", completed.stdout)
+
+    def test_recovery_cli_exposes_no_version_or_build_override(self) -> None:
+        args = release.build_parser().parse_args(["recover-beta3"])
+
+        self.assertEqual(args.command, "recover-beta3")
+        self.assertFalse(hasattr(args, "version"))
+        self.assertFalse(hasattr(args, "build"))
+        self.assertFalse(hasattr(args, "pyproject"))
+        self.assertFalse(hasattr(args, "lock"))
+        self.assertFalse(hasattr(args, "macos_project"))
+        self.assertFalse(hasattr(args, "uv"))
+
+    def test_recovery_accepts_only_the_exact_source_target_and_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
+            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
+            evidence_path = make_recovery_evidence(root)
+
+            metadata = release.recover_beta3(
+                pyproject_path=pyproject_path,
+                lock_path=lock_path,
+                macos_project_path=macos_project_path,
+                evidence_path=evidence_path,
+                lock_runner=fake_lock_runner,
+                remote_verifier=skip_remote_verification,
+            )
+
+            with pyproject_path.open("rb") as handle:
+                pyproject = tomllib.load(handle)
+            with lock_path.open("rb") as handle:
+                lock = tomllib.load(handle)
+            project_text = macos_project_path.read_text(encoding="utf-8")
+
+        self.assertEqual(metadata.package_version, "0.3.0b3")
+        self.assertEqual(metadata.public_version, "0.3.0-beta.3")
+        self.assertEqual(metadata.build_version, "148")
+        self.assertEqual(metadata.release_tag, "v0.3.0-beta.3")
+        self.assertEqual(metadata.channel, "beta")
+        self.assertEqual(pyproject["project"]["version"], "0.3.0b3")
+        self.assertEqual(
+            pyproject["tool"]["briefcase"]["app"]["bd-to-avp"]["macOS"]["info"]["CFBundleVersion"],
+            "148",
+        )
+        self.assertEqual(lock["package"][0]["version"], "0.3.0b3")
+        self.assertIn("MARKETING_VERSION: 0.3.0b3", project_text)
+        self.assertIn("CURRENT_PROJECT_VERSION: 148", project_text)
+
+    def test_recovery_rejects_bad_evidence_before_writes(self) -> None:
+        reviewed_evidence = BETA3_RECOVERY_EVIDENCE_PATH.read_bytes()
+        evidence_cases: list[tuple[str, bytes | None]] = [
+            ("missing", None),
+            ("malformed", b"{"),
+            (
+                "mismatched",
+                reviewed_evidence.replace(b'"artifact_count": 0', b'"artifact_count": 1'),
+            ),
+        ]
+
+        for name, content in evidence_cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
+                macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
+                evidence_path = root / "evidence.json"
+                if content is not None:
+                    evidence_path.write_bytes(content)
+                originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
+                lock_called = False
+
+                def unexpected_lock(_stage_root: Path, _uv_executable: str) -> None:
+                    nonlocal lock_called
+                    lock_called = True
+
+                with self.assertRaises(release.ReleaseError):
+                    release.recover_beta3(
+                        pyproject_path=pyproject_path,
+                        lock_path=lock_path,
+                        macos_project_path=macos_project_path,
+                        evidence_path=evidence_path,
+                        lock_runner=unexpected_lock,
+                        remote_verifier=skip_remote_verification,
+                    )
+
+                self.assertFalse(lock_called)
+                for path, original in originals.items():
+                    self.assertEqual(path.read_bytes(), original)
+
+    def test_recovery_rejects_wrong_current_metadata_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="146")
+            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="146")
+            evidence_path = make_recovery_evidence(root)
+            originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
+            lock_called = False
+
+            def unexpected_lock(_stage_root: Path, _uv_executable: str) -> None:
+                nonlocal lock_called
+                lock_called = True
+
+            with self.assertRaisesRegex(release.ReleaseError, "requires exact source metadata"):
+                release.recover_beta3(
+                    pyproject_path=pyproject_path,
+                    lock_path=lock_path,
+                    macos_project_path=macos_project_path,
+                    evidence_path=evidence_path,
+                    lock_runner=unexpected_lock,
+                    remote_verifier=skip_remote_verification,
+                )
+
+            self.assertFalse(lock_called)
+            for path, original in originals.items():
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_recovery_is_atomic_when_lock_refresh_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
+            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
+            evidence_path = make_recovery_evidence(root)
+            originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
+
+            def fail_lock(_stage_root: Path, _uv_executable: str) -> None:
+                raise subprocess.CalledProcessError(1, ["uv", "lock"])
+
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.recover_beta3(
+                    pyproject_path=pyproject_path,
+                    lock_path=lock_path,
+                    macos_project_path=macos_project_path,
+                    evidence_path=evidence_path,
+                    lock_runner=fail_lock,
+                    remote_verifier=skip_remote_verification,
+                )
+
+            for path, original in originals.items():
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_recovery_rejects_remote_drift_before_lock_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
+            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
+            evidence_path = make_recovery_evidence(root)
+            originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
+            lock_called = False
+
+            def reject_remote_state(_evidence: object) -> None:
+                raise Beta3RecoveryEvidenceError("remote release state changed")
+
+            def unexpected_lock(_stage_root: Path, _uv_executable: str) -> None:
+                nonlocal lock_called
+                lock_called = True
+
+            with self.assertRaisesRegex(release.ReleaseError, "remote release state changed"):
+                release.recover_beta3(
+                    pyproject_path=pyproject_path,
+                    lock_path=lock_path,
+                    macos_project_path=macos_project_path,
+                    evidence_path=evidence_path,
+                    lock_runner=unexpected_lock,
+                    remote_verifier=reject_remote_state,
+                )
+
+            self.assertFalse(lock_called)
+            for path, original in originals.items():
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_recovery_rechecks_remote_state_immediately_before_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
+            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
+            evidence_path = make_recovery_evidence(root)
+            originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
+            verification_count = 0
+            events: list[str] = []
+
+            def remote_changes_after_staging(_evidence: object) -> None:
+                nonlocal verification_count
+                verification_count += 1
+                events.append(f"verify-{verification_count}")
+                if verification_count == 2:
+                    raise Beta3RecoveryEvidenceError("remote state changed before commit")
+
+            def observe_transaction(event: str, _path: Path) -> None:
+                events.append(event)
+
+            with self.assertRaisesRegex(release.ReleaseError, "remote state changed before commit"):
+                release.recover_beta3(
+                    pyproject_path=pyproject_path,
+                    lock_path=lock_path,
+                    macos_project_path=macos_project_path,
+                    evidence_path=evidence_path,
+                    lock_runner=fake_lock_runner,
+                    remote_verifier=remote_changes_after_staging,
+                    transaction_observer=observe_transaction,
+                )
+
+            self.assertEqual(verification_count, 2)
+            self.assertGreater(
+                events.index("verify-2"),
+                max(index for index, event in enumerate(events) if event == "file-applied"),
+            )
+            self.assertNotIn("journal-committed", events)
+            for path, original in originals.items():
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_recovery_rejects_source_drift_during_remote_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
+            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
+            evidence_path = make_recovery_evidence(root)
+            original_pyproject = pyproject_path.read_bytes()
+
+            def mutate_source(_evidence: object) -> None:
+                pyproject_path.write_bytes(original_pyproject + b"\n# concurrent drift\n")
+
+            with self.assertRaisesRegex(release.ReleaseError, "changed after identity validation"):
+                release.recover_beta3(
+                    pyproject_path=pyproject_path,
+                    lock_path=lock_path,
+                    macos_project_path=macos_project_path,
+                    evidence_path=evidence_path,
+                    lock_runner=fake_lock_runner,
+                    remote_verifier=mutate_source,
+                )
+
+    def test_recovery_rejects_target_drift_during_commit_point_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
+            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
+            evidence_path = make_recovery_evidence(root)
+            originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
+            verification_count = 0
+
+            def mutate_target_at_commit(_evidence: object) -> None:
+                nonlocal verification_count
+                verification_count += 1
+                if verification_count == 2:
+                    pyproject_path.write_bytes(originals[pyproject_path])
+
+            with self.assertRaisesRegex(release.ReleaseError, "changed during final validation"):
+                release.recover_beta3(
+                    pyproject_path=pyproject_path,
+                    lock_path=lock_path,
+                    macos_project_path=macos_project_path,
+                    evidence_path=evidence_path,
+                    lock_runner=fake_lock_runner,
+                    remote_verifier=mutate_target_at_commit,
+                )
+
+            self.assertEqual(verification_count, 2)
+            for path, original in originals.items():
+                self.assertEqual(path.read_bytes(), original)
+            self.assertFalse((root / release.TRANSACTION_JOURNAL_NAME).exists())
+
+    def test_recovery_rejects_production_identity_drift(self) -> None:
+        cases = (
+            ("feed", "pyproject.toml", "https://cbusillo.github.io/BD_to_AVP/appcast.xml", "https://example.test/feed"),
+            ("public-key", "sparkle-public-ed-key.txt", PRODUCTION_SPARKLE_PUBLIC_KEY, "invalid-key"),
+            ("bundle", "project.yml", "com.shinycomputers.bd-to-avp", "com.example.changed"),
+        )
+        for name, filename, original_value, replacement in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
+                macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
+                evidence_path = make_recovery_evidence(root)
+                changed_path = root / filename
+                changed_path.write_text(
+                    changed_path.read_text(encoding="utf-8").replace(original_value, replacement),
+                    encoding="utf-8",
+                )
+
+                with self.assertRaisesRegex(release.ReleaseError, "source identity is invalid"):
+                    release.recover_beta3(
+                        pyproject_path=pyproject_path,
+                        lock_path=lock_path,
+                        macos_project_path=macos_project_path,
+                        evidence_path=evidence_path,
+                        lock_runner=fake_lock_runner,
+                        remote_verifier=skip_remote_verification,
+                    )
+
+    def test_recovery_rejects_unrelated_lockfile_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
+            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
+            evidence_path = make_recovery_evidence(root)
+
+            def change_unrelated_lock_data(stage_root: Path, uv_executable: str) -> None:
+                fake_lock_runner(stage_root, uv_executable)
+                staged_lock = stage_root / "uv.lock"
+                staged_lock.write_text(
+                    staged_lock.read_text(encoding="utf-8") + '\n[unexpected]\nvalue = "drift"\n',
+                    encoding="utf-8",
+                )
+
+            with self.assertRaisesRegex(release.ReleaseError, "other than the editable project version"):
+                release.recover_beta3(
+                    pyproject_path=pyproject_path,
+                    lock_path=lock_path,
+                    macos_project_path=macos_project_path,
+                    evidence_path=evidence_path,
+                    lock_runner=change_unrelated_lock_data,
+                    remote_verifier=skip_remote_verification,
+                )
+
+    def test_recovery_rolls_back_interrupt_after_each_file_replacement(self) -> None:
+        class SimulatedInterrupt(BaseException):
+            pass
+
+        for stop_after in (1, 2, 3):
+            with self.subTest(stop_after=stop_after), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
+                macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
+                evidence_path = make_recovery_evidence(root)
+                originals = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
+                applied = 0
+
+                def interrupt(event: str, _path: Path, expected_stop: int = stop_after) -> None:
+                    nonlocal applied
+                    if event == "file-applied":
+                        applied += 1
+                        if applied == expected_stop:
+                            raise SimulatedInterrupt
+
+                with self.assertRaises(SimulatedInterrupt):
+                    release.recover_beta3(
+                        pyproject_path=pyproject_path,
+                        lock_path=lock_path,
+                        macos_project_path=macos_project_path,
+                        evidence_path=evidence_path,
+                        lock_runner=fake_lock_runner,
+                        remote_verifier=skip_remote_verification,
+                        transaction_observer=interrupt,
+                    )
+
+                for path, original in originals.items():
+                    self.assertEqual(path.read_bytes(), original)
+                self.assertFalse((root / release.TRANSACTION_JOURNAL_NAME).exists())
+
+    def test_prepared_transaction_journal_restores_original_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root)
+            macos_project_path = make_macos_project(root)
+            files = [
+                release.TransactionFile(
+                    path=path,
+                    original=path.read_bytes(),
+                    target=path.read_bytes() + b"\n# target\n",
+                )
+                for path in (pyproject_path, lock_path, macos_project_path)
+            ]
+            journal_path = root / release.TRANSACTION_JOURNAL_NAME
+            release._write_transaction_journal(journal_path, release._transaction_payload(files, "prepared"))
+            release._atomic_write(files[0].path, files[0].target)
+
+            release._recover_interrupted_transaction(journal_path, [file.path for file in files])
+
+            for file in files:
+                self.assertEqual(file.path.read_bytes(), file.original)
+            self.assertFalse(journal_path.exists())
+
+    def test_committed_transaction_journal_preserves_target_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root)
+            macos_project_path = make_macos_project(root)
+            files = [
+                release.TransactionFile(
+                    path=path,
+                    original=path.read_bytes(),
+                    target=path.read_bytes() + b"\n# target\n",
+                )
+                for path in (pyproject_path, lock_path, macos_project_path)
+            ]
+            journal_path = root / release.TRANSACTION_JOURNAL_NAME
+            for file in files:
+                release._atomic_write(file.path, file.target)
+            release._write_transaction_journal(journal_path, release._transaction_payload(files, "committed"))
+
+            release._recover_interrupted_transaction(journal_path, [file.path for file in files])
+
+            for file in files:
+                self.assertEqual(file.path.read_bytes(), file.target)
+            self.assertFalse(journal_path.exists())
+
+    def test_release_metadata_lock_rejects_concurrent_operation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root, version="1.2.3", build="10")
+
+            with release._release_metadata_lock(pyproject_path):
+                with self.assertRaisesRegex(release.ReleaseError, "already running"):
+                    release.prepare_release(
+                        "1.2.4",
+                        "11",
+                        pyproject_path=pyproject_path,
+                        lock_path=lock_path,
+                        lock_runner=fake_lock_runner,
+                    )
+
+    def test_recovery_rerun_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pyproject_path, lock_path = make_release_files(root, version="0.3.0rc1", build="147")
+            macos_project_path = make_macos_project(root, version="0.3.0rc1", build="147")
+            evidence_path = make_recovery_evidence(root)
+            release.recover_beta3(
+                pyproject_path=pyproject_path,
+                lock_path=lock_path,
+                macos_project_path=macos_project_path,
+                evidence_path=evidence_path,
+                lock_runner=fake_lock_runner,
+                remote_verifier=skip_remote_verification,
+            )
+            recovered = {path: path.read_bytes() for path in (pyproject_path, lock_path, macos_project_path)}
+
+            with self.assertRaisesRegex(release.ReleaseError, "requires exact source metadata"):
+                release.recover_beta3(
+                    pyproject_path=pyproject_path,
+                    lock_path=lock_path,
+                    macos_project_path=macos_project_path,
+                    evidence_path=evidence_path,
+                    lock_runner=fake_lock_runner,
+                    remote_verifier=skip_remote_verification,
+                )
+
+            for path, recovered_content in recovered.items():
+                self.assertEqual(path.read_bytes(), recovered_content)
 
 
 if __name__ == "__main__":

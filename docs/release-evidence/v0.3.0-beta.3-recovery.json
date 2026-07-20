@@ -1,0 +1,218 @@
+{
+  "schema": "bd_to_avp.release_recovery",
+  "schema_version": 2,
+  "observed_at": "2026-07-20T04:59:47Z",
+  "repository": "cbusillo/BD_to_AVP",
+  "repository_identity": {
+    "id": 771225421,
+    "node_id": "R_kgDOLff3TQ",
+    "full_name": "cbusillo/BD_to_AVP",
+    "private": false,
+    "archived": false,
+    "disabled": false
+  },
+  "source_identity": {
+    "base_commit": "e4d89a54412b50b556f51ea3c32034a1dc015eb6",
+    "tree": "4ff668a0f35ca5fe99880655e9f1c3de244778c5",
+    "files": {
+      "pyproject.toml": "4a01dc9e5dedf55899cc1e903a40514b93a9507ee88f22d14a6a19beb91568af",
+      "uv.lock": "94015cc2525bcb84c3129f391593fa9fc624679c8592f630f7024a8ffd08fc20",
+      "macos/project.yml": "8fc365f4e3d8032ae9eb22734030ee50f0b7e6759b8a5952032266f6ba331ea4"
+    }
+  },
+  "transition": {
+    "source": {
+      "package_version": "0.3.0rc1",
+      "public_version": "0.3.0-rc.1",
+      "build": "147"
+    },
+    "target": {
+      "package_version": "0.3.0b3",
+      "public_version": "0.3.0-beta.3",
+      "release_tag": "v0.3.0-beta.3",
+      "build": "148"
+    }
+  },
+  "failed_run": {
+    "id": 29693513480,
+    "workflow_id": 101708423,
+    "run_number": 226,
+    "event": "workflow_dispatch",
+    "head_branch": "main",
+    "head_sha": "438991f07fa19cd2ae2df4d3ec14716bc0371f8d",
+    "run_attempt": 1,
+    "actor": "shiny-code-bot",
+    "triggering_actor": "shiny-code-bot",
+    "repository": "cbusillo/BD_to_AVP",
+    "head_repository": "cbusillo/BD_to_AVP",
+    "workflow_path": ".github/workflows/briefcase.yml",
+    "workflow_name": "Release from protected main",
+    "display_title": "Stable",
+    "status": "completed",
+    "conclusion": "failure",
+    "failed_job": "Build, sign, notarize, and validate DMG",
+    "failed_step": "Package application for GitHub",
+    "package_upload_step": "Upload verified release package",
+    "skipped_jobs": [
+      "Build stable Python distributions",
+      "Attest verified release package",
+      "Verify notarized package on macOS 26",
+      "Create draft GitHub Release",
+      "Build signed cumulative appcast snapshot",
+      "Upload, re-download, and verify draft assets",
+      "Publish stable Python distribution with trusted publishing",
+      "Publish verified GitHub Release",
+      "Deploy verified appcast snapshot"
+    ],
+    "jobs": [
+      {
+        "name": "Validate release source and metadata",
+        "conclusion": "success"
+      },
+      {
+        "name": "Build, sign, notarize, and validate DMG",
+        "conclusion": "failure"
+      },
+      {
+        "name": "Build stable Python distributions",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "Attest verified release package",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "Verify notarized package on macOS 26",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "Create draft GitHub Release",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "Build signed cumulative appcast snapshot",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "Upload, re-download, and verify draft assets",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "Publish stable Python distribution with trusted publishing",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "Publish verified GitHub Release",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "Deploy verified appcast snapshot",
+        "conclusion": "skipped"
+      }
+    ],
+    "artifact_count": 0
+  },
+  "absent_github_state": {
+    "tags": [
+      "v0.3.0rc1",
+      "v0.3.0-rc.1",
+      "v0.3.0-beta.3"
+    ],
+    "releases": [
+      "v0.3.0rc1",
+      "v0.3.0-rc.1",
+      "v0.3.0-beta.3"
+    ],
+    "drafts": [
+      "v0.3.0rc1",
+      "v0.3.0-rc.1",
+      "v0.3.0-beta.3"
+    ]
+  },
+  "github_latest": {
+    "release_id": 352601989,
+    "release_tag": "v0.2.143",
+    "target_sha": "03fe03ab58abf85b74c32f6b3b7387d9ad6f1941",
+    "immutable": true
+  },
+  "pages": {
+    "status": "enabled",
+    "public": true,
+    "build_type": "workflow",
+    "release_tag": "v0.2.143",
+    "short_version": "0.2.143",
+    "build": "146",
+    "capture_path": "docs/release-evidence/v0.2.143-appcast.xml",
+    "capture_sha256": "7b9bbf76fedfd7eeb19181f392d660cc8f189afee6d5a0a4627d62bfa38b6765",
+    "appcast_sha256": "d231c47d69606bc6f28113bb396c0ac9d24f656cbe0930c770259e0739f9904e"
+  },
+  "pypi": {
+    "latest_version": "0.2.143",
+    "absent_versions": [
+      "0.3.0rc1",
+      "0.3.0b3"
+    ]
+  },
+  "retired_preview_releases": [
+    {
+      "tag": "native-ui-preview-1",
+      "immutable": true,
+      "release_id": 352841376,
+      "target_sha": "e1e4f851096cfeae70da1c56a88acef9c5e61055",
+      "assets": [
+        {
+          "asset_id": 474714228,
+          "name": "3D-Blu-ray-to-Vision-Pro-Native-Preview-0.3.0-1.dmg",
+          "size": 406585971,
+          "digest": "sha256:119a86f829c0bc8962deaea5f1a8fb92ffbcd48002d062a0ac59cccffe61af71"
+        },
+        {
+          "asset_id": 474714389,
+          "name": "SHA256SUMS",
+          "size": 118,
+          "digest": "sha256:1b142e59fea4ee0e0f734ae5cdf34815583765d2d0895a9ec25217436d52336e"
+        }
+      ]
+    },
+    {
+      "tag": "v0.3.0-beta.1",
+      "immutable": true,
+      "release_id": 353900273,
+      "target_sha": "2378b46345185f05611f15a39658217bac7c6960",
+      "assets": [
+        {
+          "asset_id": 476861235,
+          "name": "3D-Blu-ray-to-Vision-Pro-Native-Preview-0.3.0-beta.1.dmg",
+          "size": 407183981,
+          "digest": "sha256:b611dca7de660efed218a0e2fc5c4ed9d6e5e652a54da938e13d40a6bd994bed"
+        },
+        {
+          "asset_id": 476861481,
+          "name": "SHA256SUMS",
+          "size": 123,
+          "digest": "sha256:17eead4e3faf2ffd3110a9bf200d39f0ebfba78546f40aa0fa868fd3afb53b5b"
+        }
+      ]
+    },
+    {
+      "tag": "v0.3.0-beta.2",
+      "immutable": true,
+      "release_id": 355845653,
+      "target_sha": "9e9a38c715dbbe5df97e6d3a8ba715731607db6a",
+      "assets": [
+        {
+          "asset_id": 480668646,
+          "name": "3D-Blu-ray-to-Vision-Pro-Native-Preview-0.3.0-beta.2.dmg",
+          "size": 408158527,
+          "digest": "sha256:e2e8a20c9fd4517076189e56598ff6b32cd1adc544c6ad0618f5a46f55dcae24"
+        },
+        {
+          "asset_id": 480668779,
+          "name": "SHA256SUMS",
+          "size": 123,
+          "digest": "sha256:ab387b19cef2af5923b112735a10253d42f4fc37f002e6983deb44a5a17b7fb0"
+        }
+      ]
+    }
+  ]
+}

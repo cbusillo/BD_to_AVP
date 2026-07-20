@@ -1,23 +1,50 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import copy
+import fcntl
+import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import tomllib
 
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+from scripts.beta3_recovery_evidence import (
+    BETA3_RECOVERY_EVIDENCE_PATH,
+    Beta3RecoveryEvidenceError,
+    load_beta3_recovery_evidence,
+    verify_beta3_remote_state,
+)
+from scripts.production_identity import (
+    PRODUCTION_BUNDLE_IDENTIFIER,
+    PRODUCTION_DISTRIBUTION_CHANNEL,
+    PRODUCTION_FEED_URL,
+    PRODUCTION_PRODUCT_NAME,
+    PRODUCTION_SPARKLE_PUBLIC_KEY,
+    validate_production_public_key,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 LOCK_PATH = REPO_ROOT / "uv.lock"
 MACOS_PROJECT_PATH = REPO_ROOT / "macos" / "project.yml"
+PUBLIC_KEY_PATH = REPO_ROOT / "sparkle-public-ed-key.txt"
+TRANSACTION_JOURNAL_NAME = ".bd-to-avp-release-transaction.json"
+TRANSACTION_SCHEMA = "bd_to_avp.release_metadata_transaction"
+TRANSACTION_SCHEMA_VERSION = 1
 VERSION_PATTERN = re.compile(
     r"^(?P<major>0|[1-9][0-9]*)\."
     r"(?P<minor>0|[1-9][0-9]*)\."
@@ -41,6 +68,10 @@ DMG_NAME_PREFIX = "3D-Blu-ray-to-Vision-Pro"
 INTERNAL_STAGE_NAMES = {"a": "alpha", "b": "beta", "rc": "rc"}
 PUBLIC_STAGE_SUFFIXES = {"alpha": "a", "beta": "b", "rc": "rc"}
 STAGE_ORDER = {"alpha": 0, "beta": 1, "rc": 2, "stable": 3}
+BETA3_RECOVERY_SOURCE_VERSION = "0.3.0rc1"
+BETA3_RECOVERY_SOURCE_BUILD = "147"
+BETA3_RECOVERY_TARGET_VERSION = "0.3.0b3"
+BETA3_RECOVERY_TARGET_BUILD = "148"
 
 
 class ReleaseError(RuntimeError):
@@ -116,8 +147,25 @@ class PublishedRelease:
 
 
 LockRunner = Callable[[Path, str], None]
+RemoteEvidenceVerifier = Callable[[Mapping[str, Any]], None]
+TransactionObserver = Callable[[str, Path], None]
+PrecommitValidator = Callable[[], None]
 TagExists = Callable[[str], bool]
 AncestorCheck = Callable[[str, str], bool]
+
+
+@dataclass(frozen=True)
+class TransactionFile:
+    path: Path
+    original: bytes
+    target: bytes
+
+
+@dataclass(frozen=True)
+class JournalFile:
+    path: Path
+    original: bytes
+    target_sha256: str
 
 
 def parse_release_version(value: str) -> ReleaseVersion:
@@ -273,6 +321,15 @@ def _load_toml(path: Path) -> dict[str, Any]:
         raise ReleaseError(f"Unable to load {path}: {error}") from error
 
 
+def validate_beta3_recovery_evidence(
+    evidence_path: Path = BETA3_RECOVERY_EVIDENCE_PATH,
+) -> dict[str, Any]:
+    try:
+        return load_beta3_recovery_evidence(evidence_path)
+    except Beta3RecoveryEvidenceError as error:
+        raise ReleaseError(str(error)) from error
+
+
 def _locked_project_version(lock_path: Path) -> str:
     lock = _load_toml(lock_path)
     packages = lock.get("package")
@@ -368,6 +425,165 @@ def _validate_macos_project_metadata(path: Path, pyproject: dict[str, Any], vers
         raise ReleaseError("Production macOS project metadata is inconsistent:\n" + "\n".join(mismatches))
 
 
+def _validate_beta3_recovery_source_identity(
+    pyproject_path: Path,
+    lock_path: Path,
+    macos_project_path: Path,
+    evidence: Mapping[str, Any],
+) -> dict[Path, str] | None:
+    operated_paths = (pyproject_path, lock_path, macos_project_path)
+    for path in operated_paths:
+        if path.is_symlink() or not path.is_file():
+            raise ReleaseError(f"Beta 3 recovery requires a regular non-symlink source file: {path}")
+    pyproject = _load_toml(pyproject_path)
+    try:
+        project = pyproject["project"]
+        briefcase = pyproject["tool"]["briefcase"]
+        app = briefcase["app"]["bd-to-avp"]
+        info = app["macOS"]["info"]
+    except (KeyError, TypeError) as error:
+        raise ReleaseError("Beta 3 recovery source is missing production identity metadata.") from error
+    expected_values = {
+        "project.name": (project.get("name"), "bd_to_avp"),
+        "tool.briefcase.project_name": (briefcase.get("project_name"), PRODUCTION_PRODUCT_NAME),
+        "tool.briefcase.bundle": (briefcase.get("bundle"), "com.shinycomputers"),
+        "tool.briefcase.app.bd-to-avp.formal_name": (app.get("formal_name"), PRODUCTION_PRODUCT_NAME),
+        "BDToAVPDistributionChannel": (
+            info.get("BDToAVPDistributionChannel"),
+            PRODUCTION_DISTRIBUTION_CHANNEL,
+        ),
+        "SUFeedURL": (info.get("SUFeedURL"), PRODUCTION_FEED_URL),
+        "SUPublicEDKey": (info.get("SUPublicEDKey"), PRODUCTION_SPARKLE_PUBLIC_KEY),
+        "SUAllowsAutomaticUpdates": (info.get("SUAllowsAutomaticUpdates"), False),
+        "SUVerifyUpdateBeforeExtraction": (info.get("SUVerifyUpdateBeforeExtraction"), True),
+    }
+    mismatches = [
+        f"{name}: expected {expected!r}, found {actual!r}"
+        for name, (actual, expected) in expected_values.items()
+        if actual != expected
+    ]
+    if "SUEnableAutomaticChecks" in info:
+        mismatches.append("SUEnableAutomaticChecks must remain unset")
+    public_key_path = pyproject_path.parent / PUBLIC_KEY_PATH.name
+    try:
+        public_key = public_key_path.read_text(encoding="utf-8").strip()
+        validate_production_public_key(public_key)
+    except (OSError, ValueError) as error:
+        mismatches.append(f"production Sparkle public key: {error}")
+    try:
+        project_text = macos_project_path.read_text(encoding="utf-8")
+        base_path = ("targets", "BluRayToVisionPro", "settings", "base")
+        release_path = ("targets", "BluRayToVisionPro", "settings", "configs", "Release")
+        project_expectations = {
+            "PRODUCT_BUNDLE_IDENTIFIER": PRODUCTION_BUNDLE_IDENTIFIER,
+            "PRODUCT_NAME": PRODUCTION_PRODUCT_NAME,
+            "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT": "",
+        }
+        for key, expected in project_expectations.items():
+            actual = _yaml_mapping_value(project_text, base_path, key)
+            if actual != expected:
+                mismatches.append(f"{key}: expected {expected!r}, found {actual!r}")
+        expected_release_plist = "BluRayToVisionPro/Info-Release.plist"
+        release_plist = _yaml_mapping_value(project_text, release_path, "INFOPLIST_FILE")
+        if release_plist != expected_release_plist:
+            mismatches.append(f"INFOPLIST_FILE: expected {expected_release_plist!r}, found {release_plist!r}")
+    except (OSError, UnicodeDecodeError, ReleaseError) as error:
+        mismatches.append(f"production macOS project identity: {error}")
+    canonical_paths = tuple(path.resolve() for path in operated_paths) == (
+        PYPROJECT_PATH.resolve(),
+        LOCK_PATH.resolve(),
+        MACOS_PROJECT_PATH.resolve(),
+    )
+    expected_original_digests: dict[Path, str] | None = None
+    if canonical_paths:
+        source_identity = evidence.get("source_identity")
+        if not isinstance(source_identity, Mapping):
+            mismatches.append("reviewed source identity is missing")
+        else:
+            source_files = source_identity.get("files")
+            if not isinstance(source_files, Mapping):
+                mismatches.append("reviewed source file digests are missing")
+            else:
+                expected_original_digests = {}
+                for relative_path, path in (
+                    ("pyproject.toml", pyproject_path),
+                    ("uv.lock", lock_path),
+                    ("macos/project.yml", macos_project_path),
+                ):
+                    expected_digest = source_files.get(relative_path)
+                    actual_digest = _sha256(path.read_bytes())
+                    if expected_digest != actual_digest:
+                        mismatches.append(
+                            f"{relative_path} source digest: expected {expected_digest!r}, found {actual_digest!r}"
+                        )
+                    if isinstance(expected_digest, str):
+                        expected_original_digests[path.resolve()] = expected_digest
+            base_commit = source_identity.get("base_commit")
+            expected_tree = source_identity.get("tree")
+            try:
+                repository_root = subprocess.run(
+                    ["git", "rev-parse", "--show-toplevel"],
+                    check=True,
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                origin_url = subprocess.run(
+                    ["git", "remote", "get-url", "origin"],
+                    check=True,
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                actual_tree = subprocess.run(
+                    ["git", "show", "-s", "--format=%T", str(base_commit)],
+                    check=True,
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                subprocess.run(
+                    ["git", "merge-base", "--is-ancestor", str(base_commit), "HEAD"],
+                    check=True,
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                )
+                source_status = subprocess.run(
+                    [
+                        "git",
+                        "status",
+                        "--porcelain",
+                        "--",
+                        "pyproject.toml",
+                        "uv.lock",
+                        "macos/project.yml",
+                        "sparkle-public-ed-key.txt",
+                    ],
+                    check=True,
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                ).stdout
+            except (OSError, subprocess.CalledProcessError) as error:
+                mismatches.append(f"reviewed Git source identity: {error}")
+            else:
+                normalized_origin = origin_url.removesuffix(".git").rstrip("/")
+                if Path(repository_root).resolve() != REPO_ROOT.resolve():
+                    mismatches.append(f"Git top-level must be {REPO_ROOT}, found {repository_root!r}")
+                if normalized_origin != "https://github.com/cbusillo/BD_to_AVP":
+                    mismatches.append(f"origin must be the production GitHub repository, found {origin_url!r}")
+                if actual_tree != expected_tree:
+                    mismatches.append(f"reviewed source tree: expected {expected_tree!r}, found {actual_tree!r}")
+                if source_status:
+                    mismatches.append("reviewed source files must be clean before recovery")
+    if mismatches:
+        raise ReleaseError("Beta 3 recovery source identity is invalid:\n" + "\n".join(mismatches))
+    if expected_original_digests is None:
+        expected_original_digests = {path.resolve(): _sha256(path.read_bytes()) for path in operated_paths}
+    return expected_original_digests
+
+
 def load_release_metadata(
     pyproject_path: Path = PYPROJECT_PATH,
     lock_path: Path = LOCK_PATH,
@@ -442,45 +658,262 @@ def refresh_uv_lock(stage_root: Path, uv_executable: str) -> None:
     )
 
 
+def _load_toml_bytes(content: bytes, description: str) -> dict[str, Any]:
+    try:
+        return tomllib.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise ReleaseError(f"Unable to load {description}: {error}") from error
+
+
+def _editable_project_package(lock: dict[str, Any], description: str) -> dict[str, Any]:
+    packages = lock.get("package")
+    if not isinstance(packages, list):
+        raise ReleaseError(f"{description} does not contain package entries.")
+    matches = [
+        package
+        for package in packages
+        if isinstance(package, dict)
+        and str(package.get("name", "")).replace("_", "-") == "bd-to-avp"
+        and package.get("source") == {"editable": "."}
+    ]
+    if len(matches) != 1:
+        raise ReleaseError(f"{description} must contain exactly one editable bd-to-avp package.")
+    return matches[0]
+
+
+def _validate_lock_refresh(
+    original_content: bytes,
+    staged_content: bytes,
+    *,
+    current_version: str,
+    next_version: str,
+) -> None:
+    original = _load_toml_bytes(original_content, "original uv.lock")
+    staged = _load_toml_bytes(staged_content, "staged uv.lock")
+    original_package = _editable_project_package(original, "Original uv.lock")
+    staged_package = _editable_project_package(staged, "Staged uv.lock")
+    if original_package.get("version") != current_version:
+        raise ReleaseError("Original uv.lock project version changed before release preparation.")
+    if staged_package.get("version") != next_version:
+        raise ReleaseError("Staged uv.lock project version does not match the requested release version.")
+    normalized_staged = copy.deepcopy(staged)
+    _editable_project_package(normalized_staged, "Staged uv.lock")["version"] = current_version
+    if normalized_staged != original:
+        raise ReleaseError("uv lock refresh changed data other than the editable project version.")
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _atomic_write(path: Path, content: bytes) -> None:
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary_path = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "wb") as handle:
+            os.fchmod(handle.fileno(), mode)
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_path, path)
+        _fsync_directory(path.parent)
     finally:
         temporary_path.unlink(missing_ok=True)
 
 
-def prepare_release(
-    version_value: str,
-    build_value: str,
-    *,
-    pyproject_path: Path = PYPROJECT_PATH,
-    lock_path: Path = LOCK_PATH,
-    macos_project_path: Path | None = None,
-    uv_executable: str = "uv",
-    lock_runner: LockRunner = refresh_uv_lock,
-) -> ReleaseMetadata:
-    if macos_project_path is None and pyproject_path == PYPROJECT_PATH and lock_path == LOCK_PATH:
-        macos_project_path = MACOS_PROJECT_PATH
-    current = load_release_metadata(pyproject_path, lock_path, macos_project_path)
-    current_version = parse_release_version(current.package_version)
-    next_version = parse_release_version(version_value)
-    _validate_production_version(next_version)
-    current_build = parse_build_version(current.build_version)
-    next_build = parse_build_version(build_value)
-    if next_version.order_key <= current_version.order_key:
-        raise ReleaseError(f"Release version {version_value} must be newer than {current.package_version}.")
-    if next_build <= current_build:
-        raise ReleaseError(f"CFBundleVersion {build_value} must be greater than {current.build_version}.")
+def _remove_file_durably(path: Path) -> None:
+    path.unlink(missing_ok=True)
+    _fsync_directory(path.parent)
 
+
+def _sha256(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _transaction_journal_path(pyproject_path: Path) -> Path:
+    return pyproject_path.parent / TRANSACTION_JOURNAL_NAME
+
+
+def _release_lock_path(pyproject_path: Path) -> Path:
+    root_digest = hashlib.sha256(str(pyproject_path.parent.resolve()).encode("utf-8")).hexdigest()
+    return Path(tempfile.gettempdir()) / f"bd-to-avp-release-{root_digest}.lock"
+
+
+@contextmanager
+def _release_metadata_lock(pyproject_path: Path) -> Iterator[None]:
+    lock_path = _release_lock_path(pyproject_path)
+    with lock_path.open("a+b") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ReleaseError("Another release metadata operation is already running for this checkout.") from error
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _transaction_payload(files: Sequence[TransactionFile], state: str) -> dict[str, Any]:
+    return {
+        "schema": TRANSACTION_SCHEMA,
+        "schema_version": TRANSACTION_SCHEMA_VERSION,
+        "state": state,
+        "files": [
+            {
+                "path": str(file.path.resolve()),
+                "original_sha256": _sha256(file.original),
+                "original_base64": base64.b64encode(file.original).decode("ascii"),
+                "target_sha256": _sha256(file.target),
+            }
+            for file in files
+        ],
+    }
+
+
+def _write_transaction_journal(path: Path, payload: Mapping[str, Any]) -> None:
+    content = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    _atomic_write(path, content)
+
+
+def _load_transaction_files(path: Path, expected_paths: Sequence[Path]) -> tuple[str, list[JournalFile]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ReleaseError(f"Release metadata transaction journal is invalid: {error}") from error
+    if not isinstance(payload, dict):
+        raise ReleaseError("Release metadata transaction journal must be a JSON object.")
+    if payload.get("schema") != TRANSACTION_SCHEMA or payload.get("schema_version") != TRANSACTION_SCHEMA_VERSION:
+        raise ReleaseError("Release metadata transaction journal has an unsupported schema.")
+    state = payload.get("state")
+    if state not in {"prepared", "committed"}:
+        raise ReleaseError("Release metadata transaction journal has an invalid state.")
+    entries = payload.get("files")
+    if not isinstance(entries, list) or len(entries) != len(expected_paths):
+        raise ReleaseError("Release metadata transaction journal has an invalid file set.")
+    expected_resolved = [path.resolve() for path in expected_paths]
+    files: list[JournalFile] = []
+    for entry, expected_path in zip(entries, expected_resolved, strict=True):
+        if not isinstance(entry, dict) or entry.get("path") != str(expected_path):
+            raise ReleaseError("Release metadata transaction journal path does not match this checkout.")
+        try:
+            original = base64.b64decode(str(entry["original_base64"]), validate=True)
+        except (KeyError, ValueError, binascii.Error) as error:
+            raise ReleaseError("Release metadata transaction journal contains invalid backup data.") from error
+        if _sha256(original) != entry.get("original_sha256"):
+            raise ReleaseError("Release metadata transaction journal backup digest is invalid.")
+        target_digest = entry.get("target_sha256")
+        if not isinstance(target_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", target_digest):
+            raise ReleaseError("Release metadata transaction journal target digest is invalid.")
+        files.append(JournalFile(path=expected_path, original=original, target_sha256=target_digest))
+    return str(state), files
+
+
+def _recover_interrupted_transaction(journal_path: Path, expected_paths: Sequence[Path]) -> None:
+    if not journal_path.exists():
+        return
+    state, journal_files = _load_transaction_files(journal_path, expected_paths)
+    if state == "committed":
+        for file in journal_files:
+            if _sha256(file.path.read_bytes()) != file.target_sha256:
+                raise ReleaseError("Committed release metadata transaction does not match its target digest.")
+        _remove_file_durably(journal_path)
+        return
+    for file in journal_files:
+        current_digest = _sha256(file.path.read_bytes())
+        if current_digest not in {_sha256(file.original), file.target_sha256}:
+            raise ReleaseError(f"Interrupted release transaction cannot restore externally changed file: {file.path}")
+    for file in journal_files:
+        _atomic_write(file.path, file.original)
+    _remove_file_durably(journal_path)
+
+
+def _apply_metadata_transaction(
+    files: Sequence[TransactionFile],
+    journal_path: Path,
+    validate: Callable[[], ReleaseMetadata],
+    observer: TransactionObserver | None = None,
+    precommit_validator: PrecommitValidator | None = None,
+) -> ReleaseMetadata:
+    expected_paths = [file.path for file in files]
+    prepared = _transaction_payload(files, "prepared")
+    _write_transaction_journal(journal_path, prepared)
+    if observer is not None:
+        observer("journal-prepared", journal_path)
+    try:
+        for file in files:
+            if file.path.read_bytes() != file.original:
+                raise ReleaseError(f"Release file changed immediately before replacement: {file.path}")
+            _atomic_write(file.path, file.target)
+            if observer is not None:
+                observer("file-applied", file.path)
+        metadata = validate()
+        if precommit_validator is not None:
+            precommit_validator()
+        for file in files:
+            if file.path.read_bytes() != file.target:
+                raise ReleaseError(f"Release file changed during final validation: {file.path}")
+        _write_transaction_journal(journal_path, _transaction_payload(files, "committed"))
+        if observer is not None:
+            observer("journal-committed", journal_path)
+        _remove_file_durably(journal_path)
+        return metadata
+    except BaseException:
+        try:
+            _recover_interrupted_transaction(journal_path, expected_paths)
+        except Exception as rollback_error:
+            raise ReleaseError(
+                f"Release metadata transaction could not be recovered; journal retained at {journal_path}."
+            ) from rollback_error
+        raise
+
+
+def _resolve_macos_project_path(
+    pyproject_path: Path,
+    lock_path: Path,
+    macos_project_path: Path | None,
+) -> Path | None:
+    if macos_project_path is None and pyproject_path == PYPROJECT_PATH and lock_path == LOCK_PATH:
+        return MACOS_PROJECT_PATH
+    return macos_project_path
+
+
+def _write_release_metadata(
+    next_version: ReleaseVersion,
+    next_build: int,
+    current: ReleaseMetadata,
+    *,
+    pyproject_path: Path,
+    lock_path: Path,
+    macos_project_path: Path | None,
+    uv_executable: str,
+    lock_runner: LockRunner,
+    transaction_observer: TransactionObserver | None = None,
+    precommit_validator: PrecommitValidator | None = None,
+    expected_original_digests: Mapping[Path, str] | None = None,
+) -> ReleaseMetadata:
     original_pyproject = pyproject_path.read_bytes()
     original_lock = lock_path.read_bytes()
     original_macos_project = macos_project_path.read_bytes() if macos_project_path is not None else None
+    original_contents = {
+        pyproject_path.resolve(): original_pyproject,
+        lock_path.resolve(): original_lock,
+    }
+    if macos_project_path is not None and original_macos_project is not None:
+        original_contents[macos_project_path.resolve()] = original_macos_project
+    if expected_original_digests is not None:
+        if set(expected_original_digests) != set(original_contents):
+            raise ReleaseError("Beta 3 recovery source digest set does not match the operated release files.")
+        for path, content in original_contents.items():
+            if _sha256(content) != expected_original_digests[path]:
+                raise ReleaseError(f"Beta 3 recovery source changed after identity validation: {path}")
+    if load_release_metadata(pyproject_path, lock_path, macos_project_path) != current:
+        raise ReleaseError("Release files changed before release preparation; no updates were applied.")
+
     updated_pyproject = _replace_section_value(
         original_pyproject.decode("utf-8"),
         "project",
@@ -530,23 +963,136 @@ def prepare_release(
         if staged_metadata.package_version != next_version.text or staged_metadata.build_version != str(next_build):
             raise ReleaseError("Staged release metadata does not match the requested version and build.")
         staged_lock_content = staged_lock.read_bytes()
+        _validate_lock_refresh(
+            original_lock,
+            staged_lock_content,
+            current_version=current.package_version,
+            next_version=next_version.text,
+        )
 
     if pyproject_path.read_bytes() != original_pyproject or lock_path.read_bytes() != original_lock:
         raise ReleaseError("Release files changed while release preparation was running; no updates were applied.")
     if macos_project_path is not None and macos_project_path.read_bytes() != original_macos_project:
         raise ReleaseError("Release files changed while release preparation was running; no updates were applied.")
-    try:
-        _atomic_write(pyproject_path, updated_pyproject.encode("utf-8"))
-        _atomic_write(lock_path, staged_lock_content)
-        if macos_project_path is not None and updated_macos_project is not None:
-            _atomic_write(macos_project_path, updated_macos_project.encode("utf-8"))
-    except Exception:
-        _atomic_write(pyproject_path, original_pyproject)
-        _atomic_write(lock_path, original_lock)
-        if macos_project_path is not None and original_macos_project is not None:
-            _atomic_write(macos_project_path, original_macos_project)
-        raise
-    return load_release_metadata(pyproject_path, lock_path, macos_project_path)
+    files = [
+        TransactionFile(
+            path=pyproject_path,
+            original=original_pyproject,
+            target=updated_pyproject.encode("utf-8"),
+        ),
+        TransactionFile(path=lock_path, original=original_lock, target=staged_lock_content),
+    ]
+    if macos_project_path is not None and updated_macos_project is not None and original_macos_project is not None:
+        files.append(
+            TransactionFile(
+                path=macos_project_path,
+                original=original_macos_project,
+                target=updated_macos_project.encode("utf-8"),
+            )
+        )
+    return _apply_metadata_transaction(
+        files,
+        _transaction_journal_path(pyproject_path),
+        lambda: load_release_metadata(pyproject_path, lock_path, macos_project_path),
+        transaction_observer,
+        precommit_validator,
+    )
+
+
+def prepare_release(
+    version_value: str,
+    build_value: str,
+    *,
+    pyproject_path: Path = PYPROJECT_PATH,
+    lock_path: Path = LOCK_PATH,
+    macos_project_path: Path | None = None,
+    uv_executable: str = "uv",
+    lock_runner: LockRunner = refresh_uv_lock,
+    transaction_observer: TransactionObserver | None = None,
+) -> ReleaseMetadata:
+    macos_project_path = _resolve_macos_project_path(pyproject_path, lock_path, macos_project_path)
+    expected_paths = [pyproject_path, lock_path, *([macos_project_path] if macos_project_path is not None else [])]
+    with _release_metadata_lock(pyproject_path):
+        _recover_interrupted_transaction(_transaction_journal_path(pyproject_path), expected_paths)
+        current = load_release_metadata(pyproject_path, lock_path, macos_project_path)
+        current_version = parse_release_version(current.package_version)
+        next_version = parse_release_version(version_value)
+        _validate_production_version(next_version)
+        current_build = parse_build_version(current.build_version)
+        next_build = parse_build_version(build_value)
+        if next_version.order_key <= current_version.order_key:
+            raise ReleaseError(f"Release version {version_value} must be newer than {current.package_version}.")
+        if next_build <= current_build:
+            raise ReleaseError(f"CFBundleVersion {build_value} must be greater than {current.build_version}.")
+        return _write_release_metadata(
+            next_version,
+            next_build,
+            current,
+            pyproject_path=pyproject_path,
+            lock_path=lock_path,
+            macos_project_path=macos_project_path,
+            uv_executable=uv_executable,
+            lock_runner=lock_runner,
+            transaction_observer=transaction_observer,
+        )
+
+
+def recover_beta3(
+    *,
+    pyproject_path: Path = PYPROJECT_PATH,
+    lock_path: Path = LOCK_PATH,
+    macos_project_path: Path | None = None,
+    evidence_path: Path = BETA3_RECOVERY_EVIDENCE_PATH,
+    lock_runner: LockRunner = refresh_uv_lock,
+    remote_verifier: RemoteEvidenceVerifier = verify_beta3_remote_state,
+    transaction_observer: TransactionObserver | None = None,
+) -> ReleaseMetadata:
+    evidence = validate_beta3_recovery_evidence(evidence_path)
+    macos_project_path = _resolve_macos_project_path(pyproject_path, lock_path, macos_project_path)
+    if macos_project_path is None:
+        raise ReleaseError("Beta 3 recovery requires the production macOS project metadata.")
+    expected_paths = [pyproject_path, lock_path, macos_project_path]
+    with _release_metadata_lock(pyproject_path):
+        _recover_interrupted_transaction(_transaction_journal_path(pyproject_path), expected_paths)
+        expected_original_digests = _validate_beta3_recovery_source_identity(
+            pyproject_path,
+            lock_path,
+            macos_project_path,
+            evidence,
+        )
+        current = load_release_metadata(pyproject_path, lock_path, macos_project_path)
+        if (
+            current.package_version != BETA3_RECOVERY_SOURCE_VERSION
+            or current.build_version != BETA3_RECOVERY_SOURCE_BUILD
+        ):
+            raise ReleaseError(
+                "Beta 3 recovery requires exact source metadata "
+                f"{BETA3_RECOVERY_SOURCE_VERSION} build {BETA3_RECOVERY_SOURCE_BUILD}; "
+                f"found {current.package_version} build {current.build_version}."
+            )
+
+        def verify_remote_premise() -> None:
+            try:
+                remote_verifier(evidence)
+            except Beta3RecoveryEvidenceError as error:
+                raise ReleaseError(str(error)) from error
+
+        verify_remote_premise()
+        target_version = parse_release_version(BETA3_RECOVERY_TARGET_VERSION)
+        target_build = parse_build_version(BETA3_RECOVERY_TARGET_BUILD)
+        return _write_release_metadata(
+            target_version,
+            target_build,
+            current,
+            pyproject_path=pyproject_path,
+            lock_path=lock_path,
+            macos_project_path=macos_project_path,
+            uv_executable="uv",
+            lock_runner=lock_runner,
+            transaction_observer=transaction_observer,
+            precommit_validator=verify_remote_premise,
+            expected_original_digests=expected_original_digests,
+        )
 
 
 def _add_paths(parser: argparse.ArgumentParser) -> None:
@@ -580,6 +1126,12 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--version", required=True)
     prepare.add_argument("--build", required=True)
     prepare.add_argument("--uv", default="uv")
+
+    recover_beta3_parser = commands.add_parser(
+        "recover-beta3",
+        help="Apply the audited one-time 0.3.0rc1 build 147 to 0.3.0b3 build 148 recovery.",
+    )
+    recover_beta3_parser.add_argument("--evidence", type=Path, default=BETA3_RECOVERY_EVIDENCE_PATH)
 
     validate_tag = commands.add_parser("validate-tag", help="Validate a v-prefixed release tag.")
     validate_tag.add_argument("tag")
@@ -615,6 +1167,8 @@ def main(argv: list[str] | None = None) -> int:
             macos_project_path=args.macos_project,
             uv_executable=args.uv,
         )
+    elif args.command == "recover-beta3":
+        metadata = recover_beta3(evidence_path=args.evidence)
     else:
         metadata = load_release_metadata(args.pyproject, args.lock, args.macos_project)
     if args.command == "metadata" and args.github_output:

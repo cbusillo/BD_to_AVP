@@ -6,10 +6,13 @@ closed when it cannot satisfy this contract.
 
 The application preference model, release metadata/history parser, appcast
 tooling, reusable release engine, and guarded operator entrypoints implement
-this four-route contract. The Beta 3 metadata migration and bootstrap remain
-intentionally blocked on issues 292 and 293. Do not prepare or dispatch an Alpha
-or Beta release until those gates have landed and the focused signed-install
-smoke has passed.
+this four-route contract. The exact Beta 3 metadata migration and bootstrap are
+complete at `0.3.0b3` build `148`, with build `147` permanently burned.
+Publication remains frozen: issue #294 exclusively owns exact-SHA dispatch,
+approval, signing, publication, and public verification. The recovery work
+makes no public-artifact claim. `.github/release-freezes.json` rejects the Beta
+3 tag before package or release construction until #294 removes that entry
+through protected-main review.
 
 ## Production Identity
 
@@ -25,7 +28,7 @@ services.
 | Architecture and deployment | Apple Silicon, macOS 26 or later for the `0.3.x` line |
 | Sparkle feed | `https://cbusillo.github.io/BD_to_AVP/appcast.xml` |
 | Sparkle public key | The value in `sparkle-public-ed-key.txt`, byte-identical to packaged metadata |
-| Apple signing identity | A `Developer ID Application` certificate whose Team Identifier equals the protected `TEAM_ID`; certificate rotation is allowed only within that team |
+| Apple signing identity | Exact authority `Developer ID Application: Shiny Computers Leasing LLC (MM5YXC7T6E)` and Team Identifier `MM5YXC7T6E`, pinned in `scripts/production_identity.py` |
 | Diagnostics endpoint | The approved HTTPS value of the `SUPPORT_DIAGNOSTICS_ENDPOINT` repository variable, packaged as `BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT` |
 
 Changing the bundle identifier, Apple Team Identifier, feed URL, or Sparkle key
@@ -71,15 +74,16 @@ version, the normal stage order is Alpha, Beta, RC, then Stable. Stages may be
 skipped but a published train does not move backward. Concurrent maintenance or
 backport trains require a new design rather than weakening global ordering.
 
-The committed but unpublished `0.3.0rc1` build `147` attempt is a one-time
-recovery exception. Build `147` is permanently burned. Because no tag, release,
-appcast item, Pages state, Latest change, or PyPI artifact was published, a
-focused migration may replace the repository metadata with `0.3.0b3` build
-`148`; normal forward-only enforcement resumes immediately afterward.
-The normal release preparation command intentionally rejects that backward
-stage move. The recovery must use a dedicated audited migration that first
-reconfirms the failed RC attempt left no tag, release, appcast, Pages, Latest,
-or PyPI residue; generic release preparation remains fail-closed.
+The committed but unpublished `0.3.0rc1` build `147` attempt was the sole
+one-time recovery exception. The dedicated audited `recover-beta3` migration
+validated the pinned source tree and authenticated live remote state, proving
+that the failed RC attempt left no tag, release, draft, or artifact and caused
+no appcast, Pages, Latest, or PyPI mutation. It serialized the operation with a
+checkout lock and used a durable rollback journal while replacing repository
+metadata with `0.3.0b3` build `148`. Build `147` is permanently burned and
+normal forward-only enforcement has resumed. The ordinary release preparation
+command still rejects that backward stage move, and the recovery command
+rejects every other source, target, evidence record, and rerun.
 
 ## Sparkle Route Eligibility
 

@@ -19,6 +19,14 @@ from uuid import uuid4
 
 from bd_to_avp.observability import ObservabilityEvent
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
+from scripts.production_identity import (
+    PRODUCTION_BUNDLE_IDENTIFIER,
+    PRODUCTION_DISTRIBUTION_CHANNEL,
+    PRODUCTION_FEED_URL,
+    PRODUCTION_PRODUCT_NAME,
+    PRODUCTION_SPARKLE_PUBLIC_KEY,
+    validate_production_public_key,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MACOS_ROOT = REPO_ROOT / "macos"
@@ -30,8 +38,8 @@ with PYPROJECT_PATH.open("rb") as pyproject_file:
 PROJECT_METADATA = PYPROJECT["project"]
 BRIEFCASE_METADATA = PYPROJECT["tool"]["briefcase"]
 BRIEFCASE_APP_METADATA = BRIEFCASE_METADATA["app"]["bd-to-avp"]
-NATIVE_PRODUCT_NAME = str(BRIEFCASE_APP_METADATA["formal_name"])
-NATIVE_BUNDLE_IDENTIFIER = f"{BRIEFCASE_METADATA['bundle']}.bd-to-avp"
+NATIVE_PRODUCT_NAME = PRODUCTION_PRODUCT_NAME
+NATIVE_BUNDLE_IDENTIFIER = PRODUCTION_BUNDLE_IDENTIFIER
 NATIVE_SHORT_VERSION = str(PROJECT_METADATA["version"])
 NATIVE_UPDATE_INFO = dict(BRIEFCASE_APP_METADATA["macOS"]["info"])
 NATIVE_BUILD_VERSION = str(NATIVE_UPDATE_INFO["CFBundleVersion"])
@@ -50,6 +58,7 @@ WORKER_PROTOCOL_VERSION = PROTOCOL_VERSION
 WORKER_ENTITLEMENTS = MACOS_ROOT / "BluRayToVisionPro" / "Worker.entitlements"
 DEPLOYMENT_TARGET_OVERRIDE_ENV = "BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE"
 SUPPORT_DIAGNOSTICS_ENDPOINT_ENV = "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT"
+SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY = "BDToAVPSupportDiagnosticsEndpoint"
 USER_INTERFACE_SOURCE_FILES = sorted(
     [
         *(MACOS_ROOT / "BluRayToVisionPro" / "App").glob("*.swift"),
@@ -85,6 +94,37 @@ MACH_O_MAGICS = {
     b"\xcf\xfa\xed\xfe",
     b"\xfe\xed\xfa\xcf",
 }
+
+
+def validate_repository_production_identity() -> None:
+    derived_bundle_identifier = f"{BRIEFCASE_METADATA['bundle']}.bd-to-avp"
+    expected_values = {
+        "Briefcase product name": (str(BRIEFCASE_APP_METADATA["formal_name"]), PRODUCTION_PRODUCT_NAME),
+        "Briefcase bundle identifier": (derived_bundle_identifier, PRODUCTION_BUNDLE_IDENTIFIER),
+        "distribution channel": (
+            str(NATIVE_UPDATE_INFO.get("BDToAVPDistributionChannel", "")),
+            PRODUCTION_DISTRIBUTION_CHANNEL,
+        ),
+        "Sparkle feed URL": (str(NATIVE_UPDATE_INFO.get("SUFeedURL", "")), PRODUCTION_FEED_URL),
+        "Sparkle public key": (
+            str(NATIVE_UPDATE_INFO.get("SUPublicEDKey", "")),
+            PRODUCTION_SPARKLE_PUBLIC_KEY,
+        ),
+    }
+    mismatches = [
+        f"{description}: expected {expected!r}, found {actual!r}"
+        for description, (actual, expected) in expected_values.items()
+        if actual != expected
+    ]
+    try:
+        validate_production_public_key(str(NATIVE_UPDATE_INFO.get("SUPublicEDKey", "")))
+    except ValueError as error:
+        mismatches.append(str(error))
+    if mismatches:
+        raise RuntimeError("Repository production identity validation failed:\n" + "\n".join(mismatches))
+
+
+validate_repository_production_identity()
 
 
 def run(
@@ -140,6 +180,59 @@ def xcodebuild(action: str, configuration: str) -> None:
     )
 
 
+def validate_support_diagnostics_endpoint(endpoint: str) -> str:
+    approved_endpoint = endpoint.strip()
+    if not approved_endpoint:
+        raise ValueError("Invalid support diagnostics endpoint")
+    try:
+        parsed_endpoint = urlsplit(approved_endpoint)
+        endpoint_port = parsed_endpoint.port
+    except ValueError as error:
+        raise ValueError("Invalid support diagnostics endpoint") from error
+    if (
+        parsed_endpoint.scheme != "https"
+        or parsed_endpoint.hostname is None
+        or parsed_endpoint.username is not None
+        or parsed_endpoint.password is not None
+        or parsed_endpoint.path not in {"", "/"}
+        or parsed_endpoint.query
+        or parsed_endpoint.fragment
+        or any(character.isspace() for character in approved_endpoint)
+        or (endpoint_port is not None and not 1 <= endpoint_port <= 65535)
+    ):
+        raise ValueError("Invalid support diagnostics endpoint")
+    return approved_endpoint
+
+
+def verify_support_diagnostics_endpoint(
+    info: Mapping[str, object],
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> str:
+    invalid_endpoint_message = f"{SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY} must be a non-empty valid HTTPS endpoint."
+    endpoint = info.get(SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY)
+    if not isinstance(endpoint, str):
+        raise ValueError(invalid_endpoint_message)
+    try:
+        validated_endpoint = validate_support_diagnostics_endpoint(endpoint)
+    except ValueError as error:
+        raise ValueError(invalid_endpoint_message) from error
+    if endpoint != validated_endpoint:
+        raise ValueError(invalid_endpoint_message)
+
+    environment = os.environ if environment is None else environment
+    if SUPPORT_DIAGNOSTICS_ENDPOINT_ENV in environment:
+        try:
+            approved_endpoint = validate_support_diagnostics_endpoint(environment[SUPPORT_DIAGNOSTICS_ENDPOINT_ENV])
+        except ValueError as error:
+            raise ValueError("Approved support diagnostics endpoint is invalid.") from error
+        if endpoint != approved_endpoint:
+            raise ValueError(
+                f"{SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY} must exactly match the approved support diagnostics endpoint."
+            )
+    return endpoint
+
+
 def native_build_settings(configuration: str, environment: Mapping[str, str]) -> list[str]:
     build_settings = ["CODE_SIGNING_ALLOWED=NO"]
     deployment_target = environment.get(DEPLOYMENT_TARGET_OVERRIDE_ENV, "").strip()
@@ -151,23 +244,7 @@ def native_build_settings(configuration: str, environment: Mapping[str, str]) ->
     if configuration == "Release" and not support_endpoint:
         raise ValueError("Release builds require an approved support diagnostics endpoint")
     if support_endpoint:
-        parsed_endpoint = urlsplit(support_endpoint)
-        try:
-            endpoint_port = parsed_endpoint.port
-        except ValueError as error:
-            raise ValueError("Invalid support diagnostics endpoint") from error
-        if (
-            parsed_endpoint.scheme != "https"
-            or parsed_endpoint.hostname is None
-            or parsed_endpoint.username is not None
-            or parsed_endpoint.password is not None
-            or parsed_endpoint.path not in {"", "/"}
-            or parsed_endpoint.query
-            or parsed_endpoint.fragment
-            or any(character.isspace() for character in support_endpoint)
-            or (endpoint_port is not None and not 1 <= endpoint_port <= 65535)
-        ):
-            raise ValueError("Invalid support diagnostics endpoint")
+        support_endpoint = validate_support_diagnostics_endpoint(support_endpoint)
         build_settings.append(f"BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT={support_endpoint}")
     if configuration == "Release":
         build_settings.extend(["ARCHS=arm64", "ENABLE_CODE_COVERAGE=NO", "ONLY_ACTIVE_ARCH=NO"])
@@ -229,7 +306,7 @@ def assemble_package() -> Path:
         plistlib.dump(info, info_file, sort_keys=True)
 
     strip_native_executable(PACKAGED_APP)
-    verify_layout(PACKAGED_APP)
+    verify_layout(PACKAGED_APP, environment=os.environ)
     return PACKAGED_APP
 
 
@@ -240,8 +317,8 @@ def copy_tree(source: Path, destination: Path) -> None:
     shutil.copytree(source, destination, symlinks=True, dirs_exist_ok=True)
 
 
-def verify_layout(app_path: Path) -> None:
-    verify_product_identity(app_path)
+def verify_layout(app_path: Path, *, environment: Mapping[str, str] | None = None) -> None:
+    verify_product_identity(app_path, environment=environment)
     native_executable = app_path / "Contents" / "MacOS" / NATIVE_EXECUTABLE_NAME
     worker_executable = app_path / "Contents" / "MacOS" / WORKER_EXECUTABLE_NAME
     ffprobe_executable = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / "ffprobe"
@@ -266,7 +343,7 @@ def verify_layout(app_path: Path) -> None:
     verify_package_paths(app_path)
 
 
-def verify_product_identity(app_path: Path) -> None:
+def verify_product_identity(app_path: Path, *, environment: Mapping[str, str] | None = None) -> None:
     if app_path.name != NATIVE_APP_NAME:
         raise RuntimeError(f"macOS app must use the product name: {NATIVE_APP_NAME}")
 
@@ -292,6 +369,10 @@ def verify_product_identity(app_path: Path) -> None:
         for key, expected in expected_values.items()
         if info.get(key) != expected
     ]
+    try:
+        verify_support_diagnostics_endpoint(info, environment=environment)
+    except ValueError as error:
+        mismatches.append(str(error))
     development_keys = [key for key in info if "DevelopmentRepositoryRoot" in key]
     if development_keys:
         mismatches.append("development repository metadata is present")

@@ -1,0 +1,41 @@
+<?xml version='1.0' encoding='utf-8'?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>3D Blu-ray to Vision Pro Updates</title>
+    <link>https://github.com/cbusillo/BD_to_AVP</link>
+    <description>Stable direct-DMG updates for 3D Blu-ray to Vision Pro.</description>
+    <language>en</language>
+    <item>
+      <title>Version 0.2.143</title>
+      <link>https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.2.143</link>
+      <sparkle:version>146</sparkle:version>
+      <sparkle:shortVersionString>0.2.143</sparkle:shortVersionString>
+      <sparkle:releaseNotesLink>https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.2.143</sparkle:releaseNotesLink>
+      <pubDate>Sat, 11 Jul 2026 20:33:49 +0000</pubDate>
+      <enclosure url="https://github.com/cbusillo/BD_to_AVP/releases/download/v0.2.143/3D-Blu-ray-to-Vision-Pro-0.2.143.dmg" length="382758448" type="application/octet-stream" sparkle:edSignature="zLtGNQgEW6uWIkm53cdsWW8znIMYpsp3TWZl0whXJna4DdX2ogl11IuXDkaUBmYoO49e8tqQnwqoAL8xr5v4AQ==" />
+      <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
+    </item>
+    <item>
+      <title>Version 0.2.143rc5</title>
+      <link>https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.2.143rc5</link>
+      <sparkle:version>145</sparkle:version>
+      <sparkle:shortVersionString>0.2.143rc5</sparkle:shortVersionString>
+      <sparkle:channel>rc</sparkle:channel>
+      <sparkle:releaseNotesLink>https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.2.143rc5</sparkle:releaseNotesLink>
+      <pubDate>Sat, 11 Jul 2026 18:19:37 +0000</pubDate>
+      <enclosure url="https://github.com/cbusillo/BD_to_AVP/releases/download/v0.2.143rc5/3D-Blu-ray-to-Vision-Pro-0.2.143rc5.dmg" length="382775531" type="application/octet-stream" sparkle:edSignature="8YYAQlzYZnvCJcC1n62mbLi9qWvuxbRPMuDMaIGtP17PyluC80RLU51pr5NibkLnLMsG4EUkdjhw3no/qilXBw==" />
+      <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
+    </item>
+    <item>
+      <title>Version 0.2.143rc4</title>
+      <link>https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.2.143rc4</link>
+      <sparkle:version>144</sparkle:version>
+      <sparkle:shortVersionString>0.2.143rc4</sparkle:shortVersionString>
+      <sparkle:channel>rc</sparkle:channel>
+      <sparkle:releaseNotesLink>https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.2.143rc4</sparkle:releaseNotesLink>
+      <pubDate>Sat, 11 Jul 2026 16:51:39 +0000</pubDate>
+      <enclosure url="https://github.com/cbusillo/BD_to_AVP/releases/download/v0.2.143rc4/3D-Blu-ray-to-Vision-Pro-0.2.143rc4.dmg" length="382552940" type="application/octet-stream" sparkle:edSignature="62HZfMXQAzKQi6aZX14gBklF5ukT+gptbzxlBCUaT9DvYxBVruIuC8xxYv7OSi2OFIq+WHEnxnqS9IBcT8XOCg==" />
+      <sparkle:minimumSystemVersion>11.0</sparkle:minimumSystemVersion>
+    </item>
+  </channel>
+</rss>

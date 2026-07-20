@@ -1,0 +1,10 @@
+{
+  "schema": "bd_to_avp.release_freezes",
+  "schema_version": 1,
+  "frozen_release_tags": {
+    "v0.3.0-beta.3": {
+      "issue": 294,
+      "reason": "Publication remains frozen until issue #294 removes this entry through protected-main review."
+    }
+  }
+}
