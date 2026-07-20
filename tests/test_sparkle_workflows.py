@@ -30,6 +30,14 @@ def load_release_engine() -> dict:
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_ci_fetches_full_history_for_recovery_provenance(self) -> None:
+        workflow = load_workflow("ci.yml")
+        checkout = workflow["jobs"]["validate"]["steps"][0]
+
+        self.assertEqual(checkout["uses"], "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0")
+        self.assertEqual(checkout["with"]["fetch-depth"], "0")
+        self.assertEqual(checkout["with"]["persist-credentials"], "false")
+
     def test_sparkle_bundle_uses_importable_module_entrypoint(self) -> None:
         workflow = load_release_engine()
         workflow_text = str(workflow)
