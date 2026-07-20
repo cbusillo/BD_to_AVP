@@ -9,13 +9,12 @@ version `0.3.0b3`, build `148`. The committed `0.3.0rc1` build `147` attempt
 failed before publication and its build number is permanently burned. The
 focused recovery and Beta 3 cut packet are owned by issue #293.
 
-Issue #289 implements the four-route updater preference, release metadata,
-production-history filtering, and appcast validation described here. Issue #290
-provides the reusable engine, and issue #291 provides the guarded
-Stable/Prerelease entrypoints. The Beta 3 metadata migration and
-recovery/bootstrap remain owned by issues #292 and #293, so Alpha and Beta
-preparation and dispatch stay blocked until those gates and the focused
-signed-install smoke have landed.
+The four-route updater preference, release metadata, production-history
+filtering, appcast validation, reusable engine, and guarded Stable/Prerelease
+entrypoints are implemented. The Beta 3 manual-bootstrap contract is documented
+and regression-covered here. Its focused metadata migration and recovery remain
+owned by issue #293, so Alpha and Beta preparation and dispatch stay blocked
+until that gate and the focused signed-install smoke have landed.
 
 ## Release Preparation
 

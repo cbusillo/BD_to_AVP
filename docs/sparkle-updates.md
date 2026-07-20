@@ -275,8 +275,7 @@ A live packaged-app test must prove that Qt's macOS event loop delivers
 Sparkle's timers, windows, and delegate callbacks. Resolving the Objective-C
 class alone is not sufficient evidence.
 
-After #289 implements the four-route selector, the target direct-DMG user
-experience is:
+The direct-DMG user experience is:
 
 - Help contains `Check for Updates…`.
 - Help contains an `Update Route` submenu with Stable, RC, Beta, and Alpha; the
@@ -321,9 +320,10 @@ removed from application and Briefcase requirements.
   last-good published snapshot when updates may resume.
 - Losing the EdDSA private key requires a manual app release with a new public
   key before automatic updates can resume.
-- Sparkle cannot be enabled for wider users until update smoke succeeds from an
-  older app installed in `/Applications`; testing from a mounted DMG is not
-  sufficient.
+- Beta 3 bootstrap evidence starts from an installed Stable or RC production
+  app and proves manual replacement with the exact tagged DMG; no updater offer
+  is expected. Subsequent installed-update smoke starts from a Beta-3-or-later
+  route-capable production app. Testing from a mounted DMG is not sufficient.
 
 ## Implementation Order
 
@@ -349,8 +349,10 @@ Before enabling the appcast for normal users:
 - the appcast contains no delta enclosures;
 - Sparkle timers, windows, and delegate callbacks work under the packaged Qt
   event loop;
-- an older installed app updates to the candidate, relaunches, and reports the
-  expected version;
+- for Beta 3, an installed Stable or RC production app is manually replaced by
+  the exact tagged DMG and is never claimed to discover the seed through
+  Sparkle; for later releases, an installed Beta-3-or-later route-capable app
+  updates to the candidate, relaunches, and reports the expected version;
 - unavailable-feed and invalid-signature tests leave the installed app intact;
 - active processing postpones installation/relaunch; and
 - the manual GitHub Releases recovery path remains documented.

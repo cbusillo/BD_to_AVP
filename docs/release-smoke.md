@@ -244,9 +244,11 @@ Beta without pretending the current Stable or RC client can discover it.
 1. Start with an installed signed production Stable or RC app. Confirm its
    route UI exposes only Stable and RC and that it does not offer
    `v0.3.0-beta.3` through Sparkle.
-2. If it exists, copy
+2. Quit the production app and every retired Preview variant. If it exists, copy
    `~/Library/Application Support/3D Blu-ray to Vision Pro/profiles.json` to a
-   safe location before replacing the app.
+   safe location outside that folder before replacing the app. The separate
+   bundle identities share this profile path, so keep every variant closed while
+   copying or restoring it.
 3. Download the exact `v0.3.0-beta.3` DMG from GitHub Releases; do not use an
    updater offer. Drag the app to `/Applications` and confirm it replaces the
    production `com.shinycomputers.bd-to-avp` app.
@@ -262,7 +264,8 @@ Beta without pretending the current Stable or RC client can discover it.
 7. Select Stable after installing Beta 3 and confirm no older build is offered
    or installed; it waits for a newer unchanneled Stable item. Confirm the
    retired `native-ui-preview-1`, `v0.3.0-beta.1`, and `v0.3.0-beta.2` Preview
-   apps remain separate and cannot Sparkle-update into the production app.
+   apps remain separate and cannot Sparkle-update into the production app. Do
+   not reopen them to edit the shared profile library after Beta 3 installation.
 
 ## Follow-Up Routing
 

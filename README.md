@@ -22,8 +22,10 @@ feasibility record before choosing it for headset delivery.
 
 ## GUI install
 
-To install the GUI version of `Blu-ray to Vision Pro`, download the latest release from the [releases page]. Open the
-DMG file and drag the app to your Applications folder.
+For a normal Stable install of `Blu-ray to Vision Pro`, download GitHub Latest
+from the [releases page]. Open the DMG file and drag the app to your Applications
+folder. Beta 3 is a prerelease rather than GitHub Latest; use only its exact
+tagged release as described below.
 
 The GUI app does not install Homebrew or modify your shell setup. Runtime tools are bundled into the app where possible.
 MakeMKV remains an external requirement for reading Blu-ray discs; install the current macOS version from the
@@ -41,9 +43,13 @@ can select only Stable or RC, so they cannot select the Beta route or receive
 Beta 3 through Sparkle. Download that exact GitHub Release DMG, drag it into
 `/Applications`, and replace the existing production app.
 
-Before replacing the app, copy
+Before replacing the app, quit the production app and every retired Preview
+variant, then copy
 `~/Library/Application Support/3D Blu-ray to Vision Pro/profiles.json` to a safe
-location if it exists. The DMG uses the production bundle identifier
+location outside that folder if it exists. Separate bundle identities do not
+isolate this profile file: historical Preview and production builds can read and
+write the same path. After installing Beta 3, do not edit profiles in a retired
+Preview app. The DMG uses the production bundle identifier
 `com.shinycomputers.bd-to-avp`, so it replaces/upgrades the production app
 rather than creating another app beside it. The retired Beta 1 and Beta 2
 Preview apps use separate immutable identities; they remain separate and cannot

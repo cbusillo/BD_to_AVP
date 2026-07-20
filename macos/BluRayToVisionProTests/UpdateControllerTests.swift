@@ -181,7 +181,7 @@ final class UpdateControllerTests: XCTestCase {
 
         for testCase in cases {
             let defaults = isolatedDefaults()
-            let backend = FakeUpdateBackend()
+            var backend: FakeUpdateBackend?
             var initializedChannel: UpdateChannelPreference?
             defaults.set(testCase.rawValue, forKey: UpdateController.channelDefaultsKey)
 
@@ -190,15 +190,18 @@ final class UpdateControllerTests: XCTestCase {
                 defaults: defaults,
                 backendFactory: { channel, _ in
                     initializedChannel = channel
-                    return backend
+                    let createdBackend = FakeUpdateBackend(updateChannel: channel)
+                    backend = createdBackend
+                    return createdBackend
                 }
             )
             controller.startIfNeeded()
 
             XCTAssertEqual(controller.updateChannel, testCase.preference)
             XCTAssertEqual(initializedChannel, testCase.preference)
+            XCTAssertEqual(backend?.updateChannel, testCase.preference)
             XCTAssertEqual(defaults.string(forKey: UpdateController.channelDefaultsKey), testCase.rawValue)
-            XCTAssertEqual(backend.channelChangeCount, 0)
+            XCTAssertEqual(backend?.channelChangeCount, 0)
 
             let relaunchedController = UpdateController(
                 environment: directEnvironment(publicKey: nil),
@@ -209,7 +212,8 @@ final class UpdateControllerTests: XCTestCase {
             controller.updateChannel = .beta
 
             XCTAssertEqual(defaults.string(forKey: UpdateController.channelDefaultsKey), "beta")
-            XCTAssertEqual(backend.channelChangeCount, 1)
+            XCTAssertEqual(backend?.updateChannel, .beta)
+            XCTAssertEqual(backend?.channelChangeCount, 1)
         }
     }
 
@@ -292,10 +296,12 @@ private final class FakeUpdateBackend: UpdateBackend {
 
     init(
         automaticallyChecksForUpdates: Bool = false,
-        canCheckForUpdates: Bool = true
+        canCheckForUpdates: Bool = true,
+        updateChannel: UpdateChannelPreference = .stable
     ) {
         self.automaticallyChecksForUpdates = automaticallyChecksForUpdates
         self.canCheckForUpdates = canCheckForUpdates
+        self.updateChannel = updateChannel
     }
 
     func checkForUpdates() {

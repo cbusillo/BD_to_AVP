@@ -122,7 +122,11 @@ guidance must never claim otherwise. Testers obtain the exact Beta 3 DMG through
 its GitHub Release and drag it into `/Applications`, replacing the production
 app because the bundle identity is intentionally the same. Before doing so, copy
 `~/Library/Application Support/3D Blu-ray to Vision Pro/profiles.json` to a safe
-location if it exists.
+location outside that folder if it exists. Quit the production app and every
+retired Preview variant before copying or restoring it. Bundle-identity
+separation does not isolate this file: both production and historical Preview
+builds can read and write the same profile library, so do not edit it from a
+retired Preview app after installing Beta 3.
 
 After Beta 3 is installed, it exposes Stable, RC, Beta, and Alpha. Its `beta`
 appcast item is eligible only on the Beta and Alpha routes; Stable and RC exclude

@@ -37,6 +37,7 @@ def item(
     *,
     release_tag: str | None = None,
     asset_name: str | None = None,
+    minimum_system_version: str = "11.0",
 ) -> sparkle_appcast.AppcastItem:
     tag = release_tag or sparkle_appcast._release_public_tag(short_version)
     dmg_name = asset_name or sparkle_appcast._release_asset_name(short_version)
@@ -49,7 +50,7 @@ def item(
         signature=SIGNATURE,
         release_notes_markdown=f"Version {short_version} improves conversion reliability.",
         full_release_notes_url=f"https://github.com/cbusillo/BD_to_AVP/releases/tag/{tag}",
-        minimum_system_version="11.0",
+        minimum_system_version=minimum_system_version,
         published_at=datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc),
     )
 
@@ -142,8 +143,16 @@ class SparkleAppcastTests(unittest.TestCase):
                         item("147", retired_short_version, "beta"),
                     )
 
-            sparkle_appcast.append_item(empty_feed, stable_feed, item("146", "0.2.143", None))
-            sparkle_appcast.append_item(stable_feed, beta3_feed, item("148", "0.3.0b3", "beta"))
+            sparkle_appcast.append_item(
+                empty_feed,
+                stable_feed,
+                item("146", "0.2.143", None, minimum_system_version="14.0"),
+            )
+            sparkle_appcast.append_item(
+                stable_feed,
+                beta3_feed,
+                item("148", "0.3.0b3", "beta", minimum_system_version="26.0"),
+            )
             sparkle_appcast.validate_release_snapshot(beta3_feed, "0.3.0b3")
             sparkle_appcast.validate_release_tag_snapshot(beta3_feed, "v0.3.0-beta.3")
             _, channel = sparkle_appcast.load_appcast(beta3_feed)
@@ -163,6 +172,14 @@ class SparkleAppcastTests(unittest.TestCase):
             ["0.3.0b3", "0.2.143"],
         )
         self.assertEqual(beta3_item.findtext(f"{sparkle_appcast.SPARKLE}channel"), "beta")
+        self.assertEqual(
+            beta3_item.findtext(f"{sparkle_appcast.SPARKLE}minimumSystemVersion"),
+            "26.0",
+        )
+        self.assertEqual(
+            items[1].findtext(f"{sparkle_appcast.SPARKLE}minimumSystemVersion"),
+            "14.0",
+        )
         self.assertEqual(
             beta3_enclosure.get("url"),
             "https://github.com/cbusillo/BD_to_AVP/releases/download/"
