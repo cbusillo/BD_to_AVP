@@ -419,7 +419,8 @@ final class DiagnosticBundleBuilder: Sendable {
         _ snapshot: DiagnosticTextSnapshot,
         redactor: DiagnosticRedactor
     ) -> ToolTailBuildResult {
-        let redactedText = redactor.redact(snapshot.text)
+        let safeInput = Self.redactionSafeToolTailInput(snapshot)
+        let redactedText = redactor.redact(safeInput.text)
         let bodyBudget = max(0, configuration.maximumToolTailBytes - 512)
         let boundedBody = Self.boundedUTF8Suffix(redactedText, maximumBytes: bodyBudget)
         let archiveDropped = max(0, redactedText.utf8.count - boundedBody.utf8.count)
@@ -427,14 +428,16 @@ final class DiagnosticBundleBuilder: Sendable {
             totalInputBytes: snapshot.totalBytes,
             retainedInputBytes: snapshot.retainedBytes,
             bufferDroppedBytes: snapshot.droppedBytes,
+            boundaryDroppedInputBytes: safeInput.droppedBytes,
             archiveDroppedBytes: archiveDropped,
-            truncated: snapshot.truncated || archiveDropped > 0
+            truncated: snapshot.truncated || safeInput.droppedBytes > 0 || archiveDropped > 0
         )
         let header = [
             "# bd_to_avp_support_tool_tail schema_version=1",
             "# total_input_bytes=\(truncation.totalInputBytes)",
             "# retained_input_bytes=\(truncation.retainedInputBytes)",
             "# buffer_dropped_bytes=\(truncation.bufferDroppedBytes)",
+            "# boundary_dropped_input_bytes=\(truncation.boundaryDroppedInputBytes)",
             "# archive_dropped_bytes=\(truncation.archiveDroppedBytes)",
             "# truncated=\(truncation.truncated)",
             "",
@@ -442,6 +445,48 @@ final class DiagnosticBundleBuilder: Sendable {
         .joined(separator: "\n")
         let data = Data((header + boundedBody).utf8)
         return ToolTailBuildResult(data: data, truncation: truncation)
+    }
+
+    static func redactionSafeToolTailInput(
+        _ snapshot: DiagnosticTextSnapshot
+    ) -> (text: String, droppedBytes: Int) {
+        guard !snapshot.text.isEmpty else {
+            return ("", 0)
+        }
+
+        var safeText = snapshot.text[...]
+        var droppedBytes = 0
+        if snapshot.truncated {
+            let scalars = safeText.unicodeScalars
+            guard let firstTerminator = scalars.firstIndex(where: Self.isLineTerminator) else {
+                return ("", snapshot.text.utf8.count)
+            }
+            var safeStart = scalars.index(after: firstTerminator)
+            if scalars[firstTerminator].value == 0x0D,
+               safeStart < scalars.endIndex,
+               scalars[safeStart].value == 0x0A {
+                safeStart = scalars.index(after: safeStart)
+            }
+            droppedBytes += safeText[..<safeStart].utf8.count
+            safeText = safeText[safeStart...]
+        }
+
+        let scalars = safeText.unicodeScalars
+        if let lastScalar = scalars.last,
+           !Self.isLineTerminator(lastScalar) {
+            guard let lastTerminator = scalars.lastIndex(where: Self.isLineTerminator) else {
+                return ("", droppedBytes + safeText.utf8.count)
+            }
+            let safeEnd = scalars.index(after: lastTerminator)
+            droppedBytes += safeText[safeEnd...].utf8.count
+            safeText = safeText[..<safeEnd]
+        }
+
+        return (String(safeText), droppedBytes)
+    }
+
+    private static func isLineTerminator(_ scalar: Unicode.Scalar) -> Bool {
+        scalar.value == 0x0A || scalar.value == 0x0D
     }
 
     private func makeManifest(
@@ -652,7 +697,7 @@ final class DiagnosticBundleBuilder: Sendable {
     }
 
     private static let privacyManifest = BundlePrivacy(
-        rulesVersion: 3,
+        rulesVersion: 4,
         pathTokenScope: "bundle",
         sizeRoundingMode: "down",
         fileSizeQuantumBytes: DiagnosticSizeRounding.fileSizeQuantumBytes,
@@ -674,7 +719,7 @@ final class DiagnosticBundleBuilder: Sendable {
             "raw full paths, filenames, volume names, and movie titles",
             "raw job requests and command arguments",
             "environment variables and credentials",
-            "raw process identifiers",
+            "raw process and thread identifiers",
             "raw local observability JSONL segments",
             "hardware serial numbers and reusable file hashes",
         ]
@@ -858,6 +903,7 @@ private struct BundleToolTailTruncation: Encodable {
     let totalInputBytes: Int
     let retainedInputBytes: Int
     let bufferDroppedBytes: Int
+    let boundaryDroppedInputBytes: Int
     let archiveDroppedBytes: Int
     let truncated: Bool
 }

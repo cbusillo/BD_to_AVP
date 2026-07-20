@@ -53,12 +53,14 @@ bytes.
 - `batch`: Queue kind, total/active counts, and counts by status. Item IDs,
   source names, and output names are omitted.
 - `files`: Entry names, uncompressed byte counts, and truncation flags.
-- `truncation`: Original, retained, history-dropped, archive-dropped, and
-  field-truncated counts/bytes for each bounded stream.
+- `truncation`: Original, retained, history-dropped, boundary-dropped,
+  archive-dropped, and field-truncated counts/bytes for each bounded stream.
 - `privacy`: Human-readable included/excluded categories, redaction-rules
   version, bundle-only token scope, and the media/storage size-rounding
-  contract. Privacy rules version `2` uses round-down quanta of 256 MiB for
-  media/artifact file sizes and 16 GiB for volume capacities.
+  contract. Privacy rules version `4` uses round-down quanta of 256 MiB for
+  media/artifact file sizes and 16 GiB for volume capacities, removes process
+  and thread identifiers from free text, and excludes incomplete tool-output
+  records from export.
 
 ## Event Fields
 
@@ -108,8 +110,11 @@ they do not describe host storage or media files.
 512 KiB UTF-8 tail. DispatchIO callbacks append bounded chunks directly to the
 tail; there is no unbounded `AsyncThrowingStream` continuation queue between
 the pipe and the bound. This prevents pipe backpressure while preserving exact
-original/retained/dropped byte accounting. `tool-tail.txt` begins with those
-counts and a `truncated` flag before the redacted retained text.
+original/retained/dropped byte accounting. Before redaction, archive creation
+drops a potentially partial leading record after buffer truncation and any
+unterminated trailing record. `tool-tail.txt`
+begins with separate buffer, record-boundary, and archive-limit drop counts plus
+a `truncated` flag before the redacted retained text.
 
 The existing UI-facing diagnostic string is separately limited to 128 KiB.
 
@@ -140,8 +145,9 @@ not use reusable hashes.
   JWTs, serial/device identifiers, long hexadecimal identifiers, email
   addresses, IP addresses, and MAC addresses are removed. Assignment matching
   accepts optional whitespace and quoted keys/values.
-- PID/PGID assignments found in free text are removed in addition to omitting
-  the structured fields.
+- PID/PGID/TID assignments, quoted identifier values, and Apple-style
+  `ProcessName[PID:TID]` prefixes found in free text are removed in addition to
+  omitting the structured fields.
 - UUID-like identifiers found in free text receive per-bundle identifier tokens.
   Structured worker job UUIDs receive per-bundle job tokens.
 - ANSI escapes and unsafe control characters are removed.
@@ -150,8 +156,8 @@ not use reusable hashes.
   UTF-8 byte cap.
 
 The bundle never contains media bytes, screenshots, environment dumps, raw
-commands, source titles, raw paths, raw process identifiers, exact media/storage
-sizes, serials, or reusable file fingerprints.
+commands, source titles, raw paths, raw process or thread identifiers, exact
+media/storage sizes, serials, or reusable file fingerprints.
 
 ## Local Foundation APIs
 
