@@ -5,27 +5,34 @@ import tempfile
 import unittest
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from scripts.release_workflow_policy import (
     ENGINE_WORKFLOW_PATH,
-    OPERATOR_WORKFLOW_PATH,
+    OPERATOR_WORKFLOWS,
+    PRERELEASE_OPERATOR_WORKFLOW_PATH,
+    PRERELEASE_ROUTE,
+    PRERELEASE_WORKFLOW_NAME,
     REPOSITORY,
     REQUIRED_ACTOR,
     REQUIRED_EVENT,
     REQUIRED_REF,
     OIDC_AUDIENCE,
     ReleaseWorkflowPolicyError,
+    STABLE_OPERATOR_WORKFLOW_PATH,
+    STABLE_ROUTE,
+    STABLE_WORKFLOW_NAME,
     main,
     validate_engine_environment,
+    validate_release_metadata,
 )
 
 
 HEAD_SHA = "9e9a38c715dbbe5df97e6d3a8ba715731607db6a"
 
 
-def valid_environment() -> dict[str, str]:
-    operator_ref = f"{REPOSITORY}/{OPERATOR_WORKFLOW_PATH}@{REQUIRED_REF}"
+def valid_environment(workflow: str = STABLE_WORKFLOW_NAME) -> dict[str, str]:
+    operator_ref = f"{REPOSITORY}/{OPERATOR_WORKFLOWS[workflow].path}@{REQUIRED_REF}"
     engine_ref = f"{REPOSITORY}/{ENGINE_WORKFLOW_PATH}@{REQUIRED_REF}"
     return {
         "RELEASE_REPOSITORY": REPOSITORY,
@@ -51,8 +58,25 @@ def valid_environment() -> dict[str, str]:
     }
 
 
-def oidc_environment() -> dict[str, str]:
-    environment = valid_environment()
+def valid_metadata_environment(
+    workflow: str = STABLE_WORKFLOW_NAME,
+    *,
+    channel: str = "stable",
+    prerelease: str = "false",
+    make_latest: str = "true",
+    publish_pypi: str = "true",
+) -> dict[str, str]:
+    return {
+        "RELEASE_OPERATOR_WORKFLOW_REF": f"{REPOSITORY}/{OPERATOR_WORKFLOWS[workflow].path}@{REQUIRED_REF}",
+        "RELEASE_CHANNEL": channel,
+        "RELEASE_PRERELEASE": prerelease,
+        "RELEASE_MAKE_LATEST": make_latest,
+        "RELEASE_PUBLISH_PYPI": publish_pypi,
+    }
+
+
+def oidc_environment(workflow: str = STABLE_WORKFLOW_NAME) -> dict[str, str]:
+    environment = valid_environment(workflow)
     del environment["RELEASE_ENGINE_WORKFLOW_REF"]
     del environment["RELEASE_ENGINE_WORKFLOW_SHA"]
     del environment["RELEASE_ENGINE_WORKFLOW_REPOSITORY"]
@@ -82,13 +106,24 @@ def encoded_oidc_token(environment: dict[str, str], **overrides: str) -> str:
 
 
 class ReleaseWorkflowPolicyTests(unittest.TestCase):
-    def test_expected_operator_and_engine_are_bound_to_one_fingerprint(self) -> None:
-        evidence = validate_engine_environment(valid_environment())
+    def test_each_operator_and_engine_are_bound_to_route_specific_fingerprints(self) -> None:
+        fingerprints: set[str] = set()
+        for workflow, route, path in (
+            (STABLE_WORKFLOW_NAME, STABLE_ROUTE, STABLE_OPERATOR_WORKFLOW_PATH),
+            (PRERELEASE_WORKFLOW_NAME, PRERELEASE_ROUTE, PRERELEASE_OPERATOR_WORKFLOW_PATH),
+        ):
+            with self.subTest(workflow=workflow):
+                evidence = validate_engine_environment(valid_environment(workflow))
 
-        self.assertEqual(evidence.release_sha, HEAD_SHA)
-        self.assertIn(OPERATOR_WORKFLOW_PATH, evidence.operator_workflow_ref)
-        self.assertIn(ENGINE_WORKFLOW_PATH, evidence.engine_workflow_ref)
-        self.assertRegex(evidence.fingerprint(), r"^[0-9a-f]{64}$")
+                self.assertEqual(evidence.release_sha, HEAD_SHA)
+                self.assertEqual(evidence.operator_route, route)
+                self.assertEqual(evidence.operator_workflow_path, path)
+                self.assertIn(path, evidence.operator_workflow_ref)
+                self.assertIn(ENGINE_WORKFLOW_PATH, evidence.engine_workflow_ref)
+                self.assertRegex(evidence.fingerprint(), r"^[0-9a-f]{64}$")
+                fingerprints.add(evidence.fingerprint())
+
+        self.assertEqual(len(fingerprints), 2)
 
     def test_direct_invocation_from_another_workflow_fails_closed(self) -> None:
         environment = valid_environment()
@@ -96,6 +131,15 @@ class ReleaseWorkflowPolicyTests(unittest.TestCase):
         environment["INPUT_OPERATOR_WORKFLOW_REF"] = environment["RELEASE_OPERATOR_WORKFLOW_REF"]
 
         with self.assertRaisesRegex(ReleaseWorkflowPolicyError, "operator workflow ref"):
+            validate_engine_environment(environment)
+
+    def test_retired_operator_workflow_name_and_path_fail_closed(self) -> None:
+        environment = valid_environment()
+        retired_ref = f"{REPOSITORY}/.github/workflows/release-from-main.yml@{REQUIRED_REF}"
+        environment["RELEASE_OPERATOR_WORKFLOW_REF"] = retired_ref
+        environment["INPUT_OPERATOR_WORKFLOW_REF"] = retired_ref
+
+        with self.assertRaisesRegex(ReleaseWorkflowPolicyError, "approved operator workflow"):
             validate_engine_environment(environment)
 
     def test_substituting_another_reusable_workflow_fails_closed(self) -> None:
@@ -168,12 +212,84 @@ class ReleaseWorkflowPolicyTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(outputs["release_sha"], HEAD_SHA)
-        self.assertIn(OPERATOR_WORKFLOW_PATH, outputs["operator_workflow_ref"])
+        self.assertEqual(outputs["release_route"], STABLE_ROUTE)
+        self.assertEqual(outputs["operator_workflow_path"], STABLE_OPERATOR_WORKFLOW_PATH)
+        self.assertIn(STABLE_OPERATOR_WORKFLOW_PATH, outputs["operator_workflow_ref"])
         self.assertIn(ENGINE_WORKFLOW_PATH, outputs["engine_workflow_ref"])
         self.assertRegex(outputs["policy_fingerprint"], r"^[0-9a-f]{64}$")
 
+    def test_stable_metadata_policy_accepts_only_stable_latest_and_pypi(self) -> None:
+        metadata = validate_release_metadata(valid_metadata_environment())
+
+        self.assertEqual(metadata.operator_route, STABLE_ROUTE)
+        self.assertFalse(metadata.prerelease)
+        self.assertTrue(metadata.make_latest)
+        self.assertTrue(metadata.publish_pypi)
+
+        rejected = (
+            {"channel": "rc", "prerelease": "true", "make_latest": "false", "publish_pypi": "false"},
+            {"channel": "stable", "prerelease": "false", "make_latest": "false", "publish_pypi": "true"},
+            {"channel": "stable", "prerelease": "false", "make_latest": "true", "publish_pypi": "false"},
+        )
+        for overrides in rejected:
+            with (
+                self.subTest(overrides=overrides),
+                self.assertRaisesRegex(ReleaseWorkflowPolicyError, "Stable operator requires"),
+            ):
+                validate_release_metadata(valid_metadata_environment(**overrides))
+
+    def test_prerelease_metadata_policy_accepts_alpha_beta_and_rc_only(self) -> None:
+        for channel in ("alpha", "beta", "rc"):
+            with self.subTest(channel=channel):
+                metadata = validate_release_metadata(
+                    valid_metadata_environment(
+                        PRERELEASE_WORKFLOW_NAME,
+                        channel=channel,
+                        prerelease="true",
+                        make_latest="false",
+                        publish_pypi="false",
+                    )
+                )
+                self.assertEqual(metadata.operator_route, PRERELEASE_ROUTE)
+                self.assertEqual(metadata.channel, channel)
+
+        rejected = (
+            {"channel": "stable", "prerelease": "false", "make_latest": "true", "publish_pypi": "true"},
+            {"channel": "beta", "prerelease": "true", "make_latest": "true", "publish_pypi": "false"},
+            {"channel": "rc", "prerelease": "true", "make_latest": "false", "publish_pypi": "true"},
+        )
+        for overrides in rejected:
+            with (
+                self.subTest(overrides=overrides),
+                self.assertRaisesRegex(ReleaseWorkflowPolicyError, "Prerelease operator requires"),
+            ):
+                validate_release_metadata(valid_metadata_environment(PRERELEASE_WORKFLOW_NAME, **overrides))
+
+    def test_metadata_command_writes_shared_validated_route_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            summary_path = Path(temporary_directory) / "summary.md"
+            result = main(
+                ["metadata", "--github-step-summary", str(summary_path)],
+                environment=valid_metadata_environment(
+                    PRERELEASE_WORKFLOW_NAME,
+                    channel="beta",
+                    prerelease="true",
+                    make_latest="false",
+                    publish_pypi="false",
+                ),
+            )
+            summary = summary_path.read_text(encoding="utf-8")
+
+        self.assertEqual(result, 0)
+        self.assertIn("Validated release route", summary)
+        self.assertIn("| Operator route | Prerelease |", summary)
+        self.assertIn(f"`{PRERELEASE_OPERATOR_WORKFLOW_PATH}`", summary)
+        self.assertIn("| Committed release stage | `beta` |", summary)
+        self.assertIn("| GitHub Latest | No |", summary)
+        self.assertIn("| PyPI publication | No |", summary)
+
     @patch("scripts.release_workflow_policy.urlopen")
-    def test_engine_identity_is_loaded_from_github_oidc_claims(self, urlopen_mock: unittest.mock.Mock) -> None:
+    def test_engine_identity_is_loaded_from_github_oidc_claims(self, urlopen_mock: Mock) -> None:
         environment = oidc_environment()
         token = encoded_oidc_token(environment)
         urlopen_mock.return_value = io.BytesIO(json.dumps({"value": token}).encode("utf-8"))
@@ -184,7 +300,15 @@ class ReleaseWorkflowPolicyTests(unittest.TestCase):
         self.assertEqual(request.headers["Authorization"], "Bearer ephemeral-request-token")
 
     @patch("scripts.release_workflow_policy.urlopen")
-    def test_oidc_caller_claim_mismatch_fails_closed(self, urlopen_mock: unittest.mock.Mock) -> None:
+    def test_prerelease_caller_identity_is_loaded_from_github_oidc_claims(self, urlopen_mock: Mock) -> None:
+        environment = oidc_environment(PRERELEASE_WORKFLOW_NAME)
+        token = encoded_oidc_token(environment)
+        urlopen_mock.return_value = io.BytesIO(json.dumps({"value": token}).encode("utf-8"))
+
+        self.assertEqual(main(["engine"], environment=environment), 0)
+
+    @patch("scripts.release_workflow_policy.urlopen")
+    def test_oidc_caller_claim_mismatch_fails_closed(self, urlopen_mock: Mock) -> None:
         environment = oidc_environment()
         token = encoded_oidc_token(environment, workflow_ref="untrusted/workflow@refs/heads/main")
         urlopen_mock.return_value = io.BytesIO(json.dumps({"value": token}).encode("utf-8"))
@@ -193,7 +317,7 @@ class ReleaseWorkflowPolicyTests(unittest.TestCase):
             main(["engine"], environment=environment)
 
     @patch("scripts.release_workflow_policy.urlopen")
-    def test_oidc_without_reusable_workflow_claim_fails_closed(self, urlopen_mock: unittest.mock.Mock) -> None:
+    def test_oidc_without_reusable_workflow_claim_fails_closed(self, urlopen_mock: Mock) -> None:
         environment = oidc_environment()
         token = encoded_oidc_token(environment, job_workflow_ref="")
         urlopen_mock.return_value = io.BytesIO(json.dumps({"value": token}).encode("utf-8"))

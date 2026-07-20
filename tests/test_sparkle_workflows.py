@@ -52,18 +52,29 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_release_is_manual_only_and_packages_github_sha_from_main(self) -> None:
-        operator = load_workflow("briefcase.yml")
+        operators = {
+            "Stable": load_workflow("briefcase.yml"),
+            "Prerelease": load_workflow("prerelease.yml"),
+        }
         workflow = load_release_engine()
         prepare = workflow["jobs"]["prepare"]
         package = workflow["jobs"]["package"]
 
-        self.assertEqual(set(operator["on"]), {"workflow_dispatch"})
+        self.assertEqual({operator["name"] for operator in operators.values()}, set(operators))
+        for name, operator in operators.items():
+            with self.subTest(operator=name):
+                self.assertEqual(set(operator["on"]), {"workflow_dispatch"})
+                self.assertEqual(set(operator["on"]["workflow_dispatch"]["inputs"]), {"release_notes"})
+                self.assertEqual(operator["concurrency"]["group"], "release")
+                self.assertEqual(operator["concurrency"]["cancel-in-progress"], "false")
         self.assertEqual(set(workflow["on"]), {"workflow_call"})
         self.assertEqual(workflow["env"]["GH_REPO"], "${{ github.repository }}")
-        self.assertNotIn("source_ref", str(operator) + str(workflow))
-        self.assertEqual(operator["concurrency"]["group"], "release")
-        self.assertEqual(operator["concurrency"]["cancel-in-progress"], "false")
+        self.assertNotIn("source_ref", str(operators) + str(workflow))
         self.assertNotIn("concurrency", workflow)
+        self.assertEqual(
+            sum(str(operator.get("concurrency", {}).get("group")) == "release" for operator in operators.values()),
+            2,
+        )
         checkout = prepare["steps"][0]
         self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
         self.assertEqual(checkout["with"]["persist-credentials"], "false")
@@ -80,16 +91,19 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("refs/heads/release", str(workflow))
 
     def test_reusable_engine_rejects_direct_invocation_and_policy_bypass(self) -> None:
-        operator = load_workflow("briefcase.yml")
+        stable = load_workflow("briefcase.yml")
+        prerelease = load_workflow("prerelease.yml")
         workflow = load_release_engine()
-        release = operator["jobs"]["release"]
+        release = stable["jobs"]["release"]
         call = workflow["on"]["workflow_call"]
         policy = workflow["jobs"]["policy"]
         entry_guard = policy["steps"][0]
         policy_checkout = policy["steps"][1]
         policy_step = next(step for step in policy["steps"] if step.get("id") == "policy")
 
-        self.assertEqual(set(operator["jobs"]), {"release", "publish-pypi"})
+        self.assertEqual(set(stable["jobs"]), {"release", "publish-pypi"})
+        self.assertEqual(set(prerelease["jobs"]), {"release"})
+        self.assertEqual(prerelease["jobs"]["release"], release)
         self.assertEqual(release["uses"], "./.github/workflows/release-engine.yml")
         self.assertNotIn("secrets", release)
         self.assertEqual(
@@ -113,10 +127,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 "operator_triggering_actor",
             },
         )
+        self.assertFalse({"route", "mode", "stage", "prerelease", "publish_pypi"} & set(call["inputs"]))
+        for operator in (stable, prerelease):
+            dispatch_inputs = operator["on"]["workflow_dispatch"]["inputs"]
+            self.assertFalse({"route", "mode", "stage", "prerelease", "publish_pypi"} & set(dispatch_inputs))
         self.assertEqual(policy["permissions"], {"contents": "read", "id-token": "write"})
-        self.assertEqual(entry_guard["name"], "Require the protected Stable operator context")
+        self.assertEqual(entry_guard["name"], "Require a protected release operator context")
         self.assertNotIn("uses", entry_guard)
         self.assertIn("cbusillo/BD_to_AVP/.github/workflows/briefcase.yml@refs/heads/main", entry_guard["run"])
+        self.assertIn("cbusillo/BD_to_AVP/.github/workflows/prerelease.yml@refs/heads/main", entry_guard["run"])
         self.assertIn('test "$ACTUAL_REF" = "refs/heads/main"', entry_guard["run"])
         self.assertIn('test "$ACTUAL_ACTOR" = "shiny-code-bot"', entry_guard["run"])
         self.assertEqual(policy_checkout["with"]["ref"], "${{ github.sha }}")
@@ -126,6 +145,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("RELEASE_ENGINE_WORKFLOW_REF", policy_step["env"])
         self.assertNotIn("RELEASE_ENGINE_WORKFLOW_SHA", policy_step["env"])
         self.assertIn("release_workflow_policy.py engine", policy_step["run"])
+        self.assertIn("release_route", policy["outputs"])
+        self.assertIn("operator_workflow_path", policy["outputs"])
         self.assertEqual(workflow["jobs"]["prepare"]["needs"], "policy")
         self.assertEqual(set(workflow["jobs"]["package"]["needs"]), {"policy", "prepare"})
         self.assertIn("--expected-fingerprint", str(workflow["jobs"]["package"]))
@@ -135,8 +156,19 @@ class ReleaseWorkflowTests(unittest.TestCase):
         workflow = load_release_engine()
         prepare = workflow["jobs"]["prepare"]
         release_history = next(step for step in prepare["steps"] if step.get("id") == "release_history")
+        route_validation = next(
+            step for step in prepare["steps"] if step["name"] == "Validate route and summarize publication effects"
+        )
 
         self.assertIn("python scripts/release.py metadata", str(prepare))
+        self.assertIn("release_workflow_policy.py metadata", route_validation["run"])
+        self.assertIn("$GITHUB_STEP_SUMMARY", route_validation["run"])
+        self.assertEqual(
+            route_validation["env"]["RELEASE_OPERATOR_WORKFLOW_REF"],
+            "${{ needs.policy.outputs.operator_workflow_ref }}",
+        )
+        self.assertEqual(route_validation["env"]["RELEASE_CHANNEL"], "${{ steps.metadata.outputs.channel }}")
+        self.assertNotIn("RELEASE_ROUTE", route_validation["env"])
         self.assertNotIn("awk -v version", str(workflow))
         self.assertNotIn("release_tag_suffix", str(workflow))
         self.assertIn("public_version", prepare["outputs"])
@@ -497,6 +529,7 @@ esac
 
     def test_stable_pypi_publish_uses_oidc_trusted_publishing(self) -> None:
         operator = load_workflow("briefcase.yml")
+        prerelease = load_workflow("prerelease.yml")
         workflow = load_release_engine()
         build = workflow["jobs"]["build-python"]
         publish = operator["jobs"]["publish-pypi"]
@@ -527,6 +560,8 @@ esac
         self.assertIn("PYTHON_ARTIFACT_DIGEST", str(publish))
         self.assertIn("git/ref/heads/main", str(publish))
         self.assertIn("Protected main moved before PyPI publication", str(publish))
+        self.assertIn('test "$RELEASE_ROUTE" = "stable"', str(publish))
+        self.assertIn('test "$OPERATOR_WORKFLOW_PATH" = ".github/workflows/briefcase.yml"', str(publish))
         self.assertIn("actions/artifacts/$PYTHON_ARTIFACT_ID", str(publish))
         self.assertIn("sha256:$PYTHON_ARTIFACT_DIGEST", str(publish))
         steps = publish["steps"]
@@ -548,11 +583,17 @@ esac
         self.assertEqual(download["with"]["artifact-ids"], "${{ needs.release.outputs.python_artifact_id }}")
         self.assertEqual(download["with"]["merge-multiple"], "true")
         self.assertNotIn("publish-pypi", workflow["jobs"])
+        self.assertNotIn("publish-pypi", prerelease["jobs"])
+        self.assertNotIn("pypa/gh-action-pypi-publish@", str(prerelease))
         self.assertNotIn("pypa/gh-action-pypi-publish@", str(workflow))
-        self.assertNotIn("PYPI_TOKEN", str(operator) + str(workflow))
+        self.assertNotIn("PYPI_TOKEN", str(operator) + str(prerelease) + str(workflow))
         self.assertEqual(
-            release_operations["workflows"]["Release from protected main"]["path"],
+            release_operations["workflows"]["Stable"]["path"],
             ".github/workflows/briefcase.yml",
+        )
+        self.assertEqual(
+            release_operations["workflows"]["Prerelease"],
+            {"path": ".github/workflows/prerelease.yml", "route": "prerelease"},
         )
         self.assertEqual(release_operations["engineWorkflowPath"], ".github/workflows/release-engine.yml")
 
