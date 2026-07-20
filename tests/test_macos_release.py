@@ -1,10 +1,13 @@
+import io
 import importlib
 import json
 import plistlib
 import subprocess
+import sys
 import tempfile
 import unittest
 
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +18,7 @@ from scripts.macos_release import (
     mounted_dmg,
     notarize_and_staple,
     parse_args,
+    run,
     smoke_native_app_startup,
     smoke_packaged_tools,
     verify_release_app,
@@ -41,6 +45,20 @@ def release_metadata(app_path: Path) -> SparkleBundleMetadata:
 
 
 class MacOSReleaseArtifactTests(unittest.TestCase):
+    def test_release_tool_stdout_is_routed_away_from_cli_metadata(self) -> None:
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout=None, stderr=None)
+
+        with patch("scripts.macos_release.subprocess.run", return_value=completed) as run_mock:
+            result = run(["release-tool", "--probe"])
+
+        self.assertIs(result, completed)
+        run_mock.assert_called_once_with(
+            ["release-tool", "--probe"],
+            check=True,
+            text=True,
+            stdout=sys.stderr,
+        )
+
     def test_verify_dmg_accepts_app_and_tool_smoke_flags(self) -> None:
         args = parse_args(
             [
@@ -56,6 +74,28 @@ class MacOSReleaseArtifactTests(unittest.TestCase):
         self.assertTrue(args.smoke_app)
         self.assertTrue(args.smoke_tools)
         self.assertTrue(args.smoke_worker)
+
+    def test_verify_dmg_command_emits_only_metadata_on_stdout(self) -> None:
+        dmg_path = Path("/tmp/release.dmg")
+        metadata = release_metadata(Path("/Volumes/Release") / NATIVE_APP_NAME)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        def verify_dmg(*_args: object, **_kwargs: object) -> SparkleBundleMetadata:
+            print("Processing: release.dmg", file=sys.stderr)
+            return metadata
+
+        with (
+            patch("scripts.macos_release.verify_release_dmg", side_effect=verify_dmg),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            main(["verify-dmg", "--dmg", str(dmg_path), "--verify-distribution"])
+
+        emitted = json.loads(stdout.getvalue())
+        self.assertEqual(emitted["short_version"], metadata.short_version)
+        self.assertNotIn("Processing:", stdout.getvalue())
+        self.assertIn("Processing: release.dmg", stderr.getvalue())
 
     def test_verify_release_app_delegates_identity_and_smoke_checks(self) -> None:
         app_path = Path("/tmp") / NATIVE_APP_NAME
@@ -226,6 +266,8 @@ class MacOSReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("--smoke-app", str(compatibility))
         self.assertIn("--smoke-tools", str(compatibility))
         self.assertIn("--smoke-worker", str(compatibility))
+        self.assertIn("jq -se", str(package))
+        self.assertIn("Packaged DMG metadata is not a single valid JSON object.", str(package))
         self.assertIn("compatibility", create_draft["needs"])
         self.assertFalse((REPO_ROOT / ".github" / "workflows" / "native-ui-preview.yml").exists())
 

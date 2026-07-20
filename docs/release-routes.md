@@ -193,8 +193,11 @@ definition SHA, derives Stable or Prerelease authority from that validated path,
 verifies its own OIDC `job_workflow_ref` and `job_workflow_sha` claims, and binds
 the run ID, attempt, protected-main SHA, dispatch event, and both configured
 automation actors. The reusable interface declares the Apple and Sparkle secret
-names as optional so the job-level reviewed environments can supply them; the
-operator callers neither pass nor inherit secrets. Stable authority accepts only committed stable, Latest,
+names as optional, and each operator caller forwards only those exact names.
+Because the callers run outside the protected environments, the mappings carry
+no protected value; the job-level reviewed environments supply and override them
+inside the called jobs. Same-named repository secrets and `secrets: inherit` are
+forbidden. Stable authority accepts only committed stable, Latest,
 PyPI-enabled metadata. Prerelease authority accepts only committed Alpha, Beta,
 or RC metadata that is a non-Latest GitHub prerelease with PyPI disabled. The
 engine records the validated route and publication effects in the shared step

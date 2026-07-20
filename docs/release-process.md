@@ -98,11 +98,13 @@ mutation, GitHub Release publication, Pages deployment, and signing-material
 cleanup. The engine intentionally has no `release` concurrency declaration,
 preventing a caller and its called workflow from competing with or canceling
 the same run. It declares each environment-secret name as an optional
-`workflow_call` secret so GitHub can resolve the values from the job-level
-`macos-signing` and `sparkle-release` environments. The operator callers pass
-and inherit no secrets. The engine derives the trusted route from the exact
-validated caller path and writes the validated route and publication effects to
-the run summary.
+`workflow_call` secret, and each operator caller forwards only those exact names.
+The callers do not run in either protected environment, so those expressions are
+empty unless a forbidden same-named repository secret exists; the job-level
+`macos-signing` and `sparkle-release` environments supply the approved values in
+the called workflow. `secrets: inherit` is forbidden. The engine derives the
+trusted route from the exact validated caller path and writes the validated
+route and publication effects to the run summary.
 
 The workflow must be dispatched and rerun through the configured
 `shiny-code-bot` automation identity. The required approver is `cbusillo`, and
@@ -335,6 +337,10 @@ Keep the live repository settings aligned with these contracts:
   Apple app-specific password; the workflow generates a separate ephemeral build
   keychain password for every run and derives the notarization profile
   name from `TEAM_ID`, so no `KEYCHAIN_NAME` secret is required.
+- Repository-level secrets must not reuse any name declared by `macos-signing`
+  or `sparkle-release`; exact caller mappings exist only to satisfy the reusable
+  workflow interface, and a broader-scope duplicate could become an unintended
+  fallback if an environment secret were removed.
 - `sparkle-release` is limited to `main`, contains only
   `SPARKLE_EDDSA_PRIVATE_KEY`, and has no separate required-review rule. The
   private key remains visible only to the read-only signing step.
