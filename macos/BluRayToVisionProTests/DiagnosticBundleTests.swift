@@ -49,6 +49,16 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertTrue(snapshot.truncated)
     }
 
+    func testBoundedTextBufferSnapshotPreservesLineTerminators() {
+        let buffer = BoundedDiagnosticTextBuffer(maximumBytes: 32)
+
+        buffer.append(Data("complete line\r\n".utf8))
+
+        let snapshot = buffer.snapshot()
+        XCTAssertEqual(snapshot.text, "complete line\r\n")
+        XCTAssertEqual(snapshot.retainedBytes, "complete line\r\n".utf8.count)
+    }
+
     func testBoundedTextBufferCapsLargeChunksWithoutSplittingLeadingUTF8() {
         let buffer = BoundedDiagnosticTextBuffer(maximumBytes: 17)
         let input = Data((String(repeating: "old", count: 100_000) + "😀tail-marker").utf8)
@@ -184,6 +194,124 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertTrue(output.contains("pid=<redacted>"))
         XCTAssertTrue(output.contains("NORMAL_VALUE = visible"))
         XCTAssertGreaterThanOrEqual(output.components(separatedBy: "<path:01234567:").count - 1, 4)
+    }
+
+    func testRedactorRemovesAppleLogProcessAndThreadPrefixes() {
+        let redactor = DiagnosticRedactor(bundleID: fixedBundleID)
+        let text = """
+        2026-07-20 16:21:42.737 BluRayToVisionProEngine[37058:75443740] No Python arguments
+        helper[42:0xABCDEF] failed
+        renderer[123:ABCDEF] failed
+        worker[42: 18446744073709551615] stopped
+        [31415:27182] line-start prefix
+        Process ID: [27182:31415]
+        worker[7] stopped
+        HTTP [404]
+        [1721492502]
+        frame window[1920x1080]
+        Stream #0:0[0x1](und)
+        """
+
+        let output = redactor.redact(text)
+
+        XCTAssertFalse(output.contains("[37058:75443740]"))
+        XCTAssertFalse(output.contains("[42:0xABCDEF]"))
+        XCTAssertFalse(output.contains("[42: 18446744073709551615]"))
+        XCTAssertFalse(output.contains("worker[7]"))
+        XCTAssertFalse(output.contains("[123:ABCDEF]"))
+        XCTAssertEqual(output.components(separatedBy: "[<process:redacted>]").count - 1, 7)
+        XCTAssertTrue(
+            output.contains(
+                "2026-07-20 16:21:42.737 BluRayToVisionProEngine[<process:redacted>] No Python <arguments:redacted>"
+            )
+        )
+        XCTAssertTrue(output.contains("HTTP [404]"))
+        XCTAssertTrue(output.contains("[1721492502]"))
+        XCTAssertTrue(output.contains("frame window[1920x1080]"))
+        XCTAssertTrue(output.contains("Stream #0:0[0x1](und)"))
+    }
+
+    func testRedactorRemovesLabeledProcessAndThreadIdentifiers() {
+        let redactor = DiagnosticRedactor(bundleID: fixedBundleID)
+        let text = """
+        pid=37058 tid: 75443740
+        ppid 42 pgid=43
+        thread_id=0xABCDEF pthreadIdentifier: ABC123
+        processIdentifier=99 processGroupID: 100
+        parentProcessIdentifier=103 child_process_id: 104
+        "processID": 101, 'threadID'=102
+        "pid":"105", 'threadID':'0xABCDEF'
+        pid: [106]
+        NORMAL_VALUE=visible
+        """
+
+        let output = redactor.redact(text)
+
+        for identifier in ["37058", "75443740", "0xABCDEF", "ABC123"] {
+            XCTAssertFalse(output.contains(identifier))
+        }
+        XCTAssertTrue(output.contains("pid=<redacted>"))
+        XCTAssertTrue(output.contains("tid=<redacted>"))
+        XCTAssertTrue(output.contains("ppid=<redacted>"))
+        XCTAssertTrue(output.contains("pgid=<redacted>"))
+        XCTAssertTrue(output.contains("thread_id=<redacted>"))
+        XCTAssertTrue(output.contains("pthreadIdentifier=<redacted>"))
+        XCTAssertTrue(output.contains("processIdentifier=<redacted>"))
+        XCTAssertTrue(output.contains("processGroupID=<redacted>"))
+        XCTAssertTrue(output.contains("parentProcessIdentifier=<redacted>"))
+        XCTAssertTrue(output.contains("child_process_id=<redacted>"))
+        XCTAssertTrue(output.contains("processID=<redacted>"))
+        XCTAssertTrue(output.contains("threadID=<redacted>"))
+        XCTAssertTrue(output.contains("pid=<redacted>"))
+        XCTAssertTrue(output.contains("NORMAL_VALUE=visible"))
+    }
+
+    func testTruncatedToolTailDropsPotentiallyPartialLeadingLine() {
+        let partialPrefix = "058:75443740] private prefix\n"
+        let completeLine = "complete safe line\n"
+        let snapshot = DiagnosticTextSnapshot(
+            text: partialPrefix + completeLine,
+            retainedBytes: partialPrefix.utf8.count + completeLine.utf8.count,
+            totalBytes: partialPrefix.utf8.count + completeLine.utf8.count + 10,
+            droppedBytes: 10
+        )
+
+        let result = DiagnosticBundleBuilder.redactionSafeToolTailInput(snapshot)
+
+        XCTAssertEqual(result.text, completeLine)
+        XCTAssertEqual(result.droppedBytes, partialPrefix.utf8.count)
+
+        let noNewline = DiagnosticTextSnapshot(
+            text: "543740] private prefix",
+            retainedBytes: 22,
+            totalBytes: 32,
+            droppedBytes: 10
+        )
+        let emptyResult = DiagnosticBundleBuilder.redactionSafeToolTailInput(noNewline)
+        XCTAssertEqual(emptyResult.text, "")
+        XCTAssertEqual(emptyResult.droppedBytes, noNewline.text.utf8.count)
+
+        let activeText = "complete line\r\nApp[37058:7544"
+        let activeSnapshot = DiagnosticTextSnapshot(
+            text: activeText,
+            retainedBytes: activeText.utf8.count,
+            totalBytes: activeText.utf8.count,
+            droppedBytes: 0
+        )
+        let activeResult = DiagnosticBundleBuilder.redactionSafeToolTailInput(activeSnapshot)
+        XCTAssertEqual(activeResult.text, "complete line\r\n")
+        XCTAssertEqual(activeResult.droppedBytes, "App[37058:7544".utf8.count)
+
+        let carriageReturnText = "partial prefix\rcomplete line\r"
+        let carriageReturnSnapshot = DiagnosticTextSnapshot(
+            text: carriageReturnText,
+            retainedBytes: carriageReturnText.utf8.count,
+            totalBytes: carriageReturnText.utf8.count + 10,
+            droppedBytes: 10
+        )
+        let carriageReturnResult = DiagnosticBundleBuilder.redactionSafeToolTailInput(carriageReturnSnapshot)
+        XCTAssertEqual(carriageReturnResult.text, "complete line\r")
+        XCTAssertEqual(carriageReturnResult.droppedBytes, "partial prefix\r".utf8.count)
     }
 
     func testRedactorRemovesArbitraryMediaMetadataValues() {
@@ -949,7 +1077,7 @@ final class DiagnosticBundleTests: XCTestCase {
         )
         XCTAssertEqual((sourceProbe["volume_total_rounded_bytes"] as? NSNumber)?.int64Value, volumeQuantum * 63)
         XCTAssertTrue(samples.allSatisfy { $0["file_size_bytes"] == nil && $0["volume_available_bytes"] == nil })
-        XCTAssertEqual(privacy["rules_version"] as? Int, 3)
+        XCTAssertEqual(privacy["rules_version"] as? Int, 4)
         XCTAssertEqual(privacy["size_rounding_mode"] as? String, "down")
         XCTAssertEqual((privacy["file_size_quantum_bytes"] as? NSNumber)?.int64Value, fileQuantum)
         XCTAssertEqual((privacy["volume_capacity_quantum_bytes"] as? NSNumber)?.int64Value, volumeQuantum)
@@ -1011,7 +1139,9 @@ final class DiagnosticBundleTests: XCTestCase {
                     sequence: sequence,
                     payload: WorkerEventPayload(
                         stage: "combine_to_mv_hevc",
-                        message: "Working on \(sourceURL.path)",
+                    message: sequence == 5
+                        ? "Working on \(sourceURL.path) BluRayToVisionProEngine[37058:75443740] {\"pid\":\"37058\",\"threadID\":\"0xABCDEF\"}"
+                        : "Working on \(sourceURL.path)",
                         elapsedSeconds: sequence,
                         progress: WorkerProgress(currentStage: 5, totalStages: 9, stageFraction: 0.5)
                     )
@@ -1049,6 +1179,9 @@ final class DiagnosticBundleTests: XCTestCase {
                 File "\(sourceURL.path)", line 12
                 command: /usr/bin/ffmpeg -i "\(sourceURL.path)" -metadata title="Secret Feature"
                 token=ghp_abcdefghijklmnopqrstuvwxyz123456
+                2026-07-20 16:21:42.737 BluRayToVisionProEngine[37058:75443740] No Python arguments
+                state={"pid":"37058","threadID":"0xABCDEF"}
+                App[99999:88888
                 """.utf8
             )
         )
@@ -1108,12 +1241,19 @@ final class DiagnosticBundleTests: XCTestCase {
         let storage = try XCTUnwrap(
             JSONSerialization.jsonObject(with: storageData) as? [String: Any]
         )
+        let privacy = try XCTUnwrap(manifest["privacy"] as? [String: Any])
+        let excludedCategories = try XCTUnwrap(privacy["excluded"] as? [String])
+        let truncation = try XCTUnwrap(manifest["truncation"] as? [String: Any])
+        let toolTailTruncation = try XCTUnwrap(truncation["tool_tail"] as? [String: Any])
         let manifestText = String(decoding: manifestData, as: UTF8.self)
         let combinedText = [manifestData, eventsData, storageData, toolTailData]
             .map { String(decoding: $0, as: UTF8.self) }
             .joined(separator: "\n")
 
         XCTAssertEqual(manifest["schema_version"] as? Int, 1)
+        XCTAssertEqual(privacy["rules_version"] as? Int, 4)
+        XCTAssertTrue(excludedCategories.contains("raw process and thread identifiers"))
+        XCTAssertGreaterThan(toolTailTruncation["boundary_dropped_input_bytes"] as? Int ?? 0, 0)
         XCTAssertEqual((manifest["archive"] as? [String: Any])?["maximum_compressed_bytes"] as? Int, 2 * 1_024 * 1_024)
         let localStore = try XCTUnwrap(manifest["local_observability_store"] as? [String: Any])
         XCTAssertEqual(localStore["enabled"] as? Bool, true)
@@ -1129,10 +1269,22 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertFalse(combinedText.contains(sourceURL.path))
         XCTAssertFalse(combinedText.contains("Secret Feature"))
         XCTAssertFalse(combinedText.contains("ghp_abcdefghijklmnopqrstuvwxyz123456"))
+        let toolTailText = String(decoding: toolTailData, as: UTF8.self)
+        let eventsText = String(decoding: eventsData, as: UTF8.self)
+        XCTAssertFalse(toolTailText.contains("[37058:75443740]"))
+        XCTAssertFalse(toolTailText.contains("App[99999:88888"))
+        XCTAssertFalse(toolTailText.contains("\"pid\":\"37058\""))
+        XCTAssertFalse(eventsText.contains("[37058:75443740]"))
+        XCTAssertFalse(eventsText.contains("\"pid\":\"37058\""))
         XCTAssertTrue(combinedText.contains("<path:01234567:"))
         XCTAssertTrue(combinedText.contains("ffmpeg <arguments:redacted>"))
+        XCTAssertTrue(toolTailText.contains("BluRayToVisionProEngine[<process:redacted>]"))
+        XCTAssertTrue(toolTailText.contains("pid=<redacted>"))
+        XCTAssertTrue(eventsText.contains("BluRayToVisionProEngine[<process:redacted>]"))
+        XCTAssertTrue(eventsText.contains("pid=<redacted>"))
         XCTAssertTrue(manifestText.contains("\"active\" : true"))
-        XCTAssertTrue(String(decoding: toolTailData, as: UTF8.self).contains("# truncated=true"))
+        XCTAssertTrue(toolTailText.contains("# truncated=true"))
+        XCTAssertTrue(toolTailText.contains("# boundary_dropped_input_bytes="))
         let sourcePathToken = try XCTUnwrap(
             (manifest["job"] as? [String: Any])?["source_path_token"] as? String
         )
@@ -1195,8 +1347,10 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertEqual(storageThread.mainThreadObservation, false)
         XCTAssertEqual(builderThread.mainThreadObservation, false)
         let manifestData = try unzipEntry("manifest.json", from: artifact.archiveURL)
+        let toolTailData = try unzipEntry("tool-tail.txt", from: artifact.archiveURL)
         let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
         XCTAssertEqual((manifest["worker"] as? [String: Any])?["active"] as? Bool, true)
+        XCTAssertFalse(String(decoding: toolTailData, as: UTF8.self).contains(sourceURL.path))
 
         await viewModel.stopForQuit()
         XCTAssertEqual(worker.cancelCallCount, 1)
@@ -1507,10 +1661,11 @@ private final class HoldingDiagnosticWorkerClient: WorkerProcessRunning, @unchec
         lock.lock()
         let cancelled = cancellationRequested
         lock.unlock()
+        let output = "File \"\(sensitivePath)\" remains active\n"
         let text = DiagnosticTextSnapshot(
-            text: "File \"\(sensitivePath)\" remains active",
-            retainedBytes: sensitivePath.utf8.count + 22,
-            totalBytes: sensitivePath.utf8.count + 22,
+            text: output,
+            retainedBytes: output.utf8.count,
+            totalBytes: output.utf8.count,
             droppedBytes: 0
         )
         return WorkerProcessDiagnosticSnapshot(

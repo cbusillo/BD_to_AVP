@@ -58,10 +58,8 @@ final class BoundedDiagnosticTextBuffer: @unchecked Sendable {
 
     func snapshot() -> DiagnosticTextSnapshot {
         lock.withDiagnosticLock {
-            let text = String(decoding: data, as: UTF8.self)
-                .trimmingCharacters(in: .newlines)
             return DiagnosticTextSnapshot(
-                text: text,
+                text: String(decoding: data, as: UTF8.self),
                 retainedBytes: data.count,
                 totalBytes: totalBytes,
                 droppedBytes: max(0, totalBytes - data.count)

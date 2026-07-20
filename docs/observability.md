@@ -106,13 +106,13 @@ diagnosis; standard output remains protocol-only.
 
 Every event declares its maximum privacy level and redaction state. Secrets are
 omitted instead of being logged. Executable paths, source paths, filenames,
-movie titles, command arguments, environment values, raw process identifiers,
-serial numbers, and reusable hashes are not exportable as-is.
+movie titles, command arguments, environment values, raw process and thread
+identifiers, serial numbers, and reusable hashes are not exportable as-is.
 
 Local raw records may contain private paths needed for active-file sampling.
 User-created support bundles apply a second redaction boundary that replaces
-paths and job identifiers with bundle-scoped tokens, removes process IDs and
-command details, redacts credential-like text and arbitrary media-metadata
+paths and job identifiers with bundle-scoped tokens, removes process and thread
+IDs and command details, redacts credential-like text and arbitrary media-metadata
 values, and coarsens sizes.
 Public and private classifications are retained in exported event metadata;
 private text is eligible for export only after that second redaction pass.
