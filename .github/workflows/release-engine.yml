@@ -941,6 +941,15 @@ jobs:
             --verify-distribution \
             --smoke-worker \
             > dist/macos-release-metadata.json
+          if ! jq -se '
+            length == 1
+            and (.[0] | type == "object")
+            and (.[0].short_version | type == "string")
+            and (.[0].build_version | type == "string")
+          ' dist/macos-release-metadata.json > /dev/null; then
+            echo "Packaged DMG metadata is not a single valid JSON object." >&2
+            exit 1
+          fi
           if [ "$(jq -r .short_version dist/macos-release-metadata.json)" != "$PACKAGE_VERSION" ]; then
             echo "Packaged DMG version does not match $PACKAGE_VERSION." >&2
             exit 1

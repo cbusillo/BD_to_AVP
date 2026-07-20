@@ -31,7 +31,7 @@ class MacOSReleaseError(RuntimeError):
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, check=True, text=True)
+    return subprocess.run(command, check=True, text=True, stdout=sys.stderr)
 
 
 def verify_release_app(
