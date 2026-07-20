@@ -8,6 +8,8 @@ import unittest
 
 from pathlib import Path
 
+from scripts.production_identity import PRODUCTION_DEVELOPER_IDENTITY, PRODUCTION_TEAM_ID
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 yaml = importlib.import_module("yaml")
@@ -108,8 +110,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("secrets", release)
         self.assertEqual(
             release["permissions"],
-            {"attestations": "write", "contents": "write", "id-token": "write", "pages": "write"},
+            {
+                "actions": "read",
+                "attestations": "write",
+                "contents": "write",
+                "id-token": "write",
+                "pages": "write",
+            },
         )
+        self.assertEqual(workflow["permissions"], {"actions": "read", "contents": "read"})
         self.assertEqual(release["with"]["release_sha"], "${{ github.sha }}")
         self.assertEqual(release["with"]["operator_workflow_ref"], "${{ github.workflow_ref }}")
         self.assertEqual(release["with"]["operator_workflow_sha"], "${{ github.workflow_sha }}")
@@ -160,13 +169,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
             step for step in prepare["steps"] if step["name"] == "Validate route and summarize publication effects"
         )
 
-        self.assertIn("python scripts/release.py metadata", str(prepare))
+        self.assertIn("python -m scripts.release metadata", str(prepare))
+        self.assertEqual(prepare["permissions"], {"actions": "read", "contents": "write"})
         self.assertIn("release_workflow_policy.py metadata", route_validation["run"])
         self.assertIn("$GITHUB_STEP_SUMMARY", route_validation["run"])
         self.assertEqual(
             route_validation["env"]["RELEASE_OPERATOR_WORKFLOW_REF"],
             "${{ needs.policy.outputs.operator_workflow_ref }}",
         )
+        self.assertEqual(route_validation["env"]["RELEASE_TAG"], "${{ steps.metadata.outputs.release_tag }}")
         self.assertEqual(route_validation["env"]["RELEASE_CHANNEL"], "${{ steps.metadata.outputs.channel }}")
         self.assertNotIn("RELEASE_ROUTE", route_validation["env"])
         self.assertNotIn("awk -v version", str(workflow))
@@ -175,7 +186,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("dmg_name", prepare["outputs"])
         self.assertIn("publish_pypi", prepare["outputs"])
         self.assertIn("previous_release_tag", prepare["outputs"])
-        self.assertIn("python scripts/release.py notes-base", str(release_history))
+        self.assertIn("python -m scripts.release notes-base", str(release_history))
         self.assertIn("check-release", str(prepare))
         self.assertNotIn("sort_by(.published_at)", str(release_history))
         self.assertNotIn("git merge-base --is-ancestor", str(release_history))
@@ -187,6 +198,51 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("${LATEST_SNAPSHOT_TAG#v}", str(prepare))
         self.assertIn('--release-tag "$BASE_SNAPSHOT_TAG"', str(prepare))
         self.assertIn('--release-tag "$LATEST_SNAPSHOT_TAG"', str(prepare))
+
+    def test_beta3_publication_is_frozen_before_any_release_construction(self) -> None:
+        workflow = load_release_engine()
+        prepare_steps = workflow["jobs"]["prepare"]["steps"]
+        step_names = [step["name"] for step in prepare_steps]
+        freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(freeze_policy["schema"], "bd_to_avp.release_freezes")
+        self.assertEqual(freeze_policy["frozen_release_tags"]["v0.3.0-beta.3"]["issue"], 294)
+        self.assertLess(
+            step_names.index("Validate route and summarize publication effects"),
+            step_names.index("Reject existing release identity"),
+        )
+        recovery_step = next(step for step in prepare_steps if step["name"] == "Revalidate Beta 3 recovery premise")
+        self.assertEqual(recovery_step["if"], "steps.metadata.outputs.release_tag == 'v0.3.0-beta.3'")
+        self.assertIn("--allow-beta3-draft", recovery_step["run"])
+        self.assertIn('--expected-sha "$GITHUB_SHA"', recovery_step["run"])
+
+    def test_every_release_artifact_inspection_pins_the_diagnostics_endpoint(self) -> None:
+        workflow = load_release_engine()
+        inspections = (
+            (
+                workflow["jobs"]["package"],
+                "Package application for GitHub",
+            ),
+            (
+                workflow["jobs"]["compatibility"],
+                "Validate the packaged app on macOS 26",
+            ),
+            (
+                workflow["jobs"]["publish-appcast"],
+                "Inspect draft DMG",
+            ),
+            (
+                workflow["jobs"]["verify-draft"],
+                "Re-download and verify every release boundary",
+            ),
+        )
+        for job, step_name in inspections:
+            with self.subTest(step=step_name):
+                step = next(step for step in job["steps"] if step["name"] == step_name)
+                self.assertEqual(
+                    step["env"]["BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT"],
+                    "${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}",
+                )
 
     def test_package_preserves_dmg_validation_without_write_token(self) -> None:
         workflow = load_release_engine()
@@ -267,6 +323,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         certificate_script = certificate_step["run"]
 
         self.assertEqual(certificate_step["env"]["TEAM_ID"], "${{ secrets.TEAM_ID }}")
+        self.assertEqual(certificate_step["env"]["PRODUCTION_TEAM_ID"], PRODUCTION_TEAM_ID)
+        self.assertEqual(certificate_step["env"]["PRODUCTION_DEV_ID"], PRODUCTION_DEVELOPER_IDENTITY)
         self.assertIn('case "$TEAM_ID" in', certificate_script)
         self.assertIn('if [ "${#TEAM_ID}" -ne 10 ]; then', certificate_script)
         self.assertIn('DEV_ID_PREFIX="Developer ID Application: "', certificate_script)
@@ -294,12 +352,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         package_script = package_step["run"]
 
         self.assertEqual(package_step["env"]["TEAM_ID"], "${{ secrets.TEAM_ID }}")
+        self.assertEqual(package_step["env"]["PRODUCTION_TEAM_ID"], PRODUCTION_TEAM_ID)
+        self.assertEqual(package_step["env"]["PRODUCTION_DEV_ID"], PRODUCTION_DEVELOPER_IDENTITY)
         self.assertIn("verify_codesign_metadata()", package_script)
         self.assertIn('codesign -dv --verbose=4 "$signed_path"', package_script)
         self.assertIn('$1 == "Authority"', package_script)
         self.assertIn('$1 == "TeamIdentifier"', package_script)
         self.assertIn('[ "$signing_authority" != "$DEV_ID" ]', package_script)
-        self.assertIn('[ "$team_identifier" != "$TEAM_ID" ]', package_script)
+        self.assertIn('[ "$team_identifier" != "$PRODUCTION_TEAM_ID" ]', package_script)
         self.assertIn("validate_signing_identity()", package_script)
         self.assertLess(
             package_script.index("git fetch --no-tags origin"), package_script.rindex("validate_signing_identity")
@@ -462,27 +522,34 @@ esac
         valid = self._run_release_shell_fragment(
             validation_script,
             {
-                "DEV_ID": "Developer ID Application: Shiny Computers, LLC (ABCDE12345)",
-                "TEAM_ID": "ABCDE12345",
+                "DEV_ID": PRODUCTION_DEVELOPER_IDENTITY,
+                "PRODUCTION_DEV_ID": PRODUCTION_DEVELOPER_IDENTITY,
+                "PRODUCTION_TEAM_ID": PRODUCTION_TEAM_ID,
+                "TEAM_ID": PRODUCTION_TEAM_ID,
             },
         )
         self.assertEqual(valid.returncode, 0, valid.stderr)
 
         invalid_cases = [
-            ("", "Developer ID Application: Shiny Computers, LLC (ABCDE12345)"),
-            ("ABCDE1234", "Developer ID Application: Shiny Computers, LLC (ABCDE1234)"),
-            ("ABCDE12345", "Apple Distribution: Shiny Computers, LLC (ABCDE12345)"),
-            ("ABCDE12345", "Developer ID Application:  (ABCDE12345)"),
-            ("ABCDE12345", "Developer ID Application: Shiny Computers, LLC (ZZZZZ12345)"),
-            ("ABCDE12345", "Developer ID Application: Shiny Computers, LLC (ABCDE12345) extra"),
-            ("ABCDE12345", "prefix Developer ID Application: Shiny Computers, LLC (ABCDE12345)"),
-            ("ABCDE12345", "Developer ID Application: Shiny Computers, LLC (ABCDE12345) (ZZZZZ12345)"),
+            ("", PRODUCTION_DEVELOPER_IDENTITY),
+            ("ABCDE1234", "Developer ID Application: Shiny Computers Leasing LLC (ABCDE1234)"),
+            (PRODUCTION_TEAM_ID, f"Apple Distribution: Shiny Computers Leasing LLC ({PRODUCTION_TEAM_ID})"),
+            (PRODUCTION_TEAM_ID, f"Developer ID Application:  ({PRODUCTION_TEAM_ID})"),
+            (PRODUCTION_TEAM_ID, "Developer ID Application: Shiny Computers Leasing LLC (ZZZZZ12345)"),
+            (PRODUCTION_TEAM_ID, f"{PRODUCTION_DEVELOPER_IDENTITY} extra"),
+            (PRODUCTION_TEAM_ID, f"prefix {PRODUCTION_DEVELOPER_IDENTITY}"),
+            (PRODUCTION_TEAM_ID, f"{PRODUCTION_DEVELOPER_IDENTITY} (ZZZZZ12345)"),
         ]
         for team_id, dev_id in invalid_cases:
             with self.subTest(team_id=team_id, dev_id=dev_id):
                 result = self._run_release_shell_fragment(
                     validation_script,
-                    {"DEV_ID": dev_id, "TEAM_ID": team_id},
+                    {
+                        "DEV_ID": dev_id,
+                        "PRODUCTION_DEV_ID": PRODUCTION_DEVELOPER_IDENTITY,
+                        "PRODUCTION_TEAM_ID": PRODUCTION_TEAM_ID,
+                        "TEAM_ID": team_id,
+                    },
                 )
                 self.assertNotEqual(result.returncode, 0)
 
@@ -509,35 +576,32 @@ printf '%s' "$CODESIGN_METADATA"
         valid_metadata = "".join(
             [
                 "Executable=/tmp/Test.app/Contents/MacOS/Test\n",
-                "Authority=Developer ID Application: Shiny Computers, LLC (ABCDE12345)\n",
+                f"Authority={PRODUCTION_DEVELOPER_IDENTITY}\n",
                 "Authority=Developer ID Certification Authority\n",
-                "TeamIdentifier=ABCDE12345\n",
+                f"TeamIdentifier={PRODUCTION_TEAM_ID}\n",
             ]
         )
         valid = self._run_release_shell_fragment(
             invocation,
             {
                 "CODESIGN_METADATA": valid_metadata,
-                "DEV_ID": "Developer ID Application: Shiny Computers, LLC (ABCDE12345)",
+                "DEV_ID": PRODUCTION_DEVELOPER_IDENTITY,
                 "PATH": f"{fake_bin}:{os.environ['PATH']}",
-                "TEAM_ID": "ABCDE12345",
+                "PRODUCTION_TEAM_ID": PRODUCTION_TEAM_ID,
             },
         )
         self.assertEqual(valid.returncode, 0, valid.stderr)
 
         invalid_cases = [
-            "TeamIdentifier=ABCDE12345\n",
-            "Authority=Developer ID Application: Shiny Computers, LLC (ABCDE12345)\n",
-            ("Authority=Developer ID Application: Other Company (ABCDE12345)\nTeamIdentifier=ABCDE12345\n"),
+            f"TeamIdentifier={PRODUCTION_TEAM_ID}\n",
+            f"Authority={PRODUCTION_DEVELOPER_IDENTITY}\n",
             (
-                "Authority=Developer ID Application: Shiny Computers, LLC (ABCDE12345) extra\n"
-                "TeamIdentifier=ABCDE12345\n"
+                f"Authority=Developer ID Application: Other Company ({PRODUCTION_TEAM_ID})\n"
+                f"TeamIdentifier={PRODUCTION_TEAM_ID}\n"
             ),
-            ("Authority=Developer ID Application: Shiny Computers, LLC (ABCDE12345)\nTeamIdentifier=ZZZZZ12345\n"),
-            (
-                "NotAuthority=Developer ID Application: Shiny Computers, LLC (ABCDE12345)\n"
-                "NotTeamIdentifier=ABCDE12345\n"
-            ),
+            (f"Authority={PRODUCTION_DEVELOPER_IDENTITY} extra\nTeamIdentifier={PRODUCTION_TEAM_ID}\n"),
+            (f"Authority={PRODUCTION_DEVELOPER_IDENTITY}\nTeamIdentifier=ZZZZZ12345\n"),
+            (f"NotAuthority={PRODUCTION_DEVELOPER_IDENTITY}\nNotTeamIdentifier={PRODUCTION_TEAM_ID}\n"),
         ]
         for metadata in invalid_cases:
             with self.subTest(metadata=metadata):
@@ -545,9 +609,9 @@ printf '%s' "$CODESIGN_METADATA"
                     invocation,
                     {
                         "CODESIGN_METADATA": metadata,
-                        "DEV_ID": "Developer ID Application: Shiny Computers, LLC (ABCDE12345)",
+                        "DEV_ID": PRODUCTION_DEVELOPER_IDENTITY,
                         "PATH": f"{fake_bin}:{os.environ['PATH']}",
-                        "TEAM_ID": "ABCDE12345",
+                        "PRODUCTION_TEAM_ID": PRODUCTION_TEAM_ID,
                     },
                 )
                 self.assertNotEqual(result.returncode, 0)

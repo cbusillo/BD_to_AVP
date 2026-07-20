@@ -68,11 +68,11 @@ jobs:
                 echo "release_tag is required for $OPERATION." >&2
                 exit 1
               fi
-              python scripts/release.py validate-tag "$RELEASE_TAG"
+              python -m scripts.release validate-tag "$RELEASE_TAG"
               if [ "$OPERATION" = "deploy" ] \
                 && [ -n "$EXPECTED_BASE_RELEASE_TAG" ] \
                 && [ "$EXPECTED_BASE_RELEASE_TAG" != "bootstrap" ]; then
-                python scripts/release.py validate-tag "$EXPECTED_BASE_RELEASE_TAG"
+                python -m scripts.release validate-tag "$EXPECTED_BASE_RELEASE_TAG"
               fi
               ;;
             disable)

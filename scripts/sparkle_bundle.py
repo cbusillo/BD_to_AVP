@@ -14,6 +14,15 @@ from pathlib import Path
 from typing import Iterator
 
 from scripts.native_app import verify_support_diagnostics_endpoint
+from scripts.production_identity import (
+    PRODUCTION_BUNDLE_IDENTIFIER,
+    PRODUCTION_DEVELOPER_IDENTITY,
+    PRODUCTION_DISTRIBUTION_CHANNEL,
+    PRODUCTION_FEED_URL,
+    PRODUCTION_SPARKLE_PUBLIC_KEY,
+    PRODUCTION_TEAM_ID,
+    validate_production_public_key,
+)
 from scripts.release import RETIRED_RELEASE_TAGS, ReleaseError, parse_release_version
 from scripts.sparkle_macos import FRAMEWORK_RELATIVE_PATH, REPO_ROOT, load_release, verify_framework_layout
 
@@ -48,8 +57,16 @@ def load_expected_info(
         pyproject = tomllib.load(handle)
     info = dict(pyproject["tool"]["briefcase"]["app"]["bd-to-avp"]["macOS"]["info"])
     public_key = public_key_path.read_text(encoding="utf-8").strip()
+    try:
+        validate_production_public_key(public_key)
+    except ValueError as error:
+        raise SparkleBundleError(str(error)) from error
     if info.get("SUPublicEDKey") != public_key:
         raise SparkleBundleError("The Briefcase SUPublicEDKey does not match sparkle-public-ed-key.txt.")
+    if info.get("SUFeedURL") != PRODUCTION_FEED_URL:
+        raise SparkleBundleError("The Briefcase SUFeedURL does not match the production feed identity.")
+    if info.get("BDToAVPDistributionChannel") != PRODUCTION_DISTRIBUTION_CHANNEL:
+        raise SparkleBundleError("The Briefcase distribution channel does not match the production identity.")
     return info
 
 
@@ -70,6 +87,26 @@ def _parse_short_version(value: str) -> str:
     if version.release_tag in RETIRED_RELEASE_TAGS:
         raise SparkleBundleError("CFBundleShortVersionString belongs to a retired preview identity.")
     return version.text
+
+
+def _verify_codesign_identity(path: Path, description: str) -> None:
+    result = subprocess.run(
+        ["codesign", "-dv", "--verbose=4", path],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    metadata = f"{result.stdout}\n{result.stderr}"
+    authorities = re.findall(r"^Authority=(.+)$", metadata, re.MULTILINE)
+    team_identifiers = re.findall(r"^TeamIdentifier=(.+)$", metadata, re.MULTILINE)
+    if authorities[:1] != [PRODUCTION_DEVELOPER_IDENTITY]:
+        raise SparkleBundleError(
+            f"{description} signing authority must be {PRODUCTION_DEVELOPER_IDENTITY!r}; found {authorities[:1]!r}."
+        )
+    if team_identifiers != [PRODUCTION_TEAM_ID]:
+        raise SparkleBundleError(
+            f"{description} TeamIdentifier must be {PRODUCTION_TEAM_ID!r}; found {team_identifiers!r}."
+        )
 
 
 def verify_code_signatures(app_path: Path) -> None:
@@ -94,9 +131,11 @@ def verify_code_signatures(app_path: Path) -> None:
         capture_output=True,
         text=True,
     )
+    _verify_codesign_identity(app_path, "Containing app")
 
 
 def verify_dmg_distribution(dmg_path: Path) -> None:
+    _verify_codesign_identity(dmg_path, "DMG")
     subprocess.run(
         ["xcrun", "stapler", "validate", dmg_path],
         check=True,
@@ -155,6 +194,10 @@ def inspect_app_bundle(
         expected_keys.insert(0, "CFBundleVersion")
     for key in expected_keys:
         _require_equal(info, key, expected_info[key])
+    _require_equal(info, "CFBundleIdentifier", PRODUCTION_BUNDLE_IDENTIFIER)
+    _require_equal(info, "BDToAVPDistributionChannel", PRODUCTION_DISTRIBUTION_CHANNEL)
+    _require_equal(info, "SUFeedURL", PRODUCTION_FEED_URL)
+    _require_equal(info, "SUPublicEDKey", PRODUCTION_SPARKLE_PUBLIC_KEY)
     if "SUEnableAutomaticChecks" in info:
         raise SparkleBundleError("SUEnableAutomaticChecks must remain unset so Sparkle owns consent prompting.")
 

@@ -18,7 +18,9 @@ from urllib.request import Request, urlopen
 
 
 REPOSITORY = "cbusillo/BD_to_AVP"
+REPO_ROOT = Path(__file__).resolve().parents[1]
 ENGINE_WORKFLOW_PATH = ".github/workflows/release-engine.yml"
+RELEASE_FREEZES_PATH = REPO_ROOT / ".github" / "release-freezes.json"
 REQUIRED_REF = "refs/heads/main"
 REQUIRED_EVENT = "workflow_dispatch"
 REQUIRED_ACTOR = "shiny-code-bot"
@@ -241,6 +243,7 @@ class ReleaseRouteMetadata:
     operator_name: str
     operator_route: str
     operator_workflow_path: str
+    release_tag: str
     channel: str
     prerelease: bool
     make_latest: bool
@@ -256,6 +259,7 @@ class ReleaseRouteMetadata:
                 "| --- | --- |",
                 f"| Operator route | {self.operator_name} |",
                 f"| Operator workflow | `{self.operator_workflow_path}` |",
+                f"| Release tag | `{self.release_tag}` |",
                 f"| Committed release stage | `{self.channel}` |",
                 f"| GitHub prerelease | {yes_no[self.prerelease]} |",
                 f"| GitHub Latest | {yes_no[self.make_latest]} |",
@@ -361,12 +365,28 @@ def validate_engine_environment(environment: Mapping[str, str]) -> ReleaseWorkfl
     return evidence
 
 
-def validate_release_metadata(environment: Mapping[str, str]) -> ReleaseRouteMetadata:
+def _frozen_release_tags(path: Path = RELEASE_FREEZES_PATH) -> Mapping[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ReleaseWorkflowPolicyError(f"Unable to load committed release freezes from {path}: {error}") from error
+    freezes = _mapping(payload, "Release freeze policy")
+    if freezes.get("schema") != "bd_to_avp.release_freezes" or freezes.get("schema_version") != 1:
+        raise ReleaseWorkflowPolicyError("Release freeze policy has an unsupported schema.")
+    return _mapping(freezes.get("frozen_release_tags"), "Frozen release tags")
+
+
+def validate_release_metadata(
+    environment: Mapping[str, str],
+    *,
+    freezes_path: Path = RELEASE_FREEZES_PATH,
+) -> ReleaseRouteMetadata:
     operator_policy = _operator_policy_from_ref(_required(environment, "RELEASE_OPERATOR_WORKFLOW_REF"))
     metadata = ReleaseRouteMetadata(
         operator_name=operator_policy.name,
         operator_route=operator_policy.route,
         operator_workflow_path=operator_policy.path,
+        release_tag=_required(environment, "RELEASE_TAG"),
         channel=_required(environment, "RELEASE_CHANNEL"),
         prerelease=_boolean(_required(environment, "RELEASE_PRERELEASE"), "GitHub prerelease policy"),
         make_latest=_boolean(_required(environment, "RELEASE_MAKE_LATEST"), "GitHub Latest policy"),
@@ -391,6 +411,15 @@ def validate_release_metadata(environment: Mapping[str, str]) -> ReleaseRouteMet
             f"channel={metadata.channel!r}, prerelease={metadata.prerelease!r}, "
             f"make_latest={metadata.make_latest!r}, publish_pypi={metadata.publish_pypi!r}."
         )
+    freeze = _frozen_release_tags(freezes_path).get(metadata.release_tag)
+    if freeze is not None:
+        freeze_record = _mapping(freeze, f"Release freeze for {metadata.release_tag}")
+        issue = freeze_record.get("issue")
+        reason = freeze_record.get("reason")
+        invalid_issue = isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0
+        if invalid_issue or not isinstance(reason, str) or not reason:
+            raise ReleaseWorkflowPolicyError(f"Release freeze for {metadata.release_tag} is invalid.")
+        raise ReleaseWorkflowPolicyError(f"Release {metadata.release_tag} is frozen by issue #{issue}: {reason}")
     return metadata
 
 

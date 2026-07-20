@@ -10,6 +10,14 @@ from unittest.mock import Mock, patch
 
 from scripts import briefcase_macos_signing, sparkle_bundle, sparkle_macos
 from scripts.native_app import SUPPORT_DIAGNOSTICS_ENDPOINT_ENV, SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY
+from scripts.production_identity import (
+    PRODUCTION_BUNDLE_IDENTIFIER,
+    PRODUCTION_DEVELOPER_IDENTITY,
+    PRODUCTION_DISTRIBUTION_CHANNEL,
+    PRODUCTION_FEED_URL,
+    PRODUCTION_SPARKLE_PUBLIC_KEY,
+    PRODUCTION_TEAM_ID,
+)
 
 
 def make_framework(root: Path, *, version: str = "2.9.4") -> Path:
@@ -282,19 +290,47 @@ class SparkleBundleTests(unittest.TestCase):
     def expected_info(self) -> dict[str, object]:
         return {
             "CFBundleVersion": "144",
-            "BDToAVPDistributionChannel": "direct",
-            "SUFeedURL": "https://example.invalid/appcast.xml",
-            "SUPublicEDKey": "public-key",
+            "BDToAVPDistributionChannel": PRODUCTION_DISTRIBUTION_CHANNEL,
+            "SUFeedURL": PRODUCTION_FEED_URL,
+            "SUPublicEDKey": PRODUCTION_SPARKLE_PUBLIC_KEY,
             "SUAllowsAutomaticUpdates": False,
             "SUVerifyUpdateBeforeExtraction": True,
         }
+
+    @patch("scripts.sparkle_bundle.subprocess.run")
+    def test_codesign_identity_requires_exact_production_authority_and_team(self, run_mock: Mock) -> None:
+        run_mock.return_value = Mock(
+            stdout="",
+            stderr=(
+                f"Authority={PRODUCTION_DEVELOPER_IDENTITY}\n"
+                "Authority=Developer ID Certification Authority\n"
+                f"TeamIdentifier={PRODUCTION_TEAM_ID}\n"
+            ),
+        )
+
+        sparkle_bundle._verify_codesign_identity(Path("Signed.app"), "Test app")
+
+        invalid_metadata = (
+            f"Authority=Developer ID Application: Other Company ({PRODUCTION_TEAM_ID})\n"
+            f"TeamIdentifier={PRODUCTION_TEAM_ID}\n"
+        )
+        run_mock.return_value = Mock(stdout="", stderr=invalid_metadata)
+        with self.assertRaisesRegex(sparkle_bundle.SparkleBundleError, "signing authority must be"):
+            sparkle_bundle._verify_codesign_identity(Path("Signed.app"), "Test app")
+
+        run_mock.return_value = Mock(
+            stdout="",
+            stderr=f"Authority={PRODUCTION_DEVELOPER_IDENTITY}\nTeamIdentifier=ZZZZZ12345\n",
+        )
+        with self.assertRaisesRegex(sparkle_bundle.SparkleBundleError, "TeamIdentifier must be"):
+            sparkle_bundle._verify_codesign_identity(Path("Signed.app"), "Test app")
 
     def test_inspect_app_bundle_validates_metadata_and_layout(self) -> None:
         expected = self.expected_info()
         support_endpoint = "https://support.example"
         info = {
             **expected,
-            "CFBundleIdentifier": "com.example.test",
+            "CFBundleIdentifier": PRODUCTION_BUNDLE_IDENTIFIER,
             "CFBundleShortVersionString": "1.2.3rc1",
             "LSMinimumSystemVersion": "11.0",
             SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY: support_endpoint,
@@ -320,7 +356,7 @@ class SparkleBundleTests(unittest.TestCase):
             with self.subTest(short_version=short_version), tempfile.TemporaryDirectory() as temp_dir:
                 info = {
                     **expected,
-                    "CFBundleIdentifier": "com.example.test",
+                    "CFBundleIdentifier": PRODUCTION_BUNDLE_IDENTIFIER,
                     "CFBundleShortVersionString": short_version,
                     "LSMinimumSystemVersion": "11.0",
                     SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY: "https://support.example",
@@ -336,7 +372,7 @@ class SparkleBundleTests(unittest.TestCase):
         expected["CFBundleVersion"] = "1"
         info = {
             **expected,
-            "CFBundleIdentifier": "com.example.test",
+            "CFBundleIdentifier": PRODUCTION_BUNDLE_IDENTIFIER,
             "CFBundleShortVersionString": "1.2.3",
             "LSMinimumSystemVersion": "11.0",
         }
@@ -353,7 +389,7 @@ class SparkleBundleTests(unittest.TestCase):
                 expected["CFBundleVersion"] = build_version
                 info = {
                     **expected,
-                    "CFBundleIdentifier": "com.example.test",
+                    "CFBundleIdentifier": PRODUCTION_BUNDLE_IDENTIFIER,
                     "CFBundleShortVersionString": "1.2.3",
                     "LSMinimumSystemVersion": "11.0",
                 }
@@ -367,7 +403,7 @@ class SparkleBundleTests(unittest.TestCase):
         info = {
             **expected,
             "CFBundleVersion": "145",
-            "CFBundleIdentifier": "com.example.test",
+            "CFBundleIdentifier": PRODUCTION_BUNDLE_IDENTIFIER,
             "CFBundleShortVersionString": "1.2.4rc1",
             "LSMinimumSystemVersion": "11.0",
             SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY: "https://support.example",
@@ -391,7 +427,7 @@ class SparkleBundleTests(unittest.TestCase):
             with self.subTest(short_version=short_version), tempfile.TemporaryDirectory() as temp_dir:
                 info = {
                     **expected,
-                    "CFBundleIdentifier": "com.example.test",
+                    "CFBundleIdentifier": PRODUCTION_BUNDLE_IDENTIFIER,
                     "CFBundleShortVersionString": short_version,
                     "LSMinimumSystemVersion": "11.0",
                     SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY: "https://support.example",
@@ -407,7 +443,7 @@ class SparkleBundleTests(unittest.TestCase):
             with self.subTest(short_version=short_version), tempfile.TemporaryDirectory() as temp_dir:
                 info = {
                     **expected,
-                    "CFBundleIdentifier": "com.example.test",
+                    "CFBundleIdentifier": PRODUCTION_BUNDLE_IDENTIFIER,
                     "CFBundleShortVersionString": short_version,
                     "LSMinimumSystemVersion": "11.0",
                     SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY: "https://support.example",
@@ -421,7 +457,7 @@ class SparkleBundleTests(unittest.TestCase):
         expected = self.expected_info()
         info = {
             **expected,
-            "CFBundleIdentifier": "com.example.test",
+            "CFBundleIdentifier": PRODUCTION_BUNDLE_IDENTIFIER,
             "CFBundleShortVersionString": "0.3.0b3",
             "LSMinimumSystemVersion": "11.0",
         }
@@ -443,7 +479,7 @@ class SparkleBundleTests(unittest.TestCase):
             with self.subTest(endpoint=endpoint), tempfile.TemporaryDirectory() as temp_dir:
                 info = {
                     **expected,
-                    "CFBundleIdentifier": "com.example.test",
+                    "CFBundleIdentifier": PRODUCTION_BUNDLE_IDENTIFIER,
                     "CFBundleShortVersionString": "0.3.0b3",
                     "LSMinimumSystemVersion": "11.0",
                     SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY: endpoint,
@@ -460,7 +496,7 @@ class SparkleBundleTests(unittest.TestCase):
         expected = self.expected_info()
         info = {
             **expected,
-            "CFBundleIdentifier": "com.example.test",
+            "CFBundleIdentifier": PRODUCTION_BUNDLE_IDENTIFIER,
             "CFBundleShortVersionString": "0.3.0b3",
             "LSMinimumSystemVersion": "11.0",
             SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY: "https://support.example",

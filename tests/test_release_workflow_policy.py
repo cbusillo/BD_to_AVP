@@ -61,13 +61,17 @@ def valid_environment(workflow: str = STABLE_WORKFLOW_NAME) -> dict[str, str]:
 def valid_metadata_environment(
     workflow: str = STABLE_WORKFLOW_NAME,
     *,
+    release_tag: str | None = None,
     channel: str = "stable",
     prerelease: str = "false",
     make_latest: str = "true",
     publish_pypi: str = "true",
 ) -> dict[str, str]:
+    if release_tag is None:
+        release_tag = "v1.2.3" if channel == "stable" else f"v1.2.3-{channel}.1"
     return {
         "RELEASE_OPERATOR_WORKFLOW_REF": f"{REPOSITORY}/{OPERATOR_WORKFLOWS[workflow].path}@{REQUIRED_REF}",
+        "RELEASE_TAG": release_tag,
         "RELEASE_CHANNEL": channel,
         "RELEASE_PRERELEASE": prerelease,
         "RELEASE_MAKE_LATEST": make_latest,
@@ -284,9 +288,40 @@ class ReleaseWorkflowPolicyTests(unittest.TestCase):
         self.assertIn("Validated release route", summary)
         self.assertIn("| Operator route | Prerelease |", summary)
         self.assertIn(f"`{PRERELEASE_OPERATOR_WORKFLOW_PATH}`", summary)
+        self.assertIn("| Release tag | `v1.2.3-beta.1` |", summary)
         self.assertIn("| Committed release stage | `beta` |", summary)
         self.assertIn("| GitHub Latest | No |", summary)
         self.assertIn("| PyPI publication | No |", summary)
+
+    def test_beta3_is_frozen_until_issue_294_removes_the_policy_entry(self) -> None:
+        environment = valid_metadata_environment(
+            PRERELEASE_WORKFLOW_NAME,
+            release_tag="v0.3.0-beta.3",
+            channel="beta",
+            prerelease="true",
+            make_latest="false",
+            publish_pypi="false",
+        )
+
+        with self.assertRaisesRegex(ReleaseWorkflowPolicyError, r"frozen by issue #294"):
+            validate_release_metadata(environment)
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            freezes_path = Path(temporary_directory) / "release-freezes.json"
+            freezes_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "bd_to_avp.release_freezes",
+                        "schema_version": 1,
+                        "frozen_release_tags": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            metadata = validate_release_metadata(environment, freezes_path=freezes_path)
+
+        self.assertEqual(metadata.release_tag, "v0.3.0-beta.3")
 
     @patch("scripts.release_workflow_policy.urlopen")
     def test_engine_identity_is_loaded_from_github_oidc_claims(self, urlopen_mock: Mock) -> None:

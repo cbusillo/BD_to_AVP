@@ -19,6 +19,14 @@ from uuid import uuid4
 
 from bd_to_avp.observability import ObservabilityEvent
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
+from scripts.production_identity import (
+    PRODUCTION_BUNDLE_IDENTIFIER,
+    PRODUCTION_DISTRIBUTION_CHANNEL,
+    PRODUCTION_FEED_URL,
+    PRODUCTION_PRODUCT_NAME,
+    PRODUCTION_SPARKLE_PUBLIC_KEY,
+    validate_production_public_key,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MACOS_ROOT = REPO_ROOT / "macos"
@@ -30,8 +38,8 @@ with PYPROJECT_PATH.open("rb") as pyproject_file:
 PROJECT_METADATA = PYPROJECT["project"]
 BRIEFCASE_METADATA = PYPROJECT["tool"]["briefcase"]
 BRIEFCASE_APP_METADATA = BRIEFCASE_METADATA["app"]["bd-to-avp"]
-NATIVE_PRODUCT_NAME = str(BRIEFCASE_APP_METADATA["formal_name"])
-NATIVE_BUNDLE_IDENTIFIER = f"{BRIEFCASE_METADATA['bundle']}.bd-to-avp"
+NATIVE_PRODUCT_NAME = PRODUCTION_PRODUCT_NAME
+NATIVE_BUNDLE_IDENTIFIER = PRODUCTION_BUNDLE_IDENTIFIER
 NATIVE_SHORT_VERSION = str(PROJECT_METADATA["version"])
 NATIVE_UPDATE_INFO = dict(BRIEFCASE_APP_METADATA["macOS"]["info"])
 NATIVE_BUILD_VERSION = str(NATIVE_UPDATE_INFO["CFBundleVersion"])
@@ -86,6 +94,37 @@ MACH_O_MAGICS = {
     b"\xcf\xfa\xed\xfe",
     b"\xfe\xed\xfa\xcf",
 }
+
+
+def validate_repository_production_identity() -> None:
+    derived_bundle_identifier = f"{BRIEFCASE_METADATA['bundle']}.bd-to-avp"
+    expected_values = {
+        "Briefcase product name": (str(BRIEFCASE_APP_METADATA["formal_name"]), PRODUCTION_PRODUCT_NAME),
+        "Briefcase bundle identifier": (derived_bundle_identifier, PRODUCTION_BUNDLE_IDENTIFIER),
+        "distribution channel": (
+            str(NATIVE_UPDATE_INFO.get("BDToAVPDistributionChannel", "")),
+            PRODUCTION_DISTRIBUTION_CHANNEL,
+        ),
+        "Sparkle feed URL": (str(NATIVE_UPDATE_INFO.get("SUFeedURL", "")), PRODUCTION_FEED_URL),
+        "Sparkle public key": (
+            str(NATIVE_UPDATE_INFO.get("SUPublicEDKey", "")),
+            PRODUCTION_SPARKLE_PUBLIC_KEY,
+        ),
+    }
+    mismatches = [
+        f"{description}: expected {expected!r}, found {actual!r}"
+        for description, (actual, expected) in expected_values.items()
+        if actual != expected
+    ]
+    try:
+        validate_production_public_key(str(NATIVE_UPDATE_INFO.get("SUPublicEDKey", "")))
+    except ValueError as error:
+        mismatches.append(str(error))
+    if mismatches:
+        raise RuntimeError("Repository production identity validation failed:\n" + "\n".join(mismatches))
+
+
+validate_repository_production_identity()
 
 
 def run(

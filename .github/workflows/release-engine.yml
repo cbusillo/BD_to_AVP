@@ -99,6 +99,7 @@ name: Signed release engine
         value: ${{ jobs.policy.outputs.release_sha }}
 
 permissions:
+  actions: read
   contents: read
 
 env:
@@ -200,6 +201,9 @@ jobs:
     needs: policy
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
     outputs:
       package_version: ${{ steps.metadata.outputs.package_version }}
       public_version: ${{ steps.metadata.outputs.public_version }}
@@ -247,11 +251,12 @@ jobs:
 
       - name: Derive committed release metadata
         id: metadata
-        run: python scripts/release.py metadata --github-output "$GITHUB_OUTPUT"
+        run: python -m scripts.release metadata --github-output "$GITHUB_OUTPUT"
 
       - name: Validate route and summarize publication effects
         env:
           RELEASE_OPERATOR_WORKFLOW_REF: ${{ needs.policy.outputs.operator_workflow_ref }}
+          RELEASE_TAG: ${{ steps.metadata.outputs.release_tag }}
           RELEASE_CHANNEL: ${{ steps.metadata.outputs.channel }}
           RELEASE_PRERELEASE: ${{ steps.metadata.outputs.prerelease }}
           RELEASE_MAKE_LATEST: ${{ steps.metadata.outputs.make_latest }}
@@ -307,13 +312,22 @@ jobs:
             exit 1
           fi
 
+      - name: Revalidate Beta 3 recovery premise
+        if: steps.metadata.outputs.release_tag == 'v0.3.0-beta.3'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python -m scripts.beta3_recovery_evidence
+          --allow-beta3-draft
+          --expected-sha "$GITHUB_SHA"
+
       - name: Resolve channel-aware base for generated notes
         id: release_history
         env:
           RELEASE_TAG: ${{ steps.metadata.outputs.release_tag }}
         run: |
           set -euo pipefail
-          python scripts/release.py notes-base \
+          python -m scripts.release notes-base \
             --release-tag "$RELEASE_TAG" \
             --releases-json release-identities.json \
             --head-ref "$GITHUB_SHA" \
@@ -389,7 +403,7 @@ jobs:
 
             BASE_SNAPSHOT_TAG=$(jq -r .release_tag release-preflight/appcast-state.json)
             STATE_APPCAST_SHA256=$(jq -r .appcast_sha256 release-preflight/appcast-state.json)
-            python scripts/release.py validate-tag "$BASE_SNAPSHOT_TAG" >/dev/null
+            python -m scripts.release validate-tag "$BASE_SNAPSHOT_TAG" >/dev/null
             BASE_RELEASE_COUNT=$(jq -r --arg tag "$BASE_SNAPSHOT_TAG" '
               [
                 .[][]
@@ -589,6 +603,8 @@ jobs:
           CERTIFICATE: ${{ secrets.CERTIFICATE }}
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
           DEV_ID: ${{ secrets.DEV_ID }}
+          PRODUCTION_DEV_ID: "Developer ID Application: Shiny Computers Leasing LLC (MM5YXC7T6E)"
+          PRODUCTION_TEAM_ID: MM5YXC7T6E
           TEAM_ID: ${{ secrets.TEAM_ID }}
         run: |
           set -euo pipefail
@@ -605,6 +621,14 @@ jobs:
           esac
           if [ "${#TEAM_ID}" -ne 10 ]; then
             echo "TEAM_ID must be a 10-character Apple Team ID." >&2
+            exit 1
+          fi
+          if [ "$TEAM_ID" != "$PRODUCTION_TEAM_ID" ]; then
+            echo "TEAM_ID does not match the committed production Apple team." >&2
+            exit 1
+          fi
+          if [ "$DEV_ID" != "$PRODUCTION_DEV_ID" ]; then
+            echo "DEV_ID does not match the committed production Developer ID identity." >&2
             exit 1
           fi
           DEV_ID_PREFIX="Developer ID Application: "
@@ -735,6 +759,8 @@ jobs:
           DEV_ID: ${{ secrets.DEV_ID }}
           DMG_NAME: ${{ needs.prepare.outputs.dmg_name }}
           PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
+          PRODUCTION_DEV_ID: "Developer ID Application: Shiny Computers Leasing LLC (MM5YXC7T6E)"
+          PRODUCTION_TEAM_ID: MM5YXC7T6E
           TEAM_ID: ${{ secrets.TEAM_ID }}
         run: |
           set -euo pipefail
@@ -760,8 +786,8 @@ jobs:
               echo "$signed_label code signature did not report a TeamIdentifier." >&2
               exit 1
             fi
-            if [ "$team_identifier" != "$TEAM_ID" ]; then
-              echo "$signed_label TeamIdentifier does not match the configured Team ID." >&2
+            if [ "$team_identifier" != "$PRODUCTION_TEAM_ID" ]; then
+              echo "$signed_label TeamIdentifier does not match the committed production Team ID." >&2
               exit 1
             fi
           }
@@ -775,6 +801,14 @@ jobs:
             esac
             if [ "${#TEAM_ID}" -ne 10 ]; then
               echo "TEAM_ID must be a 10-character Apple Team ID." >&2
+              exit 1
+            fi
+            if [ "$TEAM_ID" != "$PRODUCTION_TEAM_ID" ]; then
+              echo "TEAM_ID does not match the committed production Apple team." >&2
+              exit 1
+            fi
+            if [ "$DEV_ID" != "$PRODUCTION_DEV_ID" ]; then
+              echo "DEV_ID does not match the committed production Developer ID identity." >&2
               exit 1
             fi
             DEV_ID_PREFIX="Developer ID Application: "
@@ -1021,6 +1055,7 @@ jobs:
 
       - name: Validate the packaged app on macOS 26
         env:
+          BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: ${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}
           EXPECTED_DMG_NAME: ${{ needs.package.outputs.dmg_name }}
           EXPECTED_DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
         run: |
@@ -1065,7 +1100,7 @@ jobs:
       - name: Validate and build distributions
         run: |
           set -euo pipefail
-          python scripts/release.py validate
+          python -m scripts.release validate
           uv build
           mkdir -p python-distributions
           mv dist python-distributions/
@@ -1439,6 +1474,7 @@ jobs:
       - name: Inspect draft DMG
         id: bundle
         env:
+          BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: ${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}
           DMG_PATH: ${{ steps.release_asset.outputs.dmg_path }}
           EXPECTED_BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
           EXPECTED_SHORT_VERSION: ${{ needs.prepare.outputs.package_version }}
@@ -1474,7 +1510,7 @@ jobs:
           if [ "$BASE_SNAPSHOT_TAG" = "bootstrap" ]; then
             cp sparkle-feed/appcast.xml appcast-site/appcast.xml
           else
-            python scripts/release.py validate-tag "$BASE_SNAPSHOT_TAG" >/dev/null
+            python -m scripts.release validate-tag "$BASE_SNAPSHOT_TAG" >/dev/null
             curl --fail --location --silent --show-error \
               --retry 3 --retry-delay 2 --retry-all-errors \
               --connect-timeout 10 --max-time 60 \
@@ -1634,6 +1670,7 @@ jobs:
 
       - name: Re-download and verify every release boundary
         env:
+          BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: ${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}
           EXPECTED_APPCAST_SHA256: ${{ needs.publish-appcast.outputs.appcast_sha256 }}
           EXPECTED_APPCAST_SIZE: ${{ needs.publish-appcast.outputs.appcast_size }}
           EXPECTED_BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}

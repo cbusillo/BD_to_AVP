@@ -168,7 +168,7 @@ Prepare the internal version, monotonic build counter, `uv.lock`, and Xcode Rele
 metadata with:
 
 ```sh
-uv run python scripts/release.py prepare --version <version> --build <build>
+uv run python -m scripts.release prepare --version <version> --build <build>
 ```
 
 The workflow must fail before release publication if the build number is

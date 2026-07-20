@@ -200,3 +200,4 @@ cython_debug/
 # Generated native macOS project and build products
 /macos/*.xcodeproj/
 /macos/build/
+/.bd-to-avp-release-transaction.json

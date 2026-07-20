@@ -29,6 +29,7 @@ jobs:
       operator_actor: ${{ github.actor }}
       operator_triggering_actor: ${{ github.triggering_actor }}
     permissions:
+      actions: read
       attestations: write
       contents: write
       id-token: write
