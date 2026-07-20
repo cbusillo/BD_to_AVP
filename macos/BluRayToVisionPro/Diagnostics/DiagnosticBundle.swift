@@ -697,7 +697,7 @@ final class DiagnosticBundleBuilder: Sendable {
     }
 
     private static let privacyManifest = BundlePrivacy(
-        rulesVersion: 4,
+        rulesVersion: DiagnosticPrivacyRules.currentVersion,
         pathTokenScope: "bundle",
         sizeRoundingMode: "down",
         fileSizeQuantumBytes: DiagnosticSizeRounding.fileSizeQuantumBytes,
