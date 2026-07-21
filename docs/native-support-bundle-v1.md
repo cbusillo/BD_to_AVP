@@ -52,6 +52,14 @@ bytes.
   preferred language, and override values are omitted.
 - `batch`: Queue kind, total/active counts, and counts by status. Item IDs,
   source names, and output names are omitted.
+- `user_description`: The optional user-provided "What went wrong?" note. It
+  records `included`, the `redacted_bytes` size, a `truncated` flag, and the
+  redacted `text`. The text is normalized (line endings unified to `\n`, control
+  characters removed, ends trimmed), bounded to 2,000 characters and 8 KiB before
+  redaction, then passed through the same redactor as all other free text and
+  bounded again to 16 KiB. It lives in the manifest rather than a separate archive
+  entry so the immutable four-entry envelope is unchanged. `included` is `false`
+  and `text` is absent when the field was left blank.
 - `files`: Entry names, uncompressed byte counts, and truncation flags.
 - `truncation`: Original, retained, history-dropped, boundary-dropped,
   archive-dropped, and field-truncated counts/bytes for each bounded stream.
@@ -181,9 +189,20 @@ secondary entry point. Capturing, reviewing, uploading, cancelling, saving, and
 sharing diagnostics never call `stopActiveWorker()` or
 `WorkerProcessRunning.cancel()`.
 
+Before any capture begins, the sheet shows an optional multiline **What went
+wrong?** field so the user can describe the problem or leave it blank. The field
+has a clear label, placeholder guidance, a character counter bounded to 2,000
+characters, keyboard accessibility, and an explicit warning not to enter
+passwords or personal information. Capture only starts once the user chooses
+**Capture Diagnostics**; the raw text is normalized and redacted before it enters
+the immutable ZIP. The same redacted description is used for online Send, Save a
+Copy, and Share because it is part of the one reviewed archive.
+
 The flow captures the archive before presenting consent and displays
 `DiagnosticBundleArtifact.preview` directly:
 
+- The redacted description, when present, is shown verbatim in the review as
+  included content so the reviewed ZIP and its preview never disagree.
 - Included and excluded categories are shown verbatim from the artifact.
 - The compressed ZIP size, 2 MiB ceiling, member sizes, and truncation notices
   are visible before upload consent.
@@ -195,6 +214,29 @@ The flow captures the archive before presenting consent and displays
   never reused.
 - Success presents a selectable and copyable support code plus the retention
   expiry before the temporary local copy is removed.
+
+## GitHub Issue Handoff
+
+After a successful private upload, the success state offers **Create GitHub
+Issue…**. This opens the user's browser at the public
+`cbusillo/BD_to_AVP` new-issue page with a prefilled draft that the user can
+review and edit before submitting. The success state clearly warns that GitHub
+issue text is public and stays editable.
+
+The draft is built by a dedicated safe URL builder (`GitHubIssueDraft`) that
+accepts only an allowlist of non-secret fields: the redacted user description,
+the app version and build, the captured stage, and the public support code. The
+support code is the only report linkage exposed publicly because it cannot
+retrieve the report by itself. Every field value is percent-encoded with a strict
+allowlist so no value can inject an extra query parameter, and only `title` and
+`body` parameters are ever present.
+
+The builder never accepts and the URL never contains the report ID, upload or
+status tokens, private object keys, raw ZIP contents, or local paths. The app
+opens the browser without embedding any GitHub credential and never calls the
+GitHub API or requests a GitHub token. Offline/local-only mode keeps the
+description in the ZIP but never reaches the success state, so it does not offer
+the handoff or claim a linked private report exists.
 
 When no service endpoint is configured, the same action becomes **Save
 Diagnostics…**. Capture and consent/review remain available, but the sheet
