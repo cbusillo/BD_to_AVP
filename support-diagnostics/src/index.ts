@@ -47,6 +47,13 @@ const REGISTRY_INSTANCE_NAME = "support-diagnostics-v1";
 const REPORT_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
+declare const FixedLengthStream: {
+  new (expectedLength: number | bigint): {
+    readable: ReadableStream<Uint8Array>;
+    writable: WritableStream<Uint8Array>;
+  };
+};
+
 class PublicError extends Error {
   constructor(
     readonly code: string,
@@ -284,6 +291,28 @@ async function readCreateRequest(
     sha256,
     size_bytes: sizeBytes,
   };
+}
+
+async function readExactBody(
+  request: Request,
+  expectedBytes: number,
+): Promise<Uint8Array> {
+  if (expectedBytes <= 0 || expectedBytes > MAX_BUNDLE_BYTES) {
+    throw new PublicError("payload_too_large", 413);
+  }
+  if (request.body === null) {
+    throw new PublicError("content_length_mismatch", 422);
+  }
+
+  const stream = new FixedLengthStream(expectedBytes);
+  try {
+    const bodyPromise = new Response(stream.readable).arrayBuffer();
+    const pipePromise = request.body.pipeTo(stream.writable);
+    const [body] = await Promise.all([bodyPromise, pipePromise]);
+    return new Uint8Array(body);
+  } catch {
+    throw new PublicError("content_length_mismatch", 422);
+  }
 }
 
 function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
@@ -564,10 +593,7 @@ async function uploadBundle(
   );
   let bytes: Uint8Array;
   try {
-    bytes = await readLimitedBody(request, MAX_BUNDLE_BYTES);
-    if (bytes.byteLength !== authorized.sizeBytes) {
-      throw new PublicError("content_length_mismatch", 422);
-    }
+    bytes = await readExactBody(request, authorized.sizeBytes);
     if ((await sha256Hex(bytes)) !== authorized.sha256) {
       throw new PublicError("checksum_mismatch", 422);
     }
