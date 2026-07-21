@@ -249,7 +249,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.encoding.mv_hevc_quality if job.encoding else None, 75)
         self.assertEqual(job.encoding.video_mode if job.encoding else None, VideoMode.MV_HEVC)
         self.assertEqual(job.encoding.av1_crf if job.encoding else None, 32)
-        self.assertIsNone(job.encoding.audio.preferred_language if job.encoding else "missing")
+        self.assertEqual(job.encoding.audio.preferred_language if job.encoding else None, "eng")
 
     def test_retains_protocol_v8_fixture_as_rejected_historical_evidence(self) -> None:
         fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v8.json"
@@ -283,6 +283,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.source.kind, WorkerSourceKind.PHYSICAL_DISC)
         self.assertEqual(job.source.path, Path("/dev/disk9"))
         self.assertEqual(job.source.title_id, "makemkv:0")
+        self.assertEqual(job.encoding.audio.preferred_language if job.encoding else None, "eng")
         self.assertFalse(job.job.remove_original if job.job else True)
 
     def test_parses_shared_swift_preview_fixture(self) -> None:
@@ -291,6 +292,7 @@ class JobSpecTests(unittest.TestCase):
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
         self.assertEqual(job.operation, WorkerOperation.PREVIEW_SOURCE)
+        self.assertEqual(job.encoding.audio.preferred_language if job.encoding else None, "eng")
         self.assertEqual(job.preview.position if job.preview else None, PreviewPosition.MIDDLE)
         self.assertEqual(job.preview.duration_seconds if job.preview else None, 60)
 

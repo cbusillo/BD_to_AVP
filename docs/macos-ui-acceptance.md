@@ -17,9 +17,9 @@ baseline for `0.3.0` and later.
 | Area | Result | Evidence |
 | --- | --- | --- |
 | Deployment floor | Pass | XcodeGen and `MACOSX_DEPLOYMENT_TARGET` remain 26.0; package compatibility is enforced separately. |
-| Profiles | Pass | Built-ins are immutable; custom profiles support create, duplicate, rename, edit, reorder, delete, default selection, atomic persistence, and corruption recovery. Profile document v4 stores the independent audio-language policy, while v1-v3 migrations retain all audio languages. |
+| Profiles | Pass | Built-ins are immutable; custom profiles support create, duplicate, rename, edit, reorder, delete, default selection, atomic persistence, and corruption recovery. Built-in and new profile options default to preferred-only English audio. Profile document v4 stores explicit choices, while v1-v3 migrations retain all audio languages. |
 | Current-job isolation | Pass | Profile writes contain only reusable encoding settings. Source, destination, preview intent, and job/recovery options remain outside the stored profile. |
-| Audio and subtitle languages | Pass | Audio exposes `All Languages` and `Preferred Language Only` with an `Audio language` picker; subtitles retain separate handling and `Subtitle language` controls. Job and profile summaries label Video, Audio, and Subtitles independently. |
+| Audio and subtitle languages | Pass | Audio defaults to `Preferred Language Only` with English selected and also exposes `All Languages`; subtitles retain separate handling and `Subtitle language` controls. Job and profile summaries label Video, Audio, and Subtitles independently. |
 | Standard platform controls | Pass | The application uses platform windows, toolbar/menu roles, forms, pickers, lists, split views, materials, and AVKit playback rather than custom replicas. |
 | Structural chrome | Pass | Footers use system material normally and switch to an opaque window background for Reduce Transparency or Increase Contrast. No explicit `glassEffect` is applied to dense content. |
 | Readability | Pass | Forms and metadata remain opaque; video keeps a black backing; diagnostics use the platform text background. |

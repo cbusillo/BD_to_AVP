@@ -97,7 +97,7 @@ enum AudioLanguageMode: String, CaseIterable, Codable, Identifiable {
 }
 
 struct AudioLanguagePolicy: Codable, Equatable {
-    var mode = AudioLanguageMode.allLanguages
+    var mode = AudioLanguageMode.preferredOnly
     var preferredLanguage = MediaLanguage.english
 
     var summary: String {

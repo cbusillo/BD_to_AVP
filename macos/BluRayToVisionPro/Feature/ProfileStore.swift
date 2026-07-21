@@ -349,7 +349,7 @@ private struct LegacyEncodingOptionsV3: Decodable {
             swapEyes: swapEyes,
             audioHandling: audioHandling,
             audioBitrate: audioBitrate,
-            audioLanguages: AudioLanguagePolicy(),
+            audioLanguages: AudioLanguagePolicy(mode: .allLanguages, preferredLanguage: .english),
             subtitles: subtitles
         )
     }
@@ -401,6 +401,7 @@ private struct LegacyEncodingOptionsV2: Decodable {
             swapEyes: swapEyes,
             audioHandling: audioHandling,
             audioBitrate: audioBitrate,
+            audioLanguages: AudioLanguagePolicy(mode: .allLanguages, preferredLanguage: .english),
             subtitles: subtitles
         )
     }
@@ -462,6 +463,7 @@ private struct LegacyEncodingOptionsV1: Decodable {
             swapEyes: swapEyes,
             audioHandling: audioHandling,
             audioBitrate: audioBitrate,
+            audioLanguages: AudioLanguagePolicy(mode: .allLanguages, preferredLanguage: .english),
             subtitles: SubtitlePolicy(mode: mode, preferredLanguage: preferredLanguage)
         )
     }
