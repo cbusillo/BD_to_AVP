@@ -4,6 +4,7 @@ import {
   BUNDLE_FILENAME_SUFFIX,
   MAX_BUNDLE_BYTES,
   MAX_CREATE_REQUEST_BYTES,
+  MINIMUM_PRIVACY_RULES_VERSION,
   RETENTION_MS,
   STATUS_AUTH_TTL_MS,
   UPLOAD_AUTH_TTL_MS,
@@ -58,6 +59,7 @@ class PublicError extends Error {
 interface CreateReportRequest {
   bundle_schema_version: number;
   content_type: string;
+  privacy_rules_version: number;
   sha256: string;
   size_bytes: number;
 }
@@ -229,9 +231,19 @@ async function readCreateRequest(
   const expectedKeys = [
     "bundle_schema_version",
     "content_type",
+    "privacy_rules_version",
     "sha256",
     "size_bytes",
   ];
+  const legacyKeys = expectedKeys.filter(
+    (key) => key !== "privacy_rules_version",
+  );
+  if (
+    keys.length === legacyKeys.length &&
+    keys.every((key, index) => key === legacyKeys[index])
+  ) {
+    throw new PublicError("unsupported_privacy_rules_version", 422);
+  }
   if (
     keys.length !== expectedKeys.length ||
     keys.some((key, index) => key !== expectedKeys[index])
@@ -242,7 +254,15 @@ async function readCreateRequest(
   const sizeBytes = payload.size_bytes;
   const bundleSchemaVersion = payload.bundle_schema_version;
   const contentType = payload.content_type;
+  const privacyRulesVersion = payload.privacy_rules_version;
   const sha256 = payload.sha256;
+  if (
+    typeof privacyRulesVersion !== "number" ||
+    !Number.isSafeInteger(privacyRulesVersion) ||
+    privacyRulesVersion < MINIMUM_PRIVACY_RULES_VERSION
+  ) {
+    throw new PublicError("unsupported_privacy_rules_version", 422);
+  }
   if (
     typeof sizeBytes !== "number" ||
     typeof bundleSchemaVersion !== "number" ||
@@ -260,6 +280,7 @@ async function readCreateRequest(
   return {
     bundle_schema_version: bundleSchemaVersion,
     content_type: contentType,
+    privacy_rules_version: privacyRulesVersion,
     sha256,
     size_bytes: sizeBytes,
   };
@@ -377,6 +398,12 @@ function bundleHeaders(record: ReportRecord): Headers {
     "x-diagnostic-schema-version",
     String(record.bundleSchemaVersion),
   );
+  if (record.privacyRulesVersion !== undefined) {
+    headers.set(
+      "x-diagnostic-privacy-rules-version",
+      String(record.privacyRulesVersion),
+    );
+  }
   headers.set("x-diagnostic-sha256", record.sha256);
   return headers;
 }
@@ -425,6 +452,7 @@ async function createReport(
       createdAt: now,
       expiresAt,
       objectKey: `reports/${reportId}${BUNDLE_FILENAME_SUFFIX}`,
+      privacyRulesVersion: payload.privacy_rules_version,
       reportId,
       sha256: payload.sha256,
       sizeBytes: payload.size_bytes,
@@ -507,6 +535,16 @@ async function uploadBundle(
     uploadTokenHash,
     nowFrom(dependencies),
   );
+  if (
+    typeof authorized.privacyRulesVersion !== "number" ||
+    authorized.privacyRulesVersion < MINIMUM_PRIVACY_RULES_VERSION
+  ) {
+    dependencies.logger?.info("report_upload_rejected", {
+      outcome: "unsupported_privacy_rules_version",
+      report_id: authorized.reportId,
+    });
+    throw new PublicError("unsupported_privacy_rules_version", 422);
+  }
   const declaredLength = parseContentLength(request);
   if (declaredLength === undefined || declaredLength !== authorized.sizeBytes) {
     throw new PublicError("content_length_mismatch", 422);
@@ -563,6 +601,7 @@ async function uploadBundle(
           bundle_schema_version: String(record.bundleSchemaVersion),
           created_at: toIso(record.createdAt),
           expires_at: toIso(record.expiresAt),
+          privacy_rules_version: String(authorized.privacyRulesVersion),
           report_id: record.reportId,
           sha256: record.sha256,
           size_bytes: String(record.sizeBytes),
@@ -659,7 +698,10 @@ async function fetchForMaintainer(
     object.size !== record.sizeBytes ||
     object.customMetadata?.sha256 !== record.sha256 ||
     object.customMetadata.bundle_schema_version !==
-      String(record.bundleSchemaVersion)
+      String(record.bundleSchemaVersion) ||
+    (record.privacyRulesVersion !== undefined &&
+      object.customMetadata.privacy_rules_version !==
+        String(record.privacyRulesVersion))
   ) {
     dependencies.logger?.error("maintainer_fetch_failed", {
       outcome: "object_unavailable",

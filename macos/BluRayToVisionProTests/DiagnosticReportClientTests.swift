@@ -60,6 +60,7 @@ final class DiagnosticReportClientTests: XCTestCase {
                 let metadata = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
                 XCTAssertEqual(metadata["bundle_schema_version"] as? Int, 1)
                 XCTAssertEqual(metadata["content_type"] as? String, "application/zip")
+                XCTAssertEqual(metadata["privacy_rules_version"] as? Int, 4)
                 XCTAssertEqual(metadata["size_bytes"] as? Int, artifactFixture.data.count)
                 XCTAssertEqual(metadata["sha256"] as? String, checksum)
                 stub.respond(
@@ -270,6 +271,17 @@ final class DiagnosticReportClientTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? DiagnosticReportClientError, .rateLimited)
             XCTAssertFalse(error.localizedDescription.contains("private-server-detail"))
+        }
+
+        DiagnosticURLProtocolStub.requestHandler = { stub, _ in
+            stub.respond(statusCode: 422, json: ["error": "unsupported_privacy_rules_version"])
+        }
+        do {
+            _ = try await makeClient().upload(artifact: fixture.artifact) { _ in }
+            XCTFail("Expected rejected-bundle failure")
+        } catch {
+            XCTAssertEqual(error as? DiagnosticReportClientError, .bundleRejected)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.artifact.archiveURL.path))
         }
     }
 

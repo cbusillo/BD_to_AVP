@@ -33,6 +33,45 @@ struct DiagnosticBundlePreview: Equatable, Sendable {
     let truncationNotices: [String]
     let archiveBytes: Int
     let maximumArchiveBytes: Int
+    /// The exact redacted "What went wrong?" text included in the archive, or
+    /// `nil` when the user left the field blank. Shown verbatim in the review
+    /// disclosure so the reviewed ZIP and its preview never disagree.
+    let userDescription: String?
+
+    init(
+        includedCategories: [String],
+        excludedCategories: [String],
+        files: [DiagnosticBundleFilePreview],
+        truncationNotices: [String],
+        archiveBytes: Int,
+        maximumArchiveBytes: Int,
+        userDescription: String? = nil
+    ) {
+        self.includedCategories = includedCategories
+        self.excludedCategories = excludedCategories
+        self.files = files
+        self.truncationNotices = truncationNotices
+        self.archiveBytes = archiveBytes
+        self.maximumArchiveBytes = maximumArchiveBytes
+        self.userDescription = userDescription
+    }
+}
+
+/// Non-secret context carried out of capture so a successful private upload can
+/// offer a public GitHub issue draft. It never contains the report ID, upload or
+/// status tokens, private object keys, raw ZIP contents, or local paths.
+struct DiagnosticReportHandoffContext: Equatable, Sendable {
+    let appVersion: String
+    let appBuild: String
+    let capturedStage: String
+    let redactedDescription: String?
+
+    static let empty = DiagnosticReportHandoffContext(
+        appVersion: "",
+        appBuild: "",
+        capturedStage: "",
+        redactedDescription: nil
+    )
 }
 
 struct DiagnosticBundleArtifact: Sendable {
@@ -41,6 +80,23 @@ struct DiagnosticBundleArtifact: Sendable {
     let archiveURL: URL
     let suggestedFilename: String
     let preview: DiagnosticBundlePreview
+    let handoff: DiagnosticReportHandoffContext
+
+    init(
+        bundleID: UUID,
+        createdAt: Date,
+        archiveURL: URL,
+        suggestedFilename: String,
+        preview: DiagnosticBundlePreview,
+        handoff: DiagnosticReportHandoffContext = .empty
+    ) {
+        self.bundleID = bundleID
+        self.createdAt = createdAt
+        self.archiveURL = archiveURL
+        self.suggestedFilename = suggestedFilename
+        self.preview = preview
+        self.handoff = handoff
+    }
 
     var sharingItems: [URL] { [archiveURL] }
 
@@ -135,6 +191,7 @@ final class DiagnosticBundleBuilder: Sendable {
         let maximumEventsBytes: Int
         let maximumStorageBytes: Int
         let maximumToolTailBytes: Int
+        let maximumUserDescriptionBytes: Int
 
         static let production = Configuration(
             maximumArchiveBytes: 2 * 1_024 * 1_024,
@@ -142,7 +199,8 @@ final class DiagnosticBundleBuilder: Sendable {
             maximumManifestBytes: 64 * 1_024,
             maximumEventsBytes: 320 * 1_024,
             maximumStorageBytes: 160 * 1_024,
-            maximumToolTailBytes: 640 * 1_024
+            maximumToolTailBytes: 640 * 1_024,
+            maximumUserDescriptionBytes: 16 * 1_024
         )
     }
 
@@ -170,8 +228,10 @@ final class DiagnosticBundleBuilder: Sendable {
 
     func createBundle(
         from snapshot: DiagnosticCaptureSnapshot,
+        userComment: DiagnosticUserComment? = nil,
         outputDirectory: URL? = nil
     ) throws -> DiagnosticBundleArtifact {
+        try Task.checkCancellation()
         let bundleID = bundleIDProvider()
         let redactor = DiagnosticRedactor(bundleID: bundleID)
         preRegisterSensitiveValues(from: snapshot, redactor: redactor)
@@ -189,20 +249,27 @@ final class DiagnosticBundleBuilder: Sendable {
             redactor: redactor
         )
         let toolTailResult = buildToolTail(snapshot.process.toolOutput, redactor: redactor)
+        let runtime = runtimeMetadataProvider()
+        let userDescriptionResult = buildUserDescription(userComment, redactor: redactor)
+        try Task.checkCancellation()
         let manifest = makeManifest(
             bundleID: bundleID,
             snapshot: snapshot,
-            runtime: runtimeMetadataProvider(),
+            runtime: runtime,
             redactor: redactor,
             eventResult: eventResult,
             storageResult: storageResult,
-            toolTailResult: toolTailResult
+            toolTailResult: toolTailResult,
+            userDescriptionResult: userDescriptionResult
         )
         let manifestData = try Self.encode(manifest, prettyPrinted: true)
         guard manifestData.count <= configuration.maximumManifestBytes else {
             throw DiagnosticBundleError.manifestTooLarge
         }
 
+        // The immutable envelope is exactly these four entries. The redacted user
+        // description travels inside manifest.json so Send/Save/Share stay byte
+        // identical and the upload service's fixed-entry contract is preserved.
         let entries = [
             DiagnosticZipArchive.Entry(name: "manifest.json", data: manifestData),
             DiagnosticZipArchive.Entry(name: "events.jsonl", data: eventResult.data),
@@ -220,6 +287,7 @@ final class DiagnosticBundleBuilder: Sendable {
             entries: entries,
             modificationDate: snapshot.capturedAt
         )
+        try Task.checkCancellation()
         guard archiveData.count <= configuration.maximumArchiveBytes else {
             throw DiagnosticBundleError.archiveTooLarge(
                 actualBytes: archiveData.count,
@@ -233,6 +301,7 @@ final class DiagnosticBundleBuilder: Sendable {
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         let filename = Self.suggestedFilename(createdAt: snapshot.capturedAt, bundleID: bundleID)
         let archiveURL = directory.appendingPathComponent(filename, isDirectory: false)
+        try Task.checkCancellation()
         do {
             try archiveWriter(archiveData, archiveURL)
         } catch {
@@ -278,6 +347,9 @@ final class DiagnosticBundleBuilder: Sendable {
         if toolTailResult.truncation.truncated {
             truncationNotices.append("Older tool output was omitted.")
         }
+        if userDescriptionResult.truncated {
+            truncationNotices.append("Your description was shortened to fit the size limit.")
+        }
         return DiagnosticBundleArtifact(
             bundleID: bundleID,
             createdAt: snapshot.capturedAt,
@@ -289,8 +361,33 @@ final class DiagnosticBundleBuilder: Sendable {
                 files: files,
                 truncationNotices: truncationNotices,
                 archiveBytes: archiveData.count,
-                maximumArchiveBytes: configuration.maximumArchiveBytes
+                maximumArchiveBytes: configuration.maximumArchiveBytes,
+                userDescription: userDescriptionResult.redactedText
+            ),
+            handoff: DiagnosticReportHandoffContext(
+                appVersion: runtime.appVersion,
+                appBuild: runtime.appBuild,
+                capturedStage: snapshot.lifecycle.phase.rawValue,
+                redactedDescription: userDescriptionResult.redactedText
             )
+        )
+    }
+
+    private func buildUserDescription(
+        _ comment: DiagnosticUserComment?,
+        redactor: DiagnosticRedactor
+    ) -> UserDescriptionBuildResult {
+        guard let comment else {
+            return UserDescriptionBuildResult(redactedText: nil, truncated: false)
+        }
+        let redacted = redactor.redact(comment.text)
+        let bounded = Self.boundedUTF8Prefix(
+            redacted,
+            maximumBytes: configuration.maximumUserDescriptionBytes
+        )
+        return UserDescriptionBuildResult(
+            redactedText: bounded.value,
+            truncated: comment.truncated || bounded.truncated
         )
     }
 
@@ -419,7 +516,8 @@ final class DiagnosticBundleBuilder: Sendable {
         _ snapshot: DiagnosticTextSnapshot,
         redactor: DiagnosticRedactor
     ) -> ToolTailBuildResult {
-        let redactedText = redactor.redact(snapshot.text)
+        let safeInput = Self.redactionSafeToolTailInput(snapshot)
+        let redactedText = redactor.redact(safeInput.text)
         let bodyBudget = max(0, configuration.maximumToolTailBytes - 512)
         let boundedBody = Self.boundedUTF8Suffix(redactedText, maximumBytes: bodyBudget)
         let archiveDropped = max(0, redactedText.utf8.count - boundedBody.utf8.count)
@@ -427,14 +525,16 @@ final class DiagnosticBundleBuilder: Sendable {
             totalInputBytes: snapshot.totalBytes,
             retainedInputBytes: snapshot.retainedBytes,
             bufferDroppedBytes: snapshot.droppedBytes,
+            boundaryDroppedInputBytes: safeInput.droppedBytes,
             archiveDroppedBytes: archiveDropped,
-            truncated: snapshot.truncated || archiveDropped > 0
+            truncated: snapshot.truncated || safeInput.droppedBytes > 0 || archiveDropped > 0
         )
         let header = [
             "# bd_to_avp_support_tool_tail schema_version=1",
             "# total_input_bytes=\(truncation.totalInputBytes)",
             "# retained_input_bytes=\(truncation.retainedInputBytes)",
             "# buffer_dropped_bytes=\(truncation.bufferDroppedBytes)",
+            "# boundary_dropped_input_bytes=\(truncation.boundaryDroppedInputBytes)",
             "# archive_dropped_bytes=\(truncation.archiveDroppedBytes)",
             "# truncated=\(truncation.truncated)",
             "",
@@ -444,6 +544,48 @@ final class DiagnosticBundleBuilder: Sendable {
         return ToolTailBuildResult(data: data, truncation: truncation)
     }
 
+    static func redactionSafeToolTailInput(
+        _ snapshot: DiagnosticTextSnapshot
+    ) -> (text: String, droppedBytes: Int) {
+        guard !snapshot.text.isEmpty else {
+            return ("", 0)
+        }
+
+        var safeText = snapshot.text[...]
+        var droppedBytes = 0
+        if snapshot.truncated {
+            let scalars = safeText.unicodeScalars
+            guard let firstTerminator = scalars.firstIndex(where: Self.isLineTerminator) else {
+                return ("", snapshot.text.utf8.count)
+            }
+            var safeStart = scalars.index(after: firstTerminator)
+            if scalars[firstTerminator].value == 0x0D,
+               safeStart < scalars.endIndex,
+               scalars[safeStart].value == 0x0A {
+                safeStart = scalars.index(after: safeStart)
+            }
+            droppedBytes += safeText[..<safeStart].utf8.count
+            safeText = safeText[safeStart...]
+        }
+
+        let scalars = safeText.unicodeScalars
+        if let lastScalar = scalars.last,
+           !Self.isLineTerminator(lastScalar) {
+            guard let lastTerminator = scalars.lastIndex(where: Self.isLineTerminator) else {
+                return ("", droppedBytes + safeText.utf8.count)
+            }
+            let safeEnd = scalars.index(after: lastTerminator)
+            droppedBytes += safeText[safeEnd...].utf8.count
+            safeText = safeText[..<safeEnd]
+        }
+
+        return (String(safeText), droppedBytes)
+    }
+
+    private static func isLineTerminator(_ scalar: Unicode.Scalar) -> Bool {
+        scalar.value == 0x0A || scalar.value == 0x0D
+    }
+
     private func makeManifest(
         bundleID: UUID,
         snapshot: DiagnosticCaptureSnapshot,
@@ -451,7 +593,8 @@ final class DiagnosticBundleBuilder: Sendable {
         redactor: DiagnosticRedactor,
         eventResult: EventBuildResult,
         storageResult: StorageBuildResult,
-        toolTailResult: ToolTailBuildResult
+        toolTailResult: ToolTailBuildResult,
+        userDescriptionResult: UserDescriptionBuildResult
     ) -> BundleManifest {
         let lifecycle = snapshot.lifecycle
         let job = snapshot.jobContext.map { context in
@@ -465,7 +608,25 @@ final class DiagnosticBundleBuilder: Sendable {
                 settings: context.settings
             )
         }
+        let descriptionBytes = userDescriptionResult.redactedText.map { Data($0.utf8).count } ?? 0
         let payloadBytes = eventResult.data.count + storageResult.data.count + toolTailResult.data.count
+        let files = [
+            BundleFile(
+                name: "events.jsonl",
+                uncompressedBytes: eventResult.data.count,
+                truncated: eventResult.truncation.truncated
+            ),
+            BundleFile(
+                name: "storage.json",
+                uncompressedBytes: storageResult.data.count,
+                truncated: storageResult.truncation.truncated
+            ),
+            BundleFile(
+                name: "tool-tail.txt",
+                uncompressedBytes: toolTailResult.data.count,
+                truncated: toolTailResult.truncation.truncated
+            ),
+        ]
         return BundleManifest(
             schemaVersion: 1,
             bundleID: bundleID.uuidString.lowercased(),
@@ -534,23 +695,13 @@ final class DiagnosticBundleBuilder: Sendable {
             localObservabilityStore: BundleLocalObservabilityStore(
                 snapshot.observabilityPersistence
             ),
-            files: [
-                BundleFile(
-                    name: "events.jsonl",
-                    uncompressedBytes: eventResult.data.count,
-                    truncated: eventResult.truncation.truncated
-                ),
-                BundleFile(
-                    name: "storage.json",
-                    uncompressedBytes: storageResult.data.count,
-                    truncated: storageResult.truncation.truncated
-                ),
-                BundleFile(
-                    name: "tool-tail.txt",
-                    uncompressedBytes: toolTailResult.data.count,
-                    truncated: toolTailResult.truncation.truncated
-                ),
-            ],
+            userDescription: BundleUserDescription(
+                included: userDescriptionResult.redactedText != nil,
+                redactedBytes: descriptionBytes,
+                truncated: userDescriptionResult.truncated,
+                text: userDescriptionResult.redactedText
+            ),
+            files: files,
             truncation: BundleTruncation(
                 events: eventResult.truncation,
                 storage: storageResult.truncation,
@@ -652,7 +803,7 @@ final class DiagnosticBundleBuilder: Sendable {
     }
 
     private static let privacyManifest = BundlePrivacy(
-        rulesVersion: 3,
+        rulesVersion: DiagnosticPrivacyRules.currentVersion,
         pathTokenScope: "bundle",
         sizeRoundingMode: "down",
         fileSizeQuantumBytes: DiagnosticSizeRounding.fileSizeQuantumBytes,
@@ -674,7 +825,7 @@ final class DiagnosticBundleBuilder: Sendable {
             "raw full paths, filenames, volume names, and movie titles",
             "raw job requests and command arguments",
             "environment variables and credentials",
-            "raw process identifiers",
+            "raw process and thread identifiers",
             "raw local observability JSONL segments",
             "hardware serial numbers and reusable file hashes",
         ]
@@ -701,6 +852,11 @@ private struct ToolTailBuildResult {
     let truncation: BundleToolTailTruncation
 }
 
+private struct UserDescriptionBuildResult {
+    let redactedText: String?
+    let truncated: Bool
+}
+
 private struct BundleManifest: Encodable {
     let schemaVersion: Int
     let bundleID: String
@@ -712,9 +868,17 @@ private struct BundleManifest: Encodable {
     let job: BundleJob?
     let batch: BundleBatch?
     let localObservabilityStore: BundleLocalObservabilityStore
+    let userDescription: BundleUserDescription
     let files: [BundleFile]
     let truncation: BundleTruncation
     let privacy: BundlePrivacy
+}
+
+private struct BundleUserDescription: Encodable {
+    let included: Bool
+    let redactedBytes: Int
+    let truncated: Bool
+    let text: String?
 }
 
 private struct BundleArchiveContract: Encodable {
@@ -858,6 +1022,7 @@ private struct BundleToolTailTruncation: Encodable {
     let totalInputBytes: Int
     let retainedInputBytes: Int
     let bufferDroppedBytes: Int
+    let boundaryDroppedInputBytes: Int
     let archiveDroppedBytes: Int
     let truncated: Bool
 }

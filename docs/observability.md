@@ -47,6 +47,12 @@ the worker transport sequence without changing lifecycle progress, and projects
 their stable kind, stage, severity, message, detail, and failure fields into the
 existing bounded diagnostic history. Unsupported schemas, secret privacy, and
 oversized text fail decoding rather than falling back to unredacted strings.
+For multi-artifact stages such as `create_left_right_files`, the live status view
+retains the current left-eye and right-eye artifact samples separately. A quiet
+helper process with recently growing artifacts is therefore classified as active
+work rather than as an immediate stall. The technical-details panel reserves the
+stall warning for runs that have neither recent tool output nor recent expected
+artifact growth.
 
 Worker conversion stages pass the same `RunContext` and cancellation token into
 every child-tool wrapper. Canonical child-process events therefore retain the
@@ -106,13 +112,13 @@ diagnosis; standard output remains protocol-only.
 
 Every event declares its maximum privacy level and redaction state. Secrets are
 omitted instead of being logged. Executable paths, source paths, filenames,
-movie titles, command arguments, environment values, raw process identifiers,
-serial numbers, and reusable hashes are not exportable as-is.
+movie titles, command arguments, environment values, raw process and thread
+identifiers, serial numbers, and reusable hashes are not exportable as-is.
 
 Local raw records may contain private paths needed for active-file sampling.
 User-created support bundles apply a second redaction boundary that replaces
-paths and job identifiers with bundle-scoped tokens, removes process IDs and
-command details, redacts credential-like text and arbitrary media-metadata
+paths and job identifiers with bundle-scoped tokens, removes process and thread
+IDs and command details, redacts credential-like text and arbitrary media-metadata
 values, and coarsens sizes.
 Public and private classifications are retained in exported event metadata;
 private text is eligible for export only after that second redaction pass.

@@ -11,9 +11,11 @@ import {
   API_SCHEMA_VERSION,
   BUNDLE_CONTENT_TYPE,
   MAX_DAILY_REPORTS_PER_CLIENT,
+  MINIMUM_PRIVACY_RULES_VERSION,
   RETENTION_MS,
   UPLOAD_AUTH_TTL_MS,
   type CreateReportRecordInput,
+  type ReportRecord,
 } from "../src/protocol.js";
 import { ReportRegistryService } from "../src/registry.js";
 import type {
@@ -276,9 +278,12 @@ function withFirstEntryUncompressedSize(
 }
 
 class FixedRateLimiter implements RateLimitBinding {
+  calls = 0;
+
   constructor(private readonly allowed = true) {}
 
   async limit(): Promise<{ success: boolean }> {
+    this.calls += 1;
     return { success: this.allowed };
   }
 }
@@ -286,6 +291,7 @@ class FixedRateLimiter implements RateLimitBinding {
 interface TestHarness {
   bucket: MemoryBucket;
   clock: { now: number };
+  createRateLimiter: FixedRateLimiter;
   logs: Array<{ event: string; fields: Record<string, string | number> }>;
   registry: ReportRegistryService;
   service: ReturnType<typeof createDiagnosticService>;
@@ -299,6 +305,8 @@ function makeHarness(
   const bucket = new MemoryBucket();
   const storage = new MemoryStorage();
   const registry = new ReportRegistryService(storage);
+  const createRateLimiter = new FixedRateLimiter(options.createAllowed);
+  const uploadRateLimiter = new FixedRateLimiter(options.uploadAllowed);
   const logs: Array<{
     event: string;
     fields: Record<string, string | number>;
@@ -314,26 +322,36 @@ function makeHarness(
   const service = createDiagnosticService({
     bucket,
     clock: () => clock.now,
-    createRateLimiter: new FixedRateLimiter(options.createAllowed),
+    createRateLimiter,
     logger,
     maintainerToken: "maintainer-token-with-at-least-thirty-two-characters",
     rateLimitSalt: "test-rate-limit-salt",
     registry,
     serviceEnvironment: "test",
-    uploadRateLimiter: new FixedRateLimiter(options.uploadAllowed),
+    uploadRateLimiter,
   });
-  return { bucket, clock, logs, registry, service, storage };
+  return {
+    bucket,
+    clock,
+    createRateLimiter,
+    logs,
+    registry,
+    service,
+    storage,
+  };
 }
 
 async function createReport(
   service: ReturnType<typeof createDiagnosticService>,
   bytes: Uint8Array,
+  privacyRulesVersion = MINIMUM_PRIVACY_RULES_VERSION,
 ): Promise<CreatedReport> {
   const response = await service.fetch(
     new Request("https://diagnostics.example.test/v1/reports", {
       body: JSON.stringify({
         bundle_schema_version: API_SCHEMA_VERSION,
         content_type: BUNDLE_CONTENT_TYPE,
+        privacy_rules_version: privacyRulesVersion,
         sha256: await sha256Hex(bytes),
         size_bytes: bytes.byteLength,
       }),
@@ -408,6 +426,7 @@ describe("private diagnostic service", () => {
     expect(object?.customMetadata).toMatchObject({
       bundle_schema_version: "1",
       expires_at: new Date(harness.clock.now + RETENTION_MS).toISOString(),
+      privacy_rules_version: String(MINIMUM_PRIVACY_RULES_VERSION),
       report_id: report.report_id,
       sha256: await sha256Hex(bytes),
     });
@@ -430,6 +449,88 @@ describe("private diagnostic service", () => {
     const replay = await harness.service.fetch(uploadRequest(report, bytes));
     expect(replay.status).toBe(409);
     expect(await replay.json()).toEqual({ error: "upload_consumed" });
+  });
+
+  it("rejects missing or outdated privacy rules before creating a report", async () => {
+    const harness = makeHarness();
+    const bytes = makeDiagnosticBundle();
+    const basePayload = {
+      bundle_schema_version: API_SCHEMA_VERSION,
+      content_type: BUNDLE_CONTENT_TYPE,
+      sha256: await sha256Hex(bytes),
+      size_bytes: bytes.byteLength,
+    };
+
+    for (const privacyRulesVersion of [
+      undefined,
+      MINIMUM_PRIVACY_RULES_VERSION - 1,
+    ]) {
+      const payload =
+        privacyRulesVersion === undefined
+          ? basePayload
+          : { ...basePayload, privacy_rules_version: privacyRulesVersion };
+      const response = await harness.service.fetch(
+        new Request("https://diagnostics.example.test/v1/reports", {
+          body: JSON.stringify(payload),
+          headers: { "content-type": "application/json" },
+          method: "POST",
+        }),
+      );
+
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({
+        error: "unsupported_privacy_rules_version",
+      });
+    }
+
+    expect(harness.storage.values.size).toBe(0);
+    expect(harness.bucket.objects.size).toBe(0);
+    expect(harness.logs).toEqual([]);
+    expect(harness.createRateLimiter.calls).toBe(0);
+
+    const futureReport = await createReport(
+      harness.service,
+      bytes,
+      MINIMUM_PRIVACY_RULES_VERSION + 1,
+    );
+    expect(futureReport.report_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
+    );
+  });
+
+  it("revokes pre-deployment upload authorizations without consuming them", async () => {
+    const harness = makeHarness();
+    const bytes = makeDiagnosticBundle();
+    const report = await createReport(harness.service, bytes);
+    const reportKey = [...harness.storage.values.keys()].find((key) =>
+      key.startsWith("report:"),
+    );
+    const stored = await harness.storage.get<ReportRecord>(
+      reportKey ?? "missing",
+    );
+    expect(stored).toBeDefined();
+    if (stored === undefined || reportKey === undefined) {
+      throw new Error("report fixture missing");
+    }
+    delete stored.privacyRulesVersion;
+    await harness.storage.put(reportKey, stored);
+
+    const response = await harness.service.fetch(uploadRequest(report, bytes));
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({
+      error: "unsupported_privacy_rules_version",
+    });
+    expect(harness.bucket.objects.size).toBe(0);
+    const rejectedRecord = await harness.storage.get<ReportRecord>(reportKey);
+    expect(rejectedRecord?.uploadState).toBe("pending");
+    expect(harness.logs.at(-1)).toMatchObject({
+      event: "report_upload_rejected",
+      fields: {
+        outcome: "unsupported_privacy_rules_version",
+        report_id: report.report_id,
+      },
+    });
   });
 
   it("rejects wrong headers without consuming authorization", async () => {
@@ -601,6 +702,7 @@ describe("private diagnostic service", () => {
         body: JSON.stringify({
           bundle_schema_version: API_SCHEMA_VERSION,
           content_type: BUNDLE_CONTENT_TYPE,
+          privacy_rules_version: MINIMUM_PRIVACY_RULES_VERSION,
           sha256: await sha256Hex(bytes),
           size_bytes: bytes.byteLength,
         }),
@@ -619,6 +721,7 @@ describe("private diagnostic service", () => {
         body: JSON.stringify({
           bundle_schema_version: API_SCHEMA_VERSION,
           content_type: BUNDLE_CONTENT_TYPE,
+          privacy_rules_version: MINIMUM_PRIVACY_RULES_VERSION,
           sha256: await sha256Hex(bytes),
           size_bytes: bytes.byteLength,
         }),
@@ -665,6 +768,9 @@ describe("private diagnostic service", () => {
     expect(new Uint8Array(await fetched.arrayBuffer())).toEqual(bytes);
     expect(fetched.headers.get("x-diagnostic-sha256")).toBe(
       await sha256Hex(bytes),
+    );
+    expect(fetched.headers.get("x-diagnostic-privacy-rules-version")).toBe(
+      String(MINIMUM_PRIVACY_RULES_VERSION),
     );
 
     const deleted = await harness.service.fetch(

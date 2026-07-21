@@ -5,6 +5,7 @@ export const MAX_ACTIVE_REPORTS = 500;
 export const MAX_BUNDLE_BYTES = 2 * 1024 * 1024;
 export const MAX_CREATE_REQUEST_BYTES = 4 * 1024;
 export const MAX_DAILY_REPORTS_PER_CLIENT = 5;
+export const MINIMUM_PRIVACY_RULES_VERSION = 4;
 export const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const STATUS_AUTH_TTL_MS = 10 * 60 * 1000;
 export const UPLOAD_AUTH_TTL_MS = 10 * 60 * 1000;
@@ -18,6 +19,7 @@ export interface ReportRecord {
   createdAt: number;
   expiresAt: number;
   objectKey: string;
+  privacyRulesVersion?: number;
   reportId: string;
   sha256: string;
   sizeBytes: number;

@@ -49,10 +49,18 @@ no-store`; the Worker deliberately emits no CORS headers.
 {
   "bundle_schema_version": 1,
   "content_type": "application/zip",
+  "privacy_rules_version": 4,
   "sha256": "<64-character lowercase SHA-256 hex>",
   "size_bytes": 12345
 }
 ```
+
+The service rejects missing or pre-v4 privacy rules before issuing upload
+credentials. This is a fail-closed admission gate for official clients with
+known-incomplete redaction boundaries, not attestation of arbitrary callers or
+bundle contents. Rejected app clients preserve their local Save/Share fallback.
+Upload authorization records also retain the admitted privacy-rules version, so
+authorizations created before this gate was deployed fail at upload time.
 
 On `201 Created`, the service returns an opaque UUID `report_id`, a random
 `BDAVP-...` support code, a ten-minute single-use upload authorization, and a
@@ -118,19 +126,20 @@ GET    /v1/maintainer/reports/{support_code}
 DELETE /v1/maintainer/reports/{support_code}
 ```
 
-The GET response is the ZIP archive with `X-Diagnostic-SHA256` and
-`X-Diagnostic-Schema-Version` headers. The DELETE response is `204 No Content`.
-Unknown support codes return `404` only after maintainer authentication. There
-is no public list endpoint, public object route, or support-code-only read
-route.
+The GET response is the ZIP archive with `X-Diagnostic-SHA256`,
+`X-Diagnostic-Schema-Version`, and `X-Diagnostic-Privacy-Rules-Version`
+headers. The DELETE response is `204 No Content`. Unknown support codes return
+`404` only after maintainer authentication. There is no public list endpoint,
+public object route, or support-code-only read route.
 
 ## Retention and Storage
 
 Each object is stored under the private `reports/` prefix with `created_at`,
-`expires_at`, report ID, schema, checksum, and size as R2 custom metadata. The
-Worker deletes expired records from its Durable Object and R2 through both a
-Durable Object alarm and an hourly cron. `r2-lifecycle.json` defines a second
-30-day R2 lifecycle deletion rule (`2,592,000` seconds) for the same prefix.
+`expires_at`, report ID, bundle schema, privacy-rules version, checksum, and size
+as R2 custom metadata. The Worker deletes expired records from its Durable
+Object and R2 through both a Durable Object alarm and an hourly cron.
+`r2-lifecycle.json` defines a second 30-day R2 lifecycle deletion rule
+(`2,592,000` seconds) for the same prefix.
 
 Keep the R2 bucket private: do not attach a public custom domain, do not
 configure a public bucket route, and do not grant anonymous R2 access. R2
@@ -177,10 +186,10 @@ cleanup, and safe failure logging. The Python tests cover valid retrieval plus
 checksum, CRC, decompressed limits, malformed archive, schema, delete,
 confirmation, and HTTP-failure handling.
 
-## Future Deployment
+## Production Deployment
 
-No Cloudflare account, Wrangler authentication, R2 bucket, route/domain, or
-Worker secrets are provisioned by this repository. Before any deployment:
+Cloudflare authentication and Worker secrets are not provisioned by this
+repository. Before any deployment:
 
 1. Create a private R2 bucket named `bd-to-avp-support-diagnostics`, or update
    `wrangler.jsonc` to the approved private bucket name.
@@ -207,7 +216,11 @@ Worker secrets are provisioned by this repository. Before any deployment:
 
 6. Run `npm run deploy:dry-run`, review the route, binding, lifecycle, and
    secret names, then deploy only with explicit Cloudflare authorization.
-7. Submit representative and maximum-size bundles, then verify request CPU in
+7. For the privacy-rules v4 cutoff, deploy the Worker before distributing the
+   updated native client. This intentionally disables Beta 3 online submission,
+   invalidates its outstanding upload authorizations, and leaves local
+   Save/Share available. The updated client cannot submit to the old Worker.
+8. Submit representative and maximum-size bundles, then verify request CPU in
    Cloudflare analytics remains within the Workers Free limit before setting
    the production release endpoint. Do not enable a paid Workers plan as an
    automatic fallback.

@@ -8,6 +8,7 @@ struct DiagnosticReportSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var copiedSupportCode = false
     @State private var isConfirmingDiscard = false
+    @FocusState private var isDescriptionFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -59,6 +60,8 @@ struct DiagnosticReportSheet: View {
                 message: "Capture a privacy-safe support bundle without stopping the current conversion.",
                 color: .accentColor
             )
+        case .composing:
+            composingContent
         case .capturing:
             captureContent
         case .review:
@@ -91,6 +94,80 @@ struct DiagnosticReportSheet: View {
                 )
             }
         }
+    }
+
+    private var composingContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                DiagnosticReportHeader(
+                    systemImage: "text.bubble",
+                    title: "Describe the Problem",
+                    message: "Optionally tell us what went wrong. Your note is included with the diagnostics, or you can leave it blank and continue.",
+                    color: .accentColor
+                )
+                DiagnosticNotice(
+                    systemImage: "lock.shield",
+                    text: "Do not enter passwords or personal information. Your text is redacted for paths, names, and credentials before it is added to the reviewable ZIP.",
+                    color: .orange
+                )
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("What went wrong? (optional)")
+                        .font(.headline)
+                    TextEditor(text: descriptionBinding)
+                        .font(.body)
+                        .frame(minHeight: 120, maxHeight: 220)
+                        .focused($isDescriptionFocused)
+                        .overlay(alignment: .topLeading) {
+                            if viewModel.userDescription.isEmpty {
+                                Text("Describe what happened, where it stopped, and what you expected.")
+                                    .foregroundStyle(.secondary)
+                                    .padding(.top, 8)
+                                    .padding(.leading, 5)
+                                    .allowsHitTesting(false)
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.secondary.opacity(0.3))
+                        )
+                        .accessibilityLabel("What went wrong")
+                        .accessibilityHint(
+                            "Optional description included with the diagnostics. Do not enter passwords or personal information."
+                        )
+                    HStack {
+                        Spacer()
+                        Text("\(viewModel.userDescription.count)/\(DiagnosticUserComment.maximumCharacterCount)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(descriptionCounterColor)
+                            .accessibilityLabel(
+                                "\(viewModel.userDescription.count) of \(DiagnosticUserComment.maximumCharacterCount) characters used"
+                            )
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .task {
+            await Task.yield()
+            isDescriptionFocused = true
+        }
+    }
+
+    private var descriptionBinding: Binding<String> {
+        Binding(
+            get: { viewModel.userDescription },
+            set: { newValue in
+                let limit = DiagnosticUserComment.maximumCharacterCount
+                viewModel.userDescription = newValue.count > limit
+                    ? String(newValue.prefix(limit))
+                    : newValue
+            }
+        )
+    }
+
+    private var descriptionCounterColor: Color {
+        viewModel.userDescription.count >= DiagnosticUserComment.maximumCharacterCount ? .orange : .secondary
     }
 
     private var captureContent: some View {
@@ -145,6 +222,9 @@ struct DiagnosticReportSheet: View {
                         color: .secondary,
                         categories: preview.excludedCategories
                     )
+                    if let description = preview.userDescription {
+                        userDescriptionSection(description)
+                    }
                     fileSection(preview)
                     if !preview.truncationNotices.isEmpty {
                         truncationSection(preview.truncationNotices)
@@ -227,6 +307,8 @@ struct DiagnosticReportSheet: View {
                     .padding(4)
                 }
 
+                gitHubHandoffSection(receipt)
+
                 if viewModel.hasLocalArtifact {
                     DiagnosticNotice(
                         systemImage: "externaldrive.badge.exclamationmark",
@@ -273,6 +355,24 @@ struct DiagnosticReportSheet: View {
                 Spacer()
                 Button("Close") { dismiss() }
             }
+        case .composing:
+            HStack {
+                Button("Cancel") {
+                    viewModel.prepareForNewDiagnosticSession()
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button {
+                    viewModel.beginCapture()
+                } label: {
+                    Label("Capture Diagnostics", systemImage: "doc.zipper")
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .help("Capture a privacy-safe diagnostic bundle, including your description")
+                .accessibilityLabel("Capture diagnostics including your description")
+            }
         case .capturing:
             HStack {
                 Spacer()
@@ -303,9 +403,9 @@ struct DiagnosticReportSheet: View {
                 if !viewModel.hasLocalArtifact {
                     Button("Capture New Diagnostics") {
                         copiedSupportCode = false
-                        viewModel.captureNew()
+                        viewModel.composeNewDiagnostics()
                     }
-                    .help("Capture another privacy-safe diagnostic bundle")
+                    .help("Describe and capture another privacy-safe diagnostic bundle")
                 }
                 Spacer()
                 Button("Done") { dismiss() }
@@ -319,7 +419,7 @@ struct DiagnosticReportSheet: View {
                 HStack {
                     Button("Close") { dismiss() }
                     Spacer()
-                    Button("Try Again") { viewModel.captureNew() }
+                    Button("Try Again") { viewModel.beginCapture() }
                         .buttonStyle(.borderedProminent)
                         .keyboardShortcut(.defaultAction)
                 }
@@ -561,6 +661,48 @@ struct DiagnosticReportSheet: View {
         } label: {
             Label("Truncation Notices", systemImage: "exclamationmark.circle")
                 .font(.headline)
+        }
+    }
+
+    private func userDescriptionSection(_ description: String) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("This redacted text is included in the ZIP exactly as shown.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(description)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(4)
+        } label: {
+            Label("Your Description (Included)", systemImage: "text.bubble")
+                .font(.headline)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Your description is included: \(description)")
+    }
+
+    @ViewBuilder
+    private func gitHubHandoffSection(_ receipt: DiagnosticReportReceipt) -> some View {
+        if let draft = viewModel.gitHubIssueDraft(), let url = draft.url() {
+            VStack(alignment: .leading, spacing: 10) {
+                DiagnosticNotice(
+                    systemImage: "exclamationmark.bubble",
+                    text: "GitHub issues are public and stay editable in your browser before you submit. The draft includes only your redacted description, the app version, the captured stage, and this support code. Do not add passwords or personal information.",
+                    color: .orange
+                )
+                Button {
+                    NSWorkspace.shared.open(url)
+                } label: {
+                    Label("Create GitHub Issue…", systemImage: "arrow.up.forward.square")
+                }
+                .help("Open a prefilled, public GitHub issue draft in your browser")
+                .accessibilityLabel("Create a public GitHub issue draft in your browser")
+            }
         }
     }
 

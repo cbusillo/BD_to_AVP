@@ -448,6 +448,39 @@ class ChildProcessRunnerTests(unittest.TestCase):
         self.assertEqual(artifact_events[-1].data.artifact.state, "complete")
         self.assertEqual(artifact_events[-1].data.artifact.size_bytes, 131072)
 
+    def test_cancellation_emits_terminal_incomplete_artifact_snapshot(self) -> None:
+        sink = RecordingSink()
+        cancellation_event = threading.Event()
+        context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER, sink))
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "output.bin"
+            timer = threading.Timer(0.1, cancellation_event.set)
+            timer.start()
+            try:
+                with self.assertRaises(ProcessCancelled):
+                    ChildProcessRunner().run(
+                        self.spec(
+                            "import pathlib, sys, time; path = pathlib.Path(sys.argv[1]); "
+                            "path.write_bytes(b'x' * 70000); time.sleep(30)",
+                            artifact,
+                            artifacts=(ProcessArtifactProbe("intermediate", artifact),),
+                            artifact_interval_seconds=0.04,
+                            termination_grace_seconds=0.1,
+                            kill_wait_seconds=0.1,
+                        ),
+                        run_context=context,
+                        cancellation_event=cancellation_event,
+                    )
+            finally:
+                timer.cancel()
+
+        artifact_events = [event for event in sink.snapshot().events if event.kind == "tool.artifact"]
+        self.assertGreaterEqual(len(artifact_events), 1)
+        self.assertEqual(artifact_events[-1].data.artifact.state, "incomplete")
+        self.assertEqual(artifact_events[-1].data.artifact.size_bytes, 65536)
+        terminal = sink.snapshot().events[-1]
+        self.assertEqual(terminal.kind, "tool.cancelled")
+
     def test_blocked_event_sink_does_not_block_output_draining(self) -> None:
         release_sink = threading.Event()
 

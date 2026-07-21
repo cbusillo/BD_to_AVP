@@ -84,6 +84,7 @@ final class DiagnosticRedactor {
     func redact(_ value: String) -> String {
         var redacted = Self.removingUnsafeControlCharacters(from: value)
         redacted = redactMediaMetadataBlocks(in: redacted)
+        redacted = redactProcessIdentifiers(in: redacted)
         redacted = redactCommandArguments(in: redacted)
         redacted = redactTitleArguments(in: redacted)
         for (sensitiveValue, replacement) in exactReplacements.sorted(by: { $0.key.count > $1.key.count }) {
@@ -147,11 +148,6 @@ final class DiagnosticRedactor {
             return self.nameTokens[filename.lowercased()] ?? "<name:redacted>"
         }
         redacted = redactSensitiveAssignments(in: redacted)
-        redacted = replaceCapturedMatches(
-            pattern: #"(?i)\b(pid|ppid|pgid|process[_ -]?(?:group[_ -]?)?id)\b(?:\s*[:=]\s*|\s+)[0-9]+"#,
-            in: redacted,
-            captureGroup: 1
-        ) { key in "\(key)=<redacted>" }
         redacted = replaceMatches(
             pattern: #"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"#,
             in: redacted
@@ -186,7 +182,7 @@ final class DiagnosticRedactor {
             pattern: #"(?i)\b(?:[0-9A-F]{2}:){5}[0-9A-F]{2}\b"#,
             in: redacted
         ) { _ in "<network:redacted>" }
-        return redacted
+        return Self.removingUnsafeControlCharacters(from: redacted)
     }
 
     private func redactMediaMetadataBlocks(in text: String) -> String {
@@ -223,6 +219,29 @@ final class DiagnosticRedactor {
             return "\(indentation)\(key): <metadata:redacted>"
         }
         .joined(separator: "\n")
+    }
+
+    private func redactProcessIdentifiers(in text: String) -> String {
+        var redacted = replaceCapturedMatches(
+            pattern: #"(?i)(?<![A-Za-z0-9_])[\"']?((?:p|pp|pg|t)id|(?:parent|child)[_ -]?pid|(?:(?:parent|child)[_ -]?)?process(?:[_ -]?group)?[_ -]?(?:id|identifier)|p?thread[_ -]?(?:id|identifier))[\"']?(?:\s*[:=]\s*|\s+)(?:([\"']?)(?:0[xX][0-9A-Fa-f]{1,16}|[0-9A-Fa-f]{1,20})\2|\[(?:0[xX][0-9A-Fa-f]{1,16}|[0-9A-Fa-f]{1,20})\])(?![A-Za-z0-9])"#,
+            in: text,
+            captureGroup: 1
+        ) { key in
+            "\(key)=<redacted>"
+        }
+        redacted = replaceMatches(
+            pattern: #"\[[0-9]{1,10}[ \t]*:[ \t]*(?:0[xX][0-9A-Fa-f]{1,16}|[0-9A-Fa-f]{1,20})\]"#,
+            in: redacted
+        ) { _ in
+            "[<process:redacted>]"
+        }
+        redacted = replaceMatches(
+            pattern: #"(?<=[^\s\[\]])\[[0-9]{1,10}\]"#,
+            in: redacted
+        ) { _ in
+            "[<process:redacted>]"
+        }
+        return redacted
     }
 
     private func identifierToken(for identifier: String) -> String {
@@ -421,7 +440,11 @@ final class DiagnosticRedactor {
         }
         return String(
             withoutANSI.unicodeScalars.filter { scalar in
-                scalar == "\n" || scalar == "\r" || scalar == "\t" || scalar.value >= 0x20
+                if scalar == "\n" || scalar == "\r" || scalar == "\t" {
+                    return true
+                }
+                let category = scalar.properties.generalCategory
+                return category != .control && category != .format
             }
         )
     }
