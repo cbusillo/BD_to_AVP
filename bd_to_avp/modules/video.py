@@ -476,7 +476,9 @@ def run_native_mvc_split_attempt(
                     event_context=event_context,
                     artifacts=tuple(
                         ProcessArtifactProbe(role, path=output_path)
-                        for role, output_path in zip(output_artifact_roles(len(output_paths)), output_paths, strict=True)
+                        for role, output_path in zip(
+                            output_artifact_roles(len(output_paths)), output_paths, strict=True
+                        )
                     ),
                     capture_overflow=CaptureOverflowPolicy.TRUNCATE,
                 )
