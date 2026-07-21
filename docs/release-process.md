@@ -4,20 +4,19 @@ The normative production identity, version mapping, update routes, history
 boundary, and publication policy are defined in
 [Production Release Routes](release-routes.md).
 
-The repository now carries the reviewed `v0.3.0-beta.3` metadata: internal
-version `0.3.0b3`, build `148`. The failed, unpublished `0.3.0rc1` build `147`
-attempt is preserved in the checked-in recovery evidence and its build number
-is permanently burned. The exact recovery and
-[Beta 3 cut packet](0.3.0-beta.3-cut-packet.md) are complete; they do not assert
-that any Beta 3 public artifact exists.
+The repository carries published, immutable Beta 3 history at internal version
+`0.3.0b3`, build `148`, and a frozen Beta 4 target at `0.3.0b4`, build `149`.
+The failed, unpublished `0.3.0rc1` build `147` attempt is preserved in the
+checked-in recovery evidence and its build number is permanently burned. The
+reviewed [Beta 4 cut packet](0.3.0-beta.4-cut-packet.md) records metadata only;
+it does not assert that any Beta 4 public artifact exists.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
 entrypoints, Beta 3 bootstrap contract, and one-time metadata recovery are
-implemented and regression-covered. Issue #294 has authorized publication by
-removing the Beta 3 release-freeze entry through protected-main review and now
-exclusively owns the exact-SHA dispatch, approval, signing, publication, and
-verification work.
+implemented and regression-covered. Issue #316 owns Beta 4 unfreeze, exact-SHA
+dispatch, approval, signing, publication, and verification after issue #314
+records an explicitly authorized production diagnostics admission deployment.
 
 ## Release Preparation
 
@@ -33,9 +32,9 @@ uv run python -m scripts.release prepare \
 The internal version, public version, tag/title, DMG name, release stage,
 Sparkle channel, and publication effects are derived independently by
 `scripts/release.py metadata` from the mapping in `release-routes.md`. For
-example, internal `0.3.0b3` maps to public `0.3.0-beta.3`, tag/title
-`v0.3.0-beta.3`, and DMG
-`3D-Blu-ray-to-Vision-Pro-0.3.0-beta.3.dmg`. The numeric
+example, internal `0.3.0b4` maps to public `0.3.0-beta.4`, tag/title
+`v0.3.0-beta.4`, and DMG
+`3D-Blu-ray-to-Vision-Pro-0.3.0-beta.4.dmg`. The numeric
 `CFBundleVersion` must increase for every production-identity build across all
 routes, including failed unpublished attempts. The command stages a refreshed
 `uv.lock`, validates the staged metadata, and updates `pyproject.toml`,
@@ -76,13 +75,14 @@ or from a stale main commit.
 
 ## Release Orchestration
 
-> **Beta 3 publication is authorized only through issue #294.** The repository
-> metadata is the reviewed `0.3.0b3` build `148` target and build `147` remains
-> permanently burned. The Beta 3 entry has been removed from
-> `.github/release-freezes.json` through protected-main review. Do not dispatch
-> until the exact unfreeze merge SHA has green post-merge CI and CodeQL. Only
-> the guarded `Prerelease` workflow may request `macos-signing` approval, sign,
-> publish, append the cumulative appcast, or deploy Pages for this release.
+> **Beta 4 is not authorized for release.** The repository metadata is the
+> reviewed `0.3.0b4` build `149` target, and
+> `.github/release-freezes.json` binds `v0.3.0-beta.4` to issue #316. Do not
+> dispatch, request `macos-signing` approval, sign, publish, append the
+> cumulative appcast, or deploy Pages while that entry is present. Only #316 may
+> remove the freeze through protected-main review after #314 records an
+> explicitly authorized production diagnostics deployment and live admission
+> evidence.
 
 Dispatch `Stable` from `main` only for reviewed committed Stable metadata, or
 dispatch `Prerelease` only for reviewed committed Alpha, Beta, or RC metadata,
@@ -272,8 +272,8 @@ Sparkle implicitly includes default Stable items for every route. Moving to a
 safer route affects only future newer builds and never downgrades the installed
 application.
 
-When published, `v0.3.0-beta.3` (`0.3.0b3`, build `148`) is appended to the
-cumulative feed on channel `beta`, but currently shipped Stable and RC clients
+Published `v0.3.0-beta.3` (`0.3.0b3`, build `148`) is appended to the cumulative
+feed on channel `beta`, but currently shipped Stable and RC clients
 cannot select that channel. It is therefore a manual-download seed, not a
 Sparkle-discoverable update from those installations. Testers download the exact
 GitHub Release DMG, replace the production

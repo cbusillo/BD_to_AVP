@@ -22,7 +22,7 @@ feasibility record before choosing it for headset delivery.
 
 ## GUI install
 
-For a normal Stable install of `Blu-ray to Vision Pro`, download GitHub Latest
+For a normal Stable install of `3D Blu-ray to Vision Pro`, download GitHub Latest
 from the [releases page]. Open the DMG file and drag the app to your Applications
 folder. Beta 3 is a prerelease rather than GitHub Latest; use only its exact
 tagged release as described below.
@@ -37,7 +37,7 @@ for macOS 14 through 25.
 
 ### Beta 3 manual bootstrap
 
-When published, `v0.3.0-beta.3` is a one-time manual-download seed, not an
+Published `v0.3.0-beta.3` is a one-time manual-download seed, not an
 update that currently shipped Stable or RC clients can discover. Those clients
 can select only Stable or RC, so they cannot select the Beta route or receive
 Beta 3 through Sparkle. Download that exact GitHub Release DMG, drag it into
@@ -60,6 +60,11 @@ and Alpha. The Beta 3 appcast item is eligible only on Beta and Alpha; Stable
 and RC exclude it. Existing Stable or RC selections remain in place until you
 explicitly choose another route. Choosing Stable later does not downgrade the
 installed Beta 3 app—it waits for a newer eligible Stable build.
+
+Beta 4 metadata (`0.3.0b4`, build `149`) is prepared but release-frozen. There
+is no Beta 4 tag, DMG, release, or updater item until the guarded publication
+issue completes the production diagnostics admission gate, explicit release
+authorization, signing, and public verification.
 
 See [Distribution Policy](docs/distribution-policy.md) for the current GUI
 release artifact and dependency policy.

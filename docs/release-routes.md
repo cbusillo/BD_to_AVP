@@ -6,12 +6,12 @@ closed when it cannot satisfy this contract.
 
 The application preference model, release metadata/history parser, appcast
 tooling, reusable release engine, and guarded operator entrypoints implement
-this four-route contract. The exact Beta 3 metadata migration and bootstrap are
-complete at `0.3.0b3` build `148`, with build `147` permanently burned. Issue
-#294 has removed the Beta 3 release-freeze entry through protected-main review
-and exclusively owns exact-SHA dispatch, approval, signing, publication, and
-public verification. No public-artifact claim exists until that guarded flow
-completes and its public state is independently verified.
+this four-route contract. Beta 3 is published and immutable at `0.3.0b3` build
+`148`, with build `147` permanently burned. The next prepared target is frozen
+Beta 4 at `0.3.0b4` build `149`. Issue #316 exclusively owns removing that
+freeze, exact-SHA dispatch, approval, signing, publication, and public
+verification after the production diagnostics admission gate in issue #314 is
+deployed with explicit authorization.
 
 ## Production Identity
 
@@ -52,7 +52,7 @@ only the public tag forms above. Historical compact production RC tags such as
 `v0.2.143rc5` remain valid read-only history inputs and are never renamed.
 
 Externally visible DMG names use the public version stem, for example
-`3D-Blu-ray-to-Vision-Pro-0.3.0-beta.3.dmg`. Workflow names and operator intent
+`3D-Blu-ray-to-Vision-Pro-0.3.0-beta.4.dmg`. Workflow names and operator intent
 must not appear in versions, release titles, notes, artifact names, app metadata,
 or appcast content.
 
@@ -107,7 +107,7 @@ prerelease must not silently change an existing route preference.
 
 ## Beta 3 Manual-Download Seed
 
-When published, `v0.3.0-beta.3` is the first Beta on the production identity
+Published `v0.3.0-beta.3` is the first Beta on the production identity
 and the one-time manual-download seed:
 
 - internal version `0.3.0b3`;
@@ -139,8 +139,32 @@ prereleases. Beta 3 remains immutable production/feed history in the cumulative
 appcast even though older clients cannot discover it.
 
 Selecting Stable after installing Beta 3 does not downgrade to `0.2.143`; the
-client waits for a newer eligible Stable build. The next production build is at
-least `149`.
+client waits for a newer eligible Stable build. Beta 4 reserves the next global
+build, `149`.
+
+## Beta 4 Frozen Target
+
+The repository is prepared for `v0.3.0-beta.4` without authorizing a release:
+
+- internal version `0.3.0b4`;
+- public tag and title `v0.3.0-beta.4`;
+- global build `149`;
+- Sparkle channel `beta`;
+- GitHub prerelease, never Latest, PyPI, or Homebrew; and
+- the same production product, bundle, feed, key, signing team, and diagnostics
+  endpoint as Beta 3.
+
+The cumulative appcast must place Beta 4 above immutable Beta 3 build `148` and
+Stable build `146`. Stable and RC exclude both Beta items; Beta and Alpha admit
+them, allowing an installed Beta 3 to update forward to Beta 4 without changing
+the saved route.
+
+`.github/release-freezes.json` binds this exact tag to issue #316. No tag,
+draft, DMG, release, or appcast item may be created while the freeze is present.
+Only #316 may remove it through protected-main review after #314 records an
+explicitly authorized production diagnostics deployment. The reviewed metadata
+and release-note seed are in
+[the Beta 4 cut packet](0.3.0-beta.4-cut-packet.md).
 
 ## Historical Boundaries
 
