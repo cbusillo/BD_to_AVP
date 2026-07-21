@@ -254,9 +254,9 @@ One appcast serves all four routes:
 
 Sparkle continues to include default Stable items automatically. The updater
 selects the greatest eligible global build, so choosing a safer route affects
-future updates only and never downgrades the installed application. When
-published, `v0.3.0-beta.3` (`0.3.0b3`, build `148`) is an immutable `beta` item
-in the cumulative feed and a manual-download seed. Currently shipped Stable and
+future updates only and never downgrades the installed application. Published
+`v0.3.0-beta.3` (`0.3.0b3`, build `148`) is an immutable `beta` item in the
+cumulative feed and a manual-download seed. Currently shipped Stable and
 RC clients cannot select Beta, so they cannot discover it through Sparkle; do
 not claim otherwise. Its `beta` item is eligible only to Beta and Alpha, not
 Stable or RC. After manually installing the production
@@ -264,6 +264,12 @@ Stable or RC. After manually installing the production
 select Beta or Alpha for future prereleases. Retired `v0.3.0-beta.1` and
 `v0.3.0-beta.2` Preview identities remain separate, immutable, and unable to
 Sparkle-upgrade into Beta 3.
+
+The next prepared item is frozen `v0.3.0-beta.4` (`0.3.0b4`, build `149`). If
+issue #316 later authorizes publication, it must append above Beta 3 in the same
+cumulative feed, remain excluded from Stable and RC, and be eligible to Beta and
+Alpha. The committed freeze prevents the Prerelease workflow from packaging or
+signing that target today.
 
 ## Runtime Integration and UX
 

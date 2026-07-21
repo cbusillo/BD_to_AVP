@@ -188,6 +188,49 @@ class SparkleAppcastTests(unittest.TestCase):
         self.assertNotIn("v0.3.0-beta.1", appcast_text)
         self.assertNotIn("v0.3.0-beta.2", appcast_text)
 
+    def test_beta4_appends_above_beta3_in_cumulative_production_history(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            empty_feed = root / "empty.xml"
+            stable_feed = root / "stable.xml"
+            beta3_feed = root / "beta3.xml"
+            beta4_feed = root / "beta4.xml"
+            make_empty_feed(empty_feed)
+
+            sparkle_appcast.append_item(
+                empty_feed,
+                stable_feed,
+                item("146", "0.2.143", None, minimum_system_version="14.0"),
+            )
+            sparkle_appcast.append_item(
+                stable_feed,
+                beta3_feed,
+                item("148", "0.3.0b3", "beta", minimum_system_version="26.0"),
+            )
+            sparkle_appcast.append_item(
+                beta3_feed,
+                beta4_feed,
+                item("149", "0.3.0b4", "beta", minimum_system_version="26.0"),
+            )
+
+            sparkle_appcast.validate_release_snapshot(beta4_feed, "0.3.0b4")
+            sparkle_appcast.validate_release_tag_snapshot(beta4_feed, "v0.3.0-beta.4")
+            _, channel = sparkle_appcast.load_appcast(beta4_feed)
+            items = channel.findall("item")
+
+        self.assertEqual(
+            [entry.findtext(f"{sparkle_appcast.SPARKLE}version") for entry in items],
+            ["149", "148", "146"],
+        )
+        self.assertEqual(
+            [entry.findtext(f"{sparkle_appcast.SPARKLE}shortVersionString") for entry in items],
+            ["0.3.0b4", "0.3.0b3", "0.2.143"],
+        )
+        self.assertEqual(
+            [entry.findtext(f"{sparkle_appcast.SPARKLE}channel") for entry in items],
+            ["beta", "beta", None],
+        )
+
     def test_rejects_non_monotonic_build(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

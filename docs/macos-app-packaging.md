@@ -87,23 +87,18 @@ identity differs. Release metadata separately derives the dotted public tag,
 title, and DMG name instead of treating the internal PEP 440 version as a public
 identifier.
 
-Stable is the default unchanneled Sparkle route. The application now persists
+Stable is the default unchanneled Sparkle route. The application persists
 Stable `{}`, RC `{rc}`, Beta `{beta, rc}`, and Alpha `{alpha, beta, rc}` as exact
 additional-channel sets. Existing `stable`, `rc`, and legacy
 `releaseCandidate` preferences migrate without selecting a less stable route;
 missing or unknown values fail closed to Stable. Choosing a safer route affects
-only future newer builds and never downgrades the installed app. The next
-production-identity field build is `0.3.0b3` build `148`. It will be published
-as `v0.3.0-beta.3`. It is a manual-download seed: currently shipped Stable and RC
-installations cannot select Beta, so they cannot discover it with Sparkle. Before
-installing it, quit the production app and all retired Preview variants, then
-copy `~/Library/Application Support/3D Blu-ray to Vision Pro/profiles.json` to a
-safe location outside that folder if it exists. Bundle separation does not
-isolate this shared profile path; do not edit it from a retired Preview app after
-Beta 3 installation. The manual DMG replaces the production
-`com.shinycomputers.bd-to-avp` app; after launch, it exposes all four routes.
-Its Beta 3 item is visible only to Beta and Alpha, while persisted Stable and RC
-remain unchanged until explicit selection and never downgrade an installed Beta.
+only future newer builds and never downgrades the installed app. Published Beta
+3 (`0.3.0b3`, build `148`) is the one-time manual-download production seed:
+older Stable and RC installations cannot discover it, while an installed Beta
+3 exposes all four routes. Beta 4 (`0.3.0b4`, build `149`) is the next prepared
+target and is committed with a release freeze. Its future cumulative item must
+sit above Beta 3 and remain visible only to Beta and Alpha until a later newer
+Stable supersedes it.
 
 ## Release Workflow
 
@@ -155,12 +150,15 @@ behavior and engine architecture rather than release branding.
 
 ## Remaining Field Evidence
 
-The accepted physical-disc result allows the production line to proceed with
-Beta 3 so the merged observability and diagnostics can classify the reported
-follow-on issues. The signed installed-app tests must prove that:
+Beta 3 publication and route qualification are complete. Beta 4 field evidence
+is intentionally blocked until its committed freeze is lifted through issue
+#316 and the production diagnostics service admits privacy-rules-v4 clients.
+The signed installed-app qualification must prove that:
 
-- existing Stable and RC preferences migrate without silently selecting Beta;
-- Beta 3 installs with the production identity and exposes all four routes;
-- Stable and RC exclude Beta 3 while Beta and Alpha admit it; and
-- a newer unchanneled Stable can later supersede prereleases for every route
-  without changing the saved preference.
+- Beta 3 updates forward to Beta 4 on Beta and Alpha without changing the saved
+  route;
+- Stable and RC continue to exclude both Beta items;
+- the production service rejects pre-v4 clients and accepts the signed Beta 4
+  client; and
+- a deliberate report can be submitted, retrieved by support code, assessed
+  for privacy and diagnostic sufficiency, and deleted.

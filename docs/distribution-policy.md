@@ -84,10 +84,12 @@ document it as an external dependency with preflight behavior.
   production GUI path. The protected-main release workflow builds that app with
   the production name and bundle identifier on a pinned GitHub-hosted macOS 26
   toolchain, then verifies the exact DMG again in a separate macOS 26 job.
-- The next planned production-identity field build is `v0.3.0-beta.3`, internal
-  version `0.3.0b3`, build `148`. It is a manual-download seed because currently
-  shipped clients cannot select Beta or Alpha, but its immutable appcast item is
-  visible to those routes after the new selector is installed.
+- The next prepared production-identity field build is `v0.3.0-beta.4`, internal
+  version `0.3.0b4`, build `149`. It is frozen against release dispatch until
+  issue #314 records an explicitly authorized production diagnostics admission
+  deployment and issue #316 removes the committed freeze through protected-main
+  review. Beta 3 build `148` remains the published manual-download seed and
+  immutable appcast history below it.
 - Stable, RC, Beta, and Alpha are routes for the same product, bundle identifier,
   feed, Sparkle key, signing team, and diagnostics endpoint. Stable is default;
   broader routes include progressively earlier stages without permitting

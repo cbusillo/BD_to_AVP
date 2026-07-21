@@ -267,6 +267,25 @@ Beta without pretending the current Stable or RC client can discover it.
    apps remain separate and cannot Sparkle-update into the production app. Do
    not reopen them to edit the shared profile library after Beta 3 installation.
 
+### Beta 4 Frozen-Preparation Smoke
+
+Run these checks before any unfreeze or release authorization. They prove only
+the committed target and fail-closed boundary, not a signed or published app.
+
+1. Run `uv run python -m scripts.release validate` and confirm internal
+   `0.3.0b4`, public `0.3.0-beta.4`, build `149`, Beta channel, prerelease,
+   non-Latest, and no PyPI publication.
+2. Run the Prerelease metadata policy with the committed target and confirm it
+   rejects `v0.3.0-beta.4` as frozen by issue #316 before packaging or signing.
+3. Validate a cumulative appcast fixture ordered Beta 4 build `149`, Beta 3
+   build `148`, then Stable build `146`; Stable and RC must exclude both Beta
+   items while Beta and Alpha admit them.
+4. Confirm the live repository has no Beta 4 tag, release, draft, or asset and
+   the public appcast still ends at Beta 3 build `148`.
+5. Stop. Signed-app, update-route, and diagnostic-lifecycle qualification belong
+   to issue #316 after issue #314 records an explicitly authorized production
+   diagnostics deployment and the release freeze is removed through review.
+
 ## Follow-Up Routing
 
 - Missing bundled GUI dependency: file or update the relevant #88 child issue.
