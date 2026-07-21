@@ -1,0 +1,48 @@
+{
+  "schema": "bd_to_avp.observability",
+  "schema_version": 1,
+  "emitter": "worker",
+  "stream_id": "38f64c27-a1cf-43e8-92d7-021cc5f9b315",
+  "sequence": 80,
+  "occurred_at": "2026-07-21T00:00:00.000Z",
+  "elapsed_ms": 7200000,
+  "kind": "tool.artifact",
+  "severity": "info",
+  "privacy": "private",
+  "redaction": "raw",
+  "context": {
+    "correlation": {
+      "job_id": "c555d6b5-c20f-42cb-bf91-21433459b1de"
+    },
+    "stage": {
+      "id": "create_left_right_files",
+      "index": 8,
+      "count": 14
+    },
+    "tool": {
+      "id": "ffmpeg",
+      "run_id": "4a9ba245-a370-40a4-8b85-00b03531f46e"
+    },
+    "process": {
+      "pid": 9134,
+      "process_group_id": 9134
+    }
+  },
+  "data": {
+    "artifact": {
+      "role": "left_eye_video_output",
+      "state": "growing",
+      "location": {
+        "value": "/Users/example/Movies/Feature/temp_files/left.mp4",
+        "privacy": "private",
+        "truncated": false
+      },
+      "size_bytes": 884998144,
+      "modification_age_seconds": 2,
+      "growth_bytes_per_second": 8388608
+    },
+    "activity": {
+      "last_output_age_seconds": 75
+    }
+  }
+}

@@ -64,6 +64,17 @@ class NativeMvcCommandTests(unittest.TestCase):
             ],
         )
 
+    def test_output_artifact_roles_distinguish_left_and_right_outputs(self) -> None:
+        self.assertEqual(video.output_artifact_roles(1), ("stereo_video_output",))
+        self.assertEqual(
+            video.output_artifact_roles(2),
+            ("left_eye_video_output", "right_eye_video_output"),
+        )
+        self.assertEqual(
+            video.output_artifact_roles(3),
+            ("video_output_1", "video_output_2", "video_output_3"),
+        )
+
     def test_native_ffmpeg_command_splits_side_by_side_stream(self) -> None:
         with (
             patch.object(video.config, "left_right_bitrate", 12),
@@ -264,6 +275,10 @@ class NativeMvcSelectionTests(unittest.TestCase):
         self.assertEqual([stage.spec.tool_id for stage in stages], ["ffmpeg", "edge264", "ffmpeg"])
         self.assertEqual([stage.spec.argv[0] for stage in stages], ["source-ffmpeg", "edge264_test", "encode-ffmpeg"])
         self.assertEqual([probe.path for probe in stages[-1].spec.artifacts], [left_output, right_output])
+        self.assertEqual(
+            [probe.role for probe in stages[-1].spec.artifacts],
+            ["left_eye_video_output", "right_eye_video_output"],
+        )
         self.assertTrue(all(stage.spec.event_context is event_context for stage in stages))
         self.assertIs(run.call_args.kwargs["run_context"], run_context)
         self.assertIs(run.call_args.kwargs["cancellation_event"], cancellation_event)
@@ -494,7 +509,7 @@ def process_result(tool_id: str) -> ProcessResult:
     return ProcessResult(tool_run_id=f"{tool_id}-run", returncode=0, elapsed_ms=1, stdout=empty, stderr=empty)
 
 
-def process_error(returncode: int, command: list[str]) -> ProcessExecutionError:
+def process_error(returncode: int, command: list[str | bytes]) -> ProcessExecutionError:
     empty = ProcessOutputSnapshot(b"", b"", 0, 0, 0, 0)
     return ProcessExecutionError(returncode, command, empty, empty)
 
@@ -538,7 +553,7 @@ def pipeline_failure(
                 "ffmpeg",
                 None if ffmpeg_error else process_result("encoder"),
                 ffmpeg_error,
-                completed_before_final=True,
+                completed_before_final=ffmpeg_error is not None,
             ),
         )
     )
