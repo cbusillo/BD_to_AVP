@@ -252,6 +252,65 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testDiagnosticBundleIncludesUserCommentFromViewModel() async throws {
+        let outputDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outputDirectory) }
+
+        let viewModel = ConversionViewModel()
+        let comment = try XCTUnwrap(
+            DiagnosticUserComment.normalize("Left and right outputs stop growing at 1.48 GB.")
+        )
+
+        let artifact = try await viewModel.captureDiagnosticBundle(
+            in: outputDirectory,
+            userComment: comment
+        )
+
+        XCTAssertEqual(
+            artifact.preview.userDescription,
+            "Left and right outputs stop growing at 1.48 GB."
+        )
+        XCTAssertEqual(
+            artifact.handoff.redactedDescription,
+            "Left and right outputs stop growing at 1.48 GB."
+        )
+    }
+
+    @MainActor
+    func testDiagnosticBundleCancellationReachesDetachedBuilder() async throws {
+        let outputDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outputDirectory) }
+
+        let archiveWriter = BlockingDiagnosticArchiveWriter()
+        let builder = DiagnosticBundleBuilder(archiveWriter: archiveWriter.write)
+        let viewModel = ConversionViewModel(diagnosticBundleBuilder: builder)
+        let captureTask = Task {
+            try await viewModel.captureDiagnosticBundle(in: outputDirectory)
+        }
+
+        let deadline = Date().addingTimeInterval(2)
+        while !archiveWriter.hasStarted, Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(archiveWriter.hasStarted)
+
+        captureTask.cancel()
+        do {
+            _ = try await captureTask.value
+            XCTFail("Expected diagnostic bundle capture to be cancelled")
+        } catch is CancellationError {
+            // Expected.
+        }
+
+        XCTAssertTrue(archiveWriter.observedCancellation)
+        XCTAssertTrue((try FileManager.default.contentsOfDirectory(atPath: outputDirectory.path)).isEmpty)
+    }
+
+    @MainActor
     func testUnavailableDiscTitleCanBeReanalyzedBeforeRetry() async throws {
         let inspectionDone = expectation(description: "inspection done")
         inspectionDone.expectedFulfillmentCount = 2
@@ -2307,5 +2366,30 @@ private final class BatchWorkerClient: WorkerProcessRunning, @unchecked Sendable
                 continuation.resume()
             }
         }
+    }
+}
+
+private final class BlockingDiagnosticArchiveWriter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var started = false
+    private var cancelled = false
+
+    var hasStarted: Bool {
+        lock.withLock { started }
+    }
+
+    var observedCancellation: Bool {
+        lock.withLock { cancelled }
+    }
+
+    func write(_ data: Data, to url: URL) throws {
+        _ = data
+        _ = url
+        lock.withLock { started = true }
+        while !Task.isCancelled {
+            Thread.sleep(forTimeInterval: 0.005)
+        }
+        lock.withLock { cancelled = true }
+        throw CancellationError()
     }
 }

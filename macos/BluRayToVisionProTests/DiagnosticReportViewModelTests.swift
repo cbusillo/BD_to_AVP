@@ -18,12 +18,13 @@ final class DiagnosticReportViewModelTests: XCTestCase {
         let viewModel = DiagnosticReportViewModel(
             uploader: nil,
             workspace: workspace,
-            capture: { directory in
+            capture: { directory, _ in
                 try Self.makeArtifact(in: directory, data: Data("local diagnostics".utf8))
             }
         )
 
         viewModel.begin()
+        viewModel.beginCapture()
         try await waitUntil { viewModel.phase == .review }
 
         XCTAssertFalse(viewModel.isUploadAvailable)
@@ -56,12 +57,13 @@ final class DiagnosticReportViewModelTests: XCTestCase {
         let viewModel = DiagnosticReportViewModel(
             uploader: uploader,
             workspace: DiagnosticArtifactWorkspace(rootDirectory: rootDirectory),
-            capture: { directory in
+            capture: { directory, _ in
                 try Self.makeArtifact(in: directory, data: Data("upload diagnostics".utf8))
             }
         )
 
         viewModel.begin()
+        viewModel.beginCapture()
         try await waitUntil { viewModel.phase == .review }
         let temporaryURL = try XCTUnwrap(viewModel.artifact?.archiveURL)
         viewModel.uploadCapturedArtifact()
@@ -95,12 +97,13 @@ final class DiagnosticReportViewModelTests: XCTestCase {
         let viewModel = DiagnosticReportViewModel(
             uploader: uploader,
             workspace: DiagnosticArtifactWorkspace(rootDirectory: rootDirectory),
-            capture: { directory in
+            capture: { directory, _ in
                 try Self.makeArtifact(in: directory, data: Data("cancel diagnostics".utf8))
             }
         )
 
         viewModel.begin()
+        viewModel.beginCapture()
         try await waitUntil { viewModel.phase == .review }
         let artifactURL = try XCTUnwrap(viewModel.artifact?.archiveURL)
         viewModel.uploadCapturedArtifact()
@@ -133,12 +136,13 @@ final class DiagnosticReportViewModelTests: XCTestCase {
         let viewModel = DiagnosticReportViewModel(
             uploader: uploader,
             workspace: DiagnosticArtifactWorkspace(rootDirectory: rootDirectory),
-            capture: { directory in
+            capture: { directory, _ in
                 try Self.makeArtifact(in: directory, data: Data("retry diagnostics".utf8))
             }
         )
 
         viewModel.begin()
+        viewModel.beginCapture()
         try await waitUntil { viewModel.phase == .review }
         viewModel.uploadCapturedArtifact()
         try await waitUntil {
@@ -153,6 +157,8 @@ final class DiagnosticReportViewModelTests: XCTestCase {
         XCTAssertEqual(failure.kind, .offline)
         XCTAssertTrue(viewModel.hasLocalArtifact)
         XCTAssertTrue(viewModel.canRetryUpload)
+        XCTAssertNil(viewModel.handoffContext)
+        XCTAssertNil(viewModel.gitHubIssueDraft())
 
         viewModel.retryUpload()
         try await waitUntil {
@@ -175,12 +181,13 @@ final class DiagnosticReportViewModelTests: XCTestCase {
         let viewModel = DiagnosticReportViewModel(
             uploader: nil,
             workspace: DiagnosticArtifactWorkspace(rootDirectory: rootDirectory),
-            capture: { _ in
+            capture: { _, _ in
                 throw CocoaError(.fileReadNoPermission, userInfo: [NSFilePathErrorKey: "/private/user/path"])
             }
         )
 
         viewModel.begin()
+        viewModel.beginCapture()
         try await waitUntil {
             if case .failed = viewModel.phase { return true }
             return false
@@ -194,6 +201,244 @@ final class DiagnosticReportViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.artifact)
     }
 
+    @MainActor
+    func testBeginEntersComposingBeforeAnyCaptureRuns() async throws {
+        let rootDirectory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: rootDirectory) }
+        let captureRan = LockedFlag()
+        let viewModel = DiagnosticReportViewModel(
+            uploader: nil,
+            workspace: DiagnosticArtifactWorkspace(rootDirectory: rootDirectory),
+            capture: { directory, _ in
+                captureRan.set()
+                return try Self.makeArtifact(in: directory, data: Data("d".utf8))
+            }
+        )
+
+        viewModel.begin()
+
+        XCTAssertEqual(viewModel.phase, .composing)
+        XCTAssertNil(viewModel.artifact)
+        XCTAssertFalse(captureRan.value)
+    }
+
+    @MainActor
+    func testCancellingCompositionClearsUncapturedDescription() {
+        let viewModel = DiagnosticReportViewModel(
+            uploader: nil,
+            capture: { _, _ in
+                XCTFail("Cancelling composition must not capture diagnostics")
+                throw CancellationError()
+            }
+        )
+
+        viewModel.begin()
+        viewModel.userDescription = "discard this draft"
+        viewModel.prepareForNewDiagnosticSession()
+
+        XCTAssertEqual(viewModel.phase, .idle)
+        XCTAssertEqual(viewModel.userDescription, "")
+        XCTAssertNil(viewModel.handoffContext)
+        XCTAssertNil(viewModel.artifact)
+    }
+
+    @MainActor
+    func testCancellingCaptureRemovesPartialArtifactAndReturnsToIdle() async throws {
+        let rootDirectory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: rootDirectory) }
+        let captureStarted = expectation(description: "capture started")
+        let workspace = DiagnosticArtifactWorkspace(rootDirectory: rootDirectory)
+        let viewModel = DiagnosticReportViewModel(
+            uploader: nil,
+            workspace: workspace,
+            capture: { directory, _ in
+                let partialURL = directory.appendingPathComponent("partial.zip")
+                try Data("partial".utf8).write(to: partialURL)
+                captureStarted.fulfill()
+                try await Task.sleep(nanoseconds: 60_000_000_000)
+                return try Self.makeArtifact(in: directory, data: Data("complete".utf8))
+            }
+        )
+
+        viewModel.userDescription = "temporary details"
+        viewModel.begin()
+        viewModel.beginCapture()
+        await fulfillment(of: [captureStarted], timeout: 2)
+        viewModel.cancelCapture()
+        try await waitUntil { viewModel.phase == .idle }
+
+        XCTAssertNil(viewModel.artifact)
+        XCTAssertEqual(viewModel.userDescription, "")
+        XCTAssertTrue((try FileManager.default.contentsOfDirectory(atPath: rootDirectory.path)).isEmpty)
+    }
+
+    @MainActor
+    func testCapturePassesNormalizedDescriptionWithoutExposingHandoffBeforeUpload() async throws {
+        let rootDirectory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: rootDirectory) }
+        let recorded = LockedComment()
+        let handoff = DiagnosticReportHandoffContext(
+            appVersion: "1.2.3",
+            appBuild: "456",
+            capturedStage: "converting",
+            redactedDescription: "playback failed"
+        )
+        let viewModel = DiagnosticReportViewModel(
+            uploader: nil,
+            workspace: DiagnosticArtifactWorkspace(rootDirectory: rootDirectory),
+            capture: { directory, comment in
+                recorded.set(comment)
+                return try Self.makeArtifact(
+                    in: directory,
+                    data: Data("d".utf8),
+                    handoff: handoff,
+                    userDescription: "playback failed"
+                )
+            }
+        )
+
+        viewModel.userDescription = "  playback failed\r\n  "
+        viewModel.begin()
+        viewModel.beginCapture()
+        try await waitUntil { viewModel.phase == .review }
+
+        XCTAssertEqual(recorded.value?.text, "playback failed")
+        XCTAssertEqual(viewModel.artifact?.preview.userDescription, "playback failed")
+        XCTAssertEqual(viewModel.userDescription, "")
+        XCTAssertNil(viewModel.handoffContext)
+        XCTAssertNil(viewModel.gitHubIssueDraft())
+    }
+
+    @MainActor
+    func testSuccessfulUploadOffersGitHubDraftWithAllowlistedFields() async throws {
+        let rootDirectory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: rootDirectory) }
+        let receipt = DiagnosticReportReceipt(
+            supportCode: "BDAVP-0123456789ABCDEF",
+            expiresAt: Date(timeIntervalSince1970: 1_790_000_000)
+        )
+        let handoff = DiagnosticReportHandoffContext(
+            appVersion: "1.2.3",
+            appBuild: "456",
+            capturedStage: "converting",
+            redactedDescription: "audio missing"
+        )
+        let viewModel = DiagnosticReportViewModel(
+            uploader: ScriptedDiagnosticUploader(outcomes: [.success(receipt)]),
+            workspace: DiagnosticArtifactWorkspace(rootDirectory: rootDirectory),
+            capture: { directory, _ in
+                try Self.makeArtifact(in: directory, data: Data("d".utf8), handoff: handoff)
+            }
+        )
+
+        viewModel.begin()
+        viewModel.beginCapture()
+        try await waitUntil { viewModel.phase == .review }
+        viewModel.uploadCapturedArtifact()
+        try await waitUntil {
+            if case .success = viewModel.phase { return true }
+            return false
+        }
+
+        let draft = try XCTUnwrap(viewModel.gitHubIssueDraft())
+        XCTAssertEqual(draft.supportCode, receipt.supportCode)
+        XCTAssertEqual(draft.redactedDescription, "audio missing")
+        let url = try XCTUnwrap(draft.url())
+        XCTAssertEqual(url.host, "github.com")
+        XCTAssertEqual(url.path, "/cbusillo/BD_to_AVP/issues/new")
+    }
+
+    @MainActor
+    func testSuccessfulUploadWithIncompleteHandoffDoesNotOfferGitHubDraft() async throws {
+        let rootDirectory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: rootDirectory) }
+        let receipt = DiagnosticReportReceipt(
+            supportCode: "BDAVP-0123456789ABCDEF",
+            expiresAt: Date(timeIntervalSince1970: 1_790_000_000)
+        )
+        let viewModel = DiagnosticReportViewModel(
+            uploader: ScriptedDiagnosticUploader(outcomes: [.success(receipt)]),
+            workspace: DiagnosticArtifactWorkspace(rootDirectory: rootDirectory),
+            capture: { directory, _ in
+                try Self.makeArtifact(in: directory, data: Data("d".utf8))
+            }
+        )
+
+        viewModel.begin()
+        viewModel.beginCapture()
+        try await waitUntil { viewModel.phase == .review }
+        viewModel.uploadCapturedArtifact()
+        try await waitUntil {
+            if case .success = viewModel.phase { return true }
+            return false
+        }
+
+        XCTAssertNil(viewModel.gitHubIssueDraft())
+    }
+
+    @MainActor
+    func testLocalOnlyReachesReviewWithoutSuccessOrHandoff() async throws {
+        let rootDirectory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: rootDirectory) }
+        let viewModel = DiagnosticReportViewModel(
+            uploader: nil,
+            workspace: DiagnosticArtifactWorkspace(rootDirectory: rootDirectory),
+            capture: { directory, _ in
+                try Self.makeArtifact(
+                    in: directory,
+                    data: Data("d".utf8),
+                    userDescription: "note kept locally"
+                )
+            }
+        )
+
+        viewModel.userDescription = "note kept locally"
+        viewModel.begin()
+        viewModel.beginCapture()
+        try await waitUntil { viewModel.phase == .review }
+
+        XCTAssertFalse(viewModel.isUploadAvailable)
+        XCTAssertEqual(viewModel.artifact?.preview.userDescription, "note kept locally")
+        XCTAssertEqual(viewModel.userDescription, "")
+        XCTAssertNil(viewModel.handoffContext)
+        XCTAssertNil(viewModel.gitHubIssueDraft())
+        if case .success = viewModel.phase {
+            XCTFail("Local-only capture must not claim a linked private report")
+        }
+    }
+
+    @MainActor
+    func testDiscardClearsDescriptionAndHandoffBeforeNextCapture() async throws {
+        let rootDirectory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: rootDirectory) }
+        let viewModel = DiagnosticReportViewModel(
+            uploader: nil,
+            workspace: DiagnosticArtifactWorkspace(rootDirectory: rootDirectory),
+            capture: { directory, comment in
+                try Self.makeArtifact(
+                    in: directory,
+                    data: Data("d".utf8),
+                    userDescription: comment?.text
+                )
+            }
+        )
+
+        viewModel.userDescription = "first report"
+        viewModel.begin()
+        viewModel.beginCapture()
+        try await waitUntil { viewModel.phase == .review }
+        XCTAssertTrue(viewModel.discardLocalCopy())
+
+        XCTAssertEqual(viewModel.phase, .idle)
+        XCTAssertEqual(viewModel.userDescription, "")
+        XCTAssertNil(viewModel.handoffContext)
+
+        viewModel.begin()
+        viewModel.beginCapture()
+        try await waitUntil { viewModel.phase == .review }
+        XCTAssertNil(viewModel.artifact?.preview.userDescription)
+    }
+
     private func makeDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -201,7 +446,12 @@ final class DiagnosticReportViewModelTests: XCTestCase {
         return directory
     }
 
-    private static func makeArtifact(in directory: URL, data: Data) throws -> DiagnosticBundleArtifact {
+    private static func makeArtifact(
+        in directory: URL,
+        data: Data,
+        handoff: DiagnosticReportHandoffContext = .empty,
+        userDescription: String? = nil
+    ) throws -> DiagnosticBundleArtifact {
         let archiveURL = directory.appendingPathComponent("diagnostics.zip", isDirectory: false)
         try data.write(to: archiveURL)
         return DiagnosticBundleArtifact(
@@ -221,8 +471,10 @@ final class DiagnosticReportViewModelTests: XCTestCase {
                 ],
                 truncationNotices: [],
                 archiveBytes: data.count,
-                maximumArchiveBytes: 2 * 1_024 * 1_024
-            )
+                maximumArchiveBytes: 2 * 1_024 * 1_024,
+                userDescription: userDescription
+            ),
+            handoff: handoff
         )
     }
 
@@ -240,6 +492,22 @@ final class DiagnosticReportViewModelTests: XCTestCase {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
     }
+}
+
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flag = false
+
+    var value: Bool { lock.withLock { flag } }
+    func set() { lock.withLock { flag = true } }
+}
+
+private final class LockedComment: @unchecked Sendable {
+    private let lock = NSLock()
+    private var comment: DiagnosticUserComment??
+
+    var value: DiagnosticUserComment? { lock.withLock { comment ?? nil } }
+    func set(_ newValue: DiagnosticUserComment?) { lock.withLock { comment = .some(newValue) } }
 }
 
 private actor ScriptedDiagnosticUploader: DiagnosticReportUploading {

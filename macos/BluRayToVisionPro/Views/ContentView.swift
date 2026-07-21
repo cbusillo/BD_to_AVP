@@ -1024,6 +1024,10 @@ private struct LiveObservabilityStatusView: View {
     @State private var now = Date()
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
+    private var activityState: LiveObservabilityStatus.ActivityState {
+        status.activityState(at: now)
+    }
+
     private var processState: String? {
         status.processState?.rawValue.capitalized
     }
@@ -1032,18 +1036,24 @@ private struct LiveObservabilityStatusView: View {
         status.currentLastOutputAgeSeconds(at: now).map { "\($0)s ago" }
     }
 
+    private var statusSummary: String {
+        switch activityState {
+        case .active:
+            return "Recent tool output or heartbeat"
+        case .toolQuietArtifactsActive:
+            return "Tool output quiet; artifact growth continues"
+        case .stalled:
+            return "No recent tool output or artifact growth"
+        }
+    }
+
+    private var artifactLabel: String {
+        status.artifacts.count == 1 ? "Artifact" : "Artifacts"
+    }
+
     private var artifactDescription: String? {
-        let identity = [status.artifactRole, status.artifactState]
-            .compactMap { $0 }
-            .joined(separator: " · ")
-        let size = status.artifactSizeBytes.map {
-            ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
-        }
-        let growth = status.artifactGrowthBytesPerSecond.map {
-            "+\(ByteCountFormatter.string(fromByteCount: $0, countStyle: .file))/s"
-        }
-        let values = [identity.isEmpty ? nil : identity, size, growth].compactMap { $0 }
-        return values.isEmpty ? nil : values.joined(separator: " · ")
+        let descriptions = status.artifacts.map(artifactDescription(_:))
+        return descriptions.isEmpty ? nil : descriptions.joined(separator: "\n")
     }
 
     var body: some View {
@@ -1052,8 +1062,12 @@ private struct LiveObservabilityStatusView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
-            if status.isStalled(at: now) {
-                Label("No recent tool output", systemImage: "clock.badge.exclamationmark")
+            if activityState == .toolQuietArtifactsActive {
+                Label("Artifact growth continues while the tool stays quiet", systemImage: "clock.badge.checkmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            } else if activityState == .stalled {
+                Label("No recent tool output or artifact growth", systemImage: "clock.badge.exclamationmark")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.orange)
             }
@@ -1061,15 +1075,46 @@ private struct LiveObservabilityStatusView: View {
             statusRow("Stage", value: status.stageID)
             statusRow("Tool", value: status.toolID)
             statusRow("Process", value: processState)
+            statusRow("Status", value: statusSummary)
             statusRow("Last output", value: lastOutput)
-            statusRow("Artifact", value: artifactDescription)
+            statusRow(artifactLabel, value: artifactDescription)
         }
         .font(.caption.monospaced())
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Live tool status")
-        .accessibilityValue(status.isStalled(at: now) ? "No recent tool output" : "Active")
+        .accessibilityValue(statusSummary)
         .onReceive(timer) { now = $0 }
+    }
+
+    private func artifactDescription(_ artifact: LiveObservabilityStatus.ArtifactStatus) -> String {
+        let identity = [friendlyArtifactRole(artifact.role), artifact.state]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+        let size = artifact.sizeBytes.map {
+            ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+        }
+        let growth = artifact.growthBytesPerSecond.map {
+            $0 > 0
+                ? "+\(ByteCountFormatter.string(fromByteCount: $0, countStyle: .file))/s"
+                : "no growth"
+        }
+        let age = artifact.currentModificationAgeSeconds(at: now).map { "mtime \($0)s ago" }
+        let values = [identity.isEmpty ? nil : identity, size, growth, age].compactMap { $0 }
+        return values.joined(separator: " · ")
+    }
+
+    private func friendlyArtifactRole(_ role: String) -> String {
+        switch role {
+        case "left_eye_video_output":
+            return "Left eye"
+        case "right_eye_video_output":
+            return "Right eye"
+        case "stereo_video_output":
+            return "Stereo video"
+        default:
+            return role
+        }
     }
 
     @ViewBuilder
