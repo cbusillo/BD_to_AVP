@@ -1,11 +1,53 @@
 import SwiftUI
 
+enum LanguagePickerPurpose {
+    case audio
+    case subtitle
+
+    var label: String {
+        switch self {
+        case .audio:
+            "Audio language"
+        case .subtitle:
+            "Subtitle language"
+        }
+    }
+
+    var searchPrompt: String {
+        switch self {
+        case .audio:
+            "Search audio languages or code"
+        case .subtitle:
+            "Search subtitle languages or code"
+        }
+    }
+
+    var searchLabel: String {
+        switch self {
+        case .audio:
+            "Search audio languages"
+        case .subtitle:
+            "Search subtitle languages"
+        }
+    }
+
+    var listHint: String {
+        switch self {
+        case .audio:
+            "Opens a searchable list of audio languages"
+        case .subtitle:
+            "Opens a searchable list of subtitle languages"
+        }
+    }
+}
+
 struct LanguagePickerField: View {
-    @Binding var selection: SubtitleLanguage
+    let purpose: LanguagePickerPurpose
+    @Binding var selection: MediaLanguage
     @State private var isPresented = false
 
     var body: some View {
-        LabeledContent("Subtitle language") {
+        LabeledContent(purpose.label) {
             Button {
                 isPresented.toggle()
             } label: {
@@ -20,17 +62,18 @@ struct LanguagePickerField: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .accessibilityLabel("Subtitle language: \(selection.displayName)")
-            .accessibilityHint("Opens a searchable list of subtitle languages")
+            .accessibilityLabel("\(purpose.label): \(selection.displayName)")
+            .accessibilityHint(purpose.listHint)
             .popover(isPresented: $isPresented, arrowEdge: .trailing) {
-                LanguagePickerPopover(selection: $selection, isPresented: $isPresented)
+                LanguagePickerPopover(purpose: purpose, selection: $selection, isPresented: $isPresented)
             }
         }
     }
 }
 
 private struct LanguagePickerPopover: View {
-    @Binding var selection: SubtitleLanguage
+    let purpose: LanguagePickerPurpose
+    @Binding var selection: MediaLanguage
     @Binding var isPresented: Bool
     @State private var query = ""
     @State private var highlightedCode: String?
@@ -57,10 +100,10 @@ private struct LanguagePickerPopover: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
-                TextField("Search subtitle languages or code", text: $query)
+                TextField(purpose.searchPrompt, text: $query)
                     .textFieldStyle(.plain)
                     .focused($searchIsFocused)
-                    .accessibilityLabel("Search subtitle languages")
+                    .accessibilityLabel(purpose.searchLabel)
                     .onSubmit {
                         if let highlightedLanguage {
                             select(highlightedLanguage)
@@ -79,7 +122,7 @@ private struct LanguagePickerPopover: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Clear subtitle language search")
+                    .accessibilityLabel("Clear \(purpose.label.lowercased()) search")
                 }
             }
             .padding(.horizontal, 12)
@@ -175,7 +218,7 @@ private struct LanguagePickerPopover: View {
     }
 
     private func select(_ language: LanguageCatalog.Language) {
-        guard let selectedLanguage = SubtitleLanguage(code: language.code, catalog: catalog) else {
+        guard let selectedLanguage = MediaLanguage(code: language.code, catalog: catalog) else {
             assertionFailure("Language catalog returned an unselectable code: \(language.code)")
             isPresented = false
             return

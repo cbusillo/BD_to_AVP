@@ -108,6 +108,31 @@ class MainSmokeTests(unittest.TestCase):
         self.assertEqual(config.audio_mode, AudioMode.PCM)
         self.assertFalse(config.transcode_audio)
 
+    def test_audio_preferred_language_cli_normalizes_alias(self) -> None:
+        config = Config()
+
+        with patch.object(
+            sys,
+            "argv",
+            ["bd-to-avp", "--source", "/tmp/movie.mkv", "--audio-preferred-language", "en-US"],
+        ):
+            config.parse_args()
+
+        self.assertEqual(config.audio_preferred_language, "eng")
+
+    def test_audio_preferred_language_cli_rejects_invalid_code(self) -> None:
+        config = Config()
+
+        with (
+            patch.object(
+                sys,
+                "argv",
+                ["bd-to-avp", "--source", "/tmp/movie.mkv", "--audio-preferred-language", "invalid"],
+            ),
+            self.assertRaises(SystemExit),
+        ):
+            config.parse_args()
+
 
 if __name__ == "__main__":
     unittest.main()

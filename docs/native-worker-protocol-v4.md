@@ -1,7 +1,7 @@
 # Native Worker Protocol v4
 
 > Historical protocol. Current audio-mode behavior is documented in
-> [Native Worker Protocol v8](native-worker-protocol-v8.md).
+> [Native Worker Protocol v9](native-worker-protocol-v9.md).
 
 Protocol v4 adds explicit 3D Blu-ray title discovery and selection while
 preserving the single-request, single-process transport from v3. The native app

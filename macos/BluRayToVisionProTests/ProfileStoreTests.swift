@@ -37,6 +37,7 @@ final class ProfileStoreTests: XCTestCase {
             swapEyes: true,
             audioHandling: .convertAAC,
             audioBitrate: 512,
+            audioLanguages: AudioLanguagePolicy(mode: .preferredOnly, preferredLanguage: .japanese),
             subtitles: SubtitlePolicy(mode: .off, preferredLanguage: .japanese)
         )
         let store = ProfileStore(fileURL: fileURL, idGenerator: { identifier })
@@ -68,7 +69,7 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testVersionTwoProfilesMigrateAllAudioHandlingRawValuesToVersionThree() throws {
+    func testVersionTwoProfilesMigrateAllAudioHandlingRawValuesToVersionFour() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -99,6 +100,7 @@ final class ProfileStoreTests: XCTestCase {
 
         XCTAssertNil(store.loadErrorMessage)
         XCTAssertEqual(store.customProfiles.map(\.options.audioHandling), [.pcm, .convertAAC, .automatic])
+        XCTAssertTrue(store.customProfiles.allSatisfy { $0.options.audioLanguages.mode == .allLanguages })
         XCTAssertTrue(store.customProfiles.allSatisfy { $0.options.videoOutputMode == .mvHEVC })
         XCTAssertTrue(store.customProfiles.allSatisfy { $0.options.av1CRF == 32 })
         for profile in store.customProfiles {
@@ -108,7 +110,7 @@ final class ProfileStoreTests: XCTestCase {
         let persistedDocument = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
         )
-        XCTAssertEqual(persistedDocument["version"] as? Int, 3)
+        XCTAssertEqual(persistedDocument["version"] as? Int, 4)
         let persistedProfiles = try XCTUnwrap(persistedDocument["profiles"] as? [[String: Any]])
         let persistedRawValues = try persistedProfiles.map { profile in
             let options = try XCTUnwrap(profile["options"] as? [String: Any])
@@ -118,7 +120,46 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testVersionOneProfilesMigrateAtomicallyToCanonicalVersionThreeData() throws {
+    func testVersionThreeProfilesMigrateToAllAudioLanguagesInVersionFour() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        var legacyOptions = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(EncodingOptions())) as? [String: Any]
+        )
+        legacyOptions.removeValue(forKey: "audioLanguages")
+        let document: [String: Any] = [
+            "version": 3,
+            "profiles": [
+                [
+                    "id": "A4CC523E-72FA-4F36-A38D-1FB0D6A84742",
+                    "name": "Version Three",
+                    "options": legacyOptions,
+                ]
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]).write(to: fileURL)
+
+        let store = ProfileStore(fileURL: fileURL)
+
+        let profile = try XCTUnwrap(store.customProfiles.first)
+        XCTAssertNil(store.loadErrorMessage)
+        XCTAssertEqual(profile.options.audioLanguages.mode, .allLanguages)
+        XCTAssertEqual(profile.options.audioLanguages.preferredLanguage, .english)
+        let persistedDocument = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
+        )
+        XCTAssertEqual(persistedDocument["version"] as? Int, 4)
+        let persistedProfiles = try XCTUnwrap(persistedDocument["profiles"] as? [[String: Any]])
+        let persistedOptions = try XCTUnwrap(persistedProfiles.first?["options"] as? [String: Any])
+        let audioLanguages = try XCTUnwrap(persistedOptions["audioLanguages"] as? [String: Any])
+        XCTAssertEqual(audioLanguages["mode"] as? String, "all_languages")
+        XCTAssertEqual(audioLanguages["preferredLanguage"] as? String, "eng")
+    }
+
+    @MainActor
+    func testVersionOneProfilesMigrateAtomicallyToCanonicalVersionFourData() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -180,11 +221,12 @@ final class ProfileStoreTests: XCTestCase {
         XCTAssertTrue(migratedOptions.swapEyes)
         XCTAssertEqual(migratedOptions.audioHandling, .convertAAC)
         XCTAssertEqual(migratedOptions.audioBitrate, 512)
+        XCTAssertEqual(migratedOptions.audioLanguages.mode, .allLanguages)
 
         let migratedJSON = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
         )
-        XCTAssertEqual(migratedJSON["version"] as? Int, 3)
+        XCTAssertEqual(migratedJSON["version"] as? Int, 4)
         let profiles = try XCTUnwrap(migratedJSON["profiles"] as? [[String: Any]])
         let options = try XCTUnwrap(profiles.first?["options"] as? [String: Any])
         let subtitles = try XCTUnwrap(options["subtitles"] as? [String: Any])
@@ -404,6 +446,7 @@ final class ProfileStoreTests: XCTestCase {
         )
         options.removeValue(forKey: "videoOutputMode")
         options.removeValue(forKey: "av1CRF")
+        options.removeValue(forKey: "audioLanguages")
         options["audioHandling"] = audioHandlingRawValue
         return options
     }

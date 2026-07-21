@@ -1,12 +1,17 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import ffmpeg
 
 from bd_to_avp.modules import container
 from bd_to_avp.modules.audio_mode import AudioMode
+from bd_to_avp.modules.audio_selection import (
+    load_audio_selection_manifest,
+    persist_audio_selection,
+    select_audio_streams,
+)
 from bd_to_avp.modules.config import Stage
 from bd_to_avp.modules.video_mode import VideoMode
 
@@ -43,6 +48,36 @@ class AudioExtractionTests(unittest.TestCase):
         self.assertIn("handler_name=Main 5.1", command)
         self.assertIn("-metadata:s:a:1", command)
         self.assertIn("handler_name=Alternate Stereo", command)
+
+    def test_pcm_extraction_explicitly_maps_non_contiguous_preferred_tracks(self) -> None:
+        streams = [
+            audio_stream(1, "eng", title="English 5.1"),
+            audio_stream(4, "jpn", title="Japanese 5.1"),
+            audio_stream(8, "eng", title="English Commentary"),
+        ]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            audio_path = Path(temporary_directory) / "audio.mov"
+            with (
+                patch.object(container.config, "audio_preferred_language", "eng"),
+                patch.object(container, "get_audio_stream_data", return_value=streams),
+                patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
+            ):
+                container.extract_mvc_and_audio(Path("source.mkv"), None, audio_path)
+
+            manifest = load_audio_selection_manifest(audio_path)
+            self.assertIsNotNone(manifest)
+            assert manifest is not None
+            self.assertEqual(manifest.source_stream_count, 3)
+            self.assertEqual(manifest.selected_stream_count, 2)
+
+        command = ffmpeg.compile(run_ffmpeg.call_args.args[0][0])
+        self.assertIn("0:a:0", command)
+        self.assertIn("0:a:2", command)
+        self.assertNotIn("0:a:1", command)
+        self.assertIn("-metadata:s:a:0", command)
+        self.assertIn("handler_name=English 5.1", command)
+        self.assertIn("-metadata:s:a:1", command)
+        self.assertIn("handler_name=English Commentary", command)
 
     def test_direct_pipeline_skips_intermediate_video_and_pcm(self) -> None:
         with (
@@ -90,6 +125,146 @@ class AudioExtractionTests(unittest.TestCase):
 
 
 class MuxCommandTests(unittest.TestCase):
+    def test_final_mux_uses_reindexed_prepared_tracks_in_source_order(self) -> None:
+        streams = [
+            audio_stream(0, "eng", title="English 5.1", default=True),
+            audio_stream(1, "eng", title="English Commentary"),
+        ]
+        with (
+            patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+            patch.object(container.config, "audio_preferred_language", "eng"),
+            patch.object(container.config, "start_stage", Stage.CREATE_MKV),
+            patch.object(container, "get_audio_stream_data", return_value=streams),
+            patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
+            patch.object(container, "run_process_capture") as run_command,
+        ):
+            container.mux_video_audio_subs(
+                Path("movie_MV-HEVC.mov"),
+                Path("Movie_audio_AAC.m4a"),
+                Path("movie_AVP.mov"),
+                Path("."),
+            )
+
+        command = run_command.call_args.args[0]
+        self.assertIn("Movie_audio_AAC.m4a#1:lang=eng:group=1:alternate_group=1:enabled", command)
+        self.assertIn("Movie_audio_AAC.m4a#2:lang=eng:group=1:alternate_group=1:disable", command)
+        self.assertLess(
+            command.index("2:type=name:str='English 5.1'"), command.index("3:type=name:str='English Commentary'")
+        )
+
+    def test_final_mux_restart_filters_non_contiguous_pcm_tracks(self) -> None:
+        streams = [
+            audio_stream(0, "eng", title="English 5.1", default=True),
+            audio_stream(1, "jpn", title="Japanese 5.1"),
+            audio_stream(2, "eng", title="English Commentary"),
+        ]
+        with (
+            patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+            patch.object(container.config, "audio_mode", AudioMode.PCM),
+            patch.object(container.config, "audio_preferred_language", "eng"),
+            patch.object(container.config, "start_stage", Stage.CREATE_FINAL_FILE),
+            patch.object(container, "get_audio_stream_data", return_value=streams),
+            patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
+            patch.object(container, "run_process_capture") as run_command,
+        ):
+            container.mux_video_audio_subs(
+                Path("movie_MV-HEVC.mov"),
+                Path("Movie_audio_PCM.mov"),
+                Path("movie_AVP.mov"),
+                Path("."),
+            )
+
+        command = run_command.call_args.args[0]
+        self.assertIn("Movie_audio_PCM.mov#1:lang=eng:group=1:alternate_group=1:enabled", command)
+        self.assertIn("Movie_audio_PCM.mov#3:lang=eng:group=1:alternate_group=1:disable", command)
+        self.assertFalse(any("#2:lang=jpn" in str(argument) for argument in command))
+
+    def test_all_languages_explicitly_preserve_source_dispositions(self) -> None:
+        streams = [
+            audio_stream(0, "jpn", dispositions={"default": 1, "original": 1}),
+            audio_stream(1, "eng", dispositions={"comment": 1}),
+        ]
+
+        with patch.object(container, "get_audio_stream_data", return_value=streams):
+            options = container.audio_handler_metadata_options(Path("source.mkv"))
+
+        self.assertEqual(options["disposition:a:0"], "default+original")
+        self.assertEqual(options["disposition:a:1"], "comment")
+
+    def test_final_mux_restart_warns_when_prepared_artifact_cannot_restore_preferred_language(self) -> None:
+        activity = Mock()
+        streams = [audio_stream(3, "eng", title="Existing English", default=True)]
+        with (
+            patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+            patch.object(container.config, "audio_mode", AudioMode.CONVERT_AAC),
+            patch.object(container.config, "audio_preferred_language", "jpn"),
+            patch.object(container.config, "start_stage", Stage.CREATE_FINAL_FILE),
+            patch.object(container, "get_audio_stream_data", return_value=streams),
+            patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
+            patch.object(container, "run_process_capture"),
+        ):
+            container.mux_video_audio_subs(
+                Path("movie_MV-HEVC.mov"),
+                Path("Movie_audio_AAC.m4a"),
+                Path("movie_AVP.mov"),
+                Path("."),
+                activity=activity,
+            )
+
+        self.assertEqual(activity.warning.call_args.kwargs["code"], "audio_language_fallback")
+        self.assertEqual(activity.warning.call_args.kwargs["fallback_reason"], "source_default")
+        self.assertEqual(activity.warning.call_args.kwargs["selected_stream_index"], 3)
+
+    def test_final_mux_restart_warns_when_all_languages_cannot_be_restored(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            audio_path = Path(temporary_directory) / "Movie_audio_AAC.m4a"
+            audio_path.write_bytes(b"prepared")
+            original_streams = [
+                audio_stream(2, "eng", title="English", default=True),
+                audio_stream(5, "jpn", title="Japanese"),
+            ]
+            persist_audio_selection(audio_path, select_audio_streams(original_streams, "eng"))
+            activity = Mock()
+
+            with (
+                patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+                patch.object(container.config, "audio_mode", AudioMode.CONVERT_AAC),
+                patch.object(container.config, "audio_preferred_language", None),
+                patch.object(container.config, "start_stage", Stage.CREATE_FINAL_FILE),
+                patch.object(container, "get_audio_stream_data", return_value=[original_streams[0]]),
+                patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
+                patch.object(container, "run_process_capture"),
+            ):
+                container.mux_video_audio_subs(
+                    Path("movie_MV-HEVC.mov"),
+                    audio_path,
+                    Path("movie_AVP.mov"),
+                    Path("."),
+                    activity=activity,
+                )
+
+            self.assertEqual(activity.warning.call_args.kwargs["code"], "audio_languages_unrestorable_at_mux")
+            self.assertEqual(activity.warning.call_args.kwargs["previous_preferred_language"], "eng")
+            self.assertEqual(activity.warning.call_args.kwargs["source_stream_count"], 2)
+            self.assertEqual(activity.warning.call_args.kwargs["available_stream_count"], 1)
+            self.assertEqual(activity.warning.call_args.kwargs["restart_stage"], "Prepare Audio")
+
+    def test_selected_stream_metadata_and_dispositions_align_with_output_indexes(self) -> None:
+        selected_streams = [
+            audio_stream(8, "eng", title="Commentary", dispositions={"comment": 1}),
+            audio_stream(2, "eng", title="Main", dispositions={"default": 1, "original": 1}),
+        ]
+
+        options = container.audio_handler_metadata_options(
+            Path("source.mkv"),
+            selected_streams=selected_streams,
+        )
+
+        self.assertEqual(options["metadata:s:a:0"], "handler_name=Commentary")
+        self.assertEqual(options["disposition:a:0"], "comment")
+        self.assertEqual(options["metadata:s:a:1"], "handler_name=Main")
+        self.assertEqual(options["disposition:a:1"], "default+original")
+
     def test_final_mux_retains_inputs_until_completed_file_moves(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_folder = Path(temp_dir) / "Movie"
@@ -113,6 +288,7 @@ class MuxCommandTests(unittest.TestCase):
                 audio_path,
                 output_folder / "Movie_AVP.mov",
                 output_folder,
+                activity=None,
                 run_context=None,
                 cancellation_event=None,
                 observability_context=None,
@@ -443,6 +619,30 @@ class MuxCommandTests(unittest.TestCase):
 
         command = run_command.call_args.args[0]
         self.assertIn("movie.ace.srt#1:hdlr=sbtl:lang=ace:group=2:name=Achinese Subtitles:tx3g", command)
+
+
+def audio_stream(
+    index: int,
+    language: str,
+    *,
+    title: str | None = None,
+    default: bool = False,
+    dispositions: dict[str, int] | None = None,
+) -> dict[str, object]:
+    tags: dict[str, object] = {"language": language}
+    if title is not None:
+        tags["title"] = title
+    stream_dispositions = {"default": 1 if default else 0}
+    if dispositions is not None:
+        stream_dispositions.update(dispositions)
+    return {
+        "index": index,
+        "codec_type": "audio",
+        "tags": tags,
+        "disposition": stream_dispositions,
+        "channel_layout": "5.1",
+        "channels": 6,
+    }
 
 
 if __name__ == "__main__":

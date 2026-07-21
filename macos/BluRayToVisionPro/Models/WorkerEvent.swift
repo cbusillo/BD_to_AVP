@@ -128,11 +128,30 @@ struct WorkerWarning: Decodable, Equatable {
     let code: String?
     let sourceCodecs: [String]?
     let action: String?
+    let preferredLanguage: String?
+    let selectedLanguage: String?
+    let selectedStreamIndex: Int?
+    let selectedAudioPosition: Int?
+    let fallbackReason: String?
 
-    init(code: String? = nil, sourceCodecs: [String]? = nil, action: String? = nil) {
+    init(
+        code: String? = nil,
+        sourceCodecs: [String]? = nil,
+        action: String? = nil,
+        preferredLanguage: String? = nil,
+        selectedLanguage: String? = nil,
+        selectedStreamIndex: Int? = nil,
+        selectedAudioPosition: Int? = nil,
+        fallbackReason: String? = nil
+    ) {
         self.code = code
         self.sourceCodecs = sourceCodecs
         self.action = action
+        self.preferredLanguage = preferredLanguage
+        self.selectedLanguage = selectedLanguage
+        self.selectedStreamIndex = selectedStreamIndex
+        self.selectedAudioPosition = selectedAudioPosition
+        self.fallbackReason = fallbackReason
     }
 
     init(from decoder: Decoder) throws {
@@ -150,10 +169,22 @@ struct WorkerWarning: Decodable, Equatable {
         } else {
             self.action = try container.decodeIfPresent(String.self, forKey: .audioAction)
         }
+        preferredLanguage = try container.decodeIfPresent(String.self, forKey: .preferredLanguage)
+        selectedLanguage = try container.decodeIfPresent(String.self, forKey: .selectedLanguage)
+        selectedStreamIndex = try container.decodeIfPresent(Int.self, forKey: .selectedStreamIndex)
+        selectedAudioPosition = try container.decodeIfPresent(Int.self, forKey: .selectedAudioPosition)
+        fallbackReason = try container.decodeIfPresent(String.self, forKey: .fallbackReason)
     }
 
     var isEmpty: Bool {
-        code == nil && sourceCodecs == nil && action == nil
+        code == nil
+            && sourceCodecs == nil
+            && action == nil
+            && preferredLanguage == nil
+            && selectedLanguage == nil
+            && selectedStreamIndex == nil
+            && selectedAudioPosition == nil
+            && fallbackReason == nil
     }
 
     enum CodingKeys: String, CodingKey {
@@ -163,6 +194,11 @@ struct WorkerWarning: Decodable, Equatable {
         case action
         case actualAction = "actual_action"
         case audioAction = "audio_action"
+        case preferredLanguage = "preferred_language"
+        case selectedLanguage = "selected_language"
+        case selectedStreamIndex = "selected_stream_index"
+        case selectedAudioPosition = "selected_audio_position"
+        case fallbackReason = "fallback_reason"
     }
 }
 
@@ -352,6 +388,11 @@ struct WorkerEventPayload: Decodable, Equatable {
     var warningCode: String? { warning?.code }
     var sourceCodecs: [String]? { warning?.sourceCodecs }
     var audioAction: String? { warning?.action }
+    var preferredAudioLanguage: String? { warning?.preferredLanguage }
+    var selectedAudioLanguage: String? { warning?.selectedLanguage }
+    var selectedAudioStreamIndex: Int? { warning?.selectedStreamIndex }
+    var selectedAudioPosition: Int? { warning?.selectedAudioPosition }
+    var audioFallbackReason: String? { warning?.fallbackReason }
 
     enum CodingKeys: String, CodingKey {
         case workerVersion = "worker_version"

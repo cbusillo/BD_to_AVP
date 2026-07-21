@@ -91,7 +91,7 @@ def conversion_request_line(
         "source": source,
         "destination": {"path": str(destination_path)},
         "encoding": {
-            "audio": {"mode": "convert_aac", "bitrate": 384},
+            "audio": {"mode": "convert_aac", "bitrate": 384, "preferred_language": None},
             "video_mode": "mv_hevc",
             "av1_crf": 32,
             "left_right_bitrate": 20,
@@ -177,6 +177,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.destination.path if job.destination else None, destination_path)
         self.assertEqual(job.encoding.audio.mode if job.encoding else None, AudioMode.CONVERT_AAC)
         self.assertEqual(job.encoding.audio.bitrate if job.encoding else None, 384)
+        self.assertIsNone(job.encoding.audio.preferred_language if job.encoding else "missing")
         self.assertEqual(job.encoding.subtitles.mode.value if job.encoding else None, "preferred_plus_others")
         self.assertEqual(job.encoding.subtitles.preferred_language if job.encoding else None, "eng")
         self.assertEqual(job.job.start_stage if job.job else None, 1)
@@ -237,7 +238,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(context.exception.code, "invalid_source")
 
     def test_parses_shared_swift_conversion_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v8.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v9.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -248,6 +249,15 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.encoding.mv_hevc_quality if job.encoding else None, 75)
         self.assertEqual(job.encoding.video_mode if job.encoding else None, VideoMode.MV_HEVC)
         self.assertEqual(job.encoding.av1_crf if job.encoding else None, 32)
+        self.assertIsNone(job.encoding.audio.preferred_language if job.encoding else "missing")
+
+    def test_retains_protocol_v8_fixture_as_rejected_historical_evidence(self) -> None:
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v8.json"
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(context.exception.code, "protocol_mismatch")
 
     def test_rejects_av1_export_with_fx_upscale(self) -> None:
         request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
@@ -266,7 +276,7 @@ class JobSpecTests(unittest.TestCase):
             JobSpec.from_json_line(json.dumps(request))
 
     def test_parses_shared_swift_physical_disc_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v8.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v9.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -276,7 +286,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertFalse(job.job.remove_original if job.job else True)
 
     def test_parses_shared_swift_preview_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v8.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v9.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -383,6 +393,43 @@ class JobSpecTests(unittest.TestCase):
     def test_rejects_unknown_nested_audio_field_with_stable_error_code(self) -> None:
         request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
         request["encoding"]["audio"]["surprise"] = True
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request) + "\n")
+
+        self.assertEqual(context.exception.code, "invalid_encoding_options")
+
+    def test_normalizes_preferred_audio_language_aliases(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["audio"]["preferred_language"] = "dut"
+
+        job = JobSpec.from_json_line(json.dumps(request) + "\n")
+
+        self.assertEqual(job.encoding.audio.preferred_language if job.encoding else None, "nld")
+
+    def test_rejects_missing_nested_audio_fields_with_stable_error_code(self) -> None:
+        for missing_field in ("mode", "bitrate", "preferred_language"):
+            with self.subTest(missing_field=missing_field):
+                request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+                del request["encoding"]["audio"][missing_field]
+
+                with self.assertRaises(WorkerProtocolError) as context:
+                    JobSpec.from_json_line(json.dumps(request) + "\n")
+
+                self.assertEqual(context.exception.code, "invalid_encoding_options")
+
+    def test_rejects_invalid_preferred_audio_language(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["audio"]["preferred_language"] = "xyz"
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(json.dumps(request) + "\n")
+
+        self.assertEqual(context.exception.code, "invalid_encoding_options")
+
+    def test_rejects_non_string_preferred_audio_language(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["audio"]["preferred_language"] = True
 
         with self.assertRaises(WorkerProtocolError) as context:
             JobSpec.from_json_line(json.dumps(request) + "\n")
@@ -586,7 +633,29 @@ class WorkerActivityReporterTests(unittest.TestCase):
             ],
         )
 
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_fallback_warning_v8.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_fallback_warning_v9.json"
+        expected = json.loads(fixture_path.read_text())
+        self.assertEqual(decoded_events(output), [expected])
+
+    def test_warning_emits_shared_audio_language_fallback_fixture(self) -> None:
+        output = io.StringIO()
+        job_id = "11111111-1111-4111-8111-111111111111"
+        activity = WorkerActivityReporter(WorkerEventEmitter(output, job_id))
+
+        activity.warning(
+            "No audio tracks matched the preferred language Japanese (jpn). Keeping the source-default audio track "
+            "(English (eng)) instead.",
+            stage="transcode_audio",
+            code="audio_language_fallback",
+            preferred_language="jpn",
+            selected_language="eng",
+            selected_stream_index=3,
+            selected_audio_position=1,
+            fallback_reason="source_default",
+            action="keep_source_default_audio",
+        )
+
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_language_fallback_warning_v9.json"
         expected = json.loads(fixture_path.read_text())
         self.assertEqual(decoded_events(output), [expected])
 
@@ -598,7 +667,7 @@ class WorkerActivityReporterTests(unittest.TestCase):
 
         activity.stage_started("configure", "Preparing conversion settings")
 
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v8.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v9.json"
         expected = json.loads(fixture_path.read_text())
         self.assertEqual(decoded_events(output), [expected])
 
@@ -912,7 +981,7 @@ class WorkerRuntimeTests(unittest.TestCase):
                 }
             },
         )
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v8.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v9.json"
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
 
         self.assertEqual(decoded_events(output)[-1], fixture)
@@ -1359,7 +1428,7 @@ class SourceInspectionTests(unittest.TestCase):
 
 
 class SourceConversionTests(unittest.TestCase):
-    def test_subtitles_off_maps_to_legacy_engine_flags_without_audio_filtering(self) -> None:
+    def test_subtitles_off_remains_independent_from_default_all_audio_policy(self) -> None:
         source_path = Path("/tmp/movie.mkv")
         request = json.loads(conversion_request_line(source_path, Path("/tmp/output")))
         request["encoding"]["subtitles"] = {"mode": "off", "preferred_language": None}
@@ -1369,6 +1438,7 @@ class SourceConversionTests(unittest.TestCase):
             self.assertTrue(config.skip_subtitles)
             self.assertEqual(config.language_code, "eng")
             self.assertFalse(config.remove_extra_languages)
+            self.assertIsNone(config.audio_preferred_language)
 
     def test_preview_uses_resolved_range_and_emits_owned_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1379,13 +1449,16 @@ class SourceConversionTests(unittest.TestCase):
             final_path = destination_path / "movie_AVP.mov"
             final_path.parent.mkdir()
             final_path.write_bytes(b"final")
-            job = JobSpec.from_json_line(preview_request_line(source_path, destination_path))
+            request = json.loads(preview_request_line(source_path, destination_path))
+            request["encoding"]["audio"]["preferred_language"] = "jpn"
+            job = JobSpec.from_json_line(json.dumps(request) + "\n")
             output = io.StringIO()
             activity = WorkerActivityReporter(WorkerEventEmitter(output, job.job_id))
             observed: dict[str, object] = {}
 
             def process_each(*_args: object, **_kwargs: object) -> Path:
                 observed["preview_range"] = config.preview_range
+                observed["audio_preferred_language"] = config.audio_preferred_language
                 return final_path
 
             with (
@@ -1401,6 +1474,7 @@ class SourceConversionTests(unittest.TestCase):
             preview_range = observed["preview_range"]
             self.assertEqual(preview_range.start_seconds, 3570)
             self.assertEqual(preview_range.duration_seconds, 60)
+            self.assertEqual(observed["audio_preferred_language"], "jpn")
             self.assertEqual(result["output_path"], final_path.as_posix())
             self.assertEqual(result["parent_job_id"], job.preview.parent_job_id if job.preview else None)
             events = decoded_events(output)
@@ -1644,6 +1718,7 @@ class SourceConversionTests(unittest.TestCase):
             previous_source_path = config.source_path
             previous_output_root_path = config.output_root_path
             previous_audio_mode = config.audio_mode
+            previous_audio_preferred_language = config.audio_preferred_language
             previous_remove_original = config.remove_original
             previous_environment = {
                 key: os.environ.get(key) for key in ("PATH", "FFMPEG_BINARY", "FFPROBE_BINARY", "TMPDIR")
@@ -1671,6 +1746,7 @@ class SourceConversionTests(unittest.TestCase):
             self.assertEqual(config.source_path, previous_source_path)
             self.assertEqual(config.output_root_path, previous_output_root_path)
             self.assertEqual(config.audio_mode, previous_audio_mode)
+            self.assertEqual(config.audio_preferred_language, previous_audio_preferred_language)
             self.assertEqual(config.remove_original, previous_remove_original)
             for key, value in previous_environment.items():
                 self.assertEqual(os.environ.get(key), value)
@@ -1687,7 +1763,7 @@ class SourceConversionTests(unittest.TestCase):
             request = json.loads(conversion_request_line(source_path, destination_path))
             request["encoding"].update(
                 {
-                    "audio": {"mode": "pcm", "bitrate": 512},
+                    "audio": {"mode": "pcm", "bitrate": 512, "preferred_language": "jpn"},
                     "video_mode": "mv_hevc",
                     "av1_crf": 27,
                     "left_right_bitrate": 42,
@@ -1733,6 +1809,7 @@ class SourceConversionTests(unittest.TestCase):
                         "output_root_path": config.output_root_path,
                         "audio_mode": config.audio_mode,
                         "audio_bitrate": config.audio_bitrate,
+                        "audio_preferred_language": config.audio_preferred_language,
                         "video_mode": config.video_mode,
                         "av1_crf": config.av1_crf,
                         "left_right_bitrate": config.left_right_bitrate,
@@ -1770,6 +1847,7 @@ class SourceConversionTests(unittest.TestCase):
             self.assertEqual(observed["output_root_path"], destination_path)
             self.assertEqual(observed["audio_mode"], AudioMode.PCM)
             self.assertEqual(observed["audio_bitrate"], 512)
+            self.assertEqual(observed["audio_preferred_language"], "jpn")
             self.assertEqual(observed["video_mode"], VideoMode.MV_HEVC)
             self.assertEqual(observed["av1_crf"], 27)
             self.assertEqual(observed["left_right_bitrate"], 42)

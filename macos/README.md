@@ -53,11 +53,15 @@ for dyld library validation; Developer ID packages retain Hardened Runtime. The
 package gate launches the signed Swift host with `--startup-smoke`, smokes the
 embedded conversion worker, and then performs strict deep signature validation.
 
-The app and engine use worker protocol v8. MKV, MTS, M2TS, and ISO
+The app and engine use worker protocol v9. Audio and subtitle language controls
+are independent: profiles retain all audio languages by default, while
+preferred-only audio keeps every metadata-language match and visibly falls
+back to the source-default or first audio stream when no match exists. MKV,
+MTS, M2TS, and ISO
 sources can create an isolated beginning, middle, or end preview child job with
 the current resolved profile. The finalized result is leased from the preview
 cache while the embedded AVPlayer is open and removed when the preview closes.
-See `docs/native-worker-protocol-v8.md` for the request, event, and ownership
+See `docs/native-worker-protocol-v9.md` for the request, event, and ownership
 contract.
 
 The application targets Apple Silicon macOS 26 or later and uses the pinned

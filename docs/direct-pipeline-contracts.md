@@ -26,6 +26,10 @@ named restartable file.
 - Output: the source container as the logical MVC input in default mode; the
   source as audio input when AAC transcoding is enabled; PCM audio otherwise;
   `<name>_mvc.h264` and `<name>_audio_PCM.mov` with `--keep-files`.
+- PCM extraction maps the shared audio selection explicitly. All-languages mode
+  keeps the current complete stream set; preferred-only mode keeps every
+  canonical metadata-language match in source order and preserves aligned
+  titles, channel layouts, and dispositions.
 - Restart/debug value: high. These files feed video split, audio mux/transcode,
   and subtitle timing context.
 
@@ -78,6 +82,12 @@ named restartable file.
   layout. If any selected stream is unqualified, including
   AC-3 or E-AC-3, the whole selected set is converted to AAC and the worker
   emits a structured warning.
+- The same canonical selector drives Automatic qualification, AAC copy, and AAC
+  conversion. A non-retained incompatible track cannot force AAC conversion,
+  and non-contiguous retained streams are mapped explicitly.
+- If preferred-only finds no metadata-language match, Prepare Audio retains the
+  source-default stream or the first stream and emits the structured
+  `audio_language_fallback` warning. It never silently widens to all languages.
 - Older builds wrote `<folder>_audio_AAC.mov`. A resume directory containing
   only that legacy artifact must restart from Prepare Audio so the app can
   regenerate a compatible M4A instead of attempting an unsafe final mux.
@@ -90,6 +100,15 @@ named restartable file.
   files.
 - Output: `<name>_AVP.mov` for MV-HEVC or `<name>_AV1_Stereo.mov` for AV1 inside
   the output folder.
+- Final mux applies the same audio selector to prepared artifacts. A Stage 8
+  restart can remove tracks still present in that artifact but cannot restore a
+  language removed during an earlier preparation run. A missing preferred
+  language therefore keeps the artifact's default/first audio track and emits
+  the same visible fallback warning.
+- Preferred-only preparation writes an atomic hidden selection sidecar beside
+  the audio artifact. If Stage 8 later requests All Languages, the sidecar lets
+  the worker warn that omitted source languages cannot be restored without
+  restarting from Extract MVC and Audio (PCM) or Prepare Audio (AAC).
 - Restart/debug value: high. This is the MP4Box subtitle/audio/video mux
   boundary.
 
@@ -267,5 +286,13 @@ for debugging and resume workflows.
 - Subtitle extraction still produces SRT files discoverable by final mux.
 - Audio transcode direct experiments preserve stream count, language metadata,
   and final mux command construction.
+- All-languages mode preserves the historical stream set. Preferred-only tests
+  cover canonical aliases, multiple same-language tracks, unknown tags,
+  default-not-first fallback, non-contiguous mapping, preview/batch parity, and
+  late-stage mux fallback.
 - The MVC pipe has cancellation, timeout, retry, SIGPIPE cascade, and producer,
   splitter, and encoder failure-attribution tests.
+
+Audio-language selection changes track composition and can change output size,
+but it does not prove the cause of issue #202 and does not claim to resolve the
+separate Ship's *Top Gun* stall report.

@@ -7,10 +7,47 @@ import ffmpeg
 
 from bd_to_avp.modules import audio
 from bd_to_avp.modules.audio_mode import AudioMode
+from bd_to_avp.modules.audio_selection import load_audio_selection_manifest, select_audio_streams
 from bd_to_avp.modules.config import Stage
 
 
 class AudioPreparationTests(unittest.TestCase):
+    def test_automatic_qualifies_only_retained_preferred_language_tracks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_path = temp_path / "source.mkv"
+            output_folder = temp_path / "Movie"
+            source_path.write_bytes(b"source")
+            output_folder.mkdir()
+            streams = [
+                qualified_stream(index=2, language="eng"),
+                qualified_stream(index=5, codec_name="ac3", language="jpn"),
+            ]
+
+            def copy_audio(_input_path: Path, output_path: Path, **_kwargs: object) -> None:
+                output_path.write_bytes(b"selected-aac")
+
+            with (
+                patch.object(audio.config, "audio_mode", AudioMode.AUTOMATIC),
+                patch.object(audio.config, "audio_preferred_language", "eng"),
+                patch.object(audio.config, "start_stage", Stage.CREATE_MKV),
+                patch.object(audio, "get_audio_stream_data", return_value=streams),
+                patch.object(audio, "copy_audio", side_effect=copy_audio) as copy,
+                patch.object(audio, "transcode_audio") as transcode,
+            ):
+                result = audio.create_prepared_audio_file(source_path, output_folder)
+
+            self.assertEqual(result.read_bytes(), b"selected-aac")
+            transcode.assert_not_called()
+            selection = copy.call_args.kwargs["selection"]
+            self.assertEqual([stream.stream_index for stream in selection.streams], [2])
+            self.assertEqual([stream.audio_position for stream in selection.streams], [0])
+            manifest = load_audio_selection_manifest(result)
+            self.assertIsNotNone(manifest)
+            assert manifest is not None
+            self.assertEqual(manifest.source_stream_count, 2)
+            self.assertEqual(manifest.selected_stream_count, 1)
+
     def test_automatic_copies_all_qualified_aac_to_owned_m4a(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -41,6 +78,7 @@ class AudioPreparationTests(unittest.TestCase):
             self.assertTrue(source_path.exists())
             qualify.assert_called_once_with(
                 source_path,
+                selection=None,
                 run_context=None,
                 cancellation_event=None,
                 observability_context=None,
@@ -48,6 +86,7 @@ class AudioPreparationTests(unittest.TestCase):
             copy.assert_called_once_with(
                 source_path,
                 temporary_path,
+                selection=None,
                 run_context=None,
                 cancellation_event=None,
                 observability_context=None,
@@ -85,6 +124,7 @@ class AudioPreparationTests(unittest.TestCase):
             self.assertEqual(result, output_folder / "Movie_audio_AAC.m4a")
             qualify.assert_called_once_with(
                 source_path,
+                selection=None,
                 run_context=None,
                 cancellation_event=None,
                 observability_context=None,
@@ -94,6 +134,7 @@ class AudioPreparationTests(unittest.TestCase):
                 source_path,
                 output_folder / "Movie_audio_AAC.part.m4a",
                 512,
+                selection=None,
                 run_context=None,
                 cancellation_event=None,
                 observability_context=None,
@@ -134,6 +175,7 @@ class AudioPreparationTests(unittest.TestCase):
                 source_path,
                 output_folder / "Movie_audio_AAC.part.m4a",
                 384,
+                selection=None,
                 run_context=None,
                 cancellation_event=None,
                 observability_context=None,
@@ -340,6 +382,52 @@ class AudioPreparationTests(unittest.TestCase):
         self.assertIn("copy", command)
         self.assertIn("file:audio.m4a", command)
 
+    def test_copy_audio_explicitly_maps_non_contiguous_preferred_tracks(self) -> None:
+        streams = [
+            qualified_stream(index=1, language="eng", title="English 5.1"),
+            qualified_stream(index=4, language="jpn", title="Japanese 5.1"),
+            qualified_stream(index=8, language="en-US", title="English Commentary"),
+        ]
+        selection = select_audio_streams(streams, "eng")
+
+        with (
+            patch.object(audio, "audio_handler_metadata_options", return_value={}) as metadata_options,
+            patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg,
+        ):
+            audio.copy_audio(Path("source.mkv"), Path("audio.m4a"), selection=selection)
+
+        command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
+        self.assertIn("0:a:0", command)
+        self.assertIn("0:a:2", command)
+        self.assertNotIn("0:a:1", command)
+        metadata_options.assert_called_once_with(
+            Path("source.mkv"),
+            selected_streams=[streams[0], streams[2]],
+            run_context=None,
+            cancellation_event=None,
+            observability_context=None,
+        )
+
+    def test_aac_transcode_explicitly_maps_the_same_preferred_track_set(self) -> None:
+        streams = [
+            qualified_stream(index=1, language="eng"),
+            qualified_stream(index=4, language="jpn"),
+            qualified_stream(index=8, language="eng"),
+        ]
+        selection = select_audio_streams(streams, "eng")
+
+        with (
+            patch.object(audio, "audio_handler_metadata_options", return_value={}),
+            patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg,
+        ):
+            audio.transcode_audio(Path("source.mkv"), Path("audio.m4a"), 384, selection=selection)
+
+        command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
+        self.assertIn("0:a:0", command)
+        self.assertIn("0:a:2", command)
+        self.assertNotIn("0:a:1", command)
+        self.assertIn("aac", command)
+
     def test_audio_preparation_preserves_stream_titles_as_handler_names(self) -> None:
         with (
             patch.object(audio, "audio_handler_metadata_options") as metadata_options,
@@ -397,7 +485,12 @@ def qualified_stream(
     sample_rate: str = "48000",
     channels: int = 2,
     channel_layout: str = "stereo",
+    language: str = "eng",
+    title: str | None = None,
 ) -> dict[str, object]:
+    tags: dict[str, object] = {"language": language}
+    if title is not None:
+        tags["title"] = title
     return {
         "index": index,
         "codec_name": codec_name,
@@ -405,6 +498,8 @@ def qualified_stream(
         "sample_rate": sample_rate,
         "channels": channels,
         "channel_layout": channel_layout,
+        "tags": tags,
+        "disposition": {"default": 0},
     }
 
 

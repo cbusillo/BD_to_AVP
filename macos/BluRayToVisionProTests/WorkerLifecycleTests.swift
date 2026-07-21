@@ -102,10 +102,10 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertNil(state.progress)
     }
 
-    func testSharedV8ProgressFixtureDecodes() throws {
+    func testSharedV9ProgressFixtureDecodes() throws {
         let event = try JSONDecoder().decode(
             WorkerEvent.self,
-            from: sharedFixtureData(named: "native_worker_stage_started_progress_v8.json")
+            from: sharedFixtureData(named: "native_worker_stage_started_progress_v9.json")
         )
 
         XCTAssertEqual(event.payload.progress, WorkerProgress(currentStage: 1, totalStages: 2, stageFraction: nil))
@@ -130,7 +130,7 @@ final class WorkerLifecycleTests: XCTestCase {
     func testStructuredAudioFallbackWarningExposesCodecsAndActualAction() throws {
         let event = try JSONDecoder().decode(
             WorkerEvent.self,
-            from: sharedFixtureData(named: "native_worker_audio_fallback_warning_v8.json")
+            from: sharedFixtureData(named: "native_worker_audio_fallback_warning_v9.json")
         )
 
         XCTAssertEqual(event.payload.warningCode, "audio_automatic_fallback_to_aac")
@@ -145,6 +145,32 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertEqual(
             state.warningMessage,
             "Automatic audio selected AAC conversion because one or more selected tracks are not qualified AAC."
+        )
+    }
+
+    func testStructuredAudioLanguageFallbackWarningRemainsVisibleAndActionable() throws {
+        let event = try JSONDecoder().decode(
+            WorkerEvent.self,
+            from: sharedFixtureData(named: "native_worker_audio_language_fallback_warning_v9.json")
+        )
+
+        XCTAssertEqual(event.payload.warningCode, "audio_language_fallback")
+        XCTAssertEqual(event.payload.preferredAudioLanguage, "jpn")
+        XCTAssertEqual(event.payload.selectedAudioLanguage, "eng")
+        XCTAssertEqual(event.payload.selectedAudioStreamIndex, 3)
+        XCTAssertEqual(event.payload.selectedAudioPosition, 1)
+        XCTAssertEqual(event.payload.audioFallbackReason, "source_default")
+        XCTAssertEqual(event.payload.audioAction, "keep_source_default_audio")
+
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: event.jobID, operationKind: .conversion)
+        try state.receive(event)
+
+        XCTAssertEqual(
+            state.warningMessage,
+            "No audio tracks matched the preferred language Japanese (jpn). Keeping the source-default audio track "
+                + "(English (eng)) instead."
         )
     }
 
@@ -339,10 +365,10 @@ final class WorkerLifecycleTests: XCTestCase {
         }
     }
 
-    func testDecodesAndAppliesSharedV8ConversionCompletionFixture() throws {
+    func testDecodesAndAppliesSharedV9ConversionCompletionFixture() throws {
         let completed = try JSONDecoder().decode(
             WorkerEvent.self,
-            from: sharedFixtureData(named: "native_worker_conversion_completed_v8.json")
+            from: sharedFixtureData(named: "native_worker_conversion_completed_v9.json")
         )
         let fixtureJobID = try XCTUnwrap(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
         var state = WorkerLifecycleState()

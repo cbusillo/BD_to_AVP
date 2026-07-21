@@ -39,8 +39,8 @@ final class LanguageCatalogTests: XCTestCase {
         XCTAssertTrue(catalog.search("not-a-language").isEmpty)
     }
 
-    func testSubtitleLanguageCodableCanonicalizesLegacyAliases() throws {
-        let decoded = try JSONDecoder().decode(SubtitleLanguage.self, from: Data(#""dut""#.utf8))
+    func testMediaLanguageCodableCanonicalizesLegacyAliasesForAudioAndSubtitles() throws {
+        let decoded = try JSONDecoder().decode(MediaLanguage.self, from: Data(#""dut""#.utf8))
         let encoded = try JSONEncoder().encode(decoded)
 
         XCTAssertEqual(decoded, .dutch)

@@ -1,0 +1,65 @@
+{
+  "streams": [
+    {
+      "index": 1,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "profile": "LC",
+      "sample_rate": "48000",
+      "channels": 6,
+      "channel_layout": "5.1",
+      "estimated_payload_bytes": 12000000,
+      "tags": {
+        "language": "eng",
+        "title": "English 5.1"
+      },
+      "disposition": {
+        "default": 1
+      }
+    },
+    {
+      "index": 4,
+      "codec_type": "audio",
+      "codec_name": "ac3",
+      "sample_rate": "48000",
+      "channels": 6,
+      "channel_layout": "5.1(side)",
+      "estimated_payload_bytes": 10000000,
+      "tags": {
+        "language": "jpn",
+        "title": "Japanese 5.1"
+      },
+      "disposition": {
+        "default": 0
+      }
+    },
+    {
+      "index": 8,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "profile": "LC",
+      "sample_rate": "48000",
+      "channels": 2,
+      "channel_layout": "stereo",
+      "estimated_payload_bytes": 3000000,
+      "tags": {
+        "language": "en-US",
+        "title": "English Commentary"
+      },
+      "disposition": {
+        "default": 0,
+        "comment": 1
+      }
+    }
+  ],
+  "expectations": {
+    "all_languages": {
+      "stream_indexes": [1, 4, 8],
+      "estimated_payload_bytes": 25000000
+    },
+    "preferred_english": {
+      "stream_indexes": [1, 8],
+      "estimated_payload_bytes": 15000000
+    }
+  }
+}

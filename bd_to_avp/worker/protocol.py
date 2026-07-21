@@ -16,7 +16,7 @@ from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.observability import ObservabilityEvent
 from bd_to_avp.runtime import RunContext
 
-PROTOCOL_VERSION = 8
+PROTOCOL_VERSION = 9
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_DETAIL_BYTES = 64 * 1024
@@ -99,6 +99,7 @@ class JobDestination:
 class AudioOptions:
     mode: AudioMode
     bitrate: int
+    preferred_language: str | None
 
 
 @dataclass(frozen=True)
@@ -466,7 +467,7 @@ class JobSpec:
             )
         cls._require_exact_keys(
             value,
-            {"mode", "bitrate"},
+            {"mode", "bitrate", "preferred_language"},
             "encoding.audio",
             job_id,
             error_code="invalid_encoding_options",
@@ -488,6 +489,25 @@ class JobSpec:
                 job_id=job_id,
             ) from error
 
+        raw_language = value.get("preferred_language")
+        if raw_language is None:
+            preferred_language = None
+        elif isinstance(raw_language, str):
+            try:
+                preferred_language = normalize_language_code(raw_language)
+            except LanguageCodeError as error:
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    str(error),
+                    job_id=job_id,
+                ) from error
+        else:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "encoding.audio.preferred_language must be null or a language code.",
+                job_id=job_id,
+            )
+
         return AudioOptions(
             mode=mode,
             bitrate=cls._parse_int(
@@ -499,6 +519,7 @@ class JobSpec:
                 maximum=4096,
                 error_code="invalid_encoding_options",
             ),
+            preferred_language=preferred_language,
         )
 
     @classmethod
