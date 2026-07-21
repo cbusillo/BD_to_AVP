@@ -165,9 +165,11 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(AudioHandling.pcm.rawValue, "preserve")
         XCTAssertEqual(AudioHandling.pcm.title, "Uncompressed PCM")
         XCTAssertEqual(EncodingOptions().audioHandling, .automatic)
-        XCTAssertEqual(EncodingOptions().audioLanguages.mode, .allLanguages)
+        XCTAssertEqual(EncodingOptions().audioLanguages.mode, .preferredOnly)
+        XCTAssertEqual(EncodingOptions().audioLanguages.preferredLanguage, .english)
         XCTAssertTrue(BuiltInProfile.allCases.allSatisfy { $0.options.audioHandling == .automatic })
-        XCTAssertTrue(BuiltInProfile.allCases.allSatisfy { $0.options.audioLanguages.mode == .allLanguages })
+        XCTAssertTrue(BuiltInProfile.allCases.allSatisfy { $0.options.audioLanguages.mode == .preferredOnly })
+        XCTAssertTrue(BuiltInProfile.allCases.allSatisfy { $0.options.audioLanguages.preferredLanguage == .english })
         XCTAssertEqual(ConversionStage.transcodeAudio.title, "7 — Prepare Audio")
     }
 
@@ -182,17 +184,17 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(AudioHandling.convertAAC.bitrateLabel, "AAC bitrate")
         XCTAssertNil(AudioHandling.pcm.bitrateLabel)
         XCTAssertTrue(EncodingOptions().compactSummary.contains("Audio: automatic audio"))
-        XCTAssertTrue(EncodingOptions().compactSummary.contains("all languages"))
+        XCTAssertTrue(EncodingOptions().compactSummary.contains("English only"))
         XCTAssertTrue(EncodingOptions().compactSummary.contains("Subtitles: English + others"))
         XCTAssertEqual(
             EncodingOptions(audioHandling: .automatic, audioBitrate: 448).compactSummary,
-            "MV-HEVC 75 · 20 Mbps eyes · source resolution · Audio: automatic audio (AAC fallback 448 kbps), all languages · Subtitles: English + others"
+            "MV-HEVC 75 · 20 Mbps eyes · source resolution · Audio: automatic audio (AAC fallback 448 kbps), English only · Subtitles: English + others"
         )
         XCTAssertEqual(
             EncodingOptions(audioHandling: .convertAAC, audioBitrate: 448).compactSummary,
-            "MV-HEVC 75 · 20 Mbps eyes · source resolution · Audio: AAC 448 kbps, all languages · Subtitles: English + others"
+            "MV-HEVC 75 · 20 Mbps eyes · source resolution · Audio: AAC 448 kbps, English only · Subtitles: English + others"
         )
-        XCTAssertTrue(BuiltInProfile.balanced.summary.contains("all audio languages"))
+        XCTAssertTrue(BuiltInProfile.balanced.summary.contains("English audio only"))
     }
 
     func testSourceInferencePreservesProductHierarchy() throws {
@@ -566,7 +568,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(spec.encoding?.fieldOfView, 120)
         XCTAssertEqual(
             spec.encoding?.audio,
-            WorkerJobSpec.Encoding.Audio(mode: .convertAAC, bitrate: 512, preferredLanguage: nil)
+            WorkerJobSpec.Encoding.Audio(mode: .convertAAC, bitrate: 512, preferredLanguage: "eng")
         )
     }
 
@@ -711,7 +713,7 @@ final class ConversionWorkflowTests: XCTestCase {
         let audio = try XCTUnwrap(encoding["audio"] as? [String: Any])
         XCTAssertEqual(audio["mode"] as? String, "automatic")
         XCTAssertEqual(audio["bitrate"] as? Int, 384)
-        XCTAssertTrue(audio["preferred_language"] is NSNull)
+        XCTAssertEqual(audio["preferred_language"] as? String, "eng")
         XCTAssertEqual(Set(audio.keys), ["mode", "bitrate", "preferred_language"])
         XCTAssertNil(encoding["transcode_audio"])
         XCTAssertNil(encoding["audio_bitrate"])
@@ -788,7 +790,7 @@ final class ConversionWorkflowTests: XCTestCase {
 
             XCTAssertEqual(audio["mode"] as? String, expectedMode)
             XCTAssertEqual(audio["bitrate"] as? Int, 448)
-            XCTAssertTrue(audio["preferred_language"] is NSNull)
+            XCTAssertEqual(audio["preferred_language"] as? String, "eng")
             XCTAssertEqual(Set(audio.keys), ["mode", "bitrate", "preferred_language"])
         }
     }

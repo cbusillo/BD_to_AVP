@@ -54,8 +54,10 @@ package gate launches the signed Swift host with `--startup-smoke`, smokes the
 embedded conversion worker, and then performs strict deep signature validation.
 
 The app and engine use worker protocol v9. Audio and subtitle language controls
-are independent: profiles retain all audio languages by default, while
-preferred-only audio keeps every metadata-language match and visibly falls
+are independent: built-in and new profile options default to preferred-only
+English audio, while existing version-4 custom choices remain unchanged and
+version-1 through version-3 profiles migrate to all-languages behavior.
+Preferred-only audio keeps every metadata-language match and visibly falls
 back to the source-default or first audio stream when no match exists. MKV,
 MTS, M2TS, and ISO
 sources can create an isolated beginning, middle, or end preview child job with

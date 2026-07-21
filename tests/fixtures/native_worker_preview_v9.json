@@ -14,7 +14,7 @@
     "audio": {
       "mode": "automatic",
       "bitrate": 384,
-      "preferred_language": null
+      "preferred_language": "eng"
     },
     "video_mode": "mv_hevc",
     "av1_crf": 32,

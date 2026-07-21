@@ -170,11 +170,13 @@ selection. Multi-title selections run serially and preserve completed outputs
 if a later video needs attention. For source-folder jobs, accepted MKV or subtitle error
 continuations resume the failed source and then continue through the original
 batch queue. Audio and subtitle language choices are independent. The native
-app defaults every existing, migrated, built-in, and new profile to **All
-Languages** for audio. **Preferred Language Only** retains every audio stream
-whose metadata language matches the selected language; if none match, the app
-keeps the source-default audio stream or the first stream and shows a warning.
-Titles are not used to guess audio language.
+app defaults built-in and new profile options to **Preferred Language Only**
+with English selected. Existing version-4 custom profiles retain their stored
+choice, while version-1 through version-3 profiles migrate to **All Languages**
+to preserve their historical behavior. Preferred-only mode retains every audio
+stream whose metadata language matches the selected language; if none match,
+the app keeps the source-default audio stream or the first stream and shows a
+warning. Titles are not used to guess audio language.
 
 Audio-language filtering can reduce output payload when tracks are omitted,
 but this feature does not establish the cause of the output-size report in

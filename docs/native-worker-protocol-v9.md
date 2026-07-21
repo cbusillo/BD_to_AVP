@@ -1,8 +1,10 @@
 # Native Worker Protocol v9
 
-Protocol v9 adds an explicit audio-language selection field while preserving
-all-language behavior by default. The native app and bundled Python worker ship
-atomically and both require version 9.
+Protocol v9 adds an explicit audio-language selection field. The native app
+defaults built-in and new profile options to preferred-only English, while an
+explicit all-languages selection and legacy profile migrations preserve the v8
+behavior. The native app and bundled Python worker ship atomically and both
+require version 9.
 
 Observability events, lifecycle rules, ownership, heartbeats, request size
 limits, and terminal behavior are unchanged from
@@ -17,7 +19,7 @@ with exactly these keys:
 {
   "mode": "automatic",
   "bitrate": 384,
-  "preferred_language": null
+  "preferred_language": "eng"
 }
 ```
 
@@ -25,12 +27,13 @@ with exactly these keys:
 - `bitrate` remains the AAC conversion or Automatic fallback bitrate.
 - `preferred_language` is always present. `null` means retain all audio
   languages, which is the v8 behavior. A canonical ISO 639-2/T code such as
-  `eng`, `jpn`, or `nld` enables preferred-language-only selection.
+  `eng`, `jpn`, or `nld` enables preferred-language-only selection. The native
+  app's built-in/new-profile default is `eng`.
 
 The worker accepts supported alpha-2, alpha-3/B, alpha-3/T, and valid base
 language tags, then canonicalizes them to alpha-3/T. It rejects an omitted
 field, unsupported code, non-string/non-null value, or any unknown audio key.
-Swift encodes the all-language value as an explicit JSON `null`; omission is
+Swift encodes an explicit all-languages selection as JSON `null`; omission is
 not equivalent.
 
 ## Selection Policy
