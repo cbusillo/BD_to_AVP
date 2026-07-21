@@ -118,6 +118,12 @@ def skip_remote_verification(_evidence: object) -> None:
 
 
 class ReleaseMetadataTests(unittest.TestCase):
+    def test_repository_pins_uv_for_reproducible_lock_refresh(self) -> None:
+        with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
+            pyproject = tomllib.load(handle)
+
+        self.assertEqual(pyproject["tool"]["uv"]["required-version"], "==0.11.29")
+
     def test_repository_keeps_gui_dependency_out_of_cli_base(self) -> None:
         with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
             pyproject = tomllib.load(handle)
@@ -551,6 +557,54 @@ class ReleasePreparationTests(unittest.TestCase):
                     pyproject_path=pyproject_path,
                     lock_path=lock_path,
                     lock_runner=fail_lock,
+                )
+
+            self.assertEqual(pyproject_path.read_bytes(), original_pyproject)
+            self.assertEqual(lock_path.read_bytes(), original_lock)
+
+    def test_prepare_rejects_dependency_marker_drift_and_leaves_files_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pyproject_path, lock_path = make_release_files(Path(temp_dir))
+            lock_path.write_text(
+                lock_path.read_text(encoding="utf-8")
+                + """\
+
+[[package]]
+name = "parent"
+version = "1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "child", marker = "sys_platform == 'darwin'" },
+]
+
+[[package]]
+name = "child"
+version = "1.0"
+source = { registry = "https://pypi.org/simple" }
+""",
+                encoding="utf-8",
+            )
+            original_pyproject = pyproject_path.read_bytes()
+            original_lock = lock_path.read_bytes()
+
+            def normalize_dependency_marker(stage_root: Path, uv_executable: str) -> None:
+                fake_lock_runner(stage_root, uv_executable)
+                staged_lock = stage_root / "uv.lock"
+                staged_lock.write_text(
+                    staged_lock.read_text(encoding="utf-8").replace(
+                        '{ name = "child", marker = "sys_platform == \'darwin\'" }',
+                        '{ name = "child" }',
+                    ),
+                    encoding="utf-8",
+                )
+
+            with self.assertRaisesRegex(release.ReleaseError, "changed data other than"):
+                release.prepare_release(
+                    "1.2.4rc1",
+                    "11",
+                    pyproject_path=pyproject_path,
+                    lock_path=lock_path,
+                    lock_runner=normalize_dependency_marker,
                 )
 
             self.assertEqual(pyproject_path.read_bytes(), original_pyproject)
