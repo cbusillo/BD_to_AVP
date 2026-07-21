@@ -156,7 +156,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         self.assertEqual(apps["bd-to-avp"]["min_os_version"], "14.0")
 
-    def test_repository_is_prepared_and_frozen_for_beta4(self) -> None:
+    def test_repository_is_prepared_and_authorized_for_beta4(self) -> None:
         metadata = release.load_release_metadata()
 
         self.assertEqual(metadata.package_version, "0.3.0b4")
@@ -171,7 +171,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertFalse(metadata.publish_pypi)
 
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
-        self.assertEqual(freeze_policy["frozen_release_tags"]["v0.3.0-beta.4"]["issue"], 316)
+        self.assertNotIn("v0.3.0-beta.4", freeze_policy["frozen_release_tags"])
 
         cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.4-cut-packet.md").read_text(encoding="utf-8")
         self.assertIn("`0.3.0b4`", cut_packet)

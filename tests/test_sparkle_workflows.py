@@ -250,25 +250,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('--release-tag "$BASE_SNAPSHOT_TAG"', str(prepare))
         self.assertIn('--release-tag "$LATEST_SNAPSHOT_TAG"', str(prepare))
 
-    def test_beta4_freeze_retains_release_preflight_guards(self) -> None:
+    def test_beta4_unfreeze_retains_release_preflight_guards(self) -> None:
         workflow = load_release_engine()
         prepare_steps = workflow["jobs"]["prepare"]["steps"]
         step_names = [step["name"] for step in prepare_steps]
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
 
         self.assertEqual(freeze_policy["schema"], "bd_to_avp.release_freezes")
-        self.assertEqual(
-            freeze_policy["frozen_release_tags"],
-            {
-                "v0.3.0-beta.4": {
-                    "issue": 316,
-                    "reason": (
-                        "Beta 4 signing, publication, appcast mutation, and field qualification require explicit "
-                        "authorization after the production diagnostics admission gate is deployed."
-                    ),
-                }
-            },
-        )
+        self.assertEqual(freeze_policy["frozen_release_tags"], {})
         self.assertLess(
             step_names.index("Validate route and summarize publication effects"),
             step_names.index("Reject existing release identity"),

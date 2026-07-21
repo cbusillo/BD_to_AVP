@@ -96,9 +96,9 @@ only future newer builds and never downgrades the installed app. Published Beta
 3 (`0.3.0b3`, build `148`) is the one-time manual-download production seed:
 older Stable and RC installations cannot discover it, while an installed Beta
 3 exposes all four routes. Beta 4 (`0.3.0b4`, build `149`) is the next prepared
-target and is committed with a release freeze. Its future cumulative item must
-sit above Beta 3 and remain visible only to Beta and Alpha until a later newer
-Stable supersedes it.
+target and is authorized for the guarded exact-SHA Prerelease workflow. Its
+future cumulative item must sit above Beta 3 and remain visible only to Beta and
+Alpha until a later newer Stable supersedes it.
 
 ## Release Workflow
 
@@ -151,9 +151,10 @@ behavior and engine architecture rather than release branding.
 ## Remaining Field Evidence
 
 Beta 3 publication and route qualification are complete. Beta 4 field evidence
-is intentionally blocked until its committed freeze is lifted through issue
-#316 and the production diagnostics service admits privacy-rules-v4 clients.
-The signed installed-app qualification must prove that:
+remains pending issue #316's guarded Prerelease workflow and installed-app
+qualification. The committed freeze is removed after the production diagnostics
+service admitted and qualified privacy-rules-v4 clients. The signed installed-app
+qualification must prove that:
 
 - Beta 3 updates forward to Beta 4 on Beta and Alpha without changing the saved
   route;

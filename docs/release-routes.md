@@ -7,11 +7,11 @@ closed when it cannot satisfy this contract.
 The application preference model, release metadata/history parser, appcast
 tooling, reusable release engine, and guarded operator entrypoints implement
 this four-route contract. Beta 3 is published and immutable at `0.3.0b3` build
-`148`, with build `147` permanently burned. The next prepared target is frozen
-Beta 4 at `0.3.0b4` build `149`. Issue #316 exclusively owns removing that
-freeze, exact-SHA dispatch, approval, signing, publication, and public
-verification after the production diagnostics admission gate in issue #314 is
-deployed with explicit authorization.
+`148`, with build `147` permanently burned. The next prepared target is Beta 4
+at `0.3.0b4` build `149`. Issue #314 completed the authorized production
+diagnostics admission gate, and issue #316 exclusively owns the reviewed
+unfreeze, exact-SHA dispatch, approval, signing, publication, and public
+verification.
 
 ## Production Identity
 
@@ -142,9 +142,9 @@ Selecting Stable after installing Beta 3 does not downgrade to `0.2.143`; the
 client waits for a newer eligible Stable build. Beta 4 reserves the next global
 build, `149`.
 
-## Beta 4 Frozen Target
+## Beta 4 Authorized Target
 
-The repository is prepared for `v0.3.0-beta.4` without authorizing a release:
+The repository is prepared for the guarded `v0.3.0-beta.4` Prerelease workflow:
 
 - internal version `0.3.0b4`;
 - public tag and title `v0.3.0-beta.4`;
@@ -159,11 +159,11 @@ Stable build `146`. Stable and RC exclude both Beta items; Beta and Alpha admit
 them, allowing an installed Beta 3 to update forward to Beta 4 without changing
 the saved route.
 
-`.github/release-freezes.json` binds this exact tag to issue #316. No tag,
-draft, DMG, release, or appcast item may be created while the freeze is present.
-Only #316 may remove it through protected-main review after #314 records an
-explicitly authorized production diagnostics deployment. The reviewed metadata
-and release-note seed are in
+Issue #316 removed this exact tag from `.github/release-freezes.json` through
+protected-main review after #314 completed the explicitly authorized production
+diagnostics deployment. Absence of the freeze authorizes workflow preflight; it
+does not assert that a tag, draft, DMG, release, or appcast item exists. The
+reviewed metadata and release-note seed are in
 [the Beta 4 cut packet](0.3.0-beta.4-cut-packet.md).
 
 ## Historical Boundaries

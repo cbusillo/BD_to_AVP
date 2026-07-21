@@ -293,7 +293,7 @@ class ReleaseWorkflowPolicyTests(unittest.TestCase):
         self.assertIn("| GitHub Latest | No |", summary)
         self.assertIn("| PyPI publication | No |", summary)
 
-    def test_beta3_unfreeze_and_beta4_freeze_fail_closed(self) -> None:
+    def test_beta4_unfreeze_and_explicit_freeze_fail_closed(self) -> None:
         beta3_environment = valid_metadata_environment(
             PRERELEASE_WORKFLOW_NAME,
             release_tag="v0.3.0-beta.3",
@@ -314,8 +314,8 @@ class ReleaseWorkflowPolicyTests(unittest.TestCase):
             make_latest="false",
             publish_pypi="false",
         )
-        with self.assertRaisesRegex(ReleaseWorkflowPolicyError, r"frozen by issue #316"):
-            validate_release_metadata(beta4_environment)
+        beta4_metadata = validate_release_metadata(beta4_environment)
+        self.assertEqual(beta4_metadata.release_tag, "v0.3.0-beta.4")
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             freezes_path = Path(temporary_directory) / "release-freezes.json"
@@ -325,8 +325,8 @@ class ReleaseWorkflowPolicyTests(unittest.TestCase):
                         "schema": "bd_to_avp.release_freezes",
                         "schema_version": 1,
                         "frozen_release_tags": {
-                            "v0.3.0-beta.3": {
-                                "issue": 294,
+                            "v0.3.0-beta.4": {
+                                "issue": 316,
                                 "reason": "test freeze",
                             }
                         },
@@ -335,8 +335,8 @@ class ReleaseWorkflowPolicyTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(ReleaseWorkflowPolicyError, r"frozen by issue #294"):
-                validate_release_metadata(beta3_environment, freezes_path=freezes_path)
+            with self.assertRaisesRegex(ReleaseWorkflowPolicyError, r"frozen by issue #316"):
+                validate_release_metadata(beta4_environment, freezes_path=freezes_path)
 
     @patch("scripts.release_workflow_policy.urlopen")
     def test_engine_identity_is_loaded_from_github_oidc_claims(self, urlopen_mock: Mock) -> None:
