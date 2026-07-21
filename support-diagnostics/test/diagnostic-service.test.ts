@@ -29,6 +29,32 @@ import type {
   ServiceLogger,
 } from "../src/types.js";
 
+class TestFixedLengthStream extends TransformStream<Uint8Array, Uint8Array> {
+  constructor(expectedLength: number | bigint) {
+    let bytesWritten = 0;
+    const expectedBytes = Number(expectedLength);
+    super({
+      flush() {
+        if (bytesWritten !== expectedBytes) {
+          throw new TypeError("fixed-length stream received too few bytes");
+        }
+      },
+      transform(chunk, controller) {
+        bytesWritten += chunk.byteLength;
+        if (bytesWritten > expectedBytes) {
+          throw new TypeError("fixed-length stream received too many bytes");
+        }
+        controller.enqueue(chunk);
+      },
+    });
+  }
+}
+
+Object.defineProperty(globalThis, "FixedLengthStream", {
+  configurable: true,
+  value: TestFixedLengthStream,
+});
+
 interface CreatedReport {
   report_id: string;
   status: {
@@ -175,7 +201,10 @@ function crc32(bytes: Uint8Array): number {
 
 function makeDiagnosticBundle(
   options: {
+    eventsPadding?: string;
+    manifestPadding?: string;
     manifestSchemaVersion?: unknown;
+    storagePadding?: string;
     toolTail?: string;
     utf8Flag?: boolean;
   } = {},
@@ -183,18 +212,37 @@ function makeDiagnosticBundle(
   const schemaVersion = options.manifestSchemaVersion ?? API_SCHEMA_VERSION;
   const entries = [
     {
-      data: Buffer.from(JSON.stringify({ schema_version: schemaVersion })),
+      data: Buffer.from(
+        JSON.stringify({
+          schema_version: schemaVersion,
+          ...(options.manifestPadding === undefined
+            ? {}
+            : { padding: options.manifestPadding }),
+        }),
+      ),
       name: "manifest.json",
     },
     {
       data: Buffer.from(
-        `${JSON.stringify({ schema_version: API_SCHEMA_VERSION, source: "client" })}\n`,
+        `${JSON.stringify({
+          schema_version: API_SCHEMA_VERSION,
+          source: "client",
+          ...(options.eventsPadding === undefined
+            ? {}
+            : { padding: options.eventsPadding }),
+        })}\n`,
       ),
       name: "events.jsonl",
     },
     {
       data: Buffer.from(
-        JSON.stringify({ schema_version: API_SCHEMA_VERSION, probes: [] }),
+        JSON.stringify({
+          schema_version: API_SCHEMA_VERSION,
+          probes: [],
+          ...(options.storagePadding === undefined
+            ? {}
+            : { padding: options.storagePadding }),
+        }),
       ),
       name: "storage.json",
     },
@@ -248,6 +296,29 @@ function makeDiagnosticBundle(
   return new Uint8Array(
     Buffer.concat([...localParts, centralDirectory, end]),
   );
+}
+
+function deterministicPadding(length: number, seed: number): string {
+  const alphabet =
+    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_";
+  const characters = new Array<string>(length);
+  let state = seed >>> 0;
+  for (let index = 0; index < length; index += 1) {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    characters[index] = alphabet[state & 63]!;
+  }
+  return characters.join("");
+}
+
+function makeLargeNativeDiagnosticBundle(): Uint8Array {
+  return makeDiagnosticBundle({
+    eventsPadding: deterministicPadding(317_000, 2),
+    manifestPadding: deterministicPadding(62_000, 1),
+    storagePadding: deterministicPadding(157_000, 3),
+    toolTail: deterministicPadding(637_000, 4),
+  });
 }
 
 function nativeSwiftDiagnosticBundle(): Uint8Array {
@@ -561,8 +632,72 @@ describe("private diagnostic service", () => {
     expect(wrongChecksum.status).toBe(422);
     expect(await wrongChecksum.json()).toEqual({ error: "checksum_mismatch" });
 
+    const missingLengthRequest = uploadRequest(report, bytes);
+    missingLengthRequest.headers.delete("Content-Length");
+    const missingLength = await harness.service.fetch(missingLengthRequest);
+    expect(missingLength.status).toBe(422);
+    expect(await missingLength.json()).toEqual({
+      error: "content_length_mismatch",
+    });
+
     const success = await harness.service.fetch(uploadRequest(report, bytes));
     expect(success.status).toBe(201);
+  });
+
+  it("accepts a large native-shaped diagnostic bundle", async () => {
+    const harness = makeHarness();
+    const bytes = makeLargeNativeDiagnosticBundle();
+    expect(bytes.byteLength).toBeGreaterThan(800_000);
+    const report = await createReport(harness.service, bytes);
+
+    const uploaded = await harness.service.fetch(uploadRequest(report, bytes));
+
+    expect(uploaded.status).toBe(201);
+  });
+
+  it("rejects actual bodies that differ from the authorized length", async () => {
+    const harness = makeHarness();
+    const bytes = makeDiagnosticBundle();
+    const shortReport = await createReport(harness.service, bytes);
+    const shortBytes = bytes.subarray(0, bytes.byteLength - 1);
+
+    const shortBody = await harness.service.fetch(
+      uploadRequest(shortReport, shortBytes, {
+        "Content-Length": String(bytes.byteLength),
+      }),
+    );
+
+    expect(shortBody.status).toBe(422);
+    expect(await shortBody.json()).toEqual({
+      error: "content_length_mismatch",
+    });
+    const shortReplay = await harness.service.fetch(
+      uploadRequest(shortReport, bytes),
+    );
+    expect(shortReplay.status).toBe(409);
+    expect(await shortReplay.json()).toEqual({ error: "upload_consumed" });
+
+    const oversizedReport = await createReport(harness.service, bytes);
+    const oversizedBytes = new Uint8Array(bytes.byteLength + 1);
+    oversizedBytes.set(bytes);
+
+    const rejected = await harness.service.fetch(
+      uploadRequest(oversizedReport, oversizedBytes, {
+        "Content-Length": String(bytes.byteLength),
+      }),
+    );
+
+    expect(rejected.status).toBe(422);
+    expect(await rejected.json()).toEqual({
+      error: "content_length_mismatch",
+    });
+    expect(harness.bucket.objects.size).toBe(0);
+
+    const replay = await harness.service.fetch(
+      uploadRequest(oversizedReport, bytes),
+    );
+    expect(replay.status).toBe(409);
+    expect(await replay.json()).toEqual({ error: "upload_consumed" });
   });
 
   it("rejects malformed archives and consumes the reserved upload", async () => {
