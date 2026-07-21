@@ -79,6 +79,14 @@ AV1_STEREO_VEXU_CONTENT_HEX = (
 )
 
 
+def output_artifact_roles(output_count: int) -> tuple[str, ...]:
+    if output_count == 1:
+        return ("stereo_video_output",)
+    if output_count == 2:
+        return ("left_eye_video_output", "right_eye_video_output")
+    return tuple(f"video_output_{index}" for index in range(1, output_count + 1))
+
+
 def generate_native_mvc_splitter_command(video_input_path: Path, *, single_threaded: bool = False) -> list[str | Path]:
     options = "-Osk" if single_threaded else "-Omk"
     return [
@@ -467,8 +475,8 @@ def run_native_mvc_split_attempt(
                     env=os.environ.copy(),
                     event_context=event_context,
                     artifacts=tuple(
-                        ProcessArtifactProbe(f"video_output_{index}", path=output_path)
-                        for index, output_path in enumerate(output_paths, start=1)
+                        ProcessArtifactProbe(role, path=output_path)
+                        for role, output_path in zip(output_artifact_roles(len(output_paths)), output_paths, strict=True)
                     ),
                     capture_overflow=CaptureOverflowPolicy.TRUNCATE,
                 )
