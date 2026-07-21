@@ -5,7 +5,7 @@ boundary, and publication policy are defined in
 [Production Release Routes](release-routes.md).
 
 The repository carries published, immutable Beta 3 history at internal version
-`0.3.0b3`, build `148`, and a frozen Beta 4 target at `0.3.0b4`, build `149`.
+`0.3.0b3`, build `148`, and a prepared Beta 4 target at `0.3.0b4`, build `149`.
 The failed, unpublished `0.3.0rc1` build `147` attempt is preserved in the
 checked-in recovery evidence and its build number is permanently burned. The
 reviewed [Beta 4 cut packet](0.3.0-beta.4-cut-packet.md) records metadata only;
@@ -14,9 +14,9 @@ it does not assert that any Beta 4 public artifact exists.
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
 entrypoints, Beta 3 bootstrap contract, and one-time metadata recovery are
-implemented and regression-covered. Issue #316 owns Beta 4 unfreeze, exact-SHA
-dispatch, approval, signing, publication, and verification after issue #314
-records an explicitly authorized production diagnostics admission deployment.
+implemented and regression-covered. Issue #314 has completed the authorized
+production diagnostics admission deployment. Issue #316 owns the reviewed
+unfreeze, exact-SHA dispatch, approval, signing, publication, and verification.
 
 ## Release Preparation
 
@@ -75,14 +75,13 @@ or from a stale main commit.
 
 ## Release Orchestration
 
-> **Beta 4 is not authorized for release.** The repository metadata is the
-> reviewed `0.3.0b4` build `149` target, and
-> `.github/release-freezes.json` binds `v0.3.0-beta.4` to issue #316. Do not
-> dispatch, request `macos-signing` approval, sign, publish, append the
-> cumulative appcast, or deploy Pages while that entry is present. Only #316 may
-> remove the freeze through protected-main review after #314 records an
-> explicitly authorized production diagnostics deployment and live admission
-> evidence.
+> **Beta 4 is authorized but not yet published.** Issue #316 removed the
+> `v0.3.0-beta.4` freeze through protected-main review after issue #314 recorded
+> the authorized production diagnostics deployment and live admission evidence.
+> Dispatch only from the exact protected `main` commit containing that removal,
+> keep `main` fixed while the workflow is nonterminal, and do not describe Beta
+> 4 as public until signing, notarization, appcast publication, and route
+> verification complete.
 
 Dispatch `Stable` from `main` only for reviewed committed Stable metadata, or
 dispatch `Prerelease` only for reviewed committed Alpha, Beta, or RC metadata,

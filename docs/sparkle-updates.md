@@ -265,11 +265,12 @@ select Beta or Alpha for future prereleases. Retired `v0.3.0-beta.1` and
 `v0.3.0-beta.2` Preview identities remain separate, immutable, and unable to
 Sparkle-upgrade into Beta 3.
 
-The next prepared item is frozen `v0.3.0-beta.4` (`0.3.0b4`, build `149`). If
-issue #316 later authorizes publication, it must append above Beta 3 in the same
+The next prepared item is authorized `v0.3.0-beta.4` (`0.3.0b4`, build `149`).
+Issue #316 removed the committed freeze after production diagnostics
+qualification. Publication must append Beta 4 above Beta 3 in the same
 cumulative feed, remain excluded from Stable and RC, and be eligible to Beta and
-Alpha. The committed freeze prevents the Prerelease workflow from packaging or
-signing that target today.
+Alpha. The exact-SHA Prerelease workflow, signing approval, notarization, and
+public verification remain separate fail-closed boundaries.
 
 ## Runtime Integration and UX
 

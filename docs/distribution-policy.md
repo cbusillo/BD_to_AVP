@@ -85,11 +85,12 @@ document it as an external dependency with preflight behavior.
   the production name and bundle identifier on a pinned GitHub-hosted macOS 26
   toolchain, then verifies the exact DMG again in a separate macOS 26 job.
 - The next prepared production-identity field build is `v0.3.0-beta.4`, internal
-  version `0.3.0b4`, build `149`. It is frozen against release dispatch until
-  issue #314 records an explicitly authorized production diagnostics admission
-  deployment and issue #316 removes the committed freeze through protected-main
-  review. Beta 3 build `148` remains the published manual-download seed and
-  immutable appcast history below it.
+  version `0.3.0b4`, build `149`. Issue #314 has completed the authorized
+  production diagnostics admission deployment and issue #316 has removed the
+  committed freeze through protected-main review. Beta 4 is authorized for the
+  guarded exact-SHA Prerelease workflow but remains unpublished until signing
+  and public verification complete. Beta 3 build `148` remains the published
+  manual-download seed and immutable appcast history below it.
 - Stable, RC, Beta, and Alpha are routes for the same product, bundle identifier,
   feed, Sparkle key, signing team, and diagnostics endpoint. Stable is default;
   broader routes include progressively earlier stages without permitting

@@ -1,10 +1,5 @@
 {
   "schema": "bd_to_avp.release_freezes",
   "schema_version": 1,
-  "frozen_release_tags": {
-    "v0.3.0-beta.4": {
-      "issue": 316,
-      "reason": "Beta 4 signing, publication, appcast mutation, and field qualification require explicit authorization after the production diagnostics admission gate is deployed."
-    }
-  }
+  "frozen_release_tags": {}
 }
