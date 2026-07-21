@@ -488,7 +488,8 @@ final class DiagnosticBundleTests: XCTestCase {
             maximumManifestBytes: 64 * 1_024,
             maximumEventsBytes: 320 * 1_024,
             maximumStorageBytes: 1,
-            maximumToolTailBytes: 640 * 1_024
+            maximumToolTailBytes: 640 * 1_024,
+            maximumUserDescriptionBytes: 16 * 1_024
         )
         let recorder = DiagnosticSessionRecorder()
         let snapshot = recorder.snapshot(
@@ -547,6 +548,123 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertNil(manifest["job"])
         XCTAssertTrue(eventsData.isEmpty)
         XCTAssertLessThanOrEqual(artifact.preview.archiveBytes, artifact.preview.maximumArchiveBytes)
+    }
+
+    func testUserDescriptionIsRedactedAndIncludedInImmutableArchive() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        var lifecycle = WorkerLifecycleState()
+        lifecycle.selectSource(URL(fileURLWithPath: "/tmp/Movie.mkv"))
+        try lifecycle.begin(jobID: UUID(), operationKind: .conversion)
+        let recorder = DiagnosticSessionRecorder()
+        let snapshot = recorder.snapshot(
+            capturedAt: fixedDate,
+            lifecycle: lifecycle,
+            activeMode: nil,
+            batchSummary: nil,
+            process: .empty
+        )
+        let builder = DiagnosticBundleBuilder(
+            bundleIDProvider: { self.fixedBundleID },
+            runtimeMetadataProvider: {
+                DiagnosticRuntimeMetadata(
+                    appVersion: "1.2.3",
+                    appBuild: "456",
+                    distributionChannel: "direct",
+                    operatingSystemVersion: "27.0.0",
+                    architecture: "arm64"
+                )
+            }
+        )
+        let raw = "It failed reading /Users/alice/secret.mkv\r\ntoken ghp_ABCDEFGHIJKLMNOPQRSTUVWX email alice@\u{200B}example.com id 01234567-89AB-4CDE-8F01-23456789ABCD"
+        let comment = try XCTUnwrap(DiagnosticUserComment.normalize(raw))
+
+        let artifact = try builder.createBundle(
+            from: snapshot,
+            userComment: comment,
+            outputDirectory: directory
+        )
+
+        // The redacted description lives in the manifest so the immutable four-entry
+        // envelope (which the upload service enforces) is unchanged.
+        XCTAssertThrowsError(try unzipEntry("description.txt", from: artifact.archiveURL))
+        let manifestData = try unzipEntry("manifest.json", from: artifact.archiveURL)
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        let userDescription = try XCTUnwrap(manifest["user_description"] as? [String: Any])
+        let description = try XCTUnwrap(userDescription["text"] as? String)
+        XCTAssertFalse(description.contains("/Users/alice"))
+        XCTAssertFalse(description.contains("secret.mkv"))
+        XCTAssertFalse(description.contains("ghp_ABCDEFGHIJKLMNOPQRSTUVWX"))
+        XCTAssertFalse(description.contains("alice@example.com"))
+        XCTAssertFalse(description.contains("\u{200B}"))
+        XCTAssertFalse(description.contains("01234567-89AB-4CDE-8F01-23456789ABCD"))
+        XCTAssertTrue(description.contains("<path:"))
+        XCTAssertTrue(description.contains("<credential:redacted>"))
+        XCTAssertTrue(description.contains("<email:redacted>"))
+        XCTAssertFalse(description.contains("\r"))
+        XCTAssertEqual(userDescription["included"] as? Bool, true)
+        XCTAssertGreaterThan(userDescription["redacted_bytes"] as? Int ?? 0, 0)
+        let files = try XCTUnwrap(manifest["files"] as? [[String: Any]])
+        XCTAssertFalse(files.contains { $0["name"] as? String == "description.txt" })
+
+        XCTAssertEqual(artifact.preview.userDescription, description)
+        XCTAssertEqual(artifact.handoff.redactedDescription, description)
+        XCTAssertEqual(artifact.handoff.appVersion, "1.2.3")
+        XCTAssertEqual(artifact.handoff.appBuild, "456")
+        XCTAssertEqual(artifact.handoff.capturedStage, snapshot.lifecycle.phase.rawValue)
+        XCTAssertLessThanOrEqual(artifact.preview.archiveBytes, artifact.preview.maximumArchiveBytes)
+    }
+
+    func testRedactorRemovesInvisibleControlsBeforeSensitiveValueMatching() {
+        let redactor = DiagnosticRedactor(bundleID: fixedBundleID)
+
+        let redacted = redactor.redact(
+            "email alice@\u{200B}example.com path /Users/\u{202E}alice/Movies/private.mkv control \u{0085}"
+        )
+
+        XCTAssertTrue(redacted.contains("<email:redacted>"))
+        XCTAssertTrue(redacted.contains("<path:"))
+        XCTAssertFalse(redacted.contains("alice@example.com"))
+        XCTAssertFalse(redacted.unicodeScalars.contains { scalar in
+            let category = scalar.properties.generalCategory
+            return category == .control || category == .format
+        })
+    }
+
+    func testEmptyUserDescriptionOmitsDedicatedEntry() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let recorder = DiagnosticSessionRecorder()
+        let snapshot = recorder.snapshot(
+            capturedAt: fixedDate,
+            lifecycle: WorkerLifecycleState(),
+            activeMode: nil,
+            batchSummary: nil,
+            process: .empty
+        )
+        let builder = DiagnosticBundleBuilder(bundleIDProvider: { self.fixedBundleID })
+
+        let artifact = try builder.createBundle(
+            from: snapshot,
+            userComment: DiagnosticUserComment.normalize("   \n  "),
+            outputDirectory: directory
+        )
+
+        XCTAssertNil(artifact.preview.userDescription)
+        XCTAssertNil(artifact.handoff.redactedDescription)
+        XCTAssertThrowsError(try unzipEntry("description.txt", from: artifact.archiveURL))
+        let manifestData = try unzipEntry("manifest.json", from: artifact.archiveURL)
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        let userDescription = try XCTUnwrap(manifest["user_description"] as? [String: Any])
+        XCTAssertEqual(userDescription["included"] as? Bool, false)
+        let files = try XCTUnwrap(manifest["files"] as? [[String: Any]])
+        XCTAssertFalse(files.contains { $0["name"] as? String == "description.txt" })
     }
 
     func testRecorderBoundsHistoryAndRetainsTerminalRetryAndCancellationEvidence() throws {

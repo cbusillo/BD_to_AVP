@@ -123,7 +123,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     func captureDiagnosticBundle(
-        in outputDirectory: URL? = nil
+        in outputDirectory: URL? = nil,
+        userComment: DiagnosticUserComment? = nil
     ) async throws -> DiagnosticBundleArtifact {
         let capturedAt = diagnosticClock()
         let processSnapshot = client?.diagnosticSnapshot()
@@ -138,12 +139,18 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             observabilityPersistence: observabilityEventStore.snapshot()
         )
         let builder = diagnosticBundleBuilder
-        return try await Task.detached(priority: .utility) {
+        let buildTask = Task.detached(priority: .utility) {
             try builder.createBundle(
                 from: snapshot,
+                userComment: userComment,
                 outputDirectory: outputDirectory
             )
-        }.value
+        }
+        return try await withTaskCancellationHandler {
+            try await buildTask.value
+        } onCancel: {
+            buildTask.cancel()
+        }
     }
 
     func selectSource(_ sourceURL: URL) {

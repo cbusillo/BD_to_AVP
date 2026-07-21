@@ -2,6 +2,7 @@ import Foundation
 
 enum DiagnosticReportPhase: Equatable {
     case idle
+    case composing
     case capturing
     case review
     case uploading(progress: Double)
@@ -14,7 +15,7 @@ enum DiagnosticReportPhase: Equatable {
         switch self {
         case .capturing, .uploading, .cancelling:
             return true
-        case .idle, .review, .success, .cancelled, .failed:
+        case .idle, .composing, .review, .success, .cancelled, .failed:
             return false
         }
     }
@@ -119,12 +120,20 @@ struct DiagnosticArtifactWorkspace {
 
 @MainActor
 final class DiagnosticReportViewModel: ObservableObject {
-    typealias Capture = @MainActor (URL) async throws -> DiagnosticBundleArtifact
+    typealias Capture = @MainActor (URL, DiagnosticUserComment?) async throws -> DiagnosticBundleArtifact
 
     @Published private(set) var phase = DiagnosticReportPhase.idle
     @Published private(set) var artifact: DiagnosticBundleArtifact?
     @Published private(set) var lastSavedCopyURL: URL?
     @Published private(set) var exportErrorMessage: String?
+
+    /// Raw "What went wrong?" text bound to the composing field. It is normalized
+    /// and redacted before it ever enters the immutable bundle.
+    @Published var userDescription = ""
+
+    /// Non-secret context from the most recent capture, retained after a successful
+    /// upload removes the local artifact so the GitHub handoff can still be offered.
+    @Published private(set) var handoffContext: DiagnosticReportHandoffContext?
 
     let isUploadAvailable: Bool
 
@@ -168,23 +177,54 @@ final class DiagnosticReportViewModel: ObservableObject {
             return true
         case let .failed(failure):
             return failure.stage == .upload
-        case .idle, .capturing, .review, .uploading, .cancelling, .success:
+        case .idle, .composing, .capturing, .review, .uploading, .cancelling, .success:
             return false
         }
     }
 
+    /// Opens the composing step where the user can review or leave blank the
+    /// optional description before any capture begins.
     func begin() {
         guard !phase.isBusy else {
             return
         }
         switch phase {
         case .idle:
-            captureNew()
+            phase = .composing
         case let .failed(failure) where failure.stage == .capture && artifact == nil:
-            captureNew()
-        case .capturing, .review, .uploading, .cancelling, .success, .cancelled, .failed:
+            phase = .composing
+        case .composing, .capturing, .review, .uploading, .cancelling, .success, .cancelled, .failed:
             break
         }
+    }
+
+    /// Captures the bundle using the currently entered description. Callable from
+    /// the composing step or a capture-failure retry.
+    func beginCapture() {
+        guard !phase.isBusy, artifact == nil else {
+            return
+        }
+        switch phase {
+        case .composing:
+            captureNew()
+        case let .failed(failure) where failure.stage == .capture:
+            captureNew()
+        case .idle, .capturing, .review, .uploading, .cancelling, .success, .cancelled, .failed:
+            break
+        }
+    }
+
+    /// Returns to the composing step to start a fresh session after a successful
+    /// upload cleared the previous artifact.
+    func composeNewDiagnostics() {
+        guard !phase.isBusy, artifact == nil else {
+            return
+        }
+        userDescription = ""
+        handoffContext = nil
+        lastSavedCopyURL = nil
+        exportErrorMessage = nil
+        phase = .composing
     }
 
     func prepareForNewDiagnosticSession() {
@@ -192,15 +232,38 @@ final class DiagnosticReportViewModel: ObservableObject {
             return
         }
         phase = .idle
+        userDescription = ""
+        handoffContext = nil
         lastSavedCopyURL = nil
         exportErrorMessage = nil
+    }
+
+    func gitHubIssueDraft() -> GitHubIssueDraft? {
+        guard case let .success(receipt) = phase,
+              let handoffContext,
+              !receipt.supportCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !handoffContext.appVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !handoffContext.appBuild.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !handoffContext.capturedStage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return nil
+        }
+        return GitHubIssueDraft(
+            supportCode: receipt.supportCode,
+            appVersion: handoffContext.appVersion,
+            appBuild: handoffContext.appBuild,
+            capturedStage: handoffContext.capturedStage,
+            redactedDescription: handoffContext.redactedDescription
+        )
     }
 
     func captureNew() {
         guard !phase.isBusy, artifact == nil else {
             return
         }
+        let userComment = DiagnosticUserComment.normalize(userDescription)
         discardLocalCopySilently()
+        handoffContext = nil
         lastSavedCopyURL = nil
         exportErrorMessage = nil
         phase = .capturing
@@ -212,12 +275,14 @@ final class DiagnosticReportViewModel: ObservableObject {
             do {
                 let directory = try workspace.makeCaptureDirectory()
                 captureDirectory = directory
-                let artifact = try await capture(directory)
+                let artifact = try await capture(directory, userComment)
                 try Task.checkCancellation()
                 self.artifact = artifact
+                userDescription = ""
                 phase = .review
             } catch is CancellationError {
                 discardLocalCopySilently()
+                userDescription = ""
                 phase = .idle
             } catch {
                 discardLocalCopySilently()
@@ -254,6 +319,7 @@ final class DiagnosticReportViewModel: ObservableObject {
                     }
                     self.phase = .uploading(progress: min(max(progress, 0), 1))
                 }
+                handoffContext = artifact.handoff
                 phase = .success(receipt)
                 cleanupAfterSuccess()
             } catch is CancellationError {
@@ -305,6 +371,7 @@ final class DiagnosticReportViewModel: ObservableObject {
         guard let artifact else {
             try? workspace.removeCaptureDirectory(captureDirectory)
             captureDirectory = nil
+            clearUserContext()
             phase = .idle
             return true
         }
@@ -314,6 +381,7 @@ final class DiagnosticReportViewModel: ObservableObject {
             try? workspace.removeCaptureDirectory(captureDirectory)
             captureDirectory = nil
             exportErrorMessage = nil
+            clearUserContext()
             if case .success = phase {
                 return true
             }
@@ -350,5 +418,11 @@ final class DiagnosticReportViewModel: ObservableObject {
         try? workspace.removeCaptureDirectory(captureDirectory)
         artifact = nil
         captureDirectory = nil
+        handoffContext = nil
+    }
+
+    private func clearUserContext() {
+        userDescription = ""
+        handoffContext = nil
     }
 }

@@ -182,7 +182,7 @@ final class DiagnosticRedactor {
             pattern: #"(?i)\b(?:[0-9A-F]{2}:){5}[0-9A-F]{2}\b"#,
             in: redacted
         ) { _ in "<network:redacted>" }
-        return redacted
+        return Self.removingUnsafeControlCharacters(from: redacted)
     }
 
     private func redactMediaMetadataBlocks(in text: String) -> String {
@@ -440,7 +440,11 @@ final class DiagnosticRedactor {
         }
         return String(
             withoutANSI.unicodeScalars.filter { scalar in
-                scalar == "\n" || scalar == "\r" || scalar == "\t" || scalar.value >= 0x20
+                if scalar == "\n" || scalar == "\r" || scalar == "\t" {
+                    return true
+                }
+                let category = scalar.properties.generalCategory
+                return category != .control && category != .format
             }
         )
     }

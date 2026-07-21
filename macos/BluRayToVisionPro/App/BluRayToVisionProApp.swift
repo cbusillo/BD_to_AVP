@@ -28,8 +28,11 @@ struct BluRayToVisionProApp: App {
         }
         let diagnosticReportViewModel = DiagnosticReportViewModel(
             uploader: diagnosticUploader,
-            capture: { outputDirectory in
-                try await viewModel.captureDiagnosticBundle(in: outputDirectory)
+            capture: { outputDirectory, userComment in
+                try await viewModel.captureDiagnosticBundle(
+                    in: outputDirectory,
+                    userComment: userComment
+                )
             }
         )
         let workCoordinator = AppWorkCoordinator(conversion: viewModel, preview: previewViewModel)
