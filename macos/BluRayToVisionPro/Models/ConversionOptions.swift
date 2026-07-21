@@ -40,11 +40,11 @@ enum AudioHandling: String, CaseIterable, Codable, Identifiable {
     var detail: String {
         switch self {
         case .automatic:
-            "Copies all source audio tracks when every track is qualified AAC; otherwise converts them all to AAC."
+            "Copies the retained audio tracks when every retained track is qualified AAC; otherwise converts the retained set to AAC."
         case .convertAAC:
-            "Converts all source audio tracks to AAC."
+            "Converts the retained audio tracks to AAC."
         case .pcm:
-            "Decodes all source audio tracks to uncompressed PCM."
+            "Decodes the retained audio tracks to uncompressed PCM."
         }
     }
 
@@ -67,6 +67,45 @@ enum AudioHandling: String, CaseIterable, Codable, Identifiable {
             "AAC \(bitrate) kbps"
         case .pcm:
             "uncompressed PCM audio"
+        }
+    }
+}
+
+enum AudioLanguageMode: String, CaseIterable, Codable, Identifiable {
+    case allLanguages = "all_languages"
+    case preferredOnly = "preferred_only"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .allLanguages:
+            "All Languages"
+        case .preferredOnly:
+            "Preferred Language Only"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .allLanguages:
+            "Retains every source audio track in source order."
+        case .preferredOnly:
+            "Retains every track whose metadata language matches the preferred audio language. If none match, the source-default track is retained, or the first track when no default is declared."
+        }
+    }
+}
+
+struct AudioLanguagePolicy: Codable, Equatable {
+    var mode = AudioLanguageMode.allLanguages
+    var preferredLanguage = MediaLanguage.english
+
+    var summary: String {
+        switch mode {
+        case .allLanguages:
+            "all languages"
+        case .preferredOnly:
+            "\(preferredLanguage.name) only"
         }
     }
 }
@@ -103,7 +142,18 @@ enum SubtitleMode: String, CaseIterable, Codable, Identifiable {
 
 struct SubtitlePolicy: Codable, Equatable {
     var mode = SubtitleMode.preferredPlusOthers
-    var preferredLanguage = SubtitleLanguage.english
+    var preferredLanguage = MediaLanguage.english
+
+    var summary: String {
+        switch mode {
+        case .off:
+            "off"
+        case .preferredOnly:
+            "\(preferredLanguage.name) only"
+        case .preferredPlusOthers:
+            "\(preferredLanguage.name) + others"
+        }
+    }
 }
 
 enum VideoOutputMode: String, CaseIterable, Codable, Identifiable {
@@ -193,17 +243,29 @@ struct EncodingOptions: Codable, Equatable {
 
     var audioHandling = AudioHandling.automatic
     var audioBitrate = 384
+    var audioLanguages = AudioLanguagePolicy()
     var subtitles = SubtitlePolicy()
 
-    var compactSummary: String {
+    var audioSummary: String {
+        "\(audioHandling.compactSummary(bitrate: audioBitrate)), \(audioLanguages.summary)"
+    }
+
+    var subtitleSummary: String {
+        subtitles.summary
+    }
+
+    var videoSummary: String {
         let resolution = upscaleEnabled ? "2× upscale" : "source resolution"
-        let audio = audioHandling.compactSummary(bitrate: audioBitrate)
-        switch videoOutputMode {
+        return switch videoOutputMode {
         case .mvHEVC:
-            return "MV-HEVC \(hevcQuality) · \(leftRightBitrate) Mbps eyes · \(resolution) · \(audio)"
+            "MV-HEVC \(hevcQuality) · \(leftRightBitrate) Mbps eyes · \(resolution)"
         case .av1Stereo:
-            return "AV1 stereo CRF \(av1CRF) · full side-by-side · source resolution · \(audio)"
+            "AV1 stereo CRF \(av1CRF) · full side-by-side · source resolution"
         }
+    }
+
+    var compactSummary: String {
+        "\(videoSummary) · Audio: \(audioSummary) · Subtitles: \(subtitleSummary)"
     }
 }
 

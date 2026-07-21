@@ -139,7 +139,21 @@ struct EncodingOptionsEditor: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Text("All audio tracks from the source are included, regardless of language. Subtitle language choices do not filter audio.")
+                    Picker("Audio languages", selection: $options.audioLanguages.mode) {
+                        ForEach(AudioLanguageMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    if options.audioLanguages.mode == .preferredOnly {
+                        LanguagePickerField(
+                            purpose: .audio,
+                            selection: $options.audioLanguages.preferredLanguage
+                        )
+                    }
+
+                    Text(options.audioLanguages.mode.detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -164,10 +178,13 @@ struct EncodingOptionsEditor: View {
                     .pickerStyle(.segmented)
 
                     if options.subtitles.mode != .off {
-                        LanguagePickerField(selection: $options.subtitles.preferredLanguage)
+                        LanguagePickerField(
+                            purpose: .subtitle,
+                            selection: $options.subtitles.preferredLanguage
+                        )
                     }
 
-                    Text("\(options.subtitles.mode.detail) Subtitle language choices do not filter audio tracks.")
+                    Text(options.subtitles.mode.detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

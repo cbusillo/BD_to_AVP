@@ -155,6 +155,10 @@ final class ProfileStore: ObservableObject {
                 let legacyDocument = try decoder.decode(LegacyProfileDocumentV2.self, from: data)
                 storedProfiles = legacyDocument.profiles.map { $0.migrated() }
                 needsMigration = true
+            case 3:
+                let legacyDocument = try decoder.decode(LegacyProfileDocumentV3.self, from: data)
+                storedProfiles = legacyDocument.profiles.map { $0.migrated() }
+                needsMigration = true
             case ProfileDocument.currentVersion:
                 storedProfiles = try decoder.decode(ProfileDocument.self, from: data).profiles
                 needsMigration = false
@@ -281,7 +285,7 @@ enum ProfileStoreError: LocalizedError, Equatable {
 }
 
 private struct ProfileDocument: Codable {
-    static let currentVersion = 3
+    static let currentVersion = 4
 
     let version: Int
     let profiles: [StoredProfile]
@@ -295,6 +299,60 @@ private struct StoredProfile: Codable {
     let id: UUID
     let name: String
     let options: EncodingOptions
+}
+
+private struct LegacyProfileDocumentV3: Decodable {
+    let version: Int
+    let profiles: [LegacyStoredProfileV3]
+}
+
+private struct LegacyStoredProfileV3: Decodable {
+    let id: UUID
+    let name: String
+    let options: LegacyEncodingOptionsV3
+
+    func migrated() -> StoredProfile {
+        StoredProfile(id: id, name: name, options: options.migrated())
+    }
+}
+
+private struct LegacyEncodingOptionsV3: Decodable {
+    let videoOutputMode: VideoOutputMode
+    let av1CRF: Int
+    let hevcQuality: Int
+    let leftRightBitrate: Int
+    let upscaleEnabled: Bool
+    let upscaleQuality: Int
+    let linkQuality: Bool
+    let fieldOfView: Int
+    let frameRateOverride: String
+    let resolutionOverride: String
+    let cropBlackBars: Bool
+    let swapEyes: Bool
+    let audioHandling: AudioHandling
+    let audioBitrate: Int
+    let subtitles: SubtitlePolicy
+
+    func migrated() -> EncodingOptions {
+        EncodingOptions(
+            videoOutputMode: videoOutputMode,
+            av1CRF: av1CRF,
+            hevcQuality: hevcQuality,
+            leftRightBitrate: leftRightBitrate,
+            upscaleEnabled: upscaleEnabled,
+            upscaleQuality: upscaleQuality,
+            linkQuality: linkQuality,
+            fieldOfView: fieldOfView,
+            frameRateOverride: frameRateOverride,
+            resolutionOverride: resolutionOverride,
+            cropBlackBars: cropBlackBars,
+            swapEyes: swapEyes,
+            audioHandling: audioHandling,
+            audioBitrate: audioBitrate,
+            audioLanguages: AudioLanguagePolicy(),
+            subtitles: subtitles
+        )
+    }
 }
 
 private struct LegacyProfileDocumentV2: Decodable {
@@ -381,7 +439,7 @@ private struct LegacyEncodingOptionsV1: Decodable {
     let keepExtraLanguages: Bool
 
     func migrated() throws -> EncodingOptions {
-        guard let preferredLanguage = SubtitleLanguage(code: language) else {
+        guard let preferredLanguage = MediaLanguage(code: language) else {
             throw ProfileStoreError.invalidDocument
         }
         let mode: SubtitleMode = if !includeSubtitles {

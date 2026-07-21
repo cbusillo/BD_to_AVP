@@ -166,9 +166,12 @@ class NativeAppPackagingTests(unittest.TestCase):
         language_picker = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "LanguagePickerField.swift").read_text(
             encoding="utf-8"
         )
-        conversion_ui = setup_view + encoding_editor + language_picker
+        conversion_options = (MACOS_ROOT / "BluRayToVisionPro" / "Models" / "ConversionOptions.swift").read_text(
+            encoding="utf-8"
+        )
+        conversion_ui = setup_view + encoding_editor + language_picker + conversion_options
 
-        self.assertIn('.accessibilityLabel("Subtitle language: \\(selection.displayName)")', language_picker)
+        self.assertIn('.accessibilityLabel("\\(purpose.label): \\(selection.displayName)")', language_picker)
         self.assertNotIn('.accessibilityLabel("Preferred language:', language_picker)
 
         self.assertIn("Convert a 3D Blu-ray Disc", source_view)
@@ -188,7 +191,10 @@ class NativeAppPackagingTests(unittest.TestCase):
             "Crop black bars",
             "Swap left and right eyes",
             "Audio handling",
-            "All audio tracks from the source are included, regardless of language.",
+            "Audio languages",
+            "All Languages",
+            "Preferred Language Only",
+            "Audio language",
             "Subtitle handling",
             "Subtitle language",
             "Start stage",
@@ -203,9 +209,17 @@ class NativeAppPackagingTests(unittest.TestCase):
 
         self.assertIn('Section("Subtitles")', encoding_editor)
         self.assertNotIn("Subtitles and Languages", encoding_editor)
+        self.assertIn('LabeledContent("Video")', source_view)
+        self.assertIn('LabeledContent("Audio")', source_view)
+        self.assertIn('LabeledContent("Subtitles")', source_view)
+        self.assertIn("Text(options.encoding.videoSummary)", source_view)
+        self.assertIn("Text(options.encoding.audioSummary)", source_view)
+        self.assertIn("Opens a searchable list of audio languages", language_picker)
         self.assertIn("Opens a searchable list of subtitle languages", language_picker)
+        self.assertIn("Search audio languages", language_picker)
         self.assertIn("Search subtitle languages", language_picker)
-        self.assertIn("Subtitle language choices do not filter audio tracks.", encoding_editor)
+        self.assertNotIn("All audio tracks from the source are included, regardless of language.", encoding_editor)
+        self.assertNotIn("Subtitle language choices do not filter audio tracks.", encoding_editor)
 
     def test_profile_settings_remain_resizable_and_scrollable_when_read_only(self) -> None:
         settings_view = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "SettingsView.swift").read_text(encoding="utf-8")

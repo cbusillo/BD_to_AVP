@@ -205,7 +205,7 @@ struct LanguageCatalog {
     }
 }
 
-struct SubtitleLanguage: Codable, Equatable, Hashable, Identifiable {
+struct MediaLanguage: Codable, Equatable, Hashable, Identifiable {
     let code: String
 
     var id: String { code }
@@ -214,17 +214,17 @@ struct SubtitleLanguage: Codable, Equatable, Hashable, Identifiable {
     var bibliographic: String { catalogLanguage.bibliographic }
     var displayName: String { catalogLanguage.displayName }
 
-    static let english = SubtitleLanguage(canonicalCode: "eng")
-    static let spanish = SubtitleLanguage(canonicalCode: "spa")
-    static let french = SubtitleLanguage(canonicalCode: "fra")
-    static let german = SubtitleLanguage(canonicalCode: "deu")
-    static let dutch = SubtitleLanguage(canonicalCode: "nld")
-    static let chinese = SubtitleLanguage(canonicalCode: "zho")
-    static let japanese = SubtitleLanguage(canonicalCode: "jpn")
-    static let portuguese = SubtitleLanguage(canonicalCode: "por")
-    static let russian = SubtitleLanguage(canonicalCode: "rus")
-    static let italian = SubtitleLanguage(canonicalCode: "ita")
-    static let korean = SubtitleLanguage(canonicalCode: "kor")
+    static let english = MediaLanguage(canonicalCode: "eng")
+    static let spanish = MediaLanguage(canonicalCode: "spa")
+    static let french = MediaLanguage(canonicalCode: "fra")
+    static let german = MediaLanguage(canonicalCode: "deu")
+    static let dutch = MediaLanguage(canonicalCode: "nld")
+    static let chinese = MediaLanguage(canonicalCode: "zho")
+    static let japanese = MediaLanguage(canonicalCode: "jpn")
+    static let portuguese = MediaLanguage(canonicalCode: "por")
+    static let russian = MediaLanguage(canonicalCode: "rus")
+    static let italian = MediaLanguage(canonicalCode: "ita")
+    static let korean = MediaLanguage(canonicalCode: "kor")
 
     init?(code: String, catalog: LanguageCatalog = .shared) {
         guard let language = catalog.language(matching: code) else {
@@ -236,10 +236,10 @@ struct SubtitleLanguage: Codable, Equatable, Hashable, Identifiable {
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         let suppliedCode = try container.decode(String.self)
-        guard let language = SubtitleLanguage(code: suppliedCode) else {
+        guard let language = MediaLanguage(code: suppliedCode) else {
             throw DecodingError.dataCorruptedError(
                 in: container,
-                debugDescription: "Unsupported subtitle language code: \(suppliedCode)."
+                debugDescription: "Unsupported media language code: \(suppliedCode)."
             )
         }
         self = language
@@ -256,7 +256,7 @@ struct SubtitleLanguage: Codable, Equatable, Hashable, Identifiable {
 
     private var catalogLanguage: LanguageCatalog.Language {
         guard let language = LanguageCatalog.shared.language(canonicalCode: code) else {
-            preconditionFailure("Unsupported canonical subtitle language: \(code)")
+            preconditionFailure("Unsupported canonical media language: \(code)")
         }
         return language
     }

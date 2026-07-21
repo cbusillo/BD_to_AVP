@@ -1,7 +1,7 @@
 # Native Worker Protocol v5
 
 > Historical protocol. Current audio-mode behavior is documented in
-> [Native Worker Protocol v8](native-worker-protocol-v8.md).
+> [Native Worker Protocol v9](native-worker-protocol-v9.md).
 
 Protocol v5 replaces the three legacy subtitle fields with one explicit,
 backend-neutral subtitle policy. The native app and bundled Python worker ship
@@ -60,8 +60,9 @@ Unknown instead of changing the requested subtitle policy.
 ## Media Behavior
 
 Disc, image, folder, and direct-file workflows apply subtitle filtering after
-the source MKV is available. MakeMKV retains all source tracks, and subtitle
-policy never removes or reorders audio tracks.
+the source MKV is available. Under this historical v5 contract, MakeMKV retains
+all source tracks and subtitle policy does not alter audio. Protocol v9 adds a
+separate, explicit audio-language policy without changing subtitle behavior.
 
 When `preferred_only` finds no matching PGS subtitle track, conversion
 continues without subtitles and emits a warning. This is distinct from an OCR

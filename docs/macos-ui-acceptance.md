@@ -17,15 +17,16 @@ baseline for `0.3.0` and later.
 | Area | Result | Evidence |
 | --- | --- | --- |
 | Deployment floor | Pass | XcodeGen and `MACOSX_DEPLOYMENT_TARGET` remain 26.0; package compatibility is enforced separately. |
-| Profiles | Pass | Built-ins are immutable; custom profiles support create, duplicate, rename, edit, reorder, delete, default selection, atomic persistence, and corruption recovery. Reordering and duplicate-name progression now have persistence tests. |
+| Profiles | Pass | Built-ins are immutable; custom profiles support create, duplicate, rename, edit, reorder, delete, default selection, atomic persistence, and corruption recovery. Profile document v4 stores the independent audio-language policy, while v1-v3 migrations retain all audio languages. |
 | Current-job isolation | Pass | Profile writes contain only reusable encoding settings. Source, destination, preview intent, and job/recovery options remain outside the stored profile. |
+| Audio and subtitle languages | Pass | Audio exposes `All Languages` and `Preferred Language Only` with an `Audio language` picker; subtitles retain separate handling and `Subtitle language` controls. Job and profile summaries label Video, Audio, and Subtitles independently. |
 | Standard platform controls | Pass | The application uses platform windows, toolbar/menu roles, forms, pickers, lists, split views, materials, and AVKit playback rather than custom replicas. |
 | Structural chrome | Pass | Footers use system material normally and switch to an opaque window background for Reduce Transparency or Increase Contrast. No explicit `glassEffect` is applied to dense content. |
 | Readability | Pass | Forms and metadata remain opaque; video keeps a black backing; diagnostics use the platform text background. |
 | Appearance | Pass | Main and Profiles views were reviewed in light and dark appearances. |
 | Accessibility display modes | Pass | Reduce Transparency and Increase Contrast were enabled together for the main-window review and restored afterward. |
 | Keyboard and menus | Pass | The standard About, Services, Hide, and Quit items are present; `Command-,` opens the reusable Settings window; sheets retain default and cancel shortcuts. |
-| Accessibility semantics | Pass | The Settings accessibility tree exposes named profile controls and navigation tabs. Preview decoration is hidden from assistive technology, the status row has one meaningful label, and the player has an explicit label and hint. |
+| Accessibility semantics | Pass | The Settings accessibility tree exposes named profile controls and navigation tabs. Audio and subtitle language pickers have distinct labels, search prompts, and hints. Preview decoration is hidden from assistive technology, the status row has one meaningful label, and the player has an explicit label and hint. |
 | Window sizing | Pass | The main window was reviewed at its 1120×820 default size and at the configured 1080-point minimum width. The full title, both workspaces, and primary actions remain visible; the source workspace scrolls vertically when multi-title details exceed the available height. |
 | Long-running status | Pass | Conversion and preview heartbeats now expose elapsed time while remaining indeterminate when no trustworthy progress denominator exists. |
 

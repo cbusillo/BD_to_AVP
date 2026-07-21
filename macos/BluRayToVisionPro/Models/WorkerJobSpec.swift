@@ -1,7 +1,7 @@
 import Foundation
 
 struct WorkerJobSpec: Encodable, Equatable {
-    static let protocolVersion = 8
+    static let protocolVersion = 9
 
     struct Source: Encodable, Equatable {
         enum Kind: String, Encodable {
@@ -63,6 +63,24 @@ struct WorkerJobSpec: Encodable, Equatable {
 
             let mode: Mode
             let bitrate: Int
+            let preferredLanguage: String?
+
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(mode, forKey: .mode)
+                try container.encode(bitrate, forKey: .bitrate)
+                if let preferredLanguage {
+                    try container.encode(preferredLanguage, forKey: .preferredLanguage)
+                } else {
+                    try container.encodeNil(forKey: .preferredLanguage)
+                }
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case mode
+                case bitrate
+                case preferredLanguage = "preferred_language"
+            }
         }
 
         struct Subtitles: Encodable, Equatable {
@@ -249,7 +267,8 @@ struct WorkerJobSpec: Encodable, Equatable {
         return Encoding(
             audio: Encoding.Audio(
                 mode: audioMode(from: options.audioHandling),
-                bitrate: options.audioBitrate
+                bitrate: options.audioBitrate,
+                preferredLanguage: audioPreferredLanguage(from: options.audioLanguages)
             ),
             videoMode: options.videoOutputMode,
             av1CRF: options.av1CRF,
@@ -275,6 +294,15 @@ struct WorkerJobSpec: Encodable, Equatable {
             .convertAAC
         case .pcm:
             .pcm
+        }
+    }
+
+    private static func audioPreferredLanguage(from policy: AudioLanguagePolicy) -> String? {
+        switch policy.mode {
+        case .allLanguages:
+            nil
+        case .preferredOnly:
+            policy.preferredLanguage.code
         }
     }
 

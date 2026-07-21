@@ -164,7 +164,17 @@ the macOS app can convert the main movie, every detected 3D video, or a custom
 selection. Multi-title selections run serially and preserve completed outputs
 if a later video needs attention. For source-folder jobs, accepted MKV or subtitle error
 continuations resume the failed source and then continue through the original
-batch queue.
+batch queue. Audio and subtitle language choices are independent. The native
+app defaults every existing, migrated, built-in, and new profile to **All
+Languages** for audio. **Preferred Language Only** retains every audio stream
+whose metadata language matches the selected language; if none match, the app
+keeps the source-default audio stream or the first stream and shows a warning.
+Titles are not used to guess audio language.
+
+Audio-language filtering can reduce output payload when tracks are omitted,
+but this feature does not establish the cause of the output-size report in
+issue #202 and does not claim to fix the separately reported Ship's *Top Gun*
+stall. Those observations remain separate diagnostic work.
 
 ## Terminal Usage
 
@@ -192,6 +202,8 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
   qualified AAC audio to an owned M4A, and converts the whole selected set to AAC if any selected stream is unqualified.
 - `--transcode-audio`: Legacy alias for `--audio-mode convert_aac`.
 - `--audio-bitrate`: Audio bitrate for AAC conversion in kb/s do not include unit (default: "384").
+- `--audio-preferred-language`: Keep every audio track matching this language metadata. Accepts ISO 639 alpha-2,
+  alpha-3/B, and alpha-3/T codes. Omit it to keep all audio languages.
 - `--left-right-bitrate`: Bitrate for left and right views in Mb/s do not include unit (default: "20").
 - `--mv-hevc-quality`: Quality factor for MV-HEVC encoding (default: "75").
 - `--fov`: Horizontal field of view for MV-HEVC (default: "90").
@@ -203,9 +215,9 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - `--software-encoder`: Use software encoder for MV-HEVC encoding (disabled by default).
 - `--skip-subtitles`: Skip subtitle extraction (disabled by default).
 - `--continue-on-error`: Continue processing after an error (disabled by default).
-- `--language`: Language code for audio and subtitle extraction (default: "eng")  Use the ISO 639-2 (three character)
-  code.
-- `--remove-extra-languages`: Remove extra audio and subtitle languages (disabled by default).
+- `--language-code`: Preferred subtitle language (default: `eng`). Accepts ISO 639 alpha-2, alpha-3/B, and alpha-3/T
+  codes. Subtitle and audio language choices are independent.
+- `--remove-extra-languages`: Remove subtitle languages other than `--language-code` (disabled by default).
 - `--no-keep-awake`: Prevent the system from sleeping during processing (disabled by default).
 - `--version`: Show the version number and exit.
 

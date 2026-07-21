@@ -518,7 +518,12 @@ struct SourceWorkspaceView: View {
                     }
                 }
                 LabeledContent("Video") {
-                    Text(options.compactSummary)
+                    Text(options.encoding.videoSummary)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                }
+                LabeledContent("Audio") {
+                    Text(options.encoding.audioSummary)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.trailing)
                 }

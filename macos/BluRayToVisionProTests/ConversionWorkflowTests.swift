@@ -153,9 +153,9 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(BuiltInProfile.originalResolution.options.hevcQuality, 85)
         XCTAssertEqual(ConversionStage.combineToMVHEVC.rawValue, 5)
         XCTAssertEqual(ConversionStage.upscaleVideo.rawValue, 6)
-        XCTAssertEqual(SubtitleLanguage.french.code, "fra")
-        XCTAssertEqual(SubtitleLanguage.german.code, "deu")
-        XCTAssertEqual(SubtitleLanguage.chinese.code, "zho")
+        XCTAssertEqual(MediaLanguage.french.code, "fra")
+        XCTAssertEqual(MediaLanguage.german.code, "deu")
+        XCTAssertEqual(MediaLanguage.chinese.code, "zho")
     }
 
     func testAudioHandlingPreservesProfileValuesAndAutomaticDefaults() {
@@ -165,30 +165,34 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(AudioHandling.pcm.rawValue, "preserve")
         XCTAssertEqual(AudioHandling.pcm.title, "Uncompressed PCM")
         XCTAssertEqual(EncodingOptions().audioHandling, .automatic)
+        XCTAssertEqual(EncodingOptions().audioLanguages.mode, .allLanguages)
         XCTAssertTrue(BuiltInProfile.allCases.allSatisfy { $0.options.audioHandling == .automatic })
+        XCTAssertTrue(BuiltInProfile.allCases.allSatisfy { $0.options.audioLanguages.mode == .allLanguages })
         XCTAssertEqual(ConversionStage.transcodeAudio.title, "7 — Prepare Audio")
     }
 
     func testAudioHandlingHelpAndSummariesDescribeAllModesPrecisely() {
         XCTAssertEqual(
             AudioHandling.automatic.detail,
-            "Copies all source audio tracks when every track is qualified AAC; otherwise converts them all to AAC."
+            "Copies the retained audio tracks when every retained track is qualified AAC; otherwise converts the retained set to AAC."
         )
-        XCTAssertEqual(AudioHandling.convertAAC.detail, "Converts all source audio tracks to AAC.")
-        XCTAssertEqual(AudioHandling.pcm.detail, "Decodes all source audio tracks to uncompressed PCM.")
+        XCTAssertEqual(AudioHandling.convertAAC.detail, "Converts the retained audio tracks to AAC.")
+        XCTAssertEqual(AudioHandling.pcm.detail, "Decodes the retained audio tracks to uncompressed PCM.")
         XCTAssertEqual(AudioHandling.automatic.bitrateLabel, "AAC fallback bitrate")
         XCTAssertEqual(AudioHandling.convertAAC.bitrateLabel, "AAC bitrate")
         XCTAssertNil(AudioHandling.pcm.bitrateLabel)
-        XCTAssertTrue(EncodingOptions().compactSummary.contains("automatic audio"))
+        XCTAssertTrue(EncodingOptions().compactSummary.contains("Audio: automatic audio"))
+        XCTAssertTrue(EncodingOptions().compactSummary.contains("all languages"))
+        XCTAssertTrue(EncodingOptions().compactSummary.contains("Subtitles: English + others"))
         XCTAssertEqual(
             EncodingOptions(audioHandling: .automatic, audioBitrate: 448).compactSummary,
-            "MV-HEVC 75 · 20 Mbps eyes · source resolution · automatic audio (AAC fallback 448 kbps)"
+            "MV-HEVC 75 · 20 Mbps eyes · source resolution · Audio: automatic audio (AAC fallback 448 kbps), all languages · Subtitles: English + others"
         )
         XCTAssertEqual(
             EncodingOptions(audioHandling: .convertAAC, audioBitrate: 448).compactSummary,
-            "MV-HEVC 75 · 20 Mbps eyes · source resolution · AAC 448 kbps"
+            "MV-HEVC 75 · 20 Mbps eyes · source resolution · Audio: AAC 448 kbps, all languages · Subtitles: English + others"
         )
-        XCTAssertTrue(BuiltInProfile.balanced.summary.contains("automatic audio"))
+        XCTAssertTrue(BuiltInProfile.balanced.summary.contains("all audio languages"))
     }
 
     func testSourceInferencePreservesProductHierarchy() throws {
@@ -298,6 +302,7 @@ final class ConversionWorkflowTests: XCTestCase {
             var profile = BuiltInProfile.balanced.profile
             var options = ConversionOptions()
             options.encoding.hevcQuality = 81
+            options.encoding.audioLanguages = AudioLanguagePolicy(mode: .preferredOnly, preferredLanguage: .japanese)
             options.job.keepStageFiles = true
             let destinationURL = directoryURL.appendingPathComponent("Output", isDirectory: true)
 
@@ -316,6 +321,8 @@ final class ConversionWorkflowTests: XCTestCase {
                 XCTAssertEqual(draft.profile.name, "Balanced")
                 XCTAssertEqual(draft.destinationURL, destinationURL)
                 XCTAssertEqual(draft.options.encoding.hevcQuality, 81)
+                XCTAssertEqual(draft.options.encoding.audioLanguages.mode, .preferredOnly)
+                XCTAssertEqual(draft.options.encoding.audioLanguages.preferredLanguage, .japanese)
                 XCTAssertTrue(draft.options.job.keepStageFiles)
             }
             XCTAssertEqual(profile.name, "Changed Later")
@@ -557,7 +564,10 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(spec.encoding?.mvHEVCQuality, 80)
         XCTAssertTrue(spec.encoding?.fxUpscale == true)
         XCTAssertEqual(spec.encoding?.fieldOfView, 120)
-        XCTAssertEqual(spec.encoding?.audio, WorkerJobSpec.Encoding.Audio(mode: .convertAAC, bitrate: 512))
+        XCTAssertEqual(
+            spec.encoding?.audio,
+            WorkerJobSpec.Encoding.Audio(mode: .convertAAC, bitrate: 512, preferredLanguage: nil)
+        )
     }
 
     func testAV1JobSpecClearsIncompatibleUpscaleAndResolution() {
@@ -701,7 +711,8 @@ final class ConversionWorkflowTests: XCTestCase {
         let audio = try XCTUnwrap(encoding["audio"] as? [String: Any])
         XCTAssertEqual(audio["mode"] as? String, "automatic")
         XCTAssertEqual(audio["bitrate"] as? Int, 384)
-        XCTAssertEqual(Set(audio.keys), ["mode", "bitrate"])
+        XCTAssertTrue(audio["preferred_language"] is NSNull)
+        XCTAssertEqual(Set(audio.keys), ["mode", "bitrate", "preferred_language"])
         XCTAssertNil(encoding["transcode_audio"])
         XCTAssertNil(encoding["audio_bitrate"])
         let subtitles = try XCTUnwrap(encoding["subtitles"] as? [String: Any])
@@ -777,7 +788,40 @@ final class ConversionWorkflowTests: XCTestCase {
 
             XCTAssertEqual(audio["mode"] as? String, expectedMode)
             XCTAssertEqual(audio["bitrate"] as? Int, 448)
-            XCTAssertEqual(Set(audio.keys), ["mode", "bitrate"])
+            XCTAssertTrue(audio["preferred_language"] is NSNull)
+            XCTAssertEqual(Set(audio.keys), ["mode", "bitrate", "preferred_language"])
+        }
+    }
+
+    func testPreferredAudioLanguageSerializesCanonicalCodeForConversionAndPreview() throws {
+        var options = ConversionOptions()
+        options.encoding.audioLanguages = AudioLanguagePolicy(mode: .preferredOnly, preferredLanguage: .dutch)
+        let conversion = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/movie.mkv")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            options: options
+        )
+        let preview = try XCTUnwrap(
+            PreviewDraft(
+                parentJobID: UUID(),
+                conversion: conversion,
+                outputLength: .oneMinute,
+                samplePosition: .middle
+            )
+        )
+
+        for spec in [
+            WorkerJobSpec(draft: conversion),
+            WorkerJobSpec(previewDraft: preview, destinationURL: URL(fileURLWithPath: "/tmp/preview")),
+        ] {
+            let json = try XCTUnwrap(
+                try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? [String: Any]
+            )
+            let encoding = try XCTUnwrap(json["encoding"] as? [String: Any])
+            let audio = try XCTUnwrap(encoding["audio"] as? [String: Any])
+            XCTAssertEqual(audio["preferred_language"] as? String, "nld")
         }
     }
 
@@ -805,7 +849,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(changedEncoding.audio, originalEncoding.audio)
     }
 
-    func testConversionJobSpecMatchesSharedV8WorkerFixture() throws {
+    func testConversionJobSpecMatchesSharedV9WorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic
         let draft = ConversionDraft(
@@ -821,7 +865,7 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_convert_v8.json")
+            with: sharedFixtureData(named: "native_worker_convert_v9.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
@@ -852,7 +896,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(source["title_id"] as? String, "provider:playlist-01005")
     }
 
-    func testPreviewJobSpecMatchesSharedV8WorkerFixture() throws {
+    func testPreviewJobSpecMatchesSharedV9WorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic
         let conversion = ConversionDraft(
@@ -880,13 +924,13 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_preview_v8.json")
+            with: sharedFixtureData(named: "native_worker_preview_v9.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
     }
 
-    func testPhysicalDiscJobSpecMatchesSharedV8WorkerFixture() throws {
+    func testPhysicalDiscJobSpecMatchesSharedV9WorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic
         let draft = ConversionDraft(
@@ -915,7 +959,7 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_convert_physical_disc_v8.json")
+            with: sharedFixtureData(named: "native_worker_convert_physical_disc_v9.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)

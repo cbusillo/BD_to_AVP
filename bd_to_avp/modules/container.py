@@ -1,10 +1,19 @@
 import threading
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import ffmpeg
 
+from bd_to_avp.modules.audio_mode import AudioMode
+from bd_to_avp.modules.audio_selection import (
+    AudioSelectionActivityReporter,
+    emit_audio_selection_warning,
+    emit_unrestorable_all_languages_warning,
+    load_audio_selection_manifest,
+    persist_audio_selection,
+    select_audio_streams,
+)
 from bd_to_avp.modules.config import (
     Stage,
     config,
@@ -25,6 +34,26 @@ AUDIO_CHANNEL_LAYOUT_NAMES = {
     2: "stereo",
 }
 GENERIC_AUDIO_HANDLER_NAMES = frozenset({"soundhandler"})
+AUDIO_DISPOSITION_NAMES = (
+    "default",
+    "dub",
+    "original",
+    "comment",
+    "lyrics",
+    "karaoke",
+    "forced",
+    "hearing_impaired",
+    "visual_impaired",
+    "clean_effects",
+    "attached_pic",
+    "timed_thumbnails",
+    "non_diegetic",
+    "captions",
+    "descriptions",
+    "metadata",
+    "dependent",
+    "still_image",
+)
 
 
 def extract_mvc_and_audio(
@@ -32,11 +61,13 @@ def extract_mvc_and_audio(
     video_output_path: Path | None,
     audio_output_path: Path | None,
     *,
+    activity: AudioSelectionActivityReporter | None = None,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
 ) -> None:
     stream = ffmpeg.input(str(input_path))
+    audio_selection = None
 
     output_streams = []
     if video_output_path:
@@ -45,17 +76,44 @@ def extract_mvc_and_audio(
         )
 
     if audio_output_path:
-        output_streams.append(
-            ffmpeg.output(
-                stream["a"],
-                f"file:{audio_output_path}",
-                c="pcm_s24le",
-                **audio_handler_metadata_options(
+        if config.audio_preferred_language is not None:
+            audio_selection = select_audio_streams(
+                get_audio_stream_data(
                     input_path,
                     run_context=run_context,
                     cancellation_event=cancellation_event,
                     observability_context=observability_context,
                 ),
+                config.audio_preferred_language,
+            )
+            emit_audio_selection_warning(audio_selection, activity, stage="extract_mvc_and_audio")
+        audio_inputs = (
+            [stream[selected_stream.selector] for selected_stream in audio_selection.streams]
+            if audio_selection is not None
+            else [stream["a"]]
+        )
+        metadata_options = (
+            audio_handler_metadata_options(
+                input_path,
+                selected_streams=[selected_stream.stream for selected_stream in audio_selection.streams],
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                observability_context=observability_context,
+            )
+            if audio_selection is not None
+            else audio_handler_metadata_options(
+                input_path,
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                observability_context=observability_context,
+            )
+        )
+        output_streams.append(
+            ffmpeg.output(
+                *audio_inputs,
+                f"file:{audio_output_path}",
+                c="pcm_s24le",
+                **metadata_options,
             )
         )
 
@@ -69,6 +127,8 @@ def extract_mvc_and_audio(
             cancellation_event=cancellation_event,
             observability_context=observability_context,
         )
+        if audio_output_path is not None:
+            persist_audio_selection(audio_output_path, audio_selection)
 
 
 def create_muxed_file(
@@ -77,6 +137,7 @@ def create_muxed_file(
     output_folder: Path,
     disc_name: str,
     *,
+    activity: AudioSelectionActivityReporter | None = None,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
@@ -88,6 +149,7 @@ def create_muxed_file(
             audio_path,
             muxed_path,
             output_folder,
+            activity=activity,
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=observability_context,
@@ -100,6 +162,7 @@ def create_mvc_and_audio(
     mkv_output_path: Path,
     output_folder: Path,
     *,
+    activity: AudioSelectionActivityReporter | None = None,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
@@ -114,6 +177,7 @@ def create_mvc_and_audio(
             mkv_output_path,
             None if direct_mvc_stream else video_output_path,
             None if m4a_audio_preparation else audio_output_path,
+            activity=activity,
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=observability_context,
@@ -131,6 +195,7 @@ def mux_video_audio_subs(
     muxed_path: Path,
     output_folder: Path,
     *,
+    activity: AudioSelectionActivityReporter | None = None,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
@@ -141,6 +206,20 @@ def mux_video_audio_subs(
         cancellation_event=cancellation_event,
         observability_context=observability_context,
     )
+    if config.audio_preferred_language is not None:
+        selection = select_audio_streams(audio_streams, config.audio_preferred_language)
+        audio_streams = [selected_stream.stream for selected_stream in selection.streams]
+        if _audio_selection_not_prepared_in_current_run():
+            emit_audio_selection_warning(selection, activity, stage="create_final_file")
+    elif _audio_selection_not_prepared_in_current_run():
+        manifest = load_audio_selection_manifest(audio_path)
+        if manifest is not None and manifest.omitted_streams and manifest.selected_stream_count == len(audio_streams):
+            emit_unrestorable_all_languages_warning(
+                manifest,
+                activity,
+                stage="create_final_file",
+                restart_stage=("Extract MVC and Audio" if config.audio_mode is AudioMode.PCM else "Prepare Audio"),
+            )
     has_declared_audio_default = any(
         int(stream.get("disposition", {}).get("default", 0) or 0) == 1 for stream in audio_streams
     )
@@ -245,29 +324,61 @@ def audio_handler_metadata_options(
     input_path: Path,
     audio_selector: str = "a",
     *,
+    selected_streams: Sequence[dict[str, Any]] | None = None,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
 ) -> dict[str, str]:
-    streams = get_audio_stream_data(
-        input_path,
-        run_context=run_context,
-        cancellation_event=cancellation_event,
-        observability_context=observability_context,
-    )
-    if audio_selector != "a":
-        stream_type, separator, stream_index = audio_selector.partition(":")
-        if stream_type != "a" or not separator or not stream_index.isdigit():
-            return {}
-        selected_index = int(stream_index)
-        streams = streams[selected_index : selected_index + 1]
+    if selected_streams is None:
+        streams = get_audio_stream_data(
+            input_path,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
+        if audio_selector != "a":
+            stream_type, separator, stream_index = audio_selector.partition(":")
+            if stream_type != "a" or not separator or not stream_index.isdigit():
+                return {}
+            selected_index = int(stream_index)
+            streams = streams[selected_index : selected_index + 1]
+    else:
+        streams = list(selected_streams)
 
     options: dict[str, str] = {}
     for output_index, stream in enumerate(streams):
         title = audio_track_title(stream)
         if title is not None:
             options[f"metadata:s:a:{output_index}"] = f"handler_name={title}"
+        options[f"disposition:a:{output_index}"] = audio_disposition_value(stream)
     return options
+
+
+def audio_disposition_value(stream: dict[str, Any]) -> str:
+    disposition = stream.get("disposition")
+    if not isinstance(disposition, Mapping):
+        return "0"
+    enabled = [name for name in AUDIO_DISPOSITION_NAMES if _disposition_enabled(disposition.get(name))]
+    return "+".join(enabled) if enabled else "0"
+
+
+def _disposition_enabled(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str):
+        try:
+            return int(value) != 0
+        except ValueError:
+            return False
+    return False
+
+
+def _audio_selection_not_prepared_in_current_run() -> bool:
+    if config.audio_mode is AudioMode.PCM:
+        return config.start_stage.value > Stage.EXTRACT_MVC_AND_AUDIO.value
+    return config.start_stage.value > Stage.TRANSCODE_AUDIO.value
 
 
 def normalize_track_language(language_code: object) -> tuple[str, str]:

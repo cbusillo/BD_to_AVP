@@ -420,14 +420,8 @@ private struct ProfileEncodingSummaryView: View {
                     ProfileSummarySection(title: "Audio", items: audioItems)
 
                     ProfileSummarySection(
-                        title: "Subtitles and Languages",
-                        items: [
-                            ProfileSummaryItem(title: "Subtitle handling", value: options.subtitles.mode.title),
-                            ProfileSummaryItem(
-                                title: "Preferred language",
-                                value: options.subtitles.preferredLanguage.displayName
-                            ),
-                        ]
+                        title: "Subtitles",
+                        items: subtitleItems
                     )
                 }
             }
@@ -439,9 +433,33 @@ private struct ProfileEncodingSummaryView: View {
     private var audioItems: [ProfileSummaryItem] {
         var items = [
             ProfileSummaryItem(title: "Audio handling", value: options.audioHandling.title),
+            ProfileSummaryItem(title: "Audio languages", value: options.audioLanguages.mode.title),
         ]
+        if options.audioLanguages.mode == .preferredOnly {
+            items.append(
+                ProfileSummaryItem(
+                    title: "Audio language",
+                    value: options.audioLanguages.preferredLanguage.displayName
+                )
+            )
+        }
         if let bitrateLabel = options.audioHandling.bitrateLabel {
             items.append(ProfileSummaryItem(title: bitrateLabel, value: "\(options.audioBitrate) kbps"))
+        }
+        return items
+    }
+
+    private var subtitleItems: [ProfileSummaryItem] {
+        var items = [
+            ProfileSummaryItem(title: "Subtitle handling", value: options.subtitles.mode.title),
+        ]
+        if options.subtitles.mode != .off {
+            items.append(
+                ProfileSummaryItem(
+                    title: "Subtitle language",
+                    value: options.subtitles.preferredLanguage.displayName
+                )
+            )
         }
         return items
     }

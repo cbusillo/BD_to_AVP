@@ -191,6 +191,7 @@ class Config:
         self.overwrite = False
         self.audio_mode = AudioMode.AUTOMATIC
         self.audio_bitrate = 384
+        self.audio_preferred_language: str | None = None
         self.video_mode = VideoMode.MV_HEVC
         self.av1_crf = 32
         self.left_right_bitrate = 20
@@ -315,7 +316,7 @@ class Config:
                         setattr(self, key, VideoMode(config_parser.get("Options", key)))
                     else:
                         value = config_parser.get("Options", key)
-                        if key == "language_code":
+                        if key in {"language_code", "audio_preferred_language"}:
                             value = normalize_language_code(value)
                         setattr(self, key, value)
 
@@ -374,6 +375,13 @@ class Config:
             "--audio-bitrate",
             type=int,
             help="Audio bitrate for transcoding in kilobits.",
+        )
+        parser.add_argument(
+            "--audio-preferred-language",
+            help=(
+                "Keep audio tracks matching this language. Accepts ISO 639 alpha-2, alpha-3/B, or alpha-3/T codes; "
+                "omit to keep all audio languages."
+            ),
         )
         parser.add_argument(
             "--skip-freaking-subtitles-because-I-dont-care",
@@ -504,6 +512,11 @@ class Config:
         if args.language_code:
             try:
                 self.language_code = normalize_language_code(args.language_code)
+            except LanguageCodeError as error:
+                parser.error(str(error))
+        if args.audio_preferred_language:
+            try:
+                self.audio_preferred_language = normalize_language_code(args.audio_preferred_language)
             except LanguageCodeError as error:
                 parser.error(str(error))
         if args.audio_mode:

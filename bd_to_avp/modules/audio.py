@@ -9,6 +9,12 @@ from typing import Any, Protocol
 import ffmpeg
 
 from bd_to_avp.modules.audio_mode import AudioMode
+from bd_to_avp.modules.audio_selection import (
+    AudioSelection,
+    emit_audio_selection_warning,
+    persist_audio_selection,
+    select_audio_streams,
+)
 from bd_to_avp.modules.command import run_ffmpeg_print_errors
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.container import audio_handler_metadata_options, get_audio_stream_data
@@ -53,24 +59,42 @@ def transcode_audio(
     bitrate: int,
     audio_selector: str = "a",
     *,
+    selection: AudioSelection | None = None,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
 ) -> None:
     audio_input = ffmpeg.input(str(input_path))
-    audio_transcoded = ffmpeg.output(
-        audio_input[audio_selector],
-        str(f"file:{transcoded_audio_path}"),
-        acodec="aac",
-        audio_bitrate=f"{bitrate}k",
-        map_metadata=0,
-        **audio_handler_metadata_options(
+    selected_inputs = (
+        [audio_input[selected_stream.selector] for selected_stream in selection.streams]
+        if selection is not None
+        else [audio_input[audio_selector]]
+    )
+    metadata_options = (
+        audio_handler_metadata_options(
+            input_path,
+            audio_selector,
+            selected_streams=[selected_stream.stream for selected_stream in selection.streams],
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
+        if selection is not None
+        else audio_handler_metadata_options(
             input_path,
             audio_selector,
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=observability_context,
-        ),
+        )
+    )
+    audio_transcoded = ffmpeg.output(
+        *selected_inputs,
+        str(f"file:{transcoded_audio_path}"),
+        acodec="aac",
+        audio_bitrate=f"{bitrate}k",
+        map_metadata=0,
+        **metadata_options,
     )
     run_ffmpeg_print_errors(
         audio_transcoded,
@@ -86,22 +110,39 @@ def copy_audio(
     input_path: Path,
     copied_audio_path: Path,
     *,
+    selection: AudioSelection | None = None,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
 ) -> None:
     audio_input = ffmpeg.input(str(input_path))
-    copied_audio = ffmpeg.output(
-        audio_input["a"],
-        str(f"file:{copied_audio_path}"),
-        acodec="copy",
-        map_metadata=0,
-        **audio_handler_metadata_options(
+    selected_inputs = (
+        [audio_input[selected_stream.selector] for selected_stream in selection.streams]
+        if selection is not None
+        else [audio_input["a"]]
+    )
+    metadata_options = (
+        audio_handler_metadata_options(
+            input_path,
+            selected_streams=[selected_stream.stream for selected_stream in selection.streams],
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
+        if selection is not None
+        else audio_handler_metadata_options(
             input_path,
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=observability_context,
-        ),
+        )
+    )
+    copied_audio = ffmpeg.output(
+        *selected_inputs,
+        str(f"file:{copied_audio_path}"),
+        acodec="copy",
+        map_metadata=0,
+        **metadata_options,
     )
     run_ffmpeg_print_errors(
         copied_audio,
@@ -133,9 +174,18 @@ def create_prepared_audio_file(
     if should_prepare:
         temporary_audio_path = prepared_audio_path.with_suffix(".part.m4a")
         try:
+            selection = preferred_audio_selection(
+                original_audio_path,
+                activity,
+                stage="transcode_audio",
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                observability_context=observability_context,
+            )
             if mode is AudioMode.AUTOMATIC:
                 qualifications = qualify_selected_audio_streams(
                     original_audio_path,
+                    selection=selection,
                     run_context=run_context,
                     cancellation_event=cancellation_event,
                     observability_context=observability_context,
@@ -144,6 +194,7 @@ def create_prepared_audio_file(
                     copy_audio(
                         original_audio_path,
                         temporary_audio_path,
+                        selection=selection,
                         run_context=run_context,
                         cancellation_event=cancellation_event,
                         observability_context=observability_context,
@@ -154,6 +205,7 @@ def create_prepared_audio_file(
                         original_audio_path,
                         temporary_audio_path,
                         config.audio_bitrate,
+                        selection=selection,
                         run_context=run_context,
                         cancellation_event=cancellation_event,
                         observability_context=observability_context,
@@ -163,11 +215,13 @@ def create_prepared_audio_file(
                     original_audio_path,
                     temporary_audio_path,
                     config.audio_bitrate,
+                    selection=selection,
                     run_context=run_context,
                     cancellation_event=cancellation_event,
                     observability_context=observability_context,
                 )
             temporary_audio_path.replace(prepared_audio_path)
+            persist_audio_selection(prepared_audio_path, selection)
         finally:
             temporary_audio_path.unlink(missing_ok=True)
 
@@ -205,10 +259,13 @@ def create_transcoded_audio_file(
 def qualify_selected_audio_streams(
     input_path: Path,
     *,
+    selection: AudioSelection | None = None,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
 ) -> list[AudioStreamQualification]:
+    if selection is not None:
+        return [qualify_audio_stream(selected_stream.stream) for selected_stream in selection.streams]
     return [
         qualify_audio_stream(stream)
         for stream in get_audio_stream_data(
@@ -218,6 +275,31 @@ def qualify_selected_audio_streams(
             observability_context=observability_context,
         )
     ]
+
+
+def preferred_audio_selection(
+    input_path: Path,
+    activity: AudioActivityReporter | None,
+    *,
+    stage: str,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> AudioSelection | None:
+    preferred_language = config.audio_preferred_language
+    if preferred_language is None:
+        return None
+    selection = select_audio_streams(
+        get_audio_stream_data(
+            input_path,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        ),
+        preferred_language,
+    )
+    emit_audio_selection_warning(selection, activity, stage=stage)
+    return selection
 
 
 def qualify_audio_stream(stream: dict[str, Any]) -> AudioStreamQualification:
