@@ -61,10 +61,10 @@ and RC exclude it. Existing Stable or RC selections remain in place until you
 explicitly choose another route. Choosing Stable later does not downgrade the
 installed Beta 3 app—it waits for a newer eligible Stable build.
 
-Beta 4 metadata (`0.3.0b4`, build `149`) is prepared and authorized for the
-guarded Prerelease workflow after production diagnostics qualification. There
-is no Beta 4 tag, DMG, release, or updater item until issue #316 completes
-exact-SHA signing, publication, and public verification.
+Beta 4 (`0.3.0b4`, build `149`) is published and immutable. Beta 5 metadata
+(`0.3.0b5`, build `150`) is prepared and authorized for the guarded Prerelease
+workflow in issue #338. There is no Beta 5 tag, DMG, release, or updater item
+until exact-SHA signing, publication, and public verification complete.
 
 See [Distribution Policy](docs/distribution-policy.md) for the current GUI
 release artifact and dependency policy.
@@ -180,7 +180,7 @@ warning. Titles are not used to guess audio language.
 
 Audio-language filtering can reduce output payload when tracks are omitted,
 but this feature does not establish the cause of the output-size report in
-issue #202 and does not claim to fix the separately reported Ship's *Top Gun*
+issue #202 and does not claim to fix any separately reported media-specific
 stall. Those observations remain separate diagnostic work.
 
 ## Terminal Usage

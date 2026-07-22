@@ -92,8 +92,8 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertEqual(NATIVE_APP_NAME, "3D Blu-ray to Vision Pro.app")
         self.assertEqual(NATIVE_EXECUTABLE_NAME, NATIVE_PRODUCT_NAME)
         self.assertEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp")
-        self.assertEqual(NATIVE_SHORT_VERSION, "0.3.0b4")
-        self.assertEqual(NATIVE_BUILD_VERSION, "149")
+        self.assertEqual(NATIVE_SHORT_VERSION, "0.3.0b5")
+        self.assertEqual(NATIVE_BUILD_VERSION, "150")
         self.assertEqual(NATIVE_MINIMUM_SYSTEM_VERSION, "26.0")
 
     def test_uses_one_native_settings_scene_and_release_grade_source_groups(self) -> None:

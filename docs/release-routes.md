@@ -6,12 +6,11 @@ closed when it cannot satisfy this contract.
 
 The application preference model, release metadata/history parser, appcast
 tooling, reusable release engine, and guarded operator entrypoints implement
-this four-route contract. Beta 3 is published and immutable at `0.3.0b3` build
-`148`, with build `147` permanently burned. The next prepared target is Beta 4
-at `0.3.0b4` build `149`. Issue #314 completed the authorized production
-diagnostics admission gate, and issue #316 exclusively owns the reviewed
-unfreeze, exact-SHA dispatch, approval, signing, publication, and public
-verification.
+this four-route contract. Beta 3 and Beta 4 are published and immutable at
+`0.3.0b3` build `148` and `0.3.0b4` build `149`, with build `147` permanently
+burned. The next prepared target is Beta 5 at `0.3.0b5` build `150`. Issue #338
+owns the reviewed exact-SHA dispatch, approval, signing, publication, public
+verification, and installed-field qualification.
 
 ## Production Identity
 
@@ -52,7 +51,7 @@ only the public tag forms above. Historical compact production RC tags such as
 `v0.2.143rc5` remain valid read-only history inputs and are never renamed.
 
 Externally visible DMG names use the public version stem, for example
-`3D-Blu-ray-to-Vision-Pro-0.3.0-beta.4.dmg`. Workflow names and operator intent
+`3D-Blu-ray-to-Vision-Pro-0.3.0-beta.5.dmg`. Workflow names and operator intent
 must not appear in versions, release titles, notes, artifact names, app metadata,
 or appcast content.
 
@@ -139,32 +138,31 @@ prereleases. Beta 3 remains immutable production/feed history in the cumulative
 appcast even though older clients cannot discover it.
 
 Selecting Stable after installing Beta 3 does not downgrade to `0.2.143`; the
-client waits for a newer eligible Stable build. Beta 4 reserves the next global
-build, `149`.
+client waits for a newer eligible Stable build. Beta 4 is immutable production
+history, and Beta 5 reserves the next global build, `150`.
 
-## Beta 4 Authorized Target
+## Beta 5 Authorized Target
 
-The repository is prepared for the guarded `v0.3.0-beta.4` Prerelease workflow:
+The repository is prepared for the guarded `v0.3.0-beta.5` Prerelease workflow:
 
-- internal version `0.3.0b4`;
-- public tag and title `v0.3.0-beta.4`;
-- global build `149`;
+- internal version `0.3.0b5`;
+- public tag and title `v0.3.0-beta.5`;
+- global build `150`;
 - Sparkle channel `beta`;
 - GitHub prerelease, never Latest, PyPI, or Homebrew; and
 - the same production product, bundle, feed, key, signing team, and diagnostics
-  endpoint as Beta 3.
+  endpoint as Beta 4.
 
-The cumulative appcast must place Beta 4 above immutable Beta 3 build `148` and
-Stable build `146`. Stable and RC exclude both Beta items; Beta and Alpha admit
-them, allowing an installed Beta 3 to update forward to Beta 4 without changing
-the saved route.
+The cumulative appcast must place Beta 5 above immutable Beta 4 build `149`,
+Beta 3 build `148`, and Stable build `146`. Stable and RC exclude all Beta
+items; Beta and Alpha admit them, allowing an installed earlier Beta to update
+forward to Beta 5 without changing the saved route.
 
-Issue #316 removed this exact tag from `.github/release-freezes.json` through
-protected-main review after #314 completed the explicitly authorized production
-diagnostics deployment. Absence of the freeze authorizes workflow preflight; it
-does not assert that a tag, draft, DMG, release, or appcast item exists. The
-reviewed metadata and release-note seed are in
-[the Beta 4 cut packet](0.3.0-beta.4-cut-packet.md).
+Issue #338 owns this cut. The repository has no freeze entry for this exact tag;
+that absence authorizes workflow preflight but does not assert that a tag,
+draft, DMG, release, or appcast item exists. The reviewed metadata and
+release-note seed are in
+[the Beta 5 cut packet](0.3.0-beta.5-cut-packet.md).
 
 ## Historical Boundaries
 

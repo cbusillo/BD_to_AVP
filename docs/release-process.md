@@ -4,19 +4,20 @@ The normative production identity, version mapping, update routes, history
 boundary, and publication policy are defined in
 [Production Release Routes](release-routes.md).
 
-The repository carries published, immutable Beta 3 history at internal version
-`0.3.0b3`, build `148`, and a prepared Beta 4 target at `0.3.0b4`, build `149`.
-The failed, unpublished `0.3.0rc1` build `147` attempt is preserved in the
-checked-in recovery evidence and its build number is permanently burned. The
-reviewed [Beta 4 cut packet](0.3.0-beta.4-cut-packet.md) records metadata only;
-it does not assert that any Beta 4 public artifact exists.
+The repository carries published, immutable Beta 3 and Beta 4 history at
+internal versions `0.3.0b3` and `0.3.0b4`, builds `148` and `149`, and a
+prepared Beta 5 target at `0.3.0b5`, build `150`. The failed, unpublished
+`0.3.0rc1` build `147` attempt is preserved in the checked-in recovery evidence
+and its build number is permanently burned. The reviewed
+[Beta 5 cut packet](0.3.0-beta.5-cut-packet.md) records metadata only; it does
+not assert that any Beta 5 public artifact exists.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
 entrypoints, Beta 3 bootstrap contract, and one-time metadata recovery are
-implemented and regression-covered. Issue #314 has completed the authorized
-production diagnostics admission deployment. Issue #316 owns the reviewed
-unfreeze, exact-SHA dispatch, approval, signing, publication, and verification.
+implemented and regression-covered. Issue #338 owns the reviewed Beta 5
+exact-SHA dispatch, approval, signing, publication, verification, and
+installed-field qualification.
 
 ## Release Preparation
 
@@ -32,9 +33,9 @@ uv run python -m scripts.release prepare \
 The internal version, public version, tag/title, DMG name, release stage,
 Sparkle channel, and publication effects are derived independently by
 `scripts/release.py metadata` from the mapping in `release-routes.md`. For
-example, internal `0.3.0b4` maps to public `0.3.0-beta.4`, tag/title
-`v0.3.0-beta.4`, and DMG
-`3D-Blu-ray-to-Vision-Pro-0.3.0-beta.4.dmg`. The numeric
+example, internal `0.3.0b5` maps to public `0.3.0-beta.5`, tag/title
+`v0.3.0-beta.5`, and DMG
+`3D-Blu-ray-to-Vision-Pro-0.3.0-beta.5.dmg`. The numeric
 `CFBundleVersion` must increase for every production-identity build across all
 routes, including failed unpublished attempts. The command stages a refreshed
 `uv.lock`, validates the staged metadata, and updates `pyproject.toml`,
@@ -75,13 +76,12 @@ or from a stale main commit.
 
 ## Release Orchestration
 
-> **Beta 4 is authorized but not yet published.** Issue #316 removed the
-> `v0.3.0-beta.4` freeze through protected-main review after issue #314 recorded
-> the authorized production diagnostics deployment and live admission evidence.
-> Dispatch only from the exact protected `main` commit containing that removal,
-> keep `main` fixed while the workflow is nonterminal, and do not describe Beta
-> 4 as public until signing, notarization, appcast publication, and route
-> verification complete.
+> **Beta 5 is authorized but not yet published.** Issue #338 owns the guarded
+> `v0.3.0-beta.5` release, and the repository contains no freeze entry for that
+> exact tag. Dispatch only from the exact protected `main` commit containing the
+> reviewed Beta 5 metadata, keep `main` fixed while the workflow is nonterminal,
+> and do not describe Beta 5 as public until signing, notarization, appcast
+> publication, and route verification complete.
 
 Dispatch `Stable` from `main` only for reviewed committed Stable metadata, or
 dispatch `Prerelease` only for reviewed committed Alpha, Beta, or RC metadata,
