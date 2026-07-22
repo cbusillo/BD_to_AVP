@@ -267,24 +267,24 @@ Beta without pretending the current Stable or RC client can discover it.
    apps remain separate and cannot Sparkle-update into the production app. Do
    not reopen them to edit the shared profile library after Beta 3 installation.
 
-### Beta 5 Authorization Smoke
+### Beta 6 Authorization Smoke
 
-Run these checks after issue #338's metadata preparation lands and before
-workflow dispatch. They prove the committed target and authorization boundary,
-not a signed or published app.
+Run these checks after the Beta 6 metadata preparation lands and before workflow
+dispatch. They prove the committed target and authorization boundary, not a
+signed or published app.
 
 1. Run `uv run python -m scripts.release validate` and confirm internal
-   `0.3.0b5`, public `0.3.0-beta.5`, build `150`, Beta channel, prerelease,
+   `0.3.0b6`, public `0.3.0-beta.6`, build `151`, Beta channel, prerelease,
    non-Latest, and no PyPI publication.
 2. Run the Prerelease metadata policy with the committed target and confirm the
-   Beta 5 freeze is absent while all route, identity, and existing-release
+   Beta 6 freeze is absent while all route, identity, and existing-release
    guards remain active before packaging or signing.
-3. Validate a cumulative appcast fixture ordered Beta 5 build `150`, Beta 4
-   build `149`, Beta 3 build `148`, then Stable build `146`; Stable and RC must
-   exclude every Beta item while Beta and Alpha admit them.
-4. Confirm the live repository has no Beta 5 tag, release, draft, or asset and
-   the public appcast still ends at Beta 4 build `149`.
-5. Continue only through issue #338's exact-SHA Prerelease workflow. Signed-app,
+3. Validate a cumulative appcast fixture ordered Beta 6 build `151`, Beta 5
+   build `150`, Beta 4 build `149`, Beta 3 build `148`, then Stable build `146`;
+   Stable and RC must exclude every Beta item while Beta and Alpha admit them.
+4. Confirm the live repository has no Beta 6 tag, release, draft, or asset and
+   the public appcast still ends at Beta 5 build `150`.
+5. Continue only through the exact-SHA Prerelease workflow. Signed-app,
    update-route, and diagnostic-lifecycle qualification remain incomplete until
    the guarded workflow and installed-field checks finish.
 
