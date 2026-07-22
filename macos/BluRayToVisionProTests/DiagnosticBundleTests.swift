@@ -159,6 +159,25 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertTrue(output.contains("<identifier:01234567:001>"))
     }
 
+    func testRedactorRemovesGeneratedNativeMVCFilenameAfterSensitiveNameReplacement() {
+        let redactor = DiagnosticRedactor(bundleID: fixedBundleID)
+        redactor.registerSensitiveName("Secret Feature")
+
+        let output = redactor.redact("""
+        Secret Feature_mvc_abcdefgh.264
+        codec=H.264
+        timestamp=16:21:42.264
+        version=1.264
+        """)
+
+        XCTAssertFalse(output.contains("Secret Feature"))
+        XCTAssertFalse(output.contains("_mvc_abcdefgh.264"))
+        XCTAssertTrue(output.contains("codec=H.264"))
+        XCTAssertTrue(output.contains("timestamp=16:21:42.264"))
+        XCTAssertTrue(output.contains("version=1.264"))
+        XCTAssertEqual(output.components(separatedBy: "<name:01234567:").count - 1, 1)
+    }
+
     func testRedactorHandlesEscapedAndSchemePathsTitleArgumentsAndSecretEnvironmentKeys() {
         let redactor = DiagnosticRedactor(bundleID: fixedBundleID)
         let text = """
