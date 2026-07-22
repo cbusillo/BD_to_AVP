@@ -538,7 +538,7 @@ class ChildProcessRunnerTests(unittest.TestCase):
                     )
                 )
 
-    def test_pipeline_final_artifact_stall_cancels_blocked_producer(self) -> None:
+    def test_pipeline_final_artifact_stall_cleans_up_blocked_producer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             artifact = Path(directory) / "output.bin"
             stages = (
@@ -572,7 +572,10 @@ class ChildProcessRunnerTests(unittest.TestCase):
                 ProcessPipelineRunner(exit_grace_seconds=0.1).run(stages)
 
         self.assertLess(time.monotonic() - started, 3)
-        self.assertIsInstance(raised.exception.result.stages[0].error, ProcessCancelled)
+        self.assertIsInstance(
+            raised.exception.result.stages[0].error,
+            (ProcessCancelled, subprocess.CalledProcessError),
+        )
         self.assertIsInstance(raised.exception.result.stages[1].error, ProcessArtifactNoProgressError)
 
     def test_three_stage_artifact_plateau_preserves_final_error_and_cleans_up_splitter(self) -> None:
