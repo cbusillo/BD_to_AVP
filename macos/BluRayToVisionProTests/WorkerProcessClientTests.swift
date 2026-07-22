@@ -42,6 +42,132 @@ final class WorkerProcessClientTests: XCTestCase {
         XCTAssertEqual(result.terminalEvent.type, .jobCompleted)
     }
 
+    func testBackpressuresHighVolumeStdoutUntilSlowHandlerCatchesUp() async throws {
+        let eventCount = 260
+        let payloadBytes = 48 * 1_024
+        let client = fixtureClient(body: """
+        \(readyEvent())
+        sys.stderr.write("WRITER-STARTED\\n")
+        sys.stderr.flush()
+        message = "x" * \(payloadBytes)
+        for sequence in range(1, \(eventCount + 1)):
+            print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "log", "job_id": job_id, "sequence": sequence, "payload": {"level": "info", "message": message}}), flush=True)
+        sys.stderr.write("WRITER-COMPLETED\\n")
+        sys.stderr.flush()
+        print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "job.completed", "job_id": job_id, "sequence": \(eventCount + 1), "payload": {"result": {"name": "movie", "resolution": "1920x1080", "frame_rate": "24/1", "interlaced": False, "size_bytes": 10, "titles": []}}}), flush=True)
+        """)
+        let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
+        let slowHandlerStarted = expectation(description: "slow handler started")
+        let gate = AsyncGate()
+        var sequences: [Int] = []
+        let task = Task {
+            try await client.run(job: job) { event in
+                sequences.append(event.sequence)
+                if event.sequence == 1 {
+                    slowHandlerStarted.fulfill()
+                    await gate.wait()
+                }
+            }
+        }
+
+        await fulfillment(of: [slowHandlerStarted], timeout: 5)
+        let writerStarted = await waitForDiagnosticMarker("WRITER-STARTED", client: client)
+        XCTAssertTrue(writerStarted)
+        guard writerStarted else {
+            await gate.open()
+            _ = await task.result
+            return
+        }
+        try await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertFalse(client.diagnosticSnapshot().toolOutput.text.contains("WRITER-COMPLETED"))
+        await gate.open()
+        let result = try await task.value
+
+        XCTAssertEqual(sequences, Array(0 ... (eventCount + 1)))
+        XCTAssertEqual(result.terminalEvent.type, .jobCompleted)
+        XCTAssertEqual(result.exitStatus, 0)
+        XCTAssertTrue(result.diagnostics.contains("WRITER-COMPLETED"))
+    }
+
+    func testHandlesProductionShapedProgressBurst() async throws {
+        let progressEventCount = 400
+        let client = fixtureClient(body: """
+        \(readyEvent())
+        for sequence in range(1, \(progressEventCount + 1)):
+            observability = {"schema": "bd_to_avp.observability", "schema_version": 1, "emitter": "worker", "stream_id": job_id, "sequence": sequence - 1, "occurred_at": "2026-07-22T00:00:00Z", "elapsed_ms": sequence, "kind": "tool.progress", "severity": "info", "privacy": "private", "redaction": "raw", "context": {"correlation": {}}, "data": {"progress": {"completed_units": sequence, "total_units": \(progressEventCount), "unit": "ticks"}}}
+            print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "observability", "job_id": job_id, "sequence": sequence, "payload": {"event": observability}}), flush=True)
+        print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "job.completed", "job_id": job_id, "sequence": \(progressEventCount + 1), "payload": {"result": {"name": "movie", "resolution": "1920x1080", "frame_rate": "24/1", "interlaced": False, "size_bytes": 10, "titles": []}}}), flush=True)
+        """)
+        let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
+        var sequences: [Int] = []
+        var progressEvents = 0
+
+        let result = try await client.run(job: job) { event in
+            sequences.append(event.sequence)
+            if event.type == .observability {
+                progressEvents += 1
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+        }
+
+        XCTAssertEqual(sequences, Array(0 ... (progressEventCount + 1)))
+        XCTAssertEqual(progressEvents, progressEventCount)
+        XCTAssertEqual(result.terminalEvent.type, .jobCompleted)
+        XCTAssertEqual(result.exitStatus, 0)
+    }
+
+    func testCancellationWhileStdoutIsBackpressuredReapsWorker() async throws {
+        let payloadBytes = 48 * 1_024
+        let client = fixtureClient(body: """
+        \(readyEvent())
+        sys.stderr.write("WRITER-STARTED\\n")
+        sys.stderr.flush()
+        message = "x" * \(payloadBytes)
+        for sequence in range(1, 10_000):
+            print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "log", "job_id": job_id, "sequence": sequence, "payload": {"level": "info", "message": message}}), flush=True)
+        sys.stderr.write("WRITER-COMPLETED\\n")
+        sys.stderr.flush()
+        """)
+        let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
+        let slowHandlerStarted = expectation(description: "slow handler started")
+        let runFinished = expectation(description: "run finished")
+        let gate = AsyncGate()
+        let task = Task {
+            defer {
+                runFinished.fulfill()
+            }
+            return try await client.run(job: job) { event in
+                if event.sequence == 1 {
+                    slowHandlerStarted.fulfill()
+                    await gate.wait()
+                }
+            }
+        }
+
+        await fulfillment(of: [slowHandlerStarted], timeout: 5)
+        let writerStarted = await waitForDiagnosticMarker("WRITER-STARTED", client: client)
+        XCTAssertTrue(writerStarted)
+        guard writerStarted else {
+            task.cancel()
+            await gate.open()
+            _ = await task.result
+            return
+        }
+        try await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertFalse(client.diagnosticSnapshot().toolOutput.text.contains("WRITER-COMPLETED"))
+        task.cancel()
+        await gate.open()
+        await fulfillment(of: [runFinished], timeout: 5)
+
+        switch await task.result {
+        case .failure(let error):
+            XCTAssertTrue(error is CancellationError, "Unexpected cancellation error: \(error)")
+        case .success:
+            XCTFail("Expected cancellation before a terminal event to fail the run")
+        }
+        XCTAssertFalse(client.diagnosticSnapshot().isRunning)
+    }
+
     func testStreamsAndBoundsDiagnosticsWhileWorkerIsActive() async throws {
         let diagnosticPayloadBytes = 4 * 1_024 * 1_024
         let client = fixtureClient(body: """
@@ -205,6 +331,41 @@ final class WorkerProcessClientTests: XCTestCase {
         XCTAssertNotEqual(result.exitStatus, 0)
     }
 
+    func testTaskCancellationAfterTerminalDeliveryReturnsCancellationError() async throws {
+        let client = fixtureClient(body: """
+        \(readyEvent())
+        print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "job.completed", "job_id": job_id, "sequence": 1, "payload": {"result": {"name": "movie", "resolution": "1920x1080", "frame_rate": "24/1", "interlaced": False, "size_bytes": 10, "titles": []}}}), flush=True)
+        """)
+        let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
+        let terminalHandlerStarted = expectation(description: "terminal handler started")
+        let runFinished = expectation(description: "run finished")
+        let gate = AsyncGate()
+        let task = Task {
+            defer {
+                runFinished.fulfill()
+            }
+            return try await client.run(job: job) { event in
+                if event.type.isTerminal {
+                    terminalHandlerStarted.fulfill()
+                    await gate.wait()
+                }
+            }
+        }
+
+        await fulfillment(of: [terminalHandlerStarted], timeout: 5)
+        task.cancel()
+        await gate.open()
+        await fulfillment(of: [runFinished], timeout: 5)
+
+        switch await task.result {
+        case .failure(let error):
+            XCTAssertTrue(error is CancellationError, "Unexpected cancellation error: \(error)")
+        case .success:
+            XCTFail("Expected task cancellation after terminal delivery to fail the run")
+        }
+        XCTAssertFalse(client.diagnosticSnapshot().isRunning)
+    }
+
     func testCancellationRequestedBeforeLaunchIsNotLost() async throws {
         let client = fixtureClient(body: "time.sleep(30)")
         let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
@@ -223,6 +384,21 @@ final class WorkerProcessClientTests: XCTestCase {
         """
         print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "worker.ready", "job_id": job_id, "sequence": 0, "payload": {"worker_version": "test", "process_group_id": os.getpid()}}), flush=True)
         """
+    }
+
+    private func waitForDiagnosticMarker(
+        _ marker: String,
+        client: WorkerProcessClient,
+        timeout: TimeInterval = 2
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if client.diagnosticSnapshot().toolOutput.text.contains(marker) {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return false
     }
 
     private func fixtureClient(body: String) -> WorkerProcessClient {
@@ -257,5 +433,35 @@ private actor TerminalEventState {
 
     func record() {
         wasReceived = true
+    }
+}
+
+private actor AsyncGate {
+    private var isOpen = false
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isOpen else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            if isOpen {
+                continuation.resume()
+            } else {
+                continuations.append(continuation)
+            }
+        }
+    }
+
+    func open() {
+        guard !isOpen else {
+            return
+        }
+        isOpen = true
+        let waitingContinuations = continuations
+        continuations.removeAll()
+        for continuation in waitingContinuations {
+            continuation.resume()
+        }
     }
 }

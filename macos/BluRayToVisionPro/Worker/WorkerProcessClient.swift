@@ -137,6 +137,26 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
     }
 
     func run(job: WorkerJobSpec, onEvent: @escaping EventHandler) async throws -> WorkerRunResult {
+        do {
+            let result = try await withTaskCancellationHandler(
+                operation: {
+                    try await runProcess(job: job, onEvent: onEvent)
+                },
+                onCancel: {
+                    self.cancel()
+                }
+            )
+            try Task.checkCancellation()
+            return result
+        } catch {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
+            throw error
+        }
+    }
+
+    private func runProcess(job: WorkerJobSpec, onEvent: @escaping EventHandler) async throws -> WorkerRunResult {
         let process = Process()
         let standardInput = Pipe()
         let standardOutput = Pipe()
@@ -367,12 +387,19 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
         process: Process,
         onEvent: @escaping EventHandler
     ) async throws -> WorkerEvent? {
+        let reader = try PullDrivenFileReader(
+            fileHandle: fileHandle,
+            queue: Self.ioQueue
+        )
+        defer {
+            reader.close()
+        }
         var framer = JSONLFramer()
         var terminalEvent: WorkerEvent?
         var expectedSequence = 0
         let decoder = JSONDecoder()
 
-        for try await chunk in Self.chunks(from: fileHandle) {
+        while let chunk = try await reader.read(maximumBytes: Self.stdoutChunkBytes) {
             for line in try framer.append(chunk) {
                 guard terminalEvent == nil else {
                     throw WorkerLifecycleError.eventAfterTerminal
@@ -416,65 +443,75 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
     }
 
     private static let stdoutChunkBytes = 64 * 1_024
-    private static let stdoutQueueChunkLimit = 128
 
-    private static func chunks(from fileHandle: FileHandle) -> AsyncThrowingStream<Data, Error> {
-        AsyncThrowingStream(bufferingPolicy: .bufferingOldest(stdoutQueueChunkLimit)) { continuation in
-            let fileDescriptor = dup(fileHandle.fileDescriptor)
-            guard fileDescriptor >= 0 else {
-                continuation.finish(
-                    throwing: NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-                )
-                return
-            }
-            let channel = DispatchIO(
-                type: .stream,
-                fileDescriptor: fileDescriptor,
-                queue: ioQueue
-            ) { _ in
-                close(fileDescriptor)
-            }
-            channel.setLimit(lowWater: 1)
-            channel.setLimit(highWater: stdoutChunkBytes)
-            channel.read(offset: 0, length: Int.max, queue: ioQueue) { done, dispatchData, errorCode in
-                if let dispatchData, !dispatchData.isEmpty {
-                    switch continuation.yield(Data(dispatchData)) {
-                    case .enqueued:
-                        break
-                    case .dropped:
-                        continuation.finish(
-                            throwing: NSError(
-                                domain: NSPOSIXErrorDomain,
-                                code: Int(ENOBUFS),
-                                userInfo: [NSLocalizedDescriptionKey: "Worker stdout overflow: event processing fell behind."]
-                            )
-                        )
-                        channel.close(flags: .stop)
-                        return
-                    case .terminated:
-                        channel.close(flags: .stop)
-                        return
-                    @unknown default:
-                        channel.close(flags: .stop)
-                        return
+}
+
+private final class PullDrivenFileReader: @unchecked Sendable {
+    private let fileDescriptor: Int32
+    private let queue: DispatchQueue
+    private let lock = NSLock()
+    private var closed = false
+
+    init(fileHandle: FileHandle, queue: DispatchQueue) throws {
+        let fileDescriptor = dup(fileHandle.fileDescriptor)
+        guard fileDescriptor >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        self.fileDescriptor = fileDescriptor
+        self.queue = queue
+    }
+
+    deinit {
+        close()
+    }
+
+    func read(maximumBytes: Int) async throws -> Data? {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { [self] in
+                continuation.resume(
+                    with: Result {
+                        try readSynchronously(maximumBytes: maximumBytes)
                     }
-                }
-                if errorCode != 0 {
-                    continuation.finish(
-                        throwing: NSError(domain: NSPOSIXErrorDomain, code: Int(errorCode))
-                    )
-                    channel.close(flags: .stop)
-                } else if done {
-                    continuation.finish()
-                    channel.close()
-                }
-            }
-            continuation.onTermination = { _ in
-                channel.close(flags: .stop)
+                )
             }
         }
     }
 
+    func close() {
+        let shouldClose = lock.withLock {
+            guard !closed else {
+                return false
+            }
+            closed = true
+            return true
+        }
+        if shouldClose {
+            Darwin.close(fileDescriptor)
+        }
+    }
+
+    private func readSynchronously(maximumBytes: Int) throws -> Data? {
+        guard maximumBytes > 0 else {
+            return nil
+        }
+        var buffer = [UInt8](repeating: 0, count: maximumBytes)
+        while true {
+            let byteCount = buffer.withUnsafeMutableBytes { bytes in
+                Darwin.read(fileDescriptor, bytes.baseAddress, bytes.count)
+            }
+            if byteCount > 0 {
+                return Data(buffer.prefix(Int(byteCount)))
+            }
+            if byteCount == 0 {
+                return nil
+            }
+            let errorCode = errno
+            if errorCode == EINTR {
+                continue
+            }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errorCode))
+        }
+    }
 }
 
 private final class DiagnosticPipeDrainer: @unchecked Sendable {
