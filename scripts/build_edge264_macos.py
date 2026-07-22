@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import tempfile
@@ -21,8 +22,12 @@ class BuildProvenance:
     revision: str
     platform: str
     minimum_macos: str
+    xcode_version: str
+    xcode_build_version: str
+    sdk_version: str
+    architecture_flags: str
     linkage: str
-    sha256: str
+    unsigned_sha256: str
 
 
 def run(command: list[str], cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
@@ -53,22 +58,56 @@ def load_provenance(path: Path) -> BuildProvenance:
         "revision",
         "platform",
         "minimum_macos",
+        "xcode_version",
+        "xcode_build_version",
+        "sdk_version",
+        "architecture_flags",
         "linkage",
-        "sha256",
+        "unsigned_sha256",
     )
     for field in required_fields:
         if not isinstance(data.get(field), str) or not data[field]:
             raise RuntimeError(f"edge264 provenance field is missing or invalid: {field}")
+    if not re.fullmatch(r"[0-9a-f]{64}", data["unsigned_sha256"]):
+        raise RuntimeError("edge264 provenance unsigned_sha256 must be 64 lowercase hexadecimal characters")
     unexpected_fields = sorted(set(data) - set(required_fields))
     if unexpected_fields:
         raise RuntimeError(f"unexpected edge264 provenance fields: {', '.join(unexpected_fields)}")
     return BuildProvenance(**{field: data[field] for field in required_fields})
 
 
+def verify_toolchain(provenance: BuildProvenance) -> None:
+    xcode_version = subprocess.check_output(["xcodebuild", "-version"], text=True).splitlines()
+    expected_xcode_version = [
+        f"Xcode {provenance.xcode_version}",
+        f"Build version {provenance.xcode_build_version}",
+    ]
+    if xcode_version[:2] != expected_xcode_version:
+        raise RuntimeError(
+            "edge264 requires "
+            f"{expected_xcode_version[0]} ({expected_xcode_version[1]}), got {'; '.join(xcode_version[:2])}"
+        )
+    sdk_version = subprocess.check_output(
+        ["xcrun", "--sdk", "macosx", "--show-sdk-version"],
+        text=True,
+    ).strip()
+    if sdk_version != provenance.sdk_version:
+        raise RuntimeError(f"edge264 requires macOS SDK {provenance.sdk_version}, got {sdk_version}")
+
+
 def make_command(provenance: BuildProvenance, target: str) -> list[str]:
     if provenance.linkage != "static":
         raise RuntimeError(f"unsupported edge264 linkage: {provenance.linkage}")
-    return ["make", "STATIC=yes", target]
+    if provenance.architecture_flags != "-arch arm64":
+        raise RuntimeError(f"unsupported edge264 architecture flags: {provenance.architecture_flags}")
+    return [
+        "make",
+        "OS=macos",
+        "HOST_OS=distribution",
+        f"CFLAGS={provenance.architecture_flags}",
+        "STATIC=yes",
+        target,
+    ]
 
 
 def build_edge264(output_path: Path, provenance: BuildProvenance) -> str:
@@ -78,9 +117,7 @@ def build_edge264(output_path: Path, provenance: BuildProvenance) -> str:
         run(["git", "checkout", "--detach", provenance.revision], checkout)
         build_env = os.environ.copy()
         build_env["MACOSX_DEPLOYMENT_TARGET"] = provenance.minimum_macos
-        run(make_command(provenance, "edge264_test"), checkout, build_env)
-        run(make_command(provenance, "check-stream-input"), checkout, build_env)
-        run(make_command(provenance, "check-edge264-test-liveness"), checkout, build_env)
+        run(make_command(provenance, "check"), checkout, build_env)
 
         built_binary = checkout / "edge264_test"
         linked_libraries = subprocess.check_output(["otool", "-L", str(built_binary)], text=True)
@@ -89,10 +126,12 @@ def build_edge264(output_path: Path, provenance: BuildProvenance) -> str:
         build_version = subprocess.check_output(["vtool", "-show-build", str(built_binary)], text=True)
         if f"minos {provenance.minimum_macos}" not in build_version:
             raise RuntimeError(f"edge264_test minimum macOS version is not {provenance.minimum_macos}")
+        if f"sdk {provenance.sdk_version}" not in build_version:
+            raise RuntimeError(f"edge264_test macOS SDK version is not {provenance.sdk_version}")
         architecture = subprocess.check_output(["file", str(built_binary)], text=True)
         if "arm64" not in architecture:
             raise RuntimeError("edge264_test is not an arm64 executable")
-        built_sha256 = verify_checksum(built_binary, provenance.sha256, "edge264_test")
+        built_sha256 = verify_checksum(built_binary, provenance.unsigned_sha256, "unsigned edge264_test")
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(built_binary, output_path)
@@ -117,12 +156,13 @@ def main() -> int:
         raise RuntimeError(f"unsupported edge264 build platform: {provenance.platform}")
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         parser.error(f"this build script requires {provenance.platform}")
+    verify_toolchain(provenance)
 
     output_path = args.output.resolve()
     built_sha256 = build_edge264(output_path, provenance)
 
     print(f"Wrote {output_path}")
-    print(f"SHA-256: {built_sha256}")
+    print(f"Unsigned SHA-256: {built_sha256}")
     return 0
 
 

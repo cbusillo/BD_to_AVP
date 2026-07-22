@@ -47,6 +47,13 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --all-groups --python 3.12
 
+      - name: Rebuild bundled edge264 with release toolchain
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+        run: |
+          uv run python scripts/build_edge264_macos.py --output "$RUNNER_TEMP/edge264_test"
+          cmp bd_to_avp/bin/edge264_test "$RUNNER_TEMP/edge264_test"
+
       - name: Install support diagnostics dependencies
         working-directory: support-diagnostics
         run: npm ci

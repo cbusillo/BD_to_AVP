@@ -117,6 +117,8 @@ transcoding avoids an intermediate PCM file. `--keep-files` restores the durable
 and PCM boundaries for inspection, stage resume, and external workflows. Native MVC splitting supports 8-bit Blu-ray
 3D MVC sources only. Disc image sources using durable MVC input are probed for up to 30 seconds before splitting; if
 the multi-threaded native splitter is unstable for that stream, BD_to_AVP continues in slower single-threaded mode.
+The bundled splitter also recovers malformed streams that leave terminal incomplete-frame dependencies instead of
+waiting indefinitely for work that cannot complete.
 
 Runtime tool lookup prefers explicit `BD_TO_AVP_<TOOL>_PATH` environment overrides, bundled tools in `bd_to_avp/bin`,
 tools already available in `PATH`, and finally the legacy `/opt/homebrew/bin` location. The GUI app uses bundled tools
@@ -312,10 +314,12 @@ Big thanks to:
 - [steverice][steverice] for [h264-tools][ldecod]
 - Thibault Raffaillac, Celticom/TVLabs, and Jens Duttke for [edge264-mvc][edge264-mvc], used by the bundled native MVC
   splitter. The BSD license notice is included in `bd_to_avp/resources/notices/edge264-mvc-LICENSE_BSD.txt`. The
-  pinned upstream revision directly supports Annex B MVC input from stdin and FIFOs, nonzero failure exits, and
-  bounded no-progress recovery. `scripts/build_edge264_macos.py` reproduces the binary, and
-  `bd_to_avp/resources/notices/edge264-mvc-build.json` is the source of truth for the upstream revision, deployment
-  target, linkage, and reproducible binary checksum.
+  pinned source revision directly supports Annex B MVC input from stdin and FIFOs, nonzero failure exits, bounded
+  no-progress recovery, and terminal incomplete-frame recovery. `scripts/build_edge264_macos.py` reproduces the
+  unsigned binary with the pinned release Xcode, SDK, and baseline arm64 architecture flags. App packaging re-signs
+  that Mach-O as part of the containing application signature. `bd_to_avp/resources/notices/edge264-mvc-build.json`
+  is the source of truth for the source revision, build toolchain, deployment target, linkage, and reproducible
+  unsigned binary checksum.
 
 [MakeMKV]: https://www.makemkv.com/
 
