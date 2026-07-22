@@ -16,9 +16,13 @@ from pathlib import Path
 
 from scripts.support_diagnostics import (
     ClientConfiguration,
+    MAX_INVENTORY_BYTES,
+    MAX_JAVASCRIPT_SAFE_INTEGER,
     SupportDiagnosticsError,
+    _RejectRedirects,
     delete_report,
     fetch_report,
+    list_reports,
     main,
 )
 
@@ -81,6 +85,33 @@ def bundle_headers(bundle: bytes, schema_version: int = 1) -> dict[str, str]:
     }
 
 
+def inventory_body(reports: list[dict[str, object]] | None = None) -> bytes:
+    payload = {
+        "reports": reports
+        if reports is not None
+        else [
+            {
+                "bundle_schema_version": 1,
+                "created_at": "2026-07-22T13:30:00.000Z",
+                "expires_at": "2026-08-21T13:30:00.000Z",
+                "privacy_rules_version": 4,
+                "size_bytes": 4096,
+                "support_code": SUPPORT_CODE,
+                "upload_state": "uploaded",
+            }
+        ],
+        "schema_version": 1,
+    }
+    return json.dumps(payload).encode("utf-8")
+
+
+def inventory_headers(body: bytes) -> dict[str, str]:
+    return {
+        "Content-Length": str(len(body)),
+        "Content-Type": "application/json; charset=utf-8",
+    }
+
+
 def with_first_entry_crc(bundle: bytes, checksum: int) -> bytes:
     mutated = bytearray(bundle)
     central_directory_offset = mutated.find(b"PK\x01\x02")
@@ -132,6 +163,184 @@ class SupportDiagnosticsCliTests(unittest.TestCase):
             fetch_report(self.configuration, SUPPORT_CODE, output, opener)
 
             self.assertEqual(output.read_bytes(), bundle)
+
+    def test_list_reports_validates_and_normalizes_inventory(self) -> None:
+        body = inventory_body()
+        opener = CapturingOpener(FakeResponse(body, inventory_headers(body)))
+
+        inventory = list_reports(self.configuration, opener)
+
+        self.assertEqual(inventory.schema_version, 1)
+        self.assertEqual(len(inventory.reports), 1)
+        report = inventory.reports[0]
+        self.assertEqual(report.support_code, SUPPORT_CODE)
+        self.assertEqual(report.upload_state, "uploaded")
+        self.assertEqual(report.privacy_rules_version, 4)
+        request, timeout = opener.requests[0]
+        self.assertEqual(timeout, 30)
+        self.assertEqual(request.get_method(), "GET")
+        self.assertEqual(
+            request.full_url,
+            "https://diagnostics.example.test/private/v1/maintainer/reports",
+        )
+        self.assertEqual(request.get_header("Authorization"), f"Bearer {TOKEN}")
+        self.assertEqual(request.get_header("Accept"), "application/json")
+        self.assertNotIn("Authorization", request.headers)
+        self.assertEqual(
+            request.unredirected_hdrs["Authorization"],
+            f"Bearer {TOKEN}",
+        )
+        self.assertEqual(opener.response.read_sizes, [MAX_INVENTORY_BYTES + 1])
+
+    def test_maintainer_requests_reject_redirects(self) -> None:
+        request = urllib.request.Request("https://diagnostics.example.test/v1/maintainer/reports")
+        request.add_unredirected_header("Authorization", f"Bearer {TOKEN}")
+
+        redirected = _RejectRedirects().redirect_request(
+            request,
+            None,
+            302,
+            "Found",
+            email.message.Message(),
+            "https://attacker.example/collect",
+        )
+
+        self.assertIsNone(redirected)
+
+    def test_list_reports_accepts_future_privacy_rules_versions(self) -> None:
+        reports = json.loads(inventory_body())["reports"]
+        reports[0]["privacy_rules_version"] = MAX_JAVASCRIPT_SAFE_INTEGER
+        body = inventory_body(reports)
+
+        inventory = list_reports(
+            self.configuration,
+            CapturingOpener(FakeResponse(body, inventory_headers(body))),
+        )
+
+        self.assertEqual(
+            inventory.reports[0].privacy_rules_version,
+            MAX_JAVASCRIPT_SAFE_INTEGER,
+        )
+
+    def test_list_reports_accepts_legacy_privacy_metadata(self) -> None:
+        reports = [
+            {
+                "bundle_schema_version": 1,
+                "created_at": "2026-07-22T13:30:00.000Z",
+                "expires_at": "2026-08-21T13:30:00.000Z",
+                "privacy_rules_version": None,
+                "size_bytes": 4096,
+                "support_code": SUPPORT_CODE,
+                "upload_state": "pending",
+            }
+        ]
+        body = inventory_body(reports)
+        inventory = list_reports(
+            self.configuration,
+            CapturingOpener(FakeResponse(body, inventory_headers(body))),
+        )
+
+        self.assertIsNone(inventory.reports[0].privacy_rules_version)
+
+    def test_list_reports_rejects_sensitive_or_unknown_fields(self) -> None:
+        reports = json.loads(inventory_body())["reports"]
+        reports[0]["sha256"] = "a" * 64
+        body = inventory_body(reports)
+
+        with self.assertRaisesRegex(SupportDiagnosticsError, "invalid report entry"):
+            list_reports(
+                self.configuration,
+                CapturingOpener(FakeResponse(body, inventory_headers(body))),
+            )
+
+    def test_list_reports_rejects_unsorted_or_oversized_responses(self) -> None:
+        reports = [
+            {
+                "bundle_schema_version": 1,
+                "created_at": "2026-07-21T13:30:00.000Z",
+                "expires_at": "2026-08-20T13:30:00.000Z",
+                "privacy_rules_version": 4,
+                "size_bytes": 4096,
+                "support_code": SUPPORT_CODE,
+                "upload_state": "uploaded",
+            },
+            {
+                "bundle_schema_version": 1,
+                "created_at": "2026-07-22T13:30:00.000Z",
+                "expires_at": "2026-08-21T13:30:00.000Z",
+                "privacy_rules_version": 4,
+                "size_bytes": 4096,
+                "support_code": "BDAVP-1123456789ABCDEF",
+                "upload_state": "uploaded",
+            },
+        ]
+        body = inventory_body(reports)
+        with self.assertRaisesRegex(SupportDiagnosticsError, "not ordered newest-first"):
+            list_reports(
+                self.configuration,
+                CapturingOpener(FakeResponse(body, inventory_headers(body))),
+            )
+
+    def test_list_reports_rejects_duplicate_codes_and_noncanonical_timestamps(self) -> None:
+        reports = json.loads(inventory_body())["reports"]
+        body = inventory_body([reports[0], reports[0].copy()])
+        with self.assertRaisesRegex(SupportDiagnosticsError, "duplicate support codes"):
+            list_reports(
+                self.configuration,
+                CapturingOpener(FakeResponse(body, inventory_headers(body))),
+            )
+
+        reports[0]["created_at"] = "2026-07-22 13:30:00Z"
+        body = inventory_body(reports)
+        with self.assertRaisesRegex(SupportDiagnosticsError, "creation timestamp"):
+            list_reports(
+                self.configuration,
+                CapturingOpener(FakeResponse(body, inventory_headers(body))),
+            )
+
+    def test_list_reports_maps_json_resource_errors(self) -> None:
+        deeply_nested = b"[" * 10_000 + b"0" + b"]" * 10_000
+        with self.assertRaisesRegex(SupportDiagnosticsError, "not valid JSON"):
+            list_reports(
+                self.configuration,
+                CapturingOpener(FakeResponse(deeply_nested, inventory_headers(deeply_nested))),
+            )
+
+        oversized_integer = b'{"reports":[],"schema_version":' + b"9" * 5_000 + b"}"
+        with self.assertRaisesRegex(SupportDiagnosticsError, "not valid JSON"):
+            list_reports(
+                self.configuration,
+                CapturingOpener(
+                    FakeResponse(
+                        oversized_integer,
+                        inventory_headers(oversized_integer),
+                    )
+                ),
+            )
+
+        oversized = b"x" * (MAX_INVENTORY_BYTES + 1)
+        with self.assertRaisesRegex(SupportDiagnosticsError, "exceeds the response limit"):
+            list_reports(
+                self.configuration,
+                CapturingOpener(FakeResponse(oversized, inventory_headers(oversized))),
+            )
+
+    def test_main_lists_normalized_inventory(self) -> None:
+        body = inventory_body()
+        opener = CapturingOpener(FakeResponse(body, inventory_headers(body)))
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            result = main(
+                ["list"],
+                {
+                    "SUPPORT_DIAGNOSTICS_ENDPOINT": "https://diagnostics.example.test",
+                    "SUPPORT_DIAGNOSTICS_TOKEN": TOKEN,
+                },
+                opener,
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(json.loads(stdout.getvalue()), json.loads(body))
 
     def test_fetch_rejects_checksum_mismatch_without_writing_output(self) -> None:
         bundle = make_bundle()

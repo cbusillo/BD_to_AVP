@@ -3,7 +3,9 @@
 This directory is a self-contained Cloudflare Worker for user-initiated,
 private BD_to_AVP diagnostic bundles. It has no public read or list endpoint,
 does not embed a service credential in the macOS application, and stores
-bundles only in the private `DIAGNOSTIC_BUNDLES` R2 binding.
+bundles only in the private `DIAGNOSTIC_BUNDLES` R2 binding. Maintainers can
+list bounded report metadata only through the same authenticated private API
+used for retrieval and deletion.
 
 The service uses a SQLite-backed Durable Object to serialize report state
 transitions. This makes each upload authorization single-use even when two
@@ -116,21 +118,29 @@ by the maintainer CLI before any fetched archive is written to disk.
 bearer token. It returns only the opaque report ID, upload state, and retention
 expiry; it does not return the bundle, support code, or metadata.
 
-### Maintainer retrieval and deletion
+### Maintainer inventory, retrieval, and deletion
 
-Both routes require `Authorization: Bearer $SUPPORT_DIAGNOSTICS_TOKEN`, which
+All three routes require `Authorization: Bearer $SUPPORT_DIAGNOSTICS_TOKEN`, which
 is checked with fixed-length SHA-256 digests and a constant-time comparison.
 
 ```text
+GET    /v1/maintainer/reports
 GET    /v1/maintainer/reports/{support_code}
 DELETE /v1/maintainer/reports/{support_code}
 ```
 
-The GET response is the ZIP archive with `X-Diagnostic-SHA256`,
+The inventory GET returns every live report, bounded by the 500-report service
+capacity and ordered by creation time descending with support code as the tie
+breaker. Each item contains only support code, upload state, creation and expiry
+times, compressed size, bundle schema, and privacy-rules version. It never
+returns bundle content, checksums, report IDs, object keys, client fingerprints,
+or authorization material.
+
+The support-code GET response is the ZIP archive with `X-Diagnostic-SHA256`,
 `X-Diagnostic-Schema-Version`, and `X-Diagnostic-Privacy-Rules-Version`
 headers. The DELETE response is `204 No Content`. Unknown support codes return
-`404` only after maintainer authentication. There is no public list endpoint,
-public object route, or support-code-only read route.
+`404` only after maintainer authentication. There is no unauthenticated list
+endpoint, public object route, or support-code-only read route.
 
 ## Retention and Storage
 
@@ -156,12 +166,16 @@ maintainer token on the command line.
 export SUPPORT_DIAGNOSTICS_ENDPOINT='https://support.example'
 export SUPPORT_DIAGNOSTICS_TOKEN='<maintainer bearer token>'
 
+uv run python scripts/support_diagnostics.py list
 uv run python scripts/support_diagnostics.py fetch BDAVP-0123456789ABCDEF \
   --output /secure/path/report.zip
 uv run python scripts/support_diagnostics.py delete BDAVP-0123456789ABCDEF --yes
 ```
 
-`fetch` refuses non-HTTPS endpoints, does not overwrite an existing file,
+`list` reads at most 256 KiB, validates the complete metadata schema and
+newest-first ordering, and rejects unexpected fields before printing normalized
+JSON. The CLI rejects redirects so its bearer token cannot be forwarded to a
+different origin. `fetch` refuses non-HTTPS endpoints, does not overwrite an existing file,
 streams at most 2 MiB from the response, verifies the response checksum/schema,
 validates the ZIP archive without extracting it, and writes only a
 validated bundle. `delete` requires `--yes`.
@@ -184,7 +198,7 @@ wrong content type/size/checksum, ZIP envelope and declared expansion limits,
 rate limits, public-read denial, maintainer authentication, deletion, expiry
 cleanup, and safe failure logging. The Python tests cover valid retrieval plus
 checksum, CRC, decompressed limits, malformed archive, schema, delete,
-confirmation, and HTTP-failure handling.
+confirmation, inventory validation, and HTTP-failure handling.
 
 ## Production Deployment
 

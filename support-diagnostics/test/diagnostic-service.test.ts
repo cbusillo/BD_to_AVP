@@ -6,6 +6,7 @@ import { sha256Hex } from "../src/crypto.js";
 import {
   createDiagnosticService,
   DurableObjectRegistryClient,
+  ReportRegistry,
 } from "../src/index.js";
 import {
   API_SCHEMA_VERSION,
@@ -21,6 +22,7 @@ import { ReportRegistryService } from "../src/registry.js";
 import type {
   DurableObjectStorage,
   DurableObjectStub,
+  Env,
   R2Bucket,
   R2HttpMetadata,
   R2ObjectBody,
@@ -458,6 +460,16 @@ function maintainerRequest(
     {
       headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
       method,
+    },
+  );
+}
+
+function maintainerInventoryRequest(token?: string): Request {
+  return new Request(
+    "https://diagnostics.example.test/v1/maintainer/reports",
+    {
+      headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
+      method: "GET",
     },
   );
 }
@@ -927,6 +939,189 @@ describe("private diagnostic service", () => {
     expect(afterDelete.status).toBe(404);
   });
 
+  it("lists only bounded active report metadata for authenticated maintainers", async () => {
+    const harness = makeHarness();
+    const bytes = makeDiagnosticBundle();
+    const uploadedCreatedAt = harness.clock.now;
+    const uploadedReport = await createReport(harness.service, bytes);
+    expect(
+      (await harness.service.fetch(uploadRequest(uploadedReport, bytes))).status,
+    ).toBe(201);
+
+    harness.clock.now += 1;
+    const pendingCreatedAt = harness.clock.now;
+    const pendingReport = await createReport(harness.service, bytes);
+
+    const withoutToken = await harness.service.fetch(
+      maintainerInventoryRequest(),
+    );
+    expect(withoutToken.status).toBe(401);
+    expect(await withoutToken.json()).toEqual({ error: "unauthorized" });
+
+    const wrongToken = await harness.service.fetch(
+      maintainerInventoryRequest(
+        "wrong-maintainer-token-with-at-least-thirty-two",
+      ),
+    );
+    expect(wrongToken.status).toBe(401);
+    expect(await wrongToken.json()).toEqual({ error: "unauthorized" });
+
+    const listed = await harness.service.fetch(
+      maintainerInventoryRequest(
+        "maintainer-token-with-at-least-thirty-two-characters",
+      ),
+    );
+    expect(listed.status).toBe(200);
+    expect(listed.headers.get("cache-control")).toBe("no-store");
+    expect(listed.headers.get("content-type")).toBe(
+      "application/json; charset=utf-8",
+    );
+    const inventory = await listed.json();
+    expect(inventory).toEqual({
+      reports: [
+        {
+          bundle_schema_version: API_SCHEMA_VERSION,
+          created_at: new Date(pendingCreatedAt).toISOString(),
+          expires_at: new Date(pendingCreatedAt + RETENTION_MS).toISOString(),
+          privacy_rules_version: MINIMUM_PRIVACY_RULES_VERSION,
+          size_bytes: bytes.byteLength,
+          support_code: pendingReport.support_code,
+          upload_state: "pending",
+        },
+        {
+          bundle_schema_version: API_SCHEMA_VERSION,
+          created_at: new Date(uploadedCreatedAt).toISOString(),
+          expires_at: new Date(uploadedCreatedAt + RETENTION_MS).toISOString(),
+          privacy_rules_version: MINIMUM_PRIVACY_RULES_VERSION,
+          size_bytes: bytes.byteLength,
+          support_code: uploadedReport.support_code,
+          upload_state: "uploaded",
+        },
+      ],
+      schema_version: API_SCHEMA_VERSION,
+    });
+
+    const serializedInventory = JSON.stringify(inventory);
+    expect(serializedInventory).not.toContain(uploadedReport.report_id);
+    expect(serializedInventory).not.toContain(
+      uploadedReport.upload.headers.Authorization,
+    );
+    expect(serializedInventory).not.toContain(await sha256Hex(bytes));
+    expect(serializedInventory).not.toContain("clientFingerprint");
+    expect(serializedInventory).not.toContain("objectKey");
+    expect(harness.logs.at(-1)).toEqual({
+      event: "maintainer_inventory",
+      fields: { report_count: 2 },
+    });
+    expect(JSON.stringify(harness.logs.at(-1))).not.toContain(
+      uploadedReport.support_code,
+    );
+
+    harness.clock.now = pendingCreatedAt + RETENTION_MS;
+    const afterExpiry = await harness.service.fetch(
+      maintainerInventoryRequest(
+        "maintainer-token-with-at-least-thirty-two-characters",
+      ),
+    );
+    expect(await afterExpiry.json()).toEqual({
+      reports: [],
+      schema_version: API_SCHEMA_VERSION,
+    });
+  });
+
+  it("lists future privacy rule versions without poisoning inventory", async () => {
+    const harness = makeHarness();
+    const bytes = makeDiagnosticBundle();
+    const report = await createReport(
+      harness.service,
+      bytes,
+      Number.MAX_SAFE_INTEGER,
+    );
+
+    const listed = await harness.service.fetch(
+      maintainerInventoryRequest(
+        "maintainer-token-with-at-least-thirty-two-characters",
+      ),
+    );
+
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toMatchObject({
+      reports: [
+        {
+          privacy_rules_version: Number.MAX_SAFE_INTEGER,
+          support_code: report.support_code,
+        },
+      ],
+    });
+  });
+
+  it("lists legacy records through the durable object client and router", async () => {
+    const harness = makeHarness();
+    const createdAt = harness.clock.now;
+    const first: CreateReportRecordInput = {
+      bundleSchemaVersion: API_SCHEMA_VERSION,
+      clientFingerprint: "client-one",
+      contentType: BUNDLE_CONTENT_TYPE,
+      createdAt,
+      expiresAt: createdAt + RETENTION_MS,
+      objectKey: "reports/first.zip",
+      reportId: "00000000-0000-4000-8000-000000000010",
+      sha256: "d".repeat(64),
+      sizeBytes: 1,
+      statusExpiresAt: createdAt + RETENTION_MS,
+      statusTokenHash: "status-one",
+      supportCode: "BDAVP-0123456789ABCDEF",
+      uploadExpiresAt: createdAt + UPLOAD_AUTH_TTL_MS,
+      uploadState: "pending",
+      uploadTokenHash: "upload-one",
+    };
+    const second: CreateReportRecordInput = {
+      ...first,
+      clientFingerprint: "client-two",
+      objectKey: "reports/second.zip",
+      privacyRulesVersion: MINIMUM_PRIVACY_RULES_VERSION,
+      reportId: "00000000-0000-4000-8000-000000000011",
+      sha256: "e".repeat(64),
+      statusTokenHash: "status-two",
+      supportCode: "BDAVP-1123456789ABCDEF",
+      uploadTokenHash: "upload-two",
+    };
+    await harness.registry.create(second, createdAt);
+    await harness.registry.create(first, createdAt);
+
+    const durableObject = new ReportRegistry(
+      { storage: harness.storage },
+      { DIAGNOSTIC_BUNDLES: harness.bucket } as unknown as Env,
+    );
+    const stub: DurableObjectStub = {
+      fetch(input, init) {
+        return durableObject.fetch(new Request(input, init));
+      },
+    };
+    const client = new DurableObjectRegistryClient(stub);
+
+    await expect(client.listForMaintainer(createdAt)).resolves.toEqual([
+      {
+        bundleSchemaVersion: API_SCHEMA_VERSION,
+        createdAt,
+        expiresAt: createdAt + RETENTION_MS,
+        privacyRulesVersion: undefined,
+        sizeBytes: 1,
+        supportCode: first.supportCode,
+        uploadState: "pending",
+      },
+      {
+        bundleSchemaVersion: API_SCHEMA_VERSION,
+        createdAt,
+        expiresAt: createdAt + RETENTION_MS,
+        privacyRulesVersion: MINIMUM_PRIVACY_RULES_VERSION,
+        sizeBytes: 1,
+        supportCode: second.supportCode,
+        uploadState: "pending",
+      },
+    ]);
+  });
+
   it("records storage failure safely and exposes no token or bundle content in logs", async () => {
     const harness = makeHarness();
     const bytes = makeDiagnosticBundle({
@@ -1057,5 +1252,15 @@ describe("private diagnostic service", () => {
     );
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ error: "service_unavailable" });
+
+    const inventory = await service.fetch(
+      maintainerInventoryRequest(
+        "maintainer-token-with-at-least-thirty-two-characters",
+      ),
+    );
+    expect(inventory.status).toBe(503);
+    expect(await inventory.json()).toEqual({
+      error: "service_unavailable",
+    });
   });
 });
