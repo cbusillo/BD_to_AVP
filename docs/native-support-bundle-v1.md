@@ -288,3 +288,20 @@ never persisted or logged. Response bodies and headers are bounded, and
 network/HTTP failures map to a small set of user-safe offline, timeout,
 rate-limit, unavailable, rejected-bundle, expired-authorization, and invalid-
 response states without displaying server bodies or token-bearing URLs.
+
+## Maintainer Inventory Boundary
+
+The native app never lists reports and still receives no maintainer credential.
+For private operations, `GET /v1/maintainer/reports` uses the same maintainer
+bearer token as support-code retrieval and deletion. Its response is bounded by
+the service's 500-live-report capacity and contains only support code, upload
+state, creation and expiry times, compressed size, bundle schema, and optional
+privacy-rules version, ordered newest-first.
+
+The inventory omits ZIP contents, descriptions, media or source names, paths,
+filenames, checksums, report IDs, object keys, client fingerprints, network
+identity, and all upload/status authorization material. The repository CLI
+rejects unknown fields and malformed or out-of-order responses before printing
+normalized JSON, and rejects redirects before a maintainer bearer token can be
+forwarded. Public issue handoff remains unchanged: it exposes only the
+tester-provided support code and never obtains inventory access.

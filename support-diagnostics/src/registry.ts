@@ -3,6 +3,7 @@ import {
   MAX_DAILY_REPORTS_PER_CLIENT,
   type ClientUsage,
   type CreateReportRecordInput,
+  type MaintainerReportSummary,
   type RegistryErrorCode,
   RegistryError,
   type ReportRecord,
@@ -48,6 +49,7 @@ export interface Registry {
     statusTokenHash: string,
     now: number,
   ): Promise<ReportStatus>;
+  listForMaintainer(now: number): Promise<MaintainerReportSummary[]>;
   prune(now: number): Promise<string[]>;
 }
 
@@ -173,6 +175,33 @@ export class ReportRegistryService implements Registry {
     await this.deleteRecord(record);
     await this.scheduleNextExpiry().catch(() => undefined);
     return record;
+  }
+
+  async listForMaintainer(now: number): Promise<MaintainerReportSummary[]> {
+    const records = await this.storage.list<ReportRecord>({
+      prefix: REPORT_PREFIX,
+    });
+    return Array.from(records.values())
+      .filter((record) => record.expiresAt > now)
+      .sort((left, right) => {
+        const createdOrder = right.createdAt - left.createdAt;
+        if (createdOrder !== 0) {
+          return createdOrder;
+        }
+        if (left.supportCode < right.supportCode) {
+          return -1;
+        }
+        return left.supportCode > right.supportCode ? 1 : 0;
+      })
+      .map((record) => ({
+        bundleSchemaVersion: record.bundleSchemaVersion,
+        createdAt: record.createdAt,
+        expiresAt: record.expiresAt,
+        privacyRulesVersion: record.privacyRulesVersion,
+        sizeBytes: record.sizeBytes,
+        supportCode: record.supportCode,
+        uploadState: record.uploadState,
+      }));
   }
 
   async prune(now: number): Promise<string[]> {

@@ -60,3 +60,13 @@ export interface ReportStatus {
   reportId: string;
   uploadState: UploadState;
 }
+
+export interface MaintainerReportSummary {
+  bundleSchemaVersion: number;
+  createdAt: number;
+  expiresAt: number;
+  privacyRulesVersion: number | undefined;
+  sizeBytes: number;
+  supportCode: string;
+  uploadState: UploadState;
+}

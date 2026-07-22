@@ -9,6 +9,7 @@ import {
   STATUS_AUTH_TTL_MS,
   UPLOAD_AUTH_TTL_MS,
   type CreateReportRecordInput,
+  type MaintainerReportSummary,
   type RegistryErrorCode,
   RegistryError,
   type ReportRecord,
@@ -771,6 +772,37 @@ async function deleteForMaintainer(
   return emptyResponse(204);
 }
 
+function maintainerReportSummary(
+  report: MaintainerReportSummary,
+): Record<string, unknown> {
+  return {
+    bundle_schema_version: report.bundleSchemaVersion,
+    created_at: toIso(report.createdAt),
+    expires_at: toIso(report.expiresAt),
+    privacy_rules_version: report.privacyRulesVersion ?? null,
+    size_bytes: report.sizeBytes,
+    support_code: report.supportCode,
+    upload_state: report.uploadState,
+  };
+}
+
+async function listForMaintainer(
+  request: Request,
+  dependencies: ServiceDependencies,
+): Promise<Response> {
+  await requireMaintainer(request, dependencies);
+  const reports = await dependencies.registry.listForMaintainer(
+    nowFrom(dependencies),
+  );
+  dependencies.logger?.info("maintainer_inventory", {
+    report_count: reports.length,
+  });
+  return jsonResponse({
+    reports: reports.map(maintainerReportSummary),
+    schema_version: API_SCHEMA_VERSION,
+  });
+}
+
 function route(request: Request): string[] {
   return new URL(request.url).pathname.split("/").filter(Boolean);
 }
@@ -802,6 +834,15 @@ async function handleRequest(
         requireReportId(path[2]),
         dependencies,
       );
+    }
+    if (
+      request.method === "GET" &&
+      path.length === 3 &&
+      path[0] === "v1" &&
+      path[1] === "maintainer" &&
+      path[2] === "reports"
+    ) {
+      return await listForMaintainer(request, dependencies);
     }
     if (
       request.method === "GET" &&
@@ -917,6 +958,10 @@ export class DurableObjectRegistryClient implements Registry {
     now: number,
   ): Promise<ReportRecord> {
     return this.call("maintainer-delete", { now, supportCode });
+  }
+
+  async listForMaintainer(now: number): Promise<MaintainerReportSummary[]> {
+    return this.call("maintainer-list", { now });
   }
 
   async prune(now: number): Promise<string[]> {
@@ -1036,6 +1081,10 @@ export class ReportRegistry {
               payload.supportCode!,
               now,
             ),
+          });
+        case "maintainer-list":
+          return jsonResponse({
+            result: await this.service.listForMaintainer(now),
           });
         case "prune":
           return jsonResponse({ result: await this.service.prune(now) });

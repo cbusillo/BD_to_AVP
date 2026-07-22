@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -14,11 +15,15 @@ import urllib.request
 import zlib
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Mapping, Protocol, cast
 
 
 MAX_BUNDLE_BYTES = 2 * 1024 * 1024
+MAX_INVENTORY_BYTES = 256 * 1024
+MAX_INVENTORY_REPORTS = 500
+MAX_JAVASCRIPT_SAFE_INTEGER = 9_007_199_254_740_991
 MAX_UNCOMPRESSED_ARCHIVE_BYTES = 1_500_000
 ENTRY_LIMITS = {
     "manifest.json": 64 * 1024,
@@ -37,6 +42,8 @@ ZIP_DEFLATED = 8
 SCHEMA_VERSION = 1
 SUPPORT_CODE_PATTERN = re.compile(r"^BDAVP-[0-9ABCDEFGHJKMNPQRSTVWXYZ]{16}$")
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+INVENTORY_TIMESTAMP_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+UPLOAD_STATES = {"failed", "pending", "uploaded", "uploading"}
 
 
 class SupportDiagnosticsError(RuntimeError):
@@ -59,6 +66,22 @@ class ResponseLike(Protocol):
 ResponseOpener = Callable[..., object]
 
 
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        _request: urllib.request.Request,
+        _file_pointer: object,
+        _code: int,
+        _message: str,
+        _headers: Mapping[str, str],
+        _new_url: str,
+    ) -> None:
+        return None
+
+
+_DEFAULT_OPENER: ResponseOpener = urllib.request.build_opener(_RejectRedirects()).open
+
+
 @dataclass(frozen=True)
 class ClientConfiguration:
     endpoint: str
@@ -72,6 +95,23 @@ class FetchResult:
     sha256: str
     size_bytes: int
     support_code: str
+
+
+@dataclass(frozen=True)
+class ReportInventoryEntry:
+    bundle_schema_version: int
+    created_at: str
+    expires_at: str
+    privacy_rules_version: int | None
+    size_bytes: int
+    support_code: str
+    upload_state: str
+
+
+@dataclass(frozen=True)
+class ReportInventory:
+    reports: tuple[ReportInventoryEntry, ...]
+    schema_version: int
 
 
 @dataclass(frozen=True)
@@ -123,16 +163,26 @@ def report_url(configuration: ClientConfiguration, support_code: str) -> str:
     return f"{configuration.endpoint}/v1/maintainer/reports/{encoded_code}"
 
 
-def _request(url: str, method: str, token: str) -> urllib.request.Request:
-    return urllib.request.Request(
+def inventory_url(configuration: ClientConfiguration) -> str:
+    return f"{configuration.endpoint}/v1/maintainer/reports"
+
+
+def _request(
+    url: str,
+    method: str,
+    token: str,
+    accept: str = "application/zip",
+) -> urllib.request.Request:
+    request = urllib.request.Request(
         url,
         headers={
-            "Accept": "application/zip",
-            "Authorization": f"Bearer {token}",
+            "Accept": accept,
             "User-Agent": "bd-to-avp-support-diagnostics-cli/1",
         },
         method=method,
     )
+    request.add_unredirected_header("Authorization", f"Bearer {token}")
+    return request
 
 
 def _open(opener: ResponseOpener, request: urllib.request.Request) -> ResponseLike:
@@ -159,6 +209,117 @@ def _parse_content_length(headers: Mapping[str, str]) -> int:
     if length <= 0 or length > MAX_BUNDLE_BYTES:
         raise SupportDiagnosticsError("Service response exceeds the diagnostic bundle limit.")
     return length
+
+
+def _inventory_integer(
+    value: object,
+    name: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    if type(value) is not int or value < minimum or value > maximum:
+        raise SupportDiagnosticsError(f"Inventory response has an invalid {name}.")
+    return value
+
+
+def _inventory_timestamp(value: object, name: str) -> tuple[str, datetime]:
+    if not isinstance(value, str) or INVENTORY_TIMESTAMP_PATTERN.fullmatch(value) is None:
+        raise SupportDiagnosticsError(f"Inventory response has an invalid {name}.")
+    try:
+        parsed = datetime.fromisoformat(f"{value[:-1]}+00:00")
+    except ValueError as error:
+        raise SupportDiagnosticsError(f"Inventory response has an invalid {name}.") from error
+    canonical = parsed.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    if parsed.utcoffset() != timedelta(0) or canonical != value:
+        raise SupportDiagnosticsError(f"Inventory response has an invalid {name}.")
+    return value, parsed
+
+
+def _inventory_entry(value: object) -> tuple[ReportInventoryEntry, datetime]:
+    if not isinstance(value, dict):
+        raise SupportDiagnosticsError("Inventory response contains an invalid report entry.")
+    expected_keys = {
+        "bundle_schema_version",
+        "created_at",
+        "expires_at",
+        "privacy_rules_version",
+        "size_bytes",
+        "support_code",
+        "upload_state",
+    }
+    if set(value) != expected_keys:
+        raise SupportDiagnosticsError("Inventory response contains an invalid report entry.")
+    support_code = value["support_code"]
+    if not isinstance(support_code, str):
+        raise SupportDiagnosticsError("Inventory response has an invalid support code.")
+    support_code = validate_support_code(support_code)
+    created_at, created_time = _inventory_timestamp(value["created_at"], "creation timestamp")
+    expires_at, expires_time = _inventory_timestamp(value["expires_at"], "expiry timestamp")
+    if expires_time <= created_time or expires_time - created_time > timedelta(days=31):
+        raise SupportDiagnosticsError("Inventory response has an invalid expiry timestamp.")
+    upload_state = value["upload_state"]
+    if not isinstance(upload_state, str) or upload_state not in UPLOAD_STATES:
+        raise SupportDiagnosticsError("Inventory response has an invalid upload state.")
+    privacy_rules_version = value["privacy_rules_version"]
+    if privacy_rules_version is not None:
+        privacy_rules_version = _inventory_integer(
+            privacy_rules_version,
+            "privacy rules version",
+            minimum=1,
+            maximum=MAX_JAVASCRIPT_SAFE_INTEGER,
+        )
+    entry = ReportInventoryEntry(
+        bundle_schema_version=_inventory_integer(
+            value["bundle_schema_version"],
+            "bundle schema version",
+            minimum=1,
+            maximum=MAX_JAVASCRIPT_SAFE_INTEGER,
+        ),
+        created_at=created_at,
+        expires_at=expires_at,
+        privacy_rules_version=privacy_rules_version,
+        size_bytes=_inventory_integer(
+            value["size_bytes"],
+            "report size",
+            minimum=1,
+            maximum=MAX_BUNDLE_BYTES,
+        ),
+        support_code=support_code,
+        upload_state=upload_state,
+    )
+    return entry, created_time
+
+
+def _parse_inventory(data: bytes) -> ReportInventory:
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError) as error:
+        raise SupportDiagnosticsError("Inventory response is not valid JSON.") from error
+    if not isinstance(payload, dict) or set(payload) != {"reports", "schema_version"}:
+        raise SupportDiagnosticsError("Inventory response has an invalid schema.")
+    schema_version = _inventory_integer(
+        payload["schema_version"],
+        "schema version",
+        minimum=SCHEMA_VERSION,
+        maximum=SCHEMA_VERSION,
+    )
+    report_values = payload["reports"]
+    if not isinstance(report_values, list) or len(report_values) > MAX_INVENTORY_REPORTS:
+        raise SupportDiagnosticsError("Inventory response has an invalid report list.")
+    reports_with_times = [_inventory_entry(value) for value in report_values]
+    support_codes = [report.support_code for report, _ in reports_with_times]
+    if len(set(support_codes)) != len(support_codes):
+        raise SupportDiagnosticsError("Inventory response contains duplicate support codes.")
+    for (previous, previous_time), (current, current_time) in itertools.pairwise(reports_with_times):
+        if current_time > previous_time or (
+            current_time == previous_time and current.support_code < previous.support_code
+        ):
+            raise SupportDiagnosticsError("Inventory response is not ordered newest-first.")
+    return ReportInventory(
+        reports=tuple(report for report, _ in reports_with_times),
+        schema_version=schema_version,
+    )
 
 
 def _schema_document(payload: bytes, name: str, expected_schema_version: int) -> dict[str, object]:
@@ -391,7 +552,7 @@ def fetch_report(
     configuration: ClientConfiguration,
     support_code: str,
     output: Path,
-    opener: ResponseOpener = urllib.request.urlopen,
+    opener: ResponseOpener = _DEFAULT_OPENER,
 ) -> FetchResult:
     code = validate_support_code(support_code)
     request = _request(report_url(configuration, code), "GET", configuration.token)
@@ -421,10 +582,39 @@ def fetch_report(
     )
 
 
+def list_reports(
+    configuration: ClientConfiguration,
+    opener: ResponseOpener = _DEFAULT_OPENER,
+) -> ReportInventory:
+    request = _request(
+        inventory_url(configuration),
+        "GET",
+        configuration.token,
+        accept="application/json",
+    )
+    response = _open(opener, request)
+    with response:
+        content_type = _required_header(response.headers, "Content-Type").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            raise SupportDiagnosticsError("Service response has an unexpected Content-Type.")
+        declared_length = response.headers.get("Content-Length")
+        if declared_length is not None:
+            if len(declared_length) > len(str(MAX_INVENTORY_BYTES)) or not declared_length.isdecimal():
+                raise SupportDiagnosticsError("Inventory response has an invalid Content-Length.")
+            if int(declared_length) > MAX_INVENTORY_BYTES:
+                raise SupportDiagnosticsError("Inventory response exceeds the response limit.")
+        data = response.read(MAX_INVENTORY_BYTES + 1)
+    if len(data) > MAX_INVENTORY_BYTES:
+        raise SupportDiagnosticsError("Inventory response exceeds the response limit.")
+    if declared_length is not None and len(data) != int(declared_length):
+        raise SupportDiagnosticsError("Inventory response body size does not match Content-Length.")
+    return _parse_inventory(data)
+
+
 def delete_report(
     configuration: ClientConfiguration,
     support_code: str,
-    opener: ResponseOpener = urllib.request.urlopen,
+    opener: ResponseOpener = _DEFAULT_OPENER,
 ) -> None:
     code = validate_support_code(support_code)
     request = _request(report_url(configuration, code), "DELETE", configuration.token)
@@ -436,10 +626,10 @@ def delete_report(
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Fetch or delete private BD_to_AVP diagnostic bundles by support code."
-    )
+    parser = argparse.ArgumentParser(description="List, fetch, or delete private BD_to_AVP diagnostic bundles.")
     subcommands = parser.add_subparsers(dest="command", required=True)
+
+    subcommands.add_parser("list", help="List active private reports without downloading bundle contents.")
 
     fetch_parser = subcommands.add_parser("fetch", help="Fetch, checksum, and schema-validate a diagnostic bundle.")
     fetch_parser.add_argument("support_code")
@@ -454,11 +644,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(
     argv: list[str] | None = None,
     environ: Mapping[str, str] | None = None,
-    opener: ResponseOpener = urllib.request.urlopen,
+    opener: ResponseOpener = _DEFAULT_OPENER,
 ) -> int:
     try:
         arguments = parse_args(argv)
         configuration = load_configuration(environ)
+        if arguments.command == "list":
+            inventory = list_reports(configuration, opener)
+            print(
+                json.dumps(
+                    {
+                        "reports": [
+                            {
+                                "bundle_schema_version": report.bundle_schema_version,
+                                "created_at": report.created_at,
+                                "expires_at": report.expires_at,
+                                "privacy_rules_version": report.privacy_rules_version,
+                                "size_bytes": report.size_bytes,
+                                "support_code": report.support_code,
+                                "upload_state": report.upload_state,
+                            }
+                            for report in inventory.reports
+                        ],
+                        "schema_version": inventory.schema_version,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
         support_code = validate_support_code(arguments.support_code)
         if arguments.command == "fetch":
             output = arguments.output or Path(f"{support_code}.zip")
