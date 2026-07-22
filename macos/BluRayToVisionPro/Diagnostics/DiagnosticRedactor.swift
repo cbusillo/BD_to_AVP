@@ -94,6 +94,7 @@ final class DiagnosticRedactor {
                 options: [.caseInsensitive]
             )
         }
+        redacted = redactTokenAdjacentFilenameFragments(in: redacted)
         redacted = replaceCapturedMatches(
             pattern: #"[\"'`]((?:(?:file|dev|iso):/{1,3}|/|~/)[^\"'`\r\n]+)[\"'`]"#,
             in: redacted,
@@ -183,6 +184,16 @@ final class DiagnosticRedactor {
             in: redacted
         ) { _ in "<network:redacted>" }
         return Self.removingUnsafeControlCharacters(from: redacted)
+    }
+
+    private func redactTokenAdjacentFilenameFragments(in text: String) -> String {
+        replaceCapturedMatches(
+            pattern: #"(<(?:path|name):[0-9A-F]{8}:[0-9]{3}>)(?:\.[A-Za-z0-9]{1,16}|[._-][A-Za-z0-9][A-Za-z0-9._-]{0,127}\.[A-Za-z0-9]{1,16})(?![A-Za-z0-9_.-])"#,
+            in: text,
+            captureGroup: 1
+        ) { token in
+            token
+        }
     }
 
     private func redactMediaMetadataBlocks(in text: String) -> String {
