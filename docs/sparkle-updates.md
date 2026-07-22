@@ -69,8 +69,9 @@ Each new appcast item embeds the digest-bound draft release body as Markdown, so
 Sparkle uses its adaptive native text view without loading GitHub page chrome or
 making a second release-note request. A full-release link remains available for
 downloads and extended context, and historical external-link items remain valid.
-The live feed remains empty until the first enabled release is published. See
-[release-process.md](release-process.md) for the operator sequence.
+The live feed now carries cumulative production history through Beta 5 build
+`150`; prepared Beta 6 metadata does not alter it before guarded publication.
+See [release-process.md](release-process.md) for the operator sequence.
 
 Stable `0.2.143` remains compatible with macOS 14. The production SwiftUI line
 starting with `0.3.0b3` requires Apple Silicon and macOS 26. Sparkle's minimum
@@ -265,13 +266,12 @@ select Beta or Alpha for future prereleases. Retired `v0.3.0-beta.1` and
 `v0.3.0-beta.2` Preview identities remain separate, immutable, and unable to
 Sparkle-upgrade into Beta 3.
 
-Published `v0.3.0-beta.4` (`0.3.0b4`, build `149`) is the immutable head of the
-current cumulative feed above Beta 3. The next prepared item is authorized
-`v0.3.0-beta.5` (`0.3.0b5`, build `150`) under issue #338. Publication must
-append Beta 5 above Beta 4 and Beta 3, remain excluded from Stable and RC, and
-be eligible to Beta and Alpha. The exact-SHA Prerelease workflow, signing
-approval, notarization, and public verification remain separate fail-closed
-boundaries.
+Published `v0.3.0-beta.5` (`0.3.0b5`, build `150`) is the immutable head of the
+current cumulative feed above Beta 4 and Beta 3. The next prepared item is
+`v0.3.0-beta.6` (`0.3.0b6`, build `151`). Publication must append Beta 6 above
+the existing Betas, remain excluded from Stable and RC, and be eligible to Beta
+and Alpha. The exact-SHA Prerelease workflow, signing approval, notarization,
+and public verification remain separate fail-closed boundaries.
 
 ## Runtime Integration and UX
 

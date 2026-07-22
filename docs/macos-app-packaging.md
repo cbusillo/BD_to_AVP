@@ -95,11 +95,12 @@ missing or unknown values fail closed to Stable. Choosing a safer route affects
 only future newer builds and never downgrades the installed app. Published Beta
 3 (`0.3.0b3`, build `148`) is the one-time manual-download production seed:
 older Stable and RC installations cannot discover it, while an installed Beta
-3 exposes all four routes. Beta 4 (`0.3.0b4`, build `149`) is published and
-immutable. Beta 5 (`0.3.0b5`, build `150`) is the next prepared target and is
-authorized for the guarded exact-SHA Prerelease workflow. Its future cumulative
-item must sit above Beta 4 and Beta 3 and remain visible only to Beta and Alpha
-until a later newer Stable supersedes it.
+3 exposes all four routes. Beta 4 (`0.3.0b4`, build `149`) and Beta 5
+(`0.3.0b5`, build `150`) are published and immutable. Beta 6 (`0.3.0b6`, build
+`151`) is the next prepared target for the guarded exact-SHA Prerelease
+workflow. Its future cumulative item must sit above Beta 5, Beta 4, and Beta 3
+and remain visible only to Beta and Alpha until a later newer Stable supersedes
+it.
 
 ## Release Workflow
 
@@ -151,14 +152,13 @@ behavior and engine architecture rather than release branding.
 
 ## Remaining Field Evidence
 
-Beta 3 and Beta 4 publication are complete. Beta 5 field evidence remains
-pending issue #338's guarded Prerelease workflow and installed-app
-qualification. The signed installed-app qualification must prove that:
+Beta 3, Beta 4, and Beta 5 publication are complete. Beta 6 signed installed-app
+qualification must prove that:
 
-- Beta 4 updates forward to Beta 5 on Beta and Alpha without changing the saved
+- Beta 5 updates forward to Beta 6 on Beta and Alpha without changing the saved
   route;
 - Stable and RC continue to exclude every Beta item;
-- the production service rejects pre-v4 clients and accepts the signed Beta 5
+- the production service rejects pre-v4 clients and accepts the signed Beta 6
   client; and
 - a deliberate report can be submitted, retrieved by support code, assessed
   for privacy and diagnostic sufficiency, and deleted.
