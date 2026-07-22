@@ -156,29 +156,30 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         self.assertEqual(apps["bd-to-avp"]["min_os_version"], "14.0")
 
-    def test_repository_is_prepared_and_authorized_for_beta4(self) -> None:
+    def test_repository_is_prepared_and_authorized_for_beta5(self) -> None:
         metadata = release.load_release_metadata()
 
-        self.assertEqual(metadata.package_version, "0.3.0b4")
-        self.assertEqual(metadata.public_version, "0.3.0-beta.4")
-        self.assertEqual(metadata.build_version, "149")
-        self.assertEqual(metadata.release_tag, "v0.3.0-beta.4")
-        self.assertEqual(metadata.release_name, "v0.3.0-beta.4")
-        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.4.dmg")
+        self.assertEqual(metadata.package_version, "0.3.0b5")
+        self.assertEqual(metadata.public_version, "0.3.0-beta.5")
+        self.assertEqual(metadata.build_version, "150")
+        self.assertEqual(metadata.release_tag, "v0.3.0-beta.5")
+        self.assertEqual(metadata.release_name, "v0.3.0-beta.5")
+        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.5.dmg")
         self.assertEqual(metadata.channel, "beta")
         self.assertTrue(metadata.prerelease)
         self.assertFalse(metadata.make_latest)
         self.assertFalse(metadata.publish_pypi)
 
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
-        self.assertNotIn("v0.3.0-beta.4", freeze_policy["frozen_release_tags"])
+        self.assertNotIn("v0.3.0-beta.5", freeze_policy["frozen_release_tags"])
 
-        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.4-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.0b4`", cut_packet)
-        self.assertIn("Build `149`", cut_packet)
-        self.assertIn("PR #313", cut_packet)
+        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.5-cut-packet.md").read_text(encoding="utf-8")
+        self.assertIn("`0.3.0b5`", cut_packet)
+        self.assertIn("Build `150`", cut_packet)
+        self.assertIn("PR #335", cut_packet)
+        self.assertIn("PR #336", cut_packet)
         self.assertIn("Privacy rules version `4`", cut_packet)
-        self.assertIn("issue #316", cut_packet)
+        self.assertIn("issue #338", cut_packet)
 
     def test_repository_beta3_recovery_evidence_is_exact(self) -> None:
         evidence = release.validate_beta3_recovery_evidence()

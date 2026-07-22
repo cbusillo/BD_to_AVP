@@ -95,10 +95,11 @@ missing or unknown values fail closed to Stable. Choosing a safer route affects
 only future newer builds and never downgrades the installed app. Published Beta
 3 (`0.3.0b3`, build `148`) is the one-time manual-download production seed:
 older Stable and RC installations cannot discover it, while an installed Beta
-3 exposes all four routes. Beta 4 (`0.3.0b4`, build `149`) is the next prepared
-target and is authorized for the guarded exact-SHA Prerelease workflow. Its
-future cumulative item must sit above Beta 3 and remain visible only to Beta and
-Alpha until a later newer Stable supersedes it.
+3 exposes all four routes. Beta 4 (`0.3.0b4`, build `149`) is published and
+immutable. Beta 5 (`0.3.0b5`, build `150`) is the next prepared target and is
+authorized for the guarded exact-SHA Prerelease workflow. Its future cumulative
+item must sit above Beta 4 and Beta 3 and remain visible only to Beta and Alpha
+until a later newer Stable supersedes it.
 
 ## Release Workflow
 
@@ -150,16 +151,14 @@ behavior and engine architecture rather than release branding.
 
 ## Remaining Field Evidence
 
-Beta 3 publication and route qualification are complete. Beta 4 field evidence
-remains pending issue #316's guarded Prerelease workflow and installed-app
-qualification. The committed freeze is removed after the production diagnostics
-service admitted and qualified privacy-rules-v4 clients. The signed installed-app
-qualification must prove that:
+Beta 3 and Beta 4 publication are complete. Beta 5 field evidence remains
+pending issue #338's guarded Prerelease workflow and installed-app
+qualification. The signed installed-app qualification must prove that:
 
-- Beta 3 updates forward to Beta 4 on Beta and Alpha without changing the saved
+- Beta 4 updates forward to Beta 5 on Beta and Alpha without changing the saved
   route;
-- Stable and RC continue to exclude both Beta items;
-- the production service rejects pre-v4 clients and accepts the signed Beta 4
+- Stable and RC continue to exclude every Beta item;
+- the production service rejects pre-v4 clients and accepts the signed Beta 5
   client; and
 - a deliberate report can be submitted, retrieved by support code, assessed
   for privacy and diagnostic sufficiency, and deleted.
