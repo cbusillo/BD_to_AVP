@@ -95,6 +95,10 @@ class ProcessTimeoutError(ProcessRunnerError):
     pass
 
 
+class ProcessArtifactNoProgressError(ProcessRunnerError):
+    pass
+
+
 class ProcessPipeDrainError(ProcessRunnerError):
     pass
 
@@ -139,6 +143,8 @@ class ProcessSpec:
     capture_overflow: CaptureOverflowPolicy = CaptureOverflowPolicy.FAIL
     activity_interval_seconds: float = DEFAULT_ACTIVITY_INTERVAL_SECONDS
     artifact_interval_seconds: float = DEFAULT_ARTIFACT_INTERVAL_SECONDS
+    artifact_no_growth_timeout_seconds: float | None = None
+    artifact_no_growth_retryable: bool = False
     timeout_seconds: float | None = None
     termination_grace_seconds: float = DEFAULT_TERMINATION_GRACE_SECONDS
     kill_wait_seconds: float = DEFAULT_KILL_WAIT_SECONDS
@@ -180,6 +186,15 @@ class ProcessSpec:
                 raise ValueError(f"{duration_name} must be positive")
         if self.timeout_seconds is not None and self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        if self.artifact_no_growth_timeout_seconds is not None:
+            if self.artifact_no_growth_timeout_seconds <= 0:
+                raise ValueError("artifact_no_growth_timeout_seconds must be positive")
+            if not self.artifacts:
+                raise ValueError("artifact_no_growth_timeout_seconds requires at least one artifact")
+        if type(self.artifact_no_growth_retryable) is not bool:
+            raise TypeError("artifact_no_growth_retryable must be a bool")
+        if self.artifact_no_growth_retryable and self.artifact_no_growth_timeout_seconds is None:
+            raise ValueError("artifact_no_growth_retryable requires artifact_no_growth_timeout_seconds")
 
 
 @dataclass(frozen=True)
@@ -539,7 +554,9 @@ class _LineFramer:
 class _ArtifactState:
     path: Path | None = None
     size_bytes: int | None = None
+    modified_at_ns: int | None = None
     observed_at: float | None = None
+    last_progress_at: float | None = None
     resolver_failed: bool = False
 
 
@@ -639,7 +656,7 @@ class ChildProcessRunner:
             expected_streams.add(ProcessStream.STDERR)
         closed_streams: set[ProcessStream] = set()
         framers = {stream: _LineFramer(spec.line_limit_bytes) for stream in expected_streams}
-        artifact_states = [_ArtifactState(path=probe.path) for probe in spec.artifacts]
+        artifact_states = [_ArtifactState(path=probe.path, last_progress_at=started_at) for probe in spec.artifacts]
 
         pending_error: BaseException | None = None
         failure_code: str | None = None
@@ -824,6 +841,23 @@ class ChildProcessRunner:
                         now=now,
                     )
                     last_artifact_event_at = now
+                    stalled_artifact_roles = (
+                        [
+                            probe.role
+                            for probe, artifact_state in zip(spec.artifacts, artifact_states, strict=True)
+                            if artifact_state.last_progress_at is not None
+                            and now - artifact_state.last_progress_at >= spec.artifact_no_growth_timeout_seconds
+                        ]
+                        if spec.artifact_no_growth_timeout_seconds is not None
+                        else []
+                    )
+                    if pending_error is None and returncode is None and stalled_artifact_roles:
+                        pending_error = ProcessArtifactNoProgressError(
+                            f"{spec.display_name} produced no artifact growth for "
+                            f"{spec.artifact_no_growth_timeout_seconds:g} seconds: "
+                            f"{', '.join(stalled_artifact_roles)}"
+                        )
+                        failure_code = "artifact_no_growth"
 
                 if (
                     returncode is not None
@@ -945,7 +979,13 @@ class ChildProcessRunner:
                 context=final_context,
                 data=replace(
                     final_data,
-                    failure=ObservabilityFailure(code=failure_code or "runner_failed", retryable=False),
+                    failure=ObservabilityFailure(
+                        code=failure_code or "runner_failed",
+                        retryable=(
+                            isinstance(pending_error, ProcessArtifactNoProgressError)
+                            and spec.artifact_no_growth_retryable
+                        ),
+                    ),
                 ),
                 terminal=True,
             )
@@ -1199,7 +1239,9 @@ class ChildProcessRunner:
             if artifact_state.path != path:
                 artifact_state.path = path
                 artifact_state.size_bytes = None
+                artifact_state.modified_at_ns = None
                 artifact_state.observed_at = None
+                artifact_state.last_progress_at = now
             if path is None:
                 artifact = ObservabilityArtifact(role=probe.role, state="missing")
                 emitter.emit(
@@ -1218,11 +1260,20 @@ class ChildProcessRunner:
                 )
             else:
                 growth = None
+                previous_size = artifact_state.size_bytes
+                previous_modified_at_ns = artifact_state.modified_at_ns
                 if artifact_state.size_bytes is not None and artifact_state.observed_at is not None:
                     elapsed = now - artifact_state.observed_at
                     if elapsed > 0:
                         growth = max(0, int((status.st_size - artifact_state.size_bytes) / elapsed))
+                if (
+                    previous_modified_at_ns is None
+                    or status.st_size > (previous_size or 0)
+                    or status.st_mtime_ns > previous_modified_at_ns
+                ):
+                    artifact_state.last_progress_at = now
                 artifact_state.size_bytes = status.st_size
+                artifact_state.modified_at_ns = status.st_mtime_ns
                 artifact_state.observed_at = now
                 artifact = ObservabilityArtifact(
                     role=probe.role,
@@ -1338,7 +1389,12 @@ class ProcessPipelineRunner:
         ):
             internal_cancellation.set()
 
-        forced_cleanup = self._join_upstream_stages(states[:-1], internal_cancellation)
+        cleanup_error: ProcessRunnerError | None = None
+        try:
+            forced_cleanup = self._join_upstream_stages(states[:-1], internal_cancellation)
+        except ProcessRunnerError as error:
+            cleanup_error = error
+            forced_cleanup = True
         result = ProcessPipelineResult(
             stages=tuple(
                 ProcessPipelineStageResult(
@@ -1361,7 +1417,11 @@ class ProcessPipelineRunner:
                 raise cancellation_error
             raise ProcessCancelled("process pipeline was cancelled")
         if any(self._is_substantive_error(stage.error) for stage in result.stages):
+            if cleanup_error is not None:
+                raise ProcessPipelineError(result) from cleanup_error
             raise ProcessPipelineError(result)
+        if cleanup_error is not None:
+            raise cleanup_error
         if final_state.result is None:
             raise ProcessRunnerError("process pipeline ended without a final-stage result")
         return result

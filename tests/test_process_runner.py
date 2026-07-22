@@ -20,6 +20,7 @@ from bd_to_avp.process_runner import (
     EVENT_QUEUE_LIMIT,
     CaptureOverflowPolicy,
     ChildProcessRunner,
+    ProcessArtifactNoProgressError,
     ProcessArtifactProbe,
     ProcessCancelled,
     ProcessExecutionError,
@@ -447,6 +448,200 @@ class ChildProcessRunnerTests(unittest.TestCase):
         self.assertGreaterEqual(len(artifact_events), 2)
         self.assertEqual(artifact_events[-1].data.artifact.state, "complete")
         self.assertEqual(artifact_events[-1].data.artifact.size_bytes, 131072)
+
+    def test_artifact_no_growth_timeout_ignores_continuing_diagnostics(self) -> None:
+        sink = RecordingSink()
+        context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER, sink))
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "output.bin"
+            started = time.monotonic()
+            with self.assertRaises(ProcessArtifactNoProgressError):
+                ChildProcessRunner().run(
+                    self.spec(
+                        "import pathlib, sys, time; path = pathlib.Path(sys.argv[1]); "
+                        "path.write_bytes(b'x' * 70000); "
+                        "[(print('progress', index, file=sys.stderr, flush=True), time.sleep(0.02)) "
+                        "for index in range(1000)]",
+                        artifact,
+                        merge_stderr=False,
+                        artifacts=(ProcessArtifactProbe("intermediate", artifact),),
+                        artifact_interval_seconds=0.02,
+                        artifact_no_growth_timeout_seconds=0.25,
+                        artifact_no_growth_retryable=True,
+                        termination_grace_seconds=0.1,
+                        kill_wait_seconds=0.1,
+                    ),
+                    run_context=context,
+                )
+
+        self.assertLess(time.monotonic() - started, 3)
+        failures = [event for event in sink.snapshot().events if event.kind == "tool.failed"]
+        self.assertEqual(failures[-1].data.failure.code, "artifact_no_growth")
+        self.assertTrue(failures[-1].data.failure.retryable)
+
+    def test_artifact_growth_resets_no_growth_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "output.bin"
+            result = ChildProcessRunner().run(
+                self.spec(
+                    "import pathlib, sys, time; path = pathlib.Path(sys.argv[1]); "
+                    "file = path.open('wb'); "
+                    "[(file.write(b'x' * 70000), file.flush(), time.sleep(0.05)) for _ in range(4)]; "
+                    "file.close()",
+                    artifact,
+                    artifacts=(ProcessArtifactProbe("intermediate", artifact),),
+                    artifact_interval_seconds=0.02,
+                    artifact_no_growth_timeout_seconds=0.25,
+                )
+            )
+
+        self.assertEqual(result.returncode, 0)
+
+    def test_artifact_rewrite_resets_no_growth_timeout_without_size_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "output.bin"
+            result = ChildProcessRunner().run(
+                self.spec(
+                    "import os, pathlib, sys, time; path = pathlib.Path(sys.argv[1]); "
+                    "path.write_bytes(b'x' * 70000); "
+                    "[(os.utime(path, None), time.sleep(0.05)) for _ in range(4)]",
+                    artifact,
+                    artifacts=(ProcessArtifactProbe("intermediate", artifact),),
+                    artifact_interval_seconds=0.02,
+                    artifact_no_growth_timeout_seconds=0.25,
+                )
+            )
+
+        self.assertEqual(result.returncode, 0)
+
+    def test_each_artifact_must_continue_making_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            growing = Path(directory) / "growing.bin"
+            stalled = Path(directory) / "stalled.bin"
+            with self.assertRaisesRegex(ProcessArtifactNoProgressError, "stalled_output"):
+                ChildProcessRunner().run(
+                    self.spec(
+                        "import pathlib, sys, time; growing = pathlib.Path(sys.argv[1]); "
+                        "stalled = pathlib.Path(sys.argv[2]); stalled.write_bytes(b'x' * 70000); "
+                        "file = growing.open('wb'); "
+                        "[(file.write(b'x' * 70000), file.flush(), time.sleep(0.04)) for _ in range(1000)]",
+                        growing,
+                        stalled,
+                        artifacts=(
+                            ProcessArtifactProbe("growing_output", growing),
+                            ProcessArtifactProbe("stalled_output", stalled),
+                        ),
+                        artifact_interval_seconds=0.02,
+                        artifact_no_growth_timeout_seconds=0.25,
+                        termination_grace_seconds=0.1,
+                        kill_wait_seconds=0.1,
+                    )
+                )
+
+    def test_pipeline_final_artifact_stall_cancels_blocked_producer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "output.bin"
+            stages = (
+                ProcessPipelineStage(
+                    self.spec(
+                        "import os\nwhile True: os.write(1, b'x' * 65536)",
+                        tool_id="producer",
+                        display_name="producer",
+                        termination_grace_seconds=0.1,
+                        kill_wait_seconds=0.1,
+                    )
+                ),
+                ProcessPipelineStage(
+                    self.spec(
+                        "import pathlib, sys, time; pathlib.Path(sys.argv[1]).write_bytes(b'x' * 70000); "
+                        "time.sleep(30)",
+                        artifact,
+                        tool_id="consumer",
+                        display_name="consumer",
+                        artifacts=(ProcessArtifactProbe("output", artifact),),
+                        artifact_interval_seconds=0.02,
+                        artifact_no_growth_timeout_seconds=0.25,
+                        termination_grace_seconds=0.1,
+                        kill_wait_seconds=0.1,
+                    )
+                ),
+            )
+
+            started = time.monotonic()
+            with self.assertRaises(ProcessPipelineError) as raised:
+                ProcessPipelineRunner(exit_grace_seconds=0.1).run(stages)
+
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertIsInstance(raised.exception.result.stages[0].error, ProcessCancelled)
+        self.assertIsInstance(raised.exception.result.stages[1].error, ProcessArtifactNoProgressError)
+
+    def test_three_stage_artifact_plateau_preserves_final_error_and_cleans_up_splitter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            left_artifact = Path(directory) / "left.bin"
+            right_artifact = Path(directory) / "right.bin"
+            stages = (
+                ProcessPipelineStage(
+                    self.spec(
+                        "import os; os.write(1, b'x' * 1048576)",
+                        tool_id="producer",
+                        display_name="producer",
+                    )
+                ),
+                ProcessPipelineStage(
+                    self.spec(
+                        "import os, sys, time; sys.stdin.buffer.read(); os.write(1, b'x' * 131072); time.sleep(30)",
+                        tool_id="splitter",
+                        display_name="splitter",
+                        termination_grace_seconds=0.1,
+                        kill_wait_seconds=0.1,
+                    )
+                ),
+                ProcessPipelineStage(
+                    self.spec(
+                        "import pathlib, sys; payload = sys.stdin.buffer.read(65536); "
+                        "pathlib.Path(sys.argv[1]).write_bytes(payload); "
+                        "pathlib.Path(sys.argv[2]).write_bytes(payload); sys.stdin.buffer.read()",
+                        left_artifact,
+                        right_artifact,
+                        tool_id="encoder",
+                        display_name="encoder",
+                        artifacts=(
+                            ProcessArtifactProbe("left_output", left_artifact),
+                            ProcessArtifactProbe("right_output", right_artifact),
+                        ),
+                        artifact_interval_seconds=0.02,
+                        artifact_no_growth_timeout_seconds=0.25,
+                        termination_grace_seconds=0.1,
+                        kill_wait_seconds=0.1,
+                    )
+                ),
+            )
+
+            started = time.monotonic()
+            with self.assertRaises(ProcessPipelineError) as raised:
+                ProcessPipelineRunner(exit_grace_seconds=0.1).run(stages)
+
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertIsNone(raised.exception.result.stages[0].error)
+        self.assertIsInstance(raised.exception.result.stages[1].error, ProcessCancelled)
+        self.assertIsInstance(raised.exception.result.stages[2].error, ProcessArtifactNoProgressError)
+
+    def test_pipeline_preserves_stage_error_when_cleanup_monitor_fails(self) -> None:
+        stages = (
+            ProcessPipelineStage(self.spec("print('done')", tool_id="producer", display_name="producer")),
+            ProcessPipelineStage(self.spec("raise SystemExit(4)", tool_id="consumer", display_name="consumer")),
+        )
+        cleanup_error = ProcessRunnerError("pipeline monitor did not stop")
+        runner = ProcessPipelineRunner(exit_grace_seconds=0.1)
+
+        with (
+            unittest.mock.patch.object(runner, "_join_upstream_stages", side_effect=cleanup_error),
+            self.assertRaises(ProcessPipelineError) as raised,
+        ):
+            runner.run(stages)
+
+        self.assertIs(raised.exception.__cause__, cleanup_error)
+        self.assertIsInstance(raised.exception.result.stages[1].error, subprocess.CalledProcessError)
 
     def test_cancellation_emits_terminal_incomplete_artifact_snapshot(self) -> None:
         sink = RecordingSink()

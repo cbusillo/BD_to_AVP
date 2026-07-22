@@ -12,6 +12,7 @@ from bd_to_avp.modules import video
 from bd_to_avp.modules.disc import DiscInfo
 from bd_to_avp.observability import ObservabilityContext
 from bd_to_avp.process_runner import (
+    ProcessArtifactNoProgressError,
     ProcessCancelled,
     ProcessExecutionError,
     ProcessOutputSnapshot,
@@ -19,7 +20,6 @@ from bd_to_avp.process_runner import (
     ProcessPipelineResult,
     ProcessPipelineStageResult,
     ProcessResult,
-    ProcessTimeoutError,
 )
 
 
@@ -279,6 +279,11 @@ class NativeMvcSelectionTests(unittest.TestCase):
             [probe.role for probe in stages[-1].spec.artifacts],
             ["left_eye_video_output", "right_eye_video_output"],
         )
+        self.assertEqual(
+            stages[-1].spec.artifact_no_growth_timeout_seconds,
+            video.NATIVE_MVC_ARTIFACT_NO_GROWTH_TIMEOUT_SECONDS,
+        )
+        self.assertTrue(stages[-1].spec.artifact_no_growth_retryable)
         self.assertTrue(all(stage.spec.event_context is event_context for stage in stages))
         self.assertIs(run.call_args.kwargs["run_context"], run_context)
         self.assertIs(run.call_args.kwargs["cancellation_event"], cancellation_event)
@@ -365,7 +370,6 @@ class NativeMvcSelectionTests(unittest.TestCase):
         with (
             patch.object(video.config, "EDGE264_TEST_PATH", Path("edge264_test")),
             patch.object(video, "should_stream_mvc_from_container", return_value=False),
-            patch.object(video, "should_probe_native_multithread_splitter", return_value=False),
             patch.object(
                 video.ProcessPipelineRunner,
                 "run",
@@ -386,108 +390,54 @@ class NativeMvcSelectionTests(unittest.TestCase):
         second_stages = run.call_args_list[1].args[0]
         self.assertEqual(first_stages[0].spec.argv[-1], "-Omk")
         self.assertEqual(second_stages[0].spec.argv[-1], "-Osk")
+        self.assertTrue(first_stages[-1].spec.artifact_no_growth_retryable)
+        self.assertFalse(second_stages[-1].spec.artifact_no_growth_retryable)
+
+    def test_native_split_retries_single_threaded_when_outputs_stop_growing(self) -> None:
+        stall = ProcessArtifactNoProgressError("encoder outputs stopped growing")
+        with (
+            patch.object(video.config, "EDGE264_TEST_PATH", Path("edge264_test")),
+            patch.object(video, "should_stream_mvc_from_container", return_value=False),
+            patch.object(
+                video.ProcessPipelineRunner,
+                "run",
+                side_effect=[pipeline_failure(ffmpeg_error=stall), pipeline_success(False)],
+            ) as run,
+            redirect_stdout(StringIO()),
+        ):
+            video.split_mvc_to_stereo_native(Path("movie.264"), Path("left.mov"), Path("right.mov"), DiscInfo(), "")
+
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[0].args[0][0].spec.argv[-1], "-Omk")
+        self.assertEqual(run.call_args_list[1].args[0][0].spec.argv[-1], "-Osk")
+
+    def test_native_split_reports_stall_after_single_thread_retry(self) -> None:
+        stall = ProcessArtifactNoProgressError("encoder outputs stopped growing")
+        with (
+            patch.object(video.config, "EDGE264_TEST_PATH", Path("edge264_test")),
+            patch.object(video, "should_stream_mvc_from_container", return_value=False),
+            patch.object(
+                video.ProcessPipelineRunner,
+                "run",
+                side_effect=[pipeline_failure(ffmpeg_error=stall), pipeline_failure(ffmpeg_error=stall)],
+            ) as run,
+            redirect_stdout(StringIO()),
+            self.assertRaisesRegex(video.NativeMvcSplitError, "stopped producing video.*waiting indefinitely"),
+        ):
+            video.split_mvc_to_stereo_native(Path("movie.264"), Path("left.mov"), Path("right.mov"), DiscInfo(), "")
+
+        self.assertEqual(run.call_count, 2)
 
     def test_native_split_does_not_retry_when_pipeline_is_cancelled(self) -> None:
         cancellation = ProcessCancelled("cancelled")
         with (
             patch.object(video, "should_stream_mvc_from_container", return_value=False),
-            patch.object(video, "should_probe_native_multithread_splitter", return_value=False),
             patch.object(video.ProcessPipelineRunner, "run", side_effect=cancellation) as run,
             self.assertRaises(ProcessCancelled),
         ):
             video.split_mvc_to_stereo_native(Path("movie.264"), Path("left.mov"), Path("right.mov"), DiscInfo(), "")
 
         run.assert_called_once()
-
-    def test_native_split_probe_crash_skips_multithreaded_attempt(self) -> None:
-        with (
-            patch.object(video, "should_stream_mvc_from_container", return_value=False),
-            patch.object(video, "should_probe_native_multithread_splitter", return_value=True),
-            patch.object(video, "native_multithread_splitter_probe_crashed", return_value=True),
-            patch.object(video, "run_native_mvc_split_attempt") as run_attempt,
-            redirect_stdout(StringIO()),
-        ):
-            video.run_native_mvc_encoding(Path("movie.264"), (Path("output.mov"),), ["encode-ffmpeg"])
-
-        run_attempt.assert_called_once()
-        self.assertTrue(run_attempt.call_args.kwargs["single_threaded"])
-
-    def test_native_split_probe_pass_uses_multithreaded_attempt(self) -> None:
-        stdout = StringIO()
-        with (
-            patch.object(video, "should_stream_mvc_from_container", return_value=False),
-            patch.object(video, "should_probe_native_multithread_splitter", return_value=True),
-            patch.object(video, "native_multithread_splitter_probe_crashed", return_value=False),
-            patch.object(video, "run_native_mvc_split_attempt") as run_attempt,
-            redirect_stdout(stdout),
-        ):
-            video.run_native_mvc_encoding(Path("movie.264"), (Path("output.mov"),), ["encode-ffmpeg"])
-
-        self.assertFalse(run_attempt.call_args.kwargs["single_threaded"])
-        self.assertIn("Native MVC splitter probe passed", stdout.getvalue())
-
-    def test_native_split_does_not_probe_mkv_sources(self) -> None:
-        with (
-            patch.object(video, "should_stream_mvc_from_container", return_value=True),
-            patch.object(video, "native_multithread_splitter_probe_crashed") as probe,
-            patch.object(video, "run_native_mvc_split_attempt"),
-        ):
-            video.run_native_mvc_encoding(Path("movie.mkv"), (Path("output.mov"),), ["encode-ffmpeg"])
-
-        probe.assert_not_called()
-
-    def test_native_multithread_probe_returns_true_when_splitter_dies_by_signal(self) -> None:
-        with (
-            patch.object(video.config, "EDGE264_TEST_PATH", Path("edge264_test")),
-            patch.object(
-                video.ChildProcessRunner,
-                "run",
-                side_effect=process_error(-signal.SIGABRT, ["edge264_test"]),
-            ),
-        ):
-            self.assertTrue(video.native_multithread_splitter_probe_crashed(Path("movie.264")))
-
-    def test_native_multithread_probe_does_not_treat_sigterm_as_crash(self) -> None:
-        error = process_error(-signal.SIGTERM, ["edge264_test"])
-        with (
-            patch.object(video.ChildProcessRunner, "run", side_effect=error),
-            self.assertRaises(ProcessExecutionError) as raised,
-        ):
-            video.native_multithread_splitter_probe_crashed(Path("movie.264"))
-
-        self.assertIs(raised.exception, error)
-
-    def test_native_multithread_probe_returns_false_after_timeout(self) -> None:
-        with patch.object(
-            video.ChildProcessRunner,
-            "run",
-            side_effect=ProcessTimeoutError("probe timed out"),
-        ):
-            self.assertFalse(video.native_multithread_splitter_probe_crashed(Path("movie.264")))
-
-    def test_native_multithread_probe_uses_bounded_runner_contract(self) -> None:
-        run_context = Mock()
-        cancellation_event = threading.Event()
-        event_context = ObservabilityContext()
-        with (
-            patch.object(video, "generate_native_mvc_splitter_command", return_value=["edge264_test"]),
-            patch.object(video.ChildProcessRunner, "run", return_value=process_result("edge264")) as run,
-        ):
-            result = video.native_multithread_splitter_probe_crashed(
-                Path("movie.264"),
-                run_context=run_context,
-                cancellation_event=cancellation_event,
-                observability_context=event_context,
-            )
-
-        self.assertFalse(result)
-        spec = run.call_args.args[0]
-        self.assertEqual(spec.stdout, subprocess.DEVNULL)
-        self.assertFalse(spec.merge_stderr)
-        self.assertEqual(spec.timeout_seconds, video.NATIVE_MVC_PROBE_TIMEOUT_SECONDS)
-        self.assertIs(spec.event_context, event_context)
-        self.assertIs(run.call_args.kwargs["run_context"], run_context)
-        self.assertIs(run.call_args.kwargs["cancellation_event"], cancellation_event)
 
     def test_native_split_raises_clear_error_when_single_thread_retry_sigaborts(self) -> None:
         crash = pipeline_failure(
@@ -497,11 +447,24 @@ class NativeMvcSelectionTests(unittest.TestCase):
         with (
             patch.object(video.config, "EDGE264_TEST_PATH", Path("edge264_test")),
             patch.object(video, "should_stream_mvc_from_container", return_value=False),
-            patch.object(video, "should_probe_native_multithread_splitter", return_value=False),
             patch.object(video.ProcessPipelineRunner, "run", side_effect=[crash, crash]),
             self.assertRaisesRegex(video.NativeMvcSplitError, "SIGABRT.*diagnostic report"),
         ):
             video.split_mvc_to_stereo_native(Path("movie.264"), Path("left.mov"), Path("right.mov"), DiscInfo(), "")
+
+    def test_signal_crash_is_prioritized_even_when_final_stage_completes_first(self) -> None:
+        splitter_error = process_error(-signal.SIGABRT, ["edge264_test"])
+        ffmpeg_error = process_error(1, ["encode-ffmpeg"])
+        error = ProcessPipelineError(
+            ProcessPipelineResult(
+                (
+                    ProcessPipelineStageResult("edge264", None, splitter_error, completed_before_final=False),
+                    ProcessPipelineStageResult("ffmpeg", None, ffmpeg_error, completed_before_final=True),
+                )
+            )
+        )
+
+        self.assertIs(video.select_native_pipeline_error(error, producer_present=False), splitter_error)
 
 
 def process_result(tool_id: str) -> ProcessResult:

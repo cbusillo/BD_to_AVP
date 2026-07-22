@@ -16,16 +16,14 @@ from bd_to_avp.modules.disc import DiscInfo
 from bd_to_avp.modules.command import combined_process_output, run_ffmpeg_capture, run_ffprobe, run_process_capture
 from bd_to_avp.process_runner import (
     CaptureOverflowPolicy,
-    ChildProcessRunner,
+    ProcessArtifactNoProgressError,
     ProcessArtifactProbe,
     ProcessCancelled,
-    ProcessExecutionError,
     ProcessPipelineError,
     ProcessPipelineRunner,
     ProcessPipelineStage,
     ProcessRunnerError,
     ProcessSpec,
-    ProcessTimeoutError,
 )
 from bd_to_avp.presentation import cli_message
 from bd_to_avp.runtime import RunContext
@@ -66,7 +64,7 @@ class NativeMvcSplitError(RuntimeError):
     pass
 
 
-NATIVE_MVC_PROBE_TIMEOUT_SECONDS = 30
+NATIVE_MVC_ARTIFACT_NO_GROWTH_TIMEOUT_SECONDS = 120
 NATIVE_MVC_RETRY_SIGNALS = {
     signal.SIGABRT,
     signal.SIGBUS,
@@ -118,13 +116,6 @@ def generate_mvc_annex_b_stream_command(video_input_path: Path) -> list[str | Pa
         "h264",
         "-",
     ]
-
-
-def should_probe_native_multithread_splitter() -> bool:
-    source_path = config.source_path
-    if not source_path:
-        return False
-    return source_path.suffix.lower() in config.IMAGE_EXTENSIONS
 
 
 def prepare_native_mvc_input(video_input_path: Path) -> Path:
@@ -309,57 +300,32 @@ def run_native_mvc_encoding(
     producer_command = generate_mvc_annex_b_stream_command(video_input_path) if stream_from_container else None
     native_input_path = Path("-") if stream_from_container else prepare_native_mvc_input(video_input_path)
     try:
-        skip_multithreaded_attempt = False
-        if not stream_from_container and should_probe_native_multithread_splitter():
-            cli_message(
-                "Checking native MVC splitter with a short multi-threaded probe.",
-                run_context=run_context,
-            )
-            skip_multithreaded_attempt = native_multithread_splitter_probe_crashed(
+        single_threaded = False
+        try:
+            run_native_mvc_split_attempt(
                 native_input_path,
+                ffmpeg_command,
+                output_paths,
+                producer_command=producer_command,
+                single_threaded=single_threaded,
                 run_context=run_context,
                 cancellation_event=cancellation_event,
                 observability_context=observability_context,
             )
-            if not skip_multithreaded_attempt:
-                cli_message(
-                    "Native MVC splitter probe passed; proceeding with multi-threaded mode.",
-                    run_context=run_context,
-                )
-
-        try:
-            if skip_multithreaded_attempt:
-                cli_message(
-                    "Native MVC splitter probe crashed; using slower single-threaded mode.",
-                    run_context=run_context,
-                )
-                run_native_mvc_split_attempt(
-                    native_input_path,
-                    ffmpeg_command,
-                    output_paths,
-                    producer_command=producer_command,
-                    single_threaded=True,
-                    run_context=run_context,
-                    cancellation_event=cancellation_event,
-                    observability_context=observability_context,
-                )
-            else:
-                run_native_mvc_split_attempt(
-                    native_input_path,
-                    ffmpeg_command,
-                    output_paths,
-                    producer_command=producer_command,
-                    single_threaded=False,
-                    run_context=run_context,
-                    cancellation_event=cancellation_event,
-                    observability_context=observability_context,
-                )
-        except subprocess.CalledProcessError as error:
-            if not native_splitter_died_by_signal(error):
+        except (ProcessArtifactNoProgressError, subprocess.CalledProcessError) as error:
+            retry_after_stall = isinstance(error, ProcessArtifactNoProgressError)
+            retry_after_crash = isinstance(error, subprocess.CalledProcessError) and native_splitter_died_by_signal(
+                error
+            )
+            if single_threaded or not (retry_after_stall or retry_after_crash):
                 raise
 
             cli_message(
-                "Native MVC splitter crashed; retrying once in single-threaded mode.",
+                (
+                    "Native MVC splitter stopped making progress; retrying once in single-threaded mode."
+                    if retry_after_stall
+                    else "Native MVC splitter crashed; retrying once in single-threaded mode."
+                ),
                 run_context=run_context,
             )
             for output_path in output_paths:
@@ -374,6 +340,8 @@ def run_native_mvc_encoding(
                 cancellation_event=cancellation_event,
                 observability_context=observability_context,
             )
+    except ProcessArtifactNoProgressError as error:
+        raise NativeMvcSplitError(build_native_splitter_stall_message(error)) from error
     except subprocess.CalledProcessError as error:
         if native_splitter_should_report_crash(error):
             raise NativeMvcSplitError(build_native_splitter_failure_message(error)) from error
@@ -381,39 +349,6 @@ def run_native_mvc_encoding(
     finally:
         if not stream_from_container and native_input_path != video_input_path:
             native_input_path.unlink(missing_ok=True)
-
-
-def native_multithread_splitter_probe_crashed(
-    native_input_path: Path,
-    *,
-    run_context: RunContext | None = None,
-    cancellation_event: threading.Event | None = None,
-    observability_context: ObservabilityContext | None = None,
-) -> bool:
-    splitter_command = generate_native_mvc_splitter_command(native_input_path, single_threaded=False)
-    try:
-        ChildProcessRunner().run(
-            ProcessSpec(
-                argv=tuple(splitter_command),
-                tool_id="edge264",
-                display_name="Native MVC splitter probe",
-                env=os.environ.copy(),
-                stdout=subprocess.DEVNULL,
-                merge_stderr=False,
-                event_context=observability_context or ObservabilityContext(),
-                timeout_seconds=NATIVE_MVC_PROBE_TIMEOUT_SECONDS,
-                capture_overflow=CaptureOverflowPolicy.TRUNCATE,
-            ),
-            run_context=run_context,
-            cancellation_event=cancellation_event,
-        )
-    except ProcessTimeoutError:
-        return False
-    except ProcessExecutionError as error:
-        if native_splitter_returncode_is_retry_signal(error.returncode):
-            return True
-        raise
-    return False
 
 
 def run_native_mvc_split_attempt(
@@ -480,6 +415,8 @@ def run_native_mvc_split_attempt(
                             output_artifact_roles(len(output_paths)), output_paths, strict=True
                         )
                     ),
+                    artifact_no_growth_timeout_seconds=NATIVE_MVC_ARTIFACT_NO_GROWTH_TIMEOUT_SECONDS,
+                    artifact_no_growth_retryable=not single_threaded,
                     capture_overflow=CaptureOverflowPolicy.TRUNCATE,
                 )
             ),
@@ -510,10 +447,8 @@ def select_native_pipeline_error(
     splitter_stage = stages[splitter_index]
     ffmpeg_stage = stages[ffmpeg_index]
 
-    if (
-        isinstance(splitter_stage.error, subprocess.CalledProcessError)
-        and splitter_stage.completed_before_final
-        and native_splitter_died_by_signal(splitter_stage.error)
+    if isinstance(splitter_stage.error, subprocess.CalledProcessError) and native_splitter_died_by_signal(
+        splitter_stage.error
     ):
         return splitter_stage.error
     if (
@@ -572,6 +507,15 @@ def build_native_splitter_failure_message(error: subprocess.CalledProcessError) 
         f"({signal_name}). This usually means the bundled native decoder hit a Blu-ray MVC bitstream it does not "
         "currently support. The source may need a splitter update or a future fallback path. "
         "Please submit a diagnostic report so the bounded splitter and encoder evidence can be reviewed."
+    )
+
+
+def build_native_splitter_stall_message(error: ProcessArtifactNoProgressError) -> str:
+    return (
+        "The native MVC splitter stopped producing video in both multi-threaded and single-threaded modes. "
+        "The conversion was stopped instead of waiting indefinitely. This usually means the bundled native decoder "
+        "hit damaged or unsupported MVC data. Please submit a diagnostic report so the bounded splitter and encoder "
+        f"evidence can be reviewed. ({error})"
     )
 
 
