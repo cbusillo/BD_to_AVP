@@ -140,7 +140,15 @@ class MacOSReleaseArtifactTests(unittest.TestCase):
         tool_names = {call.args[0].name for call in verify_tool.call_args_list}
         self.assertEqual(
             tool_names,
-            {"MP4Box", "edge264_test", "ffmpeg", "ffprobe", "fx-upscale", "spatial-media-kit-tool"},
+            {
+                "MP4Box",
+                "edge264_test",
+                "ffmpeg",
+                "ffprobe",
+                "fx-upscale",
+                "mv-hevc-encoder",
+                "spatial-media-kit-tool",
+            },
         )
 
     def test_refuses_to_replace_an_existing_dmg(self) -> None:

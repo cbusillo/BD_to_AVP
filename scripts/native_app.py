@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from bd_to_avp.observability import ObservabilityEvent
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
+from scripts.build_mv_hevc_encoder_macos import build_encoder as build_mv_hevc_encoder
 from scripts.production_identity import (
     PRODUCTION_BUNDLE_IDENTIFIER,
     PRODUCTION_DISTRIBUTION_CHANNEL,
@@ -53,6 +54,8 @@ NATIVE_APP_NAME = f"{NATIVE_PRODUCT_NAME}.app"
 BRIEFCASE_APP = REPO_ROOT / "build" / "bd-to-avp" / "macos" / "app" / "3D Blu-ray to Vision Pro.app"
 PACKAGE_ROOT = MACOS_ROOT / "build" / "package"
 PACKAGED_APP = PACKAGE_ROOT / NATIVE_APP_NAME
+MV_HEVC_ENCODER_NAME = "mv-hevc-encoder"
+PACKAGED_MV_HEVC_ENCODER = PACKAGE_ROOT / "native-tools" / MV_HEVC_ENCODER_NAME
 WORKER_EXECUTABLE_NAME = "BluRayToVisionProEngine"
 WORKER_PROTOCOL_VERSION = PROTOCOL_VERSION
 WORKER_ENTITLEMENTS = MACOS_ROOT / "BluRayToVisionPro" / "Worker.entitlements"
@@ -267,7 +270,24 @@ def prepare_briefcase_runtime() -> None:
         raise RuntimeError(f"Briefcase did not create the expected runtime at {BRIEFCASE_APP}")
 
 
-def assemble_package() -> Path:
+def build_packaged_mv_hevc_encoder(output_path: Path = PACKAGED_MV_HEVC_ENCODER) -> Path:
+    output_path.unlink(missing_ok=True)
+    build_mv_hevc_encoder(output_path)
+    output_path.chmod(output_path.stat().st_mode | 0o111)
+    return output_path
+
+
+def install_mv_hevc_encoder(app_path: Path, source_path: Path) -> Path:
+    if not source_path.is_file():
+        raise RuntimeError(f"MV-HEVC encoder build product is missing at {source_path}")
+    destination = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / MV_HEVC_ENCODER_NAME
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_path, destination)
+    destination.chmod(destination.stat().st_mode | 0o111)
+    return destination
+
+
+def assemble_package(mv_hevc_encoder_path: Path) -> Path:
     source_app = DERIVED_DATA / "Build" / "Products" / NATIVE_PACKAGE_CONFIGURATION / NATIVE_APP_NAME
     if not source_app.is_dir():
         raise RuntimeError(f"macOS build product is missing at {source_app}")
@@ -291,6 +311,7 @@ def assemble_package() -> Path:
     for internal_document in ("README.md", "pyproject.toml"):
         (destination_contents / "Resources" / "app" / internal_document).unlink(missing_ok=True)
     shutil.rmtree(destination_contents / "Resources" / "app_packages" / "bin", ignore_errors=True)
+    install_mv_hevc_encoder(PACKAGED_APP, mv_hevc_encoder_path)
 
     source_launcher = source_contents / "MacOS" / "3D Blu-ray to Vision Pro"
     worker_launcher = destination_contents / "MacOS" / WORKER_EXECUTABLE_NAME
@@ -322,6 +343,7 @@ def verify_layout(app_path: Path, *, environment: Mapping[str, str] | None = Non
     native_executable = app_path / "Contents" / "MacOS" / NATIVE_EXECUTABLE_NAME
     worker_executable = app_path / "Contents" / "MacOS" / WORKER_EXECUTABLE_NAME
     ffprobe_executable = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / "ffprobe"
+    mv_hevc_encoder = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / MV_HEVC_ENCODER_NAME
     required_paths = [
         native_executable,
         worker_executable,
@@ -331,14 +353,16 @@ def verify_layout(app_path: Path, *, environment: Mapping[str, str] | None = Non
         app_path / "Contents" / "Resources" / "app_packages",
         app_path / "Contents" / "Resources" / "app_icon.icns",
         ffprobe_executable,
+        mv_hevc_encoder,
     ]
     missing = [path for path in required_paths if not path.exists()]
     if missing:
         raise RuntimeError("Packaged macOS app is missing:\n" + "\n".join(str(path) for path in missing))
-    for executable in (native_executable, worker_executable, ffprobe_executable):
+    for executable in (native_executable, worker_executable, ffprobe_executable, mv_hevc_encoder):
         if executable_architectures(executable) != {"arm64"}:
             raise RuntimeError(f"Packaged executable must be arm64-only: {executable}")
     verify_mach_o_minimum_system_versions(app_path, native_executable)
+    verify_exact_minimum_system_version(mv_hevc_encoder, "MV-HEVC encoder")
     verify_native_binary_paths(native_executable)
     verify_package_paths(app_path)
 
@@ -431,12 +455,7 @@ def minimum_macos_versions(path: Path) -> set[str]:
 
 def verify_mach_o_minimum_system_versions(app_path: Path, native_executable: Path) -> None:
     expected_version = normalized_version(NATIVE_MINIMUM_SYSTEM_VERSION)
-    native_versions = minimum_macos_versions(native_executable)
-    if {normalized_version(version) for version in native_versions} != {expected_version}:
-        found = ", ".join(sorted(native_versions))
-        raise RuntimeError(
-            f"Swift executable must target macOS {NATIVE_MINIMUM_SYSTEM_VERSION}; found {found}: {native_executable}"
-        )
+    verify_exact_minimum_system_version(native_executable, "Swift executable")
 
     incompatible: list[str] = []
     for path in sorted(app_path.rglob("*")):
@@ -451,6 +470,14 @@ def verify_mach_o_minimum_system_versions(app_path: Path, native_executable: Pat
             "Packaged Mach-O requires a newer macOS version than "
             f"{NATIVE_MINIMUM_SYSTEM_VERSION}:\n" + "\n".join(incompatible)
         )
+
+
+def verify_exact_minimum_system_version(path: Path, description: str) -> None:
+    expected_version = normalized_version(NATIVE_MINIMUM_SYSTEM_VERSION)
+    versions = minimum_macos_versions(path)
+    if {normalized_version(version) for version in versions} != {expected_version}:
+        found = ", ".join(sorted(versions))
+        raise RuntimeError(f"{description} must target macOS {NATIVE_MINIMUM_SYSTEM_VERSION}; found {found}: {path}")
 
 
 def normalized_version(version: str) -> tuple[int, int, int]:
@@ -545,6 +572,49 @@ def smoke_packaged_native_app(app_path: Path) -> None:
     app_path = app_path.resolve()
     native_executable = app_path / "Contents" / "MacOS" / NATIVE_EXECUTABLE_NAME
     run([str(native_executable), "--startup-smoke"], cwd=app_path)
+
+
+def smoke_packaged_mv_hevc_encoder(app_path: Path) -> None:
+    app_path = app_path.resolve()
+    encoder = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / MV_HEVC_ENCODER_NAME
+    completed = subprocess.run(
+        [str(encoder), "--capability-probe"],
+        cwd=app_path,
+        capture_output=True,
+        env=smoke_environment(),
+        text=True,
+        timeout=30,
+    )
+    validate_mv_hevc_capability_probe(completed, description="Packaged MV-HEVC encoder")
+
+
+def validate_mv_hevc_capability_probe(
+    completed: subprocess.CompletedProcess[str],
+    *,
+    description: str,
+) -> None:
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            f"{description} capability probe returned invalid JSON.\n"
+            f"exit: {completed.returncode}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        ) from error
+    unsupported_payload = {
+        "schema_version": 1,
+        "stereo_mv_hevc_encode_supported": False,
+    }
+    if completed.returncode == 2 and payload == unsupported_payload:
+        raise RuntimeError(f"{description} reports that stereo MV-HEVC encoding is unavailable on this Mac.")
+    expected_payload = {
+        "schema_version": 1,
+        "stereo_mv_hevc_encode_supported": True,
+    }
+    if completed.returncode != 0 or payload != expected_payload:
+        raise RuntimeError(
+            f"{description} capability probe failed.\n"
+            f"exit: {completed.returncode}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
 
 
 def smoke_packaged_worker(app_path: Path) -> None:
@@ -661,11 +731,13 @@ def validate_smoke_events(events: list[object], job_id: str) -> None:
 
 
 def package(identity: str, keychain: str | None = None) -> None:
+    mv_hevc_encoder_path = build_packaged_mv_hevc_encoder()
     prepare_briefcase_runtime()
     xcodebuild("build", NATIVE_PACKAGE_CONFIGURATION)
-    app_path = assemble_package()
+    app_path = assemble_package(mv_hevc_encoder_path)
     sign_package(app_path, identity, keychain)
     smoke_packaged_native_app(app_path)
+    smoke_packaged_mv_hevc_encoder(app_path)
     smoke_packaged_worker(app_path)
     verify_codesign(app_path)
     print(app_path)

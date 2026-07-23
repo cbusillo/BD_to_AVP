@@ -159,6 +159,7 @@ private struct EncoderOptions {
               --expected-frames COUNT         Fail unless exactly this many frames are received.
               --swap-eyes                     Treat the right half as the left eye.
               --overwrite                     Replace an existing output file.
+              --capability-probe              Report stereo MV-HEVC encode support and exit.
             """
         )
     }
@@ -636,7 +637,23 @@ private struct MVHEVCEncoder {
         let signalCancellation = SignalCancellation(flag: cancellationFlag)
         defer { _ = signalCancellation }
         do {
-            let options = try EncoderOptions.parse(arguments: Array(CommandLine.arguments.dropFirst()))
+            let arguments = Array(CommandLine.arguments.dropFirst())
+            if arguments == ["--capability-probe"] {
+                let supported = VTIsStereoMVHEVCEncodeSupported()
+                let data = try JSONSerialization.data(
+                    withJSONObject: [
+                        "schema_version": 1,
+                        "stereo_mv_hevc_encode_supported": supported,
+                    ],
+                    options: [.sortedKeys]
+                )
+                print(String(decoding: data, as: UTF8.self))
+                if !supported {
+                    exit(2)
+                }
+                return
+            }
+            let options = try EncoderOptions.parse(arguments: arguments)
             let (header, frameCount) = try await encode(
                 options: options,
                 cancellationFlag: cancellationFlag

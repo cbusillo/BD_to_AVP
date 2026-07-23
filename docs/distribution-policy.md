@@ -37,10 +37,14 @@ Required app-local tools today:
 - `ffprobe`
 - `MP4Box`
 - `edge264_test`
+- `fx-upscale`
+- `mv-hevc-encoder`
 - `spatial-media-kit-tool`
 
 The release gate should fail if a required bundled executable is missing, not
 executable, or linked to Homebrew paths such as `/opt/homebrew` or `/usr/local`.
+The native MV-HEVC encoder is packaged and capability-probeable before product
+routing is enabled; its presence alone does not select the direct route.
 
 Apple Vision OCR is the GUI subtitle OCR path. The clean-machine smoke should
 verify that the packaged app runtime can import and run the Apple Vision OCR
