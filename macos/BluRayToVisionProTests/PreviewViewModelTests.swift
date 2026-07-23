@@ -130,7 +130,7 @@ final class PreviewViewModelTests: XCTestCase {
     func testPreviewSnapshotDoesNotChangeWithEditableOptions() throws {
         let sourceURL = URL(fileURLWithPath: "/tmp/movie.mkv")
         var options = ConversionOptions()
-        options.encoding.hevcQuality = 82
+        options.encoding.mvHEVC.generatedMergeQuality = 82
         let conversion = ConversionDraft(
             source: ConversionSource(kind: .matroska, url: sourceURL),
             sourceDetails: nil,
@@ -146,7 +146,7 @@ final class PreviewViewModelTests: XCTestCase {
             )
         )
 
-        options.encoding.hevcQuality = 20
+        options.encoding.mvHEVC.generatedMergeQuality = 20
         let spec = WorkerJobSpec(
             previewDraft: preview,
             destinationURL: URL(fileURLWithPath: "/tmp/preview", isDirectory: true)
@@ -155,7 +155,7 @@ final class PreviewViewModelTests: XCTestCase {
         XCTAssertEqual(spec.encoding?.mvHEVCQuality, 82)
         XCTAssertEqual(spec.preview?.position, "end")
         XCTAssertEqual(spec.preview?.durationSeconds, 60)
-        XCTAssertEqual(options.encoding.hevcQuality, 20)
+        XCTAssertEqual(options.encoding.mvHEVC.generatedMergeQuality, 20)
     }
 
     private func makePreviewDraft(sourceURL: URL) -> PreviewDraft? {

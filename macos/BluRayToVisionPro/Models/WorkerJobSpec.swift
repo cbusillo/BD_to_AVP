@@ -272,9 +272,9 @@ struct WorkerJobSpec: Encodable, Equatable {
             ),
             videoMode: options.videoOutputMode,
             av1CRF: options.av1CRF,
-            leftRightBitrate: options.leftRightBitrate,
-            linkQuality: options.linkQuality,
-            mvHEVCQuality: options.hevcQuality,
+            leftRightBitrate: options.generatedEyeCustomBitrateMbps,
+            linkQuality: options.mvHEVC.linkGeneratedAndUpscaleQuality,
+            mvHEVCQuality: options.mvHEVC.generatedMergeQuality,
             upscaleQuality: options.upscaleQuality,
             fieldOfView: options.fieldOfView,
             frameRate: options.frameRateOverride,
@@ -320,7 +320,7 @@ struct WorkerJobSpec: Encodable, Equatable {
         let options = draft.options.job
         return Job(
             startStage: options.startStage.rawValue,
-            keepFiles: options.keepStageFiles,
+            keepFiles: options.intermediatePolicy.createsReusableArtifacts,
             overwrite: options.overwriteExisting,
             removeOriginal: draft.source.kind == .physicalDisc ? false : options.removeOriginalAfterSuccess,
             continueOnError: options.continueOnError,

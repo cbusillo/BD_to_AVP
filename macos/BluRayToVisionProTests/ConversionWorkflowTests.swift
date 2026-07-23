@@ -150,7 +150,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(Set(identifiers).count, profiles.count)
         XCTAssertFalse(BuiltInProfile.balanced.options.upscaleEnabled)
         XCTAssertTrue(BuiltInProfile.fourKUpscale.options.upscaleEnabled)
-        XCTAssertEqual(BuiltInProfile.originalResolution.options.hevcQuality, 85)
+        XCTAssertEqual(BuiltInProfile.originalResolution.options.mvHEVC.generatedMergeQuality, 85)
         XCTAssertEqual(ConversionStage.combineToMVHEVC.rawValue, 5)
         XCTAssertEqual(ConversionStage.upscaleVideo.rawValue, 6)
         XCTAssertEqual(MediaLanguage.french.code, "fra")
@@ -303,9 +303,9 @@ final class ConversionWorkflowTests: XCTestCase {
             )
             var profile = BuiltInProfile.balanced.profile
             var options = ConversionOptions()
-            options.encoding.hevcQuality = 81
+            options.encoding.mvHEVC.generatedMergeQuality = 81
             options.encoding.audioLanguages = AudioLanguagePolicy(mode: .preferredOnly, preferredLanguage: .japanese)
-            options.job.keepStageFiles = true
+            options.job.intermediatePolicy = .reusable
             let destinationURL = directoryURL.appendingPathComponent("Output", isDirectory: true)
 
             queue.prepareForRun(
@@ -314,21 +314,21 @@ final class ConversionWorkflowTests: XCTestCase {
                 options: options
             )
             profile.name = "Changed Later"
-            options.encoding.hevcQuality = 12
-            options.job.keepStageFiles = false
+            options.encoding.mvHEVC.generatedMergeQuality = 12
+            options.job.intermediatePolicy = .automatic
 
             XCTAssertEqual(queue.items.count, 2)
             for item in queue.items {
                 let draft = try XCTUnwrap(item.draft)
                 XCTAssertEqual(draft.profile.name, "Balanced")
                 XCTAssertEqual(draft.destinationURL, destinationURL)
-                XCTAssertEqual(draft.options.encoding.hevcQuality, 81)
+                XCTAssertEqual(draft.options.encoding.mvHEVC.generatedMergeQuality, 81)
                 XCTAssertEqual(draft.options.encoding.audioLanguages.mode, .preferredOnly)
                 XCTAssertEqual(draft.options.encoding.audioLanguages.preferredLanguage, .japanese)
-                XCTAssertTrue(draft.options.job.keepStageFiles)
+                XCTAssertEqual(draft.options.job.intermediatePolicy, .reusable)
             }
             XCTAssertEqual(profile.name, "Changed Later")
-            XCTAssertEqual(options.encoding.hevcQuality, 12)
+            XCTAssertEqual(options.encoding.mvHEVC.generatedMergeQuality, 12)
         }
     }
 
@@ -459,11 +459,13 @@ final class ConversionWorkflowTests: XCTestCase {
 
     func testCustomProfileResolvesConcreteValuesWithoutOwningJobContext() throws {
         let encoding = EncodingOptions(
-            hevcQuality: 92,
-            leftRightBitrate: 44,
+            mvHEVC: MVHEVCOptions(
+                generatedEyeBitrate: BitratePreference(mode: .custom, customMbps: 44),
+                generatedMergeQuality: 92,
+                linkGeneratedAndUpscaleQuality: false
+            ),
             upscaleEnabled: true,
             upscaleQuality: 88,
-            linkQuality: false,
             fieldOfView: 105,
             frameRateOverride: "24000/1001",
             resolutionOverride: "3840x2160",
@@ -481,7 +483,7 @@ final class ConversionWorkflowTests: XCTestCase {
             systemImage: "slider.horizontal.3"
         )
         var job = JobOptions()
-        job.keepStageFiles = true
+        job.intermediatePolicy = .reusable
         job.overwriteExisting = true
         let draft = ConversionDraft(
             source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/Sources/Feature.mkv")),
@@ -549,7 +551,7 @@ final class ConversionWorkflowTests: XCTestCase {
 
     func testConversionJobSpecEncodesVideoAndAudioSettings() {
         var encoding = EncodingOptions()
-        encoding.hevcQuality = 80
+        encoding.mvHEVC.generatedMergeQuality = 80
         encoding.upscaleEnabled = true
         encoding.fieldOfView = 120
         encoding.audioHandling = .convertAAC
@@ -592,12 +594,14 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(workerEncoding?.av1CRF, 28)
         XCTAssertEqual(workerEncoding?.resolution, "")
         XCTAssertFalse(workerEncoding?.fxUpscale == true)
+        XCTAssertTrue(encoding.upscaleEnabled)
+        XCTAssertEqual(encoding.resolutionOverride, "3840x2160")
     }
 
     func testConversionJobSpecEncodesJobSettings() {
         var job = JobOptions()
         job.startStage = .extractMVCAndAudio
-        job.keepStageFiles = true
+        job.intermediatePolicy = .reusable
         job.softwareEncoder = true
 
         let draft = ConversionDraft(
@@ -611,6 +615,73 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(spec.job?.startStage, ConversionStage.extractMVCAndAudio.rawValue)
         XCTAssertTrue(spec.job?.keepFiles == true)
         XCTAssertTrue(spec.job?.softwareEncoder == true)
+    }
+
+    func testJobOptionsCompatibilityBridgePreservesLegacyKeepFiles() throws {
+        let legacyData = try JSONSerialization.data(
+            withJSONObject: [
+                "startStage": 3,
+                "keepStageFiles": true,
+                "overwriteExisting": true,
+                "removeOriginalAfterSuccess": false,
+                "continueOnError": true,
+                "softwareEncoder": false,
+                "outputCommands": true,
+                "keepAwake": true,
+                "playSound": false,
+            ],
+            options: [.sortedKeys]
+        )
+
+        let migrated = try JSONDecoder().decode(JobOptions.self, from: legacyData)
+
+        XCTAssertEqual(migrated.startStage, .extractSubtitles)
+        XCTAssertEqual(migrated.intermediatePolicy, .reusable)
+        XCTAssertTrue(migrated.overwriteExisting)
+        XCTAssertTrue(migrated.continueOnError)
+        XCTAssertTrue(migrated.outputCommands)
+        XCTAssertFalse(migrated.playSound)
+
+        let encoded = try JSONEncoder().encode(migrated)
+        let currentJSON = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        XCTAssertEqual(currentJSON["intermediatePolicy"] as? String, "reusable")
+        XCTAssertEqual(currentJSON["keepStageFiles"] as? Bool, true)
+
+        let stable = try JSONDecoder().decode(StableJobOptions.self, from: encoded)
+        XCTAssertTrue(stable.keepStageFiles)
+        XCTAssertEqual(stable.startStage, .extractSubtitles)
+    }
+
+    func testJobOptionsRejectMismatchedCompatibilityKeys() throws {
+        var job = JobOptions()
+        job.intermediatePolicy = .reusable
+        var encoded = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(job)) as? [String: Any]
+        )
+        encoded["keepStageFiles"] = false
+        let data = try JSONSerialization.data(withJSONObject: encoded, options: [.sortedKeys])
+
+        XCTAssertThrowsError(try JSONDecoder().decode(JobOptions.self, from: data)) { error in
+            guard case DecodingError.dataCorrupted = error else {
+                return XCTFail("Expected dataCorrupted, received \(error)")
+            }
+        }
+    }
+
+    func testAutomaticGeneratedEyeIntentKeepsProtocolV9PayloadUnchanged() {
+        var encoding = EncodingOptions()
+        encoding.mvHEVC.generatedEyeBitrate = BitratePreference(mode: .automatic, customMbps: 37)
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/src/m.mkv")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/Movies"),
+            options: ConversionOptions(encoding: encoding)
+        )
+
+        XCTAssertEqual(WorkerJobSpec(draft: draft).encoding?.leftRightBitrate, 37)
     }
 
     func testMakeMKVRecoveryBuildsFreshStageTwoDraft() throws {
@@ -999,4 +1070,16 @@ final class ConversionWorkflowTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         try operation(directoryURL)
     }
+}
+
+private struct StableJobOptions: Decodable {
+    let startStage: ConversionStage
+    let keepStageFiles: Bool
+    let overwriteExisting: Bool
+    let removeOriginalAfterSuccess: Bool
+    let continueOnError: Bool
+    let softwareEncoder: Bool
+    let outputCommands: Bool
+    let keepAwake: Bool
+    let playSound: Bool
 }
