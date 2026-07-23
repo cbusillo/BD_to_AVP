@@ -108,18 +108,18 @@ On a separate two-second, 640x360-per-eye, 24 fps profiling fixture:
 
 | GPU measurement | Current path | Direct path |
 | --- | ---: | ---: |
-| Client-process AGX GPU intervals | 97 | 0 |
-| Client-process AGX GPU time | 1,665,914 ns | 0 ns |
-| Client phase-average AGX GPU utilization | 0.156107% | 0.000000% |
-| VideoToolbox-service AGX GPU time visible in the trace | 1,024,587 ns | 0 ns |
-| Elapsed time | 1.067165 s | 0.446034 s |
-| Child user CPU | 0.567417 s | 0.240963 s |
-| Child system CPU | 0.140102 s | 0.083963 s |
+| Client-process AGX GPU intervals | 96 | 0 |
+| Client-process AGX GPU time | 1,702,119 ns | 0 ns |
+| Client phase-average AGX GPU utilization | 0.173164% | 0.000000% |
+| VideoToolbox-service AGX GPU time visible in the trace | 1,384,203 ns | 0 ns |
+| Elapsed time | 0.982954 s | 0.442771 s |
+| Child user CPU | 0.488818 s | 0.246698 s |
+| Child system CPU | 0.144650 s | 0.084110 s |
 
-The positive control recorded 22,257 intervals, 177,631,319 ns of non-overlapping AGX work, and 2.168082%
+The positive control recorded 20,549 intervals, 173,229,855 ns of non-overlapping AGX work, and 4.146202%
 phase-average utilization. All client-process AGX time in the current window was attributed to
 `spatial-media-kit-tool`; its FFmpeg process used none. One `VTDecoderXPCService` visible in that window contributed
-1,024,587 ns of non-overlapping AGX work and is reported separately because Metal System Trace does not expose a
+1,384,203 ns of non-overlapping AGX work and is reported separately because Metal System Trace does not expose a
 supported client-PID linkage. The direct FFmpeg and `mv-hevc-encoder` PIDs used no AGX GPU time, and no VideoToolbox
 service visible in the direct window reported AGX intervals.
 
