@@ -25,11 +25,14 @@ final class ProfileStoreTests: XCTestCase {
         let options = EncodingOptions(
             videoOutputMode: .av1Stereo,
             av1CRF: 24,
-            hevcQuality: 91,
-            leftRightBitrate: 35,
+            mvHEVC: MVHEVCOptions(
+                directFinalBitrate: BitratePreference(mode: .custom, customMbps: 48),
+                generatedEyeBitrate: BitratePreference(mode: .custom, customMbps: 35),
+                generatedMergeQuality: 91,
+                linkGeneratedAndUpscaleQuality: false
+            ),
             upscaleEnabled: false,
             upscaleQuality: 87,
-            linkQuality: false,
             fieldOfView: 100,
             frameRateOverride: "24000/1001",
             resolutionOverride: "3840x2160",
@@ -48,6 +51,116 @@ final class ProfileStoreTests: XCTestCase {
         XCTAssertEqual(profileID, "custom.\(identifier.uuidString.lowercased())")
         XCTAssertEqual(restoredStore.profile(withID: profileID).name, "Cinema")
         XCTAssertEqual(restoredStore.profile(withID: profileID).options, options)
+    }
+
+    @MainActor
+    func testLegacyVersionFourEyeBitratesMigrateToExplicitIntent() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        let document: [String: Any] = [
+            "version": 4,
+            "profiles": [
+                [
+                    "id": "A4CC523E-72FA-4F36-A38D-1FB0D6A84742",
+                    "name": "Legacy Automatic",
+                    "options": try legacyVersionFourOptions(leftRightBitrate: 20),
+                ],
+                [
+                    "id": "6C02DFB0-2B6A-4F6D-9335-3703487FB9D7",
+                    "name": "Legacy Custom",
+                    "options": try legacyVersionFourOptions(leftRightBitrate: 35),
+                ],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]).write(to: fileURL)
+
+        let store = ProfileStore(fileURL: fileURL)
+
+        XCTAssertNil(store.loadErrorMessage)
+        XCTAssertEqual(store.customProfiles[0].options.mvHEVC.generatedEyeBitrate.mode, .automatic)
+        XCTAssertEqual(store.customProfiles[0].options.mvHEVC.generatedEyeBitrate.customMbps, 20)
+        XCTAssertEqual(store.customProfiles[1].options.mvHEVC.generatedEyeBitrate.mode, .custom)
+        XCTAssertEqual(store.customProfiles[1].options.mvHEVC.generatedEyeBitrate.customMbps, 35)
+        XCTAssertTrue(store.customProfiles.allSatisfy { $0.options.mvHEVC.directFinalBitrate.mode == .automatic })
+        XCTAssertTrue(store.customProfiles.allSatisfy { $0.options.mvHEVC.directFinalBitrate.customMbps == nil })
+    }
+
+    @MainActor
+    func testVersionFourPersistenceWritesCurrentIntentAndStableMirrorKeys() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        var options = EncodingOptions()
+        options.mvHEVC.directFinalBitrate = BitratePreference(mode: .custom, customMbps: 48)
+        options.mvHEVC.generatedEyeBitrate = BitratePreference(mode: .automatic, customMbps: 37)
+        options.mvHEVC.generatedMergeQuality = 84
+        options.mvHEVC.linkGeneratedAndUpscaleQuality = false
+        let store = ProfileStore(fileURL: fileURL)
+
+        _ = try store.createProfile(name: "Compatibility", options: options)
+
+        let document = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
+        )
+        XCTAssertEqual(document["version"] as? Int, 4)
+        let profiles = try XCTUnwrap(document["profiles"] as? [[String: Any]])
+        let persistedOptions = try XCTUnwrap(profiles.first?["options"] as? [String: Any])
+        let currentMVHEVC = try XCTUnwrap(persistedOptions["mvHEVC"] as? [String: Any])
+        let directFinalBitrate = try XCTUnwrap(currentMVHEVC["directFinalBitrate"] as? [String: Any])
+        let generatedEyeBitrate = try XCTUnwrap(currentMVHEVC["generatedEyeBitrate"] as? [String: Any])
+
+        XCTAssertEqual(directFinalBitrate["mode"] as? String, "custom")
+        XCTAssertEqual(directFinalBitrate["customMbps"] as? Int, 48)
+        XCTAssertEqual(generatedEyeBitrate["mode"] as? String, "automatic")
+        XCTAssertEqual(generatedEyeBitrate["customMbps"] as? Int, 37)
+        XCTAssertEqual(persistedOptions["hevcQuality"] as? Int, 84)
+        XCTAssertEqual(persistedOptions["leftRightBitrate"] as? Int, 37)
+        XCTAssertEqual(persistedOptions["linkQuality"] as? Bool, false)
+
+        let stableOptions = try JSONDecoder().decode(
+            StableEncodingOptionsV4.self,
+            from: JSONSerialization.data(withJSONObject: persistedOptions, options: [.sortedKeys])
+        )
+        XCTAssertEqual(stableOptions.hevcQuality, 84)
+        XCTAssertEqual(stableOptions.leftRightBitrate, 37)
+        XCTAssertFalse(stableOptions.linkQuality)
+    }
+
+    func testEncodingOptionsRejectMismatchedCompatibilityKeys() throws {
+        var encoded = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(EncodingOptions())) as? [String: Any]
+        )
+        var mvHEVC = try XCTUnwrap(encoded["mvHEVC"] as? [String: Any])
+        mvHEVC["generatedMergeQuality"] = 82
+        encoded["mvHEVC"] = mvHEVC
+        let data = try JSONSerialization.data(withJSONObject: encoded, options: [.sortedKeys])
+
+        XCTAssertThrowsError(try JSONDecoder().decode(EncodingOptions.self, from: data)) { error in
+            guard case DecodingError.dataCorrupted = error else {
+                return XCTFail("Expected dataCorrupted, received \(error)")
+            }
+        }
+    }
+
+    func testEncodingOptionsRejectCustomBitrateWithoutValue() throws {
+        var encoded = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(EncodingOptions())) as? [String: Any]
+        )
+        var mvHEVC = try XCTUnwrap(encoded["mvHEVC"] as? [String: Any])
+        var generatedEyeBitrate = try XCTUnwrap(mvHEVC["generatedEyeBitrate"] as? [String: Any])
+        generatedEyeBitrate["mode"] = "custom"
+        generatedEyeBitrate.removeValue(forKey: "customMbps")
+        mvHEVC["generatedEyeBitrate"] = generatedEyeBitrate
+        encoded["mvHEVC"] = mvHEVC
+        let data = try JSONSerialization.data(withJSONObject: encoded, options: [.sortedKeys])
+
+        XCTAssertThrowsError(try JSONDecoder().decode(EncodingOptions.self, from: data)) { error in
+            guard case DecodingError.dataCorrupted = error else {
+                return XCTFail("Expected dataCorrupted, received \(error)")
+            }
+        }
     }
 
     @MainActor
@@ -209,11 +322,14 @@ final class ProfileStoreTests: XCTestCase {
         let migratedOptions = try XCTUnwrap(store.customProfiles.first?.options)
         XCTAssertEqual(migratedOptions.videoOutputMode, .mvHEVC)
         XCTAssertEqual(migratedOptions.av1CRF, 32)
-        XCTAssertEqual(migratedOptions.hevcQuality, 91)
-        XCTAssertEqual(migratedOptions.leftRightBitrate, 35)
+        XCTAssertEqual(migratedOptions.mvHEVC.generatedMergeQuality, 91)
+        XCTAssertEqual(migratedOptions.mvHEVC.generatedEyeBitrate.mode, .custom)
+        XCTAssertEqual(migratedOptions.mvHEVC.generatedEyeBitrate.customMbps, 35)
+        XCTAssertEqual(migratedOptions.mvHEVC.directFinalBitrate.mode, .automatic)
+        XCTAssertNil(migratedOptions.mvHEVC.directFinalBitrate.customMbps)
         XCTAssertTrue(migratedOptions.upscaleEnabled)
         XCTAssertEqual(migratedOptions.upscaleQuality, 87)
-        XCTAssertFalse(migratedOptions.linkQuality)
+        XCTAssertFalse(migratedOptions.mvHEVC.linkGeneratedAndUpscaleQuality)
         XCTAssertEqual(migratedOptions.fieldOfView, 100)
         XCTAssertEqual(migratedOptions.frameRateOverride, "24000/1001")
         XCTAssertEqual(migratedOptions.resolutionOverride, "3840x2160")
@@ -312,12 +428,12 @@ final class ProfileStoreTests: XCTestCase {
 
         let firstID = try store.duplicateProfile(BuiltInProfile.balanced.id)
         var updatedOptions = store.profile(withID: firstID).options
-        updatedOptions.hevcQuality = 82
+        updatedOptions.mvHEVC.generatedMergeQuality = 82
         try store.updateProfile(firstID, name: "Living Room", options: updatedOptions)
         let secondID = try store.duplicateProfile(firstID)
 
         XCTAssertEqual(store.profile(withID: firstID).name, "Living Room")
-        XCTAssertEqual(store.profile(withID: firstID).options.hevcQuality, 82)
+        XCTAssertEqual(store.profile(withID: firstID).options.mvHEVC.generatedMergeQuality, 82)
         XCTAssertEqual(store.profile(withID: secondID).name, "Living Room Copy")
 
         XCTAssertThrowsError(
@@ -451,6 +567,15 @@ final class ProfileStoreTests: XCTestCase {
         return options
     }
 
+    private func legacyVersionFourOptions(leftRightBitrate: Int) throws -> [String: Any] {
+        var options = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(EncodingOptions())) as? [String: Any]
+        )
+        options.removeValue(forKey: "mvHEVC")
+        options["leftRightBitrate"] = leftRightBitrate
+        return options
+    }
+
     private func legacyProfile(
         id: String,
         name: String,
@@ -484,4 +609,23 @@ final class ProfileStoreTests: XCTestCase {
 
 private enum TestWriteError: Error {
     case failed
+}
+
+private struct StableEncodingOptionsV4: Decodable {
+    let videoOutputMode: VideoOutputMode
+    let av1CRF: Int
+    let hevcQuality: Int
+    let leftRightBitrate: Int
+    let upscaleEnabled: Bool
+    let upscaleQuality: Int
+    let linkQuality: Bool
+    let fieldOfView: Int
+    let frameRateOverride: String
+    let resolutionOverride: String
+    let cropBlackBars: Bool
+    let swapEyes: Bool
+    let audioHandling: AudioHandling
+    let audioBitrate: Int
+    let audioLanguages: AudioLanguagePolicy
+    let subtitles: SubtitlePolicy
 }

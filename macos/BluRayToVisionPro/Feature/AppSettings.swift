@@ -40,8 +40,13 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(showTechnicalDetails, forKey: Key.showTechnicalDetails) }
     }
 
-    @Published var keepIntermediateFiles: Bool {
-        didSet { defaults.set(keepIntermediateFiles, forKey: Key.keepIntermediateFiles) }
+    @Published var intermediatePolicy: IntermediatePolicy {
+        didSet {
+            defaults.set(
+                intermediatePolicy.createsReusableArtifacts,
+                forKey: Key.keepIntermediateFiles
+            )
+        }
     }
 
     @Published var useSoftwareEncoder: Bool {
@@ -63,13 +68,15 @@ final class AppSettings: ObservableObject {
         playSound = defaults.object(forKey: Key.playSound) as? Bool ?? true
         keepAwake = defaults.object(forKey: Key.keepAwake) as? Bool ?? true
         showTechnicalDetails = defaults.object(forKey: Key.showTechnicalDetails) as? Bool ?? false
-        keepIntermediateFiles = defaults.object(forKey: Key.keepIntermediateFiles) as? Bool ?? false
+        intermediatePolicy = IntermediatePolicy(
+            legacyKeepStageFiles: defaults.object(forKey: Key.keepIntermediateFiles) as? Bool ?? false
+        )
         useSoftwareEncoder = defaults.object(forKey: Key.useSoftwareEncoder) as? Bool ?? false
     }
 
     func resetAdvancedSettings() {
         showTechnicalDetails = false
-        keepIntermediateFiles = false
+        intermediatePolicy = .automatic
         useSoftwareEncoder = false
     }
 

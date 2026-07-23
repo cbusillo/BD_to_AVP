@@ -382,8 +382,8 @@ struct DiagnosticJobSettings: Encodable, Equatable {
         builtInProfileID = draft.profile.isBuiltIn ? draft.profile.id : nil
         videoOutputMode = encoding.videoOutputMode.rawValue
         av1CRF = encoding.av1CRF
-        hevcQuality = encoding.hevcQuality
-        leftRightBitrate = encoding.leftRightBitrate
+        hevcQuality = encoding.mvHEVC.generatedMergeQuality
+        leftRightBitrate = encoding.generatedEyeCustomBitrateMbps
         upscaleEnabled = encoding.upscaleEnabled
         upscaleQuality = encoding.upscaleQuality
         fieldOfView = encoding.fieldOfView
@@ -395,7 +395,7 @@ struct DiagnosticJobSettings: Encodable, Equatable {
         audioBitrate = encoding.audioBitrate
         subtitleMode = encoding.subtitles.mode.rawValue
         startStage = job.startStage.rawValue
-        keepStageFiles = job.keepStageFiles
+        keepStageFiles = job.intermediatePolicy.createsReusableArtifacts
         overwriteExisting = job.overwriteExisting
         removeOriginalAfterSuccess = job.removeOriginalAfterSuccess
         continueOnError = job.continueOnError

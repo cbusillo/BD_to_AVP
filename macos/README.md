@@ -57,6 +57,10 @@ The app and engine use worker protocol v9. Audio and subtitle language controls
 are independent: built-in and new profile options default to preferred-only
 English audio, while existing version-4 custom choices remain unchanged and
 version-1 through version-3 profiles migrate to all-languages behavior.
+Profile document version 4 also stores explicit MV-HEVC bitrate intent while
+continuing to write the legacy quality, eye-bitrate, and linkage keys for one
+stable rollback window. Legacy eye bitrate 20 migrates to Automatic with 20
+preserved as the inactive custom value; other legacy values migrate to Custom.
 Preferred-only audio keeps every metadata-language match and visibly falls
 back to the source-default or first audio stream when no match exists. MKV,
 MTS, M2TS, and ISO

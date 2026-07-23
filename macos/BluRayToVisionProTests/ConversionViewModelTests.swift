@@ -933,7 +933,7 @@ final class ConversionViewModelTests: XCTestCase {
     func testBatchFailureContinuesAndExplicitRetryUsesStoredDraft() async throws {
         try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, sourceURLs, destinationURL in
             var options = ConversionOptions()
-            options.encoding.hevcQuality = 83
+            options.encoding.mvHEVC.generatedMergeQuality = 83
             let firstPath = sourceURLs[0].path
             let scenario = BatchWorkerScenario(failConversionOnceFor: [firstPath])
             let viewModel = ConversionViewModel { scenario.makeClient() }
@@ -961,7 +961,7 @@ final class ConversionViewModelTests: XCTestCase {
             XCTAssertEqual(queue.items.map(\.status), [.completed, .completed])
             XCTAssertEqual(queue.items[0].draft?.profile.id, BuiltInProfile.originalResolution.id)
             XCTAssertEqual(queue.items[0].draft?.destinationURL, destinationURL)
-            XCTAssertEqual(queue.items[0].draft?.options.encoding.hevcQuality, 83)
+            XCTAssertEqual(queue.items[0].draft?.options.encoding.mvHEVC.generatedMergeQuality, 83)
             XCTAssertEqual(
                 scenario.records.filter { $0.sourcePath == firstPath }.map(\.operation),
                 ["inspect_source", "convert_source", "inspect_source", "convert_source"]

@@ -38,12 +38,6 @@ struct EncodingOptionsEditor: View {
                             Text(mode.title).tag(mode)
                         }
                     }
-                    .onChange(of: options.videoOutputMode) { _, mode in
-                        if mode == .av1Stereo {
-                            options.upscaleEnabled = false
-                            options.resolutionOverride = ""
-                        }
-                    }
 
                     Text(options.videoOutputMode.detail)
                         .font(.caption)
@@ -53,8 +47,8 @@ struct EncodingOptionsEditor: View {
                     if options.videoOutputMode == .mvHEVC {
                         EncodingQualitySliderRow(title: "HEVC quality", value: hevcQualityBinding)
                         LabeledContent("Left / right bitrate") {
-                            Stepper(value: $options.leftRightBitrate, in: 1 ... 100) {
-                                Text("\(options.leftRightBitrate) Mbps")
+                            Stepper(value: generatedEyeBitrateBinding, in: 1 ... 100) {
+                                Text("\(options.generatedEyeCustomBitrateMbps) Mbps")
                                     .monospacedDigit()
                                     .frame(width: 76, alignment: .trailing)
                             }
@@ -63,10 +57,13 @@ struct EncodingOptionsEditor: View {
 
                         if options.upscaleEnabled {
                             EncodingQualitySliderRow(title: "Upscale quality", value: upscaleQualityBinding)
-                            Toggle("Link HEVC and upscale quality", isOn: $options.linkQuality)
-                                .onChange(of: options.linkQuality) { _, linked in
+                            Toggle(
+                                "Link HEVC and upscale quality",
+                                isOn: $options.mvHEVC.linkGeneratedAndUpscaleQuality
+                            )
+                                .onChange(of: options.mvHEVC.linkGeneratedAndUpscaleQuality) { _, linked in
                                     if linked {
-                                        options.upscaleQuality = options.hevcQuality
+                                        options.upscaleQuality = options.mvHEVC.generatedMergeQuality
                                     }
                                 }
                         }
@@ -196,12 +193,22 @@ struct EncodingOptionsEditor: View {
 
     private var hevcQualityBinding: Binding<Int> {
         Binding(
-            get: { options.hevcQuality },
+            get: { options.mvHEVC.generatedMergeQuality },
             set: { newValue in
-                options.hevcQuality = newValue
-                if options.linkQuality {
+                options.mvHEVC.generatedMergeQuality = newValue
+                if options.mvHEVC.linkGeneratedAndUpscaleQuality {
                     options.upscaleQuality = newValue
                 }
+            }
+        )
+    }
+
+    private var generatedEyeBitrateBinding: Binding<Int> {
+        Binding(
+            get: { options.generatedEyeCustomBitrateMbps },
+            set: { newValue in
+                options.mvHEVC.generatedEyeBitrate.mode = .custom
+                options.mvHEVC.generatedEyeBitrate.customMbps = newValue
             }
         )
     }
@@ -211,8 +218,8 @@ struct EncodingOptionsEditor: View {
             get: { options.upscaleQuality },
             set: { newValue in
                 options.upscaleQuality = newValue
-                if options.linkQuality {
-                    options.hevcQuality = newValue
+                if options.mvHEVC.linkGeneratedAndUpscaleQuality {
+                    options.mvHEVC.generatedMergeQuality = newValue
                 }
             }
         )

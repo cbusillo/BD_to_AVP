@@ -790,7 +790,7 @@ struct ContentView: View {
 
     private static func jobOptions(from settings: AppSettings) -> JobOptions {
         JobOptions(
-            keepStageFiles: settings.keepIntermediateFiles,
+            intermediatePolicy: settings.intermediatePolicy,
             softwareEncoder: settings.useSoftwareEncoder,
             keepAwake: settings.keepAwake,
             playSound: settings.playSound
