@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from scripts import verify_app_tools
 
@@ -25,6 +25,7 @@ class VerifyAppToolsTests(unittest.TestCase):
                 "ffprobe",
                 "edge264_test",
                 "fx-upscale",
+                "mv-hevc-encoder",
                 "MP4Box",
                 "spatial-media-kit-tool",
             },
@@ -34,6 +35,7 @@ class VerifyAppToolsTests(unittest.TestCase):
         self.assertLess(set(verify_app_tools.CORE_TOOLS), set(verify_app_tools.REQUIRED_TOOLS))
         self.assertIn("edge264_test", verify_app_tools.REQUIRED_TOOLS)
         self.assertNotIn("edge264_test", verify_app_tools.CORE_TOOLS)
+        self.assertEqual(verify_app_tools.REQUIRED_TOOLS["mv-hevc-encoder"], ["--capability-probe"])
 
     def test_verify_tool_uses_probe_args_and_rejects_usr_local_linkage(self) -> None:
         with tempfile.NamedTemporaryFile() as tool_file:
@@ -53,6 +55,50 @@ class VerifyAppToolsTests(unittest.TestCase):
             with patch.object(verify_app_tools, "run", side_effect=fake_run):
                 with self.assertRaisesRegex(RuntimeError, "/usr/local"):
                     verify_app_tools.verify_tool(tool_path, ["-version"])
+
+    def test_mv_hevc_encoder_probe_requires_the_supported_capability_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tool_path = Path(temp_dir) / "mv-hevc-encoder"
+            tool_path.write_text("tool")
+            tool_path.chmod(0o755)
+            malformed_probe = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout='{"schema_version":1}\n',
+            )
+            with (
+                patch.object(verify_app_tools, "run", return_value=malformed_probe) as run_mock,
+                self.assertRaisesRegex(RuntimeError, "capability probe failed"),
+            ):
+                verify_app_tools.verify_tool(tool_path, ["--capability-probe"])
+
+        run_mock.assert_called_once_with([tool_path, "--capability-probe"], check=False)
+
+    def test_mv_hevc_encoder_probe_accepts_valid_unsupported_hardware_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tool_path = Path(temp_dir) / "mv-hevc-encoder"
+            tool_path.write_text("tool")
+            tool_path.chmod(0o755)
+            unsupported_probe = subprocess.CompletedProcess(
+                args=[],
+                returncode=2,
+                stdout='{"schema_version":1,"stereo_mv_hevc_encode_supported":false}\n',
+            )
+            linked_libraries = subprocess.CompletedProcess(args=[], returncode=0, stdout="")
+            with patch.object(
+                verify_app_tools,
+                "run",
+                side_effect=[unsupported_probe, linked_libraries],
+            ) as run_mock:
+                verify_app_tools.verify_tool(tool_path, ["--capability-probe"])
+
+        self.assertEqual(
+            run_mock.call_args_list,
+            [
+                call([tool_path, "--capability-probe"], check=False),
+                call(["otool", "-L", tool_path]),
+            ],
+        )
 
     def test_verify_ffmpeg_requires_libsvtav1(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
 from scripts.native_app import (
+    MV_HEVC_ENCODER_NAME,
     NATIVE_APP_NAME,
     NATIVE_BUNDLE_IDENTIFIER,
     NATIVE_BUILD_VERSION,
@@ -28,15 +29,20 @@ from scripts.native_app import (
     PROJECT_PATH,
     REPO_ROOT,
     SCHEME,
+    build_packaged_mv_hevc_encoder,
+    install_mv_hevc_encoder,
     native_build_settings,
     minimum_macos_versions,
+    package,
     parse_args,
     sign_package,
+    smoke_packaged_mv_hevc_encoder,
     smoke_packaged_native_app,
     smoke_packaged_worker,
     validate_smoke_events,
     verify_native_binary_paths,
     verify_mach_o_minimum_system_versions,
+    verify_exact_minimum_system_version,
     verify_package_paths,
     verify_product_identity,
     verify_product_source_copy,
@@ -95,6 +101,39 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertEqual(NATIVE_SHORT_VERSION, "0.3.0b6")
         self.assertEqual(NATIVE_BUILD_VERSION, "151")
         self.assertEqual(NATIVE_MINIMUM_SYSTEM_VERSION, "26.0")
+        self.assertEqual(MV_HEVC_ENCODER_NAME, "mv-hevc-encoder")
+
+    def test_builds_packaged_mv_hevc_encoder_at_requested_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_path = Path(temporary_directory) / "tools" / MV_HEVC_ENCODER_NAME
+
+            def build(path: Path) -> None:
+                path.parent.mkdir(parents=True)
+                path.write_bytes(b"\xcf\xfa\xed\xfe")
+
+            with patch("scripts.native_app.build_mv_hevc_encoder", side_effect=build) as build_mock:
+                result = build_packaged_mv_hevc_encoder(output_path)
+
+            self.assertEqual(result, output_path)
+            self.assertTrue(output_path.stat().st_mode & 0o111)
+            build_mock.assert_called_once_with(output_path)
+
+    def test_installs_mv_hevc_encoder_in_app_runtime_tool_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            app_path = root / NATIVE_APP_NAME
+            source_path = root / "built" / MV_HEVC_ENCODER_NAME
+            source_path.parent.mkdir(parents=True)
+            source_path.write_bytes(b"\xcf\xfa\xed\xfe")
+
+            installed_path = install_mv_hevc_encoder(app_path, source_path)
+
+            self.assertEqual(
+                installed_path,
+                app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / MV_HEVC_ENCODER_NAME,
+            )
+            self.assertEqual(installed_path.read_bytes(), source_path.read_bytes())
+            self.assertTrue(installed_path.stat().st_mode & 0o111)
 
     def test_uses_one_native_settings_scene_and_release_grade_source_groups(self) -> None:
         project_spec = (MACOS_ROOT / "project.yml").read_text(encoding="utf-8")
@@ -355,6 +394,14 @@ Load command 3
 
             versions.assert_called_once_with(native_executable)
 
+    def test_rejects_mv_hevc_encoder_with_wrong_minimum_macos(self) -> None:
+        encoder = Path("/tmp/mv-hevc-encoder")
+        with (
+            patch("scripts.native_app.minimum_macos_versions", return_value={"25.0"}),
+            self.assertRaisesRegex(RuntimeError, "MV-HEVC encoder must target macOS 26.0"),
+        ):
+            verify_exact_minimum_system_version(encoder, "MV-HEVC encoder")
+
     def test_package_accepts_an_explicit_signing_keychain(self) -> None:
         args = parse_args(
             [
@@ -368,6 +415,33 @@ Load command 3
 
         self.assertEqual(args.sign_identity, "Developer ID Application: Example")
         self.assertEqual(args.sign_keychain, "/tmp/release.keychain-db")
+
+    def test_package_builds_installs_signs_and_smokes_mv_hevc_encoder(self) -> None:
+        encoder_path = Path("/tmp/native-tools/mv-hevc-encoder")
+        app_path = Path("/tmp") / NATIVE_APP_NAME
+        with (
+            patch("scripts.native_app.build_packaged_mv_hevc_encoder", return_value=encoder_path) as build_encoder,
+            patch("scripts.native_app.prepare_briefcase_runtime") as prepare_runtime,
+            patch("scripts.native_app.xcodebuild") as xcodebuild_mock,
+            patch("scripts.native_app.assemble_package", return_value=app_path) as assemble,
+            patch("scripts.native_app.sign_package") as sign,
+            patch("scripts.native_app.smoke_packaged_native_app") as smoke_native,
+            patch("scripts.native_app.smoke_packaged_mv_hevc_encoder") as smoke_encoder,
+            patch("scripts.native_app.smoke_packaged_worker") as smoke_worker,
+            patch("scripts.native_app.verify_codesign") as verify,
+            patch("builtins.print"),
+        ):
+            package("Developer ID Application: Example", "/tmp/release.keychain-db")
+
+        build_encoder.assert_called_once_with()
+        prepare_runtime.assert_called_once_with()
+        xcodebuild_mock.assert_called_once_with("build", NATIVE_PACKAGE_CONFIGURATION)
+        assemble.assert_called_once_with(encoder_path)
+        sign.assert_called_once_with(app_path, "Developer ID Application: Example", "/tmp/release.keychain-db")
+        smoke_native.assert_called_once_with(app_path)
+        smoke_encoder.assert_called_once_with(app_path)
+        smoke_worker.assert_called_once_with(app_path)
+        verify.assert_called_once_with(app_path)
 
     def test_package_signing_uses_the_explicit_keychain(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -410,6 +484,28 @@ Load command 3
             self.assertNotIn("--options", command)
             self.assertNotIn("runtime", command)
             self.assertIn("--timestamp=none", command)
+
+    def test_package_signs_mv_hevc_encoder_before_the_containing_app(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app_path = Path(temporary_directory) / NATIVE_APP_NAME
+            encoder = app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / MV_HEVC_ENCODER_NAME
+            encoder.parent.mkdir(parents=True)
+            encoder.write_bytes(b"\xcf\xfa\xed\xfe")
+            (app_path / "Contents" / "MacOS").mkdir(parents=True)
+            with (
+                patch("scripts.native_app.is_mach_o", side_effect=lambda path: path == encoder),
+                patch("scripts.native_app.run") as run_mock,
+            ):
+                sign_package(app_path, "-")
+
+        commands = [call.args[0] for call in run_mock.call_args_list]
+        encoder_sign_index = next(
+            index for index, command in enumerate(commands) if "--sign" in command and command[-1] == str(encoder)
+        )
+        app_sign_index = next(
+            index for index, command in enumerate(commands) if "--sign" in command and command[-1] == str(app_path)
+        )
+        self.assertLess(encoder_sign_index, app_sign_index)
 
     def test_product_copy_has_no_internal_labels(self) -> None:
         verify_product_source_copy()
@@ -683,6 +779,55 @@ Load command 3
             ],
             cwd=resolved_app_path,
         )
+
+    def test_mv_hevc_encoder_smoke_uses_the_signed_packaged_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            relative_app_path = Path("package") / NATIVE_APP_NAME
+            absolute_app_path = temporary_path / relative_app_path
+            absolute_app_path.mkdir(parents=True)
+            resolved_app_path = absolute_app_path.resolve()
+            completed = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout='{"schema_version":1,"stereo_mv_hevc_encode_supported":true}\n',
+                stderr="",
+            )
+            with (
+                chdir(temporary_path),
+                patch("scripts.native_app.smoke_environment", return_value={"PATH": "/usr/bin"}) as environment,
+                patch("scripts.native_app.subprocess.run", return_value=completed) as run_mock,
+            ):
+                smoke_packaged_mv_hevc_encoder(relative_app_path)
+
+        run_mock.assert_called_once_with(
+            [
+                str(resolved_app_path / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin" / MV_HEVC_ENCODER_NAME),
+                "--capability-probe",
+            ],
+            cwd=resolved_app_path,
+            capture_output=True,
+            env={"PATH": "/usr/bin"},
+            text=True,
+            timeout=30,
+        )
+        environment.assert_called_once_with()
+
+    def test_mv_hevc_encoder_smoke_accepts_valid_unsupported_hardware_result(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=2,
+            stdout='{"schema_version":1,"stereo_mv_hevc_encode_supported":false}\n',
+            stderr="",
+        )
+        with (
+            patch("scripts.native_app.smoke_environment", return_value={}),
+            patch("scripts.native_app.subprocess.run", return_value=completed),
+            patch("builtins.print") as print_mock,
+        ):
+            smoke_packaged_mv_hevc_encoder(Path("/tmp") / NATIVE_APP_NAME)
+
+        print_mock.assert_called_once_with("Packaged MV-HEVC encoder is valid but unavailable on this build host.")
 
     def test_rejects_wrong_job_or_result(self) -> None:
         events: list[object] = [

@@ -5,7 +5,13 @@ import plistlib
 import subprocess
 from pathlib import Path
 
-from scripts.native_app import is_mach_o, minimum_macos_versions, normalized_version
+from scripts.native_app import (
+    MV_HEVC_ENCODER_NAME,
+    is_mach_o,
+    minimum_macos_versions,
+    normalized_version,
+    validate_mv_hevc_capability_probe,
+)
 
 
 APP_PATH = Path("build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app")
@@ -18,15 +24,16 @@ CORE_TOOLS = {
 GUI_RUNTIME_TOOLS = {
     "edge264_test": ["--help"],
     "fx-upscale": ["--help"],
+    "mv-hevc-encoder": ["--capability-probe"],
     "spatial-media-kit-tool": ["--help"],
 }
 REQUIRED_TOOLS = CORE_TOOLS | GUI_RUNTIME_TOOLS
 
 
-def run(command: list[str | Path]) -> subprocess.CompletedProcess[str]:
+def run(command: list[str | Path], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(item) for item in command],
-        check=True,
+        check=check,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -40,7 +47,11 @@ def verify_tool(tool_path: Path, probe_args: list[str]) -> None:
     if not tool_path.stat().st_mode & 0o111:
         raise PermissionError(f"Bundled tool is not executable: {tool_path}")
 
-    run([tool_path, *probe_args])
+    if tool_path.name == MV_HEVC_ENCODER_NAME:
+        completed = run([tool_path, *probe_args], check=False)
+        validate_mv_hevc_capability_probe(completed, description="Bundled MV-HEVC encoder")
+    else:
+        run([tool_path, *probe_args])
     linked_libraries = run(["otool", "-L", tool_path]).stdout
     for forbidden_path in ["/opt/homebrew", "/usr/local"]:
         if forbidden_path in linked_libraries:

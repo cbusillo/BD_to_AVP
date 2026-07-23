@@ -174,6 +174,7 @@ class Config:
     EDGE264_TEST_PATH = SCRIPT_PATH_BIN / "edge264_test"
     SPATIAL_MEDIA_PATH = SCRIPT_PATH_BIN / "spatial-media-kit-tool"
     FX_UPSCALE_PATH = SCRIPT_PATH_BIN / "fx-upscale"
+    MV_HEVC_ENCODER_PATH = SCRIPT_PATH_BIN / "mv-hevc-encoder"
 
     FINAL_FILE_TAG = "_AVP"
     AV1_FINAL_FILE_TAG = "_AV1_Stereo"

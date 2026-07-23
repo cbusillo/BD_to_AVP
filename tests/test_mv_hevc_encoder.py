@@ -75,6 +75,17 @@ class MVHEVCEncoderBuilderTests(unittest.TestCase):
             ],
         )
 
+    def test_capability_probe_checks_the_real_asset_writer_settings(self) -> None:
+        source = build_mv_hevc_encoder_macos.SOURCE_PATH.read_text(encoding="utf-8")
+        probe_start = source.index("private func isStereoMVHEVCOutputConfigurationSupported()")
+        probe_end = source.index("private func fillPixelBuffer", probe_start)
+        probe_source = source[probe_start:probe_end]
+
+        self.assertIn("VTIsStereoMVHEVCEncodeSupported()", probe_source)
+        self.assertIn("makeOutputSettings(options: options, header: header)", probe_source)
+        self.assertIn("writer.canApply(outputSettings: outputSettings, forMediaType: .video)", probe_source)
+        self.assertIn("let supported = try isStereoMVHEVCOutputConfigurationSupported()", source)
+
     def test_box_requirements_distinguish_candidate_from_current_baseline(self) -> None:
         self.assertIn("proj", qualify_direct_mv_hevc.DIRECT_REQUIRED_BOX_TYPES)
         self.assertNotIn("proj", qualify_direct_mv_hevc.CURRENT_REQUIRED_BOX_TYPES)
@@ -131,24 +142,26 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
         cls.encoder = Path(cls.temporary_directory.name) / "mv-hevc-encoder"
         try:
             build_mv_hevc_encoder_macos.build_encoder(cls.encoder)
-            probe_output = Path(cls.temporary_directory.name) / "capability.mov"
             probe = subprocess.run(
-                [str(cls.encoder), "--output", str(probe_output), "--expected-frames", "2"],
-                input=y4m_header() + y4m_frame(0) + y4m_frame(1),
+                [str(cls.encoder), "--capability-probe"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=30,
             )
+            probe_payload = json.loads(probe.stdout)
+            if probe.returncode == 2 and probe_payload == {
+                "schema_version": 1,
+                "stereo_mv_hevc_encode_supported": False,
+            }:
+                raise unittest.SkipTest("this Mac cannot create the bounded MV-HEVC fixture")
             if probe.returncode != 0:
                 diagnostic = probe.stderr.decode(errors="replace")
-                unavailable_messages = (
-                    "does not report stereo MV-HEVC encode support",
-                    "MV-HEVC output settings are not supported",
-                )
-                if any(message in diagnostic for message in unavailable_messages):
-                    raise unittest.SkipTest("this Mac cannot create the bounded MV-HEVC fixture")
                 raise RuntimeError(f"MV-HEVC capability probe failed:\n{diagnostic}")
-            probe_output.unlink()
+            if probe_payload != {
+                "schema_version": 1,
+                "stereo_mv_hevc_encode_supported": True,
+            }:
+                raise RuntimeError(f"unexpected MV-HEVC capability probe output: {probe_payload!r}")
         except BaseException:
             cls.temporary_directory.cleanup()
             raise
@@ -187,6 +200,23 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
 
     def assert_no_partial_output(self, output_path: Path) -> None:
         self.assertEqual(list(output_path.parent.glob(f".{output_path.name}.partial-*")), [])
+
+    def test_capability_probe_reports_support_without_input(self) -> None:
+        completed = subprocess.run(
+            [str(self.encoder), "--capability-probe"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+        self.assertEqual(
+            json.loads(completed.stdout),
+            {
+                "schema_version": 1,
+                "stereo_mv_hevc_encode_supported": True,
+            },
+        )
 
     def test_encodes_bounded_mv_hevc_and_spatial_metadata(self) -> None:
         output_path = self.output_path("valid.mov")
