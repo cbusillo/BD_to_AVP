@@ -127,24 +127,31 @@ class MVHEVCEncoderBuilderTests(unittest.TestCase):
 class MVHEVCEncoderIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        support = subprocess.run(
-            [
-                "xcrun",
-                "swift",
-                "-e",
-                'import VideoToolbox; print(VTIsStereoMVHEVCEncodeSupported() ? "yes" : "no")',
-            ],
-            check=True,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=60,
-        )
-        if support.stdout.strip() != "yes":
-            raise unittest.SkipTest("this Mac does not report stereo MV-HEVC encode support")
         cls.temporary_directory = tempfile.TemporaryDirectory(prefix="mv-hevc-encoder-tests-")
         cls.encoder = Path(cls.temporary_directory.name) / "mv-hevc-encoder"
-        build_mv_hevc_encoder_macos.build_encoder(cls.encoder)
+        try:
+            build_mv_hevc_encoder_macos.build_encoder(cls.encoder)
+            probe_output = Path(cls.temporary_directory.name) / "capability.mov"
+            probe = subprocess.run(
+                [str(cls.encoder), "--output", str(probe_output), "--expected-frames", "2"],
+                input=y4m_header() + y4m_frame(0) + y4m_frame(1),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+            )
+            if probe.returncode != 0:
+                diagnostic = probe.stderr.decode(errors="replace")
+                unavailable_messages = (
+                    "does not report stereo MV-HEVC encode support",
+                    "MV-HEVC output settings are not supported",
+                )
+                if any(message in diagnostic for message in unavailable_messages):
+                    raise unittest.SkipTest("this Mac cannot create the bounded MV-HEVC fixture")
+                raise RuntimeError(f"MV-HEVC capability probe failed:\n{diagnostic}")
+            probe_output.unlink()
+        except BaseException:
+            cls.temporary_directory.cleanup()
+            raise
 
     @classmethod
     def tearDownClass(cls) -> None:
