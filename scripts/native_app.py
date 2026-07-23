@@ -585,14 +585,16 @@ def smoke_packaged_mv_hevc_encoder(app_path: Path) -> None:
         text=True,
         timeout=30,
     )
-    validate_mv_hevc_capability_probe(completed, description="Packaged MV-HEVC encoder")
+    supported = validate_mv_hevc_capability_probe(completed, description="Packaged MV-HEVC encoder")
+    if not supported:
+        print("Packaged MV-HEVC encoder is valid but unavailable on this build host.")
 
 
 def validate_mv_hevc_capability_probe(
     completed: subprocess.CompletedProcess[str],
     *,
     description: str,
-) -> None:
+) -> bool:
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as error:
@@ -605,16 +607,17 @@ def validate_mv_hevc_capability_probe(
         "stereo_mv_hevc_encode_supported": False,
     }
     if completed.returncode == 2 and payload == unsupported_payload:
-        raise RuntimeError(f"{description} reports that stereo MV-HEVC encoding is unavailable on this Mac.")
+        return False
     expected_payload = {
         "schema_version": 1,
         "stereo_mv_hevc_encode_supported": True,
     }
-    if completed.returncode != 0 or payload != expected_payload:
-        raise RuntimeError(
-            f"{description} capability probe failed.\n"
-            f"exit: {completed.returncode}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
-        )
+    if completed.returncode == 0 and payload == expected_payload:
+        return True
+    raise RuntimeError(
+        f"{description} capability probe failed.\n"
+        f"exit: {completed.returncode}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+    )
 
 
 def smoke_packaged_worker(app_path: Path) -> None:

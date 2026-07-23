@@ -394,6 +394,36 @@ private func makeOutputSettings(options: EncoderOptions, header: Y4MHeader) thro
     ]
 }
 
+private func isStereoMVHEVCOutputConfigurationSupported() throws -> Bool {
+    guard VTIsStereoMVHEVCEncodeSupported() else {
+        return false
+    }
+    let probeURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+        ".mv-hevc-capability-\(UUID().uuidString).mov"
+    )
+    defer { try? FileManager.default.removeItem(at: probeURL) }
+    let options = EncoderOptions(
+        outputURL: probeURL,
+        bitrateMbps: 8.0,
+        fieldOfViewDegrees: 90.0,
+        baselineMillimeters: nil,
+        disparityAdjustment: 0.0,
+        expectedFrameCount: nil,
+        swapEyes: false,
+        overwrite: true
+    )
+    let header = Y4MHeader(
+        frameWidth: 3_840,
+        frameHeight: 1_080,
+        frameRateNumerator: 24_000,
+        frameRateDenominator: 1_001,
+        chromaLocation: kCVImageBufferChromaLocation_Center
+    )
+    let outputSettings = try makeOutputSettings(options: options, header: header)
+    let writer = try AVAssetWriter(outputURL: probeURL, fileType: .mov)
+    return writer.canApply(outputSettings: outputSettings, forMediaType: .video)
+}
+
 private func fillPixelBuffer(
     _ pixelBuffer: inout CVMutablePixelBuffer,
     header: Y4MHeader,
@@ -639,7 +669,7 @@ private struct MVHEVCEncoder {
         do {
             let arguments = Array(CommandLine.arguments.dropFirst())
             if arguments == ["--capability-probe"] {
-                let supported = VTIsStereoMVHEVCEncodeSupported()
+                let supported = try isStereoMVHEVCOutputConfigurationSupported()
                 let data = try JSONSerialization.data(
                     withJSONObject: [
                         "schema_version": 1,

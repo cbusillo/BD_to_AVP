@@ -75,6 +75,17 @@ class MVHEVCEncoderBuilderTests(unittest.TestCase):
             ],
         )
 
+    def test_capability_probe_checks_the_real_asset_writer_settings(self) -> None:
+        source = build_mv_hevc_encoder_macos.SOURCE_PATH.read_text(encoding="utf-8")
+        probe_start = source.index("private func isStereoMVHEVCOutputConfigurationSupported()")
+        probe_end = source.index("private func fillPixelBuffer", probe_start)
+        probe_source = source[probe_start:probe_end]
+
+        self.assertIn("VTIsStereoMVHEVCEncodeSupported()", probe_source)
+        self.assertIn("makeOutputSettings(options: options, header: header)", probe_source)
+        self.assertIn("writer.canApply(outputSettings: outputSettings, forMediaType: .video)", probe_source)
+        self.assertIn("let supported = try isStereoMVHEVCOutputConfigurationSupported()", source)
+
     def test_box_requirements_distinguish_candidate_from_current_baseline(self) -> None:
         self.assertIn("proj", qualify_direct_mv_hevc.DIRECT_REQUIRED_BOX_TYPES)
         self.assertNotIn("proj", qualify_direct_mv_hevc.CURRENT_REQUIRED_BOX_TYPES)

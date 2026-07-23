@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from scripts import verify_app_tools
 
@@ -74,7 +74,7 @@ class VerifyAppToolsTests(unittest.TestCase):
 
         run_mock.assert_called_once_with([tool_path, "--capability-probe"], check=False)
 
-    def test_mv_hevc_encoder_probe_reports_unsupported_hardware(self) -> None:
+    def test_mv_hevc_encoder_probe_accepts_valid_unsupported_hardware_result(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             tool_path = Path(temp_dir) / "mv-hevc-encoder"
             tool_path.write_text("tool")
@@ -84,11 +84,21 @@ class VerifyAppToolsTests(unittest.TestCase):
                 returncode=2,
                 stdout='{"schema_version":1,"stereo_mv_hevc_encode_supported":false}\n',
             )
-            with (
-                patch.object(verify_app_tools, "run", return_value=unsupported_probe),
-                self.assertRaisesRegex(RuntimeError, "stereo MV-HEVC encoding is unavailable"),
-            ):
+            linked_libraries = subprocess.CompletedProcess(args=[], returncode=0, stdout="")
+            with patch.object(
+                verify_app_tools,
+                "run",
+                side_effect=[unsupported_probe, linked_libraries],
+            ) as run_mock:
                 verify_app_tools.verify_tool(tool_path, ["--capability-probe"])
+
+        self.assertEqual(
+            run_mock.call_args_list,
+            [
+                call([tool_path, "--capability-probe"], check=False),
+                call(["otool", "-L", tool_path]),
+            ],
+        )
 
     def test_verify_ffmpeg_requires_libsvtav1(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -813,7 +813,7 @@ Load command 3
         )
         environment.assert_called_once_with()
 
-    def test_mv_hevc_encoder_smoke_rejects_unsupported_hardware(self) -> None:
+    def test_mv_hevc_encoder_smoke_accepts_valid_unsupported_hardware_result(self) -> None:
         completed = subprocess.CompletedProcess(
             args=[],
             returncode=2,
@@ -823,9 +823,11 @@ Load command 3
         with (
             patch("scripts.native_app.smoke_environment", return_value={}),
             patch("scripts.native_app.subprocess.run", return_value=completed),
-            self.assertRaisesRegex(RuntimeError, "stereo MV-HEVC encoding is unavailable"),
+            patch("builtins.print") as print_mock,
         ):
             smoke_packaged_mv_hevc_encoder(Path("/tmp") / NATIVE_APP_NAME)
+
+        print_mock.assert_called_once_with("Packaged MV-HEVC encoder is valid but unavailable on this build host.")
 
     def test_rejects_wrong_job_or_result(self) -> None:
         events: list[object] = [
