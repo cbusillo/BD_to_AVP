@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 
+from contextlib import suppress
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -204,7 +205,7 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
             timeout=30,
         ).stdout
         observed = set(qualify_direct_mv_hevc.BOX_TYPE_PATTERN.findall(boxes))
-        self.assertTrue(qualify_direct_mv_hevc.DIRECT_REQUIRED_BOX_TYPES <= observed)
+        self.assertLessEqual(qualify_direct_mv_hevc.DIRECT_REQUIRED_BOX_TYPES, observed)
         self.assert_no_partial_output(output_path)
 
     def test_rejects_high_bit_depth_y4m_before_writing_output(self) -> None:
@@ -277,15 +278,11 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
             json.loads(cancellation_line)["event"],
             "encoder.cancellation_requested",
         )
-        try:
+        with suppress(BrokenPipeError):
             process.stdin.write(b"FRAME\n")
             process.stdin.flush()
-        except BrokenPipeError:
-            pass
-        try:
+        with suppress(BrokenPipeError):
             process.stdin.close()
-        except BrokenPipeError:
-            pass
         status = process.wait(timeout=10)
         stderr = ready_line + cancellation_line + process.stderr.read()
         process.stderr.close()
