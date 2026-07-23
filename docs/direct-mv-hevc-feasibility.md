@@ -2,7 +2,8 @@
 
 Issue #347 asks whether the decoded stereo stream can become a final Apple-compatible MV-HEVC movie without first
 writing left and right HEVC eye movies. The bounded prototype proves that this boundary is viable on Apple Silicon,
-but it is not yet qualified as the production default.
+and the completed qualification clears it for product integration. The current product remains on the legacy path
+until that integration is implemented and shipped.
 
 ## Decision
 
@@ -76,10 +77,59 @@ merge performs a second lossy encode governed by quality 75, so this fixture can
 regression threshold. The direct result slightly exceeded the current path's decoded per-eye SSIM, and each same-eye
 score remained clearly above its crossed-eye score.
 
-Both paths use VideoToolbox hardware HEVC encoders, and the host reports stereo MV-HEVC encode support. The bounded
-CLI probe does not have a trustworthy per-process GPU counter, so numeric GPU utilization remains unproven. A release
-qualification should add an approved Instruments or equivalent measurement rather than infer GPU load from codec
-selection.
+### Quality-matched size
+
+`scripts/qualify_mv_hevc_quality_match.py` removes the target-setting mismatch by searching for a direct bitrate whose
+minimum decoded same-eye SSIM exceeds the current path's median by at least 0.002. It then repeats both paths three
+times with the same source fixture and requires every direct run to preserve that margin.
+
+| Three-run median | Current path | Quality-matched direct path |
+| --- | ---: | ---: |
+| Target bitrate | 4.0 Mbps aggregate eye target plus merge quality 75 | 0.543750 Mbps final target |
+| Effective final bitrate | 0.662600 Mbps | 0.599912 Mbps |
+| Final movie size | 165,650 bytes | 149,978 bytes |
+| Minimum same-eye SSIM | 0.909273 | 0.911418 |
+| Minimum eye-order SSIM margin | 0.338076 | 0.347851 |
+
+Every direct run exceeded the required quality floor of 0.911273. At that matched-quality point, the direct movie was
+9.46% smaller and its worst-eye SSIM was 0.002145 higher. All three runs produced identical sizes and decoded quality
+metrics. Their file hashes differed, so the result makes no byte-for-byte determinism claim about container metadata.
+The like-for-like size gate therefore passes for the bounded fixture without inferring equivalence from encoder input
+controls.
+
+### GPU time
+
+`scripts/profile_mv_hevc_gpu.py` records the bounded workloads with Xcode's Metal System Trace, captures each client
+PID when it is created, exports the `metal-gpu-intervals` table, and sums exact AGX GPU interval durations per PID. A
+known Metal compute workload must produce nonzero intervals in the same run before an encoder value of zero is
+accepted.
+
+On a separate two-second, 640x360-per-eye, 24 fps profiling fixture:
+
+| GPU measurement | Current path | Direct path |
+| --- | ---: | ---: |
+| Client-process AGX GPU intervals | 97 | 0 |
+| Client-process AGX GPU time | 1,665,914 ns | 0 ns |
+| Client phase-average AGX GPU utilization | 0.156107% | 0.000000% |
+| VideoToolbox-service AGX GPU time visible in the trace | 1,024,587 ns | 0 ns |
+| Elapsed time | 1.067165 s | 0.446034 s |
+| Child user CPU | 0.567417 s | 0.240963 s |
+| Child system CPU | 0.140102 s | 0.083963 s |
+
+The positive control recorded 22,257 intervals, 177,631,319 ns of non-overlapping AGX work, and 2.168082%
+phase-average utilization. All client-process AGX time in the current window was attributed to
+`spatial-media-kit-tool`; its FFmpeg process used none. One `VTDecoderXPCService` visible in that window contributed
+1,024,587 ns of non-overlapping AGX work and is reported separately because Metal System Trace does not expose a
+supported client-PID linkage. The direct FFmpeg and `mv-hevc-encoder` PIDs used no AGX GPU time, and no VideoToolbox
+service visible in the direct window reported AGX intervals.
+
+This measures general-purpose AGX work, not VideoToolbox's dedicated Apple media engine. macOS does not expose a
+supported per-process utilization API for that engine, so the profiler records that limitation rather than relabeling
+media-engine activity as GPU use. Raw trace bundles, compressed interval exports, source and encoder hashes, command
+arguments, host/tool versions, and artifact checksums are retained in a local evidence manifest. The manifest
+fingerprints the canonical measurement summary, and a detached SHA-256 file authenticates the manifest itself. The
+summary, manifest, and profiler hashes were independently rechecked after capture. The positive-controlled numeric
+CPU/GPU comparison gate is complete on the qualifying host.
 
 ## Container and playback validation
 
@@ -93,8 +143,29 @@ The direct fixture passed all locally automatable checks:
 - `scripts/verify_apple_media.py` passes its AVFoundation/`avconvert` compatibility check.
 - FFmpeg decodes frames after beginning, middle, and near-end seeks.
 
-These checks do not prove stereoscopic presentation in the headset. The physical Apple Vision Pro workflow in
-`docs/visionos-playback-validator.md` remains mandatory before the route can be declared production-ready.
+`scripts/create_direct_mv_hevc_playback_fixture.sh` creates the exact six-second direct-helper calibration movie with
+English audio and subtitles, runs the Apple media compatibility check, and prepares it for the existing spatial
+autorun workflow.
+
+### Physical Apple Vision Pro result
+
+On July 23, 2026, the exact direct-helper fixture passed the physical workflow in
+`docs/visionos-playback-validator.md`. The fresh schema-3 report was bound to the local fixture by matching its full
+fingerprint and file size: SHA-256 `0c13e6e65f13d6d852ef37904445a0cfe95995c40ce186b36ef9ae81a0b160fb`
+and 3,317,639 bytes. The movie was copied back from the app container after the run and independently rechecked.
+
+- All eight automatic checks passed, including stereo decode, player readiness, RealityKit rendering readiness,
+  stereo presentation, spatial portal presentation, and beginning/middle/end seeks.
+- The reported modes were Stereo · Spatial · Portal throughout the guided run.
+- One audio option and two subtitle options were discovered.
+- The wearer confirmed that the picture remained visible and that the scene appeared three-dimensional rather than
+  flat.
+- A signed visionOS build installed and launched on the paired physical headset without changing the validator or
+  fixture after local qualification.
+
+This completes the physical playback criterion for the direct encoder boundary. It does not change the separate
+product rule that ordinary Blu-ray output must omit invented camera-baseline metadata and use the Stereo · Screen
+presentation contract already qualified by the playback-validator workstream.
 
 ## Failure, cancellation, and backpressure
 
@@ -135,8 +206,8 @@ continue through upscale and final mux without changing later artifact names.
   bundled-tool deployment-target checks.
 - No third-party runtime, source archive, or additional license notice is required; the implementation uses Apple SDK
   frameworks.
-- No production routing or app-bundle change is included in this prototype. Those changes should occur only after the
-  remaining device and GPU evidence is recorded.
+- No production routing or app-bundle change is included in this prototype. The completed qualification now allows
+  those changes to proceed in the generated-intermediate and mode-specific-control integration workstream.
 
 ## Reproduction
 
@@ -149,7 +220,28 @@ uv run python scripts/qualify_direct_mv_hevc.py \
   --output build/direct-mv-hevc/direct.mov \
   --json-output build/direct-mv-hevc/qualification.json
 
-uv run python -m unittest tests.test_mv_hevc_encoder -v
+uv run python -m scripts.qualify_mv_hevc_quality_match \
+  --encoder build/mv-hevc-encoder/mv-hevc-encoder \
+  --runs 3 \
+  --json-output build/direct-mv-hevc-quality-match/quality-match.json
+
+uv run python -m scripts.profile_mv_hevc_gpu \
+  --encoder build/mv-hevc-encoder/mv-hevc-encoder \
+  --eye-width 640 \
+  --eye-height 360 \
+  --frame-rate 24 \
+  --duration 2 \
+  --bitrate-mbps 4 \
+  --trace-limit-seconds 30 \
+  --json-output build/direct-mv-hevc-gpu/gpu-profile.json
+
+scripts/create_direct_mv_hevc_playback_fixture.sh
+
+uv run python -m unittest \
+  tests.test_mv_hevc_encoder \
+  tests.test_mv_hevc_quality_match \
+  tests.test_mv_hevc_gpu_profile \
+  -v
 ```
 
 ## Acceptance status
@@ -159,12 +251,12 @@ uv run python -m unittest tests.test_mv_hevc_encoder -v
 | Encoder-boundary inventory | Passed |
 | Final MV-HEVC fixture without eye HEVC movies | Passed |
 | Eye order, dimensions, timing, color, FOV, disparity, and multiview metadata | Passed for the bounded fixture |
-| Quality, size, elapsed time, CPU, GPU, and peak disk comparison | Partial: numeric GPU utilization and a like-for-like final-size threshold remain unproven |
+| Quality, size, elapsed time, CPU, GPU, and peak disk comparison | Passed on the bounded fixtures |
 | AVFoundation and beginning/middle/end seeks | Passed |
-| Physical Apple Vision Pro validation | Pending |
+| Physical Apple Vision Pro validation | Passed |
 | Cancellation, backpressure, failure attribution, and cleanup | Passed for the bounded prototype |
 | Restart and fallback behavior | Defined |
 | Runtime, license, macOS, architecture, signing, notarization, and bundle implications | Recorded |
 
-The prototype establishes a viable architecture. It must remain non-default until numeric GPU evidence and physical
-Apple Vision Pro playback evidence close the two remaining qualification gaps.
+The prototype is fully qualified for product integration. It remains non-default only because the runtime, UI,
+profile, protocol, fallback, packaging, and migration changes belong to the follow-on implementation plan.
