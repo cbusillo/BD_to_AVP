@@ -113,7 +113,7 @@ struct ConversionSetupView: View {
                     }
                 }
 
-                Toggle("Keep durable stage files", isOn: $options.job.keepStageFiles)
+                Toggle("Keep durable stage files", isOn: reusableIntermediatesBinding)
                 Toggle("Continue processing after recoverable errors", isOn: $options.job.continueOnError)
                 Toggle("Use software HEVC encoder", isOn: $options.job.softwareEncoder)
                     .disabled(options.encoding.videoOutputMode == .av1Stereo)
@@ -148,6 +148,15 @@ struct ConversionSetupView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var reusableIntermediatesBinding: Binding<Bool> {
+        Binding(
+            get: { options.job.intermediatePolicy.createsReusableArtifacts },
+            set: { enabled in
+                options.job.intermediatePolicy = enabled ? .reusable : .automatic
+            }
+        )
     }
 }
 

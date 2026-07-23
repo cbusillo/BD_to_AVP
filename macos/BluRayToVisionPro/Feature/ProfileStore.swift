@@ -337,11 +337,13 @@ private struct LegacyEncodingOptionsV3: Decodable {
         EncodingOptions(
             videoOutputMode: videoOutputMode,
             av1CRF: av1CRF,
-            hevcQuality: hevcQuality,
-            leftRightBitrate: leftRightBitrate,
+            mvHEVC: MVHEVCOptions.migrated(
+                generatedMergeQuality: hevcQuality,
+                generatedEyeBitrate: leftRightBitrate,
+                linkGeneratedAndUpscaleQuality: linkQuality
+            ),
             upscaleEnabled: upscaleEnabled,
             upscaleQuality: upscaleQuality,
-            linkQuality: linkQuality,
             fieldOfView: fieldOfView,
             frameRateOverride: frameRateOverride,
             resolutionOverride: resolutionOverride,
@@ -389,11 +391,13 @@ private struct LegacyEncodingOptionsV2: Decodable {
         EncodingOptions(
             videoOutputMode: .mvHEVC,
             av1CRF: 32,
-            hevcQuality: hevcQuality,
-            leftRightBitrate: leftRightBitrate,
+            mvHEVC: MVHEVCOptions.migrated(
+                generatedMergeQuality: hevcQuality,
+                generatedEyeBitrate: leftRightBitrate,
+                linkGeneratedAndUpscaleQuality: linkQuality
+            ),
             upscaleEnabled: upscaleEnabled,
             upscaleQuality: upscaleQuality,
-            linkQuality: linkQuality,
             fieldOfView: fieldOfView,
             frameRateOverride: frameRateOverride,
             resolutionOverride: resolutionOverride,
@@ -451,11 +455,13 @@ private struct LegacyEncodingOptionsV1: Decodable {
             .preferredOnly
         }
         return EncodingOptions(
-            hevcQuality: hevcQuality,
-            leftRightBitrate: leftRightBitrate,
+            mvHEVC: MVHEVCOptions.migrated(
+                generatedMergeQuality: hevcQuality,
+                generatedEyeBitrate: leftRightBitrate,
+                linkGeneratedAndUpscaleQuality: linkQuality
+            ),
             upscaleEnabled: upscaleEnabled,
             upscaleQuality: upscaleQuality,
-            linkQuality: linkQuality,
             fieldOfView: fieldOfView,
             frameRateOverride: frameRateOverride,
             resolutionOverride: resolutionOverride,

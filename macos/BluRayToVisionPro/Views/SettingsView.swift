@@ -469,11 +469,17 @@ private struct ProfileEncodingSummaryView: View {
         switch options.videoOutputMode {
         case .mvHEVC:
             items.append(contentsOf: [
-                ProfileSummaryItem(title: "HEVC quality", value: "\(options.hevcQuality)"),
-                ProfileSummaryItem(title: "Left / right bitrate", value: "\(options.leftRightBitrate) Mbps"),
+                ProfileSummaryItem(title: "HEVC quality", value: "\(options.mvHEVC.generatedMergeQuality)"),
+                ProfileSummaryItem(
+                    title: "Left / right bitrate",
+                    value: "\(options.generatedEyeCustomBitrateMbps) Mbps"
+                ),
                 ProfileSummaryItem(title: "AI FX upscale to 2× resolution", value: enabledText(options.upscaleEnabled)),
                 ProfileSummaryItem(title: "Upscale quality", value: "\(options.upscaleQuality)"),
-                ProfileSummaryItem(title: "Link HEVC and upscale quality", value: enabledText(options.linkQuality)),
+                ProfileSummaryItem(
+                    title: "Link HEVC and upscale quality",
+                    value: enabledText(options.mvHEVC.linkGeneratedAndUpscaleQuality)
+                ),
             ])
         case .av1Stereo:
             items.append(contentsOf: [
@@ -725,7 +731,7 @@ private struct AdvancedSettingsPane: View {
 
             Section("Defaults for New Jobs") {
                 Toggle("Default to the software encoder", isOn: $settings.useSoftwareEncoder)
-                Toggle("Keep durable stage files by default", isOn: $settings.keepIntermediateFiles)
+                Toggle("Keep durable stage files by default", isOn: reusableIntermediatesBinding)
             }
 
             Section("Diagnostics") {
@@ -739,6 +745,15 @@ private struct AdvancedSettingsPane: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var reusableIntermediatesBinding: Binding<Bool> {
+        Binding(
+            get: { settings.intermediatePolicy.createsReusableArtifacts },
+            set: { enabled in
+                settings.intermediatePolicy = enabled ? .reusable : .automatic
+            }
+        )
     }
 }
 
