@@ -259,7 +259,7 @@ def record_trace(
     assert process.stdout is not None
     output_lines: list[str] = []
     workload_result: WorkloadResult | None = None
-    workload_error: BaseException | None = None
+    workload_error: Exception | None = None
     try:
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
@@ -282,7 +282,7 @@ def record_trace(
         if process.poll() is not None:
             raise QualificationFailure("xctrace ended before the workload completed.")
         time.sleep(0.5)
-    except BaseException as error:
+    except Exception as error:
         workload_error = error
     finally:
         if process.poll() is None:
