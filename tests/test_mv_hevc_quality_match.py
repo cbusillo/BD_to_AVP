@@ -65,6 +65,22 @@ class MVHEVCQualityMatchTests(unittest.TestCase):
         self.assertFalse(summary["all_direct_runs_meet_required_quality"])
         self.assertFalse(summary["passed"])
 
+    def test_summary_reports_same_metrics_with_different_container_hashes(self) -> None:
+        current_runs = [{"final_bytes": 100, "min_same_eye_ssim": 0.91}]
+        direct_runs = [
+            {"final_bytes": 90, "min_same_eye_ssim": 0.913, "sha256": "first"},
+            {"final_bytes": 90, "min_same_eye_ssim": 0.913, "sha256": "second"},
+        ]
+
+        summary = qualify_mv_hevc_quality_match.summarize_quality_match(
+            current_runs,
+            direct_runs,
+            required_quality_margin=0.002,
+        )
+
+        self.assertTrue(summary["passed"])
+        self.assertFalse(summary["direct_runs_byte_identical"])
+
     def test_summary_rejects_zero_sized_current_output(self) -> None:
         with self.assertRaisesRegex(ValueError, "current median size"):
             qualify_mv_hevc_quality_match.summarize_quality_match(
