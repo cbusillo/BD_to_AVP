@@ -149,6 +149,11 @@ artifacts. Default mode removes consumed intermediates after the final output
 is complete; `--keep-files` retains them. Disc/ISO inputs retain their MakeMKV
 materialization.
 
+The [direct MV-HEVC feasibility prototype](direct-mv-hevc-feasibility.md)
+demonstrates a candidate replacement for the normal MV-HEVC eye-file boundary.
+It is not yet part of this production contract; the current file-backed route
+remains authoritative until device and performance qualification completes.
+
 The reused source is user-owned. Automatic cleanup never deletes it.
 `--remove-original` is the explicit exception and removes the source only after
 the complete conversion succeeds. With `--keep-files`, the source is copied
