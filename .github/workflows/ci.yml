@@ -16,9 +16,10 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  quality:
+    name: Fast validation
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - name: Check out repo
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -31,13 +32,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: support-diagnostics/package-lock.json
-
       - name: Set up uv
         # Trusted toolchain publisher for uv; see CodeQL alert triage from 2026-07-07.
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
@@ -46,31 +40,6 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --locked --all-groups --python 3.12
-
-      - name: Rebuild bundled edge264 with release toolchain
-        env:
-          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
-        run: |
-          uv run python scripts/build_edge264_macos.py --output "$RUNNER_TEMP/edge264_test"
-          cmp bd_to_avp/bin/edge264_test "$RUNNER_TEMP/edge264_test"
-
-      - name: Install support diagnostics dependencies
-        working-directory: support-diagnostics
-        run: npm ci
-
-      - name: Validate support diagnostics service
-        working-directory: support-diagnostics
-        run: npm run check
-
-      - name: Validate support diagnostics deployment config
-        working-directory: support-diagnostics
-        run: npm run deploy:dry-run
-
-      - name: Install direct SSIF prototype dependencies
-        run: brew install libbluray libudfread pkgconf
-
-      - name: Build direct SSIF prototype
-        run: uv run python scripts/build_ssif_probe_macos.py
 
       - name: Validate committed release metadata
         run: uv run python -m scripts.release validate
@@ -89,12 +58,6 @@ jobs:
 
       - name: Unit smoke tests
         run: uv run python -m unittest discover -s tests -t .
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
-
-      - name: macOS app tests
-        run: uv run python scripts/native_app.py test
 
       - name: Import smoke
         run: >-
@@ -116,6 +79,97 @@ jobs:
           fi
           grep -F 'bd_to_avp[gui]' <<< "$OUTPUT"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: support-diagnostics/package-lock.json
+
+      - name: Install support diagnostics dependencies
+        working-directory: support-diagnostics
+        run: npm ci
+
+      - name: Validate support diagnostics service
+        working-directory: support-diagnostics
+        run: npm run check
+
+      - name: Validate support diagnostics deployment config
+        working-directory: support-diagnostics
+        run: npm run deploy:dry-run
+
+  native:
+    name: Native validation
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        # Trusted toolchain publisher for uv; see CodeQL alert triage from 2026-07-07.
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --all-groups --python 3.12
+
+      - name: Rebuild bundled edge264 with release toolchain
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+        run: |
+          uv run python scripts/build_edge264_macos.py --output "$RUNNER_TEMP/edge264_test"
+          cmp bd_to_avp/bin/edge264_test "$RUNNER_TEMP/edge264_test"
+
+      - name: Install direct SSIF prototype dependencies
+        run: brew install libbluray libudfread pkgconf
+
+      - name: Build direct SSIF prototype
+        run: uv run python scripts/build_ssif_probe_macos.py
+
+      - name: Validate direct SSIF prototype behavior
+        run: uv run python -m unittest tests.test_ssif_probe
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: macOS app tests
+        run: uv run python scripts/native_app.py test
+
+  package:
+    name: Package validation
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        # Trusted toolchain publisher for uv; see CodeQL alert triage from 2026-07-07.
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --all-groups --python 3.12
+
       - name: Build Python package
         run: uv build
 
@@ -127,3 +181,28 @@ jobs:
 
       - name: Verify bundled tools and deployment targets
         run: uv run python scripts/verify_app_tools.py
+
+  validate:
+    name: validate
+    if: ${{ always() }}
+    needs:
+      - quality
+      - native
+      - package
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require successful validation lanes
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          NATIVE_RESULT: ${{ needs.native.result }}
+          PACKAGE_RESULT: ${{ needs.package.result }}
+        run: |
+          printf 'quality=%s\nnative=%s\npackage=%s\n' \
+            "$QUALITY_RESULT" "$NATIVE_RESULT" "$PACKAGE_RESULT"
+          if [ "$QUALITY_RESULT" != success ] \
+            || [ "$NATIVE_RESULT" != success ] \
+            || [ "$PACKAGE_RESULT" != success ]; then
+            echo "One or more required validation lanes did not succeed." >&2
+            exit 1
+          fi

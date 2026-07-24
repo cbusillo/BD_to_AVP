@@ -70,10 +70,11 @@ The initial main-only Sparkle migration used `0.2.143rc4` build `144` and
 `0.2.143` build `146` follows only after that smoke passes. Future releases
 must continue increasing `CFBundleVersion` from this sequence.
 
-Review and commit all resulting changes. CI runs
-`scripts/release.py validate`, the unit suite, Python package builds, and the
-Briefcase create/build smoke. Do not dispatch a release from an unmerged branch
-or from a stale main commit.
+Review and commit all resulting changes. CI runs three independent GitHub-hosted
+macOS lanes for fast validation, native toolchain tests, and package/Briefcase
+smoke work. A final GitHub-hosted `validate` job succeeds only when all three
+lanes succeed, preserving one stable required-check contract. Do not dispatch a
+release from an unmerged branch or from a stale main commit.
 
 ## Release Orchestration
 

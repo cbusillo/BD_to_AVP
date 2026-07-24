@@ -33,11 +33,123 @@ def load_release_engine() -> dict:
 class ReleaseWorkflowTests(unittest.TestCase):
     def test_ci_fetches_full_history_for_recovery_provenance(self) -> None:
         workflow = load_workflow("ci.yml")
-        checkout = workflow["jobs"]["validate"]["steps"][0]
+        for job_name in ("quality", "native", "package"):
+            with self.subTest(job=job_name):
+                checkout = workflow["jobs"][job_name]["steps"][0]
+                self.assertEqual(
+                    checkout["uses"],
+                    "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+                )
+                self.assertEqual(checkout["with"]["fetch-depth"], "0")
+                self.assertEqual(checkout["with"]["persist-credentials"], "false")
 
-        self.assertEqual(checkout["uses"], "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0")
-        self.assertEqual(checkout["with"]["fetch-depth"], "0")
-        self.assertEqual(checkout["with"]["persist-credentials"], "false")
+    def test_ci_parallelizes_validation_behind_stable_required_check(self) -> None:
+        workflow = load_workflow("ci.yml")
+        jobs = workflow["jobs"]
+
+        self.assertEqual(set(jobs), {"quality", "native", "package", "validate"})
+        for job_name in ("quality", "native", "package"):
+            self.assertEqual(jobs[job_name]["runs-on"], "macos-26")
+        aggregate = jobs["validate"]
+        self.assertEqual(aggregate["name"], "validate")
+        self.assertEqual(aggregate["runs-on"], "ubuntu-latest")
+        self.assertEqual(aggregate["if"], "${{ always() }}")
+        self.assertEqual(set(aggregate["needs"]), {"quality", "native", "package"})
+        self.assertEqual(
+            aggregate["steps"][0]["env"],
+            {
+                "QUALITY_RESULT": "${{ needs.quality.result }}",
+                "NATIVE_RESULT": "${{ needs.native.result }}",
+                "PACKAGE_RESULT": "${{ needs.package.result }}",
+            },
+        )
+        self.assertNotIn("self-hosted", str(workflow))
+        self.assertEqual(workflow["permissions"], {"contents": "read"})
+        self.assertEqual(
+            workflow["concurrency"]["cancel-in-progress"],
+            "${{ github.event_name == 'pull_request' }}",
+        )
+
+        aggregate_script = aggregate["steps"][0]["run"]
+        success = subprocess.run(
+            ["bash", "-e", "-o", "pipefail", "-c", aggregate_script],
+            env={
+                **os.environ,
+                "QUALITY_RESULT": "success",
+                "NATIVE_RESULT": "success",
+                "PACKAGE_RESULT": "success",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(success.returncode, 0, success.stderr)
+        for failed_lane, failed_result in (
+            ("QUALITY_RESULT", "failure"),
+            ("NATIVE_RESULT", "cancelled"),
+            ("PACKAGE_RESULT", "skipped"),
+        ):
+            with self.subTest(failed_lane=failed_lane, failed_result=failed_result):
+                environment = {
+                    **os.environ,
+                    "QUALITY_RESULT": "success",
+                    "NATIVE_RESULT": "success",
+                    "PACKAGE_RESULT": "success",
+                    failed_lane: failed_result,
+                }
+                failure = subprocess.run(
+                    ["bash", "-e", "-o", "pipefail", "-c", aggregate_script],
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(failure.returncode, 0)
+                self.assertIn("did not succeed", failure.stderr)
+
+        expected_steps = {
+            "quality": {
+                "Validate committed release metadata",
+                "Validate observability migration",
+                "Check formatting",
+                "Lint",
+                "Type check",
+                "Unit smoke tests",
+                "Import smoke",
+                "CLI-only install smoke",
+                "Install support diagnostics dependencies",
+                "Validate support diagnostics service",
+                "Validate support diagnostics deployment config",
+            },
+            "native": {
+                "Rebuild bundled edge264 with release toolchain",
+                "Install direct SSIF prototype dependencies",
+                "Build direct SSIF prototype",
+                "Validate direct SSIF prototype behavior",
+                "Install XcodeGen",
+                "macOS app tests",
+            },
+            "package": {
+                "Build Python package",
+                "Briefcase create smoke",
+                "Briefcase build smoke",
+                "Verify bundled tools and deployment targets",
+            },
+        }
+        for job_name, step_names in expected_steps.items():
+            with self.subTest(job=job_name):
+                actual_names = {step["name"] for step in jobs[job_name]["steps"]}
+                self.assertTrue(step_names.issubset(actual_names))
+
+        native_step_names = [step["name"] for step in jobs["native"]["steps"]]
+        self.assertLess(
+            native_step_names.index("Install direct SSIF prototype dependencies"),
+            native_step_names.index("Validate direct SSIF prototype behavior"),
+        )
+        self.assertLess(
+            native_step_names.index("Build direct SSIF prototype"),
+            native_step_names.index("Validate direct SSIF prototype behavior"),
+        )
 
     def test_sparkle_bundle_uses_importable_module_entrypoint(self) -> None:
         workflow = load_release_engine()
@@ -949,7 +1061,7 @@ printf '%s' "$CODESIGN_METADATA"
             self.assertEqual(checkout["with"]["persist-credentials"], "false")
 
     def test_release_actions_are_pinned_to_commit_shas(self) -> None:
-        for workflow_name in ("briefcase.yml", "release-engine.yml", "sparkle-pages.yml"):
+        for workflow_name in ("briefcase.yml", "ci.yml", "release-engine.yml", "sparkle-pages.yml"):
             workflow = load_workflow(workflow_name)
             action_uses = [
                 step["uses"]
