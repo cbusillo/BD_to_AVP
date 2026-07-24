@@ -34,6 +34,7 @@ private struct EncoderOptions {
     let baselineMillimeters: Double?
     let disparityAdjustment: Double
     let expectedFrameCount: Int?
+    let upscaleMode: FrameUpscaleMode?
     let swapEyes: Bool
     let overwrite: Bool
 
@@ -46,6 +47,7 @@ private struct EncoderOptions {
         var baselineMillimeters: Double?
         var disparityAdjustment = 0.0
         var expectedFrameCount: Int?
+        var upscaleMode: FrameUpscaleMode?
         var swapEyes = false
         var overwrite = false
 
@@ -68,6 +70,14 @@ private struct EncoderOptions {
                 disparityAdjustment = try doubleValue(after: argument, arguments: arguments, index: &index)
             case "--expected-frames":
                 expectedFrameCount = try integerValue(after: argument, arguments: arguments, index: &index)
+            case "--upscale-mode":
+                let rawMode = try value(after: argument, arguments: arguments, index: &index)
+                guard let parsedMode = FrameUpscaleMode(rawValue: rawMode) else {
+                    throw EncoderFailure.invalidArguments(
+                        "--upscale-mode must be metalfx or pixel-transfer."
+                    )
+                }
+                upscaleMode = parsedMode
             case "--swap-eyes":
                 swapEyes = true
             case "--overwrite":
@@ -116,6 +126,7 @@ private struct EncoderOptions {
             baselineMillimeters: baselineMillimeters,
             disparityAdjustment: disparityAdjustment,
             expectedFrameCount: expectedFrameCount,
+            upscaleMode: upscaleMode,
             swapEyes: swapEyes,
             overwrite: overwrite
         )
@@ -171,6 +182,7 @@ private struct EncoderOptions {
               --baseline-mm VALUE             Optional constant camera baseline.
               --disparity-adjustment VALUE    Fraction of image width, -1 through 1 (default: 0).
               --expected-frames COUNT         Fail unless exactly this many frames are received.
+              --upscale-mode MODE             Prototype 2x scaler: metalfx or pixel-transfer.
               --swap-eyes                     Treat the right half as the left eye.
               --overwrite                     Replace an existing output file.
               --capability-probe              Report stereo MV-HEVC encode support and exit.
@@ -400,11 +412,17 @@ private func makeCompressionProperties(options: EncoderOptions, header: Y4MHeade
     return properties
 }
 
+private func outputEyeDimensions(options: EncoderOptions, header: Y4MHeader) -> (width: Int, height: Int) {
+    let multiplier = options.upscaleMode == nil ? 1 : 2
+    return (header.eyeWidth * multiplier, header.frameHeight * multiplier)
+}
+
 private func makeOutputSettings(options: EncoderOptions, header: Y4MHeader) throws -> [String: Any] {
-    [
+    let outputDimensions = outputEyeDimensions(options: options, header: header)
+    return [
         AVVideoCodecKey: AVVideoCodecType.hevc,
-        AVVideoWidthKey: header.eyeWidth,
-        AVVideoHeightKey: header.frameHeight,
+        AVVideoWidthKey: outputDimensions.width,
+        AVVideoHeightKey: outputDimensions.height,
         AVVideoCompressionPropertiesKey: try makeCompressionProperties(options: options, header: header),
         AVVideoColorPropertiesKey: [
             AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
@@ -414,7 +432,9 @@ private func makeOutputSettings(options: EncoderOptions, header: Y4MHeader) thro
     ]
 }
 
-private func isStereoMVHEVCOutputConfigurationSupported() throws -> Bool {
+private func isStereoMVHEVCOutputConfigurationSupported(
+    upscaleMode: FrameUpscaleMode? = nil
+) throws -> Bool {
     guard VTIsStereoMVHEVCEncodeSupported() else {
         return false
     }
@@ -438,6 +458,7 @@ private func isStereoMVHEVCOutputConfigurationSupported() throws -> Bool {
             baselineMillimeters: nil,
             disparityAdjustment: 0.0,
             expectedFrameCount: nil,
+            upscaleMode: upscaleMode,
             swapEyes: false,
             overwrite: true
         )
@@ -525,14 +546,20 @@ private func fillPixelBuffer(
 private func makePixelBuffer(
     header: Y4MHeader,
     frame: Data,
-    eyeIndex: Int
+    eyeIndex: Int,
+    sourcePool: SourcePixelBufferPool?
 ) throws -> CVReadOnlyPixelBuffer {
-    var attributes = CVPixelBufferCreationAttributes(
-        pixelFormatType: CVPixelFormatType(rawValue: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
-        size: CVImageSize(width: header.eyeWidth, height: header.frameHeight)
-    )
-    attributes.backing = .ioSurface
-    var pixelBuffer = try CVMutablePixelBuffer(attributes)
+    var pixelBuffer: CVMutablePixelBuffer
+    if let sourcePool {
+        pixelBuffer = try sourcePool.makePixelBuffer()
+    } else {
+        var attributes = CVPixelBufferCreationAttributes(
+            pixelFormatType: CVPixelFormatType(rawValue: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+            size: CVImageSize(width: header.eyeWidth, height: header.frameHeight)
+        )
+        attributes.backing = .ioSurface
+        pixelBuffer = try CVMutablePixelBuffer(attributes)
+    }
     try fillPixelBuffer(&pixelBuffer, header: header, frame: frame, eyeIndex: eyeIndex)
     return CVReadOnlyPixelBuffer(pixelBuffer)
 }
@@ -540,13 +567,36 @@ private func makePixelBuffer(
 private func makeTaggedBuffers(
     header: Y4MHeader,
     frame: Data,
-    swapEyes: Bool
+    swapEyes: Bool,
+    sourcePool: SourcePixelBufferPool?,
+    upscaler: StereoFrameUpscaler?,
+    cancellationFlag: CancellationFlag
 ) throws -> [CMTaggedDynamicBuffer] {
     let sourceIndices = swapEyes ? [1, 0] : [0, 1]
     let eyes: [CMStereoViewComponents] = [.leftEye, .rightEye]
-    return try zip(videoLayerIDs, zip(eyes, sourceIndices)).map { layerID, eyeAndIndex in
-        let (eye, sourceIndex) = eyeAndIndex
-        let pixelBuffer = try makePixelBuffer(header: header, frame: frame, eyeIndex: sourceIndex)
+    let sourceBuffers = try sourceIndices.map {
+        try makePixelBuffer(
+            header: header,
+            frame: frame,
+            eyeIndex: $0,
+            sourcePool: sourcePool
+        )
+    }
+    let outputBuffers: [CVReadOnlyPixelBuffer]
+    if let upscaler {
+        do {
+            outputBuffers = try upscaler.upscale(
+                sourceBuffers,
+                isCancellationRequested: { cancellationFlag.isRequested }
+            )
+        } catch FrameUpscalerFailure.cancelled {
+            throw EncoderFailure.cancelled
+        }
+    } else {
+        outputBuffers = sourceBuffers
+    }
+    return zip(videoLayerIDs, zip(eyes, outputBuffers)).map { layerID, eyeAndBuffer in
+        let (eye, pixelBuffer) = eyeAndBuffer
         return CMTaggedDynamicBuffer(
             tags: [.videoLayerID(Int64(layerID)), .stereoView(eye)],
             content: pixelBuffer
@@ -566,7 +616,10 @@ private func emitStatus(_ values: [String: Any]) {
     try? FileHandle.standardError.write(contentsOf: data)
 }
 
-private func encode(options: EncoderOptions, cancellationFlag: CancellationFlag) async throws -> (Y4MHeader, Int) {
+private func encode(
+    options: EncoderOptions,
+    cancellationFlag: CancellationFlag
+) async throws -> (Y4MHeader, Int, FrameUpscaleMetrics?) {
     guard VTIsStereoMVHEVCEncodeSupported() else {
         throw EncoderFailure.unsupported("This Mac does not report stereo MV-HEVC encode support.")
     }
@@ -601,6 +654,12 @@ private func encode(options: EncoderOptions, cancellationFlag: CancellationFlag)
         throw EncoderFailure.invalidInput("Y4M input is empty.")
     }
     let header = try Y4MHeader.parse(headerLine)
+    let sourcePool = try options.upscaleMode.map { _ in
+        try SourcePixelBufferPool(width: header.eyeWidth, height: header.frameHeight)
+    }
+    let upscaler = try options.upscaleMode.map {
+        try StereoFrameUpscaler(mode: $0, inputWidth: header.eyeWidth, inputHeight: header.frameHeight)
+    }
     let outputSettings = try makeOutputSettings(options: options, header: header)
     let writer = try AVAssetWriter(outputURL: partialURL, fileType: .mov)
     guard writer.canApply(outputSettings: outputSettings, forMediaType: .video) else {
@@ -628,7 +687,14 @@ private func encode(options: EncoderOptions, cancellationFlag: CancellationFlag)
                 )
             }
             let frame = try input.readExactly(header.frameBytes)
-            let taggedBuffers = try makeTaggedBuffers(header: header, frame: frame, swapEyes: options.swapEyes)
+            let taggedBuffers = try makeTaggedBuffers(
+                header: header,
+                frame: frame,
+                swapEyes: options.swapEyes,
+                sourcePool: sourcePool,
+                upscaler: upscaler,
+                cancellationFlag: cancellationFlag
+            )
             let presentationTime = CMTime(
                 value: CMTimeValue(frameCount) * CMTimeValue(header.frameRateDenominator),
                 timescale: CMTimeScale(header.frameRateNumerator)
@@ -679,7 +745,7 @@ private func encode(options: EncoderOptions, cancellationFlag: CancellationFlag)
             throw EncoderFailure.writer("Failed to atomically finalize the MV-HEVC output.")
         }
         completed = true
-        return (header, frameCount)
+        return (header, frameCount, upscaler?.metrics)
     } catch {
         writer.cancelWriting()
         throw error
@@ -696,10 +762,21 @@ private struct MVHEVCEncoder {
             let arguments = Array(CommandLine.arguments.dropFirst())
             if arguments == ["--capability-probe"] {
                 let supported = try isStereoMVHEVCOutputConfigurationSupported()
+                let pixelTransferUpscaleSupported = try isStereoMVHEVCOutputConfigurationSupported(
+                    upscaleMode: .pixelTransfer
+                )
+                let metalFXDeviceSupported = metalFXSpatialScalingSupported()
+                let metalFXWriterSupported = try isStereoMVHEVCOutputConfigurationSupported(
+                    upscaleMode: .metalFX
+                )
+                let metalFXUpscaleSupported = metalFXDeviceSupported && metalFXWriterSupported
                 let data = try JSONSerialization.data(
                     withJSONObject: [
+                        "metalfx_2x_mv_hevc_supported": metalFXUpscaleSupported,
                         "schema_version": 1,
                         "stereo_mv_hevc_encode_supported": supported,
+                        "metalfx_spatial_scaling_supported": metalFXDeviceSupported,
+                        "pixel_transfer_2x_mv_hevc_supported": pixelTransferUpscaleSupported,
                     ],
                     options: [.sortedKeys]
                 )
@@ -710,13 +787,13 @@ private struct MVHEVCEncoder {
                 return
             }
             let options = try EncoderOptions.parse(arguments: arguments)
-            let (header, frameCount) = try await encode(
+            let (header, frameCount, upscaleMetrics) = try await encode(
                 options: options,
                 cancellationFlag: cancellationFlag
             )
             var summary: [String: Any] = [
-                "eye_height": header.frameHeight,
-                "eye_width": header.eyeWidth,
+                "eye_height": outputEyeDimensions(options: options, header: header).height,
+                "eye_width": outputEyeDimensions(options: options, header: header).width,
                 "field_of_view_degrees": options.fieldOfViewDegrees,
                 "frame_count": frameCount,
                 "frame_rate_denominator": header.frameRateDenominator,
@@ -725,6 +802,24 @@ private struct MVHEVCEncoder {
                 "schema_version": 1,
                 "swapped_eyes": options.swapEyes,
             ]
+            if let upscaleMode = options.upscaleMode {
+                summary["input_eye_height"] = header.frameHeight
+                summary["input_eye_width"] = header.eyeWidth
+                summary["upscale_converted_input_buffer_limit_per_eye"] =
+                    FrameUpscaleContract.convertedInputBufferLimit
+                summary["upscale_output_buffer_limit_per_eye"] = FrameUpscaleContract.outputBufferLimit
+                summary["upscale_source_buffer_limit"] = FrameUpscaleContract.sourceBufferLimit
+                summary["upscale_mode"] = upscaleMode.rawValue
+            }
+            if let upscaleMetrics {
+                summary["metalfx_device_final_allocated_size_bytes"] =
+                    upscaleMetrics.metalDeviceFinalAllocatedSizeBytes
+                summary["metalfx_device_initial_allocated_size_bytes"] =
+                    upscaleMetrics.metalDeviceInitialAllocatedSizeBytes
+                summary["metalfx_device_peak_allocated_size_bytes"] =
+                    upscaleMetrics.metalDevicePeakAllocatedSizeBytes
+                summary["metalfx_device_peak_delta_bytes"] = upscaleMetrics.metalDevicePeakDeltaBytes
+            }
             if let quality = options.quality {
                 summary["quality"] = quality
                 summary["rate_control"] = "quality"

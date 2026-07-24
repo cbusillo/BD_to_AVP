@@ -296,4 +296,5 @@ uv run python -m unittest \
 The prototype is fully qualified and its runtime route is active under protocol v10. Issue #364 rejected the fixed
 Automatic bitrate; issue #366 qualifies content-adaptive quality `0.7` across the representative corpus, packaged full
 and preview routes, generated fallback, and physical Vision Pro playback. Streamed 4K upscale and live conversion
-imagery remain separate follow-up issues.
+imagery remain separate follow-up issues. The native-only issue #357 boundary is documented in
+`docs/metalfx-mv-hevc-prototype.md`; product routing remains owned by #358.
