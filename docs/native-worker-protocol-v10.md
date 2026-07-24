@@ -89,7 +89,11 @@ Protocol v9 fields such as `video_mode`, `av1_crf`, `left_right_bitrate`,
 ```
 
 An enabled request adds `quality` from 0 through 100. AV1 rejects enabled
-upscaling. MV-HEVC upscaling selects the generated/file-backed route.
+upscaling. Eligible automatic MV-HEVC jobs use the native 2× MetalFX path;
+`quality` remains the file-based FX Upscale setting when preflight selects the
+generated fallback. Automatic crop, incompatible resolution overrides,
+reusable intermediates, software HEVC, and stage-4/5 restarts retain the
+generated/file-backed route.
 
 ## Route Resolution
 
@@ -106,10 +110,13 @@ preflight, and execution.
 | MV-HEVC stage 4 or 5 restart | `generated_mv_hevc` |
 | Reusable intermediates | `generated_mv_hevc` |
 | Software HEVC | `generated_mv_hevc` |
-| FX upscale | `generated_mv_hevc` |
+| FX upscale with automatic crop | `generated_mv_hevc` |
+| FX upscale with a resolution other than source/1920×1080 | `generated_mv_hevc` |
 | FOV outside the direct helper's 1° through 180° range | `generated_mv_hevc` |
 | Eligible automatic MV-HEVC with supported helper | `direct_mv_hevc` |
+| Eligible 1080p automatic MV-HEVC upscale with supported MetalFX helper | `direct_mv_hevc` |
 | Eligible automatic MV-HEVC with missing or valid unavailable helper | `generated_mv_hevc` |
+| Eligible upscale with unavailable direct MetalFX capability | `generated_mv_hevc` |
 
 Capability-unavailable fallback uses automatic generated settings: 20 Mbps per
 eye and merge quality 75. It never applies inactive generated custom values
@@ -142,9 +149,12 @@ the conversion result and preview artifact:
 Automatic direct reports `rate_control: "quality"` and `quality: 0.7`; Custom
 direct reports `rate_control: "average_bitrate"` and the exact
 `bitrate_mbps`. Generated reports `eye_bitrate_mbps` and `merge_quality`; AV1
-reports `crf`; existing-artifact reports have no encode controls. Preview child
-jobs resolve capability before their duration inspection and use the same
-resolver and fallback report as full conversions.
+reports `crf`; existing-artifact reports have no encode controls. Direct 4K
+also reports `upscale_mode: "metalfx"`. The optional field preserves decoding
+compatibility with earlier protocol-v10 workers. Preview child jobs resolve
+capability before their duration inspection and use the same resolver and
+fallback report as full conversions. This is the existing finalized-preview
+workflow, not a live processed-frame preview channel.
 
 ## Direct Stage Contract
 
@@ -155,10 +165,12 @@ Direct MV-HEVC executes during existing stage 4,
 optional source FFmpeg -> edge264_test -> FFmpeg geometry normalizer -> mv-hevc-encoder
 ```
 
-It writes the existing `<name>_MV-HEVC.mov` artifact and omits stage 5,
-`combine_to_mv_hevc`. Generated MV-HEVC retains both existing eye filenames and
-stage 5. Stage numbers, restart boundaries, later audio/subtitle muxing, and
-final filenames remain unchanged. Final AAC preparation normalizes source
+Ordinary direct jobs write `<name>_MV-HEVC.mov` and omit stage 5,
+`combine_to_mv_hevc`. Eligible direct 4K jobs pass `--upscale-mode metalfx`,
+write `<name>_MV-HEVC Upscaled.mov` during stage 4, and omit both stage 5 and
+stage 6. Generated MV-HEVC retains both existing eye filenames, stage 5, and
+the file-backed stage-6 upscale. Stage numbers, restart boundaries, later
+audio/subtitle muxing, and final filenames remain unchanged. Final AAC preparation normalizes source
 `5.1(side)` to standard `5.1` before encoding because Program Config Element
 AAC is not exposed as an audio track by AVFoundation; `5.1(side)` is therefore
 not eligible for Automatic AAC copy.

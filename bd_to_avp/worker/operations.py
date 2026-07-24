@@ -36,6 +36,7 @@ from bd_to_avp.worker.protocol import (
     JobSource,
     JobSpec,
     SubtitleMode,
+    VideoRouteIntent,
     WorkerActivityReporter,
     WorkerOperation,
     WorkerSourceKind,
@@ -533,8 +534,14 @@ def resolve_job_video_route(
 def report_video_route(activity: WorkerActivityReporter, video_route: ResolvedVideoRoute) -> None:
     report = video_route.report()
     if video_route.fallback_reason is not None:
+        message = (
+            "Direct 4K MetalFX MV-HEVC is unavailable on this Mac. "
+            "Continuing with the generated file-backed upscale route."
+            if video_route.intent is VideoRouteIntent.AUTOMATIC and video_route.fallback_reason.startswith("metalfx_")
+            else "Direct MV-HEVC is unavailable on this Mac. Continuing with generated MV-HEVC."
+        )
         activity.warning(
-            "Direct MV-HEVC is unavailable on this Mac. Continuing with generated MV-HEVC.",
+            message,
             stage="configure",
             code="video_route_fallback",
             video_route=report,
@@ -549,6 +556,8 @@ def report_video_route(activity: WorkerActivityReporter, video_route: ResolvedVi
 
 
 def route_message(video_route: ResolvedVideoRoute) -> str:
+    if video_route.uses_in_process_upscale:
+        return "Using direct 4K MetalFX MV-HEVC encoding."
     messages = {
         VideoRouteKind.DIRECT_MV_HEVC: "Using direct MV-HEVC encoding.",
         VideoRouteKind.GENERATED_MV_HEVC: "Using generated MV-HEVC encoding.",

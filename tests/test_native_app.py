@@ -793,7 +793,12 @@ Load command 3
             completed = subprocess.CompletedProcess(
                 args=[],
                 returncode=0,
-                stdout='{"schema_version":1,"stereo_mv_hevc_encode_supported":true}\n',
+                stdout=(
+                    '{"metalfx_2x_mv_hevc_supported":true,'
+                    '"metalfx_spatial_scaling_supported":true,'
+                    '"pixel_transfer_2x_mv_hevc_supported":true,'
+                    '"schema_version":1,"stereo_mv_hevc_encode_supported":true}\n'
+                ),
                 stderr="",
             )
             with (
@@ -831,6 +836,24 @@ Load command 3
             smoke_packaged_mv_hevc_encoder(Path("/tmp") / NATIVE_APP_NAME)
 
         print_mock.assert_called_once_with("Packaged MV-HEVC encoder is valid but unavailable on this build host.")
+
+    def test_mv_hevc_encoder_smoke_rejects_contradictory_extended_capability_result(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                '{"metalfx_2x_mv_hevc_supported":true,'
+                '"metalfx_spatial_scaling_supported":false,'
+                '"schema_version":1,"stereo_mv_hevc_encode_supported":true}\n'
+            ),
+            stderr="",
+        )
+        with (
+            patch("scripts.native_app.smoke_environment", return_value={}),
+            patch("scripts.native_app.subprocess.run", return_value=completed),
+            self.assertRaisesRegex(RuntimeError, "capability probe failed"),
+        ):
+            smoke_packaged_mv_hevc_encoder(Path("/tmp") / NATIVE_APP_NAME)
 
     def test_rejects_wrong_job_or_result(self) -> None:
         events: list[object] = [

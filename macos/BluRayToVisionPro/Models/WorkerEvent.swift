@@ -12,6 +12,7 @@ struct VideoRouteReport: Decodable, Equatable {
     let fallbackTiming: String?
     let rateControl: String?
     let quality: Double?
+    let upscaleMode: String?
 
     init(
         intent: String,
@@ -24,7 +25,8 @@ struct VideoRouteReport: Decodable, Equatable {
         fallbackReason: String?,
         fallbackTiming: String?,
         rateControl: String? = nil,
-        quality: Double? = nil
+        quality: Double? = nil,
+        upscaleMode: String? = nil
     ) {
         self.intent = intent
         self.selected = selected
@@ -37,6 +39,7 @@ struct VideoRouteReport: Decodable, Equatable {
         self.fallbackTiming = fallbackTiming
         self.rateControl = rateControl
         self.quality = quality
+        self.upscaleMode = upscaleMode
     }
 
     enum CodingKeys: String, CodingKey {
@@ -51,6 +54,7 @@ struct VideoRouteReport: Decodable, Equatable {
         case fallbackTiming = "fallback_timing"
         case rateControl = "rate_control"
         case quality
+        case upscaleMode = "upscale_mode"
     }
 }
 

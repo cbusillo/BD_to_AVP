@@ -77,7 +77,11 @@ def get_required_dependency_binaries_for_current_job(
         required_paths.append(config.SPATIAL_MEDIA_PATH)
     if config.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
         required_paths.append(config.MP4BOX_PATH)
-    if config.fx_upscale and config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
+    if (
+        config.fx_upscale
+        and not video_route.uses_in_process_upscale
+        and config.start_stage.value <= Stage.UPSCALE_VIDEO.value
+    ):
         required_paths.append(config.FX_UPSCALE_PATH)
 
     return dedupe_paths(required_paths)

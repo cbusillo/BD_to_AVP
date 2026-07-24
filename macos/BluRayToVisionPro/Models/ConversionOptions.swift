@@ -575,8 +575,7 @@ extension BuiltInProfile {
                 ),
                 upscaleEnabled: true,
                 upscaleQuality: 80,
-                fieldOfView: 90,
-                resolutionOverride: "3840x2160"
+                fieldOfView: 90
             )
         }
     }

@@ -21,7 +21,7 @@ from bd_to_avp.modules.disc import DiscInfo, DiscTitleInfo, MKVCreationError
 from bd_to_avp.modules.process import process_each
 from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.modules.video_mode import VideoMode
-from bd_to_avp.modules.video_route import DirectMVHEVCCapability
+from bd_to_avp.modules.video_route import DirectMVHEVCCapability, VideoRouteIntent
 from bd_to_avp.observability import ObservabilityEmitter
 from bd_to_avp.process_runner import ChildProcessRunner, ProcessCancelled, ProcessSpec
 from bd_to_avp.runtime import ObservabilityStream
@@ -278,6 +278,26 @@ class JobSpecTests(unittest.TestCase):
 
         with self.assertRaisesRegex(WorkerProtocolError, "does not support AI FX upscale"):
             JobSpec.from_json_line(json.dumps(request))
+
+    def test_accepts_automatic_mv_hevc_with_direct_metalfx_upscale(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["upscale"] = {"enabled": True, "quality": 75}
+
+        job = JobSpec.from_json_line(json.dumps(request))
+
+        self.assertTrue(job.encoding.upscale.enabled if job.encoding else False)
+        self.assertEqual(job.encoding.video.route_intent if job.encoding else None, VideoRouteIntent.AUTOMATIC)
+
+    def test_rejects_direct_metalfx_upscale_with_incompatible_geometry(self) -> None:
+        cases = (("crop_black_bars", True), ("resolution", "3840x2160"))
+        for key, value in cases:
+            with self.subTest(key=key):
+                request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+                request["encoding"]["upscale"] = {"enabled": True, "quality": 75}
+                request["encoding"][key] = value
+
+                with self.assertRaisesRegex(WorkerProtocolError, "requires the generated MV-HEVC route"):
+                    JobSpec.from_json_line(json.dumps(request))
 
     def test_rejects_av1_export_with_resolution_override(self) -> None:
         request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
@@ -1563,6 +1583,7 @@ class SourceConversionTests(unittest.TestCase):
             final_path.write_bytes(b"final")
             request = json.loads(preview_request_line(source_path, destination_path))
             request["encoding"]["audio"]["preferred_language"] = "jpn"
+            request["encoding"]["upscale"] = {"enabled": True, "quality": 75}
             job = JobSpec.from_json_line(json.dumps(request) + "\n")
             output = io.StringIO()
             activity = WorkerActivityReporter(WorkerEventEmitter(output, job.job_id))
@@ -1581,7 +1602,11 @@ class SourceConversionTests(unittest.TestCase):
                 patch.object(config, "configure_tool_environment"),
                 patch(
                     "bd_to_avp.modules.video_route.probe_direct_mv_hevc_capability",
-                    return_value=DirectMVHEVCCapability(True, "direct_capability_supported"),
+                    return_value=DirectMVHEVCCapability(
+                        True,
+                        "direct_capability_supported",
+                        metalfx_2x_mv_hevc_supported=True,
+                    ),
                 ),
                 patch("bd_to_avp.modules.process.process_each", side_effect=process_each),
             ):
@@ -1596,6 +1621,7 @@ class SourceConversionTests(unittest.TestCase):
             events = decoded_events(output)
             self.assertEqual(events[0]["type"], "log")
             self.assertEqual(events[0]["payload"]["video_route"]["selected"], "direct_mv_hevc")
+            self.assertEqual(events[0]["payload"]["video_route"]["upscale_mode"], "metalfx")
             inspect_event = next(event for event in events if event["type"] == "stage.started")
             self.assertEqual(inspect_event["payload"]["stage"], "inspect_source")
             self.assertEqual(events[-1]["type"], "artifact.ready")
@@ -1617,15 +1643,19 @@ class SourceConversionTests(unittest.TestCase):
             preview_output.parent.mkdir()
             full_output.write_bytes(b"full")
             preview_output.write_bytes(b"preview")
-            full_job = JobSpec.from_json_line(conversion_request_line(source_path, full_destination))
-            preview_job = JobSpec.from_json_line(preview_request_line(source_path, preview_destination))
+            full_request = json.loads(conversion_request_line(source_path, full_destination))
+            preview_request = json.loads(preview_request_line(source_path, preview_destination))
+            full_request["encoding"]["upscale"] = {"enabled": True, "quality": 75}
+            preview_request["encoding"]["upscale"] = {"enabled": True, "quality": 75}
+            full_job = JobSpec.from_json_line(json.dumps(full_request))
+            preview_job = JobSpec.from_json_line(json.dumps(preview_request))
             full_events = io.StringIO()
             preview_events = io.StringIO()
             order: list[str] = []
 
             def capability_probe(*_args: object, **_kwargs: object) -> DirectMVHEVCCapability:
                 order.append("probe")
-                return DirectMVHEVCCapability(False, "stereo_mv_hevc_encode_unavailable")
+                return DirectMVHEVCCapability(True, "direct_capability_supported")
 
             def inspect(*_args: object, **_kwargs: object) -> dict[str, object]:
                 order.append("inspect")
@@ -1651,10 +1681,12 @@ class SourceConversionTests(unittest.TestCase):
             self.assertEqual(full_result["video_route"], preview_result["video_route"])
             self.assertEqual(full_result["video_route"]["selected"], "generated_mv_hevc")
             self.assertEqual(full_result["video_route"]["fallback_timing"], "pre_input")
+            self.assertEqual(full_result["video_route"]["fallback_reason"], "metalfx_2x_mv_hevc_unavailable")
             self.assertEqual(order, ["probe", "probe", "inspect"])
             for events in (decoded_events(full_events), decoded_events(preview_events)):
                 fallback = next(event for event in events if event["payload"].get("code") == "video_route_fallback")
                 self.assertEqual(fallback["type"], "warning")
+                self.assertIn("generated file-backed upscale route", fallback["payload"]["message"])
                 self.assertEqual(fallback["payload"]["video_route"], full_result["video_route"])
 
     def test_iso_preview_preserves_selected_title_id_through_artifact(self) -> None:

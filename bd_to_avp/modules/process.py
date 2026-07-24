@@ -132,7 +132,11 @@ def conversion_stage_plan(video_route: ResolvedVideoRoute | None = None) -> tupl
             stages.append("finalize_av1_stereo")
         elif video_route.selected is not VideoRouteKind.DIRECT_MV_HEVC:
             stages.append("combine_to_mv_hevc")
-    if config.fx_upscale and config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
+    if (
+        config.fx_upscale
+        and not video_route.uses_in_process_upscale
+        and config.start_stage.value <= Stage.UPSCALE_VIDEO.value
+    ):
         stages.append("upscale_video")
     if config.audio_mode.prepares_m4a and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
         stages.append("transcode_audio")
@@ -401,7 +405,12 @@ def process_each(
         )
     elif video_route.selected is VideoRouteKind.DIRECT_MV_HEVC:
         if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
-            activity.stage_started("create_left_right_files", "Encoding direct MV-HEVC video")
+            message = (
+                "Encoding direct 4K MetalFX MV-HEVC video"
+                if video_route.uses_in_process_upscale
+                else "Encoding direct MV-HEVC video"
+            )
+            activity.stage_started("create_left_right_files", message)
         video_path = create_direct_mv_hevc_file(
             disc_info,
             output_folder,
@@ -409,6 +418,7 @@ def process_each(
             crop_params,
             video_route.direct_bitrate_mbps,
             video_route.direct_quality,
+            video_route.direct_upscale_mode.value if video_route.direct_upscale_mode is not None else None,
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("create_left_right_files"),
@@ -438,14 +448,15 @@ def process_each(
             observability_context=stage_observability_context("combine_to_mv_hevc"),
         )
     raise_if_cancelled(cancellation_event)
-    if activity and config.fx_upscale and config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
-        activity.stage_started("upscale_video", "Upscaling video")
-    video_path = create_upscaled_file(
-        video_path,
-        run_context=run_context,
-        cancellation_event=cancellation_event,
-        observability_context=stage_observability_context("upscale_video"),
-    )
+    if not video_route.uses_in_process_upscale:
+        if activity and config.fx_upscale and config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
+            activity.stage_started("upscale_video", "Upscaling video")
+        video_path = create_upscaled_file(
+            video_path,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=stage_observability_context("upscale_video"),
+        )
 
     raise_if_cancelled(cancellation_event)
     if activity and config.audio_mode.prepares_m4a and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
