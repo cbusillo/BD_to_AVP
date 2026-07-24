@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "corpus_id": "direct-mv-hevc-prerelease-v1",
+  "required_coverage": [
+    "real_mvc",
+    "motion",
+    "grain",
+    "dark",
+    "animation",
+    "crop",
+    "disparity",
+    "frame_rate_override",
+    "bit_depth_8"
+  ],
+  "source_bit_depth_policy": {
+    "supported": [8],
+    "rejected": [10, 12]
+  },
+  "cases": [
+    {
+      "id": "production-dark",
+      "tags": ["real_mvc", "dark", "disparity", "bit_depth_8"],
+      "source": {
+        "kind": "mvc_container",
+        "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+        "start_seconds": 300,
+        "duration_seconds": 4
+      },
+      "eye_width": 1920,
+      "eye_height": 1080,
+      "frame_rate": "24000/1001"
+    },
+    {
+      "id": "production-grain-rain",
+      "tags": ["real_mvc", "grain", "motion", "bit_depth_8"],
+      "source": {
+        "kind": "mvc_container",
+        "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+        "start_seconds": 1200,
+        "duration_seconds": 4
+      },
+      "eye_width": 1920,
+      "eye_height": 1080,
+      "frame_rate": "24000/1001"
+    },
+    {
+      "id": "production-snow-detail",
+      "tags": ["real_mvc", "grain", "motion", "bit_depth_8"],
+      "source": {
+        "kind": "mvc_container",
+        "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+        "start_seconds": 1800,
+        "duration_seconds": 4
+      },
+      "eye_width": 1920,
+      "eye_height": 1080,
+      "frame_rate": "24000/1001"
+    },
+    {
+      "id": "production-motion",
+      "tags": ["real_mvc", "motion", "disparity", "bit_depth_8"],
+      "source": {
+        "kind": "mvc_container",
+        "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+        "start_seconds": 4500,
+        "duration_seconds": 4
+      },
+      "eye_width": 1920,
+      "eye_height": 1080,
+      "frame_rate": "24000/1001"
+    },
+    {
+      "id": "production-crop",
+      "tags": ["real_mvc", "crop", "disparity", "bit_depth_8"],
+      "source": {
+        "kind": "mvc_container",
+        "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+        "start_seconds": 1500,
+        "duration_seconds": 4
+      },
+      "eye_width": 1920,
+      "eye_height": 1080,
+      "frame_rate": "24000/1001",
+      "transforms": {
+        "crop": [1920, 800, 0, 140]
+      }
+    },
+    {
+      "id": "production-rate-override",
+      "tags": ["real_mvc", "motion", "frame_rate_override", "bit_depth_8"],
+      "source": {
+        "kind": "mvc_container",
+        "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+        "start_seconds": 4200,
+        "duration_seconds": 4
+      },
+      "eye_width": 1920,
+      "eye_height": 1080,
+      "frame_rate": "24000/1001",
+      "transforms": {
+        "frame_rate": "30"
+      }
+    },
+    {
+      "id": "itu-mvcds-2",
+      "tags": ["real_mvc", "motion", "public_conformance", "bit_depth_8"],
+      "source": {
+        "kind": "mvc_annex_b",
+        "path_env": "BD_TO_AVP_ITU_MVC_VECTOR"
+      },
+      "eye_width": 640,
+      "eye_height": 480,
+      "frame_rate": "24000/1001",
+      "quality_gate": false
+    },
+    {
+      "id": "synthetic-animation",
+      "tags": ["animation", "disparity", "synthetic_control", "bit_depth_8"],
+      "source": {
+        "kind": "synthetic",
+        "duration_seconds": 4,
+        "filter": "testsrc2=size=656x360:rate=24,split=2[left_source][right_source];[left_source]crop=640:360:0:0[left];[right_source]crop=640:360:16:0[right];[left][right]hstack=inputs=2,format=yuv420p"
+      },
+      "eye_width": 640,
+      "eye_height": 360,
+      "frame_rate": "24",
+      "minimum_eye_order_margin": 0.15
+    }
+  ]
+}
