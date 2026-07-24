@@ -409,12 +409,18 @@ struct EncodingOptions: Codable, Equatable {
     }
 
     var videoSummary: String {
+        videoSummary(for: VideoRoutePlan(encoding: self))
+    }
+
+    func videoSummary(for route: VideoRoutePlan) -> String {
         let resolution = upscaleEnabled ? "2× upscale" : "source resolution"
-        return switch videoOutputMode {
-        case .mvHEVC:
-            "MV-HEVC \(mvHEVC.generatedMergeQuality) · \(generatedEyeCustomBitrateMbps) Mbps eyes · \(resolution)"
+        return switch route.kind {
+        case .directMVHEVC, .generatedMVHEVC:
+            "\(route.compactSummary) · \(resolution)"
         case .av1Stereo:
-            "AV1 stereo CRF \(av1CRF) · full side-by-side · source resolution"
+            "\(route.compactSummary) · full side-by-side · source resolution"
+        case .existingArtifact:
+            route.compactSummary
         }
     }
 
@@ -533,8 +539,16 @@ struct ConversionOptions: Codable, Equatable {
     var encoding = EncodingOptions()
     var job = JobOptions()
 
+    var videoRoutePlan: VideoRoutePlan {
+        VideoRoutePlan(options: self)
+    }
+
+    var videoSummary: String {
+        encoding.videoSummary(for: videoRoutePlan)
+    }
+
     var compactSummary: String {
-        encoding.compactSummary
+        "\(videoSummary) · Audio: \(encoding.audioSummary) · Subtitles: \(encoding.subtitleSummary)"
     }
 }
 

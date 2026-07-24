@@ -353,16 +353,21 @@ struct DiagnosticJobSettings: Encodable, Equatable {
     let profileKind: String
     let builtInProfileID: String?
     let videoOutputMode: String
-    let av1CRF: Int
-    let hevcQuality: Int
-    let leftRightBitrate: Int
-    let upscaleEnabled: Bool
-    let upscaleQuality: Int
-    let fieldOfView: Int
-    let frameRateOverrideSet: Bool
-    let resolutionOverrideSet: Bool
-    let cropBlackBars: Bool
-    let swapEyes: Bool
+    let requestedVideoRoute: String
+    let routeRequirement: String?
+    let directBitrateMode: String?
+    let directFinalBitrate: Int?
+    let av1CRF: Int?
+    let generatedEyeBitrateMode: String?
+    let hevcQuality: Int?
+    let leftRightBitrate: Int?
+    let upscaleEnabled: Bool?
+    let upscaleQuality: Int?
+    let fieldOfView: Int?
+    let frameRateOverrideSet: Bool?
+    let resolutionOverrideSet: Bool?
+    let cropBlackBars: Bool?
+    let swapEyes: Bool?
     let audioHandling: String
     let audioBitrate: Int
     let subtitleMode: String
@@ -378,19 +383,43 @@ struct DiagnosticJobSettings: Encodable, Equatable {
     init(draft: ConversionDraft) {
         let encoding = draft.options.encoding
         let job = draft.options.job
+        let route = VideoRoutePlan(options: draft.options)
         profileKind = draft.profile.kind.rawValue
         builtInProfileID = draft.profile.isBuiltIn ? draft.profile.id : nil
         videoOutputMode = encoding.videoOutputMode.rawValue
-        av1CRF = encoding.av1CRF
-        hevcQuality = encoding.mvHEVC.generatedMergeQuality
-        leftRightBitrate = encoding.generatedEyeCustomBitrateMbps
-        upscaleEnabled = encoding.upscaleEnabled
-        upscaleQuality = encoding.upscaleQuality
-        fieldOfView = encoding.fieldOfView
-        frameRateOverrideSet = !encoding.frameRateOverride.isEmpty
-        resolutionOverrideSet = !encoding.resolutionOverride.isEmpty
-        cropBlackBars = encoding.cropBlackBars
-        swapEyes = encoding.swapEyes
+        requestedVideoRoute = route.kind.rawValue
+        routeRequirement = route.generatedRequirement?.identifier
+        directBitrateMode = route.kind == .directMVHEVC
+            ? encoding.mvHEVC.directFinalBitrate.mode.rawValue
+            : nil
+        directFinalBitrate = route.kind == .directMVHEVC ? route.directBitrateMbps : nil
+        av1CRF = route.kind == .av1Stereo ? route.av1CRF : nil
+        generatedEyeBitrateMode = route.kind == .generatedMVHEVC
+            ? encoding.mvHEVC.generatedEyeBitrate.mode.rawValue
+            : nil
+        hevcQuality = route.generatedMergeQuality
+        leftRightBitrate = route.generatedEyeBitrateMbps
+        if route.kind == .existingArtifact {
+            let resumesAtUpscale = job.startStage == .upscaleVideo
+                && encoding.videoOutputMode == .mvHEVC
+            upscaleEnabled = resumesAtUpscale ? encoding.upscaleEnabled : nil
+            upscaleQuality = resumesAtUpscale && encoding.upscaleEnabled ? encoding.upscaleQuality : nil
+            fieldOfView = nil
+            frameRateOverrideSet = nil
+            resolutionOverrideSet = nil
+            cropBlackBars = nil
+            swapEyes = nil
+        } else {
+            let routeAllowsUpscale = route.kind != .av1Stereo
+            let activeUpscale = routeAllowsUpscale && encoding.upscaleEnabled
+            upscaleEnabled = routeAllowsUpscale ? encoding.upscaleEnabled : false
+            upscaleQuality = activeUpscale ? encoding.upscaleQuality : nil
+            fieldOfView = encoding.fieldOfView
+            frameRateOverrideSet = !encoding.frameRateOverride.isEmpty
+            resolutionOverrideSet = route.kind == .av1Stereo ? false : !encoding.resolutionOverride.isEmpty
+            cropBlackBars = encoding.cropBlackBars
+            swapEyes = encoding.swapEyes
+        }
         audioHandling = encoding.audioHandling.rawValue
         audioBitrate = encoding.audioBitrate
         subtitleMode = encoding.subtitles.mode.rawValue

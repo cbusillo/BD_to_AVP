@@ -188,13 +188,245 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertTrue(EncodingOptions().compactSummary.contains("Subtitles: English + others"))
         XCTAssertEqual(
             EncodingOptions(audioHandling: .automatic, audioBitrate: 448).compactSummary,
-            "MV-HEVC 75 · 20 Mbps eyes · source resolution · Audio: automatic audio (AAC fallback 448 kbps), English only · Subtitles: English + others"
+            "Direct MV-HEVC when available · Automatic · 40 Mbps final · source resolution · Audio: automatic audio (AAC fallback 448 kbps), English only · Subtitles: English + others"
         )
         XCTAssertEqual(
             EncodingOptions(audioHandling: .convertAAC, audioBitrate: 448).compactSummary,
-            "MV-HEVC 75 · 20 Mbps eyes · source resolution · Audio: AAC 448 kbps, English only · Subtitles: English + others"
+            "Direct MV-HEVC when available · Automatic · 40 Mbps final · source resolution · Audio: AAC 448 kbps, English only · Subtitles: English + others"
         )
         XCTAssertTrue(BuiltInProfile.balanced.summary.contains("English audio only"))
+    }
+
+    func testVideoRoutePlanCoversDirectGeneratedAV1AndExistingRoutes() {
+        var options = ConversionOptions()
+
+        var route = VideoRoutePlan(options: options)
+        XCTAssertEqual(route.kind, .directMVHEVC)
+        XCTAssertEqual(route.directBitrateMode, .automatic)
+        XCTAssertEqual(route.directBitrateMbps, 40)
+        XCTAssertNil(route.generatedEyeBitrateMbps)
+        XCTAssertTrue(route.allowsFinalizedPreview)
+
+        options.job.intermediatePolicy = .reusable
+        route = VideoRoutePlan(options: options)
+        XCTAssertEqual(route.kind, .generatedMVHEVC)
+        XCTAssertEqual(route.generatedRequirement, .reusableIntermediates)
+        XCTAssertEqual(route.generatedEyeBitrateMode, .automatic)
+        XCTAssertEqual(route.generatedEyeBitrateMbps, 20)
+        XCTAssertEqual(route.generatedMergeQuality, 75)
+
+        options.job.intermediatePolicy = .automatic
+        options.encoding.upscaleEnabled = true
+        route = VideoRoutePlan(options: options)
+        XCTAssertEqual(route.kind, .generatedMVHEVC)
+        XCTAssertEqual(route.generatedRequirement, .upscale)
+
+        options.encoding.videoOutputMode = .av1Stereo
+        route = VideoRoutePlan(options: options)
+        XCTAssertEqual(route.kind, .av1Stereo)
+        XCTAssertEqual(route.av1CRF, 32)
+
+        options.job.startStage = .transcodeAudio
+        route = VideoRoutePlan(options: options)
+        XCTAssertEqual(route.kind, .existingArtifact)
+        XCTAssertFalse(route.allowsFinalizedPreview)
+
+        route = VideoRoutePlan(
+            encoding: options.encoding,
+            startStage: options.job.startStage.rawValue,
+            keepsReusableArtifacts: false,
+            softwareEncoder: false,
+            allowsExistingArtifact: false
+        )
+        XCTAssertEqual(route.kind, .av1Stereo)
+    }
+
+    func testRouteAwareSummariesDoNotExposeInactiveGeneratedSettings() {
+        let direct = EncodingOptions()
+        XCTAssertEqual(
+            direct.videoSummary,
+            "Direct MV-HEVC when available · Automatic · 40 Mbps final · source resolution"
+        )
+        XCTAssertFalse(direct.videoSummary.contains("Mbps per eye"))
+        XCTAssertFalse(direct.videoSummary.contains("merge 75"))
+
+        var generated = ConversionOptions()
+        generated.job.intermediatePolicy = .reusable
+        generated.encoding.mvHEVC.generatedEyeBitrate = BitratePreference(mode: .custom, customMbps: 35)
+        generated.encoding.mvHEVC.generatedMergeQuality = 82
+
+        XCTAssertEqual(
+            generated.videoSummary,
+            "Generated MV-HEVC · Custom · 35 Mbps per eye · merge 82 · source resolution"
+        )
+        XCTAssertTrue(generated.compactSummary.contains("Generated MV-HEVC"))
+
+        var customDirect = EncodingOptions()
+        customDirect.mvHEVC.directFinalBitrate = BitratePreference(mode: .custom, customMbps: 48)
+        XCTAssertEqual(
+            customDirect.videoSummary,
+            "Direct MV-HEVC when available · Custom · 48 Mbps final · source resolution"
+        )
+    }
+
+    func testVideoRouteReportPresentationCoversEveryRouteAndFallback() {
+        let direct = VideoRouteReport(
+            intent: "automatic",
+            selected: "direct_mv_hevc",
+            reason: "direct_eligible",
+            bitrateMbps: 40,
+            eyeBitrateMbps: nil,
+            mergeQuality: nil,
+            crf: nil,
+            fallbackReason: nil,
+            fallbackTiming: nil
+        )
+        XCTAssertEqual(direct.displayTitle, "Direct MV-HEVC")
+        XCTAssertEqual(direct.settingsSummary, "40 Mbps final")
+        XCTAssertTrue(direct.displayDetail.contains("confirmed direct stereo MV-HEVC support"))
+
+        let generated = VideoRouteReport(
+            intent: "generated",
+            selected: "generated_mv_hevc",
+            reason: "reusable_intermediates_requested",
+            bitrateMbps: nil,
+            eyeBitrateMbps: 20,
+            mergeQuality: 75,
+            crf: nil,
+            fallbackReason: nil,
+            fallbackTiming: nil
+        )
+        XCTAssertEqual(generated.displayTitle, "Generated MV-HEVC")
+        XCTAssertEqual(generated.settingsSummary, "20 Mbps per eye · merge 75")
+        XCTAssertEqual(generated.displayDetail, "Reusable intermediate files were requested.")
+
+        let fallback = VideoRouteReport(
+            intent: "automatic",
+            selected: "generated_mv_hevc",
+            reason: "direct_capability_unavailable",
+            bitrateMbps: nil,
+            eyeBitrateMbps: 20,
+            mergeQuality: 75,
+            crf: nil,
+            fallbackReason: "helper_missing",
+            fallbackTiming: "pre_input"
+        )
+        XCTAssertEqual(fallback.displayTitle, "Generated MV-HEVC fallback")
+        XCTAssertTrue(fallback.isFallback)
+        XCTAssertTrue(fallback.displayDetail.contains("packaged direct MV-HEVC encoder was unavailable"))
+        XCTAssertTrue(fallback.displayDetail.contains("before conversion input was read"))
+
+        let av1 = VideoRouteReport(
+            intent: "encode",
+            selected: "av1",
+            reason: "av1_output_requested",
+            bitrateMbps: nil,
+            eyeBitrateMbps: nil,
+            mergeQuality: nil,
+            crf: 32,
+            fallbackReason: nil,
+            fallbackTiming: nil
+        )
+        XCTAssertEqual(av1.displayTitle, "AV1 stereo")
+        XCTAssertEqual(av1.settingsSummary, "CRF 32")
+        XCTAssertEqual(av1.displayDetail, "AV1 stereo output was requested.")
+
+        let existing = VideoRouteReport(
+            intent: "existing_artifact",
+            selected: "existing_artifact",
+            reason: "resume_uses_existing_video_artifact",
+            bitrateMbps: nil,
+            eyeBitrateMbps: nil,
+            mergeQuality: nil,
+            crf: nil,
+            fallbackReason: nil,
+            fallbackTiming: nil
+        )
+        XCTAssertEqual(existing.displayTitle, "Existing encoded video artifact")
+        XCTAssertEqual(existing.settingsSummary, "No video re-encode")
+        XCTAssertEqual(existing.displayDetail, "The selected restart stage uses an existing encoded video artifact.")
+
+        let unknown = VideoRouteReport(
+            intent: "future",
+            selected: "future_route",
+            reason: "future_reason",
+            bitrateMbps: nil,
+            eyeBitrateMbps: nil,
+            mergeQuality: nil,
+            crf: nil,
+            fallbackReason: nil,
+            fallbackTiming: nil
+        )
+        XCTAssertEqual(unknown.displayTitle, "Video route")
+        XCTAssertEqual(unknown.settingsSummary, "future route")
+        XCTAssertEqual(unknown.displayDetail, "The conversion engine selected this route during preflight.")
+    }
+
+    func testVideoStorageEstimateReservesFallbackAndRetainedEyeFiles() throws {
+        let inspection = SourceInspection(
+            name: "movie.mkv",
+            resolution: "1920x1080",
+            frameRate: "23.976",
+            interlaced: false,
+            sizeBytes: 30_000_000_000,
+            durationSeconds: 7_200
+        )
+        let source = ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/movie.mkv"))
+
+        let directDraft = ConversionDraft(
+            source: source,
+            sourceDetails: inspection,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            options: ConversionOptions()
+        )
+        let directEstimate = VideoStorageEstimate(drafts: [directDraft])
+        let directFinalBytes = try XCTUnwrap(directEstimate.finalOutputBytes)
+        let directPeakBytes = try XCTUnwrap(directEstimate.peakWorkingBytes)
+
+        XCTAssertTrue(directEstimate.conservativeFallbackReserve)
+        XCTAssertGreaterThan(directPeakBytes, directFinalBytes)
+        XCTAssertEqual(directEstimate.retainedIntermediateBytes, 0)
+        XCTAssertTrue(directEstimate.finalOutputDescription.hasPrefix("Up to "))
+
+        var generatedOptions = ConversionOptions()
+        generatedOptions.job.intermediatePolicy = .reusable
+        let generatedDraft = ConversionDraft(
+            source: source,
+            sourceDetails: inspection,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            options: generatedOptions
+        )
+        let generatedEstimate = VideoStorageEstimate(drafts: [generatedDraft])
+        let generatedFinalBytes = try XCTUnwrap(generatedEstimate.finalOutputBytes)
+
+        XCTAssertFalse(generatedEstimate.conservativeFallbackReserve)
+        XCTAssertEqual(generatedEstimate.retainedIntermediateBytes, generatedFinalBytes)
+        XCTAssertEqual(generatedEstimate.peakWorkingBytes, generatedFinalBytes * 2)
+    }
+
+    func testVideoStorageEstimateAvoidsFalsePrecisionForAV1() {
+        var options = ConversionOptions()
+        options.encoding.videoOutputMode = .av1Stereo
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/movie.mkv")),
+            sourceDetails: SourceInspection(
+                name: "movie.mkv",
+                resolution: "1920x1080",
+                frameRate: "23.976",
+                interlaced: false,
+                durationSeconds: 7_200
+            ),
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            options: options
+        )
+
+        let estimate = VideoStorageEstimate(drafts: [draft])
+
+        XCTAssertNil(estimate.finalOutputBytes)
+        XCTAssertEqual(estimate.unavailableReason, "AV1 size varies with source content and CRF.")
     }
 
     func testSourceInferencePreservesProductHierarchy() throws {
@@ -383,6 +615,19 @@ final class ConversionWorkflowTests: XCTestCase {
 
             XCTAssertTrue(discs.isEmpty)
         }
+    }
+
+    func testInsertedDiscDetectionSkipsDirectoryProbeWhenVolumeHasNoDevice() {
+        let fileManager = DirectoryProbeRecordingFileManager()
+
+        let discs = DiscSourceDetector.insertedDiscs(
+            in: [URL(fileURLWithPath: "/Volumes/Unavailable", isDirectory: true)],
+            fileManager: fileManager,
+            devicePathResolver: { _ in nil }
+        )
+
+        XCTAssertTrue(discs.isEmpty)
+        XCTAssertFalse(fileManager.didProbeDirectory)
     }
 
     func testCurrentCapabilitiesStayHonest() {
@@ -1282,4 +1527,13 @@ private struct StableJobOptions: Decodable {
     let outputCommands: Bool
     let keepAwake: Bool
     let playSound: Bool
+}
+
+private final class DirectoryProbeRecordingFileManager: FileManager, @unchecked Sendable {
+    private(set) var didProbeDirectory = false
+
+    override func fileExists(atPath path: String, isDirectory: UnsafeMutablePointer<ObjCBool>?) -> Bool {
+        didProbeDirectory = true
+        return false
+    }
 }

@@ -27,6 +27,7 @@ struct ContentView: View {
     @State private var titleSelection = DiscTitleSelection.main
     @State private var isShowingTitleChooser = false
     @State private var isShowingDiagnosticReport = false
+    @State private var isRefreshingDiscs = false
 
     init(
         viewModel: ConversionViewModel,
@@ -73,6 +74,7 @@ struct ContentView: View {
                     queueItems: visibleQueueItems,
                     destinationURL: $destinationURL,
                     plannedOutputURLs: plannedOutputURLs,
+                    storageEstimate: VideoStorageEstimate(drafts: conversionDrafts),
                     refreshDiscs: refreshDiscs,
                     useDisc: selectSource,
                     openDiscImage: { chooseFile(.discImage) },
@@ -635,6 +637,11 @@ struct ContentView: View {
         if let warningMessage = viewModel.state.warningMessage {
             return "Warning: \(warningMessage)"
         }
+        if viewModel.state.operationKind == .conversion,
+           let videoRoute = viewModel.state.videoRoute
+        {
+            return videoRoute.compactSummary
+        }
         if let batchQueue = viewModel.batchQueue {
             if batchQueue.isRunning {
                 return viewModel.state.stageMessage
@@ -729,6 +736,9 @@ struct ContentView: View {
         guard selectedVideoCount == 1 else {
             return false
         }
+        guard requestedVideoRoute.allowsFinalizedPreview else {
+            return false
+        }
         switch viewModel.source?.kind {
         case .discImage, .matroska, .transportStream:
             return true
@@ -739,10 +749,13 @@ struct ContentView: View {
 
     private var previewUnavailableReason: String {
         if previewCanStart {
-            return "Create a representative preview with the current resolved settings."
+            return "Create a finalized representative preview with the current route policy and settings."
         }
         if selectedVideoCount > 1 {
             return "Choose one 3D video to create a preview."
+        }
+        if !requestedVideoRoute.allowsFinalizedPreview {
+            return "A late-stage restart uses an existing video artifact. Choose an earlier start stage to generate a representative preview."
         }
         switch viewModel.source?.kind {
         case .physicalDisc, .bluRayFolder:
@@ -750,6 +763,10 @@ struct ContentView: View {
         default:
             return conversionUnavailableReason
         }
+    }
+
+    private var requestedVideoRoute: VideoRoutePlan {
+        VideoRoutePlan(options: options)
     }
 
     private var canSelectSource: Bool {
@@ -831,16 +848,25 @@ struct ContentView: View {
     }
 
     private func refreshDiscs() {
-        let refreshedDiscs = DiscSourceDetector.insertedDiscs()
-        insertedDiscs = refreshedDiscs
-        guard !viewModel.hasActiveWork,
-              let selectedSource = viewModel.source,
-              selectedSource.kind == .physicalDisc,
-              !refreshedDiscs.contains(where: { $0.workerSourcePath == selectedSource.workerSourcePath })
-        else {
+        guard !isRefreshingDiscs else {
             return
         }
-        viewModel.clearSource()
+        isRefreshingDiscs = true
+        Task { @MainActor in
+            let refreshedDiscs = await Task.detached(priority: .utility) {
+                DiscSourceDetector.insertedDiscs()
+            }.value
+            insertedDiscs = refreshedDiscs
+            isRefreshingDiscs = false
+            guard !viewModel.hasActiveWork,
+                  let selectedSource = viewModel.source,
+                  selectedSource.kind == .physicalDisc,
+                  !refreshedDiscs.contains(where: { $0.workerSourcePath == selectedSource.workerSourcePath })
+            else {
+                return
+            }
+            viewModel.clearSource()
+        }
     }
 
     private func handleVolumeUnmount(_ notification: Notification) {

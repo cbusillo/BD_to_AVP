@@ -222,8 +222,11 @@ class NativeAppPackagingTests(unittest.TestCase):
             source_view.index("Import MTS or M2TS transport stream"),
         )
         for label in (
-            "HEVC quality",
-            "Left / right bitrate",
+            "Final bitrate",
+            "Advanced final bitrate",
+            "MV-HEVC merge quality",
+            "Eye intermediate bitrate",
+            "Advanced eye intermediate bitrate",
             "Video Output",
             "AV1 quality",
             "AI FX upscale to 2\u00d7 resolution",
@@ -237,7 +240,7 @@ class NativeAppPackagingTests(unittest.TestCase):
             "Subtitle handling",
             "Subtitle language",
             "Start stage",
-            "Keep durable stage files",
+            "Create reusable intermediate files",
             "Continue processing after recoverable errors",
             "Use software HEVC encoder",
             "Overwrite an existing output file",
@@ -251,7 +254,7 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn('LabeledContent("Video")', source_view)
         self.assertIn('LabeledContent("Audio")', source_view)
         self.assertIn('LabeledContent("Subtitles")', source_view)
-        self.assertIn("Text(options.encoding.videoSummary)", source_view)
+        self.assertIn("Text(options.videoSummary)", source_view)
         self.assertIn("Text(options.encoding.audioSummary)", source_view)
         self.assertIn("Opens a searchable list of audio languages", language_picker)
         self.assertIn("Opens a searchable list of subtitle languages", language_picker)

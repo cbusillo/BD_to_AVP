@@ -52,6 +52,8 @@ final class PreviewViewModelTests: XCTestCase {
                 WorkerJobSpec(previewDraft: previewDraft, destinationURL: playerLease!.directoryURL).encoding
             )
             XCTAssertTrue(FileManager.default.fileExists(atPath: playerLease!.artifact.outputURL.path))
+            XCTAssertEqual(viewModel.videoRoute?.selected, "direct_mv_hevc")
+            XCTAssertEqual(viewModel.videoRoute, playerLease!.artifact.videoRoute)
 
             let directoryURL = playerLease!.directoryURL
             viewModel.discardPreview()
@@ -60,6 +62,38 @@ final class PreviewViewModelTests: XCTestCase {
             XCTAssertTrue(FileManager.default.fileExists(atPath: directoryURL.path))
             playerLease = nil
             XCTAssertFalse(FileManager.default.fileExists(atPath: directoryURL.path))
+        }
+    }
+
+    @MainActor
+    func testPreviewRetainsVisibleGeneratedFallbackRoute() async throws {
+        try await withTemporaryPreviewEnvironment { sourceURL, cache in
+            let completed = expectation(description: "preview completed")
+            let fallbackRoute = VideoRouteReport(
+                intent: "automatic",
+                selected: "generated_mv_hevc",
+                reason: "direct_capability_unavailable",
+                bitrateMbps: nil,
+                eyeBitrateMbps: 20,
+                mergeQuality: 75,
+                crf: nil,
+                fallbackReason: "stereo_mv_hevc_encode_unavailable",
+                fallbackTiming: "pre_input"
+            )
+            let worker = PreviewWorkerClient(
+                videoRouteOverride: fallbackRoute,
+                onCompleted: { completed.fulfill() }
+            )
+            let viewModel = PreviewViewModel(clientFactory: { worker }, cache: cache)
+            let previewDraft = try XCTUnwrap(makePreviewDraft(sourceURL: sourceURL))
+
+            viewModel.startPreview(previewDraft)
+            await fulfillment(of: [completed], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+
+            XCTAssertEqual(viewModel.videoRoute, fallbackRoute)
+            XCTAssertEqual(viewModel.artifactLease?.artifact.videoRoute, fallbackRoute)
+            XCTAssertEqual(viewModel.videoRoute?.displayTitle, "Generated MV-HEVC fallback")
         }
     }
 
@@ -241,6 +275,7 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
     private let initialStage: String
     private let initialStageMessage: String
     private let observabilityEvent: ObservabilityEvent?
+    private let videoRouteOverride: VideoRouteReport?
     private let waitsForCancellation: Bool
     private let onStarted: (() -> Void)?
     private let onCancellationEventsDelivered: (() -> Void)?
@@ -256,6 +291,7 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
         initialStage: String = "create_left_right_files",
         initialStageMessage: String = "Encoding Preview",
         observabilityEvent: ObservabilityEvent? = nil,
+        videoRouteOverride: VideoRouteReport? = nil,
         waitsForCancellation: Bool = false,
         onStarted: (() -> Void)? = nil,
         onCancellationEventsDelivered: (() -> Void)? = nil,
@@ -264,6 +300,7 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
         self.initialStage = initialStage
         self.initialStageMessage = initialStageMessage
         self.observabilityEvent = observabilityEvent
+        self.videoRouteOverride = videoRouteOverride
         self.waitsForCancellation = waitsForCancellation
         self.onStarted = onStarted
         self.onCancellationEventsDelivered = onCancellationEventsDelivered
@@ -275,6 +312,7 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
         onEvent: @escaping (WorkerEvent) async throws -> Void
     ) async throws -> WorkerRunResult {
         receivedJob = job
+        let videoRoute = videoRouteOverride ?? Self.videoRoute(for: job)
         let ready = WorkerEvent(
             protocolVersion: WorkerJobSpec.protocolVersion,
             type: .workerReady,
@@ -292,7 +330,8 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
             payload: WorkerEventPayload(
                 stage: initialStage,
                 message: initialStageMessage,
-                progress: WorkerProgress(currentStage: 9, totalStages: 13, stageFraction: nil)
+                progress: WorkerProgress(currentStage: 9, totalStages: 13, stageFraction: nil),
+                videoRoute: videoRoute
             )
         )
         try await onEvent(stage)
@@ -383,7 +422,8 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
             position: job.preview!.position,
             startSeconds: 3570,
             durationSeconds: 60,
-            sourceDurationSeconds: 7200
+            sourceDurationSeconds: 7200,
+            videoRoute: videoRoute
         )
         let artifactReady = WorkerEvent(
             protocolVersion: WorkerJobSpec.protocolVersion,
@@ -404,6 +444,72 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
         try await onEvent(completed)
         onCompleted?()
         return WorkerRunResult(terminalEvent: completed, exitStatus: 0, diagnostics: "")
+    }
+
+    private static func videoRoute(for job: WorkerJobSpec) -> VideoRouteReport {
+        guard let video = job.encoding?.video else {
+            return VideoRouteReport(
+                intent: "automatic",
+                selected: "direct_mv_hevc",
+                reason: "direct_eligible",
+                bitrateMbps: 40,
+                eyeBitrateMbps: nil,
+                mergeQuality: nil,
+                crf: nil,
+                fallbackReason: nil,
+                fallbackTiming: nil
+            )
+        }
+        switch video.routeIntent {
+        case .automatic:
+            return VideoRouteReport(
+                intent: "automatic",
+                selected: "direct_mv_hevc",
+                reason: "direct_eligible",
+                bitrateMbps: video.directBitrate?.mbps ?? 40,
+                eyeBitrateMbps: nil,
+                mergeQuality: nil,
+                crf: nil,
+                fallbackReason: nil,
+                fallbackTiming: nil
+            )
+        case .generated:
+            return VideoRouteReport(
+                intent: "generated",
+                selected: "generated_mv_hevc",
+                reason: "generated_route_requested",
+                bitrateMbps: nil,
+                eyeBitrateMbps: video.generatedEyeBitrate?.mbps ?? 20,
+                mergeQuality: video.generatedMergeQuality,
+                crf: nil,
+                fallbackReason: nil,
+                fallbackTiming: nil
+            )
+        case .encode:
+            return VideoRouteReport(
+                intent: "encode",
+                selected: "av1",
+                reason: "av1_output_requested",
+                bitrateMbps: nil,
+                eyeBitrateMbps: nil,
+                mergeQuality: nil,
+                crf: video.av1CRF,
+                fallbackReason: nil,
+                fallbackTiming: nil
+            )
+        case .existingArtifact:
+            return VideoRouteReport(
+                intent: "existing_artifact",
+                selected: "existing_artifact",
+                reason: "resume_uses_existing_video_artifact",
+                bitrateMbps: nil,
+                eyeBitrateMbps: nil,
+                mergeQuality: nil,
+                crf: nil,
+                fallbackReason: nil,
+                fallbackTiming: nil
+            )
+        }
     }
 
     func cancel() {

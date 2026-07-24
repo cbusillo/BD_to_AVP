@@ -44,7 +44,7 @@ struct PreviewSheet: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Representative Conversion Preview")
                     .font(.title2.weight(.semibold))
-                Text("Uses a separate child job and the exact resolved profile settings below.")
+                Text("Uses a separate finalized child job with the route policy and settings below.")
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -104,6 +104,17 @@ struct PreviewSheet: View {
                     }
                 }
 
+                Divider()
+                    .gridCellColumns(2)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Requested Route")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    VideoRouteSummaryView(plan: requestedRoute)
+                }
+                .gridCellColumns(2)
+
                 if conversionDraft.source.kind == .discImage {
                     Divider()
                         .gridCellColumns(2)
@@ -140,6 +151,7 @@ struct PreviewSheet: View {
         if viewModel.phase == .ready, let lease = viewModel.artifactLease {
             PreviewPlayerView(
                 lease: lease,
+                videoRoute: viewModel.videoRoute,
                 generateAgain: generatePreview,
                 removePreview: viewModel.discardPreview,
                 startFullConversion: startReviewedConversion
@@ -175,6 +187,16 @@ struct PreviewSheet: View {
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(statusAccessibilityLabel)
+
+                    if let resolvedRoute = viewModel.videoRoute {
+                        Divider()
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(previewRouteStatusTitle)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            VideoRouteSummaryView(report: resolvedRoute)
+                        }
+                    }
 
                 }
                 .padding(4)
@@ -273,7 +295,24 @@ struct PreviewSheet: View {
         if let progress = viewModel.progress, viewModel.hasActiveWorker {
             components.append(progress.accessibilityValue)
         }
+        if let videoRoute = viewModel.videoRoute {
+            components.append(videoRoute.compactSummary)
+            components.append(videoRoute.displayDetail)
+        }
         return components.joined(separator: ". ")
+    }
+
+    private var requestedRoute: VideoRoutePlan {
+        VideoRoutePlan(options: conversionDraft.options, allowsExistingArtifact: false)
+    }
+
+    private var previewRouteStatusTitle: String {
+        switch viewModel.phase {
+        case .failed, .idle:
+            "Last Attempted Route"
+        case .preparing, .encoding, .ready, .stopping, .expired:
+            "Resolved Route"
+        }
     }
 
     private func generatePreview() {
@@ -297,6 +336,7 @@ struct PreviewSheet: View {
 
 private struct PreviewPlayerView: View {
     let lease: PreviewArtifactLease
+    let videoRoute: VideoRouteReport?
     let generateAgain: () -> Void
     let removePreview: () -> Void
     let startFullConversion: () -> Void
@@ -305,11 +345,13 @@ private struct PreviewPlayerView: View {
 
     init(
         lease: PreviewArtifactLease,
+        videoRoute: VideoRouteReport?,
         generateAgain: @escaping () -> Void,
         removePreview: @escaping () -> Void,
         startFullConversion: @escaping () -> Void
     ) {
         self.lease = lease
+        self.videoRoute = videoRoute
         self.generateAgain = generateAgain
         self.removePreview = removePreview
         self.startFullConversion = startFullConversion
@@ -325,6 +367,10 @@ private struct PreviewPlayerView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .accessibilityLabel("Conversion preview video")
                     .accessibilityHint("Use the playback controls to play, pause, seek, and choose available audio or subtitles.")
+
+                if let resolvedRoute = videoRoute ?? lease.artifact.videoRoute {
+                    VideoRouteSummaryView(report: resolvedRoute)
+                }
 
                 HStack(spacing: 12) {
                     Label(rangeDescription, systemImage: "timeline.selection")

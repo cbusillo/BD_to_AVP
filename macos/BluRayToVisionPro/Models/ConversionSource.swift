@@ -39,7 +39,7 @@ enum ConversionSourceKind: String, CaseIterable, Identifiable {
         case .matroska:
             "film.stack"
         case .sourceFolder:
-            "folder.stack"
+            "folder"
         case .transportStream:
             "doc.richtext"
         }
@@ -152,11 +152,13 @@ enum DiscSourceDetector {
     }
 
     static func insertedDiscs(fileManager: FileManager = .default) -> [ConversionSource] {
-        let volumeKeys: [URLResourceKey] = [.volumeNameKey, .isVolumeKey]
+        let volumeKeys: [URLResourceKey] = [.volumeNameKey, .isVolumeKey, .volumeIsLocalKey]
         let volumes = fileManager.mountedVolumeURLs(
             includingResourceValuesForKeys: volumeKeys,
             options: [.skipHiddenVolumes]
-        ) ?? []
+        )?.filter { volumeURL in
+            (try? volumeURL.resourceValues(forKeys: [.volumeIsLocalKey]).volumeIsLocal) != false
+        } ?? []
         return insertedDiscs(in: volumes, fileManager: fileManager)
     }
 
@@ -166,8 +168,8 @@ enum DiscSourceDetector {
         devicePathResolver: (URL) -> String? = physicalDevicePath(for:)
     ) -> [ConversionSource] {
         volumes.compactMap { volumeURL in
-            guard isBluRayFolder(volumeURL, fileManager: fileManager),
-                  let devicePath = devicePathResolver(volumeURL)
+            guard let devicePath = devicePathResolver(volumeURL),
+                  isBluRayFolder(volumeURL, fileManager: fileManager)
             else {
                 return nil
             }
