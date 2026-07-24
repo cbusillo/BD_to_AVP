@@ -125,7 +125,8 @@ class PackagedRouteParityTests(unittest.TestCase):
             "intent": "automatic",
             "selected": "direct_mv_hevc",
             "reason": "direct_eligible",
-            "bitrate_mbps": 40,
+            "rate_control": "quality",
+            "quality": 0.7,
         }
 
         validate_route_pair(
@@ -161,6 +162,23 @@ class PackagedRouteParityTests(unittest.TestCase):
             validate_route_pair(
                 worker_result(full_route, operation="convert_source", event_code="video_route_selected"),
                 worker_result(preview_route, operation="preview_source", event_code="video_route_selected"),
+                expected_selected="direct_mv_hevc",
+                expected_fallback_reason=None,
+            )
+
+    def test_direct_route_pair_rejects_fixed_automatic_bitrate(self) -> None:
+        route = {
+            "intent": "automatic",
+            "selected": "direct_mv_hevc",
+            "reason": "direct_eligible",
+            "rate_control": "average_bitrate",
+            "bitrate_mbps": 40,
+        }
+
+        with self.assertRaisesRegex(PackagedRouteFailure, "quality rate control"):
+            validate_route_pair(
+                worker_result(route, operation="convert_source", event_code="video_route_selected"),
+                worker_result(route, operation="preview_source", event_code="video_route_selected"),
                 expected_selected="direct_mv_hevc",
                 expected_fallback_reason=None,
             )

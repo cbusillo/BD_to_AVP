@@ -188,11 +188,11 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertTrue(EncodingOptions().compactSummary.contains("Subtitles: English + others"))
         XCTAssertEqual(
             EncodingOptions(audioHandling: .automatic, audioBitrate: 448).compactSummary,
-            "Direct MV-HEVC when available · Automatic · 40 Mbps final · source resolution · Audio: automatic audio (AAC fallback 448 kbps), English only · Subtitles: English + others"
+            "Direct MV-HEVC when available · Automatic · content-adaptive quality · source resolution · Audio: automatic audio (AAC fallback 448 kbps), English only · Subtitles: English + others"
         )
         XCTAssertEqual(
             EncodingOptions(audioHandling: .convertAAC, audioBitrate: 448).compactSummary,
-            "Direct MV-HEVC when available · Automatic · 40 Mbps final · source resolution · Audio: AAC 448 kbps, English only · Subtitles: English + others"
+            "Direct MV-HEVC when available · Automatic · content-adaptive quality · source resolution · Audio: AAC 448 kbps, English only · Subtitles: English + others"
         )
         XCTAssertTrue(BuiltInProfile.balanced.summary.contains("English audio only"))
     }
@@ -203,7 +203,7 @@ final class ConversionWorkflowTests: XCTestCase {
         var route = VideoRoutePlan(options: options)
         XCTAssertEqual(route.kind, .directMVHEVC)
         XCTAssertEqual(route.directBitrateMode, .automatic)
-        XCTAssertEqual(route.directBitrateMbps, 40)
+        XCTAssertNil(route.directBitrateMbps)
         XCTAssertNil(route.generatedEyeBitrateMbps)
         XCTAssertTrue(route.allowsFinalizedPreview)
 
@@ -245,7 +245,7 @@ final class ConversionWorkflowTests: XCTestCase {
         let direct = EncodingOptions()
         XCTAssertEqual(
             direct.videoSummary,
-            "Direct MV-HEVC when available · Automatic · 40 Mbps final · source resolution"
+            "Direct MV-HEVC when available · Automatic · content-adaptive quality · source resolution"
         )
         XCTAssertFalse(direct.videoSummary.contains("Mbps per eye"))
         XCTAssertFalse(direct.videoSummary.contains("merge 75"))
@@ -274,16 +274,31 @@ final class ConversionWorkflowTests: XCTestCase {
             intent: "automatic",
             selected: "direct_mv_hevc",
             reason: "direct_eligible",
-            bitrateMbps: 40,
+            bitrateMbps: nil,
+            eyeBitrateMbps: nil,
+            mergeQuality: nil,
+            crf: nil,
+            fallbackReason: nil,
+            fallbackTiming: nil,
+            rateControl: "quality",
+            quality: 0.7
+        )
+        XCTAssertEqual(direct.displayTitle, "Direct MV-HEVC")
+        XCTAssertEqual(direct.settingsSummary, "Automatic · content-adaptive quality")
+        XCTAssertTrue(direct.displayDetail.contains("confirmed direct stereo MV-HEVC support"))
+
+        let legacyDirect = VideoRouteReport(
+            intent: "automatic",
+            selected: "direct_mv_hevc",
+            reason: "direct_eligible",
+            bitrateMbps: nil,
             eyeBitrateMbps: nil,
             mergeQuality: nil,
             crf: nil,
             fallbackReason: nil,
             fallbackTiming: nil
         )
-        XCTAssertEqual(direct.displayTitle, "Direct MV-HEVC")
-        XCTAssertEqual(direct.settingsSummary, "40 Mbps final")
-        XCTAssertTrue(direct.displayDetail.contains("confirmed direct stereo MV-HEVC support"))
+        XCTAssertEqual(legacyDirect.settingsSummary, "Automatic · content-adaptive quality")
 
         let generated = VideoRouteReport(
             intent: "generated",
@@ -381,13 +396,31 @@ final class ConversionWorkflowTests: XCTestCase {
             options: ConversionOptions()
         )
         let directEstimate = VideoStorageEstimate(drafts: [directDraft])
-        let directFinalBytes = try XCTUnwrap(directEstimate.finalOutputBytes)
-        let directPeakBytes = try XCTUnwrap(directEstimate.peakWorkingBytes)
 
-        XCTAssertTrue(directEstimate.conservativeFallbackReserve)
-        XCTAssertGreaterThan(directPeakBytes, directFinalBytes)
-        XCTAssertEqual(directEstimate.retainedIntermediateBytes, 0)
-        XCTAssertTrue(directEstimate.finalOutputDescription.hasPrefix("Up to "))
+        XCTAssertNil(directEstimate.finalOutputBytes)
+        XCTAssertFalse(directEstimate.conservativeFallbackReserve)
+        XCTAssertEqual(
+            directEstimate.unavailableReason,
+            "Automatic direct size varies with source content. Choose a Custom bitrate for a size estimate."
+        )
+
+        var customDirectOptions = ConversionOptions()
+        customDirectOptions.encoding.mvHEVC.directFinalBitrate = BitratePreference(mode: .custom, customMbps: 37)
+        let customDirectDraft = ConversionDraft(
+            source: source,
+            sourceDetails: inspection,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            options: customDirectOptions
+        )
+        let customDirectEstimate = VideoStorageEstimate(drafts: [customDirectDraft])
+        let customDirectFinalBytes = try XCTUnwrap(customDirectEstimate.finalOutputBytes)
+        let customDirectPeakBytes = try XCTUnwrap(customDirectEstimate.peakWorkingBytes)
+
+        XCTAssertTrue(customDirectEstimate.conservativeFallbackReserve)
+        XCTAssertGreaterThan(customDirectPeakBytes, customDirectFinalBytes)
+        XCTAssertEqual(customDirectEstimate.retainedIntermediateBytes, 0)
+        XCTAssertTrue(customDirectEstimate.finalOutputDescription.hasPrefix("Up to "))
 
         var generatedOptions = ConversionOptions()
         generatedOptions.job.intermediatePolicy = .reusable

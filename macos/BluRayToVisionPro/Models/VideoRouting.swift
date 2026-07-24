@@ -46,7 +46,7 @@ enum GeneratedVideoRouteRequirement: Equatable {
 }
 
 struct VideoRoutePlan: Equatable {
-    static let automaticDirectBitrateMbps = 40
+    static let defaultDirectCustomBitrateMbps = 40
     static let automaticGeneratedEyeBitrateMbps = MVHEVCOptions.defaultGeneratedEyeBitrate
     static let automaticGeneratedMergeQuality = 75
 
@@ -155,10 +155,9 @@ struct VideoRoutePlan: Equatable {
         kind = .directMVHEVC
         generatedRequirement = nil
         directBitrateMode = encoding.mvHEVC.directFinalBitrate.mode
-        directBitrateMbps = Self.resolvedBitrate(
-            encoding.mvHEVC.directFinalBitrate,
-            automatic: Self.automaticDirectBitrateMbps
-        )
+        directBitrateMbps = encoding.mvHEVC.directFinalBitrate.mode == .custom
+            ? encoding.mvHEVC.directFinalBitrate.customMbps ?? Self.defaultDirectCustomBitrateMbps
+            : nil
         generatedEyeBitrateMode = nil
         generatedEyeBitrateMbps = nil
         generatedMergeQuality = nil
@@ -202,7 +201,11 @@ struct VideoRoutePlan: Equatable {
     var settingsSummary: String {
         switch kind {
         case .directMVHEVC:
-            "\(bitratePolicyTitle(directBitrateMode)) · \(directBitrateMbps ?? Self.automaticDirectBitrateMbps) Mbps final"
+            if let directBitrateMbps {
+                "Custom · \(directBitrateMbps) Mbps final"
+            } else {
+                "Automatic · content-adaptive quality"
+            }
         case .generatedMVHEVC:
             "\(bitratePolicyTitle(generatedEyeBitrateMode)) · \(generatedEyeBitrateMbps ?? Self.automaticGeneratedEyeBitrateMbps) Mbps per eye · merge \(generatedMergeQuality ?? Self.automaticGeneratedMergeQuality)"
         case .av1Stereo:
@@ -219,7 +222,7 @@ struct VideoRoutePlan: Equatable {
     var detail: String {
         switch kind {
         case .directMVHEVC:
-            "The engine confirms stereo MV-HEVC support before reading conversion input. If unavailable, it visibly uses Automatic generated settings instead."
+            "Automatic adapts bitrate to source complexity. The engine confirms stereo MV-HEVC support before reading conversion input and visibly uses Automatic generated settings if unavailable."
         case .generatedMVHEVC:
             generatedRequirement?.detail ?? "This job creates left- and right-eye movies before assembling MV-HEVC."
         case .av1Stereo:
@@ -317,7 +320,10 @@ extension VideoRouteReport {
     var settingsSummary: String {
         switch kind {
         case .directMVHEVC:
-            return bitrateMbps.map { "\($0) Mbps final" } ?? "Automatic final bitrate"
+            if rateControl == "quality" || quality != nil {
+                return "Automatic · content-adaptive quality"
+            }
+            return bitrateMbps.map { "\($0) Mbps final" } ?? "Automatic · content-adaptive quality"
         case .generatedMVHEVC:
             if let eyeBitrateMbps, let mergeQuality {
                 return "\(eyeBitrateMbps) Mbps per eye · merge \(mergeQuality)"
@@ -486,8 +492,13 @@ struct VideoStorageEstimate: Equatable {
         let route = VideoRoutePlan(options: draft.options)
         switch route.kind {
         case .directMVHEVC:
+            guard route.directBitrateMode == .custom,
+                  let directBitrateMbps = route.directBitrateMbps
+            else {
+                return nil
+            }
             let directFinal = bytes(
-                bitrateMbps: route.directBitrateMbps ?? VideoRoutePlan.automaticDirectBitrateMbps,
+                bitrateMbps: directBitrateMbps,
                 durationSeconds: durationSeconds
             )
             let fallbackFinal = bytes(
@@ -531,7 +542,9 @@ struct VideoStorageEstimate: Equatable {
             "AV1 size varies with source content and CRF."
         case .existingArtifact:
             "This restart uses an existing encoded video artifact."
-        case .directMVHEVC, .generatedMVHEVC:
+        case .directMVHEVC:
+            "Automatic direct size varies with source content. Choose a Custom bitrate for a size estimate."
+        case .generatedMVHEVC:
             "Available after source duration is known."
         }
     }

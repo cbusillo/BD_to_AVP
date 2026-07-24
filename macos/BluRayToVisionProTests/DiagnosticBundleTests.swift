@@ -25,12 +25,18 @@ final class DiagnosticBundleTests: XCTestCase {
         let direct = try encodedSettings(options: ConversionOptions())
         XCTAssertEqual(direct["requested_video_route"] as? String, "direct_mv_hevc")
         XCTAssertEqual(direct["direct_bitrate_mode"] as? String, "automatic")
-        XCTAssertEqual(direct["direct_final_bitrate"] as? Int, 40)
+        XCTAssertNil(direct["direct_final_bitrate"])
         XCTAssertNil(direct["left_right_bitrate"])
         XCTAssertNil(direct["hevc_quality"])
         XCTAssertEqual(direct["upscale_enabled"] as? Bool, false)
         XCTAssertNil(direct["upscale_quality"])
         XCTAssertNil(direct["av1_crf"])
+
+        var customDirectOptions = ConversionOptions()
+        customDirectOptions.encoding.mvHEVC.directFinalBitrate = BitratePreference(mode: .custom, customMbps: 48)
+        let customDirect = try encodedSettings(options: customDirectOptions)
+        XCTAssertEqual(customDirect["direct_bitrate_mode"] as? String, "custom")
+        XCTAssertEqual(customDirect["direct_final_bitrate"] as? Int, 48)
 
         var generatedOptions = ConversionOptions()
         generatedOptions.job.intermediatePolicy = .reusable

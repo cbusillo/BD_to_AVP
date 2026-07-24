@@ -17,7 +17,7 @@ from bd_to_avp.process_runner import ProcessCancelled, ProcessExecutionError, Pr
 from bd_to_avp.runtime import RunContext
 from bd_to_avp.worker.protocol import BitrateMode, BitrateOptions, EncodingOptions, JobOptions, VideoRouteIntent
 
-AUTOMATIC_DIRECT_BITRATE_MBPS = 40
+AUTOMATIC_DIRECT_QUALITY = 0.7
 AUTOMATIC_GENERATED_EYE_BITRATE_MBPS = 20
 AUTOMATIC_GENERATED_MERGE_QUALITY = 75
 DIRECT_CAPABILITY_TIMEOUT_SECONDS = 15
@@ -43,6 +43,7 @@ class ResolvedVideoRoute:
     reason: str
     output_mode: VideoMode
     direct_bitrate_mbps: int | None = None
+    direct_quality: float | None = None
     generated_eye_bitrate_mbps: int | None = None
     generated_merge_quality: int | None = None
     av1_crf: int | None = None
@@ -54,7 +55,11 @@ class ResolvedVideoRoute:
             "selected": self.selected.value,
             "reason": self.reason,
         }
-        if self.direct_bitrate_mbps is not None:
+        if self.direct_quality is not None:
+            report["rate_control"] = "quality"
+            report["quality"] = self.direct_quality
+        elif self.direct_bitrate_mbps is not None:
+            report["rate_control"] = "average_bitrate"
             report["bitrate_mbps"] = self.direct_bitrate_mbps
         if self.generated_eye_bitrate_mbps is not None:
             report["eye_bitrate_mbps"] = self.generated_eye_bitrate_mbps
@@ -120,7 +125,7 @@ def resolve_video_route(
             f"MV-HEVC stage {start_stage.value} cannot use route intent {video.route_intent.value!r}."
         )
     if video.direct_bitrate is None:
-        raise VideoRoutePreflightError("Automatic MV-HEVC routing requires an active direct bitrate policy.")
+        raise VideoRoutePreflightError("Automatic MV-HEVC routing requires an active direct rate-control policy.")
 
     probe = capability_probe or (
         lambda: probe_direct_mv_hevc_capability(
@@ -138,12 +143,14 @@ def resolve_video_route(
             use_requested_settings=False,
         )
 
+    direct_bitrate_mbps, direct_quality = _resolve_direct_rate_control(video.direct_bitrate)
     return ResolvedVideoRoute(
         intent=video.route_intent,
         selected=VideoRouteKind.DIRECT_MV_HEVC,
         reason="direct_eligible",
         output_mode=video.mode,
-        direct_bitrate_mbps=_resolve_bitrate(video.direct_bitrate, AUTOMATIC_DIRECT_BITRATE_MBPS),
+        direct_bitrate_mbps=direct_bitrate_mbps,
+        direct_quality=direct_quality,
     )
 
 
@@ -283,3 +290,11 @@ def _resolve_bitrate(bitrate: BitrateOptions, automatic_mbps: int) -> int:
     if bitrate.mbps is None:
         raise VideoRoutePreflightError("Custom bitrate mode requires an Mbps value.")
     return bitrate.mbps
+
+
+def _resolve_direct_rate_control(bitrate: BitrateOptions) -> tuple[int | None, float | None]:
+    if bitrate.mode is BitrateMode.AUTOMATIC:
+        return None, AUTOMATIC_DIRECT_QUALITY
+    if bitrate.mbps is None:
+        raise VideoRoutePreflightError("Custom bitrate mode requires an Mbps value.")
+    return bitrate.mbps, None

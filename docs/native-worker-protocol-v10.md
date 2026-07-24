@@ -16,7 +16,7 @@ Every conversion and preview request contains one strict `encoding.video`
 object. `mode` is `mv_hevc` or `av1_sbs`. `route_intent` determines the exact
 remaining keys.
 
-An automatic MV-HEVC request carries only its direct final-bitrate policy:
+An automatic MV-HEVC request carries only its direct rate-control policy:
 
 ```json
 {
@@ -28,18 +28,15 @@ An automatic MV-HEVC request carries only its direct final-bitrate policy:
 }
 ```
 
-Custom bitrate mode adds one integer `mbps` value from 1 through 500. Automatic
-mode omits `mbps`; it does not send a numeric sentinel. The initial
-worker-owned automatic direct target is 40 Mbps, matching the aggregate budget
-of the generated route's two default 20 Mbps eye encodes. A 1080p24 synthetic
-check put direct output within 0.00045 minimum same-eye SSIM of the generated
-path at that target, but did not satisfy the qualification harness's positive
-quality-margin gate. Issue #364 completed the representative-corpus gate and
-rejected one fixed Automatic target: matched direct targets span 0.5 to 16
-Mbps, while a fixed 16 Mbps policy makes simpler cases 1.55 to 3.24 times
-larger. The direct route is not approved as the stable default until #366 adds
-content-adaptive Automatic rate control and reruns the gate. Native or streamed
-4K upscaling remains a separate route and is not inferred from this policy.
+Custom bitrate mode adds one integer `mbps` value from 1 through 500 and remains
+an exact average-bitrate target. Automatic mode omits `mbps`; it does not send
+a numeric sentinel. The worker resolves Automatic to VideoToolbox compression
+quality `0.7`, allowing effective bitrate to adapt to source complexity without
+materializing eye intermediates. The representative corpus selected this value
+because all seven gated cases preserve decoded quality, eye order, and the 5%
+matched-output size limit while producing materially different effective
+bitrates. Native or streamed 4K upscaling remains a separate generated route
+and is not inferred from this policy.
 
 A generated MV-HEVC request carries only generated-route controls:
 
@@ -142,10 +139,12 @@ the conversion result and preview artifact:
 }
 ```
 
-Direct reports `bitrate_mbps`; generated reports `eye_bitrate_mbps` and
-`merge_quality`; AV1 reports `crf`; existing-artifact reports have no encode
-controls. Preview child jobs resolve capability before their duration
-inspection and use the same resolver and fallback report as full conversions.
+Automatic direct reports `rate_control: "quality"` and `quality: 0.7`; Custom
+direct reports `rate_control: "average_bitrate"` and the exact
+`bitrate_mbps`. Generated reports `eye_bitrate_mbps` and `merge_quality`; AV1
+reports `crf`; existing-artifact reports have no encode controls. Preview child
+jobs resolve capability before their duration inspection and use the same
+resolver and fallback report as full conversions.
 
 ## Direct Stage Contract
 

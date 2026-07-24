@@ -80,7 +80,7 @@ class DirectMVHEVCRouteIntegrationTests(unittest.TestCase):
                     source_path,
                     output_path,
                     video.generate_direct_mv_hevc_normalizer_command(disc_info, ""),
-                    video.generate_direct_mv_hevc_encoder_command(output_path, 1),
+                    video.generate_direct_mv_hevc_encoder_command(output_path, None, 0.7),
                 )
 
             completed = subprocess.run(

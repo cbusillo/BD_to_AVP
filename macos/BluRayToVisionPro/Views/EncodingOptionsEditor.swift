@@ -146,7 +146,7 @@ struct EncodingOptionsEditor: View {
                                     }
                                 } else {
                                     Text(
-                                        "Automatic currently resolves to \(VideoRoutePlan.automaticDirectBitrateMbps) Mbps final."
+                                        "Automatic adapts bitrate to source complexity. Output size varies with content."
                                     )
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
@@ -335,14 +335,14 @@ struct EncodingOptionsEditor: View {
     private var directFinalBitrateSummary: String {
         switch options.mvHEVC.directFinalBitrate.mode {
         case .automatic:
-            "Automatic (Recommended) · \(VideoRoutePlan.automaticDirectBitrateMbps) Mbps final"
+            "Automatic (Recommended) · content-adaptive quality"
         case .custom:
             "Custom · \(directFinalCustomBitrateMbps) Mbps final"
         }
     }
 
     private var directFinalCustomBitrateMbps: Int {
-        options.mvHEVC.directFinalBitrate.customMbps ?? VideoRoutePlan.automaticDirectBitrateMbps
+        options.mvHEVC.directFinalBitrate.customMbps ?? VideoRoutePlan.defaultDirectCustomBitrateMbps
     }
 
     private var directFinalBitrateModeBinding: Binding<BitrateMode> {
@@ -351,7 +351,7 @@ struct EncodingOptionsEditor: View {
             set: { mode in
                 options.mvHEVC.directFinalBitrate.mode = mode
                 if mode == .custom, options.mvHEVC.directFinalBitrate.customMbps == nil {
-                    options.mvHEVC.directFinalBitrate.customMbps = VideoRoutePlan.automaticDirectBitrateMbps
+                    options.mvHEVC.directFinalBitrate.customMbps = VideoRoutePlan.defaultDirectCustomBitrateMbps
                 }
             }
         )

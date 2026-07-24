@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video_route import (
-    AUTOMATIC_DIRECT_BITRATE_MBPS,
+    AUTOMATIC_DIRECT_QUALITY,
     AUTOMATIC_GENERATED_EYE_BITRATE_MBPS,
     AUTOMATIC_GENERATED_MERGE_QUALITY,
     DirectMVHEVCCapability,
@@ -102,7 +102,7 @@ def job_options(
 
 
 class VideoRouteResolverTests(unittest.TestCase):
-    def test_selects_direct_with_calibrated_automatic_bitrate(self) -> None:
+    def test_selects_direct_with_content_adaptive_automatic_quality(self) -> None:
         route = resolve_video_route(
             mv_hevc_encoding(),
             job_options(),
@@ -110,7 +110,11 @@ class VideoRouteResolverTests(unittest.TestCase):
         )
 
         self.assertEqual(route.selected, VideoRouteKind.DIRECT_MV_HEVC)
-        self.assertEqual(route.direct_bitrate_mbps, AUTOMATIC_DIRECT_BITRATE_MBPS)
+        self.assertIsNone(route.direct_bitrate_mbps)
+        self.assertEqual(route.direct_quality, AUTOMATIC_DIRECT_QUALITY)
+        self.assertEqual(route.report()["rate_control"], "quality")
+        self.assertEqual(route.report()["quality"], AUTOMATIC_DIRECT_QUALITY)
+        self.assertNotIn("bitrate_mbps", route.report())
         self.assertEqual(route.report()["reason"], "direct_eligible")
 
     def test_selects_direct_custom_bitrate(self) -> None:
@@ -121,6 +125,10 @@ class VideoRouteResolverTests(unittest.TestCase):
         )
 
         self.assertEqual(route.direct_bitrate_mbps, 37)
+        self.assertIsNone(route.direct_quality)
+        self.assertEqual(route.report()["rate_control"], "average_bitrate")
+        self.assertEqual(route.report()["bitrate_mbps"], 37)
+        self.assertNotIn("quality", route.report())
 
     def test_valid_unavailable_capability_falls_back_before_input(self) -> None:
         route = resolve_video_route(

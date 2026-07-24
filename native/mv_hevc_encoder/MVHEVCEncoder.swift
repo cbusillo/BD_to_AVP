@@ -29,6 +29,7 @@ private enum EncoderFailure: Error, CustomStringConvertible {
 private struct EncoderOptions {
     let outputURL: URL
     let bitrateMbps: Double
+    let quality: Double?
     let fieldOfViewDegrees: Double
     let baselineMillimeters: Double?
     let disparityAdjustment: Double
@@ -39,6 +40,8 @@ private struct EncoderOptions {
     static func parse(arguments: [String]) throws -> EncoderOptions {
         var outputPath: String?
         var bitrateMbps = 8.0
+        var bitrateWasSpecified = false
+        var quality: Double?
         var fieldOfViewDegrees = 90.0
         var baselineMillimeters: Double?
         var disparityAdjustment = 0.0
@@ -54,6 +57,9 @@ private struct EncoderOptions {
                 outputPath = try value(after: argument, arguments: arguments, index: &index)
             case "--bitrate-mbps":
                 bitrateMbps = try doubleValue(after: argument, arguments: arguments, index: &index)
+                bitrateWasSpecified = true
+            case "--quality":
+                quality = try doubleValue(after: argument, arguments: arguments, index: &index)
             case "--fov":
                 fieldOfViewDegrees = try doubleValue(after: argument, arguments: arguments, index: &index)
             case "--baseline-mm":
@@ -81,6 +87,12 @@ private struct EncoderOptions {
         guard bitrateMbps.isFinite, bitrateMbps > 0, bitrateMbps <= 500 else {
             throw EncoderFailure.invalidArguments("--bitrate-mbps must be greater than 0 and at most 500.")
         }
+        if bitrateWasSpecified, quality != nil {
+            throw EncoderFailure.invalidArguments("--bitrate-mbps and --quality are mutually exclusive.")
+        }
+        if let quality, (!quality.isFinite || !(0 ... 1).contains(quality)) {
+            throw EncoderFailure.invalidArguments("--quality must be between 0 and 1.")
+        }
         guard fieldOfViewDegrees.isFinite, fieldOfViewDegrees > 0, fieldOfViewDegrees <= 180 else {
             throw EncoderFailure.invalidArguments("--fov must be greater than 0 and at most 180 degrees.")
         }
@@ -99,6 +111,7 @@ private struct EncoderOptions {
         return EncoderOptions(
             outputURL: URL(fileURLWithPath: outputPath).standardizedFileURL,
             bitrateMbps: bitrateMbps,
+            quality: quality,
             fieldOfViewDegrees: fieldOfViewDegrees,
             baselineMillimeters: baselineMillimeters,
             disparityAdjustment: disparityAdjustment,
@@ -153,6 +166,7 @@ private struct EncoderOptions {
 
               --output FILE                  Required output MOV path.
               --bitrate-mbps VALUE           Final MV-HEVC average bitrate (default: 8).
+              --quality VALUE                Compression quality from 0 through 1; exclusive with bitrate.
               --fov DEGREES                   Horizontal field of view (default: 90).
               --baseline-mm VALUE             Optional constant camera baseline.
               --disparity-adjustment VALUE    Fraction of image width, -1 through 1 (default: 0).
@@ -367,11 +381,17 @@ private func makeCompressionProperties(options: EncoderOptions, header: Y4MHeade
         kVTCompressionPropertyKey_HorizontalDisparityAdjustment as String: Int32(
             (options.disparityAdjustment * 10_000).rounded()
         ),
-        kVTCompressionPropertyKey_AverageBitRate as String: Int((options.bitrateMbps * 1_000_000).rounded()),
         kVTCompressionPropertyKey_ExpectedFrameRate as String: header.frameRate,
         kVTCompressionPropertyKey_ProfileLevel as String: kVTProfileLevel_HEVC_Main_AutoLevel,
         kVTCompressionPropertyKey_AllowFrameReordering as String: true,
     ]
+    if let quality = options.quality {
+        properties[kVTCompressionPropertyKey_Quality as String] = quality
+    } else {
+        properties[kVTCompressionPropertyKey_AverageBitRate as String] = Int(
+            (options.bitrateMbps * 1_000_000).rounded()
+        )
+    }
     if let baselineMillimeters = options.baselineMillimeters {
         properties[kVTCompressionPropertyKey_StereoCameraBaseline as String] = UInt32(
             (baselineMillimeters * 1_000).rounded()
@@ -398,20 +418,6 @@ private func isStereoMVHEVCOutputConfigurationSupported() throws -> Bool {
     guard VTIsStereoMVHEVCEncodeSupported() else {
         return false
     }
-    let probeURL = FileManager.default.temporaryDirectory.appendingPathComponent(
-        ".mv-hevc-capability-\(UUID().uuidString).mov"
-    )
-    defer { try? FileManager.default.removeItem(at: probeURL) }
-    let options = EncoderOptions(
-        outputURL: probeURL,
-        bitrateMbps: 8.0,
-        fieldOfViewDegrees: 90.0,
-        baselineMillimeters: nil,
-        disparityAdjustment: 0.0,
-        expectedFrameCount: nil,
-        swapEyes: false,
-        overwrite: true
-    )
     let header = Y4MHeader(
         frameWidth: 3_840,
         frameHeight: 1_080,
@@ -419,9 +425,29 @@ private func isStereoMVHEVCOutputConfigurationSupported() throws -> Bool {
         frameRateDenominator: 1_001,
         chromaLocation: kCVImageBufferChromaLocation_Center
     )
-    let outputSettings = try makeOutputSettings(options: options, header: header)
-    let writer = try AVAssetWriter(outputURL: probeURL, fileType: .mov)
-    return writer.canApply(outputSettings: outputSettings, forMediaType: .video)
+    for quality in [Double?.none, 0.7] {
+        let probeURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            ".mv-hevc-capability-\(UUID().uuidString).mov"
+        )
+        defer { try? FileManager.default.removeItem(at: probeURL) }
+        let options = EncoderOptions(
+            outputURL: probeURL,
+            bitrateMbps: 8.0,
+            quality: quality,
+            fieldOfViewDegrees: 90.0,
+            baselineMillimeters: nil,
+            disparityAdjustment: 0.0,
+            expectedFrameCount: nil,
+            swapEyes: false,
+            overwrite: true
+        )
+        let outputSettings = try makeOutputSettings(options: options, header: header)
+        let writer = try AVAssetWriter(outputURL: probeURL, fileType: .mov)
+        if !writer.canApply(outputSettings: outputSettings, forMediaType: .video) {
+            return false
+        }
+    }
+    return true
 }
 
 private func fillPixelBuffer(
@@ -688,8 +714,7 @@ private struct MVHEVCEncoder {
                 options: options,
                 cancellationFlag: cancellationFlag
             )
-            let summary: [String: Any] = [
-                "bitrate_mbps": options.bitrateMbps,
+            var summary: [String: Any] = [
                 "eye_height": header.frameHeight,
                 "eye_width": header.eyeWidth,
                 "field_of_view_degrees": options.fieldOfViewDegrees,
@@ -700,6 +725,13 @@ private struct MVHEVCEncoder {
                 "schema_version": 1,
                 "swapped_eyes": options.swapEyes,
             ]
+            if let quality = options.quality {
+                summary["quality"] = quality
+                summary["rate_control"] = "quality"
+            } else {
+                summary["bitrate_mbps"] = options.bitrateMbps
+                summary["rate_control"] = "average_bitrate"
+            }
             let data = try JSONSerialization.data(withJSONObject: summary, options: [.sortedKeys])
             print(String(decoding: data, as: UTF8.self))
         } catch EncoderFailure.cancelled {
