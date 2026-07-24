@@ -23,6 +23,12 @@ from bd_to_avp.modules.process import (
     start_process,
 )
 from bd_to_avp.modules.sub import SRTCreationError
+from bd_to_avp.modules.video_route import (
+    ResolvedVideoRoute,
+    VideoRouteKind,
+    VideoRoutePreflightError,
+    resolve_video_route,
+)
 from bd_to_avp.process_runner import ProcessCancelled
 from bd_to_avp.runtime import RunContext
 from bd_to_avp.worker.ownership import WorkerCancelled, WorkerProcessOwner
@@ -226,6 +232,18 @@ def preview_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActi
     if preview is None:
         raise WorkerOperationError("invalid_request", "Preview requests require preview options.")
 
+    try:
+        resolved_video_route = resolve_job_video_route(job, owner, activity)
+    except VideoRoutePreflightError as error:
+        if owner.cancellation_event.is_set():
+            raise WorkerCancelled("The preview was cancelled.") from error
+        raise WorkerOperationError(
+            "video_route_preflight_failed",
+            "The video route could not be prepared safely.",
+            str(error),
+        ) from error
+    report_video_route(activity, resolved_video_route)
+
     activity.stage_started("inspect_source", "Reading video metadata")
     inspection = inspect_source(job.source, owner, run_context=activity.run_context)
     try:
@@ -250,6 +268,8 @@ def preview_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActi
         activity,
         preview_range=preview_range,
         allow_recovery=False,
+        resolved_video_route=resolved_video_route,
+        route_already_reported=True,
     )
     artifact = {
         **result,
@@ -267,6 +287,8 @@ def _convert_source(
     *,
     preview_range: PreviewRange | None = None,
     allow_recovery: bool = True,
+    resolved_video_route: ResolvedVideoRoute | None = None,
+    route_already_reported: bool = False,
 ) -> dict[str, object]:
     source_path = validate_source(job.source)
     destination = job.destination
@@ -287,15 +309,20 @@ def _convert_source(
     owner.check_cancelled()
     with configured_conversion(job, source_path, preview_range=preview_range):
         try:
-            activity.set_stage_plan(conversion_stage_plan())
-            activity.stage_started("configure", "Preparing conversion settings")
             config.configure_tool_environment()
+            resolved_video_route = resolved_video_route or resolve_job_video_route(job, owner, activity)
+            apply_video_route_to_config(resolved_video_route)
+            activity.set_stage_plan(conversion_stage_plan(resolved_video_route))
+            activity.stage_started("configure", "Preparing conversion settings")
             activity.log("Tool environment configured", stage="configure")
+            if not route_already_reported:
+                report_video_route(activity, resolved_video_route)
             final_output_path = start_process(
                 cancellation_event=owner.cancellation_event,
                 activity=activity,
                 selected_title_id=job.source.title_id,
                 run_context=activity.run_context,
+                video_route=resolved_video_route,
             )
             resolved_preview_range = config.preview_range
             owner.check_cancelled()
@@ -338,6 +365,14 @@ def _convert_source(
             raise WorkerOperationError(
                 "dependency_preflight_failed",
                 "A required conversion helper is missing or unavailable.",
+                str(error),
+            ) from error
+        except VideoRoutePreflightError as error:
+            if owner.cancellation_event.is_set():
+                raise WorkerCancelled("The conversion was cancelled.") from error
+            raise WorkerOperationError(
+                "video_route_preflight_failed",
+                "The video route could not be prepared safely.",
                 str(error),
             ) from error
         except FileExistsError as error:
@@ -386,6 +421,8 @@ def _convert_source(
         "output_path": final_output_path.as_posix(),
         "size_bytes": final_output_path.stat().st_size,
     }
+    assert resolved_video_route is not None
+    result["video_route"] = resolved_video_route.report()
     if job.source.title_id is not None:
         result["title_id"] = job.source.title_id
     if resolved_preview_range is not None:
@@ -437,11 +474,8 @@ def configured_conversion(
         config.audio_bitrate = job.encoding.audio.bitrate
         config.audio_preferred_language = job.encoding.audio.preferred_language
         config.video_mode = job.encoding.video_mode
-        config.av1_crf = job.encoding.av1_crf
-        config.left_right_bitrate = job.encoding.left_right_bitrate
-        config.link_quality = job.encoding.link_quality
-        config.mv_hevc_quality = job.encoding.mv_hevc_quality
-        config.upscale_quality = job.encoding.upscale_quality
+        if job.encoding.upscale.quality is not None:
+            config.upscale_quality = job.encoding.upscale.quality
         config.fov = job.encoding.fov
         config.frame_rate = job.encoding.frame_rate
         config.resolution = job.encoding.resolution
@@ -453,7 +487,7 @@ def configured_conversion(
         config.crop_black_bars = job.encoding.crop_black_bars
         config.output_commands = job.job.output_commands
         config.software_encoder = job.job.software_encoder
-        config.fx_upscale = job.encoding.fx_upscale
+        config.fx_upscale = job.encoding.upscale.enabled
         config.continue_on_error = job.job.continue_on_error
         config.language_code = job.encoding.subtitles.preferred_language or "eng"
         config.remove_extra_languages = job.encoding.subtitles.mode is SubtitleMode.PREFERRED_ONLY
@@ -468,6 +502,60 @@ def configured_conversion(
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+
+def apply_video_route_to_config(video_route: ResolvedVideoRoute) -> None:
+    config.video_mode = video_route.output_mode
+    if video_route.av1_crf is not None:
+        config.av1_crf = video_route.av1_crf
+    if video_route.generated_eye_bitrate_mbps is not None:
+        config.left_right_bitrate = video_route.generated_eye_bitrate_mbps
+    if video_route.generated_merge_quality is not None:
+        config.mv_hevc_quality = video_route.generated_merge_quality
+
+
+def resolve_job_video_route(
+    job: JobSpec,
+    owner: WorkerProcessOwner,
+    activity: WorkerActivityReporter,
+) -> ResolvedVideoRoute:
+    if job.encoding is None or job.job is None:
+        raise WorkerOperationError("invalid_request", "Conversion requests require encoding and job options.")
+    return resolve_video_route(
+        job.encoding,
+        job.job,
+        run_context=activity.run_context,
+        cancellation_event=owner.cancellation_event,
+        observability_context=stage_observability_context("configure"),
+    )
+
+
+def report_video_route(activity: WorkerActivityReporter, video_route: ResolvedVideoRoute) -> None:
+    report = video_route.report()
+    if video_route.fallback_reason is not None:
+        activity.warning(
+            "Direct MV-HEVC is unavailable on this Mac. Continuing with generated MV-HEVC.",
+            stage="configure",
+            code="video_route_fallback",
+            video_route=report,
+        )
+        return
+    activity.log(
+        route_message(video_route),
+        stage="configure",
+        code="video_route_selected",
+        video_route=report,
+    )
+
+
+def route_message(video_route: ResolvedVideoRoute) -> str:
+    messages = {
+        VideoRouteKind.DIRECT_MV_HEVC: "Using direct MV-HEVC encoding.",
+        VideoRouteKind.GENERATED_MV_HEVC: "Using generated MV-HEVC encoding.",
+        VideoRouteKind.AV1: "Using AV1 stereo encoding.",
+        VideoRouteKind.EXISTING_ARTIFACT: "Using the existing encoded video artifact.",
+    }
+    return messages[video_route.selected]
 
 
 def validate_source(source: JobSource) -> Path:

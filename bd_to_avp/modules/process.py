@@ -25,12 +25,14 @@ from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video import (
     create_av1_sbs_file,
     create_av1_stereo_file,
+    create_direct_mv_hevc_file,
     create_left_right_files,
     create_mv_hevc_file,
     detect_crop_parameters,
     create_upscaled_file,
     get_video_color_depth,
 )
+from bd_to_avp.modules.video_route import ResolvedVideoRoute, VideoRouteKind, legacy_video_route
 from bd_to_avp.observability import ObservabilityContext, ObservabilityStage
 from bd_to_avp.process_runner import ProcessCancelled
 from bd_to_avp.presentation import cli_message
@@ -101,7 +103,8 @@ def find_batch_sources(source_folder_path: Path) -> tuple[Path, ...]:
     )
 
 
-def conversion_stage_plan() -> tuple[str, ...]:
+def conversion_stage_plan(video_route: ResolvedVideoRoute | None = None) -> tuple[str, ...]:
+    video_route = video_route or legacy_video_route()
     stages = ["configure"]
     if config.start_stage is Stage.MOVE_FILES:
         return (*stages, "move_files")
@@ -121,9 +124,14 @@ def conversion_stage_plan() -> tuple[str, ...]:
     if not config.skip_subtitles and config.start_stage.value <= Stage.EXTRACT_SUBTITLES.value:
         stages.append("extract_subtitles")
     if config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
-        stages.append("encode_av1_stereo" if config.video_mode is VideoMode.AV1_SBS else "create_left_right_files")
+        stages.append(
+            "encode_av1_stereo" if video_route.output_mode is VideoMode.AV1_SBS else "create_left_right_files"
+        )
     if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
-        stages.append("finalize_av1_stereo" if config.video_mode is VideoMode.AV1_SBS else "combine_to_mv_hevc")
+        if video_route.output_mode is VideoMode.AV1_SBS:
+            stages.append("finalize_av1_stereo")
+        elif video_route.selected is not VideoRouteKind.DIRECT_MV_HEVC:
+            stages.append("combine_to_mv_hevc")
     if config.fx_upscale and config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
         stages.append("upscale_video")
     if config.audio_mode.prepares_m4a and config.start_stage.value <= Stage.TRANSCODE_AUDIO.value:
@@ -144,6 +152,7 @@ def process(
     batch_sources: tuple[Path, ...] | None = None,
     activity: ActivityReporter | None = None,
     run_context: RunContext | None = None,
+    video_route: ResolvedVideoRoute | None = None,
 ) -> Path | None:
     cancellation_event = normalized_cancellation_event(cancellation_event, run_context)
     raise_if_cancelled(cancellation_event)
@@ -164,9 +173,14 @@ def process(
             config.start_stage = gui_start_stage if is_resume_source else batch_start_stage
             try:
                 final_output_path = (
-                    process_each(cancellation_event, activity=activity, run_context=run_context)
+                    process_each(
+                        cancellation_event,
+                        activity=activity,
+                        run_context=run_context,
+                        video_route=video_route,
+                    )
                     if activity
-                    else process_each(cancellation_event, run_context=run_context)
+                    else process_each(cancellation_event, run_context=run_context, video_route=video_route)
                 )
                 raise_if_cancelled(cancellation_event)
             except preflight.DependencyPreflightError:
@@ -192,9 +206,14 @@ def process(
     else:
         if selected_title_id is None:
             final_output_path = (
-                process_each(cancellation_event, activity=activity, run_context=run_context)
+                process_each(
+                    cancellation_event,
+                    activity=activity,
+                    run_context=run_context,
+                    video_route=video_route,
+                )
                 if activity
-                else process_each(cancellation_event, run_context=run_context)
+                else process_each(cancellation_event, run_context=run_context, video_route=video_route)
             )
         else:
             final_output_path = (
@@ -203,12 +222,14 @@ def process(
                     activity=activity,
                     selected_title_id=selected_title_id,
                     run_context=run_context,
+                    video_route=video_route,
                 )
                 if activity
                 else process_each(
                     cancellation_event,
                     selected_title_id=selected_title_id,
                     run_context=run_context,
+                    video_route=video_route,
                 )
             )
 
@@ -221,7 +242,9 @@ def process_each(
     *,
     selected_title_id: str | None = None,
     run_context: RunContext | None = None,
+    video_route: ResolvedVideoRoute | None = None,
 ) -> Path:
+    video_route = video_route or legacy_video_route()
     cancellation_event = normalized_cancellation_event(cancellation_event, run_context)
     raise_if_cancelled(cancellation_event)
     if config.video_mode is VideoMode.AV1_SBS and config.fx_upscale:
@@ -246,6 +269,7 @@ def process_each(
     if activity:
         activity.stage_started("preflight", "Checking required conversion tools")
     preflight.verify_runtime_ready(
+        video_route=video_route,
         run_context=run_context,
         cancellation_event=cancellation_event,
         observability_context=stage_observability_context("preflight"),
@@ -352,7 +376,7 @@ def process_each(
         observability_context=stage_observability_context("extract_subtitles"),
     )
     raise_if_cancelled(cancellation_event)
-    if config.video_mode is VideoMode.AV1_SBS:
+    if video_route.output_mode is VideoMode.AV1_SBS:
         if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
             activity.stage_started("encode_av1_stereo", "Encoding side-by-side AV1 stereo video")
         av1_sbs_path = create_av1_sbs_file(
@@ -374,6 +398,19 @@ def process_each(
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("finalize_av1_stereo"),
+        )
+    elif video_route.selected is VideoRouteKind.DIRECT_MV_HEVC:
+        if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
+            activity.stage_started("create_left_right_files", "Encoding direct MV-HEVC video")
+        video_path = create_direct_mv_hevc_file(
+            disc_info,
+            output_folder,
+            video_output_path,
+            crop_params,
+            video_route.direct_bitrate_mbps,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=stage_observability_context("create_left_right_files"),
         )
     else:
         if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
@@ -527,6 +564,7 @@ def start_process(
     batch_sources: tuple[Path, ...] | None = None,
     activity: ActivityReporter | None = None,
     run_context: RunContext | None = None,
+    video_route: ResolvedVideoRoute | None = None,
 ) -> Path | None:
     cancellation_event = normalized_cancellation_event(cancellation_event, run_context)
     gui_start_stage = gui_start_stage or config.start_stage
@@ -542,6 +580,7 @@ def start_process(
                     batch_sources=batch_sources,
                     activity=activity,
                     run_context=run_context,
+                    video_route=video_route,
                 )
         return process(
             gui_start_stage,
@@ -552,6 +591,7 @@ def start_process(
             batch_sources=batch_sources,
             activity=activity,
             run_context=run_context,
+            video_route=video_route,
         )
     except ProcessCancelled as error:
         raise ProcessingCancelled("Processing was cancelled.") from error

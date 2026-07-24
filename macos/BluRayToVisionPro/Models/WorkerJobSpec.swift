@@ -1,7 +1,7 @@
 import Foundation
 
 struct WorkerJobSpec: Encodable, Equatable {
-    static let protocolVersion = 9
+    static let protocolVersion = 10
 
     struct Source: Encodable, Equatable {
         enum Kind: String, Encodable {
@@ -103,35 +103,114 @@ struct WorkerJobSpec: Encodable, Equatable {
             }
         }
 
+        struct Bitrate: Encodable, Equatable {
+            let mode: BitrateMode
+            let mbps: Int?
+
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(mode, forKey: .mode)
+                if mode == .custom {
+                    guard let mbps else {
+                        throw EncodingError.invalidValue(
+                            self,
+                            EncodingError.Context(
+                                codingPath: encoder.codingPath,
+                                debugDescription: "Custom bitrate mode requires an Mbps value."
+                            )
+                        )
+                    }
+                    try container.encode(mbps, forKey: .mbps)
+                }
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case mode
+                case mbps
+            }
+        }
+
+        struct Video: Encodable, Equatable {
+            enum RouteIntent: String, Encodable, Equatable {
+                case automatic
+                case generated
+                case encode
+                case existingArtifact = "existing_artifact"
+            }
+
+            let mode: VideoOutputMode
+            let routeIntent: RouteIntent
+            let directBitrate: Bitrate?
+            let generatedEyeBitrate: Bitrate?
+            let generatedMergeQuality: Int?
+            let av1CRF: Int?
+
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(mode, forKey: .mode)
+                try container.encode(routeIntent, forKey: .routeIntent)
+                try container.encodeIfPresent(directBitrate, forKey: .directBitrate)
+                try container.encodeIfPresent(generatedEyeBitrate, forKey: .generatedEyeBitrate)
+                try container.encodeIfPresent(generatedMergeQuality, forKey: .generatedMergeQuality)
+                try container.encodeIfPresent(av1CRF, forKey: .av1CRF)
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case mode
+                case routeIntent = "route_intent"
+                case directBitrate = "direct_bitrate"
+                case generatedEyeBitrate = "generated_eye_bitrate"
+                case generatedMergeQuality = "generated_merge_quality"
+                case av1CRF = "crf"
+            }
+        }
+
+        struct Upscale: Encodable, Equatable {
+            let enabled: Bool
+            let quality: Int?
+
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(enabled, forKey: .enabled)
+                if enabled {
+                    guard let quality else {
+                        throw EncodingError.invalidValue(
+                            self,
+                            EncodingError.Context(
+                                codingPath: encoder.codingPath,
+                                debugDescription: "Enabled upscale mode requires a quality value."
+                            )
+                        )
+                    }
+                    try container.encode(quality, forKey: .quality)
+                }
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case enabled
+                case quality
+            }
+        }
+
         let audio: Audio
-        let videoMode: VideoOutputMode
-        let av1CRF: Int
-        let leftRightBitrate: Int
-        let linkQuality: Bool
-        let mvHEVCQuality: Int
-        let upscaleQuality: Int
+        let video: Video
+        let upscale: Upscale
         let fieldOfView: Int
         let frameRate: String
         let resolution: String
         let cropBlackBars: Bool
         let swapEyes: Bool
-        let fxUpscale: Bool
         let subtitles: Subtitles
 
         enum CodingKeys: String, CodingKey {
             case audio
-            case videoMode = "video_mode"
-            case av1CRF = "av1_crf"
-            case leftRightBitrate = "left_right_bitrate"
-            case linkQuality = "link_quality"
-            case mvHEVCQuality = "mv_hevc_quality"
-            case upscaleQuality = "upscale_quality"
+            case video
+            case upscale
             case fieldOfView = "fov"
             case frameRate = "frame_rate"
             case resolution
             case cropBlackBars = "crop_black_bars"
             case swapEyes = "swap_eyes"
-            case fxUpscale = "fx_upscale"
             case subtitles
         }
     }
@@ -212,8 +291,9 @@ struct WorkerJobSpec: Encodable, Equatable {
         source = Source(source: draft.source, titleID: Self.titleID(for: draft))
         destination = Destination(path: draft.destinationURL.path)
 
-        encoding = Self.encoding(from: draft.options.encoding)
-        job = Self.conversionJob(from: draft)
+        let job = Self.conversionJob(from: draft)
+        encoding = Self.encoding(from: draft.options.encoding, job: job)
+        self.job = job
         preview = nil
     }
 
@@ -229,10 +309,8 @@ struct WorkerJobSpec: Encodable, Equatable {
         operation = "preview_source"
         source = Source(source: conversion.source, titleID: Self.titleID(for: conversion))
         destination = Destination(path: destinationURL.path)
-        encoding = Self.encoding(from: conversion.options.encoding)
-
         let jobOptions = conversion.options.job
-        job = Job(
+        let job = Job(
             startStage: 1,
             keepFiles: false,
             overwrite: true,
@@ -242,6 +320,14 @@ struct WorkerJobSpec: Encodable, Equatable {
             outputCommands: jobOptions.outputCommands,
             keepAwake: jobOptions.keepAwake
         )
+        encoding = Self.encoding(
+            from: conversion.options.encoding,
+            job: job,
+            routeStartStage: jobOptions.startStage.rawValue,
+            routeKeepFiles: jobOptions.intermediatePolicy.createsReusableArtifacts,
+            allowsExistingArtifact: false
+        )
+        self.job = job
         preview = Preview(
             parentJobID: previewDraft.parentJobID,
             position: previewDraft.samplePosition.rawValue,
@@ -262,7 +348,13 @@ struct WorkerJobSpec: Encodable, Equatable {
         try container.encodeIfPresent(preview, forKey: .preview)
     }
 
-    private static func encoding(from options: EncodingOptions) -> Encoding {
+    private static func encoding(
+        from options: EncodingOptions,
+        job: Job,
+        routeStartStage: Int? = nil,
+        routeKeepFiles: Bool? = nil,
+        allowsExistingArtifact: Bool = true
+    ) -> Encoding {
         let isAV1Stereo = options.videoOutputMode == .av1Stereo
         return Encoding(
             audio: Encoding.Audio(
@@ -270,20 +362,100 @@ struct WorkerJobSpec: Encodable, Equatable {
                 bitrate: options.audioBitrate,
                 preferredLanguage: audioPreferredLanguage(from: options.audioLanguages)
             ),
-            videoMode: options.videoOutputMode,
-            av1CRF: options.av1CRF,
-            leftRightBitrate: options.generatedEyeCustomBitrateMbps,
-            linkQuality: options.mvHEVC.linkGeneratedAndUpscaleQuality,
-            mvHEVCQuality: options.mvHEVC.generatedMergeQuality,
-            upscaleQuality: options.upscaleQuality,
+            video: videoOptions(
+                from: options,
+                job: job,
+                routeStartStage: routeStartStage,
+                routeKeepFiles: routeKeepFiles,
+                allowsExistingArtifact: allowsExistingArtifact
+            ),
+            upscale: Encoding.Upscale(
+                enabled: isAV1Stereo ? false : options.upscaleEnabled,
+                quality: isAV1Stereo || !options.upscaleEnabled ? nil : options.upscaleQuality
+            ),
             fieldOfView: options.fieldOfView,
             frameRate: options.frameRateOverride,
             resolution: isAV1Stereo ? "" : options.resolutionOverride,
             cropBlackBars: options.cropBlackBars,
             swapEyes: options.swapEyes,
-            fxUpscale: isAV1Stereo ? false : options.upscaleEnabled,
             subtitles: subtitleOptions(from: options)
         )
+    }
+
+    private static func videoOptions(
+        from options: EncodingOptions,
+        job: Job,
+        routeStartStage: Int?,
+        routeKeepFiles: Bool?,
+        allowsExistingArtifact: Bool
+    ) -> Encoding.Video {
+        let requestedStartStage = routeStartStage ?? job.startStage
+        let keepsReusableArtifacts = routeKeepFiles ?? job.keepFiles
+        if options.videoOutputMode == .av1Stereo {
+            if allowsExistingArtifact, requestedStartStage > ConversionStage.combineToMVHEVC.rawValue {
+                return Encoding.Video(
+                    mode: .av1Stereo,
+                    routeIntent: .existingArtifact,
+                    directBitrate: nil,
+                    generatedEyeBitrate: nil,
+                    generatedMergeQuality: nil,
+                    av1CRF: nil
+                )
+            }
+            return Encoding.Video(
+                mode: .av1Stereo,
+                routeIntent: .encode,
+                directBitrate: nil,
+                generatedEyeBitrate: nil,
+                generatedMergeQuality: nil,
+                av1CRF: options.av1CRF
+            )
+        }
+
+        if allowsExistingArtifact, requestedStartStage > ConversionStage.combineToMVHEVC.rawValue {
+            return Encoding.Video(
+                mode: .mvHEVC,
+                routeIntent: .existingArtifact,
+                directBitrate: nil,
+                generatedEyeBitrate: nil,
+                generatedMergeQuality: nil,
+                av1CRF: nil
+            )
+        }
+
+        let requiresGeneratedRoute = requestedStartStage >= ConversionStage.createLeftRightFiles.rawValue
+            || keepsReusableArtifacts
+            || job.softwareEncoder
+            || options.upscaleEnabled
+            || !(1 ... 180).contains(options.fieldOfView)
+        if requiresGeneratedRoute {
+            return Encoding.Video(
+                mode: .mvHEVC,
+                routeIntent: .generated,
+                directBitrate: nil,
+                generatedEyeBitrate: bitrate(from: options.mvHEVC.generatedEyeBitrate),
+                generatedMergeQuality: options.mvHEVC.generatedMergeQuality,
+                av1CRF: nil
+            )
+        }
+
+        return Encoding.Video(
+            mode: .mvHEVC,
+            routeIntent: .automatic,
+            directBitrate: bitrate(from: options.mvHEVC.directFinalBitrate),
+            generatedEyeBitrate: nil,
+            generatedMergeQuality: nil,
+            av1CRF: nil
+        )
+    }
+
+    private static func bitrate(from preference: BitratePreference) -> Encoding.Bitrate {
+        switch preference.mode {
+        case .automatic:
+            Encoding.Bitrate(mode: .automatic, mbps: nil)
+        case .custom:
+            Encoding.Bitrate(mode: .custom, mbps: preference.customMbps)
+        }
     }
 
     private static func audioMode(from handling: AudioHandling) -> Encoding.Audio.Mode {

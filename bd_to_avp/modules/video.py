@@ -237,6 +237,64 @@ def generate_native_mvc_av1_command(
     return [arg if arg != "pipe:0" else "-" for arg in command]
 
 
+def generate_direct_mv_hevc_normalizer_command(
+    disc_info: DiscInfo,
+    crop_params: str,
+) -> list[str]:
+    if disc_info.color_depth != 8:
+        raise ValueError("Direct MV-HEVC encoding currently supports 8-bit 4:2:0 Blu-ray MVC sources only.")
+
+    source_width, source_height = parse_resolution(config.resolution or disc_info.resolution)
+    stream = ffmpeg.input(
+        "pipe:0",
+        f="yuv4mpegpipe",
+        r=config.frame_rate or disc_info.frame_rate,
+    )
+    split_streams = ffmpeg.filter_multi_output(stream, "split", 2)
+    left_stream = ffmpeg.filter(split_streams[0], "crop", source_width, source_height, 0, 0)
+    right_stream = ffmpeg.filter(split_streams[1], "crop", source_width, source_height, source_width, 0)
+
+    if crop_params:
+        left_stream = ffmpeg.filter(left_stream, "crop", *crop_params.split(":"))
+        right_stream = ffmpeg.filter(right_stream, "crop", *crop_params.split(":"))
+
+    if disc_info.is_interlaced:
+        left_stream = ffmpeg.filter(left_stream, "bwdif")
+        right_stream = ffmpeg.filter(right_stream, "bwdif")
+
+    if config.swap_eyes:
+        left_stream, right_stream = right_stream, left_stream
+
+    packed_stream = ffmpeg.filter([left_stream, right_stream], "hstack", inputs=2)
+    output = ffmpeg.output(
+        packed_stream,
+        "pipe:1",
+        format="yuv4mpegpipe",
+        pix_fmt="yuv420p",
+        r=config.frame_rate or disc_info.frame_rate,
+    )
+    command = ffmpeg.compile(output, cmd=config.FFMPEG_PATH.as_posix(), overwrite_output=True)
+    return [arg if arg != "pipe:0" else "-" for arg in command]
+
+
+def generate_direct_mv_hevc_encoder_command(
+    output_path: Path,
+    bitrate_mbps: int,
+) -> list[str | Path]:
+    return [
+        config.MV_HEVC_ENCODER_PATH,
+        "--output",
+        output_path,
+        "--bitrate-mbps",
+        str(bitrate_mbps),
+        "--fov",
+        str(config.fov),
+        "--disparity-adjustment",
+        "0",
+        "--overwrite",
+    ]
+
+
 def parse_resolution(resolution: str) -> tuple[int, int]:
     width, height = resolution.lower().split("x", 1)
     return int(width), int(height)
@@ -349,6 +407,213 @@ def run_native_mvc_encoding(
     finally:
         if not stream_from_container and native_input_path != video_input_path:
             native_input_path.unlink(missing_ok=True)
+
+
+def run_direct_mv_hevc_encoding(
+    video_input_path: Path,
+    output_path: Path,
+    normalizer_command: list[str],
+    encoder_command: list[str | Path],
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> None:
+    stream_from_container = should_stream_mvc_from_container(video_input_path)
+    producer_command = generate_mvc_annex_b_stream_command(video_input_path) if stream_from_container else None
+    native_input_path = Path("-") if stream_from_container else prepare_native_mvc_input(video_input_path)
+
+    try:
+        try:
+            run_direct_mv_hevc_attempt(
+                native_input_path,
+                output_path,
+                normalizer_command,
+                encoder_command,
+                producer_command=producer_command,
+                single_threaded=False,
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                observability_context=observability_context,
+            )
+        except (ProcessArtifactNoProgressError, subprocess.CalledProcessError) as error:
+            retry_after_crash = isinstance(error, subprocess.CalledProcessError) and native_splitter_died_by_signal(
+                error
+            )
+            if not isinstance(error, ProcessArtifactNoProgressError) and not retry_after_crash:
+                raise
+            retry_reason = (
+                "Direct MV-HEVC output stopped making progress; retrying once with single-threaded MVC decoding."
+                if isinstance(error, ProcessArtifactNoProgressError)
+                else "Native MVC splitter crashed; retrying direct MV-HEVC once in single-threaded mode."
+            )
+            cli_message(retry_reason, run_context=run_context)
+            remove_direct_mv_hevc_attempt_artifacts(output_path)
+            run_direct_mv_hevc_attempt(
+                native_input_path,
+                output_path,
+                normalizer_command,
+                encoder_command,
+                producer_command=producer_command,
+                single_threaded=True,
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                observability_context=observability_context,
+            )
+    except ProcessArtifactNoProgressError as error:
+        raise NativeMvcSplitError(build_direct_mv_hevc_stall_message(error)) from error
+    except subprocess.CalledProcessError as error:
+        if native_splitter_should_report_crash(error):
+            raise NativeMvcSplitError(build_native_splitter_failure_message(error)) from error
+        raise
+    finally:
+        if not stream_from_container and native_input_path != video_input_path:
+            native_input_path.unlink(missing_ok=True)
+
+
+def run_direct_mv_hevc_attempt(
+    native_input_path: Path,
+    output_path: Path,
+    normalizer_command: list[str],
+    encoder_command: list[str | Path],
+    *,
+    producer_command: list[str | Path] | None,
+    single_threaded: bool,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> None:
+    splitter_command = generate_native_mvc_splitter_command(native_input_path, single_threaded=single_threaded)
+    attempt_name = "single-threaded" if single_threaded else "multi-threaded"
+    cli_message(f"Running direct MVC to MV-HEVC encode ({attempt_name}).", run_context=run_context)
+
+    if config.output_commands and run_context is None:
+        commands: list[list[str | Path]] = [splitter_command, [*normalizer_command], encoder_command]
+        if producer_command:
+            commands.insert(0, producer_command)
+        cli_message(
+            "Running command:\n" + " | ".join(" ".join(str(argument) for argument in command) for command in commands)
+        )
+
+    event_context = observability_context or ObservabilityContext()
+    stages: list[ProcessPipelineStage] = []
+    if producer_command:
+        stages.append(
+            ProcessPipelineStage(
+                ProcessSpec(
+                    argv=tuple(producer_command),
+                    tool_id="ffmpeg",
+                    display_name=f"Extract MVC stream ({attempt_name})",
+                    env=os.environ.copy(),
+                    event_context=event_context,
+                    capture_overflow=CaptureOverflowPolicy.TRUNCATE,
+                )
+            )
+        )
+    stages.extend(
+        (
+            ProcessPipelineStage(
+                ProcessSpec(
+                    argv=tuple(splitter_command),
+                    tool_id="edge264",
+                    display_name=f"Split native MVC stream ({attempt_name})",
+                    env=os.environ.copy(),
+                    event_context=event_context,
+                    capture_overflow=CaptureOverflowPolicy.TRUNCATE,
+                )
+            ),
+            ProcessPipelineStage(
+                ProcessSpec(
+                    argv=tuple(normalizer_command),
+                    tool_id="ffmpeg",
+                    display_name=f"Normalize direct stereo video ({attempt_name})",
+                    env=os.environ.copy(),
+                    event_context=event_context,
+                    capture_overflow=CaptureOverflowPolicy.TRUNCATE,
+                )
+            ),
+            ProcessPipelineStage(
+                ProcessSpec(
+                    argv=tuple(encoder_command),
+                    tool_id="mv_hevc_encoder",
+                    display_name=f"Encode direct MV-HEVC video ({attempt_name})",
+                    env=os.environ.copy(),
+                    event_context=event_context,
+                    artifacts=(
+                        ProcessArtifactProbe(
+                            "stereo_video_output",
+                            resolver=lambda: resolve_direct_mv_hevc_artifact(output_path),
+                        ),
+                    ),
+                    artifact_no_growth_timeout_seconds=NATIVE_MVC_ARTIFACT_NO_GROWTH_TIMEOUT_SECONDS,
+                    artifact_no_growth_retryable=not single_threaded,
+                    capture_overflow=CaptureOverflowPolicy.TRUNCATE,
+                )
+            ),
+        )
+    )
+    try:
+        ProcessPipelineRunner(exit_grace_seconds=5).run(
+            tuple(stages),
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+        )
+    except ProcessPipelineError as error:
+        selected_error = select_direct_mv_hevc_pipeline_error(error, producer_present=producer_command is not None)
+        if selected_error is not None:
+            raise selected_error from error
+
+
+def select_direct_mv_hevc_pipeline_error(
+    pipeline_error: ProcessPipelineError,
+    *,
+    producer_present: bool,
+) -> BaseException | None:
+    stages = pipeline_error.result.stages
+    producer_index = 0 if producer_present else None
+    splitter_index = 1 if producer_present else 0
+    normalizer_index = splitter_index + 1
+    encoder_index = normalizer_index + 1
+    producer_stage = stages[producer_index] if producer_index is not None else None
+    splitter_stage = stages[splitter_index]
+    normalizer_stage = stages[normalizer_index]
+    encoder_stage = stages[encoder_index]
+
+    if isinstance(splitter_stage.error, subprocess.CalledProcessError) and native_splitter_died_by_signal(
+        splitter_stage.error
+    ):
+        return splitter_stage.error
+    for stage in (producer_stage, splitter_stage, normalizer_stage):
+        if (
+            stage is not None
+            and stage.completed_before_final
+            and stage.error is not None
+            and not process_error_is_sigpipe(stage.error)
+        ):
+            return stage.error
+    if encoder_stage.error is not None:
+        return encoder_stage.error
+    for stage in (normalizer_stage, splitter_stage, producer_stage):
+        if stage is not None and stage.error is not None and not process_error_is_sigpipe(stage.error):
+            return stage.error
+    return None
+
+
+def resolve_direct_mv_hevc_artifact(output_path: Path) -> Path | None:
+    candidates: list[tuple[int, Path]] = []
+    for candidate in output_path.parent.glob(f".{output_path.name}.partial-*"):
+        try:
+            candidates.append((candidate.stat().st_mtime_ns, candidate))
+        except OSError:
+            continue
+    if candidates:
+        return max(candidates)[1]
+    return output_path if output_path.exists() else None
+
+
+def remove_direct_mv_hevc_attempt_artifacts(output_path: Path) -> None:
+    for partial_path in output_path.parent.glob(f".{output_path.name}.partial-*"):
+        partial_path.unlink(missing_ok=True)
 
 
 def run_native_mvc_split_attempt(
@@ -516,6 +781,15 @@ def build_native_splitter_stall_message(error: ProcessArtifactNoProgressError) -
         "The conversion was stopped instead of waiting indefinitely. This usually means the bundled native decoder "
         "hit damaged or unsupported MVC data. Please submit a diagnostic report so the bounded splitter and encoder "
         f"evidence can be reviewed. ({error})"
+    )
+
+
+def build_direct_mv_hevc_stall_message(error: ProcessArtifactNoProgressError) -> str:
+    return (
+        "Direct MV-HEVC output stopped making progress during both multi-threaded and single-threaded MVC decoding. "
+        "The conversion was stopped instead of waiting indefinitely. The splitter, geometry normalizer, or direct "
+        "encoder may have stalled. Please submit a diagnostic report so the bounded pipeline evidence can be reviewed. "
+        f"({error})"
     )
 
 
@@ -865,6 +1139,39 @@ def create_mv_hevc_file(
     if not config.keep_files:
         left_video_path.unlink(missing_ok=True)
         right_video_path.unlink(missing_ok=True)
+    return mv_hevc_path
+
+
+def create_direct_mv_hevc_file(
+    disc_info: DiscInfo,
+    output_folder: Path,
+    mvc_video: Path,
+    crop_params: str,
+    bitrate_mbps: int | None,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> Path:
+    mv_hevc_path = output_folder / f"{disc_info.name}_MV-HEVC.mov"
+    if config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
+        if bitrate_mbps is None:
+            raise ValueError("Direct MV-HEVC encoding requires a resolved bitrate.")
+        if not can_use_native_mvc_splitter(disc_info):
+            raise RuntimeError(explain_native_mvc_unavailable(disc_info))
+        normalizer_command = generate_direct_mv_hevc_normalizer_command(disc_info, crop_params)
+        encoder_command = generate_direct_mv_hevc_encoder_command(mv_hevc_path, bitrate_mbps)
+        run_direct_mv_hevc_encoding(
+            mvc_video,
+            mv_hevc_path,
+            normalizer_command,
+            encoder_command,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
+        if not config.keep_files and not should_stream_mvc_from_container(mvc_video):
+            mvc_video.unlink(missing_ok=True)
     return mv_hevc_path
 
 

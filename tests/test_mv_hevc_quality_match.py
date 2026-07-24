@@ -1,9 +1,38 @@
 import unittest
 
+from pathlib import Path
+from unittest.mock import patch
+
 from scripts import qualify_mv_hevc_quality_match
+from scripts.qualify_direct_mv_hevc import FixtureOptions
 
 
 class MVHEVCQualityMatchTests(unittest.TestCase):
+    def test_search_can_use_direct_ceiling_independent_from_current_path_bitrate(self) -> None:
+        observed_bitrates: list[float] = []
+
+        def candidate(*_args: object) -> dict[str, float]:
+            bitrate = float(_args[-2])
+            observed_bitrates.append(bitrate)
+            return {"min_same_eye_ssim": 1.0, "target_bitrate_mbps": bitrate}
+
+        options = FixtureOptions(320, 180, 24, 2, 16, 4.0)
+        with patch.object(qualify_mv_hevc_quality_match, "evaluate_direct_candidate", side_effect=candidate):
+            qualify_mv_hevc_quality_match.search_quality_matched_bitrate(
+                "ffmpeg",
+                Path("encoder"),
+                Path("work"),
+                Path("left"),
+                Path("right"),
+                options,
+                0.9,
+                iterations=1,
+                quality_margin=0.0,
+                maximum_bitrate_mbps=8.0,
+            )
+
+        self.assertEqual(observed_bitrates[0], 8.0)
+
     def test_effective_bitrate_mbps_uses_file_size_and_duration(self) -> None:
         self.assertEqual(
             qualify_mv_hevc_quality_match.effective_bitrate_mbps(250_000, 2),

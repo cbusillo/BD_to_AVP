@@ -131,6 +131,7 @@ final class PreviewViewModelTests: XCTestCase {
         let sourceURL = URL(fileURLWithPath: "/tmp/movie.mkv")
         var options = ConversionOptions()
         options.encoding.mvHEVC.generatedMergeQuality = 82
+        options.job.intermediatePolicy = .reusable
         let conversion = ConversionDraft(
             source: ConversionSource(kind: .matroska, url: sourceURL),
             sourceDetails: nil,
@@ -152,7 +153,7 @@ final class PreviewViewModelTests: XCTestCase {
             destinationURL: URL(fileURLWithPath: "/tmp/preview", isDirectory: true)
         )
 
-        XCTAssertEqual(spec.encoding?.mvHEVCQuality, 82)
+        XCTAssertEqual(spec.encoding?.video.generatedMergeQuality, 82)
         XCTAssertEqual(spec.preview?.position, "end")
         XCTAssertEqual(spec.preview?.durationSeconds, 60)
         XCTAssertEqual(options.encoding.mvHEVC.generatedMergeQuality, 20)

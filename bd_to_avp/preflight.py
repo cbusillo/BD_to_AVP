@@ -8,6 +8,7 @@ from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr, OcrError
 from bd_to_avp.modules.command import run_process_capture
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.modules.video_route import ResolvedVideoRoute, VideoRouteKind, legacy_video_route
 from bd_to_avp.observability import ObservabilityContext
 from bd_to_avp.process_runner import ProcessCancelled, ProcessRunnerError
 from bd_to_avp.runtime import RunContext
@@ -19,11 +20,13 @@ class DependencyPreflightError(RuntimeError):
 
 def verify_runtime_ready(
     *,
+    video_route: ResolvedVideoRoute | None = None,
     run_context: RunContext | None = None,
     cancellation_event: Event | None = None,
     observability_context: ObservabilityContext | None = None,
 ) -> None:
-    missing_binaries = get_missing_dependency_binaries_for_current_job()
+    video_route = video_route or legacy_video_route()
+    missing_binaries = get_missing_dependency_binaries_for_current_job(video_route)
     if not missing_binaries:
         verify_av1_encoder_ready(
             run_context=run_context,
@@ -37,8 +40,11 @@ def verify_runtime_ready(
     raise DependencyPreflightError(message)
 
 
-def get_missing_dependency_binaries_for_current_job() -> list[Path]:
-    required_paths = get_required_dependency_binaries_for_current_job()
+def get_missing_dependency_binaries_for_current_job(
+    video_route: ResolvedVideoRoute | None = None,
+) -> list[Path]:
+    video_route = video_route or legacy_video_route()
+    required_paths = get_required_dependency_binaries_for_current_job(video_route)
     missing_binaries = [path for path in required_paths if not path.exists()]
     if (
         needs_native_mvc_splitter()
@@ -46,17 +52,28 @@ def get_missing_dependency_binaries_for_current_job() -> list[Path]:
         and not ensure_native_mvc_splitter_executable()
     ):
         missing_binaries.append(config.EDGE264_TEST_PATH)
+    if (
+        video_route.selected is VideoRouteKind.DIRECT_MV_HEVC
+        and config.MV_HEVC_ENCODER_PATH not in missing_binaries
+        and not os.access(config.MV_HEVC_ENCODER_PATH, os.X_OK)
+    ):
+        missing_binaries.append(config.MV_HEVC_ENCODER_PATH)
     return missing_binaries
 
 
-def get_required_dependency_binaries_for_current_job() -> list[Path]:
+def get_required_dependency_binaries_for_current_job(
+    video_route: ResolvedVideoRoute | None = None,
+) -> list[Path]:
+    video_route = video_route or legacy_video_route()
     required_paths = [config.FFMPEG_PATH, config.FFPROBE_PATH]
 
     if needs_makemkv():
         required_paths.append(config.MAKEMKVCON_PATH)
     if needs_native_mvc_splitter():
         required_paths.append(config.EDGE264_TEST_PATH)
-    if config.video_mode is VideoMode.MV_HEVC and config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
+    if video_route.selected is VideoRouteKind.DIRECT_MV_HEVC:
+        required_paths.append(config.MV_HEVC_ENCODER_PATH)
+    if video_route.selected is VideoRouteKind.GENERATED_MV_HEVC:
         required_paths.append(config.SPATIAL_MEDIA_PATH)
     if config.start_stage.value <= Stage.CREATE_FINAL_FILE.value:
         required_paths.append(config.MP4BOX_PATH)
@@ -129,6 +146,7 @@ def get_dependency_name(path: Path) -> str:
         config.MAKEMKVCON_PATH: "MakeMKV",
         config.MP4BOX_PATH: "MP4Box",
         config.EDGE264_TEST_PATH: "Native MVC helper",
+        config.MV_HEVC_ENCODER_PATH: "Direct MV-HEVC encoder",
         config.SPATIAL_MEDIA_PATH: "Spatial media tool",
         config.FX_UPSCALE_PATH: "FX Upscale",
     }

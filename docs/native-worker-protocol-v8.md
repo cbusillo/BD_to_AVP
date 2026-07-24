@@ -1,7 +1,7 @@
 # Native Worker Protocol v8
 
 > Historical contract. Current clients must use
-> [Native Worker Protocol v9](native-worker-protocol-v9.md).
+> [Native Worker Protocol v10](native-worker-protocol-v10.md).
 
 Protocol v8 carries canonical structured observability through the worker JSONL
 stream. The native app and bundled Python worker ship atomically and both

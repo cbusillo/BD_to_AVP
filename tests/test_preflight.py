@@ -7,11 +7,42 @@ from unittest.mock import Mock, patch
 from bd_to_avp import preflight
 from bd_to_avp.modules.config import Stage
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.modules.video_route import ResolvedVideoRoute, VideoRouteKind
 from bd_to_avp.process_runner import ProcessCancelled
 from bd_to_avp.vendor.pgsrip.ocr import OcrError
+from bd_to_avp.worker.protocol import VideoRouteIntent
 
 
 class DependencyPreflightTests(unittest.TestCase):
+    def test_direct_route_requires_encoder_but_not_spatial_media_tool(self) -> None:
+        route = ResolvedVideoRoute(
+            intent=VideoRouteIntent.AUTOMATIC,
+            selected=VideoRouteKind.DIRECT_MV_HEVC,
+            reason="direct_eligible",
+            output_mode=VideoMode.MV_HEVC,
+            direct_bitrate_mbps=20,
+        )
+        with patch.object(preflight.config, "start_stage", Stage.CREATE_MKV):
+            required_paths = preflight.get_required_dependency_binaries_for_current_job(route)
+
+        self.assertIn(preflight.config.MV_HEVC_ENCODER_PATH, required_paths)
+        self.assertNotIn(preflight.config.SPATIAL_MEDIA_PATH, required_paths)
+
+    def test_generated_route_requires_spatial_media_but_not_direct_encoder(self) -> None:
+        route = ResolvedVideoRoute(
+            intent=VideoRouteIntent.GENERATED,
+            selected=VideoRouteKind.GENERATED_MV_HEVC,
+            reason="generated_route_requested",
+            output_mode=VideoMode.MV_HEVC,
+            generated_eye_bitrate_mbps=20,
+            generated_merge_quality=75,
+        )
+        with patch.object(preflight.config, "start_stage", Stage.CREATE_MKV):
+            required_paths = preflight.get_required_dependency_binaries_for_current_job(route)
+
+        self.assertIn(preflight.config.SPATIAL_MEDIA_PATH, required_paths)
+        self.assertNotIn(preflight.config.MV_HEVC_ENCODER_PATH, required_paths)
+
     def test_missing_required_dependency_binaries_raise_clear_error(self) -> None:
         with (
             patch.object(preflight.config, "FFMPEG_PATH", Path(__file__)),

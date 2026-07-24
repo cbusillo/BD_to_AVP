@@ -10,6 +10,7 @@ from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.disc import MKVCreationError
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.modules.video_route import ResolvedVideoRoute, VideoRouteKind
 from bd_to_avp.modules.file import (
     move_file_to_output_root_folder,
     prepare_output_folder_for_source,
@@ -17,9 +18,31 @@ from bd_to_avp.modules.file import (
 )
 from bd_to_avp.observability import ObservabilityEmitter
 from bd_to_avp.runtime import CancellationToken, ObservabilityStream, RunContext
+from bd_to_avp.worker.protocol import VideoRouteIntent
 
 
 class ProcessPreflightTests(unittest.TestCase):
+    def test_direct_route_uses_stage_four_and_omits_stage_five(self) -> None:
+        route = ResolvedVideoRoute(
+            intent=VideoRouteIntent.AUTOMATIC,
+            selected=VideoRouteKind.DIRECT_MV_HEVC,
+            reason="direct_eligible",
+            output_mode=VideoMode.MV_HEVC,
+            direct_bitrate_mbps=20,
+        )
+        with (
+            patch.object(process.config, "preview_range", None),
+            patch.object(process.config, "skip_subtitles", True),
+            patch.object(process.config, "fx_upscale", False),
+            patch.object(process.config, "audio_mode", AudioMode.PCM),
+            patch.object(process.config, "video_mode", VideoMode.MV_HEVC),
+            patch.object(process.config, "start_stage", Stage.CREATE_MKV),
+        ):
+            plan = process.conversion_stage_plan(route)
+
+        self.assertIn("create_left_right_files", plan)
+        self.assertNotIn("combine_to_mv_hevc", plan)
+
     def test_conversion_stage_plan_tracks_optional_work(self) -> None:
         with (
             patch.object(process.config, "preview_range", None),
