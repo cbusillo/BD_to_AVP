@@ -34,9 +34,12 @@ worker-owned automatic direct target is 40 Mbps, matching the aggregate budget
 of the generated route's two default 20 Mbps eye encodes. A 1080p24 synthetic
 check put direct output within 0.00045 minimum same-eye SSIM of the generated
 path at that target, but did not satisfy the qualification harness's positive
-quality-margin gate. Issue #354 therefore retains the representative-corpus
-prerelease gate before release/default promotion. Native or streamed 4K
-upscaling remains a separate route and is not inferred from this policy.
+quality-margin gate. Issue #364 completed the representative-corpus gate and
+rejected one fixed Automatic target: matched direct targets span 0.5 to 16
+Mbps, while a fixed 16 Mbps policy makes simpler cases 1.55 to 3.24 times
+larger. The direct route is not approved as the stable default until #366 adds
+content-adaptive Automatic rate control and reruns the gate. Native or streamed
+4K upscaling remains a separate route and is not inferred from this policy.
 
 A generated MV-HEVC request carries only generated-route controls:
 
@@ -156,7 +159,10 @@ optional source FFmpeg -> edge264_test -> FFmpeg geometry normalizer -> mv-hevc-
 It writes the existing `<name>_MV-HEVC.mov` artifact and omits stage 5,
 `combine_to_mv_hevc`. Generated MV-HEVC retains both existing eye filenames and
 stage 5. Stage numbers, restart boundaries, later audio/subtitle muxing, and
-final filenames remain unchanged.
+final filenames remain unchanged. Final AAC preparation normalizes source
+`5.1(side)` to standard `5.1` before encoding because Program Config Element
+AAC is not exposed as an audio track by AVFoundation; `5.1(side)` is therefore
+not eligible for Automatic AAC copy.
 
 ## Compatibility
 

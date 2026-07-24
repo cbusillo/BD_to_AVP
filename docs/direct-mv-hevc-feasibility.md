@@ -105,11 +105,13 @@ against the product's default generated budget of 20 Mbps per eye plus merge qua
 the direct minimum same-eye SSIM was 0.961318 versus 0.961768 for the generated path, a difference of 0.000450. Raising
 the direct ceiling to 500 Mbps reduced but did not eliminate that fixture-specific gap: 0.961567 versus 0.961755.
 
-The initial worker-owned automatic target is therefore the conservative 40 Mbps aggregate generated-eye budget, not
-the 20 Mbps value inferred by scaling only the small fixture. This one-run synthetic check is integration evidence, not
-the representative-corpus release gate. Issue #354 retains the prerelease quality, size, and physical-playback gate
-before direct is promoted in a stable release. The quality matcher accepts `--direct-max-bitrate-mbps` so future corpus
-runs can test a direct search ceiling independently from the generated path's aggregate eye target.
+The initial worker-owned automatic target was therefore the conservative 40 Mbps aggregate generated-eye budget, not
+the 20 Mbps value inferred by scaling only the small fixture. Issue #364 subsequently completed the representative
+corpus and packaged gate. Every gated case has a quality-matched direct result, but those matched targets span 0.5 to
+16 Mbps. A fixed 16 Mbps policy makes simpler cases 1.55 to 3.24 times larger, while the packaged 40 Mbps route produced
+330,860,823 bytes versus 45,629,113 bytes for generated fallback on the same 65-second source. The fixed Automatic
+policy is therefore not approved for release. Content-adaptive rate control continues in #366; see
+`docs/direct-mv-hevc-release-gate.md`.
 
 ### GPU time
 
@@ -251,10 +253,24 @@ uv run python -m scripts.profile_mv_hevc_gpu \
 
 scripts/create_direct_mv_hevc_playback_fixture.sh
 
+uv run python -m scripts.qualify_mv_hevc_corpus \
+  --manifest docs/qualification/direct-mv-hevc-corpus-v1.json \
+  --encoder build/mv-hevc-encoder/mv-hevc-encoder \
+  --output build/direct-mv-hevc-corpus/evidence.json
+
+uv run python -m scripts.verify_packaged_mv_hevc_routes \
+  --app "/absolute/path/to/3D Blu-ray to Vision Pro.app" \
+  --source /absolute/path/to/representative-65-second.mkv \
+  --output build/direct-mv-hevc-packaged/evidence.json
+
 uv run python -m unittest \
+  tests.test_audio \
   tests.test_mv_hevc_encoder \
+  tests.test_mv_hevc_corpus \
   tests.test_mv_hevc_quality_match \
   tests.test_mv_hevc_gpu_profile \
+  tests.test_packaged_mv_hevc_routes \
+  tests.test_verify_apple_media \
   -v
 ```
 
@@ -272,5 +288,7 @@ uv run python -m unittest \
 | Restart and fallback behavior | Defined |
 | Runtime, license, macOS, architecture, signing, notarization, and bundle implications | Recorded |
 
-The prototype is fully qualified and its runtime route is active under protocol v10. Route-aware UI diagnostics and
-rollout remain in issue #354; streamed 4K upscale and live conversion imagery remain separate follow-up issues.
+The prototype is fully qualified and its runtime route is active under protocol v10. Packaged routing, finalized
+preview parity, generated fallback, and per-case quality matching pass, but issue #364 rejected the fixed Automatic
+bitrate for release. Content-adaptive Automatic rate control continues in #366. Streamed 4K upscale and live conversion
+imagery remain separate follow-up issues.

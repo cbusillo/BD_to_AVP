@@ -344,6 +344,7 @@ class AudioPreparationTests(unittest.TestCase):
             qualified_stream(index=6, channels=6, channel_layout="stereo"),
             qualified_stream(index=7, channel_layout="4.0"),
             {"index": 8, "codec_name": "aac", "profile": "LC"},
+            qualified_stream(index=9, channel_layout="5.1(side)"),
         ]
 
         results = [audio.qualify_audio_stream(stream) for stream in streams]
@@ -357,9 +358,12 @@ class AudioPreparationTests(unittest.TestCase):
         self.assertEqual(results[6].reason, "channel_layout_mismatch")
         self.assertEqual(results[7].reason, "channel_layout_not_qualified")
         self.assertEqual(results[8].reason, "sample_rate_missing")
+        self.assertEqual(results[9].reason, "channel_layout_not_qualified")
 
     def test_transcode_audio_maps_requested_stream_selector(self) -> None:
+        streams = [qualified_stream(index=0)]
         with (
+            patch.object(audio, "audio_streams_for_selector", return_value=streams),
             patch.object(audio, "audio_handler_metadata_options", return_value={}),
             patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg,
         ):
@@ -428,8 +432,31 @@ class AudioPreparationTests(unittest.TestCase):
         self.assertNotIn("0:a:1", command)
         self.assertIn("aac", command)
 
-    def test_audio_preparation_preserves_stream_titles_as_handler_names(self) -> None:
+    def test_aac_transcode_normalizes_side_surround_for_apple_playback(self) -> None:
+        streams = [
+            qualified_stream(index=1, language="eng", channel_layout="5.1(side)", channels=6),
+            qualified_stream(index=4, language="eng", channel_layout="stereo", channels=2),
+        ]
+        selection = select_audio_streams(streams, "eng")
+
         with (
+            patch.object(audio, "audio_handler_metadata_options", return_value={}),
+            patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg,
+        ):
+            audio.transcode_audio(Path("source.mkv"), Path("audio.m4a"), 384, selection=selection)
+
+        command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
+        self.assertIn("-channel_layout:a:0", command)
+        self.assertIn("5.1", command)
+        self.assertNotIn("-channel_layout:a:1", command)
+
+    def test_audio_preparation_preserves_stream_titles_as_handler_names(self) -> None:
+        streams = [
+            qualified_stream(index=0, title="Main 5.1"),
+            qualified_stream(index=1, title="Alternate Stereo", channels=2, channel_layout="stereo"),
+        ]
+        with (
+            patch.object(audio, "audio_streams_for_selector", return_value=streams),
             patch.object(audio, "audio_handler_metadata_options") as metadata_options,
             patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg,
         ):
@@ -448,6 +475,7 @@ class AudioPreparationTests(unittest.TestCase):
         metadata_options.assert_called_once_with(
             Path("source.mkv"),
             "a",
+            selected_streams=streams,
             run_context=None,
             cancellation_event=None,
             observability_context=None,

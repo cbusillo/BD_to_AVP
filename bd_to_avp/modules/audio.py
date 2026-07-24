@@ -48,9 +48,9 @@ AAC_COPY_LAYOUT_CHANNELS = {
     "mono": 1,
     "stereo": 2,
     "5.1": 6,
-    "5.1(side)": 6,
     "7.1": 8,
 }
+AAC_TRANSCODE_LAYOUT_NORMALIZATION = {"5.1(side)": "5.1"}
 
 
 def transcode_audio(
@@ -65,28 +65,29 @@ def transcode_audio(
     observability_context: ObservabilityContext | None = None,
 ) -> None:
     audio_input = ffmpeg.input(str(input_path))
+    selected_streams = (
+        [selected_stream.stream for selected_stream in selection.streams]
+        if selection is not None
+        else audio_streams_for_selector(
+            input_path,
+            audio_selector,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
+    )
     selected_inputs = (
         [audio_input[selected_stream.selector] for selected_stream in selection.streams]
         if selection is not None
         else [audio_input[audio_selector]]
     )
-    metadata_options = (
-        audio_handler_metadata_options(
-            input_path,
-            audio_selector,
-            selected_streams=[selected_stream.stream for selected_stream in selection.streams],
-            run_context=run_context,
-            cancellation_event=cancellation_event,
-            observability_context=observability_context,
-        )
-        if selection is not None
-        else audio_handler_metadata_options(
-            input_path,
-            audio_selector,
-            run_context=run_context,
-            cancellation_event=cancellation_event,
-            observability_context=observability_context,
-        )
+    metadata_options = audio_handler_metadata_options(
+        input_path,
+        audio_selector,
+        selected_streams=selected_streams,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
     )
     audio_transcoded = ffmpeg.output(
         *selected_inputs,
@@ -94,6 +95,7 @@ def transcode_audio(
         acodec="aac",
         audio_bitrate=f"{bitrate}k",
         map_metadata=0,
+        **aac_layout_options(selected_streams),
         **metadata_options,
     )
     run_ffmpeg_print_errors(
@@ -104,6 +106,39 @@ def transcode_audio(
         cancellation_event=cancellation_event,
         observability_context=observability_context,
     )
+
+
+def audio_streams_for_selector(
+    input_path: Path,
+    audio_selector: str,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> list[dict[str, Any]]:
+    streams = get_audio_stream_data(
+        input_path,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
+    )
+    if audio_selector == "a":
+        return streams
+    stream_type, separator, stream_index = audio_selector.partition(":")
+    if stream_type != "a" or not separator or not stream_index.isdigit():
+        return []
+    selected_index = int(stream_index)
+    return streams[selected_index : selected_index + 1]
+
+
+def aac_layout_options(streams: list[dict[str, Any]]) -> dict[str, str]:
+    options: dict[str, str] = {}
+    for output_index, stream in enumerate(streams):
+        channel_layout = str(stream.get("channel_layout") or "").strip().lower()
+        normalized_layout = AAC_TRANSCODE_LAYOUT_NORMALIZATION.get(channel_layout)
+        if normalized_layout is not None:
+            options[f"channel_layout:a:{output_index}"] = normalized_layout
+    return options
 
 
 def copy_audio(
