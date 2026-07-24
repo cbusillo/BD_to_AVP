@@ -1,6 +1,8 @@
+import subprocess
 import unittest
 
 from pathlib import Path
+from unittest.mock import Mock
 
 from scripts import benchmark_mv_hevc_metalfx
 
@@ -81,6 +83,19 @@ class MVHEVCMetalFXBenchmarkTests(unittest.TestCase):
                 max_unmodeled_growth_bytes=100,
             )["passed"]
         )
+
+    def test_kill_process_reports_an_unreaped_child_and_closes_streams(self) -> None:
+        streams = [Mock(closed=False) for _ in range(3)]
+        process = Mock(pid=357, stdin=streams[0], stdout=streams[1], stderr=streams[2])
+        process.poll.return_value = None
+        process.wait.side_effect = subprocess.TimeoutExpired("encoder", 30)
+
+        with self.assertRaisesRegex(benchmark_mv_hevc_metalfx.QualificationFailure, "Failed to reap process 357"):
+            benchmark_mv_hevc_metalfx.kill_process(process)
+
+        process.kill.assert_called_once_with()
+        for stream in streams:
+            stream.close.assert_called_once_with()
 
 
 if __name__ == "__main__":

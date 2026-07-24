@@ -60,6 +60,13 @@ def sha256_file(path: Path) -> str:
 
 
 def generator_command(ffmpeg: str, *, frames: int, frame_rate: int) -> list[str]:
+    filter_complex = "".join(
+        [
+            "[0:v]split=2[left][right];",
+            "[right]hflip[right_flipped];",
+            "[left][right_flipped]hstack=inputs=2,format=yuv420p[stereo]",
+        ]
+    )
     return [
         ffmpeg,
         "-hide_banner",
@@ -70,8 +77,7 @@ def generator_command(ffmpeg: str, *, frames: int, frame_rate: int) -> list[str]
         "-i",
         f"testsrc2=size={INPUT_EYE_WIDTH}x{INPUT_EYE_HEIGHT}:rate={frame_rate}",
         "-filter_complex",
-        "[0:v]split=2[left][right];[right]hflip[right_flipped];"
-        "[left][right_flipped]hstack=inputs=2,format=yuv420p[stereo]",
+        filter_complex,
         "-map",
         "[stereo]",
         "-frames:v",
@@ -144,13 +150,17 @@ def process_rss_bytes(process: psutil.Process) -> int:
 def kill_process(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is None:
         process.kill()
+    wait_error: subprocess.TimeoutExpired | None = None
     try:
         process.wait(timeout=30)
-    except subprocess.TimeoutExpired:
-        pass
-    for stream in (process.stdin, process.stdout, process.stderr):
-        if stream is not None and not stream.closed:
-            stream.close()
+    except subprocess.TimeoutExpired as error:
+        wait_error = error
+    finally:
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+    if wait_error is not None:
+        raise QualificationFailure(f"Failed to reap process {process.pid} after kill.") from wait_error
 
 
 def validate_stream(
