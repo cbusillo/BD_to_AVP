@@ -514,6 +514,21 @@ class DirectMVHEVCPipelineTests(unittest.TestCase):
         self.assertEqual(command[command.index("--quality") + 1], "0.7")
         self.assertNotIn("--bitrate-mbps", command)
 
+    def test_encoder_command_enables_direct_metalfx_upscale(self) -> None:
+        with (
+            patch.object(video.config, "MV_HEVC_ENCODER_PATH", Path("/app/bin/mv-hevc-encoder")),
+            patch.object(video.config, "fov", 90),
+        ):
+            command = video.generate_direct_mv_hevc_encoder_command(
+                Path("Sample_MV-HEVC Upscaled.mov"),
+                None,
+                0.7,
+                "metalfx",
+            )
+
+        self.assertEqual(command[command.index("--upscale-mode") + 1], "metalfx")
+        self.assertLess(command.index("--upscale-mode"), command.index("--fov"))
+
     def test_encoder_command_requires_exactly_one_rate_control(self) -> None:
         with self.assertRaisesRegex(ValueError, "exactly one rate-control"):
             video.generate_direct_mv_hevc_encoder_command(Path("Sample_MV-HEVC.mov"), None)
@@ -692,6 +707,32 @@ class DirectMVHEVCPipelineTests(unittest.TestCase):
 
             self.assertEqual(output_path, output_folder / "Sample_MV-HEVC.mov")
             self.assertFalse(mvc_path.exists())
+
+    def test_direct_metalfx_stage_uses_final_upscaled_artifact_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_folder = Path(temporary_directory)
+            mvc_path = output_folder / "Sample_mvc.h264"
+            mvc_path.write_bytes(b"mvc")
+            with (
+                patch.object(video.config, "start_stage", video.Stage.CREATE_LEFT_RIGHT_FILES),
+                patch.object(video.config, "keep_files", False),
+                patch.object(video, "can_use_native_mvc_splitter", return_value=True),
+                patch.object(video, "should_stream_mvc_from_container", return_value=False),
+                patch.object(video, "run_direct_mv_hevc_encoding") as encode,
+            ):
+                output_path = video.create_direct_mv_hevc_file(
+                    self.disc_info,
+                    output_folder,
+                    mvc_path,
+                    "",
+                    None,
+                    0.7,
+                    "metalfx",
+                )
+
+            self.assertEqual(output_path, output_folder / "Sample_MV-HEVC Upscaled.mov")
+            self.assertEqual(encode.call_args.args[1], output_path)
+            self.assertIn("--upscale-mode", encode.call_args.args[3])
 
 
 def process_result(tool_id: str) -> ProcessResult:

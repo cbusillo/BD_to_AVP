@@ -30,10 +30,15 @@ class VideoRouteKind(StrEnum):
     EXISTING_ARTIFACT = "existing_artifact"
 
 
+class DirectUpscaleMode(StrEnum):
+    METAL_FX = "metalfx"
+
+
 @dataclass(frozen=True)
 class DirectMVHEVCCapability:
     supported: bool
     reason: str
+    metalfx_2x_mv_hevc_supported: bool = False
 
 
 @dataclass(frozen=True)
@@ -48,6 +53,11 @@ class ResolvedVideoRoute:
     generated_merge_quality: int | None = None
     av1_crf: int | None = None
     fallback_reason: str | None = None
+    direct_upscale_mode: DirectUpscaleMode | None = None
+
+    @property
+    def uses_in_process_upscale(self) -> bool:
+        return self.selected is VideoRouteKind.DIRECT_MV_HEVC and self.direct_upscale_mode is not None
 
     def report(self) -> dict[str, object]:
         report: dict[str, object] = {
@@ -67,6 +77,8 @@ class ResolvedVideoRoute:
             report["merge_quality"] = self.generated_merge_quality
         if self.av1_crf is not None:
             report["crf"] = self.av1_crf
+        if self.direct_upscale_mode is not None:
+            report["upscale_mode"] = self.direct_upscale_mode.value
         if self.fallback_reason is not None:
             report["fallback_reason"] = self.fallback_reason
             report["fallback_timing"] = "pre_input"
@@ -142,15 +154,24 @@ def resolve_video_route(
             fallback_reason=capability.reason,
             use_requested_settings=False,
         )
+    if encoding.upscale.enabled and not capability.metalfx_2x_mv_hevc_supported:
+        return _generated_route(
+            encoding,
+            reason="direct_capability_unavailable",
+            fallback_reason="metalfx_2x_mv_hevc_unavailable",
+            use_requested_settings=False,
+        )
 
     direct_bitrate_mbps, direct_quality = _resolve_direct_rate_control(video.direct_bitrate)
+    direct_upscale_mode = DirectUpscaleMode.METAL_FX if encoding.upscale.enabled else None
     return ResolvedVideoRoute(
         intent=video.route_intent,
         selected=VideoRouteKind.DIRECT_MV_HEVC,
-        reason="direct_eligible",
+        reason="direct_upscale_eligible" if direct_upscale_mode is not None else "direct_eligible",
         output_mode=video.mode,
         direct_bitrate_mbps=direct_bitrate_mbps,
         direct_quality=direct_quality,
+        direct_upscale_mode=direct_upscale_mode,
     )
 
 
@@ -221,14 +242,34 @@ def _parse_capability_payload(payload: str, *, returncode: int) -> DirectMVHEVCC
         raw = json.loads(payload)
     except json.JSONDecodeError as error:
         raise VideoRoutePreflightError("The direct MV-HEVC capability probe returned invalid JSON.") from error
-    if not isinstance(raw, Mapping) or set(raw) != {"schema_version", "stereo_mv_hevc_encode_supported"}:
+    required_keys = {"schema_version", "stereo_mv_hevc_encode_supported"}
+    optional_keys = {
+        "metalfx_2x_mv_hevc_supported",
+        "metalfx_spatial_scaling_supported",
+        "pixel_transfer_2x_mv_hevc_supported",
+    }
+    if (
+        not isinstance(raw, Mapping)
+        or not required_keys.issubset(raw)
+        or not set(raw).issubset(required_keys | optional_keys)
+    ):
         raise VideoRoutePreflightError("The direct MV-HEVC capability probe returned an invalid contract.")
     if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
         raise VideoRoutePreflightError("The direct MV-HEVC capability probe returned an invalid contract.")
     if type(raw["stereo_mv_hevc_encode_supported"]) is not bool:
         raise VideoRoutePreflightError("The direct MV-HEVC capability probe returned an invalid contract.")
+    for key in optional_keys:
+        if key in raw and type(raw[key]) is not bool:
+            raise VideoRoutePreflightError("The direct MV-HEVC capability probe returned an invalid contract.")
 
     supported = raw["stereo_mv_hevc_encode_supported"]
+    metalfx_supported = raw.get("metalfx_2x_mv_hevc_supported", False)
+    metalfx_device_supported = raw.get("metalfx_spatial_scaling_supported", False)
+    pixel_transfer_supported = raw.get("pixel_transfer_2x_mv_hevc_supported", False)
+    if (metalfx_supported and (not supported or not metalfx_device_supported)) or (
+        pixel_transfer_supported and not supported
+    ):
+        raise VideoRoutePreflightError("The direct MV-HEVC capability probe returned an invalid contract.")
     if supported and returncode != 0:
         raise VideoRoutePreflightError("The direct MV-HEVC capability probe contradicted its exit status.")
     if not supported and returncode != 2:
@@ -236,6 +277,7 @@ def _parse_capability_payload(payload: str, *, returncode: int) -> DirectMVHEVCC
     return DirectMVHEVCCapability(
         supported=supported,
         reason="direct_capability_supported" if supported else "stereo_mv_hevc_encode_unavailable",
+        metalfx_2x_mv_hevc_supported=metalfx_supported,
     )
 
 
@@ -250,8 +292,10 @@ def _generated_constraint_reason(
         return "reusable_intermediates_requested"
     if job.software_encoder:
         return "software_encoder_requested"
-    if encoding.upscale.enabled:
-        return "upscale_requires_generated_artifacts"
+    if encoding.upscale.enabled and encoding.crop_black_bars:
+        return "upscale_crop_requires_generated_artifacts"
+    if encoding.upscale.enabled and encoding.resolution not in {"", "1920x1080"}:
+        return "upscale_resolution_requires_generated_artifacts"
     if not 1 <= encoding.fov <= 180:
         return "field_of_view_requires_generated_route"
     return None

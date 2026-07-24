@@ -1,7 +1,8 @@
 # In-process MetalFX MV-HEVC prototype
 
-Issue #357 adds an explicit native-only 2x upscale prototype to `mv-hevc-encoder`. It does not activate the Python
-worker, GUI, route resolver, profiles, packaging policy, or other user-visible routing owned by #358.
+Issue #357 added the explicit native 2x upscale path to `mv-hevc-encoder`. Issue #358 integrates the qualified
+`--upscale-mode metalfx` path into eligible automatic worker and GUI routes while preserving the generated file-based
+fallback, late-stage restarts, and the existing finalized-preview workflow.
 
 ## CLI contract
 
@@ -102,7 +103,7 @@ and spatial boxes, match decoded quality within the configured tolerance, and fi
 `--direct-bitrate-mbps` is an explicit diagnostic override; the default gate has no fixture-tuned magic bitrate.
 
 These deterministic controls qualify the prototype architecture. Real representative-disc corpus and physical Vision
-Pro release qualification remain part of #359 after #358 wires the product route.
+Pro release qualification remain part of #359 after the #358 product-route integration.
 
 ## Recorded prototype result
 
@@ -130,4 +131,4 @@ every direct run is faster than the complete two-pass file route.
 - SDR, progressive, 8-bit 4:2:0 Y4M only.
 - Exact `1920x1080` input eyes and `3840x2160` output eyes.
 - BGRA writer input, with VideoToolbox performing the final encoder-native conversion.
-- Spatial scaling only; no temporal scaling, HDR/10-bit work, product routing, fallback routing, or default changes.
+- Spatial scaling only; no temporal scaling, HDR/10-bit work, live processed-frame preview, or final release promotion.

@@ -150,6 +150,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(Set(identifiers).count, profiles.count)
         XCTAssertFalse(BuiltInProfile.balanced.options.upscaleEnabled)
         XCTAssertTrue(BuiltInProfile.fourKUpscale.options.upscaleEnabled)
+        XCTAssertTrue(BuiltInProfile.fourKUpscale.options.resolutionOverride.isEmpty)
         XCTAssertEqual(BuiltInProfile.originalResolution.options.mvHEVC.generatedMergeQuality, 85)
         XCTAssertEqual(ConversionStage.combineToMVHEVC.rawValue, 5)
         XCTAssertEqual(ConversionStage.upscaleVideo.rawValue, 6)
@@ -218,9 +219,23 @@ final class ConversionWorkflowTests: XCTestCase {
         options.job.intermediatePolicy = .automatic
         options.encoding.upscaleEnabled = true
         route = VideoRoutePlan(options: options)
-        XCTAssertEqual(route.kind, .generatedMVHEVC)
-        XCTAssertEqual(route.generatedRequirement, .upscale)
+        XCTAssertEqual(route.kind, .directMVHEVC)
+        XCTAssertNil(route.generatedRequirement)
+        XCTAssertTrue(route.includesUpscale)
+        XCTAssertEqual(route.settingsSummary, "Automatic · content-adaptive quality · 2× MetalFX")
 
+        options.encoding.cropBlackBars = true
+        route = VideoRoutePlan(options: options)
+        XCTAssertEqual(route.kind, .generatedMVHEVC)
+        XCTAssertEqual(route.generatedRequirement, .upscaleCrop)
+
+        options.encoding.cropBlackBars = false
+        options.encoding.resolutionOverride = "3840x2160"
+        route = VideoRoutePlan(options: options)
+        XCTAssertEqual(route.kind, .generatedMVHEVC)
+        XCTAssertEqual(route.generatedRequirement, .upscaleResolution)
+
+        options.encoding.resolutionOverride = ""
         options.encoding.videoOutputMode = .av1Stereo
         route = VideoRoutePlan(options: options)
         XCTAssertEqual(route.kind, .av1Stereo)
@@ -286,6 +301,24 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(direct.displayTitle, "Direct MV-HEVC")
         XCTAssertEqual(direct.settingsSummary, "Automatic · content-adaptive quality")
         XCTAssertTrue(direct.displayDetail.contains("confirmed direct stereo MV-HEVC support"))
+
+        let direct4K = VideoRouteReport(
+            intent: "automatic",
+            selected: "direct_mv_hevc",
+            reason: "direct_upscale_eligible",
+            bitrateMbps: nil,
+            eyeBitrateMbps: nil,
+            mergeQuality: nil,
+            crf: nil,
+            fallbackReason: nil,
+            fallbackTiming: nil,
+            rateControl: "quality",
+            quality: 0.7,
+            upscaleMode: "metalfx"
+        )
+        XCTAssertEqual(direct4K.displayTitle, "Direct 4K MV-HEVC")
+        XCTAssertEqual(direct4K.settingsSummary, "Automatic · content-adaptive quality · 2× MetalFX")
+        XCTAssertTrue(direct4K.displayDetail.contains("MetalFX 2× support"))
 
         let legacyDirect = VideoRouteReport(
             intent: "automatic",
@@ -843,13 +876,45 @@ final class ConversionWorkflowTests: XCTestCase {
             options: ConversionOptions(encoding: encoding)
         )
         let spec = WorkerJobSpec(draft: draft)
-        XCTAssertEqual(spec.encoding?.video.generatedMergeQuality, 80)
+        XCTAssertEqual(spec.encoding?.video.routeIntent, .automatic)
+        XCTAssertNotNil(spec.encoding?.video.directBitrate)
+        XCTAssertNil(spec.encoding?.video.generatedMergeQuality)
         XCTAssertTrue(spec.encoding?.upscale.enabled == true)
         XCTAssertEqual(spec.encoding?.fieldOfView, 120)
         XCTAssertEqual(
             spec.encoding?.audio,
             WorkerJobSpec.Encoding.Audio(mode: .convertAAC, bitrate: 512, preferredLanguage: "eng")
         )
+    }
+
+    func testUpscaledFullAndPreviewJobsShareAutomaticDirectRouteIntent() throws {
+        let conversion = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/src/m.mkv")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.fourKUpscale.profile,
+            destinationURL: URL(fileURLWithPath: "/Movies"),
+            options: ConversionOptions(encoding: BuiltInProfile.fourKUpscale.options)
+        )
+        let preview = try XCTUnwrap(
+            PreviewDraft(
+                parentJobID: UUID(),
+                conversion: conversion,
+                outputLength: .oneMinute,
+                samplePosition: .middle
+            )
+        )
+        let fullSpec = WorkerJobSpec(draft: conversion)
+        let previewSpec = WorkerJobSpec(
+            previewDraft: preview,
+            destinationURL: URL(fileURLWithPath: "/tmp/preview")
+        )
+
+        XCTAssertEqual(fullSpec.encoding?.video.routeIntent, .automatic)
+        XCTAssertEqual(previewSpec.encoding?.video.routeIntent, .automatic)
+        XCTAssertTrue(fullSpec.encoding?.upscale.enabled == true)
+        XCTAssertTrue(previewSpec.encoding?.upscale.enabled == true)
+        XCTAssertNil(fullSpec.encoding?.video.generatedEyeBitrate)
+        XCTAssertNil(previewSpec.encoding?.video.generatedEyeBitrate)
     }
 
     func testAV1JobSpecClearsIncompatibleUpscaleAndResolution() {

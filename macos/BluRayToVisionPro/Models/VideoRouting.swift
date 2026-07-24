@@ -11,7 +11,8 @@ enum GeneratedVideoRouteRequirement: Equatable {
     case restartStage
     case reusableIntermediates
     case softwareEncoder
-    case upscale
+    case upscaleCrop
+    case upscaleResolution
     case fieldOfView
 
     var identifier: String {
@@ -22,8 +23,10 @@ enum GeneratedVideoRouteRequirement: Equatable {
             "reusable_intermediates_requested"
         case .softwareEncoder:
             "software_encoder_requested"
-        case .upscale:
-            "upscale_requires_generated_artifacts"
+        case .upscaleCrop:
+            "upscale_crop_requires_generated_artifacts"
+        case .upscaleResolution:
+            "upscale_resolution_requires_generated_artifacts"
         case .fieldOfView:
             "field_of_view_requires_generated_route"
         }
@@ -37,8 +40,10 @@ enum GeneratedVideoRouteRequirement: Equatable {
             "Creating reusable intermediate files for inspection or external processing requires generated left- and right-eye movies."
         case .softwareEncoder:
             "Software HEVC encoding requires generated left- and right-eye movies."
-        case .upscale:
-            "FX Upscale currently uses completed video files, so this job requires the generated route."
+        case .upscaleCrop:
+            "Automatic crop changes the scaler input geometry, so this upscale job requires the generated route."
+        case .upscaleResolution:
+            "This resolution override is incompatible with the direct 1080p-to-4K scaler, so the job requires the generated route."
         case .fieldOfView:
             "This field of view is outside the direct encoder's 1°–180° range, so the generated route is required."
         }
@@ -129,8 +134,10 @@ struct VideoRoutePlan: Equatable {
             requirement = .reusableIntermediates
         } else if softwareEncoder {
             requirement = .softwareEncoder
-        } else if encoding.upscaleEnabled {
-            requirement = .upscale
+        } else if encoding.upscaleEnabled, encoding.cropBlackBars {
+            requirement = .upscaleCrop
+        } else if encoding.upscaleEnabled, !["", "1920x1080"].contains(encoding.resolutionOverride) {
+            requirement = .upscaleResolution
         } else if !(1 ... 180).contains(encoding.fieldOfView) {
             requirement = .fieldOfView
         } else {
@@ -175,7 +182,7 @@ struct VideoRoutePlan: Equatable {
     var title: String {
         switch kind {
         case .directMVHEVC:
-            "Direct MV-HEVC when available"
+            includesUpscale ? "Direct 4K MV-HEVC when available" : "Direct MV-HEVC when available"
         case .generatedMVHEVC:
             "Generated MV-HEVC"
         case .av1Stereo:
@@ -201,17 +208,19 @@ struct VideoRoutePlan: Equatable {
     var settingsSummary: String {
         switch kind {
         case .directMVHEVC:
+            let rateControl: String
             if let directBitrateMbps {
-                "Custom · \(directBitrateMbps) Mbps final"
+                rateControl = "Custom · \(directBitrateMbps) Mbps final"
             } else {
-                "Automatic · content-adaptive quality"
+                rateControl = "Automatic · content-adaptive quality"
             }
+            return includesUpscale ? "\(rateControl) · 2× MetalFX" : rateControl
         case .generatedMVHEVC:
-            "\(bitratePolicyTitle(generatedEyeBitrateMode)) · \(generatedEyeBitrateMbps ?? Self.automaticGeneratedEyeBitrateMbps) Mbps per eye · merge \(generatedMergeQuality ?? Self.automaticGeneratedMergeQuality)"
+            return "\(bitratePolicyTitle(generatedEyeBitrateMode)) · \(generatedEyeBitrateMbps ?? Self.automaticGeneratedEyeBitrateMbps) Mbps per eye · merge \(generatedMergeQuality ?? Self.automaticGeneratedMergeQuality)"
         case .av1Stereo:
-            "CRF \(av1CRF ?? 32)"
+            return "CRF \(av1CRF ?? 32)"
         case .existingArtifact:
-            "No video re-encode"
+            return "No video re-encode"
         }
     }
 
@@ -222,7 +231,11 @@ struct VideoRoutePlan: Equatable {
     var detail: String {
         switch kind {
         case .directMVHEVC:
-            "Automatic adapts bitrate to source complexity. The engine confirms stereo MV-HEVC support before reading conversion input and visibly uses Automatic generated settings if unavailable."
+            if includesUpscale {
+                "The engine confirms stereo MV-HEVC and MetalFX 2× support before reading conversion input. It scales both eyes inside the direct encoder and visibly uses the generated file route if unavailable."
+            } else {
+                "Automatic adapts bitrate to source complexity. The engine confirms stereo MV-HEVC support before reading conversion input and visibly uses Automatic generated settings if unavailable."
+            }
         case .generatedMVHEVC:
             generatedRequirement?.detail ?? "This job creates left- and right-eye movies before assembling MV-HEVC."
         case .av1Stereo:
@@ -235,7 +248,11 @@ struct VideoRoutePlan: Equatable {
     var pipelineSteps: [String] {
         switch kind {
         case .directMVHEVC:
-            ["1 Prepare", "2–3 Extract 3D", "4 Direct MV-HEVC", "7–9 Finish"]
+            if includesUpscale {
+                ["1 Prepare", "2–3 Extract 3D", "4 Direct 4K MV-HEVC", "7–9 Finish"]
+            } else {
+                ["1 Prepare", "2–3 Extract 3D", "4 Direct MV-HEVC", "7–9 Finish"]
+            }
         case .generatedMVHEVC:
             if includesUpscale {
                 ["1 Prepare", "2–4 Eye files", "5 Merge MV-HEVC", "6 FX Upscale", "7–9 Finish"]
@@ -252,7 +269,11 @@ struct VideoRoutePlan: Equatable {
     var pipelineDetail: String {
         switch kind {
         case .directMVHEVC:
-            "Direct MV-HEVC writes the stage-4 spatial movie and skips stage 5."
+            if includesUpscale {
+                "Direct MetalFX upscale writes the stage-4 4K spatial movie and skips the file-backed stages 5 and 6."
+            } else {
+                "Direct MV-HEVC writes the stage-4 spatial movie and skips stage 5."
+            }
         case .generatedMVHEVC:
             if includesUpscale {
                 "Generated MV-HEVC creates eye movies at stage 4, assembles them at stage 5, and upscales at stage 6."
@@ -287,10 +308,14 @@ extension VideoRouteReport {
         fallbackReason != nil
     }
 
+    var usesMetalFXUpscale: Bool {
+        upscaleMode == "metalfx"
+    }
+
     var displayTitle: String {
         switch kind {
         case .directMVHEVC:
-            "Direct MV-HEVC"
+            usesMetalFXUpscale ? "Direct 4K MV-HEVC" : "Direct MV-HEVC"
         case .generatedMVHEVC:
             isFallback ? "Generated MV-HEVC fallback" : "Generated MV-HEVC"
         case .av1Stereo:
@@ -320,10 +345,14 @@ extension VideoRouteReport {
     var settingsSummary: String {
         switch kind {
         case .directMVHEVC:
+            let rateControlSummary: String
             if rateControl == "quality" || quality != nil {
-                return "Automatic · content-adaptive quality"
+                rateControlSummary = "Automatic · content-adaptive quality"
+            } else {
+                rateControlSummary = bitrateMbps.map { "\($0) Mbps final" }
+                    ?? "Automatic · content-adaptive quality"
             }
-            return bitrateMbps.map { "\($0) Mbps final" } ?? "Automatic · content-adaptive quality"
+            return usesMetalFXUpscale ? "\(rateControlSummary) · 2× MetalFX" : rateControlSummary
         case .generatedMVHEVC:
             if let eyeBitrateMbps, let mergeQuality {
                 return "\(eyeBitrateMbps) Mbps per eye · merge \(mergeQuality)"
@@ -357,6 +386,8 @@ extension VideoRouteReport {
         switch reason {
         case "direct_eligible":
             "This Mac confirmed direct stereo MV-HEVC support before conversion input."
+        case "direct_upscale_eligible":
+            "This Mac confirmed direct stereo MV-HEVC and MetalFX 2× support before conversion input."
         case "generated_route_requested":
             "The requested settings require generated eye movies."
         case "restart_stage_requires_generated_artifacts":
@@ -365,8 +396,10 @@ extension VideoRouteReport {
             "Reusable intermediate files were requested."
         case "software_encoder_requested":
             "Software HEVC encoding requires generated eye movies."
-        case "upscale_requires_generated_artifacts":
-            "FX Upscale requires the file-backed generated route."
+        case "upscale_crop_requires_generated_artifacts":
+            "Automatic crop requires the file-backed generated upscale route."
+        case "upscale_resolution_requires_generated_artifacts":
+            "The selected resolution override requires the file-backed generated upscale route."
         case "field_of_view_requires_generated_route":
             "The selected field of view requires the generated route."
         case "av1_output_requested":
@@ -388,6 +421,8 @@ extension VideoRouteReport {
             "The packaged direct MV-HEVC encoder could not be launched, so the job uses generated eye movies."
         case "stereo_mv_hevc_encode_unavailable":
             "This Mac could not initialize stereo MV-HEVC encoding, so the job uses generated eye movies."
+        case "metalfx_2x_mv_hevc_unavailable":
+            "This Mac could not initialize direct 4K MetalFX MV-HEVC, so the job uses the generated file-backed upscale route."
         default:
             "Direct MV-HEVC was unavailable, so the job uses generated eye movies."
         }

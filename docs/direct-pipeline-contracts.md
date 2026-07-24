@@ -45,6 +45,9 @@ named restartable file.
 - Input: streamed source container in default mode or extracted MVC elementary
   stream with `--keep-files`, plus crop/title metadata.
 - MV-HEVC output: `<name>_left_movie.mov` and `<name>_right_movie.mov`.
+- Eligible automatic direct MV-HEVC output: `<name>_MV-HEVC.mov`, or
+  `<name>_MV-HEVC Upscaled.mov` when exact 1920×1080 eyes are scaled 2× with
+  MetalFX inside the native writer. These direct jobs do not create eye movies.
 - AV1 stereo output: `<name>_AV1-SBS-unmarked.mp4`, encoded directly from the
   native splitter's Y4M output without a lossy HEVC intermediate. The AV1
   sequence header carries limited-range BT.709 matrix, primaries, and transfer
@@ -64,8 +67,10 @@ named restartable file.
 
 ### `UPSCALE_VIDEO`
 
-- Input: MV-HEVC movie.
-- Output: `<name>_MV-HEVC Upscaled.mov` when enabled.
+- Generated-route input: MV-HEVC movie.
+- Output: `<name>_MV-HEVC Upscaled.mov` when the file-backed route is enabled.
+- Eligible direct MetalFX jobs already created the same named artifact during
+  stage 4 and therefore omit this stage.
 - Restart/debug value: high. External and built-in upscale workflows need this
   boundary.
 
@@ -150,11 +155,23 @@ artifacts. Default mode removes consumed intermediates after the final output
 is complete; `--keep-files` retains them. Disc/ISO inputs retain their MakeMKV
 materialization.
 
+For an eligible 1080p upscale request, the same native process separates each
+eye, scales each frame to 3840×2160 with independent `MTLFXSpatialScaler`
+state, and appends the tagged pair to one MV-HEVC writer. It writes the durable
+`_MV-HEVC Upscaled.mov` artifact during stage 4 and skips both the eye movies
+and the pre-upscale `_MV-HEVC.mov` artifact. The helper capability is resolved
+before conversion input. Missing or unavailable MetalFX capability visibly
+selects the generated file-backed route; a failure after direct input starts
+never replays through another lossy route.
+
 The [direct MV-HEVC feasibility evidence](direct-mv-hevc-feasibility.md)
 qualifies that production route. Reusable intermediates, software HEVC,
-external eye workflows, upscaling, stage-4/5 restarts, and valid unavailable
-capability remain generated/file-backed. A failure after direct input starts is
-never replayed through the generated route.
+external eye workflows, upscale-with-crop, incompatible upscale resolution
+overrides, stage-4/5 restarts, and valid unavailable capability remain
+generated/file-backed. Finalized preview jobs use the same resolver and direct
+artifact path as full jobs; this does not add a live processed-frame preview.
+A failure after direct input starts is never replayed through the generated
+route.
 
 The reused source is user-owned. Automatic cleanup never deletes it.
 `--remove-original` is the explicit exception and removes the source only after

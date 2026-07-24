@@ -10,7 +10,7 @@ from bd_to_avp.modules.config import Stage
 from bd_to_avp.modules.disc import DiscInfo
 from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.modules.video_mode import VideoMode
-from bd_to_avp.modules.video_route import ResolvedVideoRoute, VideoRouteKind
+from bd_to_avp.modules.video_route import DirectUpscaleMode, ResolvedVideoRoute, VideoRouteKind
 from bd_to_avp.observability import ObservabilityEmitter
 from bd_to_avp.runtime import ObservabilityStream, RunContext
 from bd_to_avp.worker.protocol import VideoRouteIntent
@@ -429,13 +429,13 @@ class ProcessAudioWiringTests(unittest.TestCase):
             self.assertEqual(mux.call_args.args, (audio_path, stereo_path, output_folder, "Movie"))
             self.assertEqual(mux.call_args.kwargs["observability_context"].stage.id, "create_final_file")
 
-    def test_direct_mv_hevc_route_writes_stage_four_boundary_and_skips_generated_stages(self) -> None:
+    def test_direct_metalfx_route_writes_final_4k_boundary_and_skips_file_upscale(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             source_path = temp_path / "source.mkv"
             output_folder = temp_path / "Movie"
             mvc_path = output_folder / "Movie_mvc.h264"
-            direct_path = output_folder / "Movie_MV-HEVC.mov"
+            direct_path = output_folder / "Movie_MV-HEVC Upscaled.mov"
             audio_path = output_folder / "Movie_audio_PCM.mov"
             final_path = output_folder / "Movie_AVP.mov"
             source_path.write_bytes(b"source")
@@ -443,9 +443,10 @@ class ProcessAudioWiringTests(unittest.TestCase):
             route = ResolvedVideoRoute(
                 intent=VideoRouteIntent.AUTOMATIC,
                 selected=VideoRouteKind.DIRECT_MV_HEVC,
-                reason="direct_eligible",
+                reason="direct_upscale_eligible",
                 output_mode=VideoMode.MV_HEVC,
-                direct_bitrate_mbps=20,
+                direct_quality=0.7,
+                direct_upscale_mode=DirectUpscaleMode.METAL_FX,
             )
 
             with ExitStack() as stack:
@@ -455,7 +456,7 @@ class ProcessAudioWiringTests(unittest.TestCase):
                 stack.enter_context(patch.object(process.config, "keep_files", False))
                 stack.enter_context(patch.object(process.config, "audio_mode", AudioMode.PCM))
                 stack.enter_context(patch.object(process.config, "video_mode", VideoMode.MV_HEVC))
-                stack.enter_context(patch.object(process.config, "fx_upscale", False))
+                stack.enter_context(patch.object(process.config, "fx_upscale", True))
                 stack.enter_context(patch.object(process.config, "skip_subtitles", True))
                 stack.enter_context(patch.object(process.config, "start_stage", Stage.CREATE_MKV))
                 stack.enter_context(patch.object(process.config, "remove_original", False))
@@ -476,7 +477,7 @@ class ProcessAudioWiringTests(unittest.TestCase):
                 )
                 create_left_right = stack.enter_context(patch.object(process, "create_left_right_files"))
                 create_mv_hevc = stack.enter_context(patch.object(process, "create_mv_hevc_file"))
-                stack.enter_context(patch.object(process, "create_upscaled_file", return_value=direct_path))
+                upscale = stack.enter_context(patch.object(process, "create_upscaled_file", return_value=direct_path))
                 stack.enter_context(patch.object(process, "create_transcoded_audio_file", return_value=audio_path))
                 mux = stack.enter_context(patch.object(process, "create_muxed_file", return_value=final_path))
                 stack.enter_context(patch.object(process, "move_file_to_output_root_folder", return_value=final_path))
@@ -486,11 +487,13 @@ class ProcessAudioWiringTests(unittest.TestCase):
 
             self.assertIs(preflight.call_args.kwargs["video_route"], route)
             self.assertEqual(
-                direct.call_args.args, (DiscInfo(name="Movie", color_depth=8), output_folder, mvc_path, "", 20, None)
+                direct.call_args.args,
+                (DiscInfo(name="Movie", color_depth=8), output_folder, mvc_path, "", None, 0.7, "metalfx"),
             )
             self.assertEqual(direct.call_args.kwargs["observability_context"].stage.id, "create_left_right_files")
             create_left_right.assert_not_called()
             create_mv_hevc.assert_not_called()
+            upscale.assert_not_called()
             self.assertEqual(mux.call_args.args, (audio_path, direct_path, output_folder, "Movie"))
 
 

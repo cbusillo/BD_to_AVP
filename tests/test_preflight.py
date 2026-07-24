@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 from bd_to_avp import preflight
 from bd_to_avp.modules.config import Stage
 from bd_to_avp.modules.video_mode import VideoMode
-from bd_to_avp.modules.video_route import ResolvedVideoRoute, VideoRouteKind
+from bd_to_avp.modules.video_route import DirectUpscaleMode, ResolvedVideoRoute, VideoRouteKind
 from bd_to_avp.process_runner import ProcessCancelled
 from bd_to_avp.vendor.pgsrip.ocr import OcrError
 from bd_to_avp.worker.protocol import VideoRouteIntent
@@ -42,6 +42,24 @@ class DependencyPreflightTests(unittest.TestCase):
 
         self.assertIn(preflight.config.SPATIAL_MEDIA_PATH, required_paths)
         self.assertNotIn(preflight.config.MV_HEVC_ENCODER_PATH, required_paths)
+
+    def test_direct_metalfx_upscale_does_not_require_file_upscale_tool(self) -> None:
+        route = ResolvedVideoRoute(
+            intent=VideoRouteIntent.AUTOMATIC,
+            selected=VideoRouteKind.DIRECT_MV_HEVC,
+            reason="direct_upscale_eligible",
+            output_mode=VideoMode.MV_HEVC,
+            direct_quality=0.7,
+            direct_upscale_mode=DirectUpscaleMode.METAL_FX,
+        )
+        with (
+            patch.object(preflight.config, "fx_upscale", True),
+            patch.object(preflight.config, "start_stage", Stage.CREATE_MKV),
+        ):
+            required_paths = preflight.get_required_dependency_binaries_for_current_job(route)
+
+        self.assertIn(preflight.config.MV_HEVC_ENCODER_PATH, required_paths)
+        self.assertNotIn(preflight.config.FX_UPSCALE_PATH, required_paths)
 
     def test_missing_required_dependency_binaries_raise_clear_error(self) -> None:
         with (

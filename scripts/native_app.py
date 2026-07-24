@@ -602,18 +602,37 @@ def validate_mv_hevc_capability_probe(
             f"{description} capability probe returned invalid JSON.\n"
             f"exit: {completed.returncode}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
         ) from error
-    unsupported_payload = {
-        "schema_version": 1,
-        "stereo_mv_hevc_encode_supported": False,
+    required_keys = {"schema_version", "stereo_mv_hevc_encode_supported"}
+    optional_keys = {
+        "metalfx_2x_mv_hevc_supported",
+        "metalfx_spatial_scaling_supported",
+        "pixel_transfer_2x_mv_hevc_supported",
     }
-    if completed.returncode == 2 and payload == unsupported_payload:
-        return False
-    expected_payload = {
-        "schema_version": 1,
-        "stereo_mv_hevc_encode_supported": True,
-    }
-    if completed.returncode == 0 and payload == expected_payload:
-        return True
+    if (
+        not isinstance(payload, dict)
+        or not required_keys.issubset(payload)
+        or not set(payload).issubset(required_keys | optional_keys)
+        or type(payload["schema_version"]) is not int
+        or payload["schema_version"] != 1
+        or type(payload["stereo_mv_hevc_encode_supported"]) is not bool
+        or any(type(payload[key]) is not bool for key in optional_keys if key in payload)
+    ):
+        raise RuntimeError(
+            f"{description} capability probe failed.\n"
+            f"exit: {completed.returncode}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
+
+    supported = payload["stereo_mv_hevc_encode_supported"]
+    metalfx_supported = payload.get("metalfx_2x_mv_hevc_supported", False)
+    metalfx_device_supported = payload.get("metalfx_spatial_scaling_supported", False)
+    pixel_transfer_supported = payload.get("pixel_transfer_2x_mv_hevc_supported", False)
+    contract_is_consistent = not (
+        (metalfx_supported and (not supported or not metalfx_device_supported))
+        or (pixel_transfer_supported and not supported)
+    )
+    expected_returncode = 0 if supported else 2
+    if contract_is_consistent and completed.returncode == expected_returncode:
+        return supported
     raise RuntimeError(
         f"{description} capability probe failed.\n"
         f"exit: {completed.returncode}\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"

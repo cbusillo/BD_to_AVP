@@ -401,8 +401,10 @@ class JobSpec:
             generated_requirement = "Reusable intermediates require"
         elif job.software_encoder:
             generated_requirement = "Software HEVC requires"
-        elif encoding.upscale.enabled:
-            generated_requirement = "FX upscale requires"
+        elif encoding.upscale.enabled and encoding.crop_black_bars:
+            generated_requirement = "FX upscale with automatic crop requires"
+        elif encoding.upscale.enabled and encoding.resolution not in {"", "1920x1080"}:
+            generated_requirement = "FX upscale with this resolution override requires"
         elif not 1 <= encoding.fov <= 180:
             generated_requirement = "The selected field of view requires"
         if generated_requirement is not None and video.route_intent is not VideoRouteIntent.GENERATED:
