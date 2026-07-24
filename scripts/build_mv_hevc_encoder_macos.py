@@ -12,6 +12,18 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PATH = REPOSITORY_ROOT / "native/mv_hevc_encoder/MVHEVCEncoder.swift"
+METALFX_SOURCE_PATH = REPOSITORY_ROOT / "native/mv_hevc_encoder/MetalFXSpatialUpscaler.swift"
+SOURCE_PATHS = (SOURCE_PATH, METALFX_SOURCE_PATH)
+FRAMEWORKS = (
+    "AVFoundation",
+    "CoreGraphics",
+    "CoreImage",
+    "CoreMedia",
+    "CoreVideo",
+    "Metal",
+    "MetalFX",
+    "VideoToolbox",
+)
 MINIMUM_MACOS = "26.0"
 COMMAND_TIMEOUT_SECONDS = 180
 
@@ -45,8 +57,8 @@ def swift_compiler() -> str:
     return value
 
 
-def build_command(compiler: str, source_path: Path, output_path: Path, sdk: Path) -> list[str]:
-    return [
+def build_command(compiler: str, source_paths: tuple[Path, ...], output_path: Path, sdk: Path) -> list[str]:
+    command = [
         compiler,
         "-swift-version",
         "6",
@@ -58,18 +70,13 @@ def build_command(compiler: str, source_path: Path, output_path: Path, sdk: Path
         f"arm64-apple-macosx{MINIMUM_MACOS}",
         "-sdk",
         str(sdk),
-        str(source_path),
+        *(str(source_path) for source_path in source_paths),
         "-o",
         str(output_path),
-        "-framework",
-        "AVFoundation",
-        "-framework",
-        "CoreMedia",
-        "-framework",
-        "CoreVideo",
-        "-framework",
-        "VideoToolbox",
     ]
+    for framework in FRAMEWORKS:
+        command.extend(["-framework", framework])
+    return command
 
 
 def build_encoder(output_path: Path) -> None:
@@ -80,7 +87,7 @@ def build_encoder(output_path: Path) -> None:
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         subprocess.run(
-            build_command(compiler, SOURCE_PATH, output_path, sdk),
+            build_command(compiler, SOURCE_PATHS, output_path, sdk),
             check=True,
             timeout=COMMAND_TIMEOUT_SECONDS,
             env=environment,
@@ -105,7 +112,7 @@ def build_encoder(output_path: Path) -> None:
         text=True,
         timeout=COMMAND_TIMEOUT_SECONDS,
     )
-    for framework in ("AVFoundation", "CoreMedia", "CoreVideo", "VideoToolbox"):
+    for framework in FRAMEWORKS:
         if f"/{framework}.framework/" not in linked_libraries:
             raise RuntimeError(f"MV-HEVC encoder is not linked to {framework}")
 
