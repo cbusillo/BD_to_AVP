@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterator, Mapping, Sequence
 
+from bd_to_avp.modules.video_route import AUTOMATIC_DIRECT_QUALITY
 from scripts.qualify_direct_mv_hevc import (
     CURRENT_REQUIRED_BOX_TYPES,
     DIRECT_REQUIRED_BOX_TYPES,
@@ -229,6 +230,12 @@ def validate_route_pair(
     if full.route.get("fallback_reason") != expected_fallback_reason:
         raise PackagedRouteFailure("Resolved route reported an unexpected fallback reason.")
     if expected_fallback_reason is None:
+        if full.route.get("rate_control") != "quality":
+            raise PackagedRouteFailure("Automatic direct route did not report quality rate control.")
+        if full.route.get("quality") != AUTOMATIC_DIRECT_QUALITY:
+            raise PackagedRouteFailure("Automatic direct route reported an unexpected quality value.")
+        if "bitrate_mbps" in full.route:
+            raise PackagedRouteFailure("Automatic direct route unexpectedly reported a fixed bitrate.")
         if "fallback_timing" in full.route:
             raise PackagedRouteFailure("Direct route unexpectedly reported fallback timing.")
     elif full.route.get("fallback_timing") != "pre_input":

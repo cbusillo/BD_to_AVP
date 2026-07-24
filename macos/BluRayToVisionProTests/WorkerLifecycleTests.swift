@@ -383,7 +383,9 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertEqual(state.conversionResult?.outputPath, "/tmp/output/movie_AVP.mov")
         XCTAssertEqual(state.conversionResult?.sizeBytes, 1024)
         XCTAssertEqual(state.conversionResult?.videoRoute?.selected, "direct_mv_hevc")
-        XCTAssertEqual(state.conversionResult?.videoRoute?.bitrateMbps, 40)
+        XCTAssertEqual(state.conversionResult?.videoRoute?.rateControl, "quality")
+        XCTAssertEqual(state.conversionResult?.videoRoute?.quality, 0.7)
+        XCTAssertNil(state.conversionResult?.videoRoute?.bitrateMbps)
         XCTAssertEqual(state.videoRoute, state.conversionResult?.videoRoute)
     }
 

@@ -408,6 +408,7 @@ def process_each(
             video_output_path,
             crop_params,
             video_route.direct_bitrate_mbps,
+            video_route.direct_quality,
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("create_left_right_files"),

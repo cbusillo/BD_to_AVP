@@ -452,26 +452,31 @@ private final class PreviewWorkerClient: WorkerProcessRunning, @unchecked Sendab
                 intent: "automatic",
                 selected: "direct_mv_hevc",
                 reason: "direct_eligible",
-                bitrateMbps: 40,
+                bitrateMbps: nil,
                 eyeBitrateMbps: nil,
                 mergeQuality: nil,
                 crf: nil,
                 fallbackReason: nil,
-                fallbackTiming: nil
+                fallbackTiming: nil,
+                rateControl: "quality",
+                quality: 0.7
             )
         }
         switch video.routeIntent {
         case .automatic:
+            let customBitrate = video.directBitrate?.mode == .custom ? video.directBitrate?.mbps : nil
             return VideoRouteReport(
                 intent: "automatic",
                 selected: "direct_mv_hevc",
                 reason: "direct_eligible",
-                bitrateMbps: video.directBitrate?.mbps ?? 40,
+                bitrateMbps: customBitrate,
                 eyeBitrateMbps: nil,
                 mergeQuality: nil,
                 crf: nil,
                 fallbackReason: nil,
-                fallbackTiming: nil
+                fallbackTiming: nil,
+                rateControl: customBitrate == nil ? "quality" : "average_bitrate",
+                quality: customBitrate == nil ? 0.7 : nil
             )
         case .generated:
             return VideoRouteReport(

@@ -82,6 +82,7 @@ class MVHEVCEncoderBuilderTests(unittest.TestCase):
         probe_source = source[probe_start:probe_end]
 
         self.assertIn("VTIsStereoMVHEVCEncodeSupported()", probe_source)
+        self.assertIn("for quality in [Double?.none, 0.7]", probe_source)
         self.assertIn("makeOutputSettings(options: options, header: header)", probe_source)
         self.assertIn("writer.canApply(outputSettings: outputSettings, forMediaType: .video)", probe_source)
         self.assertIn("let supported = try isStereoMVHEVCOutputConfigurationSupported()", source)
@@ -182,10 +183,16 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
         output_path: Path,
         input_bytes: bytes,
         *,
+        bitrate_mbps: float | None = None,
         expected_frames: int | None = None,
         overwrite: bool = False,
+        quality: float | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
         command = [str(self.encoder), "--output", str(output_path)]
+        if bitrate_mbps is not None:
+            command.extend(["--bitrate-mbps", str(bitrate_mbps)])
+        if quality is not None:
+            command.extend(["--quality", str(quality)])
         if expected_frames is not None:
             command.extend(["--expected-frames", str(expected_frames)])
         if overwrite:
@@ -232,6 +239,9 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
         self.assertEqual(summary["frame_count"], 2)
         self.assertEqual(summary["eye_width"], 64)
         self.assertEqual(summary["eye_height"], 64)
+        self.assertEqual(summary["bitrate_mbps"], 8)
+        self.assertEqual(summary["rate_control"], "average_bitrate")
+        self.assertNotIn("quality", summary)
         self.assertTrue(output_path.is_file())
         boxes = subprocess.run(
             [str(MP4BOX), "-diso", str(output_path), "-std"],
@@ -244,6 +254,47 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
         observed = set(qualify_direct_mv_hevc.BOX_TYPE_PATTERN.findall(boxes))
         self.assertLessEqual(qualify_direct_mv_hevc.DIRECT_REQUIRED_BOX_TYPES, observed)
         self.assert_no_partial_output(output_path)
+
+    def test_encodes_with_quality_rate_control(self) -> None:
+        output_path = self.output_path("quality.mov")
+
+        completed = self.run_encoder(
+            output_path,
+            y4m_header() + y4m_frame(0) + y4m_frame(1),
+            expected_frames=2,
+            quality=0.5,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+        summary = json.loads(completed.stdout)
+        self.assertEqual(summary["quality"], 0.5)
+        self.assertEqual(summary["rate_control"], "quality")
+        self.assertNotIn("bitrate_mbps", summary)
+        self.assertTrue(output_path.is_file())
+        self.assert_no_partial_output(output_path)
+
+    def test_rejects_conflicting_rate_control_options(self) -> None:
+        output_path = self.output_path("conflicting-rate-control.mov")
+
+        completed = self.run_encoder(
+            output_path,
+            y4m_header(),
+            bitrate_mbps=8,
+            quality=0.5,
+        )
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(b"mutually exclusive", completed.stderr)
+        self.assertFalse(output_path.exists())
+
+    def test_rejects_out_of_range_quality(self) -> None:
+        output_path = self.output_path("invalid-quality.mov")
+
+        completed = self.run_encoder(output_path, y4m_header(), quality=1.1)
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(b"between 0 and 1", completed.stderr)
+        self.assertFalse(output_path.exists())
 
     def test_rejects_high_bit_depth_y4m_before_writing_output(self) -> None:
         output_path = self.output_path("high-bit-depth.mov")

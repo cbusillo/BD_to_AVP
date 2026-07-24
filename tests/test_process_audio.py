@@ -486,7 +486,7 @@ class ProcessAudioWiringTests(unittest.TestCase):
 
             self.assertIs(preflight.call_args.kwargs["video_route"], route)
             self.assertEqual(
-                direct.call_args.args, (DiscInfo(name="Movie", color_depth=8), output_folder, mvc_path, "", 20)
+                direct.call_args.args, (DiscInfo(name="Movie", color_depth=8), output_folder, mvc_path, "", 20, None)
             )
             self.assertEqual(direct.call_args.kwargs["observability_context"].stage.id, "create_left_right_files")
             create_left_right.assert_not_called()

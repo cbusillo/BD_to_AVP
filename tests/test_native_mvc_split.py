@@ -497,7 +497,28 @@ class DirectMVHEVCPipelineTests(unittest.TestCase):
         self.assertEqual(command[0], Path("/app/bin/mv-hevc-encoder"))
         self.assertEqual(command[command.index("--bitrate-mbps") + 1], "20")
         self.assertEqual(command[command.index("--fov") + 1], "105")
+        self.assertNotIn("--quality", command)
         self.assertNotIn("--swap-eyes", command)
+
+    def test_encoder_command_uses_content_adaptive_quality(self) -> None:
+        with (
+            patch.object(video.config, "MV_HEVC_ENCODER_PATH", Path("/app/bin/mv-hevc-encoder")),
+            patch.object(video.config, "fov", 90),
+        ):
+            command = video.generate_direct_mv_hevc_encoder_command(
+                Path("Sample_MV-HEVC.mov"),
+                None,
+                0.7,
+            )
+
+        self.assertEqual(command[command.index("--quality") + 1], "0.7")
+        self.assertNotIn("--bitrate-mbps", command)
+
+    def test_encoder_command_requires_exactly_one_rate_control(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exactly one rate-control"):
+            video.generate_direct_mv_hevc_encoder_command(Path("Sample_MV-HEVC.mov"), None)
+        with self.assertRaisesRegex(ValueError, "exactly one rate-control"):
+            video.generate_direct_mv_hevc_encoder_command(Path("Sample_MV-HEVC.mov"), 20, 0.7)
 
     def test_direct_attempt_runs_splitter_normalizer_and_encoder_in_order(self) -> None:
         with (

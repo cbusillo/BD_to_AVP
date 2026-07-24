@@ -10,6 +10,34 @@ struct VideoRouteReport: Decodable, Equatable {
     let crf: Int?
     let fallbackReason: String?
     let fallbackTiming: String?
+    let rateControl: String?
+    let quality: Double?
+
+    init(
+        intent: String,
+        selected: String,
+        reason: String,
+        bitrateMbps: Int?,
+        eyeBitrateMbps: Int?,
+        mergeQuality: Int?,
+        crf: Int?,
+        fallbackReason: String?,
+        fallbackTiming: String?,
+        rateControl: String? = nil,
+        quality: Double? = nil
+    ) {
+        self.intent = intent
+        self.selected = selected
+        self.reason = reason
+        self.bitrateMbps = bitrateMbps
+        self.eyeBitrateMbps = eyeBitrateMbps
+        self.mergeQuality = mergeQuality
+        self.crf = crf
+        self.fallbackReason = fallbackReason
+        self.fallbackTiming = fallbackTiming
+        self.rateControl = rateControl
+        self.quality = quality
+    }
 
     enum CodingKeys: String, CodingKey {
         case intent
@@ -21,6 +49,8 @@ struct VideoRouteReport: Decodable, Equatable {
         case crf
         case fallbackReason = "fallback_reason"
         case fallbackTiming = "fallback_timing"
+        case rateControl = "rate_control"
+        case quality
     }
 }
 

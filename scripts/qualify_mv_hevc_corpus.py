@@ -774,8 +774,14 @@ def _encode_direct(
     prepared: PreparedCase,
     output_path: Path,
     *,
-    bitrate_mbps: float,
+    bitrate_mbps: float | None = None,
+    quality: float | None = None,
 ) -> None:
+    if (bitrate_mbps is None) == (quality is None):
+        raise ValueError("Direct qualification requires exactly one rate-control setting.")
+    rate_control_arguments = (
+        ["--quality", str(quality)] if quality is not None else ["--bitrate-mbps", str(bitrate_mbps)]
+    )
     summary = _run_pipeline(
         [
             ffmpeg,
@@ -794,8 +800,7 @@ def _encode_direct(
             encoder,
             "--output",
             output_path,
-            "--bitrate-mbps",
-            str(bitrate_mbps),
+            *rate_control_arguments,
             "--fov",
             "90",
             "--disparity-adjustment",
@@ -811,6 +816,14 @@ def _encode_direct(
         raise QualificationFailure("Direct encoder returned invalid completion JSON.") from error
     if not isinstance(payload, Mapping) or payload.get("schema_version") != 1:
         raise QualificationFailure("Direct encoder returned an unsupported completion contract.")
+    expected_rate_control = "quality" if quality is not None else "average_bitrate"
+    if payload.get("rate_control") != expected_rate_control:
+        raise QualificationFailure("Direct encoder reported an unexpected rate-control mode.")
+    if quality is not None:
+        if payload.get("quality") != quality or "bitrate_mbps" in payload:
+            raise QualificationFailure("Direct encoder reported an unexpected quality setting.")
+    elif payload.get("bitrate_mbps") != bitrate_mbps or "quality" in payload:
+        raise QualificationFailure("Direct encoder reported an unexpected bitrate setting.")
 
 
 def _measure_output(

@@ -279,20 +279,30 @@ def generate_direct_mv_hevc_normalizer_command(
 
 def generate_direct_mv_hevc_encoder_command(
     output_path: Path,
-    bitrate_mbps: int,
+    bitrate_mbps: int | None,
+    quality: float | None = None,
 ) -> list[str | Path]:
-    return [
+    if (bitrate_mbps is None) == (quality is None):
+        raise ValueError("Direct MV-HEVC encoding requires exactly one rate-control setting.")
+    command: list[str | Path] = [
         config.MV_HEVC_ENCODER_PATH,
         "--output",
         output_path,
-        "--bitrate-mbps",
-        str(bitrate_mbps),
-        "--fov",
-        str(config.fov),
-        "--disparity-adjustment",
-        "0",
-        "--overwrite",
     ]
+    if quality is not None:
+        command.extend(["--quality", f"{quality:g}"])
+    else:
+        command.extend(["--bitrate-mbps", str(bitrate_mbps)])
+    command.extend(
+        [
+            "--fov",
+            str(config.fov),
+            "--disparity-adjustment",
+            "0",
+            "--overwrite",
+        ]
+    )
+    return command
 
 
 def parse_resolution(resolution: str) -> tuple[int, int]:
@@ -1148,6 +1158,7 @@ def create_direct_mv_hevc_file(
     mvc_video: Path,
     crop_params: str,
     bitrate_mbps: int | None,
+    quality: float | None = None,
     *,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
@@ -1155,12 +1166,12 @@ def create_direct_mv_hevc_file(
 ) -> Path:
     mv_hevc_path = output_folder / f"{disc_info.name}_MV-HEVC.mov"
     if config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
-        if bitrate_mbps is None:
-            raise ValueError("Direct MV-HEVC encoding requires a resolved bitrate.")
+        if (bitrate_mbps is None) == (quality is None):
+            raise ValueError("Direct MV-HEVC encoding requires exactly one resolved rate-control setting.")
         if not can_use_native_mvc_splitter(disc_info):
             raise RuntimeError(explain_native_mvc_unavailable(disc_info))
         normalizer_command = generate_direct_mv_hevc_normalizer_command(disc_info, crop_params)
-        encoder_command = generate_direct_mv_hevc_encoder_command(mv_hevc_path, bitrate_mbps)
+        encoder_command = generate_direct_mv_hevc_encoder_command(mv_hevc_path, bitrate_mbps, quality)
         run_direct_mv_hevc_encoding(
             mvc_video,
             mv_hevc_path,

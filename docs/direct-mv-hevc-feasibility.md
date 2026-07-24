@@ -110,8 +110,13 @@ the 20 Mbps value inferred by scaling only the small fixture. Issue #364 subsequ
 corpus and packaged gate. Every gated case has a quality-matched direct result, but those matched targets span 0.5 to
 16 Mbps. A fixed 16 Mbps policy makes simpler cases 1.55 to 3.24 times larger, while the packaged 40 Mbps route produced
 330,860,823 bytes versus 45,629,113 bytes for generated fallback on the same 65-second source. The fixed Automatic
-policy is therefore not approved for release. Content-adaptive rate control continues in #366; see
-`docs/direct-mv-hevc-release-gate.md`.
+policy is therefore not approved for release.
+
+Issue #366 replaces that provisional target with VideoToolbox compression quality `0.7`. Across three runs for every
+gated case, effective bitrate adapts from 2.00 to 13.74 Mbps, worst-eye SSIM remains within 0.000370 of generated, and
+the largest direct/generated size ratio is 89.98%. The final packaged 65-second direct output is 55,517,754 bytes,
+16.86% smaller than its 66,773,648-byte generated fallback, and the exact fixture passes physical Vision Pro stereo
+playback. See `docs/direct-mv-hevc-release-gate.md`.
 
 ### GPU time
 
@@ -288,7 +293,7 @@ uv run python -m unittest \
 | Restart and fallback behavior | Defined |
 | Runtime, license, macOS, architecture, signing, notarization, and bundle implications | Recorded |
 
-The prototype is fully qualified and its runtime route is active under protocol v10. Packaged routing, finalized
-preview parity, generated fallback, and per-case quality matching pass, but issue #364 rejected the fixed Automatic
-bitrate for release. Content-adaptive Automatic rate control continues in #366. Streamed 4K upscale and live conversion
+The prototype is fully qualified and its runtime route is active under protocol v10. Issue #364 rejected the fixed
+Automatic bitrate; issue #366 qualifies content-adaptive quality `0.7` across the representative corpus, packaged full
+and preview routes, generated fallback, and physical Vision Pro playback. Streamed 4K upscale and live conversion
 imagery remain separate follow-up issues.

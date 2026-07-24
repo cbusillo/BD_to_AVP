@@ -1087,7 +1087,8 @@ class WorkerRuntimeTests(unittest.TestCase):
                         "intent": "automatic",
                         "selected": "direct_mv_hevc",
                         "reason": "direct_eligible",
-                        "bitrate_mbps": 40,
+                        "rate_control": "quality",
+                        "quality": 0.7,
                     },
                 }
             },
