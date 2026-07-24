@@ -6,6 +6,72 @@ final class DiagnosticBundleTests: XCTestCase {
     private let fixedDate = Date(timeIntervalSince1970: 1_784_323_200)
     private let fixedBundleID = UUID(uuidString: "01234567-89AB-4CDE-8F01-23456789ABCD")!
 
+    func testDiagnosticJobSettingsIncludeOnlyActiveRouteFields() throws {
+        func encodedSettings(options: ConversionOptions) throws -> [String: Any] {
+            let source = ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/movie.mkv"))
+            let draft = ConversionDraft(
+                source: source,
+                sourceDetails: nil,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+                options: options
+            )
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            let data = try encoder.encode(DiagnosticJobSettings(draft: draft))
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        }
+
+        let direct = try encodedSettings(options: ConversionOptions())
+        XCTAssertEqual(direct["requested_video_route"] as? String, "direct_mv_hevc")
+        XCTAssertEqual(direct["direct_bitrate_mode"] as? String, "automatic")
+        XCTAssertEqual(direct["direct_final_bitrate"] as? Int, 40)
+        XCTAssertNil(direct["left_right_bitrate"])
+        XCTAssertNil(direct["hevc_quality"])
+        XCTAssertEqual(direct["upscale_enabled"] as? Bool, false)
+        XCTAssertNil(direct["upscale_quality"])
+        XCTAssertNil(direct["av1_crf"])
+
+        var generatedOptions = ConversionOptions()
+        generatedOptions.job.intermediatePolicy = .reusable
+        let generated = try encodedSettings(options: generatedOptions)
+        XCTAssertEqual(generated["requested_video_route"] as? String, "generated_mv_hevc")
+        XCTAssertEqual(generated["route_requirement"] as? String, "reusable_intermediates_requested")
+        XCTAssertEqual(generated["generated_eye_bitrate_mode"] as? String, "automatic")
+        XCTAssertEqual(generated["left_right_bitrate"] as? Int, 20)
+        XCTAssertEqual(generated["hevc_quality"] as? Int, 75)
+        XCTAssertNil(generated["direct_final_bitrate"])
+        XCTAssertNil(generated["av1_crf"])
+
+        var av1Options = ConversionOptions()
+        av1Options.encoding.videoOutputMode = .av1Stereo
+        av1Options.encoding.upscaleEnabled = true
+        av1Options.encoding.resolutionOverride = "3840x2160"
+        let av1 = try encodedSettings(options: av1Options)
+        XCTAssertEqual(av1["requested_video_route"] as? String, "av1")
+        XCTAssertEqual(av1["upscale_enabled"] as? Bool, false)
+        XCTAssertNil(av1["upscale_quality"])
+        XCTAssertEqual(av1["resolution_override_set"] as? Bool, false)
+
+        var existingOptions = ConversionOptions()
+        existingOptions.job.startStage = .transcodeAudio
+        existingOptions.encoding.upscaleEnabled = true
+        existingOptions.encoding.frameRateOverride = "24"
+        existingOptions.encoding.cropBlackBars = true
+        let existing = try encodedSettings(options: existingOptions)
+        XCTAssertEqual(existing["requested_video_route"] as? String, "existing_artifact")
+        XCTAssertNil(existing["upscale_enabled"])
+        XCTAssertNil(existing["upscale_quality"])
+        XCTAssertNil(existing["field_of_view"])
+        XCTAssertNil(existing["frame_rate_override_set"])
+        XCTAssertNil(existing["crop_black_bars"])
+
+        existingOptions.job.startStage = .upscaleVideo
+        let upscaleResume = try encodedSettings(options: existingOptions)
+        XCTAssertEqual(upscaleResume["upscale_enabled"] as? Bool, true)
+        XCTAssertEqual(upscaleResume["upscale_quality"] as? Int, 75)
+    }
+
     func testDiagnosticZipArchiveMatchesSharedNativeFixture() throws {
         let fixtureURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

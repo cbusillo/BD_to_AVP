@@ -465,30 +465,55 @@ private struct ProfileEncodingSummaryView: View {
     }
 
     private var videoItems: [ProfileSummaryItem] {
-        var items = [ProfileSummaryItem(title: "Format", value: options.videoOutputMode.title)]
-        switch options.videoOutputMode {
-        case .mvHEVC:
+        let route = VideoRoutePlan(encoding: options)
+        var items = [
+            ProfileSummaryItem(title: "Format", value: options.videoOutputMode.title),
+            ProfileSummaryItem(title: "Route", value: route.title),
+        ]
+        switch route.kind {
+        case .directMVHEVC:
+            items.append(ProfileSummaryItem(title: "Final bitrate", value: route.settingsSummary))
+            items.append(ProfileSummaryItem(title: "AI FX upscale to 2× resolution", value: "Disabled"))
+        case .generatedMVHEVC:
             items.append(contentsOf: [
-                ProfileSummaryItem(title: "HEVC quality", value: "\(options.mvHEVC.generatedMergeQuality)"),
                 ProfileSummaryItem(
-                    title: "Left / right bitrate",
-                    value: "\(options.generatedEyeCustomBitrateMbps) Mbps"
+                    title: "Eye intermediate bitrate",
+                    value: generatedEyeBitrateSummary
+                ),
+                ProfileSummaryItem(
+                    title: "MV-HEVC merge quality",
+                    value: "\(options.mvHEVC.generatedMergeQuality)"
                 ),
                 ProfileSummaryItem(title: "AI FX upscale to 2× resolution", value: enabledText(options.upscaleEnabled)),
-                ProfileSummaryItem(title: "Upscale quality", value: "\(options.upscaleQuality)"),
-                ProfileSummaryItem(
-                    title: "Link HEVC and upscale quality",
-                    value: enabledText(options.mvHEVC.linkGeneratedAndUpscaleQuality)
-                ),
             ])
+            if options.upscaleEnabled {
+                items.append(contentsOf: [
+                    ProfileSummaryItem(title: "Upscale quality", value: "\(options.upscaleQuality)"),
+                    ProfileSummaryItem(
+                        title: "Link MV-HEVC and upscale quality",
+                        value: enabledText(options.mvHEVC.linkGeneratedAndUpscaleQuality)
+                    ),
+                ])
+            }
         case .av1Stereo:
             items.append(contentsOf: [
                 ProfileSummaryItem(title: "AV1 quality", value: "CRF \(options.av1CRF)"),
                 ProfileSummaryItem(title: "Packing", value: "Full side-by-side"),
                 ProfileSummaryItem(title: "Encoder", value: "Software SVT-AV1"),
             ])
+        case .existingArtifact:
+            items.append(ProfileSummaryItem(title: "Encoding", value: "Uses an existing stage artifact"))
         }
         return items
+    }
+
+    private var generatedEyeBitrateSummary: String {
+        switch options.mvHEVC.generatedEyeBitrate.mode {
+        case .automatic:
+            "Automatic (Recommended) · \(VideoRoutePlan.automaticGeneratedEyeBitrateMbps) Mbps per eye"
+        case .custom:
+            "Custom · \(options.generatedEyeCustomBitrateMbps) Mbps per eye"
+        }
     }
 
     private var pictureItems: [ProfileSummaryItem] {
@@ -731,7 +756,7 @@ private struct AdvancedSettingsPane: View {
 
             Section("Defaults for New Jobs") {
                 Toggle("Default to the software encoder", isOn: $settings.useSoftwareEncoder)
-                Toggle("Keep durable stage files by default", isOn: reusableIntermediatesBinding)
+                Toggle("Create reusable intermediate files by default", isOn: reusableIntermediatesBinding)
             }
 
             Section("Diagnostics") {

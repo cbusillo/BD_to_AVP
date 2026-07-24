@@ -384,6 +384,39 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertEqual(state.conversionResult?.sizeBytes, 1024)
         XCTAssertEqual(state.conversionResult?.videoRoute?.selected, "direct_mv_hevc")
         XCTAssertEqual(state.conversionResult?.videoRoute?.bitrateMbps, 40)
+        XCTAssertEqual(state.videoRoute, state.conversionResult?.videoRoute)
+    }
+
+    func testRetainsResolvedVideoRouteFromPreflightEvent() throws {
+        let route = VideoRouteReport(
+            intent: "automatic",
+            selected: "generated_mv_hevc",
+            reason: "direct_capability_unavailable",
+            bitrateMbps: nil,
+            eyeBitrateMbps: 20,
+            mergeQuality: 75,
+            crf: nil,
+            fallbackReason: "stereo_mv_hevc_encode_unavailable",
+            fallbackTiming: "pre_input"
+        )
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID, operationKind: .conversion)
+
+        try state.receive(
+            event(
+                .warning,
+                sequence: 0,
+                payload: WorkerEventPayload(
+                    message: "Direct MV-HEVC is unavailable on this Mac.",
+                    videoRoute: route
+                )
+            )
+        )
+
+        XCTAssertEqual(state.videoRoute, route)
+        XCTAssertEqual(state.videoRoute?.displayTitle, "Generated MV-HEVC fallback")
+        XCTAssertTrue(state.videoRoute?.displayDetail.contains("before conversion input was read") == true)
     }
 
     func testRejectsSequenceGap() throws {

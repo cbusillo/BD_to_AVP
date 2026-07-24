@@ -79,6 +79,7 @@ struct WorkerLifecycleState: Equatable {
     private(set) var progress: WorkerProgress?
     private(set) var result: SourceInspection?
     private(set) var conversionResult: ConversionResult?
+    private(set) var videoRoute: VideoRouteReport?
     private(set) var failureMessage: String?
     private(set) var failureDetails: String?
     private(set) var failureCode: String?
@@ -127,6 +128,10 @@ struct WorkerLifecycleState: Equatable {
         }
         lastSequence = event.sequence
 
+        if let reportedVideoRoute = event.payload.videoRoute {
+            videoRoute = reportedVideoRoute
+        }
+
         if phase == .stopping, !event.type.isTerminal {
             return
         }
@@ -174,6 +179,7 @@ struct WorkerLifecycleState: Equatable {
                     throw WorkerLifecycleError.missingPayload(event: event.type)
                 }
                 conversionResult = convResult
+                videoRoute = convResult.videoRoute ?? videoRoute
                 stageMessage = "Conversion complete"
             }
             progress = nil
@@ -265,6 +271,7 @@ struct WorkerLifecycleState: Equatable {
         progress = nil
         result = nil
         conversionResult = nil
+        videoRoute = nil
         failureMessage = nil
         failureDetails = nil
         failureCode = nil

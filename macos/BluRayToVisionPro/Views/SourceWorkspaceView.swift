@@ -16,6 +16,7 @@ struct SourceWorkspaceView: View {
     let queueItems: [ConversionQueueItem]
     @Binding var destinationURL: URL
     let plannedOutputURLs: [URL]
+    let storageEstimate: VideoStorageEstimate
     let refreshDiscs: () -> Void
     let useDisc: (ConversionSource) -> Void
     let openDiscImage: () -> Void
@@ -136,7 +137,7 @@ struct SourceWorkspaceView: View {
                     }
                     HStack(spacing: 8) {
                         sourceButton("Open 3D MKV…", systemImage: "film.stack", action: openMKV)
-                        sourceButton("Open Source Folder…", systemImage: "folder.stack", action: openSourceFolder)
+                        sourceButton("Open Source Folder…", systemImage: "folder", action: openSourceFolder)
                     }
                 }
 
@@ -345,7 +346,7 @@ struct SourceWorkspaceView: View {
                 }
             }
         } else {
-            Label("Choose a source folder to build a conversion queue.", systemImage: "folder.stack")
+            Label("Choose a source folder to build a conversion queue.", systemImage: "folder")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -459,13 +460,17 @@ struct SourceWorkspaceView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
                 LabeledContent("Destination") {
-                    HStack(spacing: 8) {
-                        Text(destinationURL.path)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Button("Choose…", action: chooseDestination)
-                            .disabled(outputControlsLocked)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) {
+                            destinationPathText
+                            Button("Choose…", action: chooseDestination)
+                                .disabled(outputControlsLocked)
+                        }
+                        VStack(alignment: .trailing, spacing: 6) {
+                            destinationPathText
+                            Button("Choose…", action: chooseDestination)
+                                .disabled(outputControlsLocked)
+                        }
                     }
                 }
 
@@ -496,6 +501,31 @@ struct SourceWorkspaceView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+
+                Divider()
+                if storageEstimate.peakWorkingBytes != nil {
+                    LabeledContent("Estimated final video") {
+                        Text(storageEstimate.finalOutputDescription)
+                            .foregroundStyle(.secondary)
+                    }
+                    LabeledContent("Peak video workspace") {
+                        Text(storageEstimate.peakWorkingDescription)
+                            .foregroundStyle(.secondary)
+                    }
+                    LabeledContent("Retained intermediates") {
+                        Text(storageEstimate.retainedIntermediateDescription)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    LabeledContent("Video workspace") {
+                        Text("Not available yet")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text(storageEstimate.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(4)
         } label: {
@@ -518,7 +548,7 @@ struct SourceWorkspaceView: View {
                     }
                 }
                 LabeledContent("Video") {
-                    Text(options.encoding.videoSummary)
+                    Text(options.videoSummary)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.trailing)
                 }
@@ -541,6 +571,24 @@ struct SourceWorkspaceView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+
+                Divider()
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Requested Route")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    VideoRouteSummaryView(plan: routePlan)
+                }
+
+                if let resolvedRoute = state.videoRoute {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(state.phase.isRunning ? "Resolved Route" : "Last Resolved Route")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        VideoRouteSummaryView(report: resolvedRoute)
+                    }
+                }
             }
             .padding(4)
         } label: {
@@ -552,28 +600,26 @@ struct SourceWorkspaceView: View {
     private var pipelineSection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 5) {
-                    PipelineStep(systemImage: "opticaldisc", title: "1 Create MKV")
-                    pipelineChevron
-                    PipelineStep(
-                        systemImage: "rectangle.split.2x1",
-                        title: options.encoding.videoOutputMode == .av1Stereo ? "2–3 Extract 3D" : "2–4 Extract 3D"
-                    )
-                    pipelineChevron
-                    PipelineStep(
-                        systemImage: options.encoding.videoOutputMode == .av1Stereo ? "rectangle.split.2x1" : "visionpro",
-                        title: options.encoding.videoOutputMode == .av1Stereo ? "4–5 AV1 Stereo" : "5–6 Spatial"
-                    )
-                    pipelineChevron
-                    PipelineStep(systemImage: "checkmark.circle", title: "7–9 Finish")
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 5) {
+                        ForEach(Array(routePlan.pipelineSteps.enumerated()), id: \.offset) { index, title in
+                            PipelineStep(systemImage: pipelineSystemImage(at: index), title: title)
+                            if index < routePlan.pipelineSteps.count - 1 {
+                                pipelineChevron
+                            }
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(routePlan.pipelineSteps.enumerated()), id: \.offset) { index, title in
+                            Label(title, systemImage: pipelineSystemImage(at: index))
+                                .font(.caption.weight(.medium))
+                        }
+                    }
                 }
-                Text(
-                    options.encoding.videoOutputMode == .av1Stereo
-                        ? "AV1 uses stages 1–5 and 7–9; stage 6 FX Upscale is unavailable."
-                        : "Nine restartable stages are available under Files & Recovery."
-                )
+                Text(routePlan.pipelineDetail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(4)
         } label: {
@@ -601,6 +647,37 @@ struct SourceWorkspaceView: View {
 
     private var outputControlsLocked: Bool {
         isBatchRunning || state.phase.isRunning || state.phase == .decisionRequired
+    }
+
+    private var routePlan: VideoRoutePlan {
+        VideoRoutePlan(options: options)
+    }
+
+    private var destinationPathText: some View {
+        Text(destinationURL.path)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .textSelection(.enabled)
+    }
+
+    private func pipelineSystemImage(at index: Int) -> String {
+        if index == 0 {
+            return "opticaldisc"
+        }
+        if index == routePlan.pipelineSteps.count - 1 {
+            return "checkmark.circle"
+        }
+        switch routePlan.kind {
+        case .directMVHEVC:
+            return index == 2 ? "visionpro" : "rectangle.split.2x1"
+        case .generatedMVHEVC:
+            return index == 1 ? "rectangle.split.2x1" : "visionpro"
+        case .av1Stereo:
+            return "rectangle.split.2x1"
+        case .existingArtifact:
+            return "arrow.clockwise.circle"
+        }
     }
 
     private var outputSummary: String {

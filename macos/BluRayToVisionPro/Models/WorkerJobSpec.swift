@@ -391,17 +391,16 @@ struct WorkerJobSpec: Encodable, Equatable {
     ) -> Encoding.Video {
         let requestedStartStage = routeStartStage ?? job.startStage
         let keepsReusableArtifacts = routeKeepFiles ?? job.keepFiles
-        if options.videoOutputMode == .av1Stereo {
-            if allowsExistingArtifact, requestedStartStage > ConversionStage.combineToMVHEVC.rawValue {
-                return Encoding.Video(
-                    mode: .av1Stereo,
-                    routeIntent: .existingArtifact,
-                    directBitrate: nil,
-                    generatedEyeBitrate: nil,
-                    generatedMergeQuality: nil,
-                    av1CRF: nil
-                )
-            }
+        let route = VideoRoutePlan(
+            encoding: options,
+            startStage: requestedStartStage,
+            keepsReusableArtifacts: keepsReusableArtifacts,
+            softwareEncoder: job.softwareEncoder,
+            allowsExistingArtifact: allowsExistingArtifact
+        )
+
+        switch route.kind {
+        case .av1Stereo:
             return Encoding.Video(
                 mode: .av1Stereo,
                 routeIntent: .encode,
@@ -410,25 +409,16 @@ struct WorkerJobSpec: Encodable, Equatable {
                 generatedMergeQuality: nil,
                 av1CRF: options.av1CRF
             )
-        }
-
-        if allowsExistingArtifact, requestedStartStage > ConversionStage.combineToMVHEVC.rawValue {
+        case .existingArtifact:
             return Encoding.Video(
-                mode: .mvHEVC,
+                mode: options.videoOutputMode,
                 routeIntent: .existingArtifact,
                 directBitrate: nil,
                 generatedEyeBitrate: nil,
                 generatedMergeQuality: nil,
                 av1CRF: nil
             )
-        }
-
-        let requiresGeneratedRoute = requestedStartStage >= ConversionStage.createLeftRightFiles.rawValue
-            || keepsReusableArtifacts
-            || job.softwareEncoder
-            || options.upscaleEnabled
-            || !(1 ... 180).contains(options.fieldOfView)
-        if requiresGeneratedRoute {
+        case .generatedMVHEVC:
             return Encoding.Video(
                 mode: .mvHEVC,
                 routeIntent: .generated,
@@ -437,16 +427,16 @@ struct WorkerJobSpec: Encodable, Equatable {
                 generatedMergeQuality: options.mvHEVC.generatedMergeQuality,
                 av1CRF: nil
             )
+        case .directMVHEVC:
+            return Encoding.Video(
+                mode: .mvHEVC,
+                routeIntent: .automatic,
+                directBitrate: bitrate(from: options.mvHEVC.directFinalBitrate),
+                generatedEyeBitrate: nil,
+                generatedMergeQuality: nil,
+                av1CRF: nil
+            )
         }
-
-        return Encoding.Video(
-            mode: .mvHEVC,
-            routeIntent: .automatic,
-            directBitrate: bitrate(from: options.mvHEVC.directFinalBitrate),
-            generatedEyeBitrate: nil,
-            generatedMergeQuality: nil,
-            av1CRF: nil
-        )
     }
 
     private static func bitrate(from preference: BitratePreference) -> Encoding.Bitrate {

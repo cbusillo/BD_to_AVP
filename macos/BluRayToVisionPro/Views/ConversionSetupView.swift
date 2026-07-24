@@ -88,7 +88,11 @@ struct ConversionSetupView: View {
             Group {
                 switch selectedTab {
                 case .video:
-                    EncodingOptionsEditor(options: $options.encoding, section: .video)
+                    EncodingOptionsEditor(
+                        options: $options.encoding,
+                        section: .video,
+                        jobOptions: options.job
+                    )
                 case .audioAndSubtitles:
                     EncodingOptionsEditor(options: $options.encoding, section: .audioAndSubtitles)
                 case .filesAndRecovery:
@@ -107,21 +111,31 @@ struct ConversionSetupView: View {
     private var filesAndRecoveryForm: some View {
         Form {
             Section("Pipeline and Recovery") {
+                VideoRouteSummaryView(plan: routePlan)
+
                 Picker("Start stage", selection: $options.job.startStage) {
                     ForEach(ConversionStage.allCases) { stage in
                         Text(stage.title).tag(stage)
                     }
                 }
 
-                Toggle("Keep durable stage files", isOn: reusableIntermediatesBinding)
+                Toggle("Create reusable intermediate files", isOn: reusableIntermediatesBinding)
+                Text(intermediatePolicyDetail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 Toggle("Continue processing after recoverable errors", isOn: $options.job.continueOnError)
                 Toggle("Use software HEVC encoder", isOn: $options.job.softwareEncoder)
-                    .disabled(options.encoding.videoOutputMode == .av1Stereo)
-                    .help(
-                        options.encoding.videoOutputMode == .av1Stereo
-                            ? "AV1 output always uses the bundled software encoder."
-                            : "Use libx265 instead of the default VideoToolbox HEVC encoder."
-                    )
+                    .disabled(!softwareEncoderIsApplicable)
+                    .help(softwareEncoderHelp)
+
+                if options.job.softwareEncoder, softwareEncoderIsApplicable {
+                    Text("Software HEVC requires generated left- and right-eye movies.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Section("Output Files") {
@@ -157,6 +171,50 @@ struct ConversionSetupView: View {
                 options.job.intermediatePolicy = enabled ? .reusable : .automatic
             }
         )
+    }
+
+    private var routePlan: VideoRoutePlan {
+        VideoRoutePlan(options: options)
+    }
+
+    private var intermediatePolicyDetail: String {
+        if options.job.intermediatePolicy.createsReusableArtifacts {
+            return switch routePlan.kind {
+            case .directMVHEVC:
+                "Creates and retains reusable stage artifacts."
+            case .generatedMVHEVC:
+                "Creates and retains generated eye files for inspection or external processing."
+            case .av1Stereo:
+                "Creates and retains reusable AV1 stage artifacts."
+            case .existingArtifact:
+                "Retains new stage artifacts created after the selected restart point; the existing video artifact is reused unchanged."
+            }
+        }
+        return switch routePlan.kind {
+        case .directMVHEVC:
+            "Direct jobs avoid eye movies. A generated fallback may create temporary eye files, which are removed after success."
+        case .generatedMVHEVC:
+            "Generated eye files are temporary and removed after a successful conversion."
+        case .av1Stereo:
+            "Temporary AV1 stage files are removed after a successful conversion."
+        case .existingArtifact:
+            "Temporary files created after the selected restart point are removed after success; the existing video artifact is preserved."
+        }
+    }
+
+    private var softwareEncoderIsApplicable: Bool {
+        options.encoding.videoOutputMode == .mvHEVC
+            && options.job.startStage.rawValue <= ConversionStage.createLeftRightFiles.rawValue
+    }
+
+    private var softwareEncoderHelp: String {
+        if options.encoding.videoOutputMode == .av1Stereo {
+            return "AV1 output always uses the bundled software encoder."
+        }
+        if !softwareEncoderIsApplicable {
+            return "The selected restart stage does not encode HEVC video."
+        }
+        return "Use libx265 instead of the default VideoToolbox HEVC encoder."
     }
 }
 

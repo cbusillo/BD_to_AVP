@@ -29,6 +29,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var reviewedDraft: PreviewDraft?
     @Published private(set) var elapsedSeconds = 0
     @Published private(set) var progress: WorkerProgress?
+    @Published private(set) var videoRoute: VideoRouteReport?
 
     private let clientFactory: ClientFactory
     private let cache: PreviewCache
@@ -92,6 +93,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         pendingTerminalEvent = nil
         elapsedSeconds = 0
         progress = nil
+        videoRoute = nil
 
         let jobID = UUID()
         do {
@@ -152,6 +154,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         }
         releaseArtifact()
         reviewedDraft = nil
+        videoRoute = nil
         phase = .expired
         stageMessage = "Preview Expired"
         activityMessage = "The cached preview was removed."
@@ -164,6 +167,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         guard cache.fileManager.fileExists(atPath: artifactLease.artifact.outputURL.path) else {
             self.artifactLease = nil
             reviewedDraft = nil
+            videoRoute = nil
             phase = .expired
             stageMessage = "Preview Expired"
             activityMessage = "The cached preview is no longer available."
@@ -182,6 +186,9 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     private func receive(_ event: WorkerEvent) throws {
         if let observabilityEvent = event.payload.observabilityEvent {
             observabilityEventStore.append(observabilityEvent)
+        }
+        if let reportedVideoRoute = event.payload.videoRoute {
+            videoRoute = reportedVideoRoute
         }
         if event.type.isTerminal {
             pendingTerminalEvent = event
@@ -241,6 +248,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
             directoryURL: activeDirectoryURL,
             cache: cache
         )
+        videoRoute = artifact.videoRoute ?? videoRoute
         reviewedDraft = activeDraft
         phase = .ready
         stageMessage = "Ready to Play"
@@ -261,6 +269,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
                 failTransport(PreviewViewModelError.missingArtifact.localizedDescription)
                 return
             }
+            videoRoute = completedArtifact.videoRoute ?? videoRoute
             phase = .ready
             stageMessage = "Ready to Play"
             clearActiveWorker(preserveDirectory: true)
