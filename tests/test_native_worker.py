@@ -21,6 +21,7 @@ from bd_to_avp.modules.disc import DiscInfo, DiscTitleInfo, MKVCreationError
 from bd_to_avp.modules.process import process_each
 from bd_to_avp.modules.sub import SRTCreationError
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.modules.video_route import DirectMVHEVCCapability
 from bd_to_avp.observability import ObservabilityEmitter
 from bd_to_avp.process_runner import ChildProcessRunner, ProcessCancelled, ProcessSpec
 from bd_to_avp.runtime import ObservabilityStream
@@ -92,18 +93,17 @@ def conversion_request_line(
         "destination": {"path": str(destination_path)},
         "encoding": {
             "audio": {"mode": "convert_aac", "bitrate": 384, "preferred_language": None},
-            "video_mode": "mv_hevc",
-            "av1_crf": 32,
-            "left_right_bitrate": 20,
-            "link_quality": True,
-            "mv_hevc_quality": 75,
-            "upscale_quality": 75,
+            "video": {
+                "mode": "mv_hevc",
+                "route_intent": "automatic",
+                "direct_bitrate": {"mode": "automatic"},
+            },
+            "upscale": {"enabled": False},
             "fov": 90,
             "frame_rate": "",
             "resolution": "",
             "crop_black_bars": False,
             "swap_eyes": False,
-            "fx_upscale": False,
             "subtitles": {
                 "mode": "preferred_plus_others",
                 "preferred_language": "eng",
@@ -238,7 +238,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(context.exception.code, "invalid_source")
 
     def test_parses_shared_swift_conversion_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v9.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v10.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -246,10 +246,18 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.source.kind, WorkerSourceKind.DIRECT_FILE)
         self.assertEqual(job.source.path, Path("/tmp/movie.mkv"))
         self.assertEqual(job.destination.path if job.destination else None, Path("/tmp/output"))
-        self.assertEqual(job.encoding.mv_hevc_quality if job.encoding else None, 75)
         self.assertEqual(job.encoding.video_mode if job.encoding else None, VideoMode.MV_HEVC)
-        self.assertEqual(job.encoding.av1_crf if job.encoding else None, 32)
+        self.assertEqual(job.encoding.video.route_intent.value if job.encoding else None, "automatic")
+        self.assertEqual(job.encoding.video.direct_bitrate.mode.value if job.encoding else None, "automatic")
         self.assertEqual(job.encoding.audio.preferred_language if job.encoding else None, "eng")
+
+    def test_retains_protocol_v9_fixture_as_rejected_historical_evidence(self) -> None:
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v9.json"
+
+        with self.assertRaises(WorkerProtocolError) as context:
+            JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(context.exception.code, "protocol_mismatch")
 
     def test_retains_protocol_v8_fixture_as_rejected_historical_evidence(self) -> None:
         fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_v8.json"
@@ -261,22 +269,93 @@ class JobSpecTests(unittest.TestCase):
 
     def test_rejects_av1_export_with_fx_upscale(self) -> None:
         request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
-        request["encoding"]["video_mode"] = "av1_sbs"
-        request["encoding"]["fx_upscale"] = True
+        request["encoding"]["video"] = {
+            "mode": "av1_sbs",
+            "route_intent": "encode",
+            "crf": 32,
+        }
+        request["encoding"]["upscale"] = {"enabled": True, "quality": 75}
 
         with self.assertRaisesRegex(WorkerProtocolError, "does not support AI FX upscale"):
             JobSpec.from_json_line(json.dumps(request))
 
     def test_rejects_av1_export_with_resolution_override(self) -> None:
         request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
-        request["encoding"]["video_mode"] = "av1_sbs"
+        request["encoding"]["video"] = {
+            "mode": "av1_sbs",
+            "route_intent": "encode",
+            "crf": 32,
+        }
         request["encoding"]["resolution"] = "3840x2160"
 
         with self.assertRaisesRegex(WorkerProtocolError, "full source resolution"):
             JobSpec.from_json_line(json.dumps(request))
 
+    def test_rejects_automatic_bitrate_with_inactive_numeric_value(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["video"]["direct_bitrate"]["mbps"] = 20
+
+        with self.assertRaisesRegex(WorkerProtocolError, "unsupported field.*mbps"):
+            JobSpec.from_json_line(json.dumps(request))
+
+    def test_rejects_custom_bitrate_without_numeric_value(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["video"]["direct_bitrate"] = {"mode": "custom"}
+
+        with self.assertRaisesRegex(WorkerProtocolError, "missing required field.*mbps"):
+            JobSpec.from_json_line(json.dumps(request))
+
+    def test_rejects_generated_controls_on_automatic_route(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["video"]["generated_eye_bitrate"] = {"mode": "custom", "mbps": 42}
+
+        with self.assertRaisesRegex(WorkerProtocolError, "unsupported field.*generated_eye_bitrate"):
+            JobSpec.from_json_line(json.dumps(request))
+
+    def test_parses_generated_route_with_only_generated_controls(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["video"] = {
+            "mode": "mv_hevc",
+            "route_intent": "generated",
+            "generated_eye_bitrate": {"mode": "custom", "mbps": 42},
+            "generated_merge_quality": 88,
+        }
+
+        job = JobSpec.from_json_line(json.dumps(request))
+
+        self.assertEqual(job.encoding.video.generated_eye_bitrate.mbps if job.encoding else None, 42)
+        self.assertEqual(job.encoding.video.generated_merge_quality if job.encoding else None, 88)
+        self.assertIsNone(job.encoding.video.direct_bitrate if job.encoding else None)
+
+    def test_parses_existing_artifact_route_without_encode_controls(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["encoding"]["video"] = {
+            "mode": "mv_hevc",
+            "route_intent": "existing_artifact",
+        }
+        request["job"]["start_stage"] = 6
+
+        job = JobSpec.from_json_line(json.dumps(request))
+
+        self.assertEqual(job.encoding.video.route_intent.value if job.encoding else None, "existing_artifact")
+        self.assertIsNone(job.encoding.video.direct_bitrate if job.encoding else None)
+
+    def test_rejects_automatic_route_when_job_requires_generated_artifacts(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["job"]["keep_files"] = True
+
+        with self.assertRaisesRegex(WorkerProtocolError, "Reusable intermediates require the generated"):
+            JobSpec.from_json_line(json.dumps(request))
+
+    def test_rejects_encode_controls_after_video_stage(self) -> None:
+        request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
+        request["job"]["start_stage"] = 6
+
+        with self.assertRaisesRegex(WorkerProtocolError, "must request the existing video artifact"):
+            JobSpec.from_json_line(json.dumps(request))
+
     def test_parses_shared_swift_physical_disc_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v9.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_physical_disc_v10.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -287,7 +366,7 @@ class JobSpecTests(unittest.TestCase):
         self.assertFalse(job.job.remove_original if job.job else True)
 
     def test_parses_shared_swift_preview_fixture(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v9.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_preview_v10.json"
 
         job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
 
@@ -295,6 +374,24 @@ class JobSpecTests(unittest.TestCase):
         self.assertEqual(job.encoding.audio.preferred_language if job.encoding else None, "eng")
         self.assertEqual(job.preview.position if job.preview else None, PreviewPosition.MIDDLE)
         self.assertEqual(job.preview.duration_seconds if job.preview else None, 60)
+
+    def test_parses_shared_swift_generated_route_fixture(self) -> None:
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_generated_v10.json"
+
+        job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(job.encoding.video.route_intent.value if job.encoding else None, "generated")
+        self.assertEqual(job.encoding.video.generated_eye_bitrate.mode.value if job.encoding else None, "automatic")
+        self.assertEqual(job.encoding.video.generated_merge_quality if job.encoding else None, 75)
+        self.assertTrue(job.job.keep_files if job.job else False)
+
+    def test_parses_shared_swift_existing_artifact_fixture(self) -> None:
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_convert_existing_artifact_v10.json"
+
+        job = JobSpec.from_json_line(fixture_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(job.encoding.video.route_intent.value if job.encoding else None, "existing_artifact")
+        self.assertEqual(job.job.start_stage if job.job else None, 6)
 
     def test_rejects_remove_original_for_physical_disc(self) -> None:
         request = json.loads(
@@ -353,6 +450,12 @@ class JobSpecTests(unittest.TestCase):
     def test_accepts_zero_field_of_view_used_by_existing_ui(self) -> None:
         request = json.loads(conversion_request_line(Path("/tmp/movie.mkv"), Path("/tmp/output")))
         request["encoding"]["fov"] = 0
+        request["encoding"]["video"] = {
+            "mode": "mv_hevc",
+            "route_intent": "generated",
+            "generated_eye_bitrate": {"mode": "automatic"},
+            "generated_merge_quality": 75,
+        }
 
         job = JobSpec.from_json_line(json.dumps(request) + "\n")
 
@@ -635,7 +738,7 @@ class WorkerActivityReporterTests(unittest.TestCase):
             ],
         )
 
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_fallback_warning_v9.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_fallback_warning_v10.json"
         expected = json.loads(fixture_path.read_text())
         self.assertEqual(decoded_events(output), [expected])
 
@@ -657,7 +760,7 @@ class WorkerActivityReporterTests(unittest.TestCase):
             action="keep_source_default_audio",
         )
 
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_language_fallback_warning_v9.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_audio_language_fallback_warning_v10.json"
         expected = json.loads(fixture_path.read_text())
         self.assertEqual(decoded_events(output), [expected])
 
@@ -669,7 +772,7 @@ class WorkerActivityReporterTests(unittest.TestCase):
 
         activity.stage_started("configure", "Preparing conversion settings")
 
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v9.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_stage_started_progress_v10.json"
         expected = json.loads(fixture_path.read_text())
         self.assertEqual(decoded_events(output), [expected])
 
@@ -980,10 +1083,16 @@ class WorkerRuntimeTests(unittest.TestCase):
                     "destination_path": "/tmp/output",
                     "output_path": "/tmp/output/movie_AVP.mov",
                     "size_bytes": 1024,
+                    "video_route": {
+                        "intent": "automatic",
+                        "selected": "direct_mv_hevc",
+                        "reason": "direct_eligible",
+                        "bitrate_mbps": 40,
+                    },
                 }
             },
         )
-        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v9.json"
+        fixture_path = Path(__file__).parent / "fixtures" / "native_worker_conversion_completed_v10.json"
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
 
         self.assertEqual(decoded_events(output)[-1], fixture)
@@ -1469,6 +1578,10 @@ class SourceConversionTests(unittest.TestCase):
                     return_value={"duration_seconds": 7200.0},
                 ),
                 patch.object(config, "configure_tool_environment"),
+                patch(
+                    "bd_to_avp.modules.video_route.probe_direct_mv_hevc_capability",
+                    return_value=DirectMVHEVCCapability(True, "direct_capability_supported"),
+                ),
                 patch("bd_to_avp.modules.process.process_each", side_effect=process_each),
             ):
                 result = preview_source(job, WorkerProcessOwner(), activity)
@@ -1480,9 +1593,68 @@ class SourceConversionTests(unittest.TestCase):
             self.assertEqual(result["output_path"], final_path.as_posix())
             self.assertEqual(result["parent_job_id"], job.preview.parent_job_id if job.preview else None)
             events = decoded_events(output)
-            self.assertEqual(events[0]["type"], "stage.started")
-            self.assertEqual(events[0]["payload"]["stage"], "inspect_source")
+            self.assertEqual(events[0]["type"], "log")
+            self.assertEqual(events[0]["payload"]["video_route"]["selected"], "direct_mv_hevc")
+            inspect_event = next(event for event in events if event["type"] == "stage.started")
+            self.assertEqual(inspect_event["payload"]["stage"], "inspect_source")
             self.assertEqual(events[-1]["type"], "artifact.ready")
+            self.assertEqual(
+                events[-1]["payload"]["artifact"]["video_route"],
+                result["video_route"],
+            )
+
+    def test_full_and_preview_share_capability_fallback_report_before_preview_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.mkv"
+            source_path.write_bytes(b"source")
+            full_destination = temporary_path / "full"
+            preview_destination = temporary_path / "preview"
+            full_output = full_destination / "movie_AVP.mov"
+            preview_output = preview_destination / "movie_AVP.mov"
+            full_output.parent.mkdir()
+            preview_output.parent.mkdir()
+            full_output.write_bytes(b"full")
+            preview_output.write_bytes(b"preview")
+            full_job = JobSpec.from_json_line(conversion_request_line(source_path, full_destination))
+            preview_job = JobSpec.from_json_line(preview_request_line(source_path, preview_destination))
+            full_events = io.StringIO()
+            preview_events = io.StringIO()
+            order: list[str] = []
+
+            def capability_probe(*_args: object, **_kwargs: object) -> DirectMVHEVCCapability:
+                order.append("probe")
+                return DirectMVHEVCCapability(False, "stereo_mv_hevc_encode_unavailable")
+
+            def inspect(*_args: object, **_kwargs: object) -> dict[str, object]:
+                order.append("inspect")
+                return {"duration_seconds": 7200.0}
+
+            with (
+                patch.object(config, "configure_tool_environment"),
+                patch("bd_to_avp.modules.video_route.probe_direct_mv_hevc_capability", side_effect=capability_probe),
+                patch("bd_to_avp.worker.operations.inspect_source", side_effect=inspect),
+                patch("bd_to_avp.modules.process.process_each", side_effect=[full_output, preview_output]),
+            ):
+                full_result = convert_source(
+                    full_job,
+                    WorkerProcessOwner(),
+                    WorkerActivityReporter(WorkerEventEmitter(full_events, full_job.job_id)),
+                )
+                preview_result = preview_source(
+                    preview_job,
+                    WorkerProcessOwner(),
+                    WorkerActivityReporter(WorkerEventEmitter(preview_events, preview_job.job_id)),
+                )
+
+            self.assertEqual(full_result["video_route"], preview_result["video_route"])
+            self.assertEqual(full_result["video_route"]["selected"], "generated_mv_hevc")
+            self.assertEqual(full_result["video_route"]["fallback_timing"], "pre_input")
+            self.assertEqual(order, ["probe", "probe", "inspect"])
+            for events in (decoded_events(full_events), decoded_events(preview_events)):
+                fallback = next(event for event in events if event["payload"].get("code") == "video_route_fallback")
+                self.assertEqual(fallback["type"], "warning")
+                self.assertEqual(fallback["payload"]["video_route"], full_result["video_route"])
 
     def test_iso_preview_preserves_selected_title_id_through_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1766,17 +1938,18 @@ class SourceConversionTests(unittest.TestCase):
             request["encoding"].update(
                 {
                     "audio": {"mode": "pcm", "bitrate": 512, "preferred_language": "jpn"},
-                    "video_mode": "mv_hevc",
-                    "av1_crf": 27,
-                    "left_right_bitrate": 42,
-                    "mv_hevc_quality": 88,
-                    "upscale_quality": 66,
+                    "video": {
+                        "mode": "mv_hevc",
+                        "route_intent": "generated",
+                        "generated_eye_bitrate": {"mode": "custom", "mbps": 42},
+                        "generated_merge_quality": 88,
+                    },
+                    "upscale": {"enabled": True, "quality": 66},
                     "fov": 110,
                     "frame_rate": "24000/1001",
                     "resolution": "1920x1080",
                     "crop_black_bars": True,
                     "swap_eyes": True,
-                    "fx_upscale": True,
                     "subtitles": {
                         "mode": "preferred_only",
                         "preferred_language": "jpn",
@@ -1785,7 +1958,7 @@ class SourceConversionTests(unittest.TestCase):
             )
             request["job"].update(
                 {
-                    "start_stage": 7,
+                    "start_stage": 4,
                     "keep_files": True,
                     "overwrite": True,
                     "remove_original": True,
@@ -1851,7 +2024,6 @@ class SourceConversionTests(unittest.TestCase):
             self.assertEqual(observed["audio_bitrate"], 512)
             self.assertEqual(observed["audio_preferred_language"], "jpn")
             self.assertEqual(observed["video_mode"], VideoMode.MV_HEVC)
-            self.assertEqual(observed["av1_crf"], 27)
             self.assertEqual(observed["left_right_bitrate"], 42)
             self.assertEqual(observed["mv_hevc_quality"], 88)
             self.assertEqual(observed["upscale_quality"], 66)
@@ -1864,7 +2036,7 @@ class SourceConversionTests(unittest.TestCase):
             self.assertTrue(observed["fx_upscale"])
             self.assertEqual(observed["language_code"], "jpn")
             self.assertTrue(observed["remove_extra_languages"])
-            self.assertEqual(observed["start_stage"], 7)
+            self.assertEqual(observed["start_stage"], 4)
             self.assertTrue(observed["keep_files"])
             self.assertTrue(observed["overwrite"])
             self.assertTrue(observed["remove_original"])

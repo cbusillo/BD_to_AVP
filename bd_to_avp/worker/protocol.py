@@ -16,7 +16,7 @@ from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.observability import ObservabilityEvent
 from bd_to_avp.runtime import RunContext
 
-PROTOCOL_VERSION = 9
+PROTOCOL_VERSION = 10
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_DETAIL_BYTES = 64 * 1024
@@ -49,6 +49,18 @@ class SubtitleMode(StrEnum):
     OFF = "off"
     PREFERRED_ONLY = "preferred_only"
     PREFERRED_PLUS_OTHERS = "preferred_plus_others"
+
+
+class BitrateMode(StrEnum):
+    AUTOMATIC = "automatic"
+    CUSTOM = "custom"
+
+
+class VideoRouteIntent(StrEnum):
+    AUTOMATIC = "automatic"
+    GENERATED = "generated"
+    ENCODE = "encode"
+    EXISTING_ARTIFACT = "existing_artifact"
 
 
 class WorkerEventType(StrEnum):
@@ -109,21 +121,42 @@ class SubtitleOptions:
 
 
 @dataclass(frozen=True)
+class BitrateOptions:
+    mode: BitrateMode
+    mbps: int | None = None
+
+
+@dataclass(frozen=True)
+class VideoOptions:
+    mode: VideoMode
+    route_intent: VideoRouteIntent
+    direct_bitrate: BitrateOptions | None = None
+    generated_eye_bitrate: BitrateOptions | None = None
+    generated_merge_quality: int | None = None
+    av1_crf: int | None = None
+
+
+@dataclass(frozen=True)
+class UpscaleOptions:
+    enabled: bool
+    quality: int | None = None
+
+
+@dataclass(frozen=True)
 class EncodingOptions:
     audio: AudioOptions
-    video_mode: VideoMode
-    av1_crf: int
-    left_right_bitrate: int
-    link_quality: bool
-    mv_hevc_quality: int
-    upscale_quality: int
+    video: VideoOptions
+    upscale: UpscaleOptions
     fov: int
     frame_rate: str
     resolution: str
     crop_black_bars: bool
     swap_eyes: bool
-    fx_upscale: bool
     subtitles: SubtitleOptions
+
+    @property
+    def video_mode(self) -> VideoMode:
+        return self.video.mode
 
 
 @dataclass(frozen=True)
@@ -295,6 +328,7 @@ class JobSpec:
             encoding = cls._parse_encoding(raw.get("encoding"), job_id)
             job_options = cls._parse_job_options(raw.get("job"), job_id)
             assert job_options is not None
+            cls._validate_video_route_for_job(encoding, job_options, job_id)
         if operation is WorkerOperation.CONVERT_SOURCE:
             assert job_options is not None
             if source_kind is WorkerSourceKind.PHYSICAL_DISC and job_options.remove_original:
@@ -335,6 +369,48 @@ class JobSpec:
             job=job_options,
             preview=preview_options,
         )
+
+    @staticmethod
+    def _validate_video_route_for_job(
+        encoding: EncodingOptions,
+        job: JobOptions,
+        job_id: str,
+    ) -> None:
+        video = encoding.video
+        if job.start_stage > 5:
+            if video.route_intent is not VideoRouteIntent.EXISTING_ARTIFACT:
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    "Jobs starting after stage 5 must request the existing video artifact route.",
+                    job_id=job_id,
+                )
+            return
+        if video.route_intent is VideoRouteIntent.EXISTING_ARTIFACT:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "The existing video artifact route requires a start stage after stage 5.",
+                job_id=job_id,
+            )
+        if video.mode is VideoMode.AV1_SBS:
+            return
+
+        generated_requirement: str | None = None
+        if job.start_stage >= 4:
+            generated_requirement = "Stage 4 and stage 5 restarts require"
+        elif job.keep_files:
+            generated_requirement = "Reusable intermediates require"
+        elif job.software_encoder:
+            generated_requirement = "Software HEVC requires"
+        elif encoding.upscale.enabled:
+            generated_requirement = "FX upscale requires"
+        elif not 1 <= encoding.fov <= 180:
+            generated_requirement = "The selected field of view requires"
+        if generated_requirement is not None and video.route_intent is not VideoRouteIntent.GENERATED:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                f"{generated_requirement} the generated MV-HEVC route.",
+                job_id=job_id,
+            )
 
     @staticmethod
     def _parse_job_id(value: Any) -> str:
@@ -395,38 +471,28 @@ class JobSpec:
             )
         required_keys = {
             "audio",
-            "video_mode",
-            "av1_crf",
-            "left_right_bitrate",
-            "link_quality",
-            "mv_hevc_quality",
-            "upscale_quality",
+            "video",
+            "upscale",
             "fov",
             "frame_rate",
             "resolution",
             "crop_black_bars",
             "swap_eyes",
-            "fx_upscale",
             "subtitles",
         }
         cls._require_exact_keys(value, required_keys, "encoding", job_id)
         encoding = EncodingOptions(
             audio=cls._parse_audio_options(value.get("audio"), job_id),
-            video_mode=cls._parse_video_mode(value.get("video_mode"), job_id),
-            av1_crf=cls._parse_int(value, "av1_crf", "encoding", job_id, minimum=0, maximum=63),
-            left_right_bitrate=cls._parse_int(value, "left_right_bitrate", "encoding", job_id, minimum=1, maximum=500),
-            link_quality=cls._parse_bool(value, "link_quality", "encoding", job_id),
-            mv_hevc_quality=cls._parse_int(value, "mv_hevc_quality", "encoding", job_id, minimum=0, maximum=100),
-            upscale_quality=cls._parse_int(value, "upscale_quality", "encoding", job_id, minimum=0, maximum=100),
+            video=cls._parse_video_options(value.get("video"), job_id),
+            upscale=cls._parse_upscale_options(value.get("upscale"), job_id),
             fov=cls._parse_int(value, "fov", "encoding", job_id, minimum=0, maximum=360),
             frame_rate=cls._parse_string(value, "frame_rate", "encoding", job_id),
             resolution=cls._parse_string(value, "resolution", "encoding", job_id),
             crop_black_bars=cls._parse_bool(value, "crop_black_bars", "encoding", job_id),
             swap_eyes=cls._parse_bool(value, "swap_eyes", "encoding", job_id),
-            fx_upscale=cls._parse_bool(value, "fx_upscale", "encoding", job_id),
             subtitles=cls._parse_subtitle_options(value.get("subtitles"), job_id),
         )
-        if encoding.video_mode is VideoMode.AV1_SBS and encoding.fx_upscale:
+        if encoding.video_mode is VideoMode.AV1_SBS and encoding.upscale.enabled:
             raise WorkerProtocolError(
                 "invalid_encoding_options",
                 "AV1 stereo export does not support AI FX upscale.",
@@ -439,6 +505,189 @@ class JobSpec:
                 job_id=job_id,
             )
         return encoding
+
+    @classmethod
+    def _parse_video_options(cls, value: Any, job_id: str) -> VideoOptions:
+        if not isinstance(value, Mapping):
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "encoding.video must be an object.",
+                job_id=job_id,
+            )
+
+        mode = cls._parse_video_mode(value.get("mode"), job_id)
+        route_intent = cls._parse_video_route_intent(value.get("route_intent"), job_id)
+        if mode is VideoMode.MV_HEVC and route_intent is VideoRouteIntent.AUTOMATIC:
+            cls._require_exact_keys(
+                value,
+                {"mode", "route_intent", "direct_bitrate"},
+                "encoding.video",
+                job_id,
+                error_code="invalid_encoding_options",
+            )
+            return VideoOptions(
+                mode=mode,
+                route_intent=route_intent,
+                direct_bitrate=cls._parse_bitrate_options(
+                    value.get("direct_bitrate"),
+                    "encoding.video.direct_bitrate",
+                    job_id,
+                ),
+            )
+        if mode is VideoMode.MV_HEVC and route_intent is VideoRouteIntent.GENERATED:
+            cls._require_exact_keys(
+                value,
+                {"mode", "route_intent", "generated_eye_bitrate", "generated_merge_quality"},
+                "encoding.video",
+                job_id,
+                error_code="invalid_encoding_options",
+            )
+            return VideoOptions(
+                mode=mode,
+                route_intent=route_intent,
+                generated_eye_bitrate=cls._parse_bitrate_options(
+                    value.get("generated_eye_bitrate"),
+                    "encoding.video.generated_eye_bitrate",
+                    job_id,
+                ),
+                generated_merge_quality=cls._parse_int(
+                    value,
+                    "generated_merge_quality",
+                    "encoding.video",
+                    job_id,
+                    minimum=0,
+                    maximum=100,
+                    error_code="invalid_encoding_options",
+                ),
+            )
+        if mode is VideoMode.AV1_SBS and route_intent is VideoRouteIntent.ENCODE:
+            cls._require_exact_keys(
+                value,
+                {"mode", "route_intent", "crf"},
+                "encoding.video",
+                job_id,
+                error_code="invalid_encoding_options",
+            )
+            return VideoOptions(
+                mode=mode,
+                route_intent=route_intent,
+                av1_crf=cls._parse_int(
+                    value,
+                    "crf",
+                    "encoding.video",
+                    job_id,
+                    minimum=0,
+                    maximum=63,
+                    error_code="invalid_encoding_options",
+                ),
+            )
+        if route_intent is VideoRouteIntent.EXISTING_ARTIFACT:
+            cls._require_exact_keys(
+                value,
+                {"mode", "route_intent"},
+                "encoding.video",
+                job_id,
+                error_code="invalid_encoding_options",
+            )
+            return VideoOptions(mode=mode, route_intent=route_intent)
+
+        raise WorkerProtocolError(
+            "invalid_encoding_options",
+            f"encoding.video route {route_intent.value!r} is not valid for {mode.value!r} output.",
+            job_id=job_id,
+        )
+
+    @classmethod
+    def _parse_bitrate_options(cls, value: Any, label: str, job_id: str) -> BitrateOptions:
+        if not isinstance(value, Mapping):
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                f"{label} must be an object.",
+                job_id=job_id,
+            )
+        raw_mode = value.get("mode")
+        if not isinstance(raw_mode, str):
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                f"{label}.mode must be a string.",
+                job_id=job_id,
+            )
+        try:
+            mode = BitrateMode(raw_mode)
+        except ValueError as error:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                f"Unsupported {label}.mode: {raw_mode!r}.",
+                job_id=job_id,
+            ) from error
+        if mode is BitrateMode.AUTOMATIC:
+            cls._require_exact_keys(
+                value,
+                {"mode"},
+                label,
+                job_id,
+                error_code="invalid_encoding_options",
+            )
+            return BitrateOptions(mode=mode)
+
+        cls._require_exact_keys(
+            value,
+            {"mode", "mbps"},
+            label,
+            job_id,
+            error_code="invalid_encoding_options",
+        )
+        return BitrateOptions(
+            mode=mode,
+            mbps=cls._parse_int(
+                value,
+                "mbps",
+                label,
+                job_id,
+                minimum=1,
+                maximum=500,
+                error_code="invalid_encoding_options",
+            ),
+        )
+
+    @classmethod
+    def _parse_upscale_options(cls, value: Any, job_id: str) -> UpscaleOptions:
+        if not isinstance(value, Mapping):
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "encoding.upscale must be an object.",
+                job_id=job_id,
+            )
+        enabled = cls._parse_bool(value, "enabled", "encoding.upscale", job_id)
+        if not enabled:
+            cls._require_exact_keys(
+                value,
+                {"enabled"},
+                "encoding.upscale",
+                job_id,
+                error_code="invalid_encoding_options",
+            )
+            return UpscaleOptions(enabled=False)
+
+        cls._require_exact_keys(
+            value,
+            {"enabled", "quality"},
+            "encoding.upscale",
+            job_id,
+            error_code="invalid_encoding_options",
+        )
+        return UpscaleOptions(
+            enabled=True,
+            quality=cls._parse_int(
+                value,
+                "quality",
+                "encoding.upscale",
+                job_id,
+                minimum=0,
+                maximum=100,
+                error_code="invalid_encoding_options",
+            ),
+        )
 
     @staticmethod
     def _parse_video_mode(value: Any, job_id: str) -> VideoMode:
@@ -454,6 +703,23 @@ class JobSpec:
             raise WorkerProtocolError(
                 "invalid_encoding_options",
                 f"Unsupported encoding.video_mode: {value!r}.",
+                job_id=job_id,
+            ) from error
+
+    @staticmethod
+    def _parse_video_route_intent(value: Any, job_id: str) -> VideoRouteIntent:
+        if not isinstance(value, str):
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "encoding.video.route_intent must be a string.",
+                job_id=job_id,
+            )
+        try:
+            return VideoRouteIntent(value)
+        except ValueError as error:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                f"Unsupported encoding.video.route_intent: {value!r}.",
                 job_id=job_id,
             ) from error
 

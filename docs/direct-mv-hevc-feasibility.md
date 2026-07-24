@@ -2,8 +2,9 @@
 
 Issue #347 asks whether the decoded stereo stream can become a final Apple-compatible MV-HEVC movie without first
 writing left and right HEVC eye movies. The bounded prototype proves that this boundary is viable on Apple Silicon,
-and the completed qualification clears it for product integration. The current product remains on the legacy path
-until that integration is implemented and shipped.
+and the completed qualification clears it for product integration. Protocol v10 now activates the qualified route for
+eligible native-app conversions while preserving the generated path for explicit workflow constraints and preflight
+fallback.
 
 ## Decision
 
@@ -96,6 +97,19 @@ Every direct run exceeded the required quality floor of 0.911273. At that matche
 metrics. Their file hashes differed, so the result makes no byte-for-byte determinism claim about container metadata.
 The like-for-like size gate therefore passes for the bounded fixture without inferring equivalence from encoder input
 controls.
+
+### Initial 1080p automatic-policy check
+
+Protocol-v10 integration also ran a one-second, 1920x1080-per-eye, 24 fps synthetic check with 128 pixels of disparity
+against the product's default generated budget of 20 Mbps per eye plus merge quality 75. At a 40 Mbps direct target,
+the direct minimum same-eye SSIM was 0.961318 versus 0.961768 for the generated path, a difference of 0.000450. Raising
+the direct ceiling to 500 Mbps reduced but did not eliminate that fixture-specific gap: 0.961567 versus 0.961755.
+
+The initial worker-owned automatic target is therefore the conservative 40 Mbps aggregate generated-eye budget, not
+the 20 Mbps value inferred by scaling only the small fixture. This one-run synthetic check is integration evidence, not
+the representative-corpus release gate. Issue #354 retains the prerelease quality, size, and physical-playback gate
+before direct is promoted in a stable release. The quality matcher accepts `--direct-max-bitrate-mbps` so future corpus
+runs can test a direct search ceiling independently from the generated path's aggregate eye target.
 
 ### GPU time
 
@@ -206,8 +220,8 @@ continue through upscale and final mux without changing later artifact names.
   bundled-tool deployment-target checks.
 - No third-party runtime, source archive, or additional license notice is required; the implementation uses Apple SDK
   frameworks.
-- No production routing or app-bundle change is included in this prototype. The completed qualification now allows
-  those changes to proceed in the generated-intermediate and mode-specific-control integration workstream.
+- The packaged helper is consumed only through `Config.MV_HEVC_ENCODER_PATH`. Protocol v10 resolves capability before
+  input, executes direct output during stage 4, and preserves the generated route for restart and reusable artifacts.
 
 ## Reproduction
 
@@ -258,5 +272,5 @@ uv run python -m unittest \
 | Restart and fallback behavior | Defined |
 | Runtime, license, macOS, architecture, signing, notarization, and bundle implications | Recorded |
 
-The prototype is fully qualified for product integration. It remains non-default only because the runtime, UI,
-profile, protocol, fallback, packaging, and migration changes belong to the follow-on implementation plan.
+The prototype is fully qualified and its runtime route is active under protocol v10. Route-aware UI diagnostics and
+rollout remain in issue #354; streamed 4K upscale and live conversion imagery remain separate follow-up issues.

@@ -186,9 +186,10 @@ def search_quality_matched_bitrate(
     *,
     iterations: int,
     quality_margin: float,
+    maximum_bitrate_mbps: float | None = None,
 ) -> tuple[float, list[RunRecord]]:
     lower_bitrate = max(0.05, options.bitrate_mbps / 80)
-    upper_bitrate = options.bitrate_mbps
+    upper_bitrate = maximum_bitrate_mbps or options.bitrate_mbps
     required_ssim = target_ssim + quality_margin
     candidates: list[RunRecord] = []
 
@@ -204,7 +205,11 @@ def search_quality_matched_bitrate(
     )
     candidates.append(upper_record)
     if float(upper_record["min_same_eye_ssim"]) < required_ssim:
-        raise QualificationFailure("Configured direct bitrate cannot match the current path's decoded quality.")
+        raise QualificationFailure(
+            "Configured direct bitrate cannot match the current path's decoded quality: "
+            f"{float(upper_record['min_same_eye_ssim']):.6f} < required {required_ssim:.6f} "
+            f"at {upper_bitrate:.6f} Mbps."
+        )
 
     best_record = upper_record
     for candidate_index in range(1, iterations + 1):
@@ -237,6 +242,7 @@ def qualify_quality_match(
     runs: int,
     search_iterations: int,
     quality_margin: float,
+    direct_max_bitrate_mbps: float | None = None,
 ) -> dict[str, object]:
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise QualificationFailure("Quality-matched MV-HEVC qualification requires macOS arm64.")
@@ -290,6 +296,7 @@ def qualify_quality_match(
             current_target_ssim,
             iterations=search_iterations,
             quality_margin=quality_margin,
+            maximum_bitrate_mbps=direct_max_bitrate_mbps,
         )
 
         direct_runs: list[RunRecord] = []
@@ -353,6 +360,7 @@ def qualify_quality_match(
                 "run_count": runs,
                 "search_candidates": search_candidates,
                 "search_iterations": search_iterations,
+                "search_maximum_bitrate_mbps": direct_max_bitrate_mbps or options.bitrate_mbps,
                 "quality_metric": "minimum decoded same-eye SSIM",
             },
             "schema_version": 2,
@@ -379,6 +387,7 @@ def main() -> int:
     parser.add_argument("--duration", type=int, default=2)
     parser.add_argument("--disparity-pixels", type=int, default=16)
     parser.add_argument("--bitrate-mbps", type=float, default=4.0)
+    parser.add_argument("--direct-max-bitrate-mbps", type=float)
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--search-iterations", type=int, default=DEFAULT_SEARCH_ITERATIONS)
     parser.add_argument("--quality-margin", type=float, default=DEFAULT_QUALITY_MARGIN)
@@ -393,6 +402,8 @@ def main() -> int:
         parser.error("disparity pixels must be a non-negative even integer")
     if args.bitrate_mbps <= 0:
         parser.error("bitrate must be positive")
+    if args.direct_max_bitrate_mbps is not None and args.direct_max_bitrate_mbps <= 0:
+        parser.error("direct maximum bitrate must be positive")
     if args.runs <= 0 or args.runs > 10:
         parser.error("runs must be between 1 and 10")
     if args.search_iterations <= 0 or args.search_iterations > 12:
@@ -416,6 +427,7 @@ def main() -> int:
             runs=args.runs,
             search_iterations=args.search_iterations,
             quality_margin=args.quality_margin,
+            direct_max_bitrate_mbps=args.direct_max_bitrate_mbps,
         )
     except QualificationFailure as error:
         parser.exit(1, f"error: {error}\n")

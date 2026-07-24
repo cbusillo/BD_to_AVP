@@ -10,8 +10,10 @@ from bd_to_avp.modules.config import Stage
 from bd_to_avp.modules.disc import DiscInfo
 from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.modules.video_route import ResolvedVideoRoute, VideoRouteKind
 from bd_to_avp.observability import ObservabilityEmitter
 from bd_to_avp.runtime import ObservabilityStream, RunContext
+from bd_to_avp.worker.protocol import VideoRouteIntent
 
 
 class ProcessAudioWiringTests(unittest.TestCase):
@@ -426,6 +428,70 @@ class ProcessAudioWiringTests(unittest.TestCase):
             create_mv_hevc.assert_not_called()
             self.assertEqual(mux.call_args.args, (audio_path, stereo_path, output_folder, "Movie"))
             self.assertEqual(mux.call_args.kwargs["observability_context"].stage.id, "create_final_file")
+
+    def test_direct_mv_hevc_route_writes_stage_four_boundary_and_skips_generated_stages(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_path = temp_path / "source.mkv"
+            output_folder = temp_path / "Movie"
+            mvc_path = output_folder / "Movie_mvc.h264"
+            direct_path = output_folder / "Movie_MV-HEVC.mov"
+            audio_path = output_folder / "Movie_audio_PCM.mov"
+            final_path = output_folder / "Movie_AVP.mov"
+            source_path.write_bytes(b"source")
+            output_folder.mkdir()
+            route = ResolvedVideoRoute(
+                intent=VideoRouteIntent.AUTOMATIC,
+                selected=VideoRouteKind.DIRECT_MV_HEVC,
+                reason="direct_eligible",
+                output_mode=VideoMode.MV_HEVC,
+                direct_bitrate_mbps=20,
+            )
+
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(process.config, "source_path", source_path))
+                stack.enter_context(patch.object(process.config, "output_root_path", temp_path))
+                stack.enter_context(patch.object(process.config, "overwrite", True))
+                stack.enter_context(patch.object(process.config, "keep_files", False))
+                stack.enter_context(patch.object(process.config, "audio_mode", AudioMode.PCM))
+                stack.enter_context(patch.object(process.config, "video_mode", VideoMode.MV_HEVC))
+                stack.enter_context(patch.object(process.config, "fx_upscale", False))
+                stack.enter_context(patch.object(process.config, "skip_subtitles", True))
+                stack.enter_context(patch.object(process.config, "start_stage", Stage.CREATE_MKV))
+                stack.enter_context(patch.object(process.config, "remove_original", False))
+                preflight = stack.enter_context(patch.object(process.preflight, "verify_runtime_ready"))
+                stack.enter_context(
+                    patch.object(process, "get_disc_and_mvc_video_info", return_value=DiscInfo(name="Movie"))
+                )
+                stack.enter_context(
+                    patch.object(process, "prepare_output_folder_for_source", return_value=output_folder)
+                )
+                stack.enter_context(patch.object(process, "file_exists_normalized", return_value=False))
+                stack.enter_context(patch.object(process, "create_mkv_file", return_value=source_path))
+                stack.enter_context(patch.object(process, "get_video_color_depth", return_value=8))
+                stack.enter_context(patch.object(process, "detect_crop_parameters", return_value=""))
+                stack.enter_context(patch.object(process, "create_mvc_and_audio", return_value=(audio_path, mvc_path)))
+                direct = stack.enter_context(
+                    patch.object(process, "create_direct_mv_hevc_file", return_value=direct_path)
+                )
+                create_left_right = stack.enter_context(patch.object(process, "create_left_right_files"))
+                create_mv_hevc = stack.enter_context(patch.object(process, "create_mv_hevc_file"))
+                stack.enter_context(patch.object(process, "create_upscaled_file", return_value=direct_path))
+                stack.enter_context(patch.object(process, "create_transcoded_audio_file", return_value=audio_path))
+                mux = stack.enter_context(patch.object(process, "create_muxed_file", return_value=final_path))
+                stack.enter_context(patch.object(process, "move_file_to_output_root_folder", return_value=final_path))
+                stack.enter_context(patch.dict(process.os.environ, {}, clear=False))
+
+                process.process_each(video_route=route)
+
+            self.assertIs(preflight.call_args.kwargs["video_route"], route)
+            self.assertEqual(
+                direct.call_args.args, (DiscInfo(name="Movie", color_depth=8), output_folder, mvc_path, "", 20)
+            )
+            self.assertEqual(direct.call_args.kwargs["observability_context"].stage.id, "create_left_right_files")
+            create_left_right.assert_not_called()
+            create_mv_hevc.assert_not_called()
+            self.assertEqual(mux.call_args.args, (audio_path, direct_path, output_folder, "Movie"))
 
 
 if __name__ == "__main__":

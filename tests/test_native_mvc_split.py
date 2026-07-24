@@ -467,6 +467,212 @@ class NativeMvcSelectionTests(unittest.TestCase):
         self.assertIs(video.select_native_pipeline_error(error, producer_present=False), splitter_error)
 
 
+class DirectMVHEVCPipelineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.disc_info = DiscInfo(name="Sample", frame_rate="24000/1001", resolution="1920x1080", color_depth=8)
+
+    def test_normalizer_outputs_packed_progressive_y4m(self) -> None:
+        with (
+            patch.object(video.config, "swap_eyes", False),
+            patch.object(video.config, "frame_rate", ""),
+            patch.object(video.config, "resolution", ""),
+        ):
+            command = video.generate_direct_mv_hevc_normalizer_command(self.disc_info, "")
+
+        filter_graph = command[command.index("-filter_complex") + 1]
+        self.assertIn("split=2", filter_graph)
+        self.assertIn("hstack=inputs=2", filter_graph)
+        self.assertIn("-pix_fmt", command)
+        self.assertIn("yuv420p", command)
+        self.assertIn("pipe:1", command)
+        self.assertNotIn("hevc_videotoolbox", command)
+
+    def test_encoder_command_uses_packaged_helper_and_explicit_settings(self) -> None:
+        with (
+            patch.object(video.config, "MV_HEVC_ENCODER_PATH", Path("/app/bin/mv-hevc-encoder")),
+            patch.object(video.config, "fov", 105),
+        ):
+            command = video.generate_direct_mv_hevc_encoder_command(Path("Sample_MV-HEVC.mov"), 20)
+
+        self.assertEqual(command[0], Path("/app/bin/mv-hevc-encoder"))
+        self.assertEqual(command[command.index("--bitrate-mbps") + 1], "20")
+        self.assertEqual(command[command.index("--fov") + 1], "105")
+        self.assertNotIn("--swap-eyes", command)
+
+    def test_direct_attempt_runs_splitter_normalizer_and_encoder_in_order(self) -> None:
+        with (
+            patch.object(video.config, "EDGE264_TEST_PATH", Path("edge264_test")),
+            patch.object(video.ProcessPipelineRunner, "run", return_value=direct_pipeline_success(False)) as run,
+        ):
+            video.run_direct_mv_hevc_attempt(
+                Path("movie.264"),
+                Path("Sample_MV-HEVC.mov"),
+                ["ffmpeg", "normalize"],
+                [Path("mv-hevc-encoder"), "--output", Path("Sample_MV-HEVC.mov")],
+                producer_command=None,
+                single_threaded=False,
+            )
+
+        stages = run.call_args.args[0]
+        self.assertEqual([stage.spec.tool_id for stage in stages], ["edge264", "ffmpeg", "mv_hevc_encoder"])
+        self.assertEqual(stages[0].spec.argv[-1], "-Omk")
+        self.assertIsNotNone(stages[-1].spec.artifacts[0].resolver)
+
+    def test_splitter_crash_retries_same_direct_route_once(self) -> None:
+        splitter_error = process_error(-signal.SIGABRT, ["edge264_test"])
+        crash = direct_pipeline_failure(splitter_error=splitter_error)
+        with (
+            patch.object(video.config, "EDGE264_TEST_PATH", Path("edge264_test")),
+            patch.object(video, "should_stream_mvc_from_container", return_value=False),
+            patch.object(
+                video.ProcessPipelineRunner, "run", side_effect=[crash, direct_pipeline_success(False)]
+            ) as run,
+            patch.object(video, "remove_direct_mv_hevc_attempt_artifacts"),
+            redirect_stdout(StringIO()),
+        ):
+            video.run_direct_mv_hevc_encoding(
+                Path("movie.264"),
+                Path("Sample_MV-HEVC.mov"),
+                ["ffmpeg", "normalize"],
+                ["mv-hevc-encoder", "--output", "Sample_MV-HEVC.mov"],
+            )
+
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[0].args[0][0].spec.argv[-1], "-Omk")
+        self.assertEqual(run.call_args_list[1].args[0][0].spec.argv[-1], "-Osk")
+
+    def test_direct_no_growth_retries_same_route_once(self) -> None:
+        stall = ProcessArtifactNoProgressError("direct output stopped growing")
+        failure = direct_pipeline_failure(encoder_error=stall)
+        with (
+            patch.object(video.config, "EDGE264_TEST_PATH", Path("edge264_test")),
+            patch.object(video, "should_stream_mvc_from_container", return_value=False),
+            patch.object(
+                video.ProcessPipelineRunner, "run", side_effect=[failure, direct_pipeline_success(False)]
+            ) as run,
+            patch.object(video, "remove_direct_mv_hevc_attempt_artifacts"),
+            redirect_stdout(StringIO()) as output,
+        ):
+            video.run_direct_mv_hevc_encoding(
+                Path("movie.264"),
+                Path("Sample_MV-HEVC.mov"),
+                ["ffmpeg", "normalize"],
+                ["mv-hevc-encoder", "--output", "Sample_MV-HEVC.mov"],
+            )
+
+        self.assertEqual(run.call_count, 2)
+        self.assertIn("Direct MV-HEVC output stopped making progress", output.getvalue())
+
+    def test_direct_no_growth_after_retry_reports_pipeline_stall(self) -> None:
+        stall = ProcessArtifactNoProgressError("direct output stopped growing")
+        failure = direct_pipeline_failure(encoder_error=stall)
+        with (
+            patch.object(video.config, "EDGE264_TEST_PATH", Path("edge264_test")),
+            patch.object(video, "should_stream_mvc_from_container", return_value=False),
+            patch.object(video.ProcessPipelineRunner, "run", side_effect=[failure, failure]) as run,
+            patch.object(video, "remove_direct_mv_hevc_attempt_artifacts"),
+            redirect_stdout(StringIO()),
+            self.assertRaisesRegex(video.NativeMvcSplitError, "splitter, geometry normalizer, or direct encoder"),
+        ):
+            video.run_direct_mv_hevc_encoding(
+                Path("movie.264"),
+                Path("Sample_MV-HEVC.mov"),
+                ["ffmpeg", "normalize"],
+                ["mv-hevc-encoder", "--output", "Sample_MV-HEVC.mov"],
+            )
+
+        self.assertEqual(run.call_count, 2)
+
+    def test_encoder_failure_is_not_retried_or_fallback(self) -> None:
+        encoder_error = process_error(1, ["mv-hevc-encoder"])
+        failure = direct_pipeline_failure(encoder_error=encoder_error)
+        with (
+            patch.object(video, "should_stream_mvc_from_container", return_value=False),
+            patch.object(video.ProcessPipelineRunner, "run", side_effect=failure) as run,
+            self.assertRaises(ProcessExecutionError),
+        ):
+            video.run_direct_mv_hevc_encoding(
+                Path("movie.264"),
+                Path("Sample_MV-HEVC.mov"),
+                ["ffmpeg", "normalize"],
+                ["mv-hevc-encoder", "--output", "Sample_MV-HEVC.mov"],
+            )
+
+        run.assert_called_once()
+
+    def test_direct_pipeline_cancellation_is_not_retried(self) -> None:
+        cancellation = ProcessCancelled("cancelled")
+        with (
+            patch.object(video, "should_stream_mvc_from_container", return_value=False),
+            patch.object(video.ProcessPipelineRunner, "run", side_effect=cancellation) as run,
+            self.assertRaises(ProcessCancelled),
+        ):
+            video.run_direct_mv_hevc_encoding(
+                Path("movie.264"),
+                Path("Sample_MV-HEVC.mov"),
+                ["ffmpeg", "normalize"],
+                ["mv-hevc-encoder", "--output", "Sample_MV-HEVC.mov"],
+            )
+
+        run.assert_called_once()
+
+    def test_encoder_error_wins_over_upstream_sigpipe(self) -> None:
+        normalizer_error = process_error(-signal.SIGPIPE, ["ffmpeg"])
+        encoder_error = process_error(1, ["mv-hevc-encoder"])
+        failure = direct_pipeline_failure(normalizer_error=normalizer_error, encoder_error=encoder_error)
+
+        selected = video.select_direct_mv_hevc_pipeline_error(failure, producer_present=False)
+
+        self.assertIs(selected, encoder_error)
+
+    def test_partial_artifact_is_observed_before_final_rename(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_path = Path(temporary_directory) / "Sample_MV-HEVC.mov"
+            partial_path = output_path.parent / f".{output_path.name}.partial-test"
+            partial_path.write_bytes(b"partial")
+
+            self.assertEqual(video.resolve_direct_mv_hevc_artifact(output_path), partial_path)
+            output_path.write_bytes(b"final")
+            self.assertEqual(video.resolve_direct_mv_hevc_artifact(output_path), partial_path)
+            partial_path.unlink()
+            self.assertEqual(video.resolve_direct_mv_hevc_artifact(output_path), output_path)
+
+    def test_retry_cleanup_preserves_previous_completed_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_path = Path(temporary_directory) / "Sample_MV-HEVC.mov"
+            partial_path = output_path.parent / f".{output_path.name}.partial-test"
+            output_path.write_bytes(b"previous")
+            partial_path.write_bytes(b"partial")
+
+            video.remove_direct_mv_hevc_attempt_artifacts(output_path)
+
+            self.assertEqual(output_path.read_bytes(), b"previous")
+            self.assertFalse(partial_path.exists())
+
+    def test_direct_stage_removes_consumed_owned_mvc_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_folder = Path(temporary_directory)
+            mvc_path = output_folder / "Sample_mvc.h264"
+            mvc_path.write_bytes(b"mvc")
+            with (
+                patch.object(video.config, "start_stage", video.Stage.CREATE_LEFT_RIGHT_FILES),
+                patch.object(video.config, "keep_files", False),
+                patch.object(video, "can_use_native_mvc_splitter", return_value=True),
+                patch.object(video, "should_stream_mvc_from_container", return_value=False),
+                patch.object(video, "run_direct_mv_hevc_encoding"),
+            ):
+                output_path = video.create_direct_mv_hevc_file(
+                    self.disc_info,
+                    output_folder,
+                    mvc_path,
+                    "",
+                    20,
+                )
+
+            self.assertEqual(output_path, output_folder / "Sample_MV-HEVC.mov")
+            self.assertFalse(mvc_path.exists())
+
+
 def process_result(tool_id: str) -> ProcessResult:
     empty = ProcessOutputSnapshot(b"", b"", 0, 0, 0, 0)
     return ProcessResult(tool_run_id=f"{tool_id}-run", returncode=0, elapsed_ms=1, stdout=empty, stderr=empty)
@@ -517,6 +723,67 @@ def pipeline_failure(
                 None if ffmpeg_error else process_result("encoder"),
                 ffmpeg_error,
                 completed_before_final=ffmpeg_error is not None,
+            ),
+        )
+    )
+    return ProcessPipelineError(ProcessPipelineResult(tuple(stages)))
+
+
+def direct_pipeline_success(producer_present: bool) -> ProcessPipelineResult:
+    tool_ids = (
+        ["ffmpeg", "edge264", "ffmpeg", "mv_hevc_encoder"]
+        if producer_present
+        else [
+            "edge264",
+            "ffmpeg",
+            "mv_hevc_encoder",
+        ]
+    )
+    return ProcessPipelineResult(
+        stages=tuple(
+            ProcessPipelineStageResult(tool_id, process_result(tool_id), completed_before_final=True)
+            for tool_id in tool_ids
+        )
+    )
+
+
+def direct_pipeline_failure(
+    *,
+    producer_present: bool = False,
+    producer_error: BaseException | None = None,
+    splitter_error: BaseException | None = None,
+    normalizer_error: BaseException | None = None,
+    encoder_error: BaseException | None = None,
+) -> ProcessPipelineError:
+    stages: list[ProcessPipelineStageResult] = []
+    if producer_present:
+        stages.append(
+            ProcessPipelineStageResult(
+                "ffmpeg",
+                None if producer_error else process_result("producer"),
+                producer_error,
+                completed_before_final=producer_error is not None,
+            )
+        )
+    stages.extend(
+        (
+            ProcessPipelineStageResult(
+                "edge264",
+                None if splitter_error else process_result("splitter"),
+                splitter_error,
+                completed_before_final=splitter_error is not None,
+            ),
+            ProcessPipelineStageResult(
+                "ffmpeg",
+                None if normalizer_error else process_result("normalizer"),
+                normalizer_error,
+                completed_before_final=normalizer_error is not None,
+            ),
+            ProcessPipelineStageResult(
+                "mv_hevc_encoder",
+                None if encoder_error else process_result("encoder"),
+                encoder_error,
+                completed_before_final=encoder_error is not None,
             ),
         )
     )

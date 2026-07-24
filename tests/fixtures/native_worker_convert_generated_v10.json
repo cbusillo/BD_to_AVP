@@ -1,0 +1,50 @@
+{
+  "protocol_version": 10,
+  "type": "job.start",
+  "job_id": "33333333-3333-4333-8333-333333333333",
+  "operation": "convert_source",
+  "source": {
+    "kind": "direct_file",
+    "path": "/tmp/movie.mkv"
+  },
+  "destination": {
+    "path": "/tmp/output"
+  },
+  "encoding": {
+    "audio": {
+      "mode": "automatic",
+      "bitrate": 384,
+      "preferred_language": "eng"
+    },
+    "video": {
+      "mode": "mv_hevc",
+      "route_intent": "generated",
+      "generated_eye_bitrate": {
+        "mode": "automatic"
+      },
+      "generated_merge_quality": 75
+    },
+    "upscale": {
+      "enabled": false
+    },
+    "fov": 90,
+    "frame_rate": "",
+    "resolution": "",
+    "crop_black_bars": false,
+    "swap_eyes": false,
+    "subtitles": {
+      "mode": "preferred_plus_others",
+      "preferred_language": "eng"
+    }
+  },
+  "job": {
+    "start_stage": 1,
+    "keep_files": true,
+    "overwrite": false,
+    "remove_original": false,
+    "continue_on_error": false,
+    "software_encoder": false,
+    "output_commands": false,
+    "keep_awake": true
+  }
+}

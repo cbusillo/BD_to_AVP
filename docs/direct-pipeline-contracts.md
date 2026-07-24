@@ -141,18 +141,20 @@ source path, AAC transcoding reads audio from that source without an
 intermediate PCM MOV, and MVC video is demuxed as Annex B into the native
 splitter without an intermediate `.h264` file.
 
-The MVC path is a bounded three-process pipeline: source FFmpeg to
-`edge264_test` to encoding FFmpeg. MV-HEVC materializes left/right eye files;
-AV1 directly materializes one packed software-encoded video. Subtitles, AAC,
+The MVC path uses the shared bounded process supervisor. Generated MV-HEVC and
+AV1 use source FFmpeg to `edge264_test` to encoding FFmpeg. Eligible protocol-v10
+MV-HEVC jobs add the packaged `mv-hevc-encoder` after an FFmpeg geometry
+normalizer and write `_MV-HEVC.mov` directly during stage 4. Subtitles, AAC,
 the mode-specific finalized video, and the final movie remain named stage
 artifacts. Default mode removes consumed intermediates after the final output
 is complete; `--keep-files` retains them. Disc/ISO inputs retain their MakeMKV
 materialization.
 
-The [direct MV-HEVC feasibility prototype](direct-mv-hevc-feasibility.md)
-demonstrates a candidate replacement for the normal MV-HEVC eye-file boundary.
-It is not yet part of this production contract; the current file-backed route
-remains authoritative until device and performance qualification completes.
+The [direct MV-HEVC feasibility evidence](direct-mv-hevc-feasibility.md)
+qualifies that production route. Reusable intermediates, software HEVC,
+external eye workflows, upscaling, stage-4/5 restarts, and valid unavailable
+capability remain generated/file-backed. A failure after direct input starts is
+never replayed through the generated route.
 
 The reused source is user-owned. Automatic cleanup never deletes it.
 `--remove-original` is the explicit exception and removes the source only after

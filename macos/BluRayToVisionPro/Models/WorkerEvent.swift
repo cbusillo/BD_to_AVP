@@ -1,20 +1,52 @@
 import Foundation
 
+struct VideoRouteReport: Decodable, Equatable {
+    let intent: String
+    let selected: String
+    let reason: String
+    let bitrateMbps: Int?
+    let eyeBitrateMbps: Int?
+    let mergeQuality: Int?
+    let crf: Int?
+    let fallbackReason: String?
+    let fallbackTiming: String?
+
+    enum CodingKeys: String, CodingKey {
+        case intent
+        case selected
+        case reason
+        case bitrateMbps = "bitrate_mbps"
+        case eyeBitrateMbps = "eye_bitrate_mbps"
+        case mergeQuality = "merge_quality"
+        case crf
+        case fallbackReason = "fallback_reason"
+        case fallbackTiming = "fallback_timing"
+    }
+}
+
 struct ConversionResult: Decodable, Equatable {
     let outputPath: String
     let durationSeconds: Double?
     let sizeBytes: Int64?
     let titleID: String?
+    let videoRoute: VideoRouteReport?
 
     var outputURL: URL {
         URL(fileURLWithPath: outputPath)
     }
 
-    init(outputPath: String, durationSeconds: Double? = nil, sizeBytes: Int64? = nil, titleID: String? = nil) {
+    init(
+        outputPath: String,
+        durationSeconds: Double? = nil,
+        sizeBytes: Int64? = nil,
+        titleID: String? = nil,
+        videoRoute: VideoRouteReport? = nil
+    ) {
         self.outputPath = outputPath
         self.durationSeconds = durationSeconds
         self.sizeBytes = sizeBytes
         self.titleID = titleID
+        self.videoRoute = videoRoute
     }
 
     enum CodingKeys: String, CodingKey {
@@ -22,6 +54,7 @@ struct ConversionResult: Decodable, Equatable {
         case durationSeconds = "duration_seconds"
         case sizeBytes = "size_bytes"
         case titleID = "title_id"
+        case videoRoute = "video_route"
     }
 }
 
@@ -36,6 +69,7 @@ struct PreviewArtifact: Decodable, Equatable {
     let durationSeconds: Double
     let sourceDurationSeconds: Double
     let titleID: String?
+    let videoRoute: VideoRouteReport?
 
     init(
         sourcePath: String,
@@ -47,7 +81,8 @@ struct PreviewArtifact: Decodable, Equatable {
         startSeconds: Double,
         durationSeconds: Double,
         sourceDurationSeconds: Double,
-        titleID: String? = nil
+        titleID: String? = nil,
+        videoRoute: VideoRouteReport? = nil
     ) {
         self.sourcePath = sourcePath
         self.destinationPath = destinationPath
@@ -59,6 +94,7 @@ struct PreviewArtifact: Decodable, Equatable {
         self.durationSeconds = durationSeconds
         self.sourceDurationSeconds = sourceDurationSeconds
         self.titleID = titleID
+        self.videoRoute = videoRoute
     }
 
     var outputURL: URL {
@@ -76,6 +112,7 @@ struct PreviewArtifact: Decodable, Equatable {
         case durationSeconds = "duration_seconds"
         case sourceDurationSeconds = "source_duration_seconds"
         case titleID = "title_id"
+        case videoRoute = "video_route"
     }
 }
 
@@ -323,6 +360,7 @@ struct WorkerEventPayload: Decodable, Equatable {
     let error: WorkerFailure?
     let decision: WorkerDecision?
     let observabilityEvent: ObservabilityEvent?
+    let videoRoute: VideoRouteReport?
 
     init(
         workerVersion: String? = nil,
@@ -340,7 +378,8 @@ struct WorkerEventPayload: Decodable, Equatable {
         previewResult: PreviewArtifact? = nil,
         error: WorkerFailure? = nil,
         decision: WorkerDecision? = nil,
-        observabilityEvent: ObservabilityEvent? = nil
+        observabilityEvent: ObservabilityEvent? = nil,
+        videoRoute: VideoRouteReport? = nil
     ) {
         self.workerVersion = workerVersion
         self.processGroupID = processGroupID
@@ -358,6 +397,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         self.error = error
         self.decision = decision
         self.observabilityEvent = observabilityEvent
+        self.videoRoute = videoRoute
     }
 
     init(from decoder: Decoder) throws {
@@ -383,6 +423,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         error = try container.decodeIfPresent(WorkerFailure.self, forKey: .error)
         decision = try container.decodeIfPresent(WorkerDecision.self, forKey: .decision)
         observabilityEvent = try container.decodeIfPresent(ObservabilityEvent.self, forKey: .observabilityEvent)
+        videoRoute = try container.decodeIfPresent(VideoRouteReport.self, forKey: .videoRoute)
     }
 
     var warningCode: String? { warning?.code }
@@ -411,6 +452,7 @@ struct WorkerEventPayload: Decodable, Equatable {
         case error
         case decision
         case observabilityEvent = "event"
+        case videoRoute = "video_route"
     }
 }
 
