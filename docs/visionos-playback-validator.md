@@ -135,6 +135,17 @@ MV-HEVC with the required spatial boxes, English audio, English subtitles, and
 successful beginning, middle, and end seeks. Supplying the packaged helper
 binds the physical report to the exact app artifact under qualification.
 
+The direct 4K fixture is synthetic calibration media with fixed camera
+metadata. Launch it with the spatial expectation:
+
+```bash
+xcrun devicectl device process launch \
+  --device <device-id> \
+  --terminate-existing \
+  --environment-variables '{"BD_TO_AVP_PROBE_ASSET":"Probe.mov","BD_TO_AVP_PROBE_AUTORUN":"1","BD_TO_AVP_PROBE_EXPECTED_PRESENTATION":"spatial"}' \
+  com.shinycomputers.bd-to-avp.spatial-playback-probe
+```
+
 For a normal Blu-ray release movie, launch the app with the default stereo expectation:
 
 ```bash
@@ -142,16 +153,6 @@ xcrun devicectl device process launch \
   --device <device-id> \
   --terminate-existing \
   --environment-variables '{"BD_TO_AVP_PROBE_ASSET":"Probe.mov","BD_TO_AVP_PROBE_AUTORUN":"1"}' \
-  com.shinycomputers.bd-to-avp.spatial-playback-probe
-```
-
-For the generated calibration fixture, require spatial portal presentation:
-
-```bash
-xcrun devicectl device process launch \
-  --device <device-id> \
-  --terminate-existing \
-  --environment-variables '{"BD_TO_AVP_PROBE_ASSET":"Probe.mov","BD_TO_AVP_PROBE_AUTORUN":"1","BD_TO_AVP_PROBE_EXPECTED_PRESENTATION":"spatial"}' \
   com.shinycomputers.bd-to-avp.spatial-playback-probe
 ```
 

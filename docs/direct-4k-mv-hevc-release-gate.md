@@ -4,10 +4,9 @@ Issue #359 qualifies the in-process 2× MetalFX route integrated by #358. The Ju
 separate Automatic compression quality of `0.6` for direct 4K output; the source-resolution direct route remains at
 `0.7`, and Custom remains an exact user-owned average-bitrate target.
 
-The local deterministic, resource, Developer ID package, packaged-helper, Apple media, seek, and device-transfer gates
-pass. Final promotion remains blocked on the private representative-MVC corpus, the complete packaged worker
-direct/fallback matrix using that source, notarization evidence, and the two wearer observations on the paired Vision
-Pro.
+The local deterministic, resource, Developer ID package, packaged-helper, Apple media, seek, device-transfer, and
+physical Vision Pro playback gates pass. Final promotion remains blocked on the private representative-MVC corpus,
+the complete packaged worker direct/fallback matrix using that source, and notarization evidence.
 
 ## Policy decision
 
@@ -107,7 +106,7 @@ The controlled MetalFX-unavailable app is cloned, helper-replaced, ad-hoc re-sig
 only answer the capability probe, so any accidental attempt to encode through it fails immediately. Executing the full
 matrix remains blocked on the private 65-second representative MVC source.
 
-## Physical fixture readiness
+## Physical playback gate
 
 `scripts/create_direct_mv_hevc_playback_fixture.sh` creates a six-second 3840×2160-per-eye calibration movie with the
 packaged helper, Automatic quality `0.6`, English AAC, English subtitles, required spatial boxes, Apple compatibility,
@@ -115,8 +114,15 @@ and three local seeks. The point-in-time Developer ID package fixture is `7,974,
 `9e6a06d2782d2c9bd5d23cc8a6955aed0051d483f36d926cbddfb5563fa4679a`.
 
 The signed visionOS validator is installed on the paired physical Vision Pro. That exact Developer ID package fixture
-was copied into the app container and read back byte-for-byte with the same SHA-256. The automatic playback sequence
-and two wearer observations remain pending.
+was copied into the app container and read back byte-for-byte with the same SHA-256. Because this synthetic fixture
+contains fixed calibration camera metadata, it is launched with
+`BD_TO_AVP_PROBE_EXPECTED_PRESENTATION=spatial`, not the normal Blu-ray `stereo` expectation.
+
+The July 25, 2026 physical report passes all eight automatic checks: stereo MV-HEVC decode, player readiness,
+RealityKit readiness, stereoscopic playback, `Stereo · Spatial · Portal` presentation, and beginning/middle/end seeks.
+The wearer reported **Yes** for continuous visible video and **Yes** for three-dimensional presentation. The schema-3
+report binds those observations to the exact fixture hash above and has SHA-256
+`6681cacb1e286b02af5f7b5d04e609817db9f466a9a314bae6dbd43b346bf90c`.
 
 ## Reproduction
 
