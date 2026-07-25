@@ -17,6 +17,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from bd_to_avp.modules.video_route import AUTOMATIC_DIRECT_UPSCALE_QUALITY
 from scripts import benchmark_mv_hevc_metalfx, build_mv_hevc_encoder_macos
 from scripts.qualify_direct_mv_hevc import (
     CURRENT_REQUIRED_BOX_TYPES,
@@ -38,7 +39,8 @@ INPUT_EYE_HEIGHT = 1_080
 OUTPUT_EYE_WIDTH = 3_840
 OUTPUT_EYE_HEIGHT = 2_160
 COMMAND_TIMEOUT_SECONDS = 600
-FIXTURE_NAMES = ("motion", "dark", "grain", "crop", "disparity")
+DEFAULT_AUTOMATIC_MAX_SIZE_RATIO = 1.05
+FIXTURE_NAMES = ("motion", "dark", "grain", "animation", "crop", "disparity")
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,8 @@ def high_resolution_source(frame_rate: int, fixture: str = "motion") -> str:
         return f"{source},eq=brightness=-0.35:contrast=0.75"
     if fixture == "grain":
         return f"{source},noise=alls=12:allf=t+u:all_seed=357"
+    if fixture == "animation":
+        return f"testsrc=size={OUTPUT_EYE_WIDTH}x{OUTPUT_EYE_HEIGHT}:rate={frame_rate}"
     if fixture == "crop":
         return f"testsrc2=size=4096x2304:rate={frame_rate},crop=3840:2160:128:72"
     if fixture in {"motion", "disparity"}:
@@ -166,7 +170,8 @@ def encode_from_generator(
     *,
     frames: int,
     frame_rate: int,
-    bitrate_mbps: float,
+    bitrate_mbps: float | None = None,
+    quality: float | None = None,
     upscale_mode: str | None,
     fixture: str = "motion",
 ) -> tuple[dict[str, object], float]:
@@ -184,6 +189,7 @@ def encode_from_generator(
             output_path,
             frames=frames,
             bitrate_mbps=bitrate_mbps,
+            quality=quality,
             upscale_mode=upscale_mode,
         ),
         stdin=generator.stdout,
@@ -328,6 +334,48 @@ def summarize_acceptance(
     }
 
 
+def summarize_automatic_acceptance(
+    file_based_runs: list[QualityRun],
+    automatic_runs: list[QualityRun],
+    *,
+    quality_tolerance: float,
+    max_size_ratio: float,
+) -> dict[str, object]:
+    if not file_based_runs or not automatic_runs:
+        raise ValueError("File-based and Automatic MetalFX runs are required.")
+    file_quality = statistics.median(run.min_same_eye_ssim for run in file_based_runs)
+    automatic_quality = statistics.median(run.min_same_eye_ssim for run in automatic_runs)
+    file_size = statistics.median(run.final_bytes for run in file_based_runs)
+    automatic_size = statistics.median(run.final_bytes for run in automatic_runs)
+    automatic_max_size = max(run.final_bytes for run in automatic_runs)
+    file_elapsed = statistics.median(run.elapsed_seconds for run in file_based_runs)
+    automatic_elapsed = statistics.median(run.elapsed_seconds for run in automatic_runs)
+    automatic_max_elapsed = max(run.elapsed_seconds for run in automatic_runs)
+    automatic_worst_quality = min(run.min_same_eye_ssim for run in automatic_runs)
+    eye_order_preserved = all(run.min_eye_order_margin > 0.15 for run in automatic_runs)
+    quality_matches = automatic_worst_quality + quality_tolerance >= file_quality
+    size_within_limit = automatic_max_size <= int(file_size * max_size_ratio)
+    faster_than_file_based = automatic_max_elapsed <= file_elapsed
+    return {
+        "automatic_faster_than_file_based": faster_than_file_based,
+        "automatic_max_elapsed_seconds": automatic_max_elapsed,
+        "automatic_max_final_bytes": automatic_max_size,
+        "automatic_median_elapsed_seconds": automatic_elapsed,
+        "automatic_median_final_bytes": automatic_size,
+        "automatic_median_min_same_eye_ssim": automatic_quality,
+        "automatic_quality_matches_file_based": quality_matches,
+        "automatic_size_within_limit": size_within_limit,
+        "automatic_worst_min_same_eye_ssim": automatic_worst_quality,
+        "eye_order_preserved": eye_order_preserved,
+        "file_based_median_elapsed_seconds": file_elapsed,
+        "file_based_median_final_bytes": file_size,
+        "file_based_median_min_same_eye_ssim": file_quality,
+        "max_size_ratio": max_size_ratio,
+        "passed": eye_order_preserved and quality_matches and size_within_limit and faster_than_file_based,
+        "quality_tolerance": quality_tolerance,
+    }
+
+
 def validate_output(ffprobe: str, path: Path, *, frames: int, required_boxes: set[str]) -> None:
     stream = ffprobe_stream(ffprobe, path)
     benchmark_mv_hevc_metalfx.validate_stream(
@@ -445,6 +493,29 @@ def select_direct_bitrate(
     return selected.bitrate_mbps, sorted(probes.values(), key=lambda probe: probe.bitrate_mbps)
 
 
+def require_upscale_capability(encoder: Path) -> None:
+    capability = subprocess.run(
+        [str(encoder), "--capability-probe"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    try:
+        capability_payload = json.loads(capability.stdout)
+    except json.JSONDecodeError as error:
+        detail = capability.stderr.strip() or capability.stdout.strip() or "no capability payload"
+        raise QualificationFailure(f"MetalFX capability probe returned invalid output:\n{detail}") from error
+    if capability.returncode != 0:
+        if capability_payload.get("stereo_mv_hevc_encode_supported") is False:
+            raise QualificationFailure("Stereo MV-HEVC capability is unavailable.")
+        detail = capability.stderr.strip() or capability.stdout.strip()
+        raise QualificationFailure(f"MetalFX capability probe failed:\n{detail}")
+    if capability_payload.get("metalfx_2x_mv_hevc_supported") is not True:
+        raise QualificationFailure("MetalFX 2x MV-HEVC capability is unavailable.")
+    if capability_payload.get("pixel_transfer_2x_mv_hevc_supported") is not True:
+        raise QualificationFailure("Pixel-transfer 2x MV-HEVC capability is unavailable.")
+
+
 def run_qualification(args: argparse.Namespace) -> dict[str, object]:
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise QualificationFailure("MetalFX quality qualification requires macOS arm64.")
@@ -462,9 +533,18 @@ def run_qualification(args: argparse.Namespace) -> dict[str, object]:
     ):
         raise QualificationFailure("The direct bitrate search bounds and precision must be positive and ordered.")
     if not 0 < args.size_target_ratio < 1:
-        raise QualificationFailure("The size target ratio must be greater than zero and less than one.")
-    if not 0 <= args.upscale_quality <= 1 or args.quality_tolerance < 0:
-        raise QualificationFailure("Upscale quality must be 0 through 1 and tolerance must not be negative.")
+        raise QualificationFailure(
+            "The matched-bitrate size target must be greater than zero and less than one to require strict headroom."
+        )
+    if (
+        not 0 <= args.upscale_quality <= 1
+        or not 0 <= args.automatic_quality <= 1
+        or args.quality_tolerance < 0
+        or args.automatic_max_size_ratio <= 0
+    ):
+        raise QualificationFailure(
+            "Upscale and Automatic quality must be 0 through 1; tolerance and size limits must be positive."
+        )
     if not FX_UPSCALE.is_file():
         raise QualificationFailure("The bundled FX Upscale executable is unavailable.")
 
@@ -477,18 +557,7 @@ def run_qualification(args: argparse.Namespace) -> dict[str, object]:
         build_mv_hevc_encoder_macos.build_encoder(encoder)
     encoder = encoder.resolve()
 
-    capability = subprocess.run(
-        [str(encoder), "--capability-probe"],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    capability_payload = json.loads(capability.stdout)
-    if capability_payload.get("metalfx_2x_mv_hevc_supported") is not True:
-        raise QualificationFailure("MetalFX 2x MV-HEVC capability is unavailable.")
-    if capability_payload.get("pixel_transfer_2x_mv_hevc_supported") is not True:
-        raise QualificationFailure("Pixel-transfer 2x MV-HEVC capability is unavailable.")
+    require_upscale_capability(encoder)
 
     reference_left = artifacts / "reference-left.mkv"
     reference_right = artifacts / "reference-right.mkv"
@@ -515,6 +584,7 @@ def run_qualification(args: argparse.Namespace) -> dict[str, object]:
 
     file_based_runs: list[QualityRun] = []
     metalfx_runs: list[QualityRun] = []
+    automatic_metalfx_runs: list[QualityRun] = []
     pixel_transfer_runs: list[QualityRun] = []
     warmup_directory = artifacts / "warmup"
     warmup_directory.mkdir(parents=True, exist_ok=True)
@@ -579,7 +649,7 @@ def run_qualification(args: argparse.Namespace) -> dict[str, object]:
         size_target_ratio=args.size_target_ratio,
     )
 
-    selected_metalfx: Path | None = None
+    selected_automatic_metalfx: Path | None = None
     for run_index in range(args.runs):
         run_directory = artifacts / f"direct-run-{run_index + 1}"
         run_directory.mkdir(parents=True, exist_ok=True)
@@ -606,8 +676,6 @@ def run_qualification(args: argparse.Namespace) -> dict[str, object]:
                 metalfx_elapsed,
             )
         )
-        selected_metalfx = metalfx_path
-
         pixel_path = run_directory / "pixel-transfer.mov"
         _, pixel_elapsed = encode_from_generator(
             ffmpeg,
@@ -631,20 +699,63 @@ def run_qualification(args: argparse.Namespace) -> dict[str, object]:
             )
         )
 
-    assert selected_metalfx is not None
+        automatic_path = run_directory / "metalfx-automatic.mov"
+        automatic_summary, automatic_elapsed = encode_from_generator(
+            ffmpeg,
+            encoder,
+            automatic_path,
+            frames=args.frames,
+            frame_rate=args.frame_rate,
+            quality=args.automatic_quality,
+            upscale_mode="metalfx",
+            fixture=args.fixture,
+        )
+        if (
+            automatic_summary.get("rate_control") != "quality"
+            or automatic_summary.get("quality") != args.automatic_quality
+        ):
+            raise QualificationFailure("Automatic MetalFX run did not use the requested quality rate control.")
+        validate_output(ffprobe, automatic_path, frames=args.frames, required_boxes=DIRECT_REQUIRED_BOX_TYPES)
+        automatic_metalfx_runs.append(
+            measure_quality(
+                ffmpeg,
+                automatic_path,
+                reference_left,
+                reference_right,
+                run_directory / "metalfx-automatic-split",
+                automatic_elapsed,
+            )
+        )
+        selected_automatic_metalfx = automatic_path
+
+    assert selected_automatic_metalfx is not None
     args.output_movie.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(selected_metalfx, args.output_movie)
-    acceptance = summarize_acceptance(
+    shutil.copy2(selected_automatic_metalfx, args.output_movie)
+    matched_acceptance = summarize_acceptance(
         file_based_runs,
         metalfx_runs,
         pixel_transfer_runs,
         quality_tolerance=args.quality_tolerance,
         size_target_ratio=args.size_target_ratio,
     )
+    automatic_acceptance = summarize_automatic_acceptance(
+        file_based_runs,
+        automatic_metalfx_runs,
+        quality_tolerance=args.quality_tolerance,
+        max_size_ratio=args.automatic_max_size_ratio,
+    )
+    acceptance = {
+        **matched_acceptance,
+        "automatic": automatic_acceptance,
+        "matched_bitrate_passed": matched_acceptance["passed"],
+        "passed": matched_acceptance["passed"] is True and automatic_acceptance["passed"] is True,
+    }
     return {
         "acceptance": acceptance,
         "configuration": {
             "base_bitrate_mbps": args.base_bitrate_mbps,
+            "automatic_max_size_ratio": args.automatic_max_size_ratio,
+            "automatic_quality": args.automatic_quality,
             "direct_bitrate_mbps": selected_direct_bitrate,
             "direct_bitrate_override_mbps": args.direct_bitrate_mbps,
             "frame_rate": args.frame_rate,
@@ -666,6 +777,7 @@ def run_qualification(args: argparse.Namespace) -> dict[str, object]:
         },
         "file_based_runs": [asdict(run) for run in file_based_runs],
         "metalfx_runs": [asdict(run) for run in metalfx_runs],
+        "automatic_metalfx_runs": [asdict(run) for run in automatic_metalfx_runs],
         "pixel_transfer_runs": [asdict(run) for run in pixel_transfer_runs],
         "provenance": {
             "encoder_sha256": sha256_file(encoder),
@@ -687,7 +799,7 @@ def run_qualification(args: argparse.Namespace) -> dict[str, object]:
             "macos_version": platform.mac_ver()[0],
             "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         },
-        "schema_version": 1,
+        "schema_version": 2,
     }
 
 
@@ -710,6 +822,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--base-bitrate-mbps", type=float, default=10.0)
     parser.add_argument("--upscale-quality", type=float, default=0.75)
+    parser.add_argument("--automatic-quality", type=float, default=AUTOMATIC_DIRECT_UPSCALE_QUALITY)
+    parser.add_argument("--automatic-max-size-ratio", type=float, default=DEFAULT_AUTOMATIC_MAX_SIZE_RATIO)
     parser.add_argument("--quality-tolerance", type=float, default=0.002)
     parser.add_argument("--size-target-ratio", type=float, default=0.99)
     parser.add_argument("--search-min-bitrate-mbps", type=float, default=0.5)

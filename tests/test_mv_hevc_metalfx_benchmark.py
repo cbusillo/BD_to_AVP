@@ -19,6 +19,27 @@ class MVHEVCMetalFXBenchmarkTests(unittest.TestCase):
 
         self.assertEqual(command[-2:], ["--upscale-mode", "metalfx"])
 
+    def test_encoder_command_supports_quality_rate_control(self) -> None:
+        command = benchmark_mv_hevc_metalfx.encoder_command(
+            Path("mv-hevc-encoder"),
+            Path("output.mov"),
+            frames=240,
+            quality=0.7,
+            upscale_mode="metalfx",
+        )
+
+        self.assertIn("--quality", command)
+        self.assertNotIn("--bitrate-mbps", command)
+
+    def test_encoder_command_requires_exactly_one_rate_control(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Exactly one"):
+            benchmark_mv_hevc_metalfx.encoder_command(
+                Path("mv-hevc-encoder"),
+                Path("output.mov"),
+                frames=240,
+                upscale_mode="metalfx",
+            )
+
     def test_declared_pool_payload_counts_per_eye_pools(self) -> None:
         source = 1_920 * 1_080 * 3 // 2 * 4
         output = 3_840 * 2_160 * 4 * 4 * 2
@@ -83,6 +104,83 @@ class MVHEVCMetalFXBenchmarkTests(unittest.TestCase):
                 max_unmodeled_growth_bytes=100,
             )["passed"]
         )
+
+    def test_metal_gate_models_bounded_internal_texture_variance(self) -> None:
+        stream: dict[str, object] = {}
+        baseline = benchmark_mv_hevc_metalfx.BenchmarkRun(1, 200, "baseline", 1, stream, {})
+        short = benchmark_mv_hevc_metalfx.BenchmarkRun(
+            1,
+            220,
+            "metalfx",
+            1,
+            stream,
+            {"metalfx_device_peak_delta_bytes": 419_086_336},
+        )
+        observed_upper_plateau = benchmark_mv_hevc_metalfx.BenchmarkRun(
+            10,
+            460,
+            "metalfx",
+            1,
+            stream,
+            {"metalfx_device_peak_delta_bytes": 452_280_320},
+        )
+        excessive_growth = benchmark_mv_hevc_metalfx.BenchmarkRun(
+            10,
+            460,
+            "metalfx",
+            1,
+            stream,
+            {
+                "metalfx_device_peak_delta_bytes": 419_086_336
+                + benchmark_mv_hevc_metalfx.aligned_4k_bgra_texture_bytes(1)
+                + 1
+            },
+        )
+        excessive_short = benchmark_mv_hevc_metalfx.BenchmarkRun(
+            1,
+            220,
+            "metalfx",
+            1,
+            stream,
+            {
+                "metalfx_device_peak_delta_bytes": benchmark_mv_hevc_metalfx.declared_metal_payload_bytes("metalfx")
+                + benchmark_mv_hevc_metalfx.aligned_4k_bgra_texture_bytes(
+                    benchmark_mv_hevc_metalfx.METALFX_INTERNAL_TEXTURE_ALLOWANCE
+                )
+                + 1
+            },
+        )
+
+        bounded = benchmark_mv_hevc_metalfx.boundedness_result(
+            baseline,
+            baseline,
+            short,
+            observed_upper_plateau,
+            mode="metalfx",
+            max_unmodeled_growth_bytes=100,
+        )
+        growing = benchmark_mv_hevc_metalfx.boundedness_result(
+            baseline,
+            baseline,
+            short,
+            excessive_growth,
+            mode="metalfx",
+            max_unmodeled_growth_bytes=100,
+        )
+        oversized_short = benchmark_mv_hevc_metalfx.boundedness_result(
+            baseline,
+            baseline,
+            excessive_short,
+            observed_upper_plateau,
+            mode="metalfx",
+            max_unmodeled_growth_bytes=100,
+        )
+
+        self.assertTrue(bounded["metal"]["passed"])
+        self.assertEqual(bounded["metal"]["duration_growth_texture_allowance"], 1)
+        self.assertEqual(bounded["metal"]["internal_texture_allowance"], 3)
+        self.assertFalse(growing["metal"]["passed"])
+        self.assertFalse(oversized_short["metal"]["passed"])
 
     def test_kill_process_reports_an_unreaped_child_and_closes_streams(self) -> None:
         streams = [Mock(closed=False) for _ in range(3)]

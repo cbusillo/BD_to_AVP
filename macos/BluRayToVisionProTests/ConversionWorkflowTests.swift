@@ -313,7 +313,7 @@ final class ConversionWorkflowTests: XCTestCase {
             fallbackReason: nil,
             fallbackTiming: nil,
             rateControl: "quality",
-            quality: 0.7,
+            quality: 0.6,
             upscaleMode: "metalfx"
         )
         XCTAssertEqual(direct4K.displayTitle, "Direct 4K MV-HEVC")

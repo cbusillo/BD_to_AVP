@@ -1,6 +1,7 @@
 import unittest
 
 from pathlib import Path
+from subprocess import CompletedProcess
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
@@ -22,6 +23,18 @@ def quality_run(*, quality: float, size: int, elapsed: float, margin: float = 0.
 
 
 class MVHEVCMetalFXQualityTests(unittest.TestCase):
+    def test_capability_probe_reports_unsupported_encoder_clearly(self) -> None:
+        completed = CompletedProcess(
+            ["encoder", "--capability-probe"],
+            2,
+            stdout='{"schema_version":1,"stereo_mv_hevc_encode_supported":false}\n',
+            stderr="",
+        )
+
+        with patch.object(qualify_mv_hevc_metalfx.subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(qualify_mv_hevc_metalfx.QualificationFailure, "capability is unavailable"):
+                qualify_mv_hevc_metalfx.require_upscale_capability(Path("encoder"))
+
     def test_generator_downscales_one_native_4k_source_for_both_eyes(self) -> None:
         command = qualify_mv_hevc_metalfx.generator_command(
             "/tools/ffmpeg",
@@ -35,9 +48,10 @@ class MVHEVCMetalFXQualityTests(unittest.TestCase):
         self.assertIn("hflip,scale=1920:1080:flags=lanczos[right]", filter_value)
         self.assertEqual(command[command.index("-frames:v") + 1], "48")
 
-    def test_fixture_variants_cover_dark_grain_crop_and_disparity(self) -> None:
+    def test_fixture_variants_cover_dark_grain_animation_crop_and_disparity(self) -> None:
         self.assertIn("eq=brightness=-0.35:contrast=0.75", qualify_mv_hevc_metalfx.high_resolution_source(24, "dark"))
         self.assertIn("noise=alls=12", qualify_mv_hevc_metalfx.high_resolution_source(24, "grain"))
+        self.assertIn("testsrc=size=3840x2160", qualify_mv_hevc_metalfx.high_resolution_source(24, "animation"))
         self.assertIn("crop=3840:2160:128:72", qualify_mv_hevc_metalfx.high_resolution_source(24, "crop"))
         disparity_command = qualify_mv_hevc_metalfx.generator_command(
             "/tools/ffmpeg",
@@ -87,6 +101,41 @@ class MVHEVCMetalFXQualityTests(unittest.TestCase):
             size_target_ratio=0.99,
         )
         self.assertFalse(oversized_repeat["metalfx_size_has_headroom"])
+
+    def test_automatic_acceptance_requires_quality_size_speed_and_eye_order(self) -> None:
+        file_based = [quality_run(quality=0.95, size=1_000, elapsed=2.0)]
+        passing = qualify_mv_hevc_metalfx.summarize_automatic_acceptance(
+            file_based,
+            [quality_run(quality=0.951, size=1_010, elapsed=1.5)],
+            quality_tolerance=0.002,
+            max_size_ratio=1.05,
+        )
+        failing = qualify_mv_hevc_metalfx.summarize_automatic_acceptance(
+            file_based,
+            [quality_run(quality=0.94, size=1_100, elapsed=2.5, margin=0.1)],
+            quality_tolerance=0.002,
+            max_size_ratio=1.05,
+        )
+
+        self.assertTrue(passing["passed"])
+        self.assertFalse(failing["passed"])
+        self.assertFalse(failing["automatic_quality_matches_file_based"])
+        self.assertFalse(failing["automatic_size_within_limit"])
+        self.assertFalse(failing["automatic_faster_than_file_based"])
+
+        outlier_repeat = qualify_mv_hevc_metalfx.summarize_automatic_acceptance(
+            [quality_run(quality=0.95, size=1_000, elapsed=2.0)] * 3,
+            [
+                quality_run(quality=0.951, size=1_010, elapsed=1.5),
+                quality_run(quality=0.951, size=1_010, elapsed=1.5),
+                quality_run(quality=0.94, size=1_010, elapsed=2.5),
+            ],
+            quality_tolerance=0.002,
+            max_size_ratio=1.05,
+        )
+        self.assertFalse(outlier_repeat["automatic_quality_matches_file_based"])
+        self.assertFalse(outlier_repeat["automatic_faster_than_file_based"])
+        self.assertFalse(outlier_repeat["passed"])
 
     def test_bitrate_search_records_and_selects_highest_probe_with_headroom(self) -> None:
         def fake_probe(*args, bitrate_mbps: float, **kwargs):

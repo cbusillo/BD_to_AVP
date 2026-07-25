@@ -377,18 +377,23 @@ class MVHEVCEncoderIntegrationTests(unittest.TestCase):
                 self.assert_no_partial_output(output_path)
 
     def test_upscale_rejects_non_1080p_eyes_without_partial_output(self) -> None:
-        output_path = self.output_path("invalid-upscale-size.mov")
+        modes = ["pixel-transfer"]
+        if self.metalfx_upscale_supported:
+            modes.append("metalfx")
+        for mode in modes:
+            with self.subTest(mode=mode):
+                output_path = self.output_path(f"invalid-upscale-size-{mode}.mov")
 
-        completed = self.run_encoder(
-            output_path,
-            y4m_header(),
-            upscale_mode="pixel-transfer",
-        )
+                completed = self.run_encoder(
+                    output_path,
+                    y4m_header(),
+                    upscale_mode=mode,
+                )
 
-        self.assertEqual(completed.returncode, 1)
-        self.assertIn(b"requires each SBS eye to be 1920x1080", completed.stderr)
-        self.assertFalse(output_path.exists())
-        self.assert_no_partial_output(output_path)
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn(b"requires each SBS eye to be 1920x1080", completed.stderr)
+                self.assertFalse(output_path.exists())
+                self.assert_no_partial_output(output_path)
 
     def test_encodes_bounded_mv_hevc_and_spatial_metadata(self) -> None:
         output_path = self.output_path("valid.mov")

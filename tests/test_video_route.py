@@ -9,6 +9,7 @@ from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video_route import (
     AUTOMATIC_DIRECT_QUALITY,
+    AUTOMATIC_DIRECT_UPSCALE_QUALITY,
     AUTOMATIC_GENERATED_EYE_BITRATE_MBPS,
     AUTOMATIC_GENERATED_MERGE_QUALITY,
     DirectUpscaleMode,
@@ -201,6 +202,7 @@ class VideoRouteResolverTests(unittest.TestCase):
         self.assertEqual(route.selected, VideoRouteKind.DIRECT_MV_HEVC)
         self.assertEqual(route.reason, "direct_upscale_eligible")
         self.assertEqual(route.direct_upscale_mode, DirectUpscaleMode.METAL_FX)
+        self.assertEqual(route.direct_quality, AUTOMATIC_DIRECT_UPSCALE_QUALITY)
         self.assertTrue(route.uses_in_process_upscale)
         self.assertEqual(route.report()["upscale_mode"], "metalfx")
 

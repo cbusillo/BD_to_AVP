@@ -35,8 +35,10 @@ quality `0.7`, allowing effective bitrate to adapt to source complexity without
 materializing eye intermediates. The representative corpus selected this value
 because all seven gated cases preserve decoded quality, eye order, and the 5%
 matched-output size limit while producing materially different effective
-bitrates. Native or streamed 4K upscaling remains a separate generated route
-and is not inferred from this policy.
+bitrates. Eligible 1080p sources that request the native 2× MetalFX path resolve
+Automatic to compression quality `0.6` instead. That separately qualified value
+produces true 3840×2160-per-eye output while preserving decoded quality and the
+matched-output size limit without materializing eye intermediates.
 
 A generated MV-HEVC request carries only generated-route controls:
 
@@ -146,12 +148,13 @@ the conversion result and preview artifact:
 }
 ```
 
-Automatic direct reports `rate_control: "quality"` and `quality: 0.7`; Custom
-direct reports `rate_control: "average_bitrate"` and the exact
-`bitrate_mbps`. Generated reports `eye_bitrate_mbps` and `merge_quality`; AV1
-reports `crf`; existing-artifact reports have no encode controls. Direct 4K
-also reports `upscale_mode: "metalfx"`. The optional field preserves decoding
-compatibility with earlier protocol-v10 workers. Preview child jobs resolve
+Automatic direct at source resolution reports `rate_control: "quality"` and
+`quality: 0.7`; Automatic direct 4K reports `quality: 0.6` plus
+`upscale_mode: "metalfx"`. Custom direct reports
+`rate_control: "average_bitrate"` and the exact `bitrate_mbps`. Generated
+reports `eye_bitrate_mbps` and `merge_quality`; AV1 reports `crf`;
+existing-artifact reports have no encode controls. The optional upscale field
+preserves decoding compatibility with earlier protocol-v10 workers. Preview child jobs resolve
 capability before their duration inspection and use the same resolver and
 fallback report as full conversions. This is the existing finalized-preview
 workflow, not a live processed-frame preview channel.

@@ -31,6 +31,9 @@ SOURCE_BUFFER_LIMIT = 4
 CONVERTED_INPUT_BUFFER_LIMIT_PER_EYE = 2
 OUTPUT_BUFFER_LIMIT_PER_EYE = 4
 PRIVATE_OUTPUT_TEXTURE_LIMIT_PER_EYE = 1
+METAL_TEXTURE_ALIGNMENT_BYTES = 16 * 1_024
+METALFX_INTERNAL_TEXTURE_ALLOWANCE = 3
+METALFX_DURATION_TEXTURE_GROWTH_ALLOWANCE = 1
 COMMAND_TIMEOUT_SECONDS = 600
 
 
@@ -93,19 +96,24 @@ def encoder_command(
     output_path: Path,
     *,
     frames: int,
-    bitrate_mbps: float,
+    bitrate_mbps: float | None = None,
+    quality: float | None = None,
     upscale_mode: str | None,
 ) -> list[str]:
+    if (bitrate_mbps is None) == (quality is None):
+        raise ValueError("Exactly one encoder rate-control setting is required.")
     command = [
         str(encoder),
         "--output",
         str(output_path),
-        "--bitrate-mbps",
-        str(bitrate_mbps),
         "--expected-frames",
         str(frames),
         "--overwrite",
     ]
+    if quality is not None:
+        command.extend(["--quality", str(quality)])
+    else:
+        command.extend(["--bitrate-mbps", str(bitrate_mbps)])
     if upscale_mode is not None:
         command.extend(["--upscale-mode", upscale_mode])
     return command
@@ -132,6 +140,10 @@ def declared_metal_payload_bytes(mode: str) -> int:
     private_output = OUTPUT_EYE_WIDTH * OUTPUT_EYE_HEIGHT * 4 * PRIVATE_OUTPUT_TEXTURE_LIMIT_PER_EYE * 2
     pooled_output = OUTPUT_EYE_WIDTH * OUTPUT_EYE_HEIGHT * 4 * OUTPUT_BUFFER_LIMIT_PER_EYE * 2
     return converted_input + private_output + pooled_output
+
+
+def aligned_4k_bgra_texture_bytes(count: int) -> int:
+    return (OUTPUT_EYE_WIDTH * OUTPUT_EYE_HEIGHT * 4 + METAL_TEXTURE_ALIGNMENT_BYTES) * count
 
 
 def process_rss_bytes(process: psutil.Process) -> int:
@@ -192,7 +204,8 @@ def run_pipeline(
     *,
     frames: int,
     frame_rate: int,
-    bitrate_mbps: float,
+    bitrate_mbps: float | None,
+    quality: float | None,
     upscale_mode: str | None,
 ) -> BenchmarkRun:
     output_path.unlink(missing_ok=True)
@@ -208,6 +221,7 @@ def run_pipeline(
             output_path,
             frames=frames,
             bitrate_mbps=bitrate_mbps,
+            quality=quality,
             upscale_mode=upscale_mode,
         ),
         stdin=generator.stdout,
@@ -330,12 +344,22 @@ def boundedness_result(
         long_metal_peak = int(long_run.summary["metalfx_device_peak_delta_bytes"])
         declared_metal_payload = declared_metal_payload_bytes(mode)
         metal_duration_growth = max(0, long_metal_peak - short_metal_peak)
-        metal_peak_ceiling = declared_metal_payload + max_unmodeled_growth_bytes
-        metal_passed = metal_duration_growth <= max_unmodeled_growth_bytes and long_metal_peak <= metal_peak_ceiling
+        observed_metal_peak = max(short_metal_peak, long_metal_peak)
+        metal_duration_growth_allowance = aligned_4k_bgra_texture_bytes(METALFX_DURATION_TEXTURE_GROWTH_ALLOWANCE)
+        metal_internal_allocation_allowance = aligned_4k_bgra_texture_bytes(METALFX_INTERNAL_TEXTURE_ALLOWANCE)
+        metal_peak_ceiling = declared_metal_payload + metal_internal_allocation_allowance
+        metal_passed = (
+            metal_duration_growth <= metal_duration_growth_allowance and observed_metal_peak <= metal_peak_ceiling
+        )
         result["metal"] = {
             "declared_payload_bytes": declared_metal_payload,
             "duration_growth_bytes": metal_duration_growth,
+            "duration_growth_texture_allowance": METALFX_DURATION_TEXTURE_GROWTH_ALLOWANCE,
+            "duration_growth_allowance_bytes": metal_duration_growth_allowance,
+            "internal_texture_allowance": METALFX_INTERNAL_TEXTURE_ALLOWANCE,
+            "internal_allocation_allowance_bytes": metal_internal_allocation_allowance,
             "long_peak_delta_bytes": long_metal_peak,
+            "observed_peak_delta_bytes": observed_metal_peak,
             "passed": metal_passed,
             "peak_ceiling_bytes": metal_peak_ceiling,
             "short_peak_delta_bytes": short_metal_peak,
@@ -349,8 +373,18 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
         raise QualificationFailure("The MetalFX benchmark requires macOS arm64.")
     if args.short_frames <= 0 or args.long_frames < args.short_frames:
         raise QualificationFailure("--long-frames must be at least --short-frames and both must be positive.")
-    if args.frame_rate <= 0 or args.bitrate_mbps <= 0 or args.max_rss_growth_mib < 0:
-        raise QualificationFailure("Frame rate, bitrate, and RSS growth limit must be valid positive values.")
+    bitrate_mbps = args.bitrate_mbps
+    quality = args.quality
+    if bitrate_mbps is None and quality is None:
+        bitrate_mbps = 40.0
+    if (
+        args.frame_rate <= 0
+        or (bitrate_mbps is not None and bitrate_mbps <= 0)
+        or (quality is not None and not 0 <= quality <= 1)
+        or (bitrate_mbps is not None and quality is not None)
+        or args.max_rss_growth_mib < 0
+    ):
+        raise QualificationFailure("Frame rate, rate control, and RSS growth limit must be valid.")
 
     ffmpeg = command_path("ffmpeg")
     ffprobe = command_path("ffprobe")
@@ -385,7 +419,8 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
         artifacts_directory / "baseline-short.mov",
         frames=args.short_frames,
         frame_rate=args.frame_rate,
-        bitrate_mbps=args.bitrate_mbps,
+        bitrate_mbps=bitrate_mbps,
+        quality=quality,
         upscale_mode=None,
     )
     baseline_long = run_pipeline(
@@ -395,7 +430,8 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
         artifacts_directory / "baseline-long.mov",
         frames=args.long_frames,
         frame_rate=args.frame_rate,
-        bitrate_mbps=args.bitrate_mbps,
+        bitrate_mbps=bitrate_mbps,
+        quality=quality,
         upscale_mode=None,
     )
     pixel_transfer_short = run_pipeline(
@@ -405,7 +441,8 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
         artifacts_directory / "pixel-transfer-short.mov",
         frames=args.short_frames,
         frame_rate=args.frame_rate,
-        bitrate_mbps=args.bitrate_mbps,
+        bitrate_mbps=bitrate_mbps,
+        quality=quality,
         upscale_mode="pixel-transfer",
     )
     pixel_transfer_long = run_pipeline(
@@ -415,7 +452,8 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
         artifacts_directory / "pixel-transfer-long.mov",
         frames=args.long_frames,
         frame_rate=args.frame_rate,
-        bitrate_mbps=args.bitrate_mbps,
+        bitrate_mbps=bitrate_mbps,
+        quality=quality,
         upscale_mode="pixel-transfer",
     )
     metalfx_short = run_pipeline(
@@ -425,7 +463,8 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
         artifacts_directory / "metalfx-short.mov",
         frames=args.short_frames,
         frame_rate=args.frame_rate,
-        bitrate_mbps=args.bitrate_mbps,
+        bitrate_mbps=bitrate_mbps,
+        quality=quality,
         upscale_mode="metalfx",
     )
     metalfx_long = run_pipeline(
@@ -435,7 +474,8 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
         artifacts_directory / "metalfx-long.mov",
         frames=args.long_frames,
         frame_rate=args.frame_rate,
-        bitrate_mbps=args.bitrate_mbps,
+        bitrate_mbps=bitrate_mbps,
+        quality=quality,
         upscale_mode="metalfx",
     )
     metalfx_boundedness = boundedness_result(
@@ -461,9 +501,9 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
             "pixel_transfer": pixel_transfer_boundedness,
         },
         "configuration": {
-            "bitrate_mbps": args.bitrate_mbps,
             "frame_rate": args.frame_rate,
             "long_frames": args.long_frames,
+            "rate_control": "quality" if quality is not None else "average_bitrate",
             "short_frames": args.short_frames,
         },
         "provenance": {
@@ -495,6 +535,10 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
         },
         "schema_version": 1,
     }
+    if quality is not None:
+        evidence["configuration"]["quality"] = quality
+    else:
+        evidence["configuration"]["bitrate_mbps"] = bitrate_mbps
     return evidence
 
 
@@ -512,7 +556,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--short-frames", type=int, default=24)
     parser.add_argument("--long-frames", type=int, default=240)
     parser.add_argument("--frame-rate", type=int, default=24)
-    parser.add_argument("--bitrate-mbps", type=float, default=40.0)
+    rate_control = parser.add_mutually_exclusive_group()
+    rate_control.add_argument("--bitrate-mbps", type=float)
+    rate_control.add_argument("--quality", type=float)
     parser.add_argument(
         "--max-rss-growth-mib",
         type=int,

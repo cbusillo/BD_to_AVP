@@ -114,6 +114,27 @@ xcrun devicectl device copy to \
   --domain-identifier com.shinycomputers.bd-to-avp.spatial-playback-probe
 ```
 
+For the direct 4K release gate, create the exact 3840×2160-per-eye Automatic
+MetalFX fixture with the packaged helper, then copy that movie instead:
+
+```bash
+scripts/create_direct_mv_hevc_playback_fixture.sh \
+  build/direct-4k-playback/Probe.mov \
+  "/absolute/path/to/3D Blu-ray to Vision Pro.app/Contents/Resources/app/bd_to_avp/bin/mv-hevc-encoder"
+
+xcrun devicectl device copy to \
+  --device <device-id> \
+  --source build/direct-4k-playback/Probe.mov \
+  --destination Documents/Probe.mov \
+  --domain-type appDataContainer \
+  --domain-identifier com.shinycomputers.bd-to-avp.spatial-playback-probe
+```
+
+The fixture command fails unless the helper produces true 3840×2160-per-eye
+MV-HEVC with the required spatial boxes, English audio, English subtitles, and
+successful beginning, middle, and end seeks. Supplying the packaged helper
+binds the physical report to the exact app artifact under qualification.
+
 For a normal Blu-ray release movie, launch the app with the default stereo expectation:
 
 ```bash
