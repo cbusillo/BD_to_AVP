@@ -10,7 +10,12 @@ from bd_to_avp.modules.config import Stage
 from bd_to_avp.modules.disc import DiscInfo
 from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.modules.video_mode import VideoMode
-from bd_to_avp.modules.video_route import DirectUpscaleMode, ResolvedVideoRoute, VideoRouteKind
+from bd_to_avp.modules.video_route import (
+    AUTOMATIC_DIRECT_UPSCALE_QUALITY,
+    DirectUpscaleMode,
+    ResolvedVideoRoute,
+    VideoRouteKind,
+)
 from bd_to_avp.observability import ObservabilityEmitter
 from bd_to_avp.runtime import ObservabilityStream, RunContext
 from bd_to_avp.worker.protocol import VideoRouteIntent
@@ -445,7 +450,7 @@ class ProcessAudioWiringTests(unittest.TestCase):
                 selected=VideoRouteKind.DIRECT_MV_HEVC,
                 reason="direct_upscale_eligible",
                 output_mode=VideoMode.MV_HEVC,
-                direct_quality=0.7,
+                direct_quality=AUTOMATIC_DIRECT_UPSCALE_QUALITY,
                 direct_upscale_mode=DirectUpscaleMode.METAL_FX,
             )
 
@@ -488,7 +493,15 @@ class ProcessAudioWiringTests(unittest.TestCase):
             self.assertIs(preflight.call_args.kwargs["video_route"], route)
             self.assertEqual(
                 direct.call_args.args,
-                (DiscInfo(name="Movie", color_depth=8), output_folder, mvc_path, "", None, 0.7, "metalfx"),
+                (
+                    DiscInfo(name="Movie", color_depth=8),
+                    output_folder,
+                    mvc_path,
+                    "",
+                    None,
+                    AUTOMATIC_DIRECT_UPSCALE_QUALITY,
+                    "metalfx",
+                ),
             )
             self.assertEqual(direct.call_args.kwargs["observability_context"].stage.id, "create_left_right_files")
             create_left_right.assert_not_called()

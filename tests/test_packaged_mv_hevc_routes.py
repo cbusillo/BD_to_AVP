@@ -4,20 +4,28 @@ import unittest
 from pathlib import Path
 
 from scripts.verify_packaged_mv_hevc_routes import (
+    METALFX_UNAVAILABLE_HELPER_SOURCE,
     PROTOCOL_VERSION,
     UNAVAILABLE_HELPER_SOURCE,
     PackagedRouteFailure,
     WorkerResult,
     build_worker_request,
     parse_worker_events,
+    validate_stage_contract,
     validate_route_pair,
 )
 
 
-def event(sequence: int, *, job_id: str, payload: dict[str, object] | None = None) -> dict[str, object]:
+def event(
+    sequence: int,
+    *,
+    job_id: str,
+    payload: dict[str, object] | None = None,
+    event_type: str = "log",
+) -> dict[str, object]:
     return {
         "protocol_version": PROTOCOL_VERSION,
-        "type": "log",
+        "type": event_type,
         "job_id": job_id,
         "sequence": sequence,
         "payload": payload or {},
@@ -82,6 +90,19 @@ class PackagedRequestTests(unittest.TestCase):
                 Path("/tmp/output"),
                 job_id="preview-job",
             )
+
+    def test_upscale_request_uses_production_4k_profile_shape(self) -> None:
+        request = build_worker_request(
+            "convert_source",
+            Path("/tmp/source.mkv"),
+            Path("/tmp/output"),
+            job_id="4k-job",
+            upscale_enabled=True,
+        )
+
+        self.assertEqual(request["encoding"]["upscale"], {"enabled": True, "quality": 80})
+        self.assertEqual(request["encoding"]["resolution"], "")
+        self.assertFalse(request["encoding"]["crop_black_bars"])
 
 
 class PackagedEventTests(unittest.TestCase):
@@ -154,6 +175,72 @@ class PackagedRouteParityTests(unittest.TestCase):
             expected_fallback_reason="stereo_mv_hevc_encode_unavailable",
         )
 
+    def test_fallback_requires_automatic_generated_settings(self) -> None:
+        route = {
+            "intent": "automatic",
+            "selected": "generated_mv_hevc",
+            "reason": "direct_capability_unavailable",
+            "eye_bitrate_mbps": 18,
+            "merge_quality": 75,
+            "fallback_reason": "stereo_mv_hevc_encode_unavailable",
+            "fallback_timing": "pre_input",
+        }
+
+        with self.assertRaisesRegex(PackagedRouteFailure, "eye bitrate"):
+            validate_route_pair(
+                worker_result(route, operation="convert_source", event_code="video_route_fallback"),
+                worker_result(route, operation="preview_source", event_code="video_route_fallback"),
+                expected_selected="generated_mv_hevc",
+                expected_fallback_reason="stereo_mv_hevc_encode_unavailable",
+            )
+
+    def test_metalfx_route_pair_requires_explicit_upscale_mode(self) -> None:
+        route = {
+            "intent": "automatic",
+            "selected": "direct_mv_hevc",
+            "reason": "direct_upscale_eligible",
+            "rate_control": "quality",
+            "quality": 0.6,
+            "upscale_mode": "metalfx",
+        }
+
+        validate_route_pair(
+            worker_result(route, operation="convert_source", event_code="video_route_selected"),
+            worker_result(route, operation="preview_source", event_code="video_route_selected"),
+            expected_selected="direct_mv_hevc",
+            expected_fallback_reason=None,
+            expected_upscale_mode="metalfx",
+        )
+
+    def test_stage_contract_rejects_file_upscale_for_direct_metalfx(self) -> None:
+        result = WorkerResult(
+            operation="convert_source",
+            route={},
+            output_path=Path("/tmp/output.mov"),
+            events=(
+                event(
+                    0,
+                    job_id="job",
+                    event_type="stage.started",
+                    payload={"stage": "create_left_right_files"},
+                ),
+                event(
+                    1,
+                    job_id="job",
+                    event_type="stage.started",
+                    payload={"stage": "upscale_video"},
+                ),
+            ),
+            preview=None,
+        )
+
+        with self.assertRaisesRegex(PackagedRouteFailure, "forbidden stages"):
+            validate_stage_contract(
+                result,
+                required={"create_left_right_files"},
+                forbidden={"combine_to_mv_hevc", "upscale_video"},
+            )
+
     def test_route_pair_rejects_preview_drift(self) -> None:
         full_route = {"selected": "direct_mv_hevc"}
         preview_route = {"selected": "generated_mv_hevc"}
@@ -187,6 +274,12 @@ class PackagedRouteParityTests(unittest.TestCase):
         self.assertIn('stereo_mv_hevc_encode_supported\\":false', UNAVAILABLE_HELPER_SOURCE)
         self.assertIn("return 2", UNAVAILABLE_HELPER_SOURCE)
         self.assertIn("must not encode", UNAVAILABLE_HELPER_SOURCE)
+
+    def test_metalfx_unavailable_helper_preserves_ordinary_direct_support(self) -> None:
+        self.assertIn('stereo_mv_hevc_encode_supported\\":true', METALFX_UNAVAILABLE_HELPER_SOURCE)
+        self.assertIn('metalfx_2x_mv_hevc_supported\\":false', METALFX_UNAVAILABLE_HELPER_SOURCE)
+        self.assertIn("return 0", METALFX_UNAVAILABLE_HELPER_SOURCE)
+        self.assertIn("must not encode", METALFX_UNAVAILABLE_HELPER_SOURCE)
 
 
 if __name__ == "__main__":

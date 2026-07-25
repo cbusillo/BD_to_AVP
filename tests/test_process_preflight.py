@@ -10,7 +10,12 @@ from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.disc import MKVCreationError
 from bd_to_avp.modules.video_mode import VideoMode
-from bd_to_avp.modules.video_route import DirectUpscaleMode, ResolvedVideoRoute, VideoRouteKind
+from bd_to_avp.modules.video_route import (
+    AUTOMATIC_DIRECT_UPSCALE_QUALITY,
+    DirectUpscaleMode,
+    ResolvedVideoRoute,
+    VideoRouteKind,
+)
 from bd_to_avp.modules.file import (
     move_file_to_output_root_folder,
     prepare_output_folder_for_source,
@@ -49,7 +54,7 @@ class ProcessPreflightTests(unittest.TestCase):
             selected=VideoRouteKind.DIRECT_MV_HEVC,
             reason="direct_upscale_eligible",
             output_mode=VideoMode.MV_HEVC,
-            direct_quality=0.7,
+            direct_quality=AUTOMATIC_DIRECT_UPSCALE_QUALITY,
             direct_upscale_mode=DirectUpscaleMode.METAL_FX,
         )
         with (

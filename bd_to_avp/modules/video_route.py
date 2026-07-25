@@ -18,6 +18,7 @@ from bd_to_avp.runtime import RunContext
 from bd_to_avp.worker.protocol import BitrateMode, BitrateOptions, EncodingOptions, JobOptions, VideoRouteIntent
 
 AUTOMATIC_DIRECT_QUALITY = 0.7
+AUTOMATIC_DIRECT_UPSCALE_QUALITY = 0.6
 AUTOMATIC_GENERATED_EYE_BITRATE_MBPS = 20
 AUTOMATIC_GENERATED_MERGE_QUALITY = 75
 DIRECT_CAPABILITY_TIMEOUT_SECONDS = 15
@@ -162,8 +163,14 @@ def resolve_video_route(
             use_requested_settings=False,
         )
 
-    direct_bitrate_mbps, direct_quality = _resolve_direct_rate_control(video.direct_bitrate)
     direct_upscale_mode = DirectUpscaleMode.METAL_FX if encoding.upscale.enabled else None
+    automatic_quality = (
+        AUTOMATIC_DIRECT_UPSCALE_QUALITY if direct_upscale_mode is not None else AUTOMATIC_DIRECT_QUALITY
+    )
+    direct_bitrate_mbps, direct_quality = _resolve_direct_rate_control(
+        video.direct_bitrate,
+        automatic_quality=automatic_quality,
+    )
     return ResolvedVideoRoute(
         intent=video.route_intent,
         selected=VideoRouteKind.DIRECT_MV_HEVC,
@@ -336,9 +343,13 @@ def _resolve_bitrate(bitrate: BitrateOptions, automatic_mbps: int) -> int:
     return bitrate.mbps
 
 
-def _resolve_direct_rate_control(bitrate: BitrateOptions) -> tuple[int | None, float | None]:
+def _resolve_direct_rate_control(
+    bitrate: BitrateOptions,
+    *,
+    automatic_quality: float = AUTOMATIC_DIRECT_QUALITY,
+) -> tuple[int | None, float | None]:
     if bitrate.mode is BitrateMode.AUTOMATIC:
-        return None, AUTOMATIC_DIRECT_QUALITY
+        return None, automatic_quality
     if bitrate.mbps is None:
         raise VideoRoutePreflightError("Custom bitrate mode requires an Mbps value.")
     return bitrate.mbps, None

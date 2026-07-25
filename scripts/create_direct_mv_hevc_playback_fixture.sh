@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 output_path="${1:-/tmp/bd-to-avp-direct-spatial-fixture/Probe.mov}"
+encoder="${2:-$repo_root/build/mv-hevc-encoder/mv-hevc-encoder}"
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 
@@ -13,29 +14,37 @@ for command_name in ffmpeg ffprobe python3 uv; do
 	fi
 done
 
-encoder="$repo_root/build/mv-hevc-encoder/mv-hevc-encoder"
 mp4box="$repo_root/bd_to_avp/bin/MP4Box"
 if [[ ! -x "$mp4box" ]]; then
 	printf 'Required bundled tool is unavailable: %s\n' "$mp4box" >&2
 	exit 1
 fi
 if [[ ! -x "$encoder" ]]; then
+	if [[ $# -ge 2 ]]; then
+		printf 'Requested MV-HEVC encoder is unavailable: %s\n' "$encoder" >&2
+		exit 1
+	fi
 	uv run python "$repo_root/scripts/build_mv_hevc_encoder_macos.py" --output "$encoder"
 fi
+automatic_quality="$(
+	cd "$repo_root"
+	uv run python -c 'from bd_to_avp.modules.video_route import AUTOMATIC_DIRECT_UPSCALE_QUALITY; print(AUTOMATIC_DIRECT_UPSCALE_QUALITY)'
+)"
 
 mkdir -p "$(dirname "$output_path")"
 
 font_file="/System/Library/Fonts/Helvetica.ttc"
-left_filter="drawgrid=width=40:height=40:thickness=1:color=white@0.18,drawbox=x=52:y=58:w=158:h=82:color=0x2878ff@0.92:t=fill,drawtext=fontfile='${font_file}':text='BLUE  BEHIND':x=70:y=88:fontsize=20:fontcolor=white,drawbox=x=241:y=151:w=158:h=82:color=0x20a45b@0.92:t=fill,drawtext=fontfile='${font_file}':text='GREEN  SCREEN':x=250:y=181:fontsize=19:fontcolor=white,drawbox=x=430:y=244:w=158:h=82:color=0xe34242@0.94:t=fill,drawtext=fontfile='${font_file}':text='RED  IN FRONT':x=441:y=274:fontsize=19:fontcolor=white"
-right_filter="drawgrid=width=40:height=40:thickness=1:color=white@0.18,drawbox=x=60:y=58:w=158:h=82:color=0x2878ff@0.92:t=fill,drawtext=fontfile='${font_file}':text='BLUE  BEHIND':x=78:y=88:fontsize=20:fontcolor=white,drawbox=x=241:y=151:w=158:h=82:color=0x20a45b@0.92:t=fill,drawtext=fontfile='${font_file}':text='GREEN  SCREEN':x=250:y=181:fontsize=19:fontcolor=white,drawbox=x=406:y=244:w=158:h=82:color=0xe34242@0.94:t=fill,drawtext=fontfile='${font_file}':text='RED  IN FRONT':x=417:y=274:fontsize=19:fontcolor=white"
+left_filter="drawgrid=width=120:height=120:thickness=2:color=white@0.18,drawbox=x=156:y=174:w=474:h=246:color=0x2878ff@0.92:t=fill,drawtext=fontfile='${font_file}':text='BLUE  BEHIND':x=210:y=264:fontsize=60:fontcolor=white,drawbox=x=723:y=453:w=474:h=246:color=0x20a45b@0.92:t=fill,drawtext=fontfile='${font_file}':text='GREEN  SCREEN':x=750:y=543:fontsize=57:fontcolor=white,drawbox=x=1290:y=732:w=474:h=246:color=0xe34242@0.94:t=fill,drawtext=fontfile='${font_file}':text='RED  IN FRONT':x=1323:y=822:fontsize=57:fontcolor=white"
+right_filter="drawgrid=width=120:height=120:thickness=2:color=white@0.18,drawbox=x=180:y=174:w=474:h=246:color=0x2878ff@0.92:t=fill,drawtext=fontfile='${font_file}':text='BLUE  BEHIND':x=234:y=264:fontsize=60:fontcolor=white,drawbox=x=723:y=453:w=474:h=246:color=0x20a45b@0.92:t=fill,drawtext=fontfile='${font_file}':text='GREEN  SCREEN':x=750:y=543:fontsize=57:fontcolor=white,drawbox=x=1218:y=732:w=474:h=246:color=0xe34242@0.94:t=fill,drawtext=fontfile='${font_file}':text='RED  IN FRONT':x=1251:y=822:fontsize=57:fontcolor=white"
 
 ffmpeg -hide_banner -loglevel error \
-	-f lavfi -i 'testsrc2=size=640x360:rate=30' \
+	-f lavfi -i 'testsrc2=size=1920x1080:rate=30' \
 	-filter_complex "[0:v]split=2[left_source][right_source];[left_source]${left_filter}[left];[right_source]${right_filter}[right];[left][right]hstack=inputs=2,format=yuv420p[stereo]" \
 	-map '[stereo]' -frames:v 180 -f yuv4mpegpipe - |
 	"$encoder" \
 		--output "$work_dir/spatial.mov" \
-		--bitrate-mbps 8 \
+		--quality "$automatic_quality" \
+		--upscale-mode metalfx \
 		--fov 90 \
 		--baseline-mm 64 \
 		--disparity-adjustment 0 \
@@ -77,5 +86,36 @@ done
 for seek_position in 0 3 5.9; do
 	ffmpeg -hide_banner -loglevel error -ss "$seek_position" -i "$output_path" -frames:v 1 -f null -
 done
-ffprobe -v error -show_entries format=duration:stream=index,codec_name,codec_type:stream_tags=language -of json "$output_path"
-printf 'Created direct MV-HEVC playback fixture: %s\n' "$output_path"
+ffprobe -v error \
+	-show_entries format=duration:stream=index,codec_name,codec_type,width,height:stream_tags=language \
+	-of json "$output_path" >"$work_dir/final-probe.json"
+python3 - "$work_dir/final-probe.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as probe_file:
+    probe = json.load(probe_file)
+
+streams = probe.get("streams", [])
+video_dimensions = {
+    (stream.get("width"), stream.get("height"))
+    for stream in streams
+    if stream.get("codec_type") == "video"
+}
+if video_dimensions != {(3840, 2160)}:
+    raise SystemExit(f"Direct 4K playback fixture has unexpected video dimensions: {sorted(video_dimensions)!r}")
+if not any(
+    stream.get("codec_type") == "audio"
+    and stream.get("codec_name") == "aac"
+    and stream.get("tags", {}).get("language") == "eng"
+    for stream in streams
+):
+    raise SystemExit("Direct 4K playback fixture is missing English AAC audio.")
+if not any(
+    stream.get("codec_type") == "subtitle" and stream.get("tags", {}).get("language") == "eng"
+    for stream in streams
+):
+    raise SystemExit("Direct 4K playback fixture is missing English subtitles.")
+PY
+cat "$work_dir/final-probe.json"
+printf 'Created direct 4K MetalFX MV-HEVC playback fixture: %s\n' "$output_path"

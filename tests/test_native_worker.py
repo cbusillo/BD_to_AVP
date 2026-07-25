@@ -1621,6 +1621,7 @@ class SourceConversionTests(unittest.TestCase):
             events = decoded_events(output)
             self.assertEqual(events[0]["type"], "log")
             self.assertEqual(events[0]["payload"]["video_route"]["selected"], "direct_mv_hevc")
+            self.assertEqual(events[0]["payload"]["video_route"]["quality"], 0.6)
             self.assertEqual(events[0]["payload"]["video_route"]["upscale_mode"], "metalfx")
             inspect_event = next(event for event in events if event["type"] == "stage.started")
             self.assertEqual(inspect_event["payload"]["stage"], "inspect_source")

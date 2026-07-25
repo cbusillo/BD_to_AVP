@@ -2,7 +2,9 @@
 
 Issue #357 added the explicit native 2x upscale path to `mv-hevc-encoder`. Issue #358 integrates the qualified
 `--upscale-mode metalfx` path into eligible automatic worker and GUI routes while preserving the generated file-based
-fallback, late-stage restarts, and the existing finalized-preview workflow.
+fallback, late-stage restarts, and the existing finalized-preview workflow. Issue #359 qualifies a separate Automatic
+4K compression quality because the source-resolution `0.7` policy does not preserve the file-based upscale size
+envelope at four times the output pixels.
 
 ## CLI contract
 
@@ -94,6 +96,8 @@ dimensions, decoded frame count, color signaling, elapsed time, process-tree pea
 size, source and encoder hashes, hardware, OS, and git SHA. The RSS gate subtracts ordinary encoder growth observed in
 the unchanged 1080p baseline. The Metal gate compares 24- and 480-frame peak allocation deltas against the declared
 Metal-compatible pools and private textures plus a bounded allowance for MetalFX-owned resources.
+The release-qualified model allows three aligned 4K BGRA texture-equivalents for MetalFX-owned internal allocation
+and at most one texture-equivalent of short-to-long variance.
 
 The quality helper creates a deterministic native-4K reference, downscales it once to the shared 1080p input, and
 compares direct MetalFX, direct pixel transfer, and the bundled file-based FX Upscale route. Before measuring direct
@@ -107,10 +111,12 @@ Pro release qualification remain part of #359 after the #358 product-route integ
 
 ## Recorded prototype result
 
-The July 24, 2026 run on `Mac16,9` with macOS 27.0 passes. Metal device allocation reaches `419,086,336` bytes above
-its initial value for both the 24- and 480-frame MetalFX runs, so measured duration growth is zero. The declared
-Metal-compatible pool and private-texture payload is `364,953,600` bytes; the remaining approximately 52 MiB stays
-inside the 64 MiB allowance for MetalFX-owned resources. Baseline-normalized excess process-RSS growth is also zero.
+The July 24, 2026 prototype run on `Mac16,9` with macOS 27.0 passes. Metal device allocation reaches `419,086,336`
+bytes above its initial value for both the 24- and 480-frame MetalFX runs, so measured duration growth is zero. The
+declared Metal-compatible pool and private-texture payload is `364,953,600` bytes, and baseline-normalized excess
+process-RSS growth is zero. The July 25 #359 release rerun additionally observed a bounded `452,280,320`-byte plateau,
+exactly one aligned 4K BGRA texture above the lower plateau; see `docs/direct-4k-mv-hevc-release-gate.md` for the
+current envelope and evidence fingerprints.
 
 The 120-frame motion gate uses three measured runs. The additional controls use one 48-frame run each:
 

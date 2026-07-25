@@ -16,8 +16,9 @@ adapting effective bitrate from 2.00 to 13.74 Mbps, and the exact package fixtur
   `5.1(side)` case.
 
 Protocol v10 request shape remains unchanged: Automatic still sends `{ "mode": "automatic" }` with no numeric
-sentinel, while the worker owns the qualified policy. Native or streamed 4K upscaling and live processed-frame preview
-remain separate future issues.
+sentinel, while the worker owns the qualified policy. Direct 4K upscaling has its own separately qualified release gate
+in [Direct 4K MV-HEVC prerelease gate](direct-4k-mv-hevc-release-gate.md). Live processed-frame preview remains a
+separate future issue.
 
 ## Representative corpus
 
