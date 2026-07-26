@@ -266,7 +266,8 @@ uv run python -m scripts.qualify_mv_hevc_corpus \
 uv run python -m scripts.verify_packaged_mv_hevc_routes \
   --app "/absolute/path/to/3D Blu-ray to Vision Pro.app" \
   --source /absolute/path/to/representative-65-second.mkv \
-  --output build/direct-mv-hevc-packaged/evidence.json
+  --output build/direct-mv-hevc-packaged/evidence.json \
+  --expected-source-sha256 "$REPRESENTATIVE_SEGMENT_SHA256"
 
 uv run python -m unittest \
   tests.test_audio \
