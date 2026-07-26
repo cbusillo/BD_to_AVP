@@ -13,6 +13,7 @@ import subprocess
 import time
 import uuid
 
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -131,10 +132,8 @@ def terminate_pipeline_processes(*processes: subprocess.Popen[bytes]) -> None:
         try:
             process.wait(timeout=max(0.1, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
-            try:
+            with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
             process.wait(timeout=10)
 
 

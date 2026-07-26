@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import uuid
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -298,10 +298,8 @@ def _process_is_running(process: psutil.Process) -> bool:
 def _terminate_worker_process(process: subprocess.Popen[str]) -> None:
     tracked = {candidate.pid: candidate for candidate in _process_tree(process.pid)}
     if process.poll() is None:
-        try:
+        with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
     try:
         process.communicate(timeout=30)
     except subprocess.TimeoutExpired:
@@ -320,10 +318,8 @@ def _terminate_worker_process(process: subprocess.Popen[str]) -> None:
             except psutil.Error:
                 continue
         if process.poll() is None:
-            try:
+            with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
         process.communicate(timeout=10)
     surviving_descendants = [
         candidate

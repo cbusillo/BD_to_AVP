@@ -18,6 +18,7 @@ import threading
 import time
 import uuid
 
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from fractions import Fraction
@@ -374,7 +375,7 @@ class ResourceSampler:
                 self._rss_samples.append(total_rss)
                 self._process_samples.append((time.monotonic() - self._started_at, process_rss))
                 self._thermal_samples.append(thermal_state())
-        except BaseException as error:
+        except Exception as error:
             self._error = error
             self._stop.set()
 
@@ -923,20 +924,16 @@ def process_group_is_running(process_group_id: int) -> bool:
 
 def terminate_packaged_worker(process: subprocess.Popen[str], process_group_id: int | None) -> None:
     if process_group_id is not None:
-        try:
+        with suppress(ProcessLookupError):
             os.killpg(process_group_id, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
     elif process.poll() is None:
         process.terminate()
     try:
         process.wait(timeout=30)
     except subprocess.TimeoutExpired:
         if process_group_id is not None:
-            try:
+            with suppress(ProcessLookupError):
                 os.killpg(process_group_id, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
         elif process.poll() is None:
             process.kill()
         process.wait(timeout=10)
@@ -1067,10 +1064,8 @@ def run_packaged_cancellation(
                         process_group_id = ready_group
                 event_process_id = _process_id_from_worker_event(event)
                 if event_process_id is not None:
-                    try:
+                    with suppress(psutil.NoSuchProcess):
                         record_process_identity(psutil.Process(event_process_id), observed_processes)
-                    except psutil.NoSuchProcess:
-                        pass
                 if event.get("type") == "heartbeat":
                     heartbeat_times.append(elapsed)
                 if event.get("type") == "stage.started" and isinstance(payload, Mapping):
@@ -1090,11 +1085,9 @@ def run_packaged_cancellation(
                                 )
                             os.killpg(process_group_id, signal.SIGTERM)
                             cancellation_sent_at = time.monotonic()
-            try:
+            with suppress(psutil.AccessDenied, psutil.NoSuchProcess):
                 for descendant in worker_process.children(recursive=True):
                     record_process_identity(descendant, observed_processes)
-            except (psutil.AccessDenied, psutil.NoSuchProcess):
-                pass
             peak_rss_bytes = max(peak_rss_bytes, process_tree_rss(worker_process))
             thermal_samples.append(thermal_state())
             if (
@@ -1103,11 +1096,11 @@ def run_packaged_cancellation(
                 and process.poll() is None
             ):
                 raise FeatureQualificationFailure("Packaged worker did not exit within 30 seconds of cancellation.")
-    except BaseException as error:
+    except (Exception, KeyboardInterrupt) as error:
         termination_error: BaseException | None = None
         try:
             terminate_packaged_worker(process, process_group_id)
-        except BaseException as cleanup_error:
+        except (Exception, KeyboardInterrupt) as cleanup_error:
             termination_error = cleanup_error
         cleanup_complete = remove_private_work_directory(work_directory)
         if termination_error is not None or not cleanup_complete:
@@ -1158,7 +1151,7 @@ def run_packaged_cancellation(
                 process_group_gone = False
             else:
                 process_group_gone = False
-    except BaseException as error:
+    except (Exception, KeyboardInterrupt) as error:
         if not remove_private_work_directory(work_directory):
             raise FeatureQualificationFailure(
                 "Packaged cancellation could not remove its private work directory after validation failed."

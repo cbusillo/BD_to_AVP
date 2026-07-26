@@ -148,10 +148,10 @@
       "scripts/qualify_direct_mv_hevc.py": "cd1207dcb1d89694655e8bccdf44393d8c37535c6c266b33700332d7323089d4",
       "scripts/qualify_mv_hevc_corpus.py": "bd81d8e6db5f368cfd4251e2c80ee0dc8ffa8a32bfb9c7256136a85e71c63ecd",
       "scripts/qualify_mv_hevc_quality_match.py": "2df839f6974fd55bce9b3ec8655c092a8ee39daecb4d9c0d1759d3af291073cd",
-      "scripts/qualify_real_mvc_4k_quality.py": "159c1425087c64e12d152d7bfbe332ff97c9aa5a7366bee65dd6b6462b83c922",
-      "scripts/qualify_real_mvc_feature.py": "aef71039177d651a752f69fbb092feb03ef41763ad343b5b4107a68fc47c1c17",
+      "scripts/qualify_real_mvc_4k_quality.py": "d457d18fb2e16f65b05fec00ada15d83ccfb269d1f18394c61b09fe1b3d8c247",
+      "scripts/qualify_real_mvc_feature.py": "de7c5fdf7a68b661163de99995ae98e868f7b16417843274c7c98322f43af7bc",
       "scripts/reassess_real_mvc_feature.py": "8f5f3e3ceb9c89117a824245229438388cf008b54d3865192d085cde3ddcf262",
-      "scripts/verify_packaged_mv_hevc_routes.py": "d4e940c0358f0c67e806ea38b8261d136cd1ea177db5e5028e94b9a8bec511c9"
+      "scripts/verify_packaged_mv_hevc_routes.py": "2b65e5c858dcdf096aba175e46702222f347526912663b07e50d44ff27991e40"
     }
   },
   "real_mvc_quality": {
