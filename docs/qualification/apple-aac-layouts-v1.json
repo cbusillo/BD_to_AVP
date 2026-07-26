@@ -1,0 +1,4405 @@
+{
+  "schema_version": 1,
+  "qualification_id": "apple-aac-layouts-v1",
+  "generated_at": "2026-07-26T21:39:19.217810+00:00",
+  "toolchain": {
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "macos": "27.0",
+    "architecture": "arm64",
+    "ffmpeg": "ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers",
+    "ffprobe": "ffprobe version 8.1.2 Copyright (c) 2007-2026 the FFmpeg developers",
+    "avconvert": "/usr/bin/avconvert"
+  },
+  "policy": {
+    "policy_sha256": "ce493276a758329ebdead492fe601db87c618992ca63fe8dabeb7162a7564eef",
+    "automatic_behavior_changed": false,
+    "current_runtime_snapshot": {
+      "aac_copy_layout_channels": {
+        "mono": 1,
+        "stereo": 2,
+        "5.1": 6,
+        "7.1": 8
+      },
+      "aac_transcode_layout_normalization": {
+        "5.1(side)": "5.1"
+      }
+    },
+    "unlisted_layout": {
+      "action": "fail",
+      "reason": "Missing, unknown, custom, discrete, or unlisted layouts require new identity and Apple evidence."
+    },
+    "action_counts": {
+      "preserve": 6,
+      "remap": 2,
+      "downmix": 18,
+      "fail": 1
+    }
+  },
+  "matrix": [
+    {
+      "id": "ch01-mono",
+      "input": {
+        "layout": "mono",
+        "channel_count": 1,
+        "channels": [
+          "FC"
+        ],
+        "identity_duration_seconds": 0.75
+      },
+      "decision": {
+        "action": "preserve",
+        "target_layout": "mono",
+        "pan_filter": null,
+        "expected_identity_map": {
+          "FC": [
+            "FC"
+          ]
+        },
+        "rationale": "AAC config 1."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 1,
+          "ffprobe_layout": "mono",
+          "channel_configuration": 1,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC"
+          ],
+          "observed_map": {
+            "FC": [
+              "FC"
+            ]
+          },
+          "observed_rms": {
+            "FC": {
+              "FC": 0.226268
+            }
+          }
+        }
+      },
+      "candidate": {
+        "same_as_direct": true
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch02-stereo",
+      "input": {
+        "layout": "stereo",
+        "channel_count": 2,
+        "channels": [
+          "FL",
+          "FR"
+        ],
+        "identity_duration_seconds": 1.0
+      },
+      "decision": {
+        "action": "preserve",
+        "target_layout": "stereo",
+        "pan_filter": null,
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ]
+        },
+        "rationale": "AAC config 2."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 2,
+          "ffprobe_layout": "stereo",
+          "channel_configuration": 2,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FL",
+            "FR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226571
+            },
+            "FR": {
+              "FR": 0.226086
+            }
+          }
+        }
+      },
+      "candidate": {
+        "same_as_direct": true
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch03-2_1",
+      "input": {
+        "layout": "2.1",
+        "channel_count": 3,
+        "channels": [
+          "FL",
+          "FR",
+          "LFE"
+        ],
+        "identity_duration_seconds": 1.25
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "stereo",
+        "pan_filter": "pan=stereo|FL<FL+0.5*LFE|FR<FR+0.5*LFE",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "LFE": [
+            "FL",
+            "FR"
+          ]
+        },
+        "rationale": "FFmpeg emits PCE AAC that Apple drops; retain LFE contribution in stereo."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 3,
+          "ffprobe_layout": "2.1",
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 2,
+          "ffprobe_layout": "stereo",
+          "channel_configuration": 2,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FL",
+            "FR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "LFE": [
+              "FL",
+              "FR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.151075
+            },
+            "FR": {
+              "FR": 0.150799
+            },
+            "LFE": {
+              "FL": 0.074674,
+              "FR": 0.074674
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch03-3_0",
+      "input": {
+        "layout": "3.0",
+        "channel_count": 3,
+        "channels": [
+          "FL",
+          "FR",
+          "FC"
+        ],
+        "identity_duration_seconds": 1.25
+      },
+      "decision": {
+        "action": "preserve",
+        "target_layout": "3.0",
+        "pan_filter": null,
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ]
+        },
+        "rationale": "AAC config 3."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 3,
+          "ffprobe_layout": "3.0",
+          "channel_configuration": 3,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226575
+            },
+            "FR": {
+              "FR": 0.226086
+            },
+            "FC": {
+              "FC": 0.226288
+            }
+          }
+        }
+      },
+      "candidate": {
+        "same_as_direct": true
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch03-3_0_back",
+      "input": {
+        "layout": "3.0(back)",
+        "channel_count": 3,
+        "channels": [
+          "FL",
+          "FR",
+          "BC"
+        ],
+        "identity_duration_seconds": 1.25
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "stereo",
+        "pan_filter": "pan=stereo|FL<FL+0.707*BC|FR<FR+0.707*BC",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "BC": [
+            "FL",
+            "FR"
+          ]
+        },
+        "rationale": "Back-center has no safe same-count canonical AAC mapping."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 3,
+          "ffprobe_layout": "3.0(back)",
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 2,
+          "ffprobe_layout": "stereo",
+          "channel_configuration": 2,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FL",
+            "FR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "BC": [
+              "FL",
+              "FR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.132718
+            },
+            "FR": {
+              "FR": 0.132441
+            },
+            "BC": {
+              "FL": 0.093776,
+              "FR": 0.093776
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch04-4_0",
+      "input": {
+        "layout": "4.0",
+        "channel_count": 4,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "BC"
+        ],
+        "identity_duration_seconds": 1.5
+      },
+      "decision": {
+        "action": "preserve",
+        "target_layout": "4.0",
+        "pan_filter": null,
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "BC": [
+            "BC"
+          ]
+        },
+        "rationale": "AAC config 4."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 4,
+          "ffprobe_layout": "4.0",
+          "channel_configuration": 4,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "BC"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "BC": [
+              "BC"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226571
+            },
+            "FR": {
+              "FR": 0.226093
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "BC": {
+              "BC": 0.226311
+            }
+          }
+        }
+      },
+      "candidate": {
+        "same_as_direct": true
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch04-quad",
+      "input": {
+        "layout": "quad",
+        "channel_count": 4,
+        "channels": [
+          "FL",
+          "FR",
+          "BL",
+          "BR"
+        ],
+        "identity_duration_seconds": 1.5
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "stereo",
+        "pan_filter": "pan=stereo|FL<FL+0.707*BL|FR<FR+0.707*BR",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "BL": [
+            "FL"
+          ],
+          "BR": [
+            "FR"
+          ]
+        },
+        "rationale": "Apple retains this PCE layout, but physical placement is not qualified."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 4,
+          "ffprobe_layout": "quad",
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "pce_not_evaluated",
+          "output_channel_count": 4
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 2,
+          "ffprobe_layout": "stereo",
+          "channel_configuration": 2,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FL",
+            "FR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "BL": [
+              "FL"
+            ],
+            "BR": [
+              "FR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.132718
+            },
+            "FR": {
+              "FR": 0.132441
+            },
+            "BL": {
+              "FL": 0.093756
+            },
+            "BR": {
+              "FR": 0.093604
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch04-quad_side",
+      "input": {
+        "layout": "quad(side)",
+        "channel_count": 4,
+        "channels": [
+          "FL",
+          "FR",
+          "SL",
+          "SR"
+        ],
+        "identity_duration_seconds": 1.5
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "stereo",
+        "pan_filter": "pan=stereo|FL<FL+0.707*SL|FR<FR+0.707*SR",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "SL": [
+            "FL"
+          ],
+          "SR": [
+            "FR"
+          ]
+        },
+        "rationale": "PCE AAC is dropped by Apple."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 4,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 2,
+          "ffprobe_layout": "stereo",
+          "channel_configuration": 2,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FL",
+            "FR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "SL": [
+              "FL"
+            ],
+            "SR": [
+              "FR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.132718
+            },
+            "FR": {
+              "FR": 0.132441
+            },
+            "SL": {
+              "FL": 0.093716
+            },
+            "SR": {
+              "FR": 0.093711
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch04-3_1",
+      "input": {
+        "layout": "3.1",
+        "channel_count": 4,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "LFE"
+        ],
+        "identity_duration_seconds": 1.5
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "stereo",
+        "pan_filter": "pan=stereo|FL<FL+0.707*FC+0.5*LFE|FR<FR+0.707*FC+0.5*LFE",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FL",
+            "FR"
+          ],
+          "LFE": [
+            "FL",
+            "FR"
+          ]
+        },
+        "rationale": "PCE AAC is dropped by Apple; retain center and LFE contribution."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 4,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 2,
+          "ffprobe_layout": "stereo",
+          "channel_configuration": 2,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FL",
+            "FR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FL",
+              "FR"
+            ],
+            "LFE": [
+              "FL",
+              "FR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.102687
+            },
+            "FR": {
+              "FR": 0.102431
+            },
+            "FC": {
+              "FL": 0.072409,
+              "FR": 0.072409
+            },
+            "LFE": {
+              "FL": 0.050732,
+              "FR": 0.050732
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch05-5_0",
+      "input": {
+        "layout": "5.0",
+        "channel_count": 5,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "BL",
+          "BR"
+        ],
+        "identity_duration_seconds": 1.75
+      },
+      "decision": {
+        "action": "preserve",
+        "target_layout": "5.0",
+        "pan_filter": null,
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "BL": [
+            "SL"
+          ],
+          "BR": [
+            "SR"
+          ]
+        },
+        "rationale": "AAC config 5; FFmpeg BL/BR samples become Apple SL/SR surround positions."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 5,
+          "ffprobe_layout": "5.0",
+          "channel_configuration": 5,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "BL": [
+              "SL"
+            ],
+            "BR": [
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226571
+            },
+            "FR": {
+              "FR": 0.226093
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "BL": {
+              "SL": 0.226345
+            },
+            "BR": {
+              "SR": 0.226109
+            }
+          }
+        }
+      },
+      "candidate": {
+        "same_as_direct": true
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch05-5_0_side",
+      "input": {
+        "layout": "5.0(side)",
+        "channel_count": 5,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "SL",
+          "SR"
+        ],
+        "identity_duration_seconds": 1.75
+      },
+      "decision": {
+        "action": "remap",
+        "target_layout": "5.0",
+        "pan_filter": "pan=5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "SL": [
+            "SL"
+          ],
+          "SR": [
+            "SR"
+          ]
+        },
+        "rationale": "Lossless one-to-one remap to AAC config 5."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 5,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 5,
+          "ffprobe_layout": "5.0",
+          "channel_configuration": 5,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "SL": [
+              "SL"
+            ],
+            "SR": [
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226571
+            },
+            "FR": {
+              "FR": 0.226093
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "SL": {
+              "SL": 0.226196
+            },
+            "SR": {
+              "SR": 0.226237
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch05-4_1",
+      "input": {
+        "layout": "4.1",
+        "channel_count": 5,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "LFE",
+          "BC"
+        ],
+        "identity_duration_seconds": 1.75
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "stereo",
+        "pan_filter": "pan=stereo|FL<FL+0.707*FC+0.5*LFE+0.707*BC|FR<FR+0.707*FC+0.5*LFE+0.707*BC",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FL",
+            "FR"
+          ],
+          "LFE": [
+            "FL",
+            "FR"
+          ],
+          "BC": [
+            "FL",
+            "FR"
+          ]
+        },
+        "rationale": "PCE AAC is dropped by Apple; no safe same-count mapping exists."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 5,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 2,
+          "ffprobe_layout": "stereo",
+          "channel_configuration": 2,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FL",
+            "FR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FL",
+              "FR"
+            ],
+            "LFE": [
+              "FL",
+              "FR"
+            ],
+            "BC": [
+              "FL",
+              "FR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.077801
+            },
+            "FR": {
+              "FR": 0.077629
+            },
+            "FC": {
+              "FL": 0.054889,
+              "FR": 0.054889
+            },
+            "LFE": {
+              "FL": 0.038436,
+              "FR": 0.038436
+            },
+            "BC": {
+              "FL": 0.054919,
+              "FR": 0.054919
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch06-5_1",
+      "input": {
+        "layout": "5.1",
+        "channel_count": 6,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "LFE",
+          "BL",
+          "BR"
+        ],
+        "identity_duration_seconds": 2.0
+      },
+      "decision": {
+        "action": "preserve",
+        "target_layout": "5.1",
+        "pan_filter": null,
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "LFE": [
+            "LFE"
+          ],
+          "BL": [
+            "SL"
+          ],
+          "BR": [
+            "SR"
+          ]
+        },
+        "rationale": "AAC config 6; FFmpeg BL/BR samples become Apple SL/SR surround positions."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 6,
+          "ffprobe_layout": "5.1",
+          "channel_configuration": 6,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR",
+            "LFE"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "LFE": [
+              "LFE"
+            ],
+            "BL": [
+              "SL"
+            ],
+            "BR": [
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226571
+            },
+            "FR": {
+              "FR": 0.226089
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "LFE": {
+              "LFE": 0.224114
+            },
+            "BL": {
+              "SL": 0.226364
+            },
+            "BR": {
+              "SR": 0.226167
+            }
+          }
+        }
+      },
+      "candidate": {
+        "same_as_direct": true
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch06-5_1_side",
+      "input": {
+        "layout": "5.1(side)",
+        "channel_count": 6,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "LFE",
+          "SL",
+          "SR"
+        ],
+        "identity_duration_seconds": 2.0
+      },
+      "decision": {
+        "action": "remap",
+        "target_layout": "5.1",
+        "pan_filter": "pan=5.1|FL=FL|FR=FR|FC=FC|LFE=LFE|BL=SL|BR=SR",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "LFE": [
+            "LFE"
+          ],
+          "SL": [
+            "SL"
+          ],
+          "SR": [
+            "SR"
+          ]
+        },
+        "rationale": "Lossless one-to-one remap already proven by the real-source gate in #364."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 6,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 6,
+          "ffprobe_layout": "5.1",
+          "channel_configuration": 6,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR",
+            "LFE"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "LFE": [
+              "LFE"
+            ],
+            "SL": [
+              "SL"
+            ],
+            "SR": [
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226571
+            },
+            "FR": {
+              "FR": 0.226089
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "LFE": {
+              "LFE": 0.224114
+            },
+            "SL": {
+              "SL": 0.226212
+            },
+            "SR": {
+              "SR": 0.226206
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch06-6_0",
+      "input": {
+        "layout": "6.0",
+        "channel_count": 6,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "BC",
+          "SL",
+          "SR"
+        ],
+        "identity_duration_seconds": 2.0
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "5.0",
+        "pan_filter": "pan=5.0|FL=FL|FR=FR|FC=FC|BL<SL+0.707*BC|BR<SR+0.707*BC",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "BC": [
+            "SL",
+            "SR"
+          ],
+          "SL": [
+            "SL"
+          ],
+          "SR": [
+            "SR"
+          ]
+        },
+        "rationale": "Collapse three surround positions into canonical AAC 5.0."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 6,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 5,
+          "ffprobe_layout": "5.0",
+          "channel_configuration": 5,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "BC": [
+              "SL",
+              "SR"
+            ],
+            "SL": [
+              "SL"
+            ],
+            "SR": [
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226571
+            },
+            "FR": {
+              "FR": 0.226093
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "BC": {
+              "SL": 0.093737,
+              "SR": 0.093737
+            },
+            "SL": {
+              "SL": 0.132502
+            },
+            "SR": {
+              "SR": 0.132551
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch06-6_0_front",
+      "input": {
+        "layout": "6.0(front)",
+        "channel_count": 6,
+        "channels": [
+          "FL",
+          "FR",
+          "FLC",
+          "FRC",
+          "SL",
+          "SR"
+        ],
+        "identity_duration_seconds": 2.0
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "5.0",
+        "pan_filter": "pan=5.0|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC<0.5*FLC+0.5*FRC|BL=SL|BR=SR",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FLC": [
+            "FL",
+            "FC"
+          ],
+          "FRC": [
+            "FR",
+            "FC"
+          ],
+          "SL": [
+            "SL"
+          ],
+          "SR": [
+            "SR"
+          ]
+        },
+        "rationale": "Fold front-wide channels into the canonical front stage."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 6,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 5,
+          "ffprobe_layout": "5.0",
+          "channel_configuration": 5,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FLC": [
+              "FC",
+              "FL"
+            ],
+            "FRC": [
+              "FC",
+              "FR"
+            ],
+            "SL": [
+              "SL"
+            ],
+            "SR": [
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.132717
+            },
+            "FR": {
+              "FR": 0.132442
+            },
+            "FLC": {
+              "FC": 0.113105,
+              "FL": 0.093704
+            },
+            "FRC": {
+              "FC": 0.113094,
+              "FR": 0.09365
+            },
+            "SL": {
+              "SL": 0.226213
+            },
+            "SR": {
+              "SR": 0.226206
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch06-hexagonal",
+      "input": {
+        "layout": "hexagonal",
+        "channel_count": 6,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "BL",
+          "BR",
+          "BC"
+        ],
+        "identity_duration_seconds": 2.0
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "5.0",
+        "pan_filter": "pan=5.0|FL=FL|FR=FR|FC=FC|BL<BL+0.707*BC|BR<BR+0.707*BC",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "BL": [
+            "SL"
+          ],
+          "BR": [
+            "SR"
+          ],
+          "BC": [
+            "SL",
+            "SR"
+          ]
+        },
+        "rationale": "Fold back-center into the canonical surround pair."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 6,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 5,
+          "ffprobe_layout": "5.0",
+          "channel_configuration": 5,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "BL": [
+              "SL"
+            ],
+            "BR": [
+              "SR"
+            ],
+            "BC": [
+              "SL",
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226571
+            },
+            "FR": {
+              "FR": 0.226093
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "BL": {
+              "SL": 0.13252
+            },
+            "BR": {
+              "SR": 0.132428
+            },
+            "BC": {
+              "SL": 0.093703,
+              "SR": 0.093703
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch07-6_1",
+      "input": {
+        "layout": "6.1",
+        "channel_count": 7,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "LFE",
+          "BC",
+          "SL",
+          "SR"
+        ],
+        "identity_duration_seconds": 2.25
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "5.1",
+        "pan_filter": "pan=5.1|FL=FL|FR=FR|FC=FC|LFE=LFE|BL<SL+0.707*BC|BR<SR+0.707*BC",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "LFE": [
+            "LFE"
+          ],
+          "BC": [
+            "SL",
+            "SR"
+          ],
+          "SL": [
+            "SL"
+          ],
+          "SR": [
+            "SR"
+          ]
+        },
+        "rationale": "Fold back-center into canonical AAC 5.1 surrounds."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 7,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 6,
+          "ffprobe_layout": "5.1",
+          "channel_configuration": 6,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR",
+            "LFE"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "LFE": [
+              "LFE"
+            ],
+            "BC": [
+              "SL",
+              "SR"
+            ],
+            "SL": [
+              "SL"
+            ],
+            "SR": [
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226571
+            },
+            "FR": {
+              "FR": 0.226089
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "LFE": {
+              "LFE": 0.224114
+            },
+            "BC": {
+              "SL": 0.093734,
+              "SR": 0.093734
+            },
+            "SL": {
+              "SL": 0.132548
+            },
+            "SR": {
+              "SR": 0.132545
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch07-6_1_back",
+      "input": {
+        "layout": "6.1(back)",
+        "channel_count": 7,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "LFE",
+          "BL",
+          "BR",
+          "BC"
+        ],
+        "identity_duration_seconds": 2.25
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "5.1",
+        "pan_filter": "pan=5.1|FL=FL|FR=FR|FC=FC|LFE=LFE|BL<BL+0.707*BC|BR<BR+0.707*BC",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "LFE": [
+            "LFE"
+          ],
+          "BL": [
+            "SL"
+          ],
+          "BR": [
+            "SR"
+          ],
+          "BC": [
+            "SL",
+            "SR"
+          ]
+        },
+        "rationale": "Fold back-center into canonical AAC 5.1 surrounds."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 7,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 6,
+          "ffprobe_layout": "5.1",
+          "channel_configuration": 6,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR",
+            "LFE"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "LFE": [
+              "LFE"
+            ],
+            "BL": [
+              "SL"
+            ],
+            "BR": [
+              "SR"
+            ],
+            "BC": [
+              "SL",
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226571
+            },
+            "FR": {
+              "FR": 0.226089
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "LFE": {
+              "LFE": 0.224114
+            },
+            "BL": {
+              "SL": 0.132638
+            },
+            "BR": {
+              "SR": 0.132459
+            },
+            "BC": {
+              "SL": 0.093705,
+              "SR": 0.093705
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch07-6_1_front",
+      "input": {
+        "layout": "6.1(front)",
+        "channel_count": 7,
+        "channels": [
+          "FL",
+          "FR",
+          "LFE",
+          "FLC",
+          "FRC",
+          "SL",
+          "SR"
+        ],
+        "identity_duration_seconds": 2.25
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "5.1",
+        "pan_filter": "pan=5.1|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC<0.5*FLC+0.5*FRC|LFE=LFE|BL=SL|BR=SR",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "LFE": [
+            "LFE"
+          ],
+          "FLC": [
+            "FL",
+            "FC"
+          ],
+          "FRC": [
+            "FR",
+            "FC"
+          ],
+          "SL": [
+            "SL"
+          ],
+          "SR": [
+            "SR"
+          ]
+        },
+        "rationale": "Fold front-wide channels into canonical AAC 5.1."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 7,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 6,
+          "ffprobe_layout": "5.1",
+          "channel_configuration": 6,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR",
+            "LFE"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "LFE": [
+              "LFE"
+            ],
+            "FLC": [
+              "FC",
+              "FL"
+            ],
+            "FRC": [
+              "FC",
+              "FR"
+            ],
+            "SL": [
+              "SL"
+            ],
+            "SR": [
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.132717
+            },
+            "FR": {
+              "FR": 0.132442
+            },
+            "LFE": {
+              "LFE": 0.224191
+            },
+            "FLC": {
+              "FC": 0.11321,
+              "FL": 0.093744
+            },
+            "FRC": {
+              "FC": 0.113125,
+              "FR": 0.093642
+            },
+            "SL": {
+              "SL": 0.226242
+            },
+            "SR": {
+              "SR": 0.226242
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch07-7_0",
+      "input": {
+        "layout": "7.0",
+        "channel_count": 7,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "BL",
+          "BR",
+          "SL",
+          "SR"
+        ],
+        "identity_duration_seconds": 2.25
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "5.0",
+        "pan_filter": "pan=5.0|FL=FL|FR=FR|FC=FC|BL<BL+SL|BR<BR+SR",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "BL": [
+            "SL"
+          ],
+          "BR": [
+            "SR"
+          ],
+          "SL": [
+            "SL"
+          ],
+          "SR": [
+            "SR"
+          ]
+        },
+        "rationale": "Collapse side and back pairs into canonical AAC 5.0 surrounds."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 7,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 5,
+          "ffprobe_layout": "5.0",
+          "channel_configuration": 5,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "BL": [
+              "SL"
+            ],
+            "BR": [
+              "SR"
+            ],
+            "SL": [
+              "SL"
+            ],
+            "SR": [
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226571
+            },
+            "FR": {
+              "FR": 0.226093
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "BL": {
+              "SL": 0.113205
+            },
+            "BR": {
+              "SR": 0.113077
+            },
+            "SL": {
+              "SL": 0.113106
+            },
+            "SR": {
+              "SR": 0.113155
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch07-7_0_front",
+      "input": {
+        "layout": "7.0(front)",
+        "channel_count": 7,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "FLC",
+          "FRC",
+          "SL",
+          "SR"
+        ],
+        "identity_duration_seconds": 2.25
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "5.0",
+        "pan_filter": "pan=5.0|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC=FC|BL=SL|BR=SR",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "FLC": [
+            "FL"
+          ],
+          "FRC": [
+            "FR"
+          ],
+          "SL": [
+            "SL"
+          ],
+          "SR": [
+            "SR"
+          ]
+        },
+        "rationale": "Fold front-wide channels into canonical AAC 5.0."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 7,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 5,
+          "ffprobe_layout": "5.0",
+          "channel_configuration": 5,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "FLC": [
+              "FL"
+            ],
+            "FRC": [
+              "FR"
+            ],
+            "SL": [
+              "SL"
+            ],
+            "SR": [
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.132717
+            },
+            "FR": {
+              "FR": 0.132442
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "FLC": {
+              "FL": 0.093744
+            },
+            "FRC": {
+              "FR": 0.093641
+            },
+            "SL": {
+              "SL": 0.226242
+            },
+            "SR": {
+              "SR": 0.226242
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch08-7_1",
+      "input": {
+        "layout": "7.1",
+        "channel_count": 8,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "LFE",
+          "BL",
+          "BR",
+          "SL",
+          "SR"
+        ],
+        "identity_duration_seconds": 2.5
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "5.1",
+        "pan_filter": "pan=5.1|FL=FL|FR=FR|FC=FC|LFE=LFE|BL<BL+SL|BR<BR+SR",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "LFE": [
+            "LFE"
+          ],
+          "BL": [
+            "SL"
+          ],
+          "BR": [
+            "SR"
+          ],
+          "SL": [
+            "SL"
+          ],
+          "SR": [
+            "SR"
+          ]
+        },
+        "rationale": "FFmpeg config 7 is decoded by Apple in AAC wide order, so track presence does not prove placement."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 8,
+          "ffprobe_layout": "7.1",
+          "channel_configuration": 7,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "observed",
+          "output_channel_order": [
+            "FC",
+            "FLC",
+            "FRC",
+            "FL",
+            "FR",
+            "SL",
+            "SR",
+            "LFE"
+          ],
+          "observed_map": {
+            "FL": [
+              "FLC"
+            ],
+            "FR": [
+              "FRC"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "LFE": [
+              "LFE"
+            ],
+            "BL": [
+              "SL"
+            ],
+            "BR": [
+              "SR"
+            ],
+            "SL": [
+              "FL"
+            ],
+            "SR": [
+              "FR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FLC": 0.226571
+            },
+            "FR": {
+              "FRC": 0.226089
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "LFE": {
+              "LFE": 0.224114
+            },
+            "BL": {
+              "SL": 0.226364
+            },
+            "BR": {
+              "SR": 0.226167
+            },
+            "SL": {
+              "FL": 0.226165
+            },
+            "SR": {
+              "FR": 0.226173
+            }
+          }
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 6,
+          "ffprobe_layout": "5.1",
+          "channel_configuration": 6,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR",
+            "LFE"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "LFE": [
+              "LFE"
+            ],
+            "BL": [
+              "SL"
+            ],
+            "BR": [
+              "SR"
+            ],
+            "SL": [
+              "SL"
+            ],
+            "SR": [
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226571
+            },
+            "FR": {
+              "FR": 0.226089
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "LFE": {
+              "LFE": 0.224114
+            },
+            "BL": {
+              "SL": 0.113118
+            },
+            "BR": {
+              "SR": 0.113064
+            },
+            "SL": {
+              "SL": 0.113034
+            },
+            "SR": {
+              "SR": 0.113108
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch08-7_1_wide",
+      "input": {
+        "layout": "7.1(wide)",
+        "channel_count": 8,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "LFE",
+          "BL",
+          "BR",
+          "FLC",
+          "FRC"
+        ],
+        "identity_duration_seconds": 2.5
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "5.1",
+        "pan_filter": "pan=5.1|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC=FC|LFE=LFE|BL=BL|BR=BR",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "LFE": [
+            "LFE"
+          ],
+          "BL": [
+            "SL"
+          ],
+          "BR": [
+            "SR"
+          ],
+          "FLC": [
+            "FL"
+          ],
+          "FRC": [
+            "FR"
+          ]
+        },
+        "rationale": "Fold front-wide channels into canonical AAC 5.1."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 8,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 6,
+          "ffprobe_layout": "5.1",
+          "channel_configuration": 6,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR",
+            "LFE"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "LFE": [
+              "LFE"
+            ],
+            "BL": [
+              "SL"
+            ],
+            "BR": [
+              "SR"
+            ],
+            "FLC": [
+              "FL"
+            ],
+            "FRC": [
+              "FR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.132717
+            },
+            "FR": {
+              "FR": 0.132442
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "LFE": {
+              "LFE": 0.224114
+            },
+            "BL": {
+              "SL": 0.226364
+            },
+            "BR": {
+              "SR": 0.226167
+            },
+            "FLC": {
+              "FL": 0.093731
+            },
+            "FRC": {
+              "FR": 0.093693
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch08-7_1_wide_side",
+      "input": {
+        "layout": "7.1(wide-side)",
+        "channel_count": 8,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "LFE",
+          "FLC",
+          "FRC",
+          "SL",
+          "SR"
+        ],
+        "identity_duration_seconds": 2.5
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "5.1",
+        "pan_filter": "pan=5.1|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC=FC|LFE=LFE|BL=SL|BR=SR",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "LFE": [
+            "LFE"
+          ],
+          "FLC": [
+            "FL"
+          ],
+          "FRC": [
+            "FR"
+          ],
+          "SL": [
+            "SL"
+          ],
+          "SR": [
+            "SR"
+          ]
+        },
+        "rationale": "Fold front-wide channels while retaining the surround pair."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 8,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 6,
+          "ffprobe_layout": "5.1",
+          "channel_configuration": 6,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR",
+            "LFE"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "LFE": [
+              "LFE"
+            ],
+            "FLC": [
+              "FL"
+            ],
+            "FRC": [
+              "FR"
+            ],
+            "SL": [
+              "SL"
+            ],
+            "SR": [
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.132717
+            },
+            "FR": {
+              "FR": 0.132442
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "LFE": {
+              "LFE": 0.224114
+            },
+            "FLC": {
+              "FL": 0.093756
+            },
+            "FRC": {
+              "FR": 0.093663
+            },
+            "SL": {
+              "SL": 0.226165
+            },
+            "SR": {
+              "SR": 0.226173
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    },
+    {
+      "id": "ch08-octagonal",
+      "input": {
+        "layout": "octagonal",
+        "channel_count": 8,
+        "channels": [
+          "FL",
+          "FR",
+          "FC",
+          "BL",
+          "BR",
+          "BC",
+          "SL",
+          "SR"
+        ],
+        "identity_duration_seconds": 2.5
+      },
+      "decision": {
+        "action": "downmix",
+        "target_layout": "5.0",
+        "pan_filter": "pan=5.0|FL=FL|FR=FR|FC=FC|BL<BL+SL+0.707*BC|BR<BR+SR+0.707*BC",
+        "expected_identity_map": {
+          "FL": [
+            "FL"
+          ],
+          "FR": [
+            "FR"
+          ],
+          "FC": [
+            "FC"
+          ],
+          "BL": [
+            "SL"
+          ],
+          "BR": [
+            "SR"
+          ],
+          "BC": [
+            "SL",
+            "SR"
+          ],
+          "SL": [
+            "SL"
+          ],
+          "SR": [
+            "SR"
+          ]
+        },
+        "rationale": "Collapse side, back, and back-center positions into canonical AAC 5.0."
+      },
+      "direct": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 8,
+          "ffprobe_layout": null,
+          "channel_configuration": 0,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "video": 1
+          },
+          "dropped_streams": {
+            "audio": 1
+          },
+          "audio_retained": false
+        },
+        "identity": {
+          "status": "audio_dropped"
+        }
+      },
+      "candidate": {
+        "aac": {
+          "audio_stream_count": 1,
+          "valid": true,
+          "codec": "aac",
+          "profile": "LC",
+          "sample_rate": "48000",
+          "channels": 5,
+          "ffprobe_layout": "5.0",
+          "channel_configuration": 5,
+          "language": "eng",
+          "title": "SoundHandler",
+          "default": 1
+        },
+        "apple_passthrough": {
+          "preset": "PresetPassthrough",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "apple_lpcm_decode": {
+          "preset": "PresetAppleProRes422LPCM",
+          "source_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "output_streams": {
+            "audio": 1,
+            "video": 1
+          },
+          "dropped_streams": {},
+          "audio_retained": true
+        },
+        "identity": {
+          "status": "passed",
+          "output_channel_order": [
+            "FC",
+            "FL",
+            "FR",
+            "SL",
+            "SR"
+          ],
+          "observed_map": {
+            "FL": [
+              "FL"
+            ],
+            "FR": [
+              "FR"
+            ],
+            "FC": [
+              "FC"
+            ],
+            "BL": [
+              "SL"
+            ],
+            "BR": [
+              "SR"
+            ],
+            "BC": [
+              "SL",
+              "SR"
+            ],
+            "SL": [
+              "SL"
+            ],
+            "SR": [
+              "SR"
+            ]
+          },
+          "observed_rms": {
+            "FL": {
+              "FL": 0.226571
+            },
+            "FR": {
+              "FR": 0.226093
+            },
+            "FC": {
+              "FC": 0.226288
+            },
+            "BL": {
+              "SL": 0.083613
+            },
+            "BR": {
+              "SR": 0.08351
+            },
+            "BC": {
+              "SL": 0.059087,
+              "SR": 0.059087
+            },
+            "SL": {
+              "SL": 0.083606
+            },
+            "SR": {
+              "SR": 0.083568
+            }
+          }
+        }
+      },
+      "policy_passed": true
+    }
+  ],
+  "summary": {
+    "case_count": 26,
+    "channel_counts_covered": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "direct_apple_audio_retained": 8,
+    "policy_passed": 26,
+    "policy_failures": []
+  }
+}

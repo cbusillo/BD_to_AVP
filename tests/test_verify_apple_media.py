@@ -90,6 +90,39 @@ class AppleMediaVerifyTests(unittest.TestCase):
             ):
                 verify_apple_media.verify_apple_media_compatible(Path(media_file.name))
 
+    def test_conversion_inspection_reports_dropped_tracks_without_raising(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            media_path = temp_path / "source.mov"
+            media_path.write_bytes(b"media")
+            source_probe = json.dumps({"streams": [{"codec_type": "video"}, {"codec_type": "audio"}]})
+            output_probe = json.dumps({"streams": [{"codec_type": "video"}]})
+            with (
+                patch.object(
+                    verify_apple_media.shutil,
+                    "which",
+                    side_effect=lambda command: f"/usr/bin/{command}",
+                ),
+                patch.object(
+                    verify_apple_media,
+                    "run",
+                    side_effect=[
+                        subprocess.CompletedProcess([], 0, stdout=""),
+                        subprocess.CompletedProcess([], 0, stdout=source_probe),
+                        subprocess.CompletedProcess([], 0, stdout=output_probe),
+                    ],
+                ) as run,
+            ):
+                report = verify_apple_media.inspect_apple_media_conversion(
+                    media_path,
+                    temp_path / "apple.mov",
+                    preset="PresetAppleProRes422LPCM",
+                )
+
+        self.assertEqual(report.dropped_streams, {"audio": 1})
+        command = run.call_args_list[0].args[0]
+        self.assertIn("PresetAppleProRes422LPCM", command)
+
 
 if __name__ == "__main__":
     unittest.main()

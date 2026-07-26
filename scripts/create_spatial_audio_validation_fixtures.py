@@ -8,7 +8,7 @@ import subprocess
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from bd_to_avp.modules.audio import create_prepared_audio_file
 from bd_to_avp.modules.audio_mode import AudioMode
@@ -173,50 +173,70 @@ def create_spatial_video(work_directory: Path) -> Path:
     return spatial_path
 
 
+def create_channel_identity_audio(
+    output_path: Path,
+    channel_layout: str,
+    channel_frequencies: Sequence[int],
+    *,
+    duration_seconds: float,
+    cycle_seconds: float,
+    slot_seconds: float = 1.0,
+    burst_seconds: float = 0.12,
+    start_offset_seconds: float = 0.0,
+    amplitude: float = 0.32,
+) -> None:
+    if not channel_frequencies:
+        raise ValueError("At least one channel frequency is required")
+    if slot_seconds <= 0 or burst_seconds <= 0 or burst_seconds > slot_seconds:
+        raise ValueError("Channel identity timing must use a positive burst no longer than its slot")
+    if start_offset_seconds < 0:
+        raise ValueError("Channel identity start offset cannot be negative")
+    if cycle_seconds < start_offset_seconds + len(channel_frequencies) * slot_seconds:
+        raise ValueError("Channel identity cycle is too short for the requested channel slots")
+
+    expressions = []
+    for index, frequency in enumerate(channel_frequencies):
+        start_seconds = start_offset_seconds + index * slot_seconds
+        end_seconds = start_seconds + burst_seconds
+        expressions.append(
+            f"{amplitude:g}*sin(2*PI*{frequency}*t)"
+            f"*between(mod(t\\,{cycle_seconds:g})\\,{start_seconds:g}\\,{end_seconds:g})"
+        )
+    run(
+        [
+            config.FFMPEG_PATH,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"aevalsrc={'|'.join(expressions)}:s=48000:d={duration_seconds:g}:c={channel_layout}",
+            "-c:a",
+            "pcm_s24le",
+            "-y",
+            output_path,
+        ]
+    )
+
+
 def create_audio_beds(work_directory: Path) -> tuple[Path, Path]:
     surround_path = work_directory / "surround-5.1.wav"
     alternate_path = work_directory / "alternate-stereo.wav"
-    channel_frequencies = (330, 440, 550, 110, 660, 770)
-    surround_expressions = [
-        f"0.32*sin(2*PI*{frequency}*t)*between(mod(t\\,6)\\,{index}\\,{index + 1})*lt(mod(t\\,1)\\,0.12)"
-        for index, frequency in enumerate(channel_frequencies)
-    ]
-    stereo_expressions = (
-        "0.26*sin(2*PI*990*t)*lt(mod(t\\,2)\\,1)*lt(mod(t\\,1)\\,0.12)",
-        "0.26*sin(2*PI*1320*t)*between(mod(t\\,2)\\,1\\,2)*lt(mod(t\\,1)\\,0.12)",
+    create_channel_identity_audio(
+        surround_path,
+        "5.1",
+        (330, 440, 550, 110, 660, 770),
+        duration_seconds=DURATION_SECONDS,
+        cycle_seconds=6,
     )
-
-    run(
-        [
-            config.FFMPEG_PATH,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            f"aevalsrc={'|'.join(surround_expressions)}:s=48000:d={DURATION_SECONDS}:c=5.1",
-            "-c:a",
-            "pcm_s24le",
-            "-y",
-            surround_path,
-        ]
-    )
-    run(
-        [
-            config.FFMPEG_PATH,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            f"aevalsrc={'|'.join(stereo_expressions)}:s=48000:d={DURATION_SECONDS}:c=stereo",
-            "-c:a",
-            "pcm_s24le",
-            "-y",
-            alternate_path,
-        ]
+    create_channel_identity_audio(
+        alternate_path,
+        "stereo",
+        (990, 1320),
+        duration_seconds=DURATION_SECONDS,
+        cycle_seconds=2,
+        amplitude=0.26,
     )
     return surround_path, alternate_path
 
