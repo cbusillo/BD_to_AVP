@@ -4,19 +4,19 @@ The normative production identity, version mapping, update routes, history
 boundary, and publication policy are defined in
 [Production Release Routes](release-routes.md).
 
-The repository carries published, immutable Beta 3, Beta 4, and Beta 5 history
-at internal versions `0.3.0b3`, `0.3.0b4`, and `0.3.0b5`, builds `148`, `149`,
-and `150`, and a prepared Beta 6 target at `0.3.0b6`, build `151`. The failed,
-unpublished `0.3.0rc1` build `147` attempt is preserved in the checked-in
-recovery evidence and its build number is permanently burned. The
-[Beta 5 cut packet](0.3.0-beta.5-cut-packet.md) records immutable publication
-history, while the reviewed [Beta 6 cut packet](0.3.0-beta.6-cut-packet.md)
-records metadata only and does not assert that a Beta 6 public artifact exists.
+The repository carries published, immutable Beta 3 through Beta 6 history at
+internal versions `0.3.0b3` through `0.3.0b6`, builds `148` through `151`, and a
+prepared Beta 7 target at `0.3.0b7`, build `152`. The failed, unpublished
+`0.3.0rc1` build `147` attempt is preserved in the checked-in recovery evidence
+and its build number is permanently burned. The
+[Beta 6 cut packet](0.3.0-beta.6-cut-packet.md) records immutable publication
+history, while the reviewed [Beta 7 cut packet](0.3.0-beta.7-cut-packet.md)
+records metadata only and does not assert that a Beta 7 public artifact exists.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
 entrypoints, Beta 3 bootstrap contract, and one-time metadata recovery are
-implemented and regression-covered. The explicit Beta 6 request authorizes the
+implemented and regression-covered. The explicit Beta 7 request authorizes the
 reviewed metadata preparation and exact-SHA dispatch; run-bound signing approval
 remains a separate authorization boundary.
 
@@ -34,9 +34,9 @@ uv run python -m scripts.release prepare \
 The internal version, public version, tag/title, DMG name, release stage,
 Sparkle channel, and publication effects are derived independently by
 `scripts/release.py metadata` from the mapping in `release-routes.md`. For
-example, internal `0.3.0b6` maps to public `0.3.0-beta.6`, tag/title
-`v0.3.0-beta.6`, and DMG
-`3D-Blu-ray-to-Vision-Pro-0.3.0-beta.6.dmg`. The numeric
+example, internal `0.3.0b7` maps to public `0.3.0-beta.7`, tag/title
+`v0.3.0-beta.7`, and DMG
+`3D-Blu-ray-to-Vision-Pro-0.3.0-beta.7.dmg`. The numeric
 `CFBundleVersion` must increase for every production-identity build across all
 routes, including failed unpublished attempts. The command stages a refreshed
 `uv.lock`, validates the staged metadata, and updates `pyproject.toml`,
@@ -77,11 +77,11 @@ or from a stale main commit.
 
 ## Release Orchestration
 
-> **Beta 6 is authorized but not yet published.** The explicit Beta 6 request
-> authorizes guarded `v0.3.0-beta.6` dispatch, and the repository contains no
+> **Beta 7 is authorized but not yet published.** The explicit Beta 7 request
+> authorizes guarded `v0.3.0-beta.7` dispatch, and the repository contains no
 > freeze entry for that exact tag. Dispatch only from the exact protected `main`
-> commit containing the reviewed Beta 6 metadata, keep `main` fixed while the
-> workflow is nonterminal, and do not describe Beta 6 as public until signing,
+> commit containing the reviewed Beta 7 metadata, keep `main` fixed while the
+> workflow is nonterminal, and do not describe Beta 7 as public until signing,
 > notarization, appcast publication, and route verification complete.
 
 Dispatch `Stable` from `main` only for reviewed committed Stable metadata, or

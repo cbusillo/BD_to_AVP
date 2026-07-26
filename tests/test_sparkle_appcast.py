@@ -188,24 +188,22 @@ class SparkleAppcastTests(unittest.TestCase):
         self.assertNotIn("v0.3.0-beta.1", appcast_text)
         self.assertNotIn("v0.3.0-beta.2", appcast_text)
 
-    def test_beta6_appends_above_existing_betas_in_cumulative_production_history(self) -> None:
+    def test_beta7_appends_above_complete_immutable_production_history(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            empty_feed = root / "empty.xml"
-            stable_feed = root / "stable.xml"
+            base_feed = root / "base.xml"
             beta3_feed = root / "beta3.xml"
             beta4_feed = root / "beta4.xml"
             beta5_feed = root / "beta5.xml"
             beta6_feed = root / "beta6.xml"
-            make_empty_feed(empty_feed)
-
-            sparkle_appcast.append_item(
-                empty_feed,
-                stable_feed,
-                item("146", "0.2.143", None, minimum_system_version="14.0"),
+            beta7_feed = root / "beta7.xml"
+            base_feed.write_bytes(
+                (
+                    Path(__file__).resolve().parents[1] / "docs" / "release-evidence" / "v0.2.143-appcast.xml"
+                ).read_bytes()
             )
             sparkle_appcast.append_item(
-                stable_feed,
+                base_feed,
                 beta3_feed,
                 item("148", "0.3.0b3", "beta", minimum_system_version="26.0"),
             )
@@ -224,23 +222,37 @@ class SparkleAppcastTests(unittest.TestCase):
                 beta6_feed,
                 item("151", "0.3.0b6", "beta", minimum_system_version="26.0"),
             )
+            sparkle_appcast.append_item(
+                beta6_feed,
+                beta7_feed,
+                item("152", "0.3.0b7", "beta", minimum_system_version="26.0"),
+            )
 
-            sparkle_appcast.validate_release_snapshot(beta6_feed, "0.3.0b6")
-            sparkle_appcast.validate_release_tag_snapshot(beta6_feed, "v0.3.0-beta.6")
-            _, channel = sparkle_appcast.load_appcast(beta6_feed)
+            sparkle_appcast.validate_release_snapshot(beta7_feed, "0.3.0b7")
+            sparkle_appcast.validate_release_tag_snapshot(beta7_feed, "v0.3.0-beta.7")
+            _, channel = sparkle_appcast.load_appcast(beta7_feed)
             items = channel.findall("item")
 
         self.assertEqual(
             [entry.findtext(f"{sparkle_appcast.SPARKLE}version") for entry in items],
-            ["151", "150", "149", "148", "146"],
+            ["152", "151", "150", "149", "148", "146", "145", "144"],
         )
         self.assertEqual(
             [entry.findtext(f"{sparkle_appcast.SPARKLE}shortVersionString") for entry in items],
-            ["0.3.0b6", "0.3.0b5", "0.3.0b4", "0.3.0b3", "0.2.143"],
+            [
+                "0.3.0b7",
+                "0.3.0b6",
+                "0.3.0b5",
+                "0.3.0b4",
+                "0.3.0b3",
+                "0.2.143",
+                "0.2.143rc5",
+                "0.2.143rc4",
+            ],
         )
         self.assertEqual(
             [entry.findtext(f"{sparkle_appcast.SPARKLE}channel") for entry in items],
-            ["beta", "beta", "beta", "beta", None],
+            ["beta", "beta", "beta", "beta", "beta", None, "rc", "rc"],
         )
 
     def test_rejects_non_monotonic_build(self) -> None:
