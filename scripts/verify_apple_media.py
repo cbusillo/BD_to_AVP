@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from dataclasses import dataclass
 import json
 import shutil
 import subprocess
@@ -15,6 +16,22 @@ class AppleMediaFailure(RuntimeError):
 
 
 MEDIA_STREAM_TYPES = frozenset({"video", "audio", "subtitle"})
+PASSTHROUGH_PRESET = "PresetPassthrough"
+
+
+@dataclass(frozen=True)
+class AppleMediaConversionReport:
+    preset: str
+    source_streams: Counter[str]
+    output_streams: Counter[str]
+
+    @property
+    def dropped_streams(self) -> dict[str, int]:
+        return {
+            stream_type: self.source_streams[stream_type] - self.output_streams[stream_type]
+            for stream_type in MEDIA_STREAM_TYPES
+            if self.output_streams[stream_type] < self.source_streams[stream_type]
+        }
 
 
 def run(command: list[str | Path]) -> subprocess.CompletedProcess[str]:
@@ -37,7 +54,12 @@ def find_ffprobe() -> str:
     return ffprobe_path
 
 
-def verify_apple_media_compatible(media_path: Path) -> None:
+def inspect_apple_media_conversion(
+    media_path: Path,
+    output_path: Path,
+    *,
+    preset: str = PASSTHROUGH_PRESET,
+) -> AppleMediaConversionReport:
     if not media_path.is_file():
         raise AppleMediaFailure(f"Missing media file: {media_path}")
     avconvert_path = shutil.which("avconvert")
@@ -45,38 +67,43 @@ def verify_apple_media_compatible(media_path: Path) -> None:
         raise AppleMediaFailure("Apple media compatibility check requires avconvert on macOS")
     ffprobe_path = find_ffprobe()
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        run(
+            [
+                avconvert_path,
+                "--source",
+                media_path,
+                "--preset",
+                preset,
+                "--output",
+                output_path,
+                "--replace",
+                "--disableFastStart",
+            ]
+        )
+    except subprocess.CalledProcessError as error:
+        output = error.stdout or ""
+        raise AppleMediaFailure(
+            f"Apple media stack could not open/convert {media_path} with {preset}:\n{output.strip()}"
+        ) from error
+    return AppleMediaConversionReport(
+        preset=preset,
+        source_streams=probe_stream_counts(ffprobe_path, media_path),
+        output_streams=probe_stream_counts(ffprobe_path, output_path),
+    )
+
+
+def verify_apple_media_compatible(media_path: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="bd-to-avp-avconvert-") as temp_dir:
-        output_path = Path(temp_dir) / "passthrough.mov"
-        try:
-            run(
-                [
-                    avconvert_path,
-                    "--source",
-                    media_path,
-                    "--preset",
-                    "PresetPassthrough",
-                    "--output",
-                    output_path,
-                    "--replace",
-                    "--disableFastStart",
-                ]
-            )
-        except subprocess.CalledProcessError as error:
-            output = error.stdout or ""
-            raise AppleMediaFailure(
-                f"Apple media stack could not open/pass through {media_path}:\n{output.strip()}"
-            ) from error
-        source_streams = probe_stream_counts(ffprobe_path, media_path)
-        passthrough_streams = probe_stream_counts(ffprobe_path, output_path)
-        dropped_streams = {
-            stream_type: source_streams[stream_type] - passthrough_streams[stream_type]
-            for stream_type in MEDIA_STREAM_TYPES
-            if passthrough_streams[stream_type] < source_streams[stream_type]
-        }
-        if dropped_streams:
+        report = inspect_apple_media_conversion(
+            media_path,
+            Path(temp_dir) / "passthrough.mov",
+        )
+        if report.dropped_streams:
             detail = ", ".join(
                 f"{count} {stream_type} track{'s' if count != 1 else ''}"
-                for stream_type, count in sorted(dropped_streams.items())
+                for stream_type, count in sorted(report.dropped_streams.items())
             )
             raise AppleMediaFailure(f"Apple media stack dropped {detail} while opening {media_path}")
 

@@ -9,6 +9,7 @@ from bd_to_avp.modules import audio
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.audio_selection import load_audio_selection_manifest, select_audio_streams
 from bd_to_avp.modules.config import Stage
+from scripts.qualify_apple_aac_layouts import LAYOUT_CASES
 
 
 class AudioPreparationTests(unittest.TestCase):
@@ -359,6 +360,34 @@ class AudioPreparationTests(unittest.TestCase):
         self.assertEqual(results[7].reason, "channel_layout_not_qualified")
         self.assertEqual(results[8].reason, "sample_rate_missing")
         self.assertEqual(results[9].reason, "channel_layout_not_qualified")
+
+    def test_layout_matrix_does_not_broaden_current_automatic_copy_or_normalization(self) -> None:
+        current_copy_layouts = {
+            "mono": 1,
+            "stereo": 2,
+            "5.1": 6,
+            "7.1": 8,
+        }
+
+        self.assertEqual(audio.AAC_COPY_LAYOUT_CHANNELS, current_copy_layouts)
+        self.assertEqual(audio.AAC_TRANSCODE_LAYOUT_NORMALIZATION, {"5.1(side)": "5.1"})
+        for index, case in enumerate(LAYOUT_CASES):
+            with self.subTest(layout=case.source_layout):
+                result = audio.qualify_audio_stream(
+                    qualified_stream(
+                        index=index,
+                        channels=len(case.source_channels),
+                        channel_layout=case.source_layout,
+                    )
+                )
+                self.assertEqual(result.qualified, case.source_layout in current_copy_layouts)
+
+    def test_7_1_copy_is_an_explicit_policy_mismatch_deferred_to_production_followup(self) -> None:
+        policy = next(case for case in LAYOUT_CASES if case.source_layout == "7.1")
+
+        self.assertIn("7.1", audio.AAC_COPY_LAYOUT_CHANNELS)
+        self.assertEqual(policy.action, "downmix")
+        self.assertEqual(policy.target_layout, "5.1")
 
     def test_transcode_audio_maps_requested_stream_selector(self) -> None:
         streams = [qualified_stream(index=0)]
