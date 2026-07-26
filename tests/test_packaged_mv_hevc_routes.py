@@ -1,18 +1,29 @@
 import json
+import signal
+import subprocess
+import tempfile
 import unittest
 
 from pathlib import Path
+from unittest.mock import Mock, patch
 
+from bd_to_avp.modules.video_route import AUTOMATIC_DIRECT_QUALITY
 from scripts.verify_packaged_mv_hevc_routes import (
     METALFX_UNAVAILABLE_HELPER_SOURCE,
     PROTOCOL_VERSION,
     UNAVAILABLE_HELPER_SOURCE,
     PackagedRouteFailure,
     WorkerResult,
+    _preview_duration,
+    _terminate_worker_process,
+    _terminal_result,
+    _validate_stream_contract,
     build_worker_request,
     parse_worker_events,
+    validate_qualification_paths,
     validate_stage_contract,
     validate_route_pair,
+    verify_packaged_routes,
 )
 
 
@@ -139,6 +150,135 @@ class PackagedEventTests(unittest.TestCase):
         with self.assertRaisesRegex(PackagedRouteFailure, "valid JSON"):
             parse_worker_events("not json", job_id="job")
 
+    def test_terminal_decision_reports_safe_id_and_prompt(self) -> None:
+        events = (
+            event(
+                0,
+                job_id="job",
+                event_type="job.decision_required",
+                payload={
+                    "decision": {
+                        "id": "subtitle_decision_required",
+                        "prompt": "Subtitle extraction did not produce usable subtitle files.",
+                    }
+                },
+            ),
+        )
+
+        with self.assertRaisesRegex(PackagedRouteFailure, "subtitle_decision_required"):
+            _terminal_result(events, "preview_source")
+
+
+class PackagedMediaContractTests(unittest.TestCase):
+    def test_preview_timing_matches_requested_middle_range(self) -> None:
+        result = WorkerResult(
+            operation="preview_source",
+            route={},
+            output_path=Path("preview.mov"),
+            events=(),
+            preview={
+                "duration_seconds": 60.435,
+                "position": "middle",
+                "source_duration_seconds": 65.649,
+                "start_seconds": 2.544,
+            },
+        )
+
+        self.assertAlmostEqual(_preview_duration(result, 65.649), 60.435)
+
+    def test_stream_contract_rejects_missing_subtitles(self) -> None:
+        streams = (
+            {"codec_name": "hevc", "codec_type": "video", "language": None},
+            {"codec_name": "aac", "codec_type": "audio", "language": "eng"},
+        )
+
+        with self.assertRaisesRegex(PackagedRouteFailure, "exactly one"):
+            _validate_stream_contract(
+                streams,
+                {
+                    "audio": ("aac", "eng"),
+                    "subtitle": ("mov_text", "eng"),
+                    "video": ("hevc", None),
+                },
+            )
+
+    def test_timeout_cleanup_signals_worker_group(self) -> None:
+        process = Mock(pid=123)
+        process.poll.return_value = None
+        process.communicate.side_effect = [
+            subprocess.TimeoutExpired(cmd="worker", timeout=30),
+            ("", ""),
+        ]
+        root = Mock(pid=123)
+        child = Mock(pid=124)
+
+        with (
+            patch(
+                "scripts.verify_packaged_mv_hevc_routes._process_tree",
+                return_value=[root, child],
+            ),
+            patch(
+                "scripts.verify_packaged_mv_hevc_routes._process_is_running",
+                return_value=False,
+            ),
+            patch(
+                "scripts.verify_packaged_mv_hevc_routes.psutil.wait_procs",
+                return_value=([child], []),
+            ),
+            patch("scripts.verify_packaged_mv_hevc_routes.os.killpg") as killpg,
+        ):
+            _terminate_worker_process(process)
+
+        killpg.assert_any_call(123, signal.SIGTERM)
+        killpg.assert_any_call(123, signal.SIGKILL)
+        child.terminate.assert_called_once_with()
+
+    def test_qualification_paths_reject_source_and_destination_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            app = root / "Qualification.app"
+            app.mkdir()
+            source = root / "source.mkv"
+            source.write_bytes(b"source")
+
+            with self.assertRaisesRegex(PackagedRouteFailure, "representative source"):
+                validate_qualification_paths(app, source, source, None)
+            with self.assertRaisesRegex(PackagedRouteFailure, "must be distinct"):
+                validate_qualification_paths(app, source, root / "evidence.json", root / "evidence.json")
+            with self.assertRaisesRegex(PackagedRouteFailure, "outside the app bundle"):
+                validate_qualification_paths(app, source, app / "evidence.json", None)
+
+    def test_qualification_paths_reject_symlink_destinations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            app = root / "Qualification.app"
+            app.mkdir()
+            source = root / "source.mkv"
+            source.write_bytes(b"source")
+            real_output = root / "real-evidence.json"
+            real_output.write_text("{}", encoding="utf-8")
+            linked_output = root / "evidence.json"
+            linked_output.symlink_to(real_output)
+
+            with self.assertRaisesRegex(PackagedRouteFailure, "must not be a symlink"):
+                validate_qualification_paths(app, source, linked_output, None)
+
+    def test_route_verifier_rejects_wrong_source_hash_before_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / "source.mkv"
+            source.write_bytes(b"source")
+
+            with (
+                patch("scripts.verify_packaged_mv_hevc_routes.read_app_bundle", return_value=Mock()),
+                self.assertRaisesRegex(PackagedRouteFailure, "SHA-256"),
+            ):
+                verify_packaged_routes(
+                    Path("Qualification.app"),
+                    source,
+                    fixture_output=None,
+                    expected_source_sha256="0" * 64,
+                )
+
 
 class PackagedRouteParityTests(unittest.TestCase):
     def test_direct_full_and_preview_require_identical_route(self) -> None:
@@ -147,7 +287,7 @@ class PackagedRouteParityTests(unittest.TestCase):
             "selected": "direct_mv_hevc",
             "reason": "direct_eligible",
             "rate_control": "quality",
-            "quality": 0.7,
+            "quality": AUTOMATIC_DIRECT_QUALITY,
         }
 
         validate_route_pair(

@@ -1,0 +1,251 @@
+{
+  "acceptance": {
+    "deterministic_segment": true,
+    "feature_length_direct_4k": true,
+    "packaged_route_matrix": true,
+    "privacy_review": true,
+    "repeated_real_mvc_quality_size": true,
+    "resource_thermal_and_cancellation": true,
+    "passed": true
+  },
+  "evidence_files": {
+    "feature_length_input_sha256": "0d34d59cf819aaf66b81339c2b34e361f13ec4651702f7c392bf89426e028dfd",
+    "feature_length_sha256": "84f18a732b303a2032e6a4db5ba98e14dc7a1042f11903b31b131cfa45919d02",
+    "packaged_route_matrix_sha256": "e182cc91b890f3177a00ad32db0c8e1039d314c79976f0ab2c56f631f4862f6e",
+    "real_mvc_quality_sha256": "ac0dd829b06d6d6dd214a5ffd1a8389eb93f79ab75197bc9730789ee7463565a",
+    "segment_generation_sha256": "71283ff4101b9f369bbf7d7ae9948a37052470dbbea1c2912d965a80b12389d5"
+  },
+  "feature_length": {
+    "artifact": {
+      "duration_seconds": 5737.731667,
+      "frame_count": 137568,
+      "sha256": "d2f46d8a929a7e0b060f6dec2fd57f901dafd6101ddb4580310eebd51f568867",
+      "size_bytes": 6546871801,
+      "video_dimensions": {
+        "height": 2160,
+        "width": 3840
+      }
+    },
+    "assessment": {
+      "input_evidence_sha256": "0d34d59cf819aaf66b81339c2b34e361f13ec4651702f7c392bf89426e028dfd",
+      "policy": "per-process-and-aggregate-q3-q4-plateau-v3"
+    },
+    "backpressure": {
+      "artifact_sample_count": 2581,
+      "failure_codes": [],
+      "increasing_artifact_sample_count": 2580,
+      "max_artifact_growth_gap_seconds": 7.19,
+      "positive_growth_sample_count": 2568
+    },
+    "cancellation": {
+      "cancel_after_bytes": 33554432,
+      "elapsed_seconds": 81.448,
+      "entered_direct_encode_stage": true,
+      "heartbeat_max_gap_seconds": 0.353,
+      "job_cancelled_exit_code": 130,
+      "no_completed_event": true,
+      "no_partial_files": true,
+      "no_surviving_processes": true,
+      "observed_artifact_bytes_before_cancel": 57671680,
+      "overwrite_sentinel_preserved": true,
+      "peak_process_tree_rss_bytes": 1322123264,
+      "private_work_directory_removed": true,
+      "thermal_pressure": "nominal"
+    },
+    "elapsed_seconds": 5240.939,
+    "resources": {
+      "aggregate_late_quartile_growth_ceiling_bytes": 134217728,
+      "edge264_peak_rss_bytes": 115163136,
+      "late_quartile_growth_ceiling_bytes": 67108864,
+      "max_process_late_quartile_growth_bytes": 50937856,
+      "metal_final_allocated_size_bytes": 485556224,
+      "metal_duration_growth_allowance_bytes": 33193984,
+      "metal_duration_growth_bytes": 33193984,
+      "metal_duration_growth_passed": true,
+      "metal_peak_delta_bytes": 485474304,
+      "metal_safety_ceiling_bytes": 1073741824,
+      "normalizer_ffmpeg_peak_rss_bytes": 793739264,
+      "per_process_late_quartile_growth_bytes": {
+        "edge264": 212992,
+        "mv_hevc_encoder": 5259264,
+        "normalizer_ffmpeg": 16613376,
+        "source_ffmpeg": 50937856
+      },
+      "process_quartile_peak_rss_bytes": [
+        1386217472,
+        1441972224,
+        1446772736,
+        1516781568
+      ],
+      "process_rss_safety_ceiling_bytes": 2147483648,
+      "process_tree_peak_rss_bytes": 1516781568,
+      "short_process_tree_peak_rss_bytes": 1168850944,
+      "source_ffmpeg_peak_rss_bytes": 141164544,
+      "stereo_encoder_peak_rss_bytes": 474562560,
+      "total_late_quartile_growth_bytes": 70008832
+    },
+    "thermal": {
+      "in_process_max_state": "nominal",
+      "in_process_sample_count": 9017,
+      "powermetrics_all_nominal": true,
+      "powermetrics_sample_count": 1046,
+      "powermetrics_trace_sha256": "81464c9e194ab8e6accad728127faee22dff6fdb849d4e71d657191fa904a37c",
+      "powermetrics_trace_size_bytes": 947996
+    }
+  },
+  "generated_at_utc": "2026-07-26T02:59:15+00:00",
+  "package": {
+    "app_tree_sha256": "7294f205d9d95d53f72d7fa30d977b2551c6d6ab8c0bdeddc444c354060fc801",
+    "bundle_identifier": "com.shinycomputers.bd-to-avp",
+    "capability": {
+      "metalfx_2x_mv_hevc_supported": true,
+      "metalfx_spatial_scaling_supported": true,
+      "pixel_transfer_2x_mv_hevc_supported": true,
+      "stereo_mv_hevc_encode_supported": true
+    },
+    "helper_sha256": "4245452e4c5dbc05479c48c5a37caa077d5c95f18a93b78272e6ac583fbd5394",
+    "version": "0.3.0b6",
+    "worker_sha256": "1a9f2edeabc5341f15d804d805511a35fecca05ce9e7db2ba7aa29d80b59f109"
+  },
+  "packaged_route_matrix": {
+    "app_tree_sha256": "7294f205d9d95d53f72d7fa30d977b2551c6d6ab8c0bdeddc444c354060fc801",
+    "physical_fixture": {
+      "sha256": "d7b9dc1bd16f0f6d3baa293c8673b681113ed839574e80c59d486859c81b0348",
+      "size_bytes": 101011343
+    },
+    "route_count": 8,
+    "routes": {
+      "metalfx_4k_direct_full": true,
+      "metalfx_4k_direct_preview": true,
+      "metalfx_4k_fallback_full": true,
+      "metalfx_4k_fallback_preview": true,
+      "ordinary_direct_full": true,
+      "ordinary_direct_preview": true,
+      "ordinary_fallback_full": true,
+      "ordinary_fallback_preview": true
+    },
+    "validated_contracts": [
+      "explicit_pre_input_fallback",
+      "full_preview_route_parity",
+      "stage_boundaries",
+      "1080p_and_4k_dimensions",
+      "spatial_boxes",
+      "audio_and_subtitle_preservation",
+      "apple_media_passthrough",
+      "beginning_middle_end_seeks"
+    ]
+  },
+  "privacy": {
+    "media_committed": false,
+    "raw_traces_committed": false,
+    "source_paths_recorded": false,
+    "source_titles_recorded": false
+  },
+  "qualification_harness": {
+    "files": {
+      "scripts/benchmark_mv_hevc_metalfx.py": "98e7afaa3881db4afafb67912113f9b6e4c2431e7d3bec5ecb2a73ec71c5c52b",
+      "scripts/create_real_mvc_qualification_segment.py": "13b8fb6465af8c2e819b6007fbd9495d98f5ac132026bccaceae144c0274b778",
+      "scripts/qualify_direct_mv_hevc.py": "cd1207dcb1d89694655e8bccdf44393d8c37535c6c266b33700332d7323089d4",
+      "scripts/qualify_mv_hevc_corpus.py": "bd81d8e6db5f368cfd4251e2c80ee0dc8ffa8a32bfb9c7256136a85e71c63ecd",
+      "scripts/qualify_mv_hevc_quality_match.py": "2df839f6974fd55bce9b3ec8655c092a8ee39daecb4d9c0d1759d3af291073cd",
+      "scripts/qualify_real_mvc_4k_quality.py": "159c1425087c64e12d152d7bfbe332ff97c9aa5a7366bee65dd6b6462b83c922",
+      "scripts/qualify_real_mvc_feature.py": "aef71039177d651a752f69fbb092feb03ef41763ad343b5b4107a68fc47c1c17",
+      "scripts/reassess_real_mvc_feature.py": "8f5f3e3ceb9c89117a824245229438388cf008b54d3865192d085cde3ddcf262",
+      "scripts/verify_packaged_mv_hevc_routes.py": "d4e940c0358f0c67e806ea38b8261d136cd1ea177db5e5028e94b9a8bec511c9"
+    }
+  },
+  "real_mvc_quality": {
+    "acceptance": {
+      "direct_quality": true,
+      "direct_size": true,
+      "eye_order": true,
+      "repeated_full_routes": true,
+      "passed": true
+    },
+    "file_based": {
+      "frame_count_per_eye": 1573,
+      "median_final_bytes": 269501345,
+      "median_min_same_eye_ssim": 0.950862,
+      "minimum_eye_order_margin": 0.034867,
+      "run_count": 3
+    },
+    "direct": {
+      "frame_count_per_eye": 1573,
+      "median_final_bytes": 101009167,
+      "median_min_same_eye_ssim": 0.952509,
+      "minimum_eye_order_margin": 0.037974,
+      "run_count": 3
+    },
+    "reference": {
+      "frame_count": 1573,
+      "left_sha256": "b5ed556fcc5a1236a1a1c154f0d79891995b1c7746126397bb14c6c9cf2dc9fa",
+      "right_sha256": "d39bff88a5e44809708a2655fbd0a82273b83432bfe9808f55c3a09caf6b3229",
+      "size_bytes": 1887599140
+    },
+    "source_sha256": "da31e6ae9749897ca199f4a37a781b2be9a2d82076885efea4d0c156673bbcec",
+    "summary": {
+      "max_run_size_ratio": 0.3748002333717481,
+      "quality_delta": 0.001647000000000065,
+      "required_direct_min_same_eye_ssim": 0.948862
+    },
+    "thresholds": {
+      "max_size_ratio": 1.05,
+      "minimum_eye_order_margin": 0.001,
+      "quality_tolerance": 0.002,
+      "runs_per_route": 3
+    }
+  },
+  "representative_segment": {
+    "deterministic_repeat_match": true,
+    "duration_seconds": 65.649,
+    "selection": {
+      "audio_track": 1,
+      "deterministic_seed": "bd-to-avp-issue-376-segment-v1",
+      "requested_duration_seconds": 65.648,
+      "start_seconds": 4500.0,
+      "subtitle_track": 41,
+      "video_track": 0
+    },
+    "sha256": "da31e6ae9749897ca199f4a37a781b2be9a2d82076885efea4d0c156673bbcec",
+    "size_bytes": 354460821,
+    "supersedes": "Deleted 65.648-second representative MVC clip",
+    "tracks": [
+      {
+        "codec": "AVC/H.264/MPEG-4p10",
+        "pixel_dimensions": "1920x1080",
+        "stereo_mode": 13,
+        "type": "video"
+      },
+      {
+        "codec": "TrueHD Atmos",
+        "language": "eng",
+        "type": "audio"
+      },
+      {
+        "codec": "HDMV PGS",
+        "language": "eng",
+        "type": "subtitles"
+      }
+    ]
+  },
+  "repository": {
+    "base_commit_sha": "c3e34474424c638ebdf27a11a465f71cbdc86a19"
+  },
+  "reproduction": {
+    "feature_length": "uv run python -m scripts.qualify_real_mvc_feature --app \"$BD_TO_AVP_SIGNED_APP\" --source \"$BD_TO_AVP_RELEASE_MVC_SOURCE\" --segment \"$BD_TO_AVP_QUALIFICATION_ROOT/segment/real-mvc-segment-v1.mkv\" --output \"$BD_TO_AVP_QUALIFICATION_ROOT/evidence/feature-real-mvc.json\" --work-directory \"$BD_TO_AVP_QUALIFICATION_ROOT/feature-real-mvc\" --expected-source-sha256 a1e3adf85f64a5a667d16ef4aa5a982183acece5af1cf7142e49da620982f97c --expected-segment-sha256 da31e6ae9749897ca199f4a37a781b2be9a2d82076885efea4d0c156673bbcec",
+    "feature_length_reassessment": "uv run python -m scripts.reassess_real_mvc_feature --input \"$BD_TO_AVP_QUALIFICATION_ROOT/evidence/feature-real-mvc.json\" --output \"$BD_TO_AVP_QUALIFICATION_ROOT/evidence/feature-real-mvc-reassessed.json\"",
+    "packaged_route_matrix": "uv run python -m scripts.verify_packaged_mv_hevc_routes --app \"$BD_TO_AVP_SIGNED_APP\" --source \"$BD_TO_AVP_QUALIFICATION_ROOT/segment/real-mvc-segment-v1.mkv\" --output \"$BD_TO_AVP_QUALIFICATION_ROOT/evidence/packaged-real-mvc-routes.json\" --fixture-output \"$BD_TO_AVP_QUALIFICATION_ROOT/artifacts/real-mvc-direct-4k.mov\" --expected-source-sha256 da31e6ae9749897ca199f4a37a781b2be9a2d82076885efea4d0c156673bbcec",
+    "real_mvc_quality": "uv run python -m scripts.qualify_real_mvc_4k_quality --app \"$BD_TO_AVP_SIGNED_APP\" --source \"$BD_TO_AVP_QUALIFICATION_ROOT/segment/real-mvc-segment-v1.mkv\" --output \"$BD_TO_AVP_QUALIFICATION_ROOT/evidence/quality-real-mvc.json\" --work-directory \"$BD_TO_AVP_QUALIFICATION_ROOT/quality-real-mvc\" --expected-source-sha256 da31e6ae9749897ca199f4a37a781b2be9a2d82076885efea4d0c156673bbcec",
+    "segment": "uv run python -m scripts.create_real_mvc_qualification_segment --source \"$BD_TO_AVP_RELEASE_MVC_SOURCE\" --output \"$BD_TO_AVP_QUALIFICATION_ROOT/segment/real-mvc-segment-v1.mkv\" --evidence \"$BD_TO_AVP_QUALIFICATION_ROOT/evidence/real-mvc-segment-v1.json\" --start-seconds 4500 --duration-seconds 65.648 --video-track 0 --audio-track 1 --subtitle-track 41 --expected-source-sha256 a1e3adf85f64a5a667d16ef4aa5a982183acece5af1cf7142e49da620982f97c --deterministic-seed bd-to-avp-issue-376-segment-v1"
+  },
+  "schema_version": 3,
+  "source": {
+    "container_duration_seconds": 5737.76,
+    "frame_rate": "24000/1001",
+    "packet_count": 137568,
+    "sha256": "a1e3adf85f64a5a667d16ef4aa5a982183acece5af1cf7142e49da620982f97c",
+    "size_bytes": 32056079827,
+    "track_count": 55,
+    "video_duration_seconds": 5737.732
+  }
+}

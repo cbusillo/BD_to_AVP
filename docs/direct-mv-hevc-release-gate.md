@@ -172,7 +172,8 @@ uv run python -m scripts.verify_packaged_mv_hevc_routes \
   --app /absolute/path/to/3D\ Blu-ray\ to\ Vision\ Pro.app \
   --source /absolute/path/to/representative-65-second.mkv \
   --output build/issue-366-packaged/evidence.json \
-  --fixture-output build/issue-366-packaged/Probe.mov
+  --fixture-output build/issue-366-packaged/Probe.mov \
+  --expected-source-sha256 "$REPRESENTATIVE_SEGMENT_SHA256"
 ```
 
 Evidence artifacts intentionally remain build outputs because they contain fingerprints of private source segments.
