@@ -327,6 +327,7 @@ def process_each(
             mkv_output_path,
             output_folder,
             config.preview_range,
+            owns_source=True,
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("prepare_preview_range"),

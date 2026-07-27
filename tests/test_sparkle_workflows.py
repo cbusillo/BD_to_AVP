@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 
+from collections.abc import Iterator
 from pathlib import Path
 
 from scripts.production_identity import PRODUCTION_DEVELOPER_IDENTITY, PRODUCTION_TEAM_ID
@@ -30,12 +31,27 @@ def load_release_engine() -> dict:
     return load_workflow("release-engine.yml")
 
 
+def iter_workflow_uses(workflow: dict) -> Iterator[str]:
+    for job in workflow["jobs"].values():
+        if "uses" in job:
+            yield job["uses"]
+        for step in job.get("steps", []):
+            if "uses" in step:
+                yield step["uses"]
+
+
 class ReleaseWorkflowTests(unittest.TestCase):
     def test_ci_fetches_full_history_for_recovery_provenance(self) -> None:
         workflow = load_workflow("ci.yml")
-        checkout = workflow["jobs"]["validate"]["steps"][0]
+        checkouts = [
+            step
+            for step in workflow["jobs"]["validate"]["steps"]
+            if step.get("uses", "").startswith("actions/checkout@")
+        ]
 
-        self.assertEqual(checkout["uses"], "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0")
+        self.assertEqual(len(checkouts), 1)
+        checkout = checkouts[0]
+        self.assertRegex(checkout["uses"], r"^actions/checkout@[0-9a-f]{40}$")
         self.assertEqual(checkout["with"]["fetch-depth"], "0")
         self.assertEqual(checkout["with"]["persist-credentials"], "false")
 
@@ -948,19 +964,21 @@ printf '%s' "$CODESIGN_METADATA"
             self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
             self.assertEqual(checkout["with"]["persist-credentials"], "false")
 
-    def test_release_actions_are_pinned_to_commit_shas(self) -> None:
-        for workflow_name in ("briefcase.yml", "release-engine.yml", "sparkle-pages.yml"):
+    def test_all_external_actions_are_pinned_to_commit_shas(self) -> None:
+        action_uses = []
+        workflow_directory = REPO_ROOT / ".github" / "workflows"
+        workflow_paths = sorted(path for pattern in ("*.yml", "*.yaml") for path in workflow_directory.glob(pattern))
+        for workflow_path in workflow_paths:
+            workflow_name = workflow_path.name
             workflow = load_workflow(workflow_name)
-            action_uses = [
-                step["uses"]
-                for job in workflow["jobs"].values()
-                for step in job.get("steps", [])
-                if "uses" in step and not step["uses"].startswith("./")
-            ]
-            self.assertTrue(action_uses)
-            for action in action_uses:
-                with self.subTest(workflow=workflow_name, action=action):
-                    self.assertRegex(action, r"^[^@]+@[0-9a-f]{40}$")
+            action_uses.extend(
+                (workflow_name, action) for action in iter_workflow_uses(workflow) if not action.startswith("./")
+            )
+
+        self.assertTrue(action_uses)
+        for workflow_name, action in action_uses:
+            with self.subTest(workflow=workflow_name, action=action):
+                self.assertRegex(action, r"^[^@]+@[0-9a-f]{40}$")
 
     def test_release_environment_contract_preserves_scoped_secrets(self) -> None:
         environments = load_github_config()["releaseEnvironments"]
