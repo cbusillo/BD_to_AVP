@@ -12,12 +12,18 @@ import subprocess
 import tempfile
 
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from bd_to_avp.modules import audio
+from bd_to_avp.modules.aac_layout_policy import (
+    AAC_LAYOUT_POLICIES,
+    LAYOUT_CHANNELS,
+    UNLISTED_LAYOUT_POLICY,
+    AacLayoutPolicy,
+)
 from bd_to_avp.modules.config import config
 from scripts.create_spatial_audio_validation_fixtures import create_channel_identity_audio
 from scripts.verify_apple_media import (
@@ -39,35 +45,6 @@ IDENTITY_ANALYSIS_INSET_SECONDS = 0.02
 IDENTITY_RELATIVE_THRESHOLD = 0.08
 IDENTITY_ABSOLUTE_THRESHOLD = 0.01
 
-
-LAYOUT_CHANNELS: dict[str, tuple[str, ...]] = {
-    "mono": ("FC",),
-    "stereo": ("FL", "FR"),
-    "2.1": ("FL", "FR", "LFE"),
-    "3.0": ("FL", "FR", "FC"),
-    "3.0(back)": ("FL", "FR", "BC"),
-    "4.0": ("FL", "FR", "FC", "BC"),
-    "quad": ("FL", "FR", "BL", "BR"),
-    "quad(side)": ("FL", "FR", "SL", "SR"),
-    "3.1": ("FL", "FR", "FC", "LFE"),
-    "5.0": ("FL", "FR", "FC", "BL", "BR"),
-    "5.0(side)": ("FL", "FR", "FC", "SL", "SR"),
-    "4.1": ("FL", "FR", "FC", "LFE", "BC"),
-    "5.1": ("FL", "FR", "FC", "LFE", "BL", "BR"),
-    "5.1(side)": ("FL", "FR", "FC", "LFE", "SL", "SR"),
-    "6.0": ("FL", "FR", "FC", "BC", "SL", "SR"),
-    "6.0(front)": ("FL", "FR", "FLC", "FRC", "SL", "SR"),
-    "hexagonal": ("FL", "FR", "FC", "BL", "BR", "BC"),
-    "6.1": ("FL", "FR", "FC", "LFE", "BC", "SL", "SR"),
-    "6.1(back)": ("FL", "FR", "FC", "LFE", "BL", "BR", "BC"),
-    "6.1(front)": ("FL", "FR", "LFE", "FLC", "FRC", "SL", "SR"),
-    "7.0": ("FL", "FR", "FC", "BL", "BR", "SL", "SR"),
-    "7.0(front)": ("FL", "FR", "FC", "FLC", "FRC", "SL", "SR"),
-    "7.1": ("FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"),
-    "7.1(wide)": ("FL", "FR", "FC", "LFE", "BL", "BR", "FLC", "FRC"),
-    "7.1(wide-side)": ("FL", "FR", "FC", "LFE", "FLC", "FRC", "SL", "SR"),
-    "octagonal": ("FL", "FR", "FC", "BL", "BR", "BC", "SL", "SR"),
-}
 
 CHANNEL_FREQUENCIES = {
     "FL": 330,
@@ -103,279 +80,8 @@ CANONICAL_AAC_CONFIGURATION = {
     "7.1": 7,
 }
 
-RUNTIME_AAC_COPY_LAYOUT_BASELINE = {
-    "mono": 1,
-    "stereo": 2,
-    "5.1": 6,
-    "7.1": 8,
-}
-RUNTIME_AAC_NORMALIZATION_BASELINE = {"5.1(side)": "5.1"}
-
-
-@dataclass(frozen=True)
-class AudioLayoutCase:
-    id: str
-    source_layout: str
-    action: str
-    target_layout: str
-    pan_filter: str | None
-    expected_identity_map: Mapping[str, tuple[str, ...]]
-    rationale: str
-
-    @property
-    def source_channels(self) -> tuple[str, ...]:
-        return LAYOUT_CHANNELS[self.source_layout]
-
-    @property
-    def target_channels(self) -> tuple[str, ...]:
-        return LAYOUT_CHANNELS[self.target_layout]
-
-
-def identity_map(**channels: str | tuple[str, ...]) -> dict[str, tuple[str, ...]]:
-    return {source: (outputs,) if isinstance(outputs, str) else outputs for source, outputs in channels.items()}
-
-
-LAYOUT_CASES = (
-    AudioLayoutCase("ch01-mono", "mono", "preserve", "mono", None, identity_map(FC="FC"), "AAC config 1."),
-    AudioLayoutCase(
-        "ch02-stereo",
-        "stereo",
-        "preserve",
-        "stereo",
-        None,
-        identity_map(FL="FL", FR="FR"),
-        "AAC config 2.",
-    ),
-    AudioLayoutCase(
-        "ch03-2_1",
-        "2.1",
-        "downmix",
-        "stereo",
-        "pan=stereo|FL<FL+0.5*LFE|FR<FR+0.5*LFE",
-        identity_map(FL="FL", FR="FR", LFE=("FL", "FR")),
-        "FFmpeg emits PCE AAC that Apple drops; retain LFE contribution in stereo.",
-    ),
-    AudioLayoutCase(
-        "ch03-3_0",
-        "3.0",
-        "preserve",
-        "3.0",
-        None,
-        identity_map(FL="FL", FR="FR", FC="FC"),
-        "AAC config 3.",
-    ),
-    AudioLayoutCase(
-        "ch03-3_0_back",
-        "3.0(back)",
-        "downmix",
-        "stereo",
-        "pan=stereo|FL<FL+0.707*BC|FR<FR+0.707*BC",
-        identity_map(FL="FL", FR="FR", BC=("FL", "FR")),
-        "Back-center has no safe same-count canonical AAC mapping.",
-    ),
-    AudioLayoutCase(
-        "ch04-4_0",
-        "4.0",
-        "preserve",
-        "4.0",
-        None,
-        identity_map(FL="FL", FR="FR", FC="FC", BC="BC"),
-        "AAC config 4.",
-    ),
-    AudioLayoutCase(
-        "ch04-quad",
-        "quad",
-        "downmix",
-        "stereo",
-        "pan=stereo|FL<FL+0.707*BL|FR<FR+0.707*BR",
-        identity_map(FL="FL", FR="FR", BL="FL", BR="FR"),
-        "Apple retains this PCE layout, but physical placement is not qualified.",
-    ),
-    AudioLayoutCase(
-        "ch04-quad_side",
-        "quad(side)",
-        "downmix",
-        "stereo",
-        "pan=stereo|FL<FL+0.707*SL|FR<FR+0.707*SR",
-        identity_map(FL="FL", FR="FR", SL="FL", SR="FR"),
-        "PCE AAC is dropped by Apple.",
-    ),
-    AudioLayoutCase(
-        "ch04-3_1",
-        "3.1",
-        "downmix",
-        "stereo",
-        "pan=stereo|FL<FL+0.707*FC+0.5*LFE|FR<FR+0.707*FC+0.5*LFE",
-        identity_map(FL="FL", FR="FR", FC=("FL", "FR"), LFE=("FL", "FR")),
-        "PCE AAC is dropped by Apple; retain center and LFE contribution.",
-    ),
-    AudioLayoutCase(
-        "ch05-5_0",
-        "5.0",
-        "preserve",
-        "5.0",
-        None,
-        identity_map(FL="FL", FR="FR", FC="FC", BL="SL", BR="SR"),
-        "AAC config 5; FFmpeg BL/BR samples become Apple SL/SR surround positions.",
-    ),
-    AudioLayoutCase(
-        "ch05-5_0_side",
-        "5.0(side)",
-        "remap",
-        "5.0",
-        "pan=5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR",
-        identity_map(FL="FL", FR="FR", FC="FC", SL="SL", SR="SR"),
-        "Lossless one-to-one remap to AAC config 5.",
-    ),
-    AudioLayoutCase(
-        "ch05-4_1",
-        "4.1",
-        "downmix",
-        "stereo",
-        "pan=stereo|FL<FL+0.707*FC+0.5*LFE+0.707*BC|FR<FR+0.707*FC+0.5*LFE+0.707*BC",
-        identity_map(FL="FL", FR="FR", FC=("FL", "FR"), LFE=("FL", "FR"), BC=("FL", "FR")),
-        "PCE AAC is dropped by Apple; no safe same-count mapping exists.",
-    ),
-    AudioLayoutCase(
-        "ch06-5_1",
-        "5.1",
-        "preserve",
-        "5.1",
-        None,
-        identity_map(FL="FL", FR="FR", FC="FC", LFE="LFE", BL="SL", BR="SR"),
-        "AAC config 6; FFmpeg BL/BR samples become Apple SL/SR surround positions.",
-    ),
-    AudioLayoutCase(
-        "ch06-5_1_side",
-        "5.1(side)",
-        "remap",
-        "5.1",
-        "pan=5.1|FL=FL|FR=FR|FC=FC|LFE=LFE|BL=SL|BR=SR",
-        identity_map(FL="FL", FR="FR", FC="FC", LFE="LFE", SL="SL", SR="SR"),
-        "Lossless one-to-one remap already proven by the real-source gate in #364.",
-    ),
-    AudioLayoutCase(
-        "ch06-6_0",
-        "6.0",
-        "downmix",
-        "5.0",
-        "pan=5.0|FL=FL|FR=FR|FC=FC|BL<SL+0.707*BC|BR<SR+0.707*BC",
-        identity_map(FL="FL", FR="FR", FC="FC", BC=("SL", "SR"), SL="SL", SR="SR"),
-        "Collapse three surround positions into canonical AAC 5.0.",
-    ),
-    AudioLayoutCase(
-        "ch06-6_0_front",
-        "6.0(front)",
-        "downmix",
-        "5.0",
-        "pan=5.0|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC<0.5*FLC+0.5*FRC|BL=SL|BR=SR",
-        identity_map(FL="FL", FR="FR", FLC=("FL", "FC"), FRC=("FR", "FC"), SL="SL", SR="SR"),
-        "Fold front-wide channels into the canonical front stage.",
-    ),
-    AudioLayoutCase(
-        "ch06-hexagonal",
-        "hexagonal",
-        "downmix",
-        "5.0",
-        "pan=5.0|FL=FL|FR=FR|FC=FC|BL<BL+0.707*BC|BR<BR+0.707*BC",
-        identity_map(FL="FL", FR="FR", FC="FC", BL="SL", BR="SR", BC=("SL", "SR")),
-        "Fold back-center into the canonical surround pair.",
-    ),
-    AudioLayoutCase(
-        "ch07-6_1",
-        "6.1",
-        "downmix",
-        "5.1",
-        "pan=5.1|FL=FL|FR=FR|FC=FC|LFE=LFE|BL<SL+0.707*BC|BR<SR+0.707*BC",
-        identity_map(FL="FL", FR="FR", FC="FC", LFE="LFE", BC=("SL", "SR"), SL="SL", SR="SR"),
-        "Fold back-center into canonical AAC 5.1 surrounds.",
-    ),
-    AudioLayoutCase(
-        "ch07-6_1_back",
-        "6.1(back)",
-        "downmix",
-        "5.1",
-        "pan=5.1|FL=FL|FR=FR|FC=FC|LFE=LFE|BL<BL+0.707*BC|BR<BR+0.707*BC",
-        identity_map(FL="FL", FR="FR", FC="FC", LFE="LFE", BL="SL", BR="SR", BC=("SL", "SR")),
-        "Fold back-center into canonical AAC 5.1 surrounds.",
-    ),
-    AudioLayoutCase(
-        "ch07-6_1_front",
-        "6.1(front)",
-        "downmix",
-        "5.1",
-        "pan=5.1|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC<0.5*FLC+0.5*FRC|LFE=LFE|BL=SL|BR=SR",
-        identity_map(
-            FL="FL",
-            FR="FR",
-            LFE="LFE",
-            FLC=("FL", "FC"),
-            FRC=("FR", "FC"),
-            SL="SL",
-            SR="SR",
-        ),
-        "Fold front-wide channels into canonical AAC 5.1.",
-    ),
-    AudioLayoutCase(
-        "ch07-7_0",
-        "7.0",
-        "downmix",
-        "5.0",
-        "pan=5.0|FL=FL|FR=FR|FC=FC|BL<BL+SL|BR<BR+SR",
-        identity_map(FL="FL", FR="FR", FC="FC", BL="SL", BR="SR", SL="SL", SR="SR"),
-        "Collapse side and back pairs into canonical AAC 5.0 surrounds.",
-    ),
-    AudioLayoutCase(
-        "ch07-7_0_front",
-        "7.0(front)",
-        "downmix",
-        "5.0",
-        "pan=5.0|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC=FC|BL=SL|BR=SR",
-        identity_map(FL="FL", FR="FR", FC="FC", FLC="FL", FRC="FR", SL="SL", SR="SR"),
-        "Fold front-wide channels into canonical AAC 5.0.",
-    ),
-    AudioLayoutCase(
-        "ch08-7_1",
-        "7.1",
-        "downmix",
-        "5.1",
-        "pan=5.1|FL=FL|FR=FR|FC=FC|LFE=LFE|BL<BL+SL|BR<BR+SR",
-        identity_map(FL="FL", FR="FR", FC="FC", LFE="LFE", BL="SL", BR="SR", SL="SL", SR="SR"),
-        "FFmpeg config 7 is decoded by Apple in AAC wide order, so track presence does not prove placement.",
-    ),
-    AudioLayoutCase(
-        "ch08-7_1_wide",
-        "7.1(wide)",
-        "downmix",
-        "5.1",
-        "pan=5.1|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC=FC|LFE=LFE|BL=BL|BR=BR",
-        identity_map(FL="FL", FR="FR", FC="FC", LFE="LFE", BL="SL", BR="SR", FLC="FL", FRC="FR"),
-        "Fold front-wide channels into canonical AAC 5.1.",
-    ),
-    AudioLayoutCase(
-        "ch08-7_1_wide_side",
-        "7.1(wide-side)",
-        "downmix",
-        "5.1",
-        "pan=5.1|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC=FC|LFE=LFE|BL=SL|BR=SR",
-        identity_map(FL="FL", FR="FR", FC="FC", LFE="LFE", FLC="FL", FRC="FR", SL="SL", SR="SR"),
-        "Fold front-wide channels while retaining the surround pair.",
-    ),
-    AudioLayoutCase(
-        "ch08-octagonal",
-        "octagonal",
-        "downmix",
-        "5.0",
-        "pan=5.0|FL=FL|FR=FR|FC=FC|BL<BL+SL+0.707*BC|BR<BR+SR+0.707*BC",
-        identity_map(FL="FL", FR="FR", FC="FC", BL="SL", BR="SR", BC=("SL", "SR"), SL="SL", SR="SR"),
-        "Collapse side, back, and back-center positions into canonical AAC 5.0.",
-    ),
-)
-
-UNLISTED_LAYOUT_POLICY = {
-    "action": "fail",
-    "reason": "Missing, unknown, custom, discrete, or unlisted layouts require new identity and Apple evidence.",
-}
+AudioLayoutCase = AacLayoutPolicy
+LAYOUT_CASES = AAC_LAYOUT_POLICIES
 
 
 def run(command: Sequence[str | Path], *, capture_output: bool = False) -> subprocess.CompletedProcess[str]:
@@ -833,10 +539,10 @@ def policy_digest() -> str:
 
 
 def runtime_behavior_changed() -> bool:
-    return (
-        audio.AAC_COPY_LAYOUT_CHANNELS != RUNTIME_AAC_COPY_LAYOUT_BASELINE
-        or audio.AAC_TRANSCODE_LAYOUT_NORMALIZATION != RUNTIME_AAC_NORMALIZATION_BASELINE
-    )
+    expected_copy_layouts = {
+        case.source_layout: len(case.source_channels) for case in LAYOUT_CASES if case.action == "preserve"
+    }
+    return audio.AAC_COPY_LAYOUT_CHANNELS != expected_copy_layouts
 
 
 def build_report(root: Path) -> dict[str, Any]:
@@ -872,7 +578,7 @@ def build_report(root: Path) -> dict[str, Any]:
             "automatic_behavior_changed": automatic_behavior_changed,
             "current_runtime_snapshot": {
                 "aac_copy_layout_channels": audio.AAC_COPY_LAYOUT_CHANNELS,
-                "aac_transcode_layout_normalization": audio.AAC_TRANSCODE_LAYOUT_NORMALIZATION,
+                "aac_layout_policy_sha256": policy_digest(),
             },
             "unlisted_layout": UNLISTED_LAYOUT_POLICY,
             "action_counts": action_counts,
@@ -1018,11 +724,9 @@ def render_policy_markdown(report: Mapping[str, object]) -> str:
                 "## Runtime Boundary",
                 "",
                 (
-                    "The first PR deliberately leaves `AAC_COPY_LAYOUT_CHANNELS` and "
-                    "`AAC_TRANSCODE_LAYOUT_NORMALIZATION` unchanged. #381 must apply this table at the "
-                    "shared audio-planning boundary, emit a structured warning for every remap/downmix/fail "
-                    "decision, reject unqualified AAC copy, and add metadata/final-MOV coverage. #382 must "
-                    "then validate the exact signed package on Vision Pro before Automatic support broadens."
+                    "Production imports this exact table at the shared audio-planning boundary, emits structured "
+                    "remap/downmix/fail decisions, and rejects unqualified AAC copy. #382 must validate the exact "
+                    "signed package on Vision Pro before the qualified policy is considered physically validated."
                 ),
                 "",
                 "## Regenerate",

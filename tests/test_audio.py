@@ -1,3 +1,5 @@
+import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,10 +8,14 @@ from unittest.mock import Mock, patch
 import ffmpeg
 
 from bd_to_avp.modules import audio
+from bd_to_avp.modules.aac_layout_policy import (
+    AAC_LAYOUT_POLICIES,
+    AacLayoutAction,
+    AacLayoutPolicyError,
+)
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.audio_selection import load_audio_selection_manifest, select_audio_streams
-from bd_to_avp.modules.config import Stage
-from scripts.qualify_apple_aac_layouts import LAYOUT_CASES
+from bd_to_avp.modules.config import Stage, config
 
 
 class AudioPreparationTests(unittest.TestCase):
@@ -136,6 +142,7 @@ class AudioPreparationTests(unittest.TestCase):
                 output_folder / "Movie_audio_AAC.part.m4a",
                 512,
                 selection=None,
+                activity=activity,
                 run_context=None,
                 cancellation_event=None,
                 observability_context=None,
@@ -177,6 +184,7 @@ class AudioPreparationTests(unittest.TestCase):
                 output_folder / "Movie_audio_AAC.part.m4a",
                 384,
                 selection=None,
+                activity=None,
                 run_context=None,
                 cancellation_event=None,
                 observability_context=None,
@@ -291,14 +299,62 @@ class AudioPreparationTests(unittest.TestCase):
             with (
                 patch.object(audio.config, "audio_mode", AudioMode.AUTOMATIC),
                 patch.object(audio.config, "start_stage", Stage.CREATE_FINAL_FILE),
+                patch.object(
+                    audio,
+                    "qualify_selected_audio_streams",
+                    return_value=[audio_qualification()],
+                ) as qualify,
                 patch.object(audio, "transcode_audio") as transcode,
                 patch.object(audio, "copy_audio") as copy,
             ):
                 result = audio.create_prepared_audio_file(source_path, output_folder)
 
             self.assertEqual(result, aac_path)
+            qualify.assert_called_once_with(
+                aac_path,
+                run_context=None,
+                cancellation_event=None,
+                observability_context=None,
+            )
             transcode.assert_not_called()
             copy.assert_not_called()
+
+    def test_final_mux_resume_rejects_stale_unqualified_aac(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_path = temp_path / "source.mkv"
+            output_folder = temp_path / "Movie"
+            source_path.write_bytes(b"source")
+            output_folder.mkdir()
+            aac_path = output_folder / "Movie_audio_AAC.m4a"
+            aac_path.write_bytes(b"stale-aac")
+            activity = Mock()
+
+            with (
+                patch.object(audio.config, "audio_mode", AudioMode.AUTOMATIC),
+                patch.object(audio.config, "start_stage", Stage.CREATE_FINAL_FILE),
+                patch.object(
+                    audio,
+                    "qualify_selected_audio_streams",
+                    return_value=[
+                        audio_qualification(
+                            channels=8,
+                            channel_layout="7.1",
+                            qualified=False,
+                            reason="channel_layout_requires_downmix",
+                        )
+                    ],
+                ),
+                self.assertRaisesRegex(AacLayoutPolicyError, "Restart from Prepare Audio"),
+            ):
+                audio.create_prepared_audio_file(source_path, output_folder, activity)
+
+            activity.warning.assert_called_once()
+            _, fields = activity.warning.call_args
+            self.assertEqual(fields["code"], "audio_layout_policy_rejected")
+            self.assertEqual(fields["action"], "restart_prepare_audio")
+            self.assertEqual(fields["unqualified_streams"][0]["channel_layout"], "7.1")
+            self.assertEqual(fields["unqualified_streams"][0]["reason"], "channel_layout_requires_downmix")
 
     def test_final_mux_resume_requires_owned_prepared_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -343,9 +399,11 @@ class AudioPreparationTests(unittest.TestCase):
             qualified_stream(index=4, profile="Main"),
             qualified_stream(index=5, sample_rate="96000"),
             qualified_stream(index=6, channels=6, channel_layout="stereo"),
-            qualified_stream(index=7, channel_layout="4.0"),
+            qualified_stream(index=7, channels=4, channel_layout="4.0"),
             {"index": 8, "codec_name": "aac", "profile": "LC"},
-            qualified_stream(index=9, channel_layout="5.1(side)"),
+            qualified_stream(index=9, channels=6, channel_layout="5.1(side)"),
+            qualified_stream(index=10, channels=8, channel_layout="7.1"),
+            qualified_stream(index=11, channels=4, channel_layout="unknown"),
         ]
 
         results = [audio.qualify_audio_stream(stream) for stream in streams]
@@ -357,37 +415,67 @@ class AudioPreparationTests(unittest.TestCase):
         self.assertEqual(results[4].reason, "aac_profile_not_qualified")
         self.assertEqual(results[5].reason, "sample_rate_not_qualified")
         self.assertEqual(results[6].reason, "channel_layout_mismatch")
-        self.assertEqual(results[7].reason, "channel_layout_not_qualified")
+        self.assertTrue(results[7].qualified)
         self.assertEqual(results[8].reason, "sample_rate_missing")
-        self.assertEqual(results[9].reason, "channel_layout_not_qualified")
+        self.assertEqual(results[9].reason, "channel_layout_requires_remap")
+        self.assertEqual(results[10].reason, "channel_layout_requires_downmix")
+        self.assertEqual(results[11].reason, "channel_layout_not_qualified")
 
-    def test_layout_matrix_does_not_broaden_current_automatic_copy_or_normalization(self) -> None:
-        current_copy_layouts = {
-            "mono": 1,
-            "stereo": 2,
-            "5.1": 6,
-            "7.1": 8,
+    def test_layout_matrix_drives_automatic_copy_qualification(self) -> None:
+        qualified_copy_layouts = {
+            policy.source_layout: len(policy.source_channels)
+            for policy in AAC_LAYOUT_POLICIES
+            if policy.action is AacLayoutAction.PRESERVE
         }
 
-        self.assertEqual(audio.AAC_COPY_LAYOUT_CHANNELS, current_copy_layouts)
-        self.assertEqual(audio.AAC_TRANSCODE_LAYOUT_NORMALIZATION, {"5.1(side)": "5.1"})
-        for index, case in enumerate(LAYOUT_CASES):
-            with self.subTest(layout=case.source_layout):
+        self.assertEqual(audio.AAC_COPY_LAYOUT_CHANNELS, qualified_copy_layouts)
+        self.assertEqual(
+            qualified_copy_layouts,
+            {"mono": 1, "stereo": 2, "3.0": 3, "4.0": 4, "5.0": 5, "5.1": 6},
+        )
+        for index, policy in enumerate(AAC_LAYOUT_POLICIES):
+            with self.subTest(layout=policy.source_layout):
                 result = audio.qualify_audio_stream(
                     qualified_stream(
                         index=index,
-                        channels=len(case.source_channels),
-                        channel_layout=case.source_layout,
+                        channels=len(policy.source_channels),
+                        channel_layout=policy.source_layout,
                     )
                 )
-                self.assertEqual(result.qualified, case.source_layout in current_copy_layouts)
+                self.assertEqual(result.qualified, policy.action is AacLayoutAction.PRESERVE)
+                if policy.action is not AacLayoutAction.PRESERVE:
+                    self.assertEqual(result.reason, f"channel_layout_requires_{policy.action.value}")
 
-    def test_7_1_copy_is_an_explicit_policy_mismatch_deferred_to_production_followup(self) -> None:
-        policy = next(case for case in LAYOUT_CASES if case.source_layout == "7.1")
+    def test_transcode_options_match_every_qualified_policy_row(self) -> None:
+        for index, policy in enumerate(AAC_LAYOUT_POLICIES):
+            with self.subTest(layout=policy.source_layout):
+                layout_plan = audio.plan_aac_layouts(
+                    [
+                        qualified_stream(
+                            index=index,
+                            channels=len(policy.source_channels),
+                            channel_layout=policy.source_layout,
+                        )
+                    ]
+                )
+                options = audio.aac_layout_options(layout_plan)
 
-        self.assertIn("7.1", audio.AAC_COPY_LAYOUT_CHANNELS)
-        self.assertEqual(policy.action, "downmix")
+                self.assertEqual(layout_plan[0].decision.policy, policy)
+                self.assertEqual(options["channel_layout:a:0"], policy.target_layout)
+                if policy.pan_filter is None:
+                    self.assertNotIn("filter:a:0", options)
+                else:
+                    self.assertEqual(options["filter:a:0"], policy.pan_filter)
+
+    def test_7_1_copy_is_rejected_and_downmixed_to_5_1(self) -> None:
+        policy = next(policy for policy in AAC_LAYOUT_POLICIES if policy.source_layout == "7.1")
+        qualification = audio.qualify_audio_stream(qualified_stream(index=0, channels=8, channel_layout="7.1"))
+
+        self.assertNotIn("7.1", audio.AAC_COPY_LAYOUT_CHANNELS)
+        self.assertEqual(policy.action, AacLayoutAction.DOWNMIX)
         self.assertEqual(policy.target_layout, "5.1")
+        self.assertFalse(qualification.qualified)
+        self.assertEqual(qualification.reason, "channel_layout_requires_downmix")
 
     def test_transcode_audio_maps_requested_stream_selector(self) -> None:
         streams = [qualified_stream(index=0)]
@@ -433,6 +521,8 @@ class AudioPreparationTests(unittest.TestCase):
         self.assertIn("0:a:0", command)
         self.assertIn("0:a:2", command)
         self.assertNotIn("0:a:1", command)
+        self.assertEqual(command[command.index("-map_metadata:s:a:0") + 1], "0:s:a:0")
+        self.assertEqual(command[command.index("-map_metadata:s:a:1") + 1], "0:s:a:2")
         metadata_options.assert_called_once_with(
             Path("source.mkv"),
             selected_streams=[streams[0], streams[2]],
@@ -443,16 +533,13 @@ class AudioPreparationTests(unittest.TestCase):
 
     def test_aac_transcode_explicitly_maps_the_same_preferred_track_set(self) -> None:
         streams = [
-            qualified_stream(index=1, language="eng"),
+            qualified_stream(index=1, language="eng", title="English Main", is_default=True),
             qualified_stream(index=4, language="jpn"),
-            qualified_stream(index=8, language="eng"),
+            qualified_stream(index=8, language="en-US", title="English Commentary"),
         ]
         selection = select_audio_streams(streams, "eng")
 
-        with (
-            patch.object(audio, "audio_handler_metadata_options", return_value={}),
-            patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg,
-        ):
+        with patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg:
             audio.transcode_audio(Path("source.mkv"), Path("audio.m4a"), 384, selection=selection)
 
         command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
@@ -460,6 +547,12 @@ class AudioPreparationTests(unittest.TestCase):
         self.assertIn("0:a:2", command)
         self.assertNotIn("0:a:1", command)
         self.assertIn("aac", command)
+        self.assertEqual(command[command.index("-map_metadata:s:a:0") + 1], "0:s:a:0")
+        self.assertEqual(command[command.index("-map_metadata:s:a:1") + 1], "0:s:a:2")
+        self.assertEqual(command[command.index("-metadata:s:a:0") + 1], "handler_name=English Main")
+        self.assertEqual(command[command.index("-metadata:s:a:1") + 1], "handler_name=English Commentary")
+        self.assertEqual(command[command.index("-disposition:a:0") + 1], "default")
+        self.assertEqual(command[command.index("-disposition:a:1") + 1], "0")
 
     def test_aac_transcode_normalizes_side_surround_for_apple_playback(self) -> None:
         streams = [
@@ -467,17 +560,174 @@ class AudioPreparationTests(unittest.TestCase):
             qualified_stream(index=4, language="eng", channel_layout="stereo", channels=2),
         ]
         selection = select_audio_streams(streams, "eng")
+        activity = Mock()
 
         with (
             patch.object(audio, "audio_handler_metadata_options", return_value={}),
             patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg,
         ):
-            audio.transcode_audio(Path("source.mkv"), Path("audio.m4a"), 384, selection=selection)
+            audio.transcode_audio(
+                Path("source.mkv"),
+                Path("audio.m4a"),
+                384,
+                selection=selection,
+                activity=activity,
+            )
 
         command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
-        self.assertIn("-channel_layout:a:0", command)
-        self.assertIn("5.1", command)
-        self.assertNotIn("-channel_layout:a:1", command)
+        self.assertEqual(command[command.index("-channel_layout:a:0") + 1], "5.1")
+        self.assertEqual(command[command.index("-channel_layout:a:1") + 1], "stereo")
+        self.assertEqual(
+            command[command.index("-filter:a:0") + 1],
+            "pan=5.1|FL=FL|FR=FR|FC=FC|LFE=LFE|BL=SL|BR=SR",
+        )
+        self.assertNotIn("-filter:a:1", command)
+        activity.warning.assert_called_once()
+        _, fields = activity.warning.call_args
+        self.assertEqual(fields["code"], "audio_layout_policy_applied")
+        self.assertEqual(
+            [decision["action"] for decision in fields["layout_decisions"]],
+            ["remap", "preserve"],
+        )
+
+    def test_aac_transcode_applies_exact_filters_to_mixed_layouts(self) -> None:
+        streams = [
+            qualified_stream(index=1, channels=5, channel_layout="5.0(side)"),
+            qualified_stream(index=4, channels=8, channel_layout="7.1(wide-side)"),
+            qualified_stream(index=8, channels=2, channel_layout="stereo"),
+        ]
+        selection = select_audio_streams(streams, None)
+        activity = Mock()
+
+        with (
+            patch.object(audio, "audio_handler_metadata_options", return_value={}),
+            patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg,
+        ):
+            audio.transcode_audio(
+                Path("source.mkv"),
+                Path("audio.m4a"),
+                512,
+                selection=selection,
+                activity=activity,
+            )
+
+        command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
+        self.assertEqual(
+            command[command.index("-filter:a:0") + 1],
+            "pan=5.0|FL=FL|FR=FR|FC=FC|BL=SL|BR=SR",
+        )
+        self.assertEqual(
+            command[command.index("-filter:a:1") + 1],
+            "pan=5.1|FL<FL+0.707*FLC|FR<FR+0.707*FRC|FC=FC|LFE=LFE|BL=SL|BR=SR",
+        )
+        self.assertNotIn("-filter:a:2", command)
+        self.assertEqual(command[command.index("-channel_layout:a:0") + 1], "5.0")
+        self.assertEqual(command[command.index("-channel_layout:a:1") + 1], "5.1")
+        self.assertEqual(command[command.index("-channel_layout:a:2") + 1], "stereo")
+        _, fields = activity.warning.call_args
+        self.assertEqual(
+            [decision["action"] for decision in fields["layout_decisions"]],
+            ["remap", "downmix", "preserve"],
+        )
+
+    def test_aac_transcode_rejects_unknown_layout_before_ffmpeg(self) -> None:
+        streams = [qualified_stream(index=3, channels=8, channel_layout="unknown")]
+        activity = Mock()
+
+        with (
+            patch.object(audio, "audio_streams_for_selector", return_value=streams),
+            patch.object(audio, "audio_handler_metadata_options") as metadata_options,
+            patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg,
+            self.assertRaisesRegex(AacLayoutPolicyError, "channel_layout_not_qualified"),
+        ):
+            audio.transcode_audio(
+                Path("source.mkv"),
+                Path("audio.m4a"),
+                384,
+                activity=activity,
+            )
+
+        metadata_options.assert_not_called()
+        run_ffmpeg.assert_not_called()
+        activity.warning.assert_called_once()
+        _, fields = activity.warning.call_args
+        self.assertEqual(fields["code"], "audio_layout_policy_rejected")
+        self.assertEqual(fields["action"], "stop_conversion")
+        self.assertEqual(fields["layout_decisions"][0]["action"], "fail")
+        self.assertEqual(fields["layout_decisions"][0]["reason"], "channel_layout_not_qualified")
+
+    @unittest.skipUnless(
+        config.FFMPEG_PATH.is_file() and config.FFPROBE_PATH.is_file(),
+        "FFmpeg integration tools are unavailable",
+    )
+    def test_real_ffmpeg_remap_produces_canonical_aac_and_preserves_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_path = temp_path / "source.mov"
+            output_path = temp_path / "output.m4a"
+            subprocess.run(
+                [
+                    config.FFMPEG_PATH,
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "anullsrc=channel_layout=5.1(side):sample_rate=48000",
+                    "-t",
+                    "0.1",
+                    "-c:a",
+                    "pcm_s16le",
+                    "-metadata:s:a:0",
+                    "language=eng",
+                    "-metadata:s:a:0",
+                    "handler_name=English Side",
+                    "-disposition:a:0",
+                    "default",
+                    "-y",
+                    source_path,
+                ],
+                check=True,
+            )
+            activity = Mock()
+
+            with patch.object(audio.config, "audio_mode", AudioMode.CONVERT_AAC):
+                audio.transcode_audio(source_path, output_path, 384, activity=activity)
+
+            probe = subprocess.run(
+                [
+                    config.FFPROBE_PATH,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    (
+                        "stream=codec_name,profile,sample_rate,channels,channel_layout:"
+                        "stream_tags=language,handler_name:stream_disposition=default"
+                    ),
+                    "-select_streams",
+                    "a",
+                    "-of",
+                    "json",
+                    output_path,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            stream = json.loads(probe.stdout)["streams"][0]
+
+            self.assertEqual(stream["codec_name"], "aac")
+            self.assertEqual(stream["profile"], "LC")
+            self.assertEqual(stream["sample_rate"], "48000")
+            self.assertEqual(stream["channels"], 6)
+            self.assertEqual(stream["channel_layout"], "5.1")
+            self.assertEqual(stream["tags"]["language"], "eng")
+            self.assertEqual(stream["tags"]["handler_name"], "English Side")
+            self.assertEqual(stream["disposition"]["default"], 1)
+            _, fields = activity.warning.call_args
+            self.assertEqual(fields["code"], "audio_layout_policy_applied")
+            self.assertEqual(fields["layout_decisions"][0]["action"], "remap")
 
     def test_audio_preparation_preserves_stream_titles_as_handler_names(self) -> None:
         streams = [
@@ -544,6 +794,7 @@ def qualified_stream(
     channel_layout: str = "stereo",
     language: str = "eng",
     title: str | None = None,
+    is_default: bool = False,
 ) -> dict[str, object]:
     tags: dict[str, object] = {"language": language}
     if title is not None:
@@ -556,7 +807,7 @@ def qualified_stream(
         "channels": channels,
         "channel_layout": channel_layout,
         "tags": tags,
-        "disposition": {"default": 0},
+        "disposition": {"default": int(is_default)},
     }
 
 

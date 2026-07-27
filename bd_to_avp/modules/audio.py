@@ -8,6 +8,13 @@ from typing import Any, Protocol
 
 import ffmpeg
 
+from bd_to_avp.modules.aac_layout_policy import (
+    AAC_COPY_LAYOUT_CHANNELS as _AAC_COPY_LAYOUT_CHANNELS,
+    AacLayoutAction,
+    AacLayoutDecision,
+    AacLayoutPolicyError,
+    resolve_aac_layout_policy,
+)
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.audio_selection import (
     AudioSelection,
@@ -40,17 +47,18 @@ class AudioStreamQualification:
     channel_layout: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PlannedAudioLayout:
+    stream_index: int
+    codec_name: str
+    decision: AacLayoutDecision
+
+
 AAC_COPY_CODECS = frozenset({"aac"})
 EXPLICITLY_UNQUALIFIED_CODECS = frozenset({"ac3", "eac3", "ac-3", "e-ac-3"})
 AAC_COPY_PROFILES = frozenset({"lc", "he-aac", "he-aacv2", "mpeg-4 aac lc", "aac lc"})
 AAC_COPY_SAMPLE_RATES = frozenset({44_100, 48_000})
-AAC_COPY_LAYOUT_CHANNELS = {
-    "mono": 1,
-    "stereo": 2,
-    "5.1": 6,
-    "7.1": 8,
-}
-AAC_TRANSCODE_LAYOUT_NORMALIZATION = {"5.1(side)": "5.1"}
+AAC_COPY_LAYOUT_CHANNELS = _AAC_COPY_LAYOUT_CHANNELS
 
 
 def transcode_audio(
@@ -60,6 +68,7 @@ def transcode_audio(
     audio_selector: str = "a",
     *,
     selection: AudioSelection | None = None,
+    activity: AudioActivityReporter | None = None,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
@@ -76,6 +85,8 @@ def transcode_audio(
             observability_context=observability_context,
         )
     )
+    layout_plan = plan_aac_layouts(selected_streams)
+    enforce_aac_layout_policy(layout_plan, activity)
     selected_inputs = (
         [audio_input[selected_stream.selector] for selected_stream in selection.streams]
         if selection is not None
@@ -89,13 +100,19 @@ def transcode_audio(
         cancellation_event=cancellation_event,
         observability_context=observability_context,
     )
+    source_audio_positions = audio_positions_for_output(
+        selection,
+        audio_selector=audio_selector,
+        output_count=len(selected_streams),
+    )
     audio_transcoded = ffmpeg.output(
         *selected_inputs,
         str(f"file:{transcoded_audio_path}"),
         acodec="aac",
         audio_bitrate=f"{bitrate}k",
         map_metadata=0,
-        **aac_layout_options(selected_streams),
+        **aac_layout_options(layout_plan),
+        **audio_stream_metadata_map_options(source_audio_positions),
         **metadata_options,
     )
     run_ffmpeg_print_errors(
@@ -131,14 +148,124 @@ def audio_streams_for_selector(
     return streams[selected_index : selected_index + 1]
 
 
-def aac_layout_options(streams: list[dict[str, Any]]) -> dict[str, str]:
-    options: dict[str, str] = {}
+def plan_aac_layouts(streams: list[dict[str, Any]]) -> list[PlannedAudioLayout]:
+    plans: list[PlannedAudioLayout] = []
     for output_index, stream in enumerate(streams):
-        channel_layout = str(stream.get("channel_layout") or "").strip().lower()
-        normalized_layout = AAC_TRANSCODE_LAYOUT_NORMALIZATION.get(channel_layout)
-        if normalized_layout is not None:
-            options[f"channel_layout:a:{output_index}"] = normalized_layout
+        stream_index = parse_optional_int(stream.get("index"))
+        codec_name = str(stream.get("codec_name") or "unknown").strip().lower() or "unknown"
+        plans.append(
+            PlannedAudioLayout(
+                stream_index=stream_index if stream_index is not None else output_index,
+                codec_name=codec_name,
+                decision=resolve_aac_layout_policy(stream.get("channel_layout"), stream.get("channels")),
+            )
+        )
+    return plans
+
+
+def aac_layout_options(layout_plan: list[PlannedAudioLayout]) -> dict[str, str]:
+    options: dict[str, str] = {}
+    for output_index, planned_layout in enumerate(layout_plan):
+        decision = planned_layout.decision
+        if decision.target_layout is not None:
+            options[f"channel_layout:a:{output_index}"] = decision.target_layout
+        if decision.pan_filter is not None:
+            options[f"filter:a:{output_index}"] = decision.pan_filter
     return options
+
+
+def audio_positions_for_output(
+    selection: AudioSelection | None,
+    *,
+    audio_selector: str,
+    output_count: int,
+) -> list[int]:
+    if selection is not None:
+        return [selected_stream.audio_position for selected_stream in selection.streams]
+    if audio_selector == "a":
+        return list(range(output_count))
+    stream_type, separator, stream_index = audio_selector.partition(":")
+    if stream_type == "a" and separator and stream_index.isdigit() and output_count == 1:
+        return [int(stream_index)]
+    return []
+
+
+def audio_stream_metadata_map_options(source_audio_positions: list[int]) -> dict[str, str]:
+    return {
+        f"map_metadata:s:a:{output_index}": f"0:s:a:{source_audio_position}"
+        for output_index, source_audio_position in enumerate(source_audio_positions)
+    }
+
+
+def enforce_aac_layout_policy(
+    layout_plan: list[PlannedAudioLayout],
+    activity: AudioActivityReporter | None,
+) -> None:
+    if not layout_plan:
+        message = "Apple-compatible AAC cannot be created because the source does not contain an audio stream."
+        emit_aac_layout_policy_warning(message, [], activity, rejected=True)
+        raise AacLayoutPolicyError(message)
+
+    rejected = [plan for plan in layout_plan if plan.decision.action is AacLayoutAction.FAIL]
+    if rejected:
+        first_rejection = rejected[0]
+        decision = first_rejection.decision
+        source_layout = decision.source_layout or "missing"
+        channel_count = decision.source_channel_count if decision.source_channel_count is not None else "missing"
+        message = (
+            "Apple-compatible AAC cannot be created for audio stream "
+            f"{first_rejection.stream_index}: layout {source_layout} with {channel_count} channels "
+            f"is not qualified ({decision.reason})."
+        )
+        emit_aac_layout_policy_warning(message, layout_plan, activity, rejected=True)
+        raise AacLayoutPolicyError(message)
+
+    changed = [plan for plan in layout_plan if plan.decision.action in {AacLayoutAction.REMAP, AacLayoutAction.DOWNMIX}]
+    if not changed:
+        return
+
+    transformations = ", ".join(
+        f"stream {plan.stream_index} {plan.decision.source_layout} to {plan.decision.target_layout} "
+        f"({plan.decision.action.value})"
+        for plan in changed
+    )
+    message = f"Applying the qualified Apple-compatible AAC layout policy: {transformations}."
+    emit_aac_layout_policy_warning(message, layout_plan, activity, rejected=False)
+
+
+def emit_aac_layout_policy_warning(
+    message: str,
+    layout_plan: list[PlannedAudioLayout],
+    activity: AudioActivityReporter | None,
+    *,
+    rejected: bool,
+) -> None:
+    if activity is None:
+        cli_message(message)
+        return
+    activity.warning(
+        message,
+        stage="transcode_audio",
+        code="audio_layout_policy_rejected" if rejected else "audio_layout_policy_applied",
+        audio_mode=config.audio_mode.value,
+        action="stop_conversion" if rejected else "normalize_aac_layouts",
+        layout_decisions=[audio_layout_decision_fields(plan) for plan in layout_plan],
+    )
+
+
+def audio_layout_decision_fields(plan: PlannedAudioLayout) -> dict[str, object]:
+    decision = plan.decision
+    return {
+        "stream_index": plan.stream_index,
+        "codec": plan.codec_name,
+        "action": decision.action.value,
+        "source_layout": decision.source_layout,
+        "source_channels": decision.source_channel_count,
+        "target_layout": decision.target_layout,
+        "target_channels": decision.target_channel_count,
+        "policy_id": decision.policy.id if decision.policy is not None else None,
+        "reason": decision.reason,
+    }
 
 
 def copy_audio(
@@ -151,6 +278,9 @@ def copy_audio(
     observability_context: ObservabilityContext | None = None,
 ) -> None:
     audio_input = ffmpeg.input(str(input_path))
+    source_audio_positions = (
+        [selected_stream.audio_position for selected_stream in selection.streams] if selection is not None else []
+    )
     selected_inputs = (
         [audio_input[selected_stream.selector] for selected_stream in selection.streams]
         if selection is not None
@@ -177,6 +307,7 @@ def copy_audio(
         str(f"file:{copied_audio_path}"),
         acodec="copy",
         map_metadata=0,
+        **audio_stream_metadata_map_options(source_audio_positions),
         **metadata_options,
     )
     run_ffmpeg_print_errors(
@@ -241,6 +372,7 @@ def create_prepared_audio_file(
                         temporary_audio_path,
                         config.audio_bitrate,
                         selection=selection,
+                        activity=activity,
                         run_context=run_context,
                         cancellation_event=cancellation_event,
                         observability_context=observability_context,
@@ -251,6 +383,7 @@ def create_prepared_audio_file(
                     temporary_audio_path,
                     config.audio_bitrate,
                     selection=selection,
+                    activity=activity,
                     run_context=run_context,
                     cancellation_event=cancellation_event,
                     observability_context=observability_context,
@@ -263,6 +396,13 @@ def create_prepared_audio_file(
         return prepared_audio_path
 
     if prepared_audio_path.exists():
+        validate_resumed_prepared_audio(
+            prepared_audio_path,
+            activity,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
         return prepared_audio_path
     if legacy_transcoded_audio_path.exists():
         raise FileNotFoundError(
@@ -310,6 +450,54 @@ def qualify_selected_audio_streams(
             observability_context=observability_context,
         )
     ]
+
+
+def validate_resumed_prepared_audio(
+    prepared_audio_path: Path,
+    activity: AudioActivityReporter | None,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> None:
+    qualifications = qualify_selected_audio_streams(
+        prepared_audio_path,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
+    )
+    if qualifications and all(qualification.qualified for qualification in qualifications):
+        return
+
+    message = (
+        "The prepared AAC artifact is not qualified for Apple playback. "
+        "Restart from Prepare Audio to regenerate it with the current layout policy."
+    )
+    if activity is None:
+        cli_message(message)
+    else:
+        activity.warning(
+            message,
+            stage="transcode_audio",
+            code="audio_layout_policy_rejected",
+            audio_mode=config.audio_mode.value,
+            action="restart_prepare_audio",
+            prepared_audio_path=str(prepared_audio_path),
+            unqualified_streams=[
+                {
+                    "index": qualification.index,
+                    "codec": qualification.codec_name,
+                    "profile": qualification.profile,
+                    "sample_rate": qualification.sample_rate,
+                    "channels": qualification.channels,
+                    "channel_layout": qualification.channel_layout,
+                    "reason": qualification.reason,
+                }
+                for qualification in qualifications
+                if not qualification.qualified
+            ],
+        )
+    raise AacLayoutPolicyError(message)
 
 
 def preferred_audio_selection(
@@ -414,30 +602,8 @@ def qualify_audio_stream(stream: dict[str, Any]) -> AudioStreamQualification:
             False,
             "sample_rate_not_qualified",
         )
-    if channels is None:
-        return audio_qualification_result(
-            stream_index,
-            codec_name,
-            normalized_profile,
-            sample_rate,
-            None,
-            channel_layout,
-            False,
-            "channel_count_missing",
-        )
-    if channel_layout is None or not channel_layout:
-        return audio_qualification_result(
-            stream_index,
-            codec_name,
-            normalized_profile,
-            sample_rate,
-            channels,
-            None,
-            False,
-            "channel_layout_missing",
-        )
-    expected_channels = AAC_COPY_LAYOUT_CHANNELS.get(channel_layout)
-    if expected_channels is None:
+    layout_decision = resolve_aac_layout_policy(channel_layout, channels)
+    if layout_decision.action is AacLayoutAction.FAIL:
         return audio_qualification_result(
             stream_index,
             codec_name,
@@ -446,9 +612,9 @@ def qualify_audio_stream(stream: dict[str, Any]) -> AudioStreamQualification:
             channels,
             channel_layout,
             False,
-            "channel_layout_not_qualified",
+            layout_decision.reason,
         )
-    if channels != expected_channels:
+    if layout_decision.action is not AacLayoutAction.PRESERVE:
         return audio_qualification_result(
             stream_index,
             codec_name,
@@ -457,7 +623,7 @@ def qualify_audio_stream(stream: dict[str, Any]) -> AudioStreamQualification:
             channels,
             channel_layout,
             False,
-            "channel_layout_mismatch",
+            f"channel_layout_requires_{layout_decision.action.value}",
         )
     return audio_qualification_result(
         stream_index,
