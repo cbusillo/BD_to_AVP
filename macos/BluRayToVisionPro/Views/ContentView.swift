@@ -463,7 +463,9 @@ struct ContentView: View {
     }
 
     private var canShowDiagnosticAction: Bool {
-        if viewModel.hasDiagnosticEvidence || diagnosticReportViewModel.hasLocalArtifact {
+        if viewModel.hasDiagnosticEvidence
+            || previewViewModel.hasDiagnosticEvidence
+            || diagnosticReportViewModel.hasLocalArtifact {
             return true
         }
         if case .success = diagnosticReportViewModel.phase {

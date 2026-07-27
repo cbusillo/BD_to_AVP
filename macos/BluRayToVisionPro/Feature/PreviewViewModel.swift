@@ -13,8 +13,8 @@ private enum PreviewViewModelError: Error, LocalizedError {
             "Preview currently supports MKV, MTS, M2TS, ISO, and Blu-ray-folder sources."
         case .workspacePreparationFailed(let volumeName):
             "The temporary preview workspace could not be prepared on \(volumeName). Make sure the destination is mounted and writable, and that no file is using the reserved .BluRayToVisionProPreviews name, then try again."
-        case .insufficientCapacity(let volumeName, let requiredBytes, let availableBytes):
-            "The temporary preview workspace on \(volumeName) needs about \(Self.bytes(requiredBytes)), but only \(Self.bytes(availableBytes)) is available. Free space there or choose another destination, then try again."
+        case .insufficientCapacity(let volumeName, _, _):
+            "The temporary preview workspace on \(volumeName) does not have enough confirmed free space. Free space there or choose another destination, then try again."
         case .invalidArtifact:
             "The preview engine returned an artifact outside its owned temporary workspace."
         case .missingArtifact:
@@ -22,9 +22,6 @@ private enum PreviewViewModelError: Error, LocalizedError {
         }
     }
 
-    private static func bytes(_ value: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
-    }
 }
 
 @MainActor
@@ -47,7 +44,11 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     private let clientFactory: ClientFactory
     private let cache: PreviewCache
     private let capacityProvider: any PreviewCapacityProviding
+    private let diagnosticClock: () -> Date
+    private let diagnosticStorageProbe: any DiagnosticStorageProbing
+    private let diagnosticBundleBuilder: DiagnosticBundleBuilder
     private let observabilityEventStore: any ObservabilityEventPersisting
+    private let diagnosticRecorder = DiagnosticSessionRecorder()
     private var client: (any WorkerProcessRunning)?
     private var runTask: Task<Void, Never>?
     private var workspacePreparationTask: Task<PreviewWorkspacePreparation, Error>?
@@ -57,6 +58,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     private var activeCache: PreviewCache?
     private var pendingTerminalEvent: WorkerEvent?
     private var actionsWaitingForIdle: [() -> Void] = []
+    private var diagnosticState = WorkerLifecycleState()
 
     init(
         clientFactory: @escaping ClientFactory = {
@@ -64,11 +66,18 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         },
         cache: PreviewCache = .automatic(),
         capacityProvider: (any PreviewCapacityProviding)? = nil,
+        diagnosticClock: @escaping () -> Date = Date.init,
+        diagnosticStorageProbe: any DiagnosticStorageProbing = FileSystemDiagnosticStorageProbe(),
+        diagnosticBundleBuilder: DiagnosticBundleBuilder? = nil,
         observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared
     ) {
         self.clientFactory = clientFactory
         self.cache = cache
         self.capacityProvider = capacityProvider ?? SystemPreviewCapacityProvider(fileManager: cache.fileManager)
+        self.diagnosticClock = diagnosticClock
+        self.diagnosticStorageProbe = diagnosticStorageProbe
+        self.diagnosticBundleBuilder = diagnosticBundleBuilder
+            ?? DiagnosticBundleBuilder(storageProbe: diagnosticStorageProbe)
         self.observabilityEventStore = observabilityEventStore
         cache.removeExpired()
     }
@@ -85,8 +94,43 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         !hasActiveWorker && !isCleaningUp
     }
 
+    var hasDiagnosticEvidence: Bool {
+        diagnosticRecorder.currentJobContext != nil
+    }
+
     var elapsedText: String? {
         ElapsedTimeText.format(seconds: elapsedSeconds)
+    }
+
+    func captureDiagnosticBundle(
+        in outputDirectory: URL? = nil,
+        userComment: DiagnosticUserComment? = nil
+    ) async throws -> DiagnosticBundleArtifact {
+        let capturedAt = diagnosticClock()
+        let processSnapshot = client?.diagnosticSnapshot()
+            ?? diagnosticRecorder.latestProcessSnapshot
+        diagnosticRecorder.updateProcessSnapshot(processSnapshot)
+        let snapshot = diagnosticRecorder.snapshot(
+            capturedAt: capturedAt,
+            lifecycle: diagnosticState,
+            activeMode: "preview",
+            batchSummary: nil,
+            process: processSnapshot,
+            observabilityPersistence: observabilityEventStore.snapshot()
+        )
+        let builder = diagnosticBundleBuilder
+        let buildTask = Task.detached(priority: .utility) {
+            try builder.createBundle(
+                from: snapshot,
+                userComment: userComment,
+                outputDirectory: outputDirectory
+            )
+        }
+        return try await withTaskCancellationHandler {
+            try await buildTask.value
+        } onCancel: {
+            buildTask.cancel()
+        }
     }
 
     func startPreview(_ draft: PreviewDraft) {
@@ -119,6 +163,8 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
 
         let jobID = UUID()
         let workspacePlan = PreviewWorkspacePlan.resolve(draft: draft, localCache: cache)
+        let plannedWorkspaceURL = workspacePlan.cache.rootURL
+            .appendingPathComponent(jobID.uuidString, isDirectory: true)
         let sourceKind = draft.conversion.source.kind
         let sourceURL = draft.conversion.source.url
         let inspectedSizeBytes = draft.conversion.sourceDetails?.sizeBytes
@@ -126,6 +172,11 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         activeDraft = draft
         phase = .preparing
         stageMessage = "Preparing Preview Workspace"
+        prepareDiagnosticSession(
+            jobID: jobID,
+            draft: draft,
+            workspaceURL: plannedWorkspaceURL
+        )
 
         let preparationTask = Task.detached(priority: .userInitiated) {
             try PreviewWorkspacePreparer.prepare(
@@ -152,6 +203,13 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
                     preparation.capacityAssessment,
                     volumeName: preparation.volumeName
                 )
+                self.recordCapacityResult(
+                    preparation.capacityResult,
+                    role: .previewWorkspace,
+                    url: preparation.directoryURL,
+                    jobID: jobID
+                )
+                self.scheduleDiagnosticStorageSample(recordedAt: self.diagnosticClock(), force: true)
                 try Task.checkCancellation()
                 let directoryURL = preparation.directoryURL
                 let job = WorkerJobSpec(
@@ -185,6 +243,14 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         phase = .stopping
         stageMessage = "Stopping Preview"
         progress = nil
+        diagnosticState.requestStop()
+        diagnosticRecorder.recordWorkflow(
+            name: "job.stop_requested",
+            lifecycle: diagnosticState,
+            activeMode: "preview",
+            recordedAt: diagnosticClock(),
+            jobID: diagnosticState.jobID
+        )
         if let client {
             client.cancel()
         } else {
@@ -239,8 +305,27 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     private func receive(_ event: WorkerEvent) throws {
+        let recordedAt = diagnosticClock()
         if let observabilityEvent = event.payload.observabilityEvent {
             observabilityEventStore.append(observabilityEvent)
+        }
+        var nextDiagnosticState = diagnosticState
+        try nextDiagnosticState.receive(event)
+        diagnosticState = nextDiagnosticState
+        diagnosticRecorder.record(
+            event: event,
+            lifecycle: diagnosticState,
+            activeMode: "preview",
+            recordedAt: recordedAt
+        )
+        if event.type.isTerminal
+            || event.type == .heartbeat
+            || event.type == .stageStarted
+            || event.type == .artifactReady {
+            scheduleDiagnosticStorageSample(
+                recordedAt: recordedAt,
+                force: event.type.isTerminal || event.type == .artifactReady
+            )
         }
         if let reportedVideoRoute = event.payload.videoRoute {
             videoRoute = reportedVideoRoute
@@ -318,6 +403,10 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     private func finish(_ result: WorkerRunResult) {
+        let processSnapshot = result.diagnosticSnapshot == .empty
+            ? client?.diagnosticSnapshot() ?? .empty
+            : result.diagnosticSnapshot
+        diagnosticRecorder.updateProcessSnapshot(processSnapshot)
         guard let terminalEvent = pendingTerminalEvent else {
             failTransport("The preview ended before a playable artifact was available.")
             return
@@ -353,9 +442,19 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         case .workerReady, .jobStarted, .stageStarted, .heartbeat, .log, .warning, .artifactReady, .observability:
             failTransport("The preview engine returned an invalid terminal event.")
         }
+        diagnosticRecorder.recordWorkflow(
+            name: "process.exited",
+            lifecycle: diagnosticState,
+            activeMode: "preview",
+            recordedAt: diagnosticClock(),
+            jobID: terminalEvent.jobID,
+            exitStatus: result.exitStatus
+        )
+        scheduleDiagnosticStorageSample(recordedAt: diagnosticClock(), force: true)
     }
 
     private func fail(_ error: Error) {
+        recordDiagnosticFailure(error)
         if phase == .stopping {
             phase = .idle
             stageMessage = "Preview Stopped"
@@ -369,6 +468,16 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     private func failTransport(_ message: String) {
+        diagnosticState.failTransport(message: message)
+        diagnosticRecorder.recordWorkflow(
+            name: "process.failed",
+            lifecycle: diagnosticState,
+            activeMode: "preview",
+            recordedAt: diagnosticClock(),
+            message: message,
+            jobID: diagnosticState.jobID
+        )
+        scheduleDiagnosticStorageSample(recordedAt: diagnosticClock(), force: true)
         failureMessage = message
         phase = .failed
         stageMessage = "Preview Failed"
@@ -469,6 +578,129 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
 
     private func releaseArtifact() {
         artifactLease = nil
+    }
+
+    private func prepareDiagnosticSession(
+        jobID: UUID,
+        draft: PreviewDraft,
+        workspaceURL: URL
+    ) {
+        diagnosticRecorder.reset()
+        diagnosticState.clear()
+        diagnosticState.selectSource(draft.conversion.source.url)
+        do {
+            try diagnosticState.begin(jobID: jobID, operationKind: .preview)
+        } catch {
+            diagnosticState.failTransport(message: "The preview diagnostic session could not start.")
+        }
+        diagnosticRecorder.beginJob(
+            context: DiagnosticJobContext(jobID: jobID, draft: draft, workspaceURL: workspaceURL),
+            lifecycle: diagnosticState,
+            activeMode: "preview",
+            recordedAt: diagnosticClock()
+        )
+        scheduleDiagnosticStorageSample(recordedAt: diagnosticClock(), force: true)
+    }
+
+    private func recordCapacityResult(
+        _ capacity: StorageCapacityResult?,
+        role: DiagnosticStorageRole,
+        url: URL,
+        jobID: UUID
+    ) {
+        guard let capacity else {
+            return
+        }
+        let capturedAt = diagnosticClock()
+        let probe = RawDiagnosticStorageProbe(
+            capturedAt: capturedAt,
+            role: role,
+            url: url.resolvingSymlinksInPath().standardizedFileURL,
+            status: .available,
+            isDirectory: true,
+            isReadable: nil,
+            isWritable: nil,
+            fileSizeBytes: nil,
+            modificationAgeSeconds: nil,
+            volumeAvailableBytes: capacity.availableBytes,
+            volumeTotalBytes: nil,
+            volumeReadOnly: nil,
+            errorKind: nil,
+            capacity: capacity
+        )
+        diagnosticRecorder.recordStorageSamples(
+            [RawDiagnosticStorageSample(probe: probe)],
+            for: jobID
+        )
+    }
+
+    private func recordDiagnosticFailure(_ error: Error) {
+        if let processSnapshot = client?.diagnosticSnapshot() {
+            diagnosticRecorder.updateProcessSnapshot(processSnapshot)
+        }
+        let message: String
+        if phase == .stopping || error is CancellationError {
+            diagnosticState.completeStop()
+            message = "The preview was cancelled."
+        } else if let previewError = error as? PreviewViewModelError {
+            switch previewError {
+            case .insufficientCapacity:
+                message = "The preview workspace capacity preflight reported known insufficient space."
+            case .workspacePreparationFailed:
+                message = "The preview workspace could not be prepared."
+            case .unsupportedSource:
+                message = "The selected source is not supported for preview."
+            case .invalidArtifact, .missingArtifact:
+                message = "The preview did not produce a valid owned artifact."
+            }
+            diagnosticState.failTransport(message: message)
+        } else {
+            message = "The preview process failed."
+            diagnosticState.failTransport(
+                message: message,
+                details: (error as? WorkerClientError)?.technicalDetails
+            )
+        }
+        diagnosticRecorder.recordWorkflow(
+            name: phase == .stopping ? "process.cancelled" : "process.failed",
+            lifecycle: diagnosticState,
+            activeMode: "preview",
+            recordedAt: diagnosticClock(),
+            message: message,
+            details: (error as? WorkerClientError)?.technicalDetails,
+            jobID: diagnosticState.jobID,
+            exitStatus: (error as? WorkerClientError)?.processExitStatus
+        )
+        scheduleDiagnosticStorageSample(recordedAt: diagnosticClock(), force: true)
+    }
+
+    private func scheduleDiagnosticStorageSample(recordedAt: Date, force: Bool) {
+        guard let request = diagnosticRecorder.makeStorageSampleRequest(
+            recordedAt: recordedAt,
+            force: force
+        ) else {
+            return
+        }
+        let probe = diagnosticStorageProbe
+        Task.detached(priority: .utility) { [weak self] in
+            let samples = request.targets.map { target in
+                RawDiagnosticStorageSample(
+                    probe: probe.probe(
+                        role: target.role,
+                        url: target.url,
+                        capturedAt: request.capturedAt
+                    )
+                )
+            }
+            await self?.recordDiagnosticStorageSamples(samples, for: request.jobID)
+        }
+    }
+
+    private func recordDiagnosticStorageSamples(
+        _ samples: [RawDiagnosticStorageSample],
+        for jobID: UUID
+    ) {
+        diagnosticRecorder.recordStorageSamples(samples, for: jobID)
     }
 
     private static let encodingStages: Set<String> = [

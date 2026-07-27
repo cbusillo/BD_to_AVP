@@ -91,15 +91,18 @@ retried item's last job instead of inheriting whichever job ran most recently.
 
 ## Storage Fields
 
-Current probes cover the selected source, destination directory, and planned
-output path when those roles exist. Samples cover destination capacity and
-planned-output size/modification age during worker heartbeats and terminal
-transitions.
+Current probes cover the selected source, destination directory, preview
+workspace, partial workspace, and canonical output when those roles exist.
+Samples cover write-workspace capacity and planned-output size/modification age
+during worker heartbeats and terminal transitions. Worker-side POSIX probes are
+also preserved as privacy-safe observability fields with explicit provenance.
 
 Each probe contains only a role, per-bundle path token, availability status,
 directory/read/write booleans, rounded-down file size, modification age,
-rounded-down free/total capacity, read-only state, and a normalized error
-category. File sizes use 256 MiB quanta; volume capacities use 16 GiB quanta.
+rounded-down free/total capacity, read-only state, a normalized error category,
+and a capacity state of `known`, `unknown`, or `conflicting`. Capacity evidence
+also includes a coarse sufficiency verdict and provenance. File sizes use 256
+MiB quanta; volume capacities use 16 GiB quanta.
 The JSON names these values `*_rounded_bytes` and the manifest records the
 quanta and rounding direction. Volume names, device paths, filesystem labels,
 filenames, exact media sizes, exact capacities, and exception descriptions are
@@ -269,7 +272,7 @@ This prevents a signed build from silently shipping without online reporting.
 
 The native client uses an ephemeral `URLSession` with no cache, cookie store, or
 credential store. It sends the v1 `application/zip` metadata request to
-`POST /v1/reports`, including privacy rules version `4`. The service rejects
+`POST /v1/reports`, including privacy rules version `5`. The service rejects
 missing or older privacy-rules versions before issuing upload credentials. The
 client validates the returned schema, support code, expiry, authorization
 methods, required headers, and exact report paths, then sends the same immutable

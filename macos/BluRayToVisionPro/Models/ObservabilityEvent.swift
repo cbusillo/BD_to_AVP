@@ -246,6 +246,13 @@ struct ObservabilityStorage: Codable, Equatable, Sendable {
     let totalBytes: Int64?
     let readOnly: Bool?
     let writable: Bool?
+    let capacityState: String?
+    let capacitySufficiency: String?
+    let capacityProvenance: [String]?
+    let capacityUnknownReason: String?
+    let requiredBytes: Int64?
+    let availableLowerBytes: Int64?
+    let availableUpperBytes: Int64?
 
     enum CodingKeys: String, CodingKey {
         case role
@@ -257,6 +264,13 @@ struct ObservabilityStorage: Codable, Equatable, Sendable {
         case totalBytes = "total_bytes"
         case readOnly = "read_only"
         case writable
+        case capacityState = "capacity_state"
+        case capacitySufficiency = "capacity_sufficiency"
+        case capacityProvenance = "capacity_provenance"
+        case capacityUnknownReason = "capacity_unknown_reason"
+        case requiredBytes = "required_bytes"
+        case availableLowerBytes = "available_lower_bytes"
+        case availableUpperBytes = "available_upper_bytes"
     }
 }
 

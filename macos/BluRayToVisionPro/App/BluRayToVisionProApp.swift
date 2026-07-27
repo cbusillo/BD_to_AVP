@@ -22,6 +22,7 @@ struct BluRayToVisionProApp: App {
         let observabilityEventStore = ObservabilityEventStore.automatic()
         let viewModel = ConversionViewModel(observabilityEventStore: observabilityEventStore)
         let previewViewModel = PreviewViewModel(observabilityEventStore: observabilityEventStore)
+        let workCoordinator = AppWorkCoordinator(conversion: viewModel, preview: previewViewModel)
         let diagnosticConfiguration = DiagnosticServiceConfiguration.configured()
         let diagnosticUploader = diagnosticConfiguration.map {
             DiagnosticReportClient(configuration: $0)
@@ -29,13 +30,12 @@ struct BluRayToVisionProApp: App {
         let diagnosticReportViewModel = DiagnosticReportViewModel(
             uploader: diagnosticUploader,
             capture: { outputDirectory, userComment in
-                try await viewModel.captureDiagnosticBundle(
+                try await workCoordinator.captureDiagnosticBundle(
                     in: outputDirectory,
                     userComment: userComment
                 )
             }
         )
-        let workCoordinator = AppWorkCoordinator(conversion: viewModel, preview: previewViewModel)
         _viewModel = StateObject(wrappedValue: viewModel)
         _previewViewModel = StateObject(wrappedValue: previewViewModel)
         _diagnosticReportViewModel = StateObject(wrappedValue: diagnosticReportViewModel)

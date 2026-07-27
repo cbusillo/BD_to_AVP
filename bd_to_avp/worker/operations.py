@@ -16,6 +16,7 @@ from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.disc import DiscTitleSelectionError, get_disc_and_mvc_video_info, MKVCreationError
 from bd_to_avp.modules.file import path_is_relative_to
 from bd_to_avp.modules.preview import PreviewRange, resolve_preview_range
+from bd_to_avp.modules.storage_capacity import emit_storage_capacity
 from bd_to_avp.modules.process import (
     ProcessingCancelled,
     conversion_stage_plan,
@@ -269,6 +270,7 @@ def preview_source(job: JobSpec, owner: WorkerProcessOwner, activity: WorkerActi
         owner,
         activity,
         preview_range=preview_range,
+        workspace_required_bytes=_preview_workspace_required_bytes(inspection),
         allow_recovery=False,
         resolved_video_route=resolved_video_route,
         route_already_reported=True,
@@ -291,6 +293,7 @@ def _convert_source(
     allow_recovery: bool = True,
     resolved_video_route: ResolvedVideoRoute | None = None,
     route_already_reported: bool = False,
+    workspace_required_bytes: int | None = None,
 ) -> dict[str, object]:
     source_path = validate_source(job.source)
     destination = job.destination
@@ -307,6 +310,24 @@ def _convert_source(
             "destination_inside_source",
             "Choose a destination outside the Blu-ray source folder.",
         )
+
+    emit_storage_capacity(
+        activity,
+        source_path,
+        role="source",
+    )
+    workspace_role = "preview_workspace" if preview_range is not None else "destination"
+    emit_storage_capacity(
+        activity,
+        destination.path,
+        role=workspace_role,
+        required_bytes=workspace_required_bytes,
+    )
+    emit_storage_capacity(
+        activity,
+        destination.path / "temp_files",
+        role="partial_workspace",
+    )
 
     owner.check_cancelled()
     with configured_conversion(job, source_path, preview_range=preview_range):
@@ -425,6 +446,7 @@ def _convert_source(
             "output_missing",
             "The conversion finished without producing the expected output file.",
         )
+    emit_storage_capacity(activity, final_output_path, role="canonical_output")
     activity.log("Conversion output ready", stage="move_files", output_path=final_output_path.as_posix())
     result: dict[str, object] = {
         "source_path": source_path.as_posix(),
@@ -445,6 +467,13 @@ def _convert_source(
             }
         )
     return result
+
+
+def _preview_workspace_required_bytes(inspection: dict[str, object]) -> int | None:
+    source_bytes = inspection.get("size_bytes")
+    if isinstance(source_bytes, bool) or not isinstance(source_bytes, int) or source_bytes <= 0:
+        return None
+    return source_bytes + 8 * 1024**3
 
 
 @contextmanager

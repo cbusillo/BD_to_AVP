@@ -118,7 +118,10 @@ struct WorkerProcessDiagnosticSnapshot: Equatable, Sendable {
 enum DiagnosticStorageRole: String, Codable, CaseIterable, Sendable {
     case source
     case destination
-    case output
+    case previewWorkspace = "preview_workspace"
+    case partialWorkspace = "partial_workspace"
+    case canonicalOutput = "canonical_output"
+
 }
 
 enum DiagnosticStorageStatus: String, Codable, Sendable {
@@ -148,6 +151,39 @@ struct RawDiagnosticStorageProbe: Equatable, Sendable {
     let volumeTotalBytes: Int64?
     let volumeReadOnly: Bool?
     let errorKind: DiagnosticStorageErrorKind?
+    let capacity: StorageCapacityResult?
+
+    init(
+        capturedAt: Date,
+        role: DiagnosticStorageRole,
+        url: URL,
+        status: DiagnosticStorageStatus,
+        isDirectory: Bool?,
+        isReadable: Bool?,
+        isWritable: Bool?,
+        fileSizeBytes: Int64?,
+        modificationAgeSeconds: Int64?,
+        volumeAvailableBytes: Int64?,
+        volumeTotalBytes: Int64?,
+        volumeReadOnly: Bool?,
+        errorKind: DiagnosticStorageErrorKind?,
+        capacity: StorageCapacityResult? = nil
+    ) {
+        self.capturedAt = capturedAt
+        self.role = role
+        self.url = url
+        self.status = status
+        self.isDirectory = isDirectory
+        self.isReadable = isReadable
+        self.isWritable = isWritable
+        self.fileSizeBytes = fileSizeBytes
+        self.modificationAgeSeconds = modificationAgeSeconds
+        self.volumeAvailableBytes = volumeAvailableBytes
+        self.volumeTotalBytes = volumeTotalBytes
+        self.volumeReadOnly = volumeReadOnly
+        self.errorKind = errorKind
+        self.capacity = capacity
+    }
 }
 
 struct RawDiagnosticStorageSample: Equatable, Sendable {
@@ -158,6 +194,7 @@ struct RawDiagnosticStorageSample: Equatable, Sendable {
     let fileSizeBytes: Int64?
     let modificationAgeSeconds: Int64?
     let volumeAvailableBytes: Int64?
+    let capacity: StorageCapacityResult?
 
     init(probe: RawDiagnosticStorageProbe) {
         capturedAt = probe.capturedAt
@@ -167,6 +204,7 @@ struct RawDiagnosticStorageSample: Equatable, Sendable {
         fileSizeBytes = probe.fileSizeBytes
         modificationAgeSeconds = probe.modificationAgeSeconds
         volumeAvailableBytes = probe.volumeAvailableBytes
+        capacity = probe.capacity
     }
 }
 
@@ -183,11 +221,14 @@ struct FileSystemDiagnosticStorageProbe: DiagnosticStorageProbing {
         .isWritableKey,
         .fileSizeKey,
         .contentModificationDateKey,
+        .volumeAvailableCapacityKey,
         .volumeAvailableCapacityForImportantUsageKey,
         .volumeTotalCapacityKey,
         .volumeIsReadOnlyKey,
     ]
     private static let volumeKeys: Set<URLResourceKey> = [
+        .isWritableKey,
+        .volumeAvailableCapacityKey,
         .volumeAvailableCapacityForImportantUsageKey,
         .volumeTotalCapacityKey,
         .volumeIsReadOnlyKey,
@@ -204,9 +245,10 @@ struct FileSystemDiagnosticStorageProbe: DiagnosticStorageProbing {
     }
 
     func probe(role: DiagnosticStorageRole, url: URL, capturedAt: Date) -> RawDiagnosticStorageProbe {
-        let normalizedURL = url.standardizedFileURL
+        let normalizedURL = url.resolvingSymlinksInPath().standardizedFileURL
         do {
             let values = try resourceReader(normalizedURL, Self.itemKeys)
+            let capacity = capacityResult(for: role, values: values)
             let modificationAge = values.contentModificationDate.map {
                 Int64(max(0, capturedAt.timeIntervalSince($0)).rounded(.down))
             }
@@ -220,10 +262,11 @@ struct FileSystemDiagnosticStorageProbe: DiagnosticStorageProbing {
                 isWritable: values.isWritable,
                 fileSizeBytes: values.fileSize.map(Int64.init),
                 modificationAgeSeconds: modificationAge,
-                volumeAvailableBytes: values.volumeAvailableCapacityForImportantUsage,
+                volumeAvailableBytes: capacity.availableBytes,
                 volumeTotalBytes: values.volumeTotalCapacity.map(Int64.init),
                 volumeReadOnly: values.volumeIsReadOnly,
-                errorKind: nil
+                errorKind: nil,
+                capacity: capacity
             )
         } catch {
             let errorKind = Self.errorKind(for: error)
@@ -238,6 +281,7 @@ struct FileSystemDiagnosticStorageProbe: DiagnosticStorageProbing {
             }
             if Self.isMissing(error) {
                 let volumeValues = nearestVolumeValues(for: normalizedURL.deletingLastPathComponent())
+                let capacity = volumeValues.map { capacityResult(for: role, values: $0) }
                 return RawDiagnosticStorageProbe(
                     capturedAt: capturedAt,
                     role: role,
@@ -248,10 +292,11 @@ struct FileSystemDiagnosticStorageProbe: DiagnosticStorageProbing {
                     isWritable: nil,
                     fileSizeBytes: nil,
                     modificationAgeSeconds: nil,
-                    volumeAvailableBytes: volumeValues?.volumeAvailableCapacityForImportantUsage,
+                    volumeAvailableBytes: capacity?.availableBytes,
                     volumeTotalBytes: volumeValues?.volumeTotalCapacity.map(Int64.init),
                     volumeReadOnly: volumeValues?.volumeIsReadOnly,
-                    errorKind: nil
+                    errorKind: nil,
+                    capacity: capacity
                 )
             }
             return failedProbe(
@@ -271,7 +316,23 @@ struct FileSystemDiagnosticStorageProbe: DiagnosticStorageProbing {
         status: DiagnosticStorageStatus,
         errorKind: DiagnosticStorageErrorKind
     ) -> RawDiagnosticStorageProbe {
-        RawDiagnosticStorageProbe(
+        let reason: StorageCapacityUnknownReason = errorKind == .permissionDenied
+            ? .permissionDenied
+            : .unavailable
+        let capacity = StorageCapacityResult.evaluate(
+            requiredBytes: nil,
+            evidence: [
+                StorageCapacityEvidence(
+                    provenance: .swiftImportantUsage,
+                    availableBytes: nil,
+                    totalBytes: nil,
+                    writable: nil,
+                    readOnly: nil,
+                    unknownReason: reason
+                ),
+            ]
+        )
+        return RawDiagnosticStorageProbe(
             capturedAt: capturedAt,
             role: role,
             url: url,
@@ -284,7 +345,37 @@ struct FileSystemDiagnosticStorageProbe: DiagnosticStorageProbing {
             volumeAvailableBytes: nil,
             volumeTotalBytes: nil,
             volumeReadOnly: nil,
-            errorKind: errorKind
+            errorKind: errorKind,
+            capacity: capacity
+        )
+    }
+
+    private func capacityResult(
+        for role: DiagnosticStorageRole,
+        values: URLResourceValues
+    ) -> StorageCapacityResult {
+        let totalBytes = values.volumeTotalCapacity.map(Int64.init)
+        let evidence = [
+            StorageCapacityEvidence(
+                provenance: .swiftImportantUsage,
+                availableBytes: values.volumeAvailableCapacityForImportantUsage,
+                totalBytes: totalBytes,
+                writable: values.isWritable,
+                readOnly: values.volumeIsReadOnly,
+                unknownReason: values.volumeAvailableCapacityForImportantUsage == nil ? .unavailable : nil
+            ),
+            StorageCapacityEvidence(
+                provenance: .swiftAvailable,
+                availableBytes: values.volumeAvailableCapacity.map(Int64.init),
+                totalBytes: totalBytes,
+                writable: values.isWritable,
+                readOnly: values.volumeIsReadOnly,
+                unknownReason: values.volumeAvailableCapacity == nil ? .unavailable : nil
+            ),
+        ]
+        return StorageCapacityResult.evaluate(
+            requiredBytes: nil,
+            evidence: evidence
         )
     }
 
@@ -440,6 +531,7 @@ struct DiagnosticJobContext: Equatable {
     let sourceKind: String
     let sourceURL: URL
     let destinationURL: URL?
+    let previewWorkspaceURL: URL?
     let outputURL: URL?
     let settings: DiagnosticJobSettings?
     let redactionPaths: [String]
@@ -451,6 +543,7 @@ struct DiagnosticJobContext: Equatable {
         sourceKind = source.kind.rawValue
         sourceURL = source.url
         destinationURL = nil
+        previewWorkspaceURL = nil
         outputURL = nil
         settings = nil
         redactionPaths = [source.url.path, source.workerSourcePath]
@@ -463,12 +556,14 @@ struct DiagnosticJobContext: Equatable {
         sourceKind = draft.source.kind.rawValue
         sourceURL = draft.source.url
         destinationURL = draft.destinationURL
+        previewWorkspaceURL = nil
         outputURL = draft.proposedOutputURL
         settings = DiagnosticJobSettings(draft: draft)
         redactionPaths = [
             draft.source.url.path,
             draft.source.workerSourcePath,
             draft.destinationURL.path,
+            draft.destinationURL.appendingPathComponent("temp_files", isDirectory: true).path,
             draft.proposedOutputURL.path,
         ]
         sensitiveNames = [
@@ -479,6 +574,36 @@ struct DiagnosticJobContext: Equatable {
             draft.selectedTitle?.outputName,
             draft.destinationURL.lastPathComponent,
             draft.proposedOutputURL.lastPathComponent,
+            PreviewVolumeName.fallbackName(for: draft.destinationURL),
+        ]
+        .compactMap { $0 }
+    }
+
+    init(jobID: UUID, draft: PreviewDraft, workspaceURL: URL) {
+        let conversion = draft.conversion
+        self.jobID = jobID
+        operation = "preview_source"
+        sourceKind = conversion.source.kind.rawValue
+        sourceURL = conversion.source.url
+        destinationURL = conversion.destinationURL
+        previewWorkspaceURL = workspaceURL
+        outputURL = nil
+        settings = DiagnosticJobSettings(draft: conversion)
+        redactionPaths = [
+            conversion.source.url.path,
+            conversion.source.workerSourcePath,
+            conversion.destinationURL.path,
+            workspaceURL.path,
+        ]
+        sensitiveNames = [
+            conversion.source.displayName,
+            conversion.source.url.lastPathComponent,
+            conversion.sourceDetails?.name,
+            conversion.selectedTitle?.name,
+            conversion.selectedTitle?.outputName,
+            conversion.destinationURL.lastPathComponent,
+            workspaceURL.lastPathComponent,
+            PreviewVolumeName.fallbackName(for: conversion.destinationURL),
         ]
         .compactMap { $0 }
     }
@@ -488,8 +613,14 @@ struct DiagnosticJobContext: Equatable {
         if let destinationURL {
             targets.append((.destination, destinationURL))
         }
+        if let previewWorkspaceURL {
+            targets.append((.previewWorkspace, previewWorkspaceURL))
+            targets.append((.partialWorkspace, previewWorkspaceURL.appendingPathComponent("temp_files", isDirectory: true)))
+        } else if let destinationURL {
+            targets.append((.partialWorkspace, destinationURL.appendingPathComponent("temp_files", isDirectory: true)))
+        }
         if let outputURL {
-            targets.append((.output, outputURL))
+            targets.append((.canonicalOutput, outputURL))
         }
         return targets
     }
@@ -525,6 +656,19 @@ struct DiagnosticEventRecord: Equatable, Sendable {
     let artifactSizeBytes: Int64?
     let artifactModificationAgeSeconds: Int64?
     let artifactGrowthBytesPerSecond: Int64?
+    let storageRole: String?
+    let storageStatus: String?
+    let storageCapacityState: String?
+    let storageCapacitySufficiency: String?
+    let storageCapacityProvenance: [String]?
+    let storageCapacityUnknownReason: String?
+    let storageAvailableBytes: Int64?
+    let storageTotalBytes: Int64?
+    let storageRequiredBytes: Int64?
+    let storageAvailableLowerBytes: Int64?
+    let storageAvailableUpperBytes: Int64?
+    let storageReadOnly: Bool?
+    let storageWritable: Bool?
     let privacy: String?
     let redaction: String?
     let messagePrivacy: String?
@@ -554,6 +698,11 @@ struct DiagnosticEventRecord: Equatable, Sendable {
             processState,
             artifactRole,
             artifactState,
+            storageRole,
+            storageStatus,
+            storageCapacityState,
+            storageCapacitySufficiency,
+            storageCapacityUnknownReason,
             privacy,
             redaction,
             messagePrivacy,
@@ -570,6 +719,9 @@ struct DiagnosticEventRecord: Equatable, Sendable {
         let choicesBytes = choices?.reduce(2) {
             $0 + DiagnosticJSONByteCount.string($1) + 1
         } ?? 0
+        let storageProvenanceBytes = storageCapacityProvenance?.reduce(2) {
+            $0 + DiagnosticJSONByteCount.string($1) + 1
+        } ?? 0
         let numericBytes = [sequence, elapsedSeconds]
             .compactMap { $0 }
             .reduce(0) { $0 + String($1).utf8.count }
@@ -584,6 +736,11 @@ struct DiagnosticEventRecord: Equatable, Sendable {
             artifactSizeBytes,
             artifactModificationAgeSeconds,
             artifactGrowthBytesPerSecond,
+            storageAvailableBytes,
+            storageTotalBytes,
+            storageRequiredBytes,
+            storageAvailableLowerBytes,
+            storageAvailableUpperBytes,
         ]
         .compactMap { $0 }
         .reduce(0) { $0 + String($1).utf8.count }
@@ -595,12 +752,15 @@ struct DiagnosticEventRecord: Equatable, Sendable {
         return 256
             + strings
             + choicesBytes
+            + storageProvenanceBytes
             + numericBytes
             + observabilityNumericBytes
             + progressBytes
             + resultSizeBytes
             + exitStatusBytes
             + fixedValueBytes
+            + (storageReadOnly == nil ? 0 : 5)
+            + (storageWritable == nil ? 0 : 5)
     }
 }
 
@@ -761,6 +921,40 @@ final class DiagnosticSessionRecorder {
         recordedAt: Date
     ) {
         let observabilityEvent = event.payload.observabilityEvent
+        let storage = observabilityEvent?.data.storage
+        if let storage,
+           let role = DiagnosticStorageRole(rawValue: storage.role),
+           let targetURL = context(for: event.jobID)?.storageTargets.first(where: { $0.0 == role })?.1 {
+            let evidence = StorageCapacityEvidence(
+                provenance: .workerStatVFS,
+                availableBytes: storage.availableBytes,
+                totalBytes: storage.totalBytes,
+                writable: storage.writable,
+                readOnly: storage.readOnly,
+                unknownReason: storage.capacityUnknownReason.flatMap(StorageCapacityUnknownReason.init(rawValue:))
+            )
+            let capacity = StorageCapacityResult.evaluate(
+                requiredBytes: storage.requiredBytes,
+                evidence: [evidence]
+            )
+            let probe = RawDiagnosticStorageProbe(
+                capturedAt: recordedAt,
+                role: role,
+                url: targetURL,
+                status: DiagnosticStorageStatus(rawValue: storage.status) ?? .error,
+                isDirectory: nil,
+                isReadable: nil,
+                isWritable: storage.writable,
+                fileSizeBytes: storage.sizeBytes,
+                modificationAgeSeconds: storage.modificationAgeSeconds,
+                volumeAvailableBytes: capacity.availableBytes,
+                volumeTotalBytes: storage.totalBytes,
+                volumeReadOnly: storage.readOnly,
+                errorKind: nil,
+                capacity: capacity
+            )
+            recordStorageSamples([RawDiagnosticStorageSample(probe: probe)], for: event.jobID)
+        }
         let observabilityTextIsOmitted = observabilityEvent?.redaction == "omitted"
         let terminalPhase: String?
         switch event.type {
@@ -799,6 +993,19 @@ final class DiagnosticSessionRecorder {
             artifactSizeBytes: observabilityEvent?.data.artifact?.sizeBytes,
             artifactModificationAgeSeconds: observabilityEvent?.data.artifact?.modificationAgeSeconds,
             artifactGrowthBytesPerSecond: observabilityEvent?.data.artifact?.growthBytesPerSecond,
+            storageRole: storage?.role,
+            storageStatus: storage?.status,
+            storageCapacityState: storage?.capacityState,
+            storageCapacitySufficiency: storage?.capacitySufficiency,
+            storageCapacityProvenance: storage?.capacityProvenance,
+            storageCapacityUnknownReason: storage?.capacityUnknownReason,
+            storageAvailableBytes: storage?.availableBytes,
+            storageTotalBytes: storage?.totalBytes,
+            storageRequiredBytes: storage?.requiredBytes,
+            storageAvailableLowerBytes: storage?.availableLowerBytes,
+            storageAvailableUpperBytes: storage?.availableUpperBytes,
+            storageReadOnly: storage?.readOnly,
+            storageWritable: storage?.writable,
             privacy: observabilityEvent?.privacy,
             redaction: observabilityEvent?.redaction,
             messagePrivacy: observabilityEvent?.data.message?.privacy,
@@ -860,6 +1067,19 @@ final class DiagnosticSessionRecorder {
                 artifactSizeBytes: nil,
                 artifactModificationAgeSeconds: nil,
                 artifactGrowthBytesPerSecond: nil,
+                storageRole: nil,
+                storageStatus: nil,
+                storageCapacityState: nil,
+                storageCapacitySufficiency: nil,
+                storageCapacityProvenance: nil,
+                storageCapacityUnknownReason: nil,
+                storageAvailableBytes: nil,
+                storageTotalBytes: nil,
+                storageRequiredBytes: nil,
+                storageAvailableLowerBytes: nil,
+                storageAvailableUpperBytes: nil,
+                storageReadOnly: nil,
+                storageWritable: nil,
                 privacy: nil,
                 redaction: nil,
                 messagePrivacy: nil,
