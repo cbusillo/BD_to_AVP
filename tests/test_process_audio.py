@@ -9,6 +9,7 @@ from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import Stage
 from bd_to_avp.modules.disc import DiscInfo
 from bd_to_avp.modules.preview_range import PreviewRange
+from bd_to_avp.modules.video import GeneratedMVHEVCArtifactError
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video_route import (
     AUTOMATIC_DIRECT_UPSCALE_QUALITY,
@@ -294,6 +295,66 @@ class ProcessAudioWiringTests(unittest.TestCase):
                 self.assertEqual(mux.call_args.args, (aac_path, mv_hevc_path, output_folder, "Movie"))
                 self.assertEqual(mux.call_args.kwargs["observability_context"].stage.id, "create_final_file")
                 self.assertFalse(source_path.exists())
+
+    def test_invalid_generated_mv_hevc_stops_upscale_audio_and_mux(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_path = temp_path / "source.mkv"
+            output_folder = temp_path / "Movie"
+            mvc_path = output_folder / "Movie_mvc.h264"
+            audio_path = output_folder / "Movie_audio.mka"
+            left_path = output_folder / "Movie_left.mov"
+            right_path = output_folder / "Movie_right.mov"
+            source_path.write_bytes(b"source")
+            output_folder.mkdir()
+            artifact_error = GeneratedMVHEVCArtifactError("stage 5 artifact invalid")
+
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(process.config, "source_path", source_path))
+                stack.enter_context(patch.object(process.config, "source_str", None))
+                stack.enter_context(patch.object(process.config, "output_root_path", temp_path))
+                stack.enter_context(patch.object(process.config, "overwrite", True))
+                stack.enter_context(patch.object(process.config, "keep_files", True))
+                stack.enter_context(patch.object(process.config, "audio_mode", AudioMode.AUTOMATIC))
+                stack.enter_context(patch.object(process.config, "video_mode", VideoMode.MV_HEVC))
+                stack.enter_context(patch.object(process.config, "fx_upscale", True))
+                stack.enter_context(patch.object(process.config, "skip_subtitles", True))
+                stack.enter_context(patch.object(process.config, "start_stage", Stage.CREATE_MKV))
+                stack.enter_context(patch.object(process.config, "preview_range", None))
+                stack.enter_context(patch.object(process.config, "remove_original", False))
+                stack.enter_context(patch.object(process.preflight, "verify_runtime_ready"))
+                stack.enter_context(
+                    patch.object(
+                        process,
+                        "get_disc_and_mvc_video_info",
+                        return_value=DiscInfo(name="Movie", duration_seconds=100.0),
+                    )
+                )
+                stack.enter_context(
+                    patch.object(process, "prepare_output_folder_for_source", return_value=output_folder)
+                )
+                stack.enter_context(patch.object(process, "file_exists_normalized", return_value=False))
+                stack.enter_context(patch.object(process, "create_mkv_file", return_value=source_path))
+                stack.enter_context(patch.object(process, "get_video_color_depth", return_value=8))
+                stack.enter_context(patch.object(process, "detect_crop_parameters", return_value=""))
+                stack.enter_context(patch.object(process, "create_mvc_and_audio", return_value=(audio_path, mvc_path)))
+                stack.enter_context(patch.object(process, "create_srt_from_mkv"))
+                stack.enter_context(
+                    patch.object(process, "create_left_right_files", return_value=(left_path, right_path))
+                )
+                stack.enter_context(patch.object(process, "create_mv_hevc_file", side_effect=artifact_error))
+                upscale = stack.enter_context(patch.object(process, "create_upscaled_file"))
+                prepare_audio = stack.enter_context(patch.object(process, "create_transcoded_audio_file"))
+                mux = stack.enter_context(patch.object(process, "create_muxed_file"))
+                stack.enter_context(patch.dict(process.os.environ, {}, clear=False))
+
+                with self.assertRaises(GeneratedMVHEVCArtifactError) as context:
+                    process.process_each()
+
+            self.assertIs(context.exception, artifact_error)
+            upscale.assert_not_called()
+            prepare_audio.assert_not_called()
+            mux.assert_not_called()
 
     def test_prepare_audio_stage_preserves_stage_id_with_new_message(self) -> None:
         class StopAfterAudio(Exception):

@@ -23,6 +23,7 @@ from bd_to_avp.modules.process import (
     start_process,
 )
 from bd_to_avp.modules.sub import SRTCreationError
+from bd_to_avp.modules.video import GeneratedMVHEVCArtifactError
 from bd_to_avp.modules.video_route import (
     ResolvedVideoRoute,
     VideoRouteKind,
@@ -375,6 +376,15 @@ def _convert_source(
                 "video_route_preflight_failed",
                 "The video route could not be prepared safely.",
                 str(error),
+            ) from error
+        except GeneratedMVHEVCArtifactError as error:
+            if owner.cancellation_event.is_set():
+                raise WorkerCancelled("The conversion was cancelled.") from error
+            raise WorkerOperationError(
+                "generated_mv_hevc_artifact_invalid",
+                f"Stage {error.stage_number} could not provide a valid {error.artifact_role}.",
+                (f"{error}\n\n{error.restart_action} Source intermediates were retained when available."),
+                retryable=True,
             ) from error
         except FileExistsError as error:
             if owner.cancellation_event.is_set():
