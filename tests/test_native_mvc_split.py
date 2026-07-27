@@ -119,16 +119,17 @@ class NativeMvcCommandTests(unittest.TestCase):
             video.generate_native_mvc_ffmpeg_command(Path("left.mov"), Path("right.mov"), self.disc_info, "")
 
     def test_mv_hevc_merge_writes_neutral_stereo_disparity_metadata(self) -> None:
+        def run_merge(command, _name, **_kwargs):
+            Path(command[command.index("--output-file") + 1]).write_bytes(b"artifact")
+            return process_result("spatial_media_kit_tool")
+
         with (
             tempfile.TemporaryDirectory() as temp_dir,
             patch.object(video.config, "SPATIAL_MEDIA_PATH", Path("/tools/spatial-media-kit-tool")),
             patch.object(video.config, "mv_hevc_quality", 75),
             patch.object(video.config, "fov", 90),
-            patch.object(
-                video,
-                "run_process_capture",
-                return_value=process_result("spatial_media_kit_tool"),
-            ) as run_command,
+            patch.object(video, "run_process_capture", side_effect=run_merge) as run_command,
+            patch.object(video, "validate_generated_mv_hevc_artifact"),
         ):
             video.combine_to_mv_hevc(Path("left.mov"), Path("right.mov"), Path(temp_dir) / "spatial.mov", 8)
 

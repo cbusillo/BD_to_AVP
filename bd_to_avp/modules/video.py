@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import re
 import signal
@@ -6,6 +7,7 @@ import stat
 import subprocess
 import tempfile
 import threading
+from fractions import Fraction
 from pathlib import Path
 
 import ffmpeg
@@ -64,6 +66,23 @@ class NativeMvcSplitError(RuntimeError):
     pass
 
 
+class GeneratedMVHEVCArtifactError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage_number: int = 5,
+        stage_name: str = "Combine to MV HEVC",
+        artifact_role: str = "generated MV-HEVC video",
+        restart_action: str = "Restart from Combine to MV HEVC (stage 5).",
+    ) -> None:
+        super().__init__(message)
+        self.stage_number = stage_number
+        self.stage_name = stage_name
+        self.artifact_role = artifact_role
+        self.restart_action = restart_action
+
+
 NATIVE_MVC_ARTIFACT_NO_GROWTH_TIMEOUT_SECONDS = 120
 NATIVE_MVC_RETRY_SIGNALS = {
     signal.SIGABRT,
@@ -75,6 +94,10 @@ NATIVE_MVC_RETRY_SIGNALS = {
 AV1_STEREO_VEXU_CONTENT_HEX = (
     "00000015657965730000000D737472690000000003000000187061636B00000010706B696E0000000073696465"
 )
+GENERATED_MV_HEVC_REQUIRED_BOX_TYPES = frozenset({"eyes", "hfov", "hvcC", "lhvC", "vexu"})
+GENERATED_MV_HEVC_BOX_TYPE_PATTERN = re.compile(r'Type="([A-Za-z0-9 ]{4})"')
+GENERATED_MV_HEVC_DURATION_TOLERANCE_MIN_SECONDS = 1.0
+GENERATED_MV_HEVC_DURATION_TOLERANCE_RATIO = 0.001
 
 
 def output_artifact_roles(output_count: int) -> tuple[str, ...]:
@@ -912,11 +935,21 @@ def combine_to_mv_hevc(
     output_path: Path,
     color_depth: int,
     *,
+    expected_dimensions: tuple[int, int] | None = None,
+    expected_duration_seconds: float | None = None,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
 ) -> None:
-    output_path.unlink(missing_ok=True)
+    partial_path = generated_mv_hevc_partial_path(output_path)
+    remove_generated_mv_hevc_artifact(
+        output_path,
+        reason="the stale canonical artifact could not be removed before retrying stage 5",
+    )
+    remove_generated_mv_hevc_artifact(
+        partial_path,
+        reason="the stale partial artifact could not be removed before retrying stage 5",
+    )
     command = [
         config.SPATIAL_MEDIA_PATH,
         "merge",
@@ -934,24 +967,336 @@ def combine_to_mv_hevc(
         "--color-depth",
         color_depth,
         "--output-file",
-        output_path,
+        partial_path,
     ]
-    process_result = run_process_capture(
-        command,
-        "combine stereo HEVC streams to MV-HEVC.",
-        tool_id="spatial_media_kit_tool",
-        merge_stderr=False,
-        capture_overflow=CaptureOverflowPolicy.FAIL,
-        run_context=run_context,
-        cancellation_event=cancellation_event,
-        observability_context=observability_context,
-        show_spinner=True,
+    try:
+        process_result = run_process_capture(
+            command,
+            "combine stereo HEVC streams to MV-HEVC.",
+            tool_id="spatial_media_kit_tool",
+            merge_stderr=False,
+            capture_overflow=CaptureOverflowPolicy.FAIL,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+            show_spinner=True,
+        )
+        output = combined_process_output(process_result)
+        if "left and right input resolutions do not match. aborting!" in output:
+            raise generated_mv_hevc_artifact_error(
+                output_path,
+                "the left and right input resolutions do not match",
+            )
+        if "aborting!" in output:
+            raise generated_mv_hevc_artifact_error(output_path, "the merge helper reported that it aborted")
+        validate_generated_mv_hevc_artifact(
+            partial_path,
+            expected_dimensions=expected_dimensions,
+            expected_duration_seconds=expected_duration_seconds,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
+        try:
+            partial_path.replace(output_path)
+        except OSError as error:
+            raise generated_mv_hevc_artifact_error(
+                output_path,
+                "the validated partial artifact could not be published atomically",
+            ) from error
+    except BaseException as error:
+        report_generated_mv_hevc_cleanup_failure(partial_path, error, run_context=run_context)
+        raise
+
+
+def generated_mv_hevc_partial_path(output_path: Path) -> Path:
+    return output_path.with_name(f".{output_path.stem}.partial{output_path.suffix}")
+
+
+def generated_mv_hevc_artifact_error(
+    path: Path,
+    reason: str,
+    *,
+    stage_number: int = 5,
+    stage_name: str = "Combine to MV HEVC",
+    artifact_role: str = "generated MV-HEVC video",
+    restart_action: str = "Restart from Combine to MV HEVC (stage 5).",
+) -> GeneratedMVHEVCArtifactError:
+    return GeneratedMVHEVCArtifactError(
+        f"Stage {stage_number} ({stage_name}) rejected the {artifact_role} artifact {path.name}: {reason}.",
+        stage_number=stage_number,
+        stage_name=stage_name,
+        artifact_role=artifact_role,
+        restart_action=restart_action,
     )
-    output = combined_process_output(process_result)
-    if "left and right input resolutions do not match. aborting!" in output:
-        raise RuntimeError("Left and right input resolutions do not match.")
-    elif "aborting!" in output:
-        raise RuntimeError("Failed to combine stereo HEVC streams to MV-HEVC.")
+
+
+def remove_generated_mv_hevc_artifact(path: Path, *, reason: str) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as error:
+        raise generated_mv_hevc_artifact_error(path, reason) from error
+
+
+def report_generated_mv_hevc_cleanup_failure(
+    path: Path,
+    substantive_error: BaseException,
+    *,
+    run_context: RunContext | None,
+) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as cleanup_error:
+        cleanup_reason = cleanup_error.strerror
+        if cleanup_reason is None and len(cleanup_error.args) == 1:
+            cleanup_reason = str(cleanup_error.args[0])
+        cleanup_reason = cleanup_reason or type(cleanup_error).__name__
+        message = f"Could not remove the failed stage-5 partial artifact {path.name}: {cleanup_reason}"
+        cli_message(message, run_context=run_context)
+        substantive_error.add_note(message)
+
+
+def generated_mv_hevc_duration_tolerance(expected_duration_seconds: float) -> float:
+    return max(
+        GENERATED_MV_HEVC_DURATION_TOLERANCE_MIN_SECONDS,
+        expected_duration_seconds * GENERATED_MV_HEVC_DURATION_TOLERANCE_RATIO,
+    )
+
+
+def adjusted_generated_mv_hevc_duration(
+    duration_seconds: float,
+    source_frame_rate: str | None,
+) -> float:
+    if not config.frame_rate or not source_frame_rate:
+        return duration_seconds
+    try:
+        source_rate = Fraction(source_frame_rate)
+        target_rate = Fraction(config.frame_rate)
+    except (ValueError, ZeroDivisionError):
+        return duration_seconds
+    if source_rate <= 0 or target_rate <= 0:
+        return duration_seconds
+    return duration_seconds * float(source_rate / target_rate)
+
+
+def probe_generated_mv_hevc_expectations(
+    source_path: Path,
+    output_path: Path,
+    source_description: str,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> tuple[tuple[int, int], float, str | None]:
+    try:
+        probe = run_ffprobe(
+            source_path,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+            select_streams="v:0",
+            show_entries="format=duration:stream=width,height,duration,avg_frame_rate",
+            v="error",
+        )
+    except ProcessCancelled:
+        raise
+    except Exception as error:
+        raise generated_mv_hevc_artifact_error(
+            output_path,
+            f"FFprobe could not read {source_description}",
+        ) from error
+    streams = probe.get("streams")
+    if not isinstance(streams, list) or len(streams) != 1 or not isinstance(streams[0], dict):
+        raise generated_mv_hevc_artifact_error(output_path, f"{source_description} has no readable video track")
+    stream = streams[0]
+    try:
+        dimensions = (int(stream["width"]), int(stream["height"]))
+    except (KeyError, TypeError, ValueError) as error:
+        raise generated_mv_hevc_artifact_error(
+            output_path,
+            f"{source_description} has missing or invalid video dimensions",
+        ) from error
+    format_data = probe.get("format")
+    duration_value = stream.get("duration")
+    if duration_value in (None, "N/A") and isinstance(format_data, dict):
+        duration_value = format_data.get("duration")
+    try:
+        duration_seconds = float(str(duration_value))
+    except ValueError as error:
+        raise generated_mv_hevc_artifact_error(
+            output_path,
+            f"{source_description} has a missing or invalid video duration",
+        ) from error
+    if dimensions[0] <= 0 or dimensions[1] <= 0 or not math.isfinite(duration_seconds) or duration_seconds <= 0:
+        raise generated_mv_hevc_artifact_error(
+            output_path,
+            f"{source_description} has invalid video dimensions or duration",
+        )
+    average_frame_rate = stream.get("avg_frame_rate")
+    return dimensions, duration_seconds, average_frame_rate if isinstance(average_frame_rate, str) else None
+
+
+def resolve_generated_mv_hevc_expectations(
+    left_video_path: Path,
+    reference_video_path: Path | None,
+    output_path: Path,
+    disc_info: DiscInfo,
+    crop_params: str | None,
+    *,
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> tuple[tuple[int, int], float]:
+    parsed_crop = parse_crop_params(crop_params or "")
+    expected_dimensions = (
+        (parsed_crop[0], parsed_crop[1])
+        if parsed_crop is not None
+        else parse_resolution(config.resolution or disc_info.resolution)
+    )
+    fallback_duration = (
+        config.preview_range.duration_seconds if config.preview_range is not None else disc_info.duration_seconds
+    )
+    expected_duration_seconds = adjusted_generated_mv_hevc_duration(fallback_duration, disc_info.frame_rate)
+
+    if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value and left_video_path.is_file():
+        dimensions, duration_seconds, _ = probe_generated_mv_hevc_expectations(
+            left_video_path,
+            output_path,
+            "the left-eye stage-4 artifact",
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
+        return dimensions, duration_seconds
+    if (
+        config.start_stage.value > Stage.COMBINE_TO_MV_HEVC.value
+        and reference_video_path is not None
+        and reference_video_path.is_file()
+    ):
+        try:
+            _, duration_seconds, source_frame_rate = probe_generated_mv_hevc_expectations(
+                reference_video_path,
+                output_path,
+                "the source video used to verify resume",
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                observability_context=observability_context,
+            )
+        except GeneratedMVHEVCArtifactError:
+            cli_message(
+                "Could not read source video timing for resume; using title metadata as the validation baseline.",
+                run_context=run_context,
+            )
+        else:
+            return expected_dimensions, adjusted_generated_mv_hevc_duration(duration_seconds, source_frame_rate)
+    return expected_dimensions, expected_duration_seconds
+
+
+def validate_generated_mv_hevc_artifact(
+    path: Path,
+    *,
+    expected_dimensions: tuple[int, int] | None,
+    expected_duration_seconds: float | None,
+    stage_number: int = 5,
+    stage_name: str = "Combine to MV HEVC",
+    artifact_role: str = "generated MV-HEVC video",
+    restart_action: str = "Restart from Combine to MV HEVC (stage 5).",
+    run_context: RunContext | None = None,
+    cancellation_event: threading.Event | None = None,
+    observability_context: ObservabilityContext | None = None,
+) -> None:
+    def invalid_artifact(reason: str) -> GeneratedMVHEVCArtifactError:
+        return generated_mv_hevc_artifact_error(
+            path,
+            reason,
+            stage_number=stage_number,
+            stage_name=stage_name,
+            artifact_role=artifact_role,
+            restart_action=restart_action,
+        )
+
+    try:
+        artifact_stat = path.stat()
+    except OSError as error:
+        raise invalid_artifact("the helper did not produce a readable file") from error
+    if not stat.S_ISREG(artifact_stat.st_mode):
+        raise invalid_artifact("the helper output is not a regular file")
+    if artifact_stat.st_size <= 0:
+        raise invalid_artifact("the helper output is empty")
+
+    try:
+        probe = run_ffprobe(
+            path,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+            select_streams="v:0",
+            show_entries="format=duration:stream=codec_name,codec_tag_string,width,height,duration",
+            v="error",
+        )
+    except ProcessCancelled:
+        raise
+    except Exception as error:
+        raise invalid_artifact("FFprobe could not parse the helper output") from error
+
+    streams = probe.get("streams")
+    if not isinstance(streams, list) or len(streams) != 1 or not isinstance(streams[0], dict):
+        raise invalid_artifact("FFprobe did not find exactly one video track")
+    stream = streams[0]
+    if stream.get("codec_name") != "hevc":
+        raise invalid_artifact("the video track is not HEVC")
+    if stream.get("codec_tag_string") != "hvc1":
+        raise invalid_artifact("the HEVC video track is not tagged hvc1 for Apple playback")
+    try:
+        actual_dimensions = (int(stream["width"]), int(stream["height"]))
+    except (KeyError, TypeError, ValueError) as error:
+        raise invalid_artifact("the video track dimensions are missing or invalid") from error
+    if actual_dimensions[0] <= 0 or actual_dimensions[1] <= 0:
+        raise invalid_artifact("the video track dimensions are not positive")
+    if expected_dimensions is not None and actual_dimensions != expected_dimensions:
+        raise invalid_artifact(
+            f"the video track dimensions are {actual_dimensions[0]}x{actual_dimensions[1]}, "
+            f"expected {expected_dimensions[0]}x{expected_dimensions[1]}",
+        )
+
+    format_data = probe.get("format")
+    duration_value = stream.get("duration")
+    if duration_value in (None, "N/A") and isinstance(format_data, dict):
+        duration_value = format_data.get("duration")
+    try:
+        actual_duration_seconds = float(str(duration_value))
+    except (TypeError, ValueError) as error:
+        raise invalid_artifact("the video duration is missing or invalid") from error
+    if not math.isfinite(actual_duration_seconds) or actual_duration_seconds <= 0:
+        raise invalid_artifact("the video duration is not finite and positive")
+    if expected_duration_seconds is not None and expected_duration_seconds > 0:
+        tolerance_seconds = generated_mv_hevc_duration_tolerance(expected_duration_seconds)
+        if abs(actual_duration_seconds - expected_duration_seconds) > tolerance_seconds:
+            raise invalid_artifact(
+                f"the video duration is {actual_duration_seconds:.3f}s, expected {expected_duration_seconds:.3f}s "
+                f"within {tolerance_seconds:.3f}s",
+            )
+
+    try:
+        box_result = run_process_capture(
+            [config.MP4BOX_PATH, "-disox", path, "-std"],
+            "inspect generated MV-HEVC container metadata.",
+            tool_id="mp4box",
+            merge_stderr=False,
+            capture_overflow=CaptureOverflowPolicy.FAIL,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
+    except ProcessCancelled:
+        raise
+    except Exception as error:
+        raise invalid_artifact("MP4Box could not parse the helper output") from error
+    observed_box_types = set(GENERATED_MV_HEVC_BOX_TYPE_PATTERN.findall(combined_process_output(box_result)))
+    missing_box_types = GENERATED_MV_HEVC_REQUIRED_BOX_TYPES - observed_box_types
+    if missing_box_types:
+        missing = ", ".join(sorted(missing_box_types))
+        raise invalid_artifact(f"the MV-HEVC container is missing required boxes: {missing}")
 
 
 def parse_crop_params(crop_string: str) -> tuple[int, int, int, int] | None:
@@ -1041,9 +1386,6 @@ def upscale_file(
         capture_overflow=CaptureOverflowPolicy.TRUNCATE,
         show_spinner=True,
     )
-
-    if not config.keep_files:
-        input_path.unlink(missing_ok=True)
 
 
 def create_left_right_files(
@@ -1135,23 +1477,50 @@ def create_mv_hevc_file(
     output_folder: Path,
     disc_info: DiscInfo,
     *,
+    crop_params: str = "",
+    reference_video_path: Path | None = None,
+    expected_dimensions: tuple[int, int] | None = None,
+    expected_duration_seconds: float | None = None,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
 ) -> Path:
     mv_hevc_path = output_folder / f"{disc_info.name}_MV-HEVC.mov"
+    if expected_dimensions is None or expected_duration_seconds is None:
+        expected_dimensions, expected_duration_seconds = resolve_generated_mv_hevc_expectations(
+            left_video_path,
+            reference_video_path,
+            mv_hevc_path,
+            disc_info,
+            crop_params,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
     if config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
         combine_to_mv_hevc(
             left_video_path,
             right_video_path,
             mv_hevc_path,
             disc_info.color_depth,
+            expected_dimensions=expected_dimensions,
+            expected_duration_seconds=expected_duration_seconds,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
+    base_artifact_validated = not (config.fx_upscale and config.start_stage.value > Stage.UPSCALE_VIDEO.value)
+    if config.start_stage.value > Stage.COMBINE_TO_MV_HEVC.value and base_artifact_validated:
+        validate_generated_mv_hevc_artifact(
+            mv_hevc_path,
+            expected_dimensions=expected_dimensions,
+            expected_duration_seconds=expected_duration_seconds,
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=observability_context,
         )
 
-    if not config.keep_files:
+    if not config.keep_files and base_artifact_validated:
         left_video_path.unlink(missing_ok=True)
         right_video_path.unlink(missing_ok=True)
     return mv_hevc_path
@@ -1226,6 +1595,8 @@ def create_av1_stereo_file(
 def create_upscaled_file(
     input_path: Path,
     *,
+    expected_generated_mv_hevc_dimensions: tuple[int, int] | None = None,
+    expected_generated_mv_hevc_duration_seconds: float | None = None,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
@@ -1240,8 +1611,20 @@ def create_upscaled_file(
             )
 
         upscaled_path = input_path.with_stem(f"{input_path.stem} Upscaled")
-        if not upscaled_path.exists():
-            raise RuntimeError("Upscaled file not found.")
+        validate_generated_mv_hevc_artifact(
+            upscaled_path,
+            expected_dimensions=expected_generated_mv_hevc_dimensions,
+            expected_duration_seconds=expected_generated_mv_hevc_duration_seconds,
+            stage_number=6,
+            stage_name="Upscale Video",
+            artifact_role="upscaled generated MV-HEVC video",
+            restart_action="Restart from Upscale Video (stage 6) when the base generated video is available.",
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
+        if not config.keep_files and config.start_stage.value <= Stage.UPSCALE_VIDEO.value:
+            input_path.unlink(missing_ok=True)
 
         return upscaled_path
     return input_path

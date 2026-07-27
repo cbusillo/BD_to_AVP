@@ -20,6 +20,7 @@ from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.disc import DiscInfo, DiscTitleInfo, MKVCreationError
 from bd_to_avp.modules.process import process_each
 from bd_to_avp.modules.sub import SRTCreationError
+from bd_to_avp.modules.video import GeneratedMVHEVCArtifactError
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video_route import DirectMVHEVCCapability, VideoRouteIntent
 from bd_to_avp.observability import ObservabilityEmitter
@@ -1889,6 +1890,33 @@ class SourceConversionTests(unittest.TestCase):
             self.assertEqual(context.exception.code, "mkv_creation_decision_required")
             self.assertEqual(context.exception.choices, ("retry_continue_on_error", "cancel"))
             self.assertIn("Extract MVC and Audio", context.exception.details or "")
+
+    def test_generated_mv_hevc_validation_failure_is_typed_and_retryable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.iso"
+            source_path.write_bytes(b"disc")
+            destination_path = temporary_path / "output"
+            job = JobSpec.from_json_line(conversion_request_line(source_path, destination_path))
+            emitter = WorkerEventEmitter(io.StringIO(), job.job_id)
+            activity = WorkerActivityReporter(emitter)
+            artifact_error = GeneratedMVHEVCArtifactError(
+                "Stage 5 (Combine to MV HEVC) rejected the generated video artifact movie_MV-HEVC.mov: "
+                "FFprobe could not parse the helper output."
+            )
+
+            with (
+                patch.object(config, "configure_tool_environment"),
+                patch("bd_to_avp.modules.process.process_each", side_effect=artifact_error),
+                self.assertRaises(WorkerOperationError) as context,
+            ):
+                convert_source(job, WorkerProcessOwner(), activity)
+
+            self.assertEqual(context.exception.code, "generated_mv_hevc_artifact_invalid")
+            self.assertTrue(context.exception.retryable)
+            self.assertIn("Stage 5", context.exception.message)
+            self.assertIn("generated video artifact", context.exception.details or "")
+            self.assertIn("Restart from Combine to MV HEVC (stage 5)", context.exception.details or "")
 
     def test_subtitle_failure_requests_skip_subtitles_decision(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

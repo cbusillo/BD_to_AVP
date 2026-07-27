@@ -31,6 +31,7 @@ from bd_to_avp.modules.video import (
     detect_crop_parameters,
     create_upscaled_file,
     get_video_color_depth,
+    resolve_generated_mv_hevc_expectations,
 )
 from bd_to_avp.modules.video_route import ResolvedVideoRoute, VideoRouteKind, legacy_video_route
 from bd_to_avp.observability import ObservabilityContext, ObservabilityStage
@@ -380,6 +381,7 @@ def process_each(
         observability_context=stage_observability_context("extract_subtitles"),
     )
     raise_if_cancelled(cancellation_event)
+    generated_mv_hevc_expectations: tuple[tuple[int, int], float] | None = None
     if video_route.output_mode is VideoMode.AV1_SBS:
         if activity and config.start_stage.value <= Stage.CREATE_LEFT_RIGHT_FILES.value:
             activity.stage_started("encode_av1_stereo", "Encoding side-by-side AV1 stereo video")
@@ -438,11 +440,26 @@ def process_each(
         raise_if_cancelled(cancellation_event)
         if activity and config.start_stage.value <= Stage.COMBINE_TO_MV_HEVC.value:
             activity.stage_started("combine_to_mv_hevc", "Combining stereo video into MV-HEVC")
+        mv_hevc_path = output_folder / f"{disc_info.name}_MV-HEVC.mov"
+        generated_mv_hevc_expectations = resolve_generated_mv_hevc_expectations(
+            left_output_path,
+            mkv_output_path,
+            mv_hevc_path,
+            disc_info,
+            crop_params,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=stage_observability_context("combine_to_mv_hevc"),
+        )
         video_path = create_mv_hevc_file(
             left_output_path,
             right_output_path,
             output_folder,
             disc_info,
+            crop_params=crop_params,
+            reference_video_path=mkv_output_path,
+            expected_dimensions=generated_mv_hevc_expectations[0],
+            expected_duration_seconds=generated_mv_hevc_expectations[1],
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("combine_to_mv_hevc"),
@@ -453,6 +470,17 @@ def process_each(
             activity.stage_started("upscale_video", "Upscaling video")
         video_path = create_upscaled_file(
             video_path,
+            expected_generated_mv_hevc_dimensions=(
+                (
+                    generated_mv_hevc_expectations[0][0] * 2,
+                    generated_mv_hevc_expectations[0][1] * 2,
+                )
+                if generated_mv_hevc_expectations is not None
+                else None
+            ),
+            expected_generated_mv_hevc_duration_seconds=(
+                generated_mv_hevc_expectations[1] if generated_mv_hevc_expectations is not None else None
+            ),
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=stage_observability_context("upscale_video"),
