@@ -2,18 +2,28 @@ import Foundation
 
 private enum PreviewViewModelError: Error, LocalizedError {
     case unsupportedSource
+    case workspacePreparationFailed(volumeName: String)
+    case insufficientCapacity(volumeName: String, requiredBytes: Int64, availableBytes: Int64)
     case invalidArtifact
     case missingArtifact
 
     var errorDescription: String? {
         switch self {
         case .unsupportedSource:
-            "Preview currently supports MKV, MTS, M2TS, and ISO sources."
+            "Preview currently supports MKV, MTS, M2TS, ISO, and Blu-ray-folder sources."
+        case .workspacePreparationFailed(let volumeName):
+            "The temporary preview workspace could not be prepared on \(volumeName). Make sure the destination is mounted and writable, and that no file is using the reserved .BluRayToVisionProPreviews name, then try again."
+        case .insufficientCapacity(let volumeName, let requiredBytes, let availableBytes):
+            "The temporary preview workspace on \(volumeName) needs about \(Self.bytes(requiredBytes)), but only \(Self.bytes(availableBytes)) is available. Free space there or choose another destination, then try again."
         case .invalidArtifact:
-            "The preview engine returned an artifact outside its owned cache."
+            "The preview engine returned an artifact outside its owned temporary workspace."
         case .missingArtifact:
             "The preview ended before a playable artifact was available."
         }
+    }
+
+    private static func bytes(_ value: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
     }
 }
 
@@ -30,14 +40,21 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var elapsedSeconds = 0
     @Published private(set) var progress: WorkerProgress?
     @Published private(set) var videoRoute: VideoRouteReport?
+    @Published private(set) var capacityWarning: String?
+    @Published private(set) var cleanupWarning: String?
+    @Published private(set) var isCleaningUp = false
 
     private let clientFactory: ClientFactory
     private let cache: PreviewCache
+    private let capacityProvider: any PreviewCapacityProviding
     private let observabilityEventStore: any ObservabilityEventPersisting
     private var client: (any WorkerProcessRunning)?
     private var runTask: Task<Void, Never>?
+    private var workspacePreparationTask: Task<PreviewWorkspacePreparation, Error>?
+    private var cleanupTask: Task<Void, Never>?
     private var activeDraft: PreviewDraft?
     private var activeDirectoryURL: URL?
+    private var activeCache: PreviewCache?
     private var pendingTerminalEvent: WorkerEvent?
     private var actionsWaitingForIdle: [() -> Void] = []
 
@@ -46,10 +63,12 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
             WorkerProcessClient(configuration: try WorkerLaunchConfiguration.automatic())
         },
         cache: PreviewCache = .automatic(),
+        capacityProvider: (any PreviewCapacityProviding)? = nil,
         observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared
     ) {
         self.clientFactory = clientFactory
         self.cache = cache
+        self.capacityProvider = capacityProvider ?? SystemPreviewCapacityProvider(fileManager: cache.fileManager)
         self.observabilityEventStore = observabilityEventStore
         cache.removeExpired()
     }
@@ -59,11 +78,11 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     var hasActiveWork: Bool {
-        hasActiveWorker
+        hasActiveWorker || isCleaningUp
     }
 
     var canStart: Bool {
-        !hasActiveWorker
+        !hasActiveWorker && !isCleaningUp
     }
 
     var elapsedText: String? {
@@ -71,12 +90,13 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     func startPreview(_ draft: PreviewDraft) {
-        guard !hasActiveWorker else {
+        guard canStart else {
             return
         }
         guard draft.conversion.source.kind == .matroska
                 || draft.conversion.source.kind == .transportStream
                 || draft.conversion.source.kind == .discImage
+                || draft.conversion.source.kind == .bluRayFolder
         else {
             fail(PreviewViewModelError.unsupportedSource)
             return
@@ -94,39 +114,67 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         elapsedSeconds = 0
         progress = nil
         videoRoute = nil
+        capacityWarning = nil
+        cleanupWarning = nil
 
         let jobID = UUID()
-        do {
-            let directoryURL = try cache.prepareDirectory(jobID: jobID)
-            activeDraft = draft
-            activeDirectoryURL = directoryURL
-            let job = WorkerJobSpec(
-                previewDraft: draft,
-                destinationURL: directoryURL,
-                jobID: jobID
+        let workspacePlan = PreviewWorkspacePlan.resolve(draft: draft, localCache: cache)
+        let sourceKind = draft.conversion.source.kind
+        let sourceURL = draft.conversion.source.url
+        let inspectedSizeBytes = draft.conversion.sourceDetails?.sizeBytes
+        let capacityProvider = capacityProvider
+        activeDraft = draft
+        phase = .preparing
+        stageMessage = "Preparing Preview Workspace"
+
+        let preparationTask = Task.detached(priority: .userInitiated) {
+            try PreviewWorkspacePreparer.prepare(
+                jobID: jobID,
+                plan: workspacePlan,
+                sourceKind: sourceKind,
+                sourceURL: sourceURL,
+                inspectedSizeBytes: inspectedSizeBytes,
+                capacityProvider: capacityProvider
             )
-            let client = try clientFactory()
-            self.client = client
-            phase = .preparing
-            stageMessage = "Preparing Preview"
-            runTask = Task { [weak self] in
-                guard let self else {
-                    return
-                }
-                do {
-                    let runResult = try await client.run(job: job) { [weak self] event in
-                        guard let self else {
-                            return
-                        }
-                        try await self.receive(event)
-                    }
-                    self.finish(runResult)
-                } catch {
-                    self.fail(error)
-                }
+        }
+        workspacePreparationTask = preparationTask
+        runTask = Task { [weak self] in
+            guard let self else {
+                preparationTask.cancel()
+                return
             }
-        } catch {
-            fail(error)
+            do {
+                let preparation = try await preparationTask.value
+                self.workspacePreparationTask = nil
+                self.activeDirectoryURL = preparation.directoryURL
+                self.activeCache = preparation.cache
+                self.applyCapacityAssessment(
+                    preparation.capacityAssessment,
+                    volumeName: preparation.volumeName
+                )
+                try Task.checkCancellation()
+                let directoryURL = preparation.directoryURL
+                let job = WorkerJobSpec(
+                    previewDraft: draft,
+                    destinationURL: directoryURL,
+                    jobID: jobID
+                )
+                let client = try clientFactory()
+                self.client = client
+                phase = .preparing
+                stageMessage = "Preparing Preview"
+                let runResult = try await client.run(job: job) { [weak self] event in
+                    guard let self else {
+                        return
+                    }
+                    try await self.receive(event)
+                }
+                self.finish(runResult)
+            } catch let error as PreviewWorkspacePreparationError {
+                self.failWorkspacePreparation(error)
+            } catch {
+                self.fail(error)
+            }
         }
     }
 
@@ -137,15 +185,22 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         phase = .stopping
         stageMessage = "Stopping Preview"
         progress = nil
-        client?.cancel()
+        if let client {
+            client.cancel()
+        } else {
+            workspacePreparationTask?.cancel()
+            runTask?.cancel()
+        }
     }
 
     func stopForQuit() async {
-        guard let task = runTask else {
-            return
+        if let task = runTask {
+            stopActiveWorker()
+            await task.value
         }
-        stopActiveWorker()
-        await task.value
+        if let cleanupTask {
+            await cleanupTask.value
+        }
     }
 
     func discardPreview() {
@@ -157,26 +212,26 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         videoRoute = nil
         phase = .expired
         stageMessage = "Preview Expired"
-        activityMessage = "The cached preview was removed."
+        activityMessage = "The temporary preview was removed."
     }
 
     func validateArtifact() {
         guard let artifactLease else {
             return
         }
-        guard cache.fileManager.fileExists(atPath: artifactLease.artifact.outputURL.path) else {
+        guard artifactLease.fileManager.fileExists(atPath: artifactLease.artifact.outputURL.path) else {
             self.artifactLease = nil
             reviewedDraft = nil
             videoRoute = nil
             phase = .expired
             stageMessage = "Preview Expired"
-            activityMessage = "The cached preview is no longer available."
+            activityMessage = "The temporary preview is no longer available."
             return
         }
     }
 
     func postponeInstallUntilIdle(_ installHandler: @escaping () -> Void) -> Bool {
-        guard hasActiveWorker else {
+        guard hasActiveWork else {
             return false
         }
         actionsWaitingForIdle.append(installHandler)
@@ -236,17 +291,23 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
 
     private func accept(_ artifact: PreviewArtifact) throws {
         guard let activeDirectoryURL,
+              let activeCache,
               let activeDraft,
               artifact.parentJobID == activeDraft.parentJobID,
-              cache.contains(artifact.outputURL, in: activeDirectoryURL),
-              cache.fileManager.fileExists(atPath: artifact.outputURL.path)
+              activeCache.contains(artifact.outputURL, in: activeDirectoryURL),
+              activeCache.fileManager.fileExists(atPath: artifact.outputURL.path)
         else {
             throw PreviewViewModelError.invalidArtifact
         }
         artifactLease = PreviewArtifactLease(
             artifact: artifact,
             directoryURL: activeDirectoryURL,
-            cache: cache
+            cache: activeCache,
+            cleanupFailureHandler: { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.cleanupWarning = Self.cleanupFailureMessage
+                }
+            }
         )
         videoRoute = artifact.videoRoute ?? videoRoute
         reviewedDraft = activeDraft
@@ -314,22 +375,91 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         clearActiveWorker(preserveDirectory: false)
     }
 
+    private func applyCapacityAssessment(
+        _ assessment: PreviewCapacityAssessment?,
+        volumeName: String
+    ) {
+        switch assessment {
+        case .unknown:
+            capacityWarning = "Available space for the temporary preview workspace on \(volumeName) could not be confirmed. The preview will continue; if it stops, free space there or choose another destination and try again."
+        case .conflicting:
+            capacityWarning = "The destination volume \(volumeName) reported conflicting free-space values for the temporary preview workspace. The preview will continue; if it stops, free space there or choose another destination and try again."
+        case .sufficient, .insufficient, .none:
+            break
+        }
+    }
+
+    private func failWorkspacePreparation(_ error: PreviewWorkspacePreparationError) {
+        switch error {
+        case .insufficientCapacity(let volumeName, let requiredBytes, let availableBytes):
+            fail(
+                PreviewViewModelError.insufficientCapacity(
+                    volumeName: volumeName,
+                    requiredBytes: requiredBytes,
+                    availableBytes: availableBytes
+                )
+            )
+        case .unavailable(let volumeName):
+            fail(PreviewViewModelError.workspacePreparationFailed(volumeName: volumeName))
+        }
+    }
+
     private func clearActiveWorker(preserveDirectory: Bool) {
         let artifactOwnedDirectory = artifactLease != nil
+        let directoryCleanup: (PreviewCache, URL)?
         if !preserveDirectory {
             releaseArtifact()
             reviewedDraft = nil
         }
-        if !preserveDirectory, !artifactOwnedDirectory, let activeDirectoryURL {
-            try? cache.remove(activeDirectoryURL)
+        if !preserveDirectory,
+           !artifactOwnedDirectory,
+           let activeDirectoryURL,
+           let activeCache {
+            directoryCleanup = (activeCache, activeDirectoryURL)
+        } else {
+            directoryCleanup = nil
         }
         client = nil
         runTask = nil
+        workspacePreparationTask = nil
         activeDraft = nil
         activeDirectoryURL = nil
+        activeCache = nil
         pendingTerminalEvent = nil
         progress = nil
 
+        if let directoryCleanup {
+            startCleanup(cache: directoryCleanup.0, directoryURL: directoryCleanup.1)
+        } else {
+            finishWaitingActions()
+        }
+    }
+
+    private func startCleanup(cache: PreviewCache, directoryURL: URL) {
+        isCleaningUp = true
+        let backgroundTask = Task.detached(priority: .utility) { () -> Bool in
+            do {
+                try cache.remove(directoryURL)
+                return true
+            } catch {
+                return false
+            }
+        }
+        cleanupTask = Task { [weak self] in
+            let succeeded = await backgroundTask.value
+            guard let self else {
+                return
+            }
+            if !succeeded {
+                self.cleanupWarning = Self.cleanupFailureMessage
+            }
+            self.isCleaningUp = false
+            self.cleanupTask = nil
+            self.finishWaitingActions()
+        }
+    }
+
+    private func finishWaitingActions() {
         let actions = actionsWaitingForIdle
         actionsWaitingForIdle.removeAll()
         for action in actions {
@@ -351,4 +481,6 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
         "create_final_file",
         "move_files",
     ]
+
+    private static let cleanupFailureMessage = "The temporary preview workspace could not be removed completely. After other previews finish, remove the hidden .BluRayToVisionProPreviews folder from the selected destination."
 }

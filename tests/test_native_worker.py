@@ -448,7 +448,19 @@ class JobSpecTests(unittest.TestCase):
 
         self.assertEqual(context.exception.code, "invalid_preview_options")
 
-    def test_rejects_preview_for_bluray_folder(self) -> None:
+    def test_parses_preview_for_bluray_folder_with_selected_title(self) -> None:
+        request = preview_request_line(
+            Path("/tmp/Disc"),
+            Path("/tmp/output"),
+            source={"kind": "blu_ray_folder", "path": "/tmp/Disc", "title_id": "7"},
+        )
+
+        job = JobSpec.from_json_line(request)
+
+        self.assertEqual(job.source.kind, WorkerSourceKind.BLU_RAY_FOLDER)
+        self.assertEqual(job.source.title_id, "7")
+
+    def test_rejects_bluray_folder_preview_without_selected_title(self) -> None:
         request = preview_request_line(
             Path("/tmp/Disc"),
             Path("/tmp/output"),
@@ -458,7 +470,7 @@ class JobSpecTests(unittest.TestCase):
         with self.assertRaises(WorkerProtocolError) as context:
             JobSpec.from_json_line(request)
 
-        self.assertEqual(context.exception.code, "invalid_preview_source")
+        self.assertEqual(context.exception.code, "invalid_title_selection")
 
     def test_rejects_preview_with_unknown_position(self) -> None:
         with self.assertRaises(WorkerProtocolError) as context:

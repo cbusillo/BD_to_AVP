@@ -159,6 +159,15 @@ capability before their duration inspection and use the same resolver and
 fallback report as full conversions. This is the existing finalized-preview
 workflow, not a live processed-frame preview channel.
 
+Direct MKV, MTS, and M2TS preview jobs keep their bounded artifacts in the app
+preview cache. ISO and Blu-ray-folder preview jobs require a selected title and
+use a hidden per-job workspace on the selected conversion destination. The app
+preflights that actual volume with a conservative reserve equal to source
+materialization plus 8 GiB for bounded route outputs. Trustworthy low-capacity
+results block before launch; missing or conflicting mounted-volume readings warn
+and continue. Once the bounded preview MKV is committed, the worker immediately
+removes its owned full-title MKV while never deleting the selected direct source.
+
 ## Direct Stage Contract
 
 Direct MV-HEVC executes during existing stage 4,
