@@ -1,10 +1,17 @@
 import unittest
 
+from pathlib import Path
+
 from bd_to_avp.modules.aac_layout_policy import identity_map
 from scripts import qualify_apple_aac_layouts as qualification
 
 
 class AppleAacLayoutQualificationTests(unittest.TestCase):
+    def test_generated_policy_keeps_packaged_fixture_gate(self) -> None:
+        policy = Path("docs/apple-aac-layout-policy.md").read_text(encoding="utf-8")
+
+        self.assertIn("\n".join(qualification.PACKAGED_FIXTURE_GATE_LINES), policy)
+
     def test_matrix_covers_standard_layouts_from_one_through_eight_channels(self) -> None:
         layouts = {case.source_layout for case in qualification.LAYOUT_CASES}
 

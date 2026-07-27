@@ -13,6 +13,7 @@ from scripts.verify_packaged_aac_layouts import (
     _build_request,
     _execute_worker,
     _failed_case,
+    _identity_evidence,
     _policy_evidence,
     _validate_streams,
     load_fixture_manifest,
@@ -253,6 +254,25 @@ class PackagedAacEvidenceTests(unittest.TestCase):
         observed[1]["default"] = True
         with self.assertRaisesRegex(PackagedAacFailure, "default"):
             _validate_streams(case, observed, expected)
+
+    def test_identity_evidence_rejects_apple_channel_count_mismatch(self) -> None:
+        case = next(case for case in load_fixture_manifest().cases if case.case_id == "remap-5_1-side")
+        report = Mock(output_streams={"audio": 1})
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            work_directory = Path(temporary_directory)
+            with (
+                patch("scripts.verify_packaged_aac_layouts.inspect_apple_media_conversion", return_value=report),
+                patch(
+                    "scripts.verify_packaged_aac_layouts._probe",
+                    return_value={"streams": [{"codec_type": "audio", "channels": 2}]},
+                ),
+                patch("scripts.verify_packaged_aac_layouts._decode_track") as decode_track,
+            ):
+                with self.assertRaisesRegex(PackagedAacFailure, "channel count changed"):
+                    _identity_evidence(Mock(), case, work_directory / "output.mov", work_directory)
+
+        decode_track.assert_not_called()
 
 
 class PackagedAacPathTests(unittest.TestCase):

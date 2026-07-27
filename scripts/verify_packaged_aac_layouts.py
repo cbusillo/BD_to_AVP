@@ -345,6 +345,11 @@ def validate_paths(
     return app, fixtures, output, artifacts
 
 
+def _require_apple_tools() -> None:
+    if shutil.which("avconvert") is None:
+        raise PackagedAacFailure("Apple media verification requires avconvert.")
+
+
 def _run(command: Sequence[str | Path]) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
@@ -574,7 +579,10 @@ def _decode_track(app: AppBundle, source: Path, index: int, output: Path) -> arr
         ]
     )
     samples = array.array("f")
-    samples.frombytes(output.read_bytes())
+    try:
+        samples.frombytes(output.read_bytes())
+    except ValueError as error:
+        raise PackagedAacFailure("Apple LPCM decode produced malformed sample data.") from error
     if sys.byteorder != "little":
         samples.byteswap()
     return samples
@@ -590,14 +598,24 @@ def _identity_evidence(
     report = inspect_apple_media_conversion(output, apple_lpcm, preset=APPLE_LPCM_PRESET)
     if report.output_streams["audio"] != len(case.selected_tracks):
         raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM conversion dropped audio.")
+    apple_streams = _audio_streams(_probe(app, apple_lpcm))
+    if len(apple_streams) != len(case.selected_tracks):
+        raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM stream count changed.")
     evidence: list[Mapping[str, object]] = []
     for index, track in enumerate(case.selected_tracks):
         policy = track.policy
         assert policy is not None
         configuration = CANONICAL_AAC_CONFIGURATION[policy.target_layout]
+        output_channel_names = AAC_CHANNEL_CONFIGURATION_LAYOUTS[configuration]
+        actual_channel_count = apple_streams[index].get("channels")
+        if actual_channel_count != len(output_channel_names):
+            raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM channel count changed.")
+        samples = _decode_track(app, apple_lpcm, index, work_directory / f"audio-{index}.f32")
+        if len(samples) % len(output_channel_names) != 0:
+            raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM samples are incomplete.")
         result = analyze_identity_samples(
-            _decode_track(app, apple_lpcm, index, work_directory / f"audio-{index}.f32"),
-            AAC_CHANNEL_CONFIGURATION_LAYOUTS[configuration],
+            samples,
+            output_channel_names,
             policy.source_channels,
             policy.expected_identity_map,
         )
@@ -680,6 +698,7 @@ def verify_packaged_aac_layouts(
     *,
     manifest_path: Path = DEFAULT_MANIFEST,
 ) -> dict[str, object]:
+    _require_apple_tools()
     manifest = load_fixture_manifest(manifest_path)
     app = read_app_bundle(app_path)
     packaged_policy = app.path / PACKAGED_POLICY_PATH
