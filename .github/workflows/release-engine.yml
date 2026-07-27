@@ -191,7 +191,7 @@ jobs:
           test "$INPUT_OPERATOR_TRIGGERING_ACTOR" = "$ACTUAL_TRIGGERING_ACTOR"
 
       - name: Checkout release policy from the authorized commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -241,7 +241,7 @@ jobs:
       base_snapshot_tag: ${{ steps.feed_state.outputs.base_snapshot_tag }}
     steps:
       - name: Checkout dispatch commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -544,7 +544,7 @@ jobs:
       dmg_size: ${{ steps.package_artifact.outputs.dmg_size }}
     steps:
       - name: Checkout validated main commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -611,7 +611,7 @@ jobs:
           echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: true
           python-version: "3.12"
@@ -1093,7 +1093,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout released commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -1140,7 +1140,7 @@ jobs:
       artifact_id: ${{ steps.python_artifact.outputs.artifact-id }}
     steps:
       - name: Checkout released commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -1151,7 +1151,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
 
       - name: Validate and build distributions
         run: |
@@ -1442,7 +1442,7 @@ jobs:
       appcast_size: ${{ steps.sign_appcast.outputs.appcast_size }}
     steps:
       - name: Checkout protected release tooling
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -1656,7 +1656,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout protected verification tooling
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
