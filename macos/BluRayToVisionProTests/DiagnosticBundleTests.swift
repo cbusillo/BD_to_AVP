@@ -470,7 +470,7 @@ final class DiagnosticBundleTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: false)
         let probe = FileSystemDiagnosticStorageProbe()
 
-        let result = probe.probe(role: .output, url: missingURL, capturedAt: fixedDate)
+        let result = probe.probe(role: .canonicalOutput, url: missingURL, capturedAt: fixedDate)
 
         XCTAssertEqual(result.status, .missing)
         XCTAssertNil(result.errorKind)
@@ -1159,6 +1159,95 @@ final class DiagnosticBundleTests: XCTestCase {
         XCTAssertEqual(event["exit_status"] as? Int, 23)
     }
 
+    func testStorageBundleReconcilesWorkerAndSwiftCapacityAsConflict() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let sourceURL = directory.appendingPathComponent("source.mkv")
+        let destinationURL = directory.appendingPathComponent("destination", isDirectory: true)
+        try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+        XCTAssertTrue(FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8)))
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let source = ConversionSource(kind: .matroska, url: sourceURL)
+        let draft = ConversionDraft(
+            source: source,
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: destinationURL,
+            options: ConversionOptions()
+        )
+        let jobID = UUID()
+        var lifecycle = WorkerLifecycleState()
+        lifecycle.selectSource(sourceURL)
+        try lifecycle.begin(jobID: jobID, operationKind: .conversion)
+        let recorder = DiagnosticSessionRecorder(storageSampleInterval: 0)
+        recorder.beginJob(
+            context: DiagnosticJobContext(jobID: jobID, draft: draft),
+            lifecycle: lifecycle,
+            activeMode: "single_conversion",
+            recordedAt: fixedDate
+        )
+        let workerCapacity = StorageCapacityResult.evaluate(
+            requiredBytes: 10 << 30,
+            evidence: [
+                StorageCapacityEvidence(
+                    provenance: .workerStatVFS,
+                    availableBytes: 100 << 30,
+                    totalBytes: nil,
+                    writable: true,
+                    readOnly: false,
+                    unknownReason: nil
+                ),
+            ]
+        )
+        recorder.recordStorageSamples(
+            [
+                RawDiagnosticStorageSample(
+                    probe: RawDiagnosticStorageProbe(
+                        capturedAt: fixedDate,
+                        role: .destination,
+                        url: destinationURL,
+                        status: .available,
+                        isDirectory: true,
+                        isReadable: true,
+                        isWritable: true,
+                        fileSizeBytes: nil,
+                        modificationAgeSeconds: nil,
+                        volumeAvailableBytes: workerCapacity.availableBytes,
+                        volumeTotalBytes: nil,
+                        volumeReadOnly: false,
+                        errorKind: nil,
+                        capacity: workerCapacity
+                    )
+                ),
+            ],
+            for: jobID
+        )
+        let snapshot = recorder.snapshot(
+            capturedAt: fixedDate,
+            lifecycle: lifecycle,
+            activeMode: "single_conversion",
+            batchSummary: nil,
+            process: .empty
+        )
+        let builder = DiagnosticBundleBuilder(
+            storageProbe: CapacityDiagnosticStorageProbe(availableBytes: 5 << 30),
+            bundleIDProvider: { self.fixedBundleID }
+        )
+
+        let artifact = try builder.createBundle(from: snapshot, outputDirectory: directory)
+        let storageData = try unzipEntry("storage.json", from: artifact.archiveURL)
+        let storage = try XCTUnwrap(JSONSerialization.jsonObject(with: storageData) as? [String: Any])
+        let probes = try XCTUnwrap(storage["probes"] as? [[String: Any]])
+        let destinationProbe = try XCTUnwrap(probes.first { $0["role"] as? String == "destination" })
+
+        XCTAssertEqual(destinationProbe["capacity_state"] as? String, "conflicting")
+        XCTAssertEqual(
+            Set(destinationProbe["capacity_provenance"] as? [String] ?? []),
+            Set(["swift_url_resource_available", "worker_posix_statvfs"])
+        )
+    }
+
     func testSerializedDiagnosticsOmitProcessIdentifiersAndRoundMediaAndStorageSizes() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1286,7 +1375,7 @@ final class DiagnosticBundleTests: XCTestCase {
         )
         XCTAssertEqual((sourceProbe["volume_total_rounded_bytes"] as? NSNumber)?.int64Value, volumeQuantum * 63)
         XCTAssertTrue(samples.allSatisfy { $0["file_size_bytes"] == nil && $0["volume_available_bytes"] == nil })
-        XCTAssertEqual(privacy["rules_version"] as? Int, 4)
+        XCTAssertEqual(privacy["rules_version"] as? Int, 5)
         XCTAssertEqual(privacy["size_rounding_mode"] as? String, "down")
         XCTAssertEqual((privacy["file_size_quantum_bytes"] as? NSNumber)?.int64Value, fileQuantum)
         XCTAssertEqual((privacy["volume_capacity_quantum_bytes"] as? NSNumber)?.int64Value, volumeQuantum)
@@ -1460,7 +1549,7 @@ final class DiagnosticBundleTests: XCTestCase {
             .joined(separator: "\n")
 
         XCTAssertEqual(manifest["schema_version"] as? Int, 1)
-        XCTAssertEqual(privacy["rules_version"] as? Int, 4)
+        XCTAssertEqual(privacy["rules_version"] as? Int, 5)
         XCTAssertTrue(excludedCategories.contains("raw process and thread identifiers"))
         XCTAssertGreaterThan(toolTailTruncation["boundary_dropped_input_bytes"] as? Int ?? 0, 0)
         XCTAssertEqual((manifest["archive"] as? [String: Any])?["maximum_compressed_bytes"] as? Int, 2 * 1_024 * 1_024)
@@ -1626,6 +1715,19 @@ final class DiagnosticBundleTests: XCTestCase {
             artifactSizeBytes: nil,
             artifactModificationAgeSeconds: nil,
             artifactGrowthBytesPerSecond: nil,
+            storageRole: nil,
+            storageStatus: nil,
+            storageCapacityState: nil,
+            storageCapacitySufficiency: nil,
+            storageCapacityProvenance: nil,
+            storageCapacityUnknownReason: nil,
+            storageAvailableBytes: nil,
+            storageTotalBytes: nil,
+            storageRequiredBytes: nil,
+            storageAvailableLowerBytes: nil,
+            storageAvailableUpperBytes: nil,
+            storageReadOnly: nil,
+            storageWritable: nil,
             privacy: nil,
             redaction: nil,
             messagePrivacy: nil,
@@ -1773,6 +1875,42 @@ private struct FixedDiagnosticStorageProbe: DiagnosticStorageProbing {
             volumeTotalBytes: volumeTotalBytes,
             volumeReadOnly: false,
             errorKind: nil
+        )
+    }
+}
+
+private struct CapacityDiagnosticStorageProbe: DiagnosticStorageProbing {
+    let availableBytes: Int64
+
+    func probe(role: DiagnosticStorageRole, url: URL, capturedAt: Date) -> RawDiagnosticStorageProbe {
+        let capacity = StorageCapacityResult.evaluate(
+            requiredBytes: nil,
+            evidence: [
+                StorageCapacityEvidence(
+                    provenance: .swiftAvailable,
+                    availableBytes: availableBytes,
+                    totalBytes: nil,
+                    writable: true,
+                    readOnly: false,
+                    unknownReason: nil
+                ),
+            ]
+        )
+        return RawDiagnosticStorageProbe(
+            capturedAt: capturedAt,
+            role: role,
+            url: url,
+            status: .available,
+            isDirectory: role != .source && role != .canonicalOutput,
+            isReadable: true,
+            isWritable: role != .source,
+            fileSizeBytes: nil,
+            modificationAgeSeconds: nil,
+            volumeAvailableBytes: capacity.availableBytes,
+            volumeTotalBytes: nil,
+            volumeReadOnly: false,
+            errorKind: nil,
+            capacity: capacity
         )
     }
 }

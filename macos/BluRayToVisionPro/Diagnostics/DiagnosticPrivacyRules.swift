@@ -1,3 +1,3 @@
 enum DiagnosticPrivacyRules {
-    static let currentVersion = 4
+    static let currentVersion = 5
 }
