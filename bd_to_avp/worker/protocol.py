@@ -307,9 +307,13 @@ class JobSpec:
                 "Direct-file sources cannot select a disc title.",
                 job_id=job_id,
             )
+        preview_disc_source = source_kind in {
+            WorkerSourceKind.DISC_IMAGE,
+            WorkerSourceKind.BLU_RAY_FOLDER,
+        }
         title_selection_required = (
             operation is WorkerOperation.CONVERT_SOURCE and source_kind is not WorkerSourceKind.DIRECT_FILE
-        ) or (operation is WorkerOperation.PREVIEW_SOURCE and source_kind is WorkerSourceKind.DISC_IMAGE)
+        ) or (operation is WorkerOperation.PREVIEW_SOURCE and preview_disc_source)
         if title_selection_required and title_id is None:
             raise WorkerProtocolError(
                 "invalid_title_selection",
@@ -340,10 +344,14 @@ class JobSpec:
         elif operation is WorkerOperation.PREVIEW_SOURCE:
             assert job_options is not None
             preview_options = cls._parse_preview_options(raw.get("preview"), job_id)
-            if source_kind not in {WorkerSourceKind.DIRECT_FILE, WorkerSourceKind.DISC_IMAGE}:
+            if source_kind not in {
+                WorkerSourceKind.DIRECT_FILE,
+                WorkerSourceKind.DISC_IMAGE,
+                WorkerSourceKind.BLU_RAY_FOLDER,
+            }:
                 raise WorkerProtocolError(
                     "invalid_preview_source",
-                    "Preview currently supports MKV, MTS, M2TS, and ISO sources.",
+                    "Preview currently supports MKV, MTS, M2TS, ISO, and Blu-ray-folder sources.",
                     job_id=job_id,
                 )
             if job_options.start_stage != 1 or job_options.keep_files or not job_options.overwrite:

@@ -50,6 +50,7 @@ def create_bounded_preview_source(
     output_folder: Path,
     preview_range: PreviewRange,
     *,
+    owns_source: bool = False,
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
@@ -65,6 +66,8 @@ def create_bounded_preview_source(
         preview_range.start_seconds + preview_range.duration_seconds,
     )
     output_path = output_folder / f"{input_path.stem}_preview.mkv"
+    if output_path.resolve() == input_path.resolve():
+        output_path = output_folder / f"{input_path.stem}_bounded_preview.mkv"
     ranged_path = output_path.with_suffix(".range.mkv")
     temporary_path = output_path.with_suffix(".part.mkv")
     output_path.unlink(missing_ok=True)
@@ -150,6 +153,7 @@ def create_bounded_preview_source(
         if final_timing.duration_seconds + 0.25 < minimum_duration:
             raise RuntimeError("The bounded preview did not cover the selected source range.")
         temporary_path.replace(output_path)
+        remove_owned_preview_source(input_path, output_folder, owns_source=owns_source)
     finally:
         ranged_path.unlink(missing_ok=True)
         temporary_path.unlink(missing_ok=True)
@@ -161,6 +165,25 @@ def create_bounded_preview_source(
             source_duration_seconds=preview_range.source_duration_seconds,
         ),
     )
+
+
+def remove_owned_preview_source(input_path: Path, output_folder: Path, *, owns_source: bool) -> None:
+    if not owns_source:
+        return
+    try:
+        resolved_input = input_path.resolve()
+        resolved_output_folder = output_folder.resolve()
+        selected_source = config.source_path.resolve() if config.source_path is not None else None
+    except OSError:
+        return
+    if selected_source == resolved_input or not resolved_input.is_relative_to(resolved_output_folder):
+        return
+    try:
+        input_path.unlink(missing_ok=True)
+    except OSError:
+        raise RuntimeError(
+            "The temporary full-title preview source could not be removed after the bounded preview was committed."
+        ) from None
 
 
 def probe_media_timing(

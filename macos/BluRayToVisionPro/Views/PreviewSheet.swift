@@ -115,11 +115,16 @@ struct PreviewSheet: View {
                 }
                 .gridCellColumns(2)
 
-                if conversionDraft.source.kind == .discImage {
+                if conversionDraft.source.kind.previewWorkspaceScope == .selectedDestination {
                     Divider()
                         .gridCellColumns(2)
+                    GridRow {
+                        Text("Temporary workspace")
+                            .foregroundStyle(.secondary)
+                        Text(destinationWorkspaceDescription)
+                    }
                     Label(
-                        "ISO previews must prepare the selected disc title before the bounded range can be encoded.",
+                        "Disc-backed previews prepare the selected title on that volume before the bounded range is encoded. Free space there or choose another destination if preparation stops.",
                         systemImage: "clock.badge.exclamationmark"
                     )
                     .font(.caption)
@@ -198,6 +203,20 @@ struct PreviewSheet: View {
                         }
                     }
 
+                    if let capacityWarning = viewModel.capacityWarning {
+                        Divider()
+                        Label(capacityWarning, systemImage: "externaldrive.badge.exclamationmark")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+
+                    if let cleanupWarning = viewModel.cleanupWarning {
+                        Divider()
+                        Label(cleanupWarning, systemImage: "trash.slash")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+
                 }
                 .padding(4)
             } label: {
@@ -210,7 +229,7 @@ struct PreviewSheet: View {
     private var footer: some View {
         HStack(spacing: 10) {
             if viewModel.hasActiveWorker {
-                Text("The preview cache is isolated from the full conversion output.")
+                Text(activeWorkspaceFooter)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -225,6 +244,7 @@ struct PreviewSheet: View {
                     Button(viewModel.phase == .failed ? "Try Again" : "Generate Preview", action: generatePreview)
                         .buttonStyle(.borderedProminent)
                         .keyboardShortcut(.defaultAction)
+                        .disabled(!viewModel.canStart)
                 }
             }
         }
@@ -304,6 +324,16 @@ struct PreviewSheet: View {
 
     private var requestedRoute: VideoRoutePlan {
         VideoRoutePlan(options: conversionDraft.options, allowsExistingArtifact: false)
+    }
+
+    private var destinationWorkspaceDescription: String {
+        "Selected destination volume: \(PreviewVolumeName.fallbackName(for: conversionDraft.destinationURL))"
+    }
+
+    private var activeWorkspaceFooter: String {
+        conversionDraft.source.kind.previewWorkspaceScope == .selectedDestination
+            ? "The temporary preview workspace is isolated on the selected destination volume."
+            : "The bounded preview cache is isolated from the full conversion output."
     }
 
     private var previewRouteStatusTitle: String {

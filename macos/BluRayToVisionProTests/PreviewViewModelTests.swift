@@ -61,6 +61,7 @@ final class PreviewViewModelTests: XCTestCase {
             XCTAssertEqual(viewModel.phase, .expired)
             XCTAssertTrue(FileManager.default.fileExists(atPath: directoryURL.path))
             playerLease = nil
+            await waitForRemoval(of: directoryURL)
             XCTAssertFalse(FileManager.default.fileExists(atPath: directoryURL.path))
         }
     }
@@ -127,10 +128,220 @@ final class PreviewViewModelTests: XCTestCase {
 
             await fulfillment(of: [cancelled], timeout: 2)
             while viewModel.hasActiveWorker { await Task.yield() }
+            while viewModel.isCleaningUp { await Task.yield() }
             XCTAssertEqual(viewModel.phase, .idle)
             XCTAssertNil(viewModel.progress)
             XCTAssertFalse(FileManager.default.fileExists(atPath: destinationURL.path))
             XCTAssertNil(viewModel.artifactLease)
+        }
+    }
+
+    @MainActor
+    func testDiscImagePreviewUsesSelectedDestinationWorkspace() async throws {
+        try await withTemporaryPreviewEnvironment { sourceURL, cache in
+            let rootURL = sourceURL.deletingLastPathComponent()
+            let isoURL = rootURL.appendingPathComponent("movie.iso")
+            _ = FileManager.default.createFile(atPath: isoURL.path, contents: Data("iso".utf8))
+            let destinationURL = rootURL.appendingPathComponent("destination", isDirectory: true)
+            try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+            let completed = expectation(description: "disc image preview completed")
+            let worker = PreviewWorkerClient(onCompleted: { completed.fulfill() })
+            let viewModel = PreviewViewModel(
+                clientFactory: { worker },
+                cache: cache,
+                capacityProvider: FixedPreviewCapacityProvider(importantUsageBytes: 64 << 30, availableBytes: 64 << 30)
+            )
+            let previewDraft = try XCTUnwrap(
+                makePreviewDraft(
+                    sourceURL: isoURL,
+                    kind: .discImage,
+                    destinationURL: destinationURL,
+                    sizeBytes: 2 << 30
+                )
+            )
+
+            viewModel.startPreview(previewDraft)
+            await fulfillment(of: [completed], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+
+            let workspaceURL = try XCTUnwrap(
+                worker.receivedJob?.destination.map { URL(fileURLWithPath: $0.path, isDirectory: true) }
+            )
+            XCTAssertEqual(
+                workspaceURL.deletingLastPathComponent(),
+                destinationURL.appendingPathComponent(PreviewCache.destinationWorkspaceDirectoryName, isDirectory: true)
+            )
+            XCTAssertEqual(worker.receivedJob?.source.kind, .discImage)
+            XCTAssertNotNil(worker.receivedJob?.source.titleID)
+            XCTAssertNil(viewModel.capacityWarning)
+        }
+    }
+
+    @MainActor
+    func testBluRayFolderPreviewUsesSelectedDestinationAndTitle() async throws {
+        try await withTemporaryPreviewEnvironment { sourceURL, cache in
+            let rootURL = sourceURL.deletingLastPathComponent()
+            let bluRayURL = rootURL.appendingPathComponent("Disc", isDirectory: true)
+            let streamURL = bluRayURL.appendingPathComponent("BDMV/STREAM", isDirectory: true)
+            try FileManager.default.createDirectory(at: streamURL, withIntermediateDirectories: true)
+            _ = FileManager.default.createFile(
+                atPath: streamURL.appendingPathComponent("00001.m2ts").path,
+                contents: Data("stream".utf8)
+            )
+            let destinationURL = rootURL.appendingPathComponent("destination", isDirectory: true)
+            try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+            let completed = expectation(description: "Blu-ray folder preview completed")
+            let worker = PreviewWorkerClient(onCompleted: { completed.fulfill() })
+            let viewModel = PreviewViewModel(
+                clientFactory: { worker },
+                cache: cache,
+                capacityProvider: FixedPreviewCapacityProvider(importantUsageBytes: 64 << 30, availableBytes: 64 << 30)
+            )
+            let previewDraft = try XCTUnwrap(
+                makePreviewDraft(
+                    sourceURL: bluRayURL,
+                    kind: .bluRayFolder,
+                    destinationURL: destinationURL,
+                    sizeBytes: 2 << 30
+                )
+            )
+
+            viewModel.startPreview(previewDraft)
+            await fulfillment(of: [completed], timeout: 2)
+            while viewModel.hasActiveWorker { await Task.yield() }
+
+            XCTAssertEqual(worker.receivedJob?.source.kind, .bluRayFolder)
+            XCTAssertEqual(worker.receivedJob?.source.titleID, "1")
+            XCTAssertTrue(
+                worker.receivedJob?.destination?.path.contains(PreviewCache.destinationWorkspaceDirectoryName) == true
+            )
+        }
+    }
+
+    @MainActor
+    func testKnownLowDestinationCapacityBlocksBeforeWorkerLaunch() async throws {
+        try await withTemporaryPreviewEnvironment { sourceURL, cache in
+            let rootURL = sourceURL.deletingLastPathComponent()
+            let isoURL = rootURL.appendingPathComponent("movie.iso")
+            _ = FileManager.default.createFile(atPath: isoURL.path, contents: Data("iso".utf8))
+            let destinationURL = rootURL.appendingPathComponent("destination", isDirectory: true)
+            try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+            let worker = PreviewWorkerClient()
+            var clientCreated = false
+            let viewModel = PreviewViewModel(
+                clientFactory: {
+                    clientCreated = true
+                    return worker
+                },
+                cache: cache,
+                capacityProvider: FixedPreviewCapacityProvider(importantUsageBytes: 5 << 30, availableBytes: 5 << 30)
+            )
+            let previewDraft = try XCTUnwrap(
+                makePreviewDraft(
+                    sourceURL: isoURL,
+                    kind: .discImage,
+                    destinationURL: destinationURL,
+                    sizeBytes: 2 << 30
+                )
+            )
+
+            viewModel.startPreview(previewDraft)
+            while viewModel.hasActiveWorker { await Task.yield() }
+
+            XCTAssertEqual(viewModel.phase, .failed)
+            XCTAssertFalse(clientCreated)
+            XCTAssertTrue(viewModel.failureMessage?.contains("temporary preview workspace") == true)
+            XCTAssertFalse(viewModel.failureMessage?.contains(destinationURL.path) == true)
+            XCTAssertFalse(
+                FileManager.default.fileExists(
+                    atPath: destinationURL.appendingPathComponent(PreviewCache.destinationWorkspaceDirectoryName).path
+                )
+            )
+        }
+    }
+
+    @MainActor
+    func testUnknownAndConflictingDestinationCapacityWarnWithoutBlocking() async throws {
+        try await withTemporaryPreviewEnvironment { sourceURL, cache in
+            let rootURL = sourceURL.deletingLastPathComponent()
+            let isoURL = rootURL.appendingPathComponent("movie.iso")
+            _ = FileManager.default.createFile(atPath: isoURL.path, contents: Data("iso".utf8))
+            let destinationURL = rootURL.appendingPathComponent("destination", isDirectory: true)
+            try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+            let unknownCompleted = expectation(description: "unknown capacity preview completed")
+            let unknownWorker = PreviewWorkerClient(onCompleted: { unknownCompleted.fulfill() })
+            let unknownViewModel = PreviewViewModel(
+                clientFactory: { unknownWorker },
+                cache: cache,
+                capacityProvider: FixedPreviewCapacityProvider(importantUsageBytes: nil, availableBytes: nil)
+            )
+            let previewDraft = try XCTUnwrap(
+                makePreviewDraft(
+                    sourceURL: isoURL,
+                    kind: .discImage,
+                    destinationURL: destinationURL,
+                    sizeBytes: 2 << 30
+                )
+            )
+
+            unknownViewModel.startPreview(previewDraft)
+            await fulfillment(of: [unknownCompleted], timeout: 2)
+            while unknownViewModel.hasActiveWorker { await Task.yield() }
+            XCTAssertNotNil(unknownViewModel.capacityWarning)
+
+            unknownViewModel.discardPreview()
+            let conflictingCompleted = expectation(description: "conflicting capacity preview completed")
+            let conflictingWorker = PreviewWorkerClient(onCompleted: { conflictingCompleted.fulfill() })
+            let conflictingViewModel = PreviewViewModel(
+                clientFactory: { conflictingWorker },
+                cache: cache,
+                capacityProvider: FixedPreviewCapacityProvider(
+                    importantUsageBytes: 100 << 30,
+                    availableBytes: 5 << 30
+                )
+            )
+            conflictingViewModel.startPreview(previewDraft)
+            await fulfillment(of: [conflictingCompleted], timeout: 2)
+            while conflictingViewModel.hasActiveWorker { await Task.yield() }
+            XCTAssertTrue(conflictingViewModel.capacityWarning?.contains("conflicting") == true)
+        }
+    }
+
+    @MainActor
+    func testDestinationWorkspacePreparationFailureIsActionable() async throws {
+        try await withTemporaryPreviewEnvironment { sourceURL, cache in
+            let rootURL = sourceURL.deletingLastPathComponent()
+            let isoURL = rootURL.appendingPathComponent("movie.iso")
+            _ = FileManager.default.createFile(atPath: isoURL.path, contents: Data("iso".utf8))
+            let destinationURL = rootURL.appendingPathComponent("destination", isDirectory: true)
+            try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+            let workspaceRootURL = destinationURL.appendingPathComponent(PreviewCache.destinationWorkspaceDirectoryName)
+            _ = FileManager.default.createFile(atPath: workspaceRootURL.path, contents: Data("blocked".utf8))
+            var clientCreated = false
+            let viewModel = PreviewViewModel(
+                clientFactory: {
+                    clientCreated = true
+                    return PreviewWorkerClient()
+                },
+                cache: cache,
+                capacityProvider: FixedPreviewCapacityProvider(importantUsageBytes: 64 << 30, availableBytes: 64 << 30)
+            )
+            let previewDraft = try XCTUnwrap(
+                makePreviewDraft(
+                    sourceURL: isoURL,
+                    kind: .discImage,
+                    destinationURL: destinationURL,
+                    sizeBytes: 2 << 30
+                )
+            )
+
+            viewModel.startPreview(previewDraft)
+            while viewModel.hasActiveWorker { await Task.yield() }
+
+            XCTAssertEqual(viewModel.phase, .failed)
+            XCTAssertFalse(clientCreated)
+            XCTAssertTrue(viewModel.failureMessage?.contains("Make sure the destination is mounted") == true)
+            XCTAssertFalse(viewModel.failureMessage?.contains(destinationURL.path) == true)
         }
     }
 
@@ -193,22 +404,40 @@ final class PreviewViewModelTests: XCTestCase {
         XCTAssertEqual(options.encoding.mvHEVC.generatedMergeQuality, 20)
     }
 
-    private func makePreviewDraft(sourceURL: URL) -> PreviewDraft? {
-        PreviewDraft(
+    private func makePreviewDraft(
+        sourceURL: URL,
+        kind: ConversionSourceKind = .matroska,
+        destinationURL: URL = URL(fileURLWithPath: "/Movies", isDirectory: true),
+        sizeBytes: Int64? = 10
+    ) -> PreviewDraft? {
+        let selectedTitle = kind.isDiscWorkflow
+            ? SourceTitle(
+                id: "1",
+                name: "Main Feature",
+                outputName: "movie",
+                durationSeconds: 7200,
+                resolution: "1920x1080",
+                frameRate: "24/1",
+                mainFeature: true
+            )
+            : nil
+        return PreviewDraft(
             parentJobID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
             conversion: ConversionDraft(
-                source: ConversionSource(kind: .matroska, url: sourceURL),
+                source: ConversionSource(kind: kind, url: sourceURL),
                 sourceDetails: SourceInspection(
                     name: "movie",
                     resolution: "1920x1080",
                     frameRate: "24/1",
                     interlaced: false,
-                    sizeBytes: 10,
-                    durationSeconds: 7200
+                    sizeBytes: sizeBytes,
+                    durationSeconds: 7200,
+                    titles: selectedTitle.map { [$0] } ?? []
                 ),
                 profile: BuiltInProfile.balanced.profile,
-                destinationURL: URL(fileURLWithPath: "/Movies", isDirectory: true),
-                options: ConversionOptions()
+                destinationURL: destinationURL,
+                options: ConversionOptions(),
+                selectedTitle: selectedTitle
             ),
             outputLength: .oneMinute,
             samplePosition: .middle
@@ -227,6 +456,16 @@ final class PreviewViewModelTests: XCTestCase {
         let cache = PreviewCache(rootURL: rootURL.appendingPathComponent("cache", isDirectory: true))
         defer { try? FileManager.default.removeItem(at: rootURL) }
         try await operation(sourceURL, cache)
+    }
+
+    @MainActor
+    private func waitForRemoval(of directoryURL: URL) async {
+        for _ in 0..<200 {
+            if !FileManager.default.fileExists(atPath: directoryURL.path) {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
     }
 }
 
@@ -267,6 +506,106 @@ final class PreviewCacheTests: XCTestCase {
 
         XCTAssertFalse(cache.contains(symlinkURL, in: directoryURL))
         XCTAssertTrue(FileManager.default.fileExists(atPath: outsideFileURL.path))
+    }
+
+    func testDestinationWorkspaceCleanupRemovesEmptyHiddenRoot() throws {
+        let destinationURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+        let cache = PreviewCache.destinationScoped(destinationURL: destinationURL)
+        let directoryURL = try cache.prepareDirectory(jobID: UUID())
+        defer { try? FileManager.default.removeItem(at: destinationURL) }
+
+        try cache.remove(directoryURL)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directoryURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cache.rootURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destinationURL.path))
+    }
+
+    func testDestinationWorkspacePruningPreservesFreshSibling() throws {
+        let destinationURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+        let cache = PreviewCache.destinationScoped(destinationURL: destinationURL)
+        let staleURL = try cache.prepareDirectory(jobID: UUID())
+        let freshURL = try cache.prepareDirectory(jobID: UUID())
+        let now = Date()
+        try FileManager.default.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-PreviewCache.expirationInterval - 1)],
+            ofItemAtPath: staleURL.path
+        )
+        defer { try? FileManager.default.removeItem(at: destinationURL) }
+
+        cache.removeExpired(now: now)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staleURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: freshURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cache.rootURL.path))
+    }
+
+    func testDestinationWorkspaceRejectsSymlinkedRoot() throws {
+        let destinationURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let outsideURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outsideURL, withIntermediateDirectories: true)
+        let rootURL = destinationURL.appendingPathComponent(PreviewCache.destinationWorkspaceDirectoryName)
+        try FileManager.default.createSymbolicLink(at: rootURL, withDestinationURL: outsideURL)
+        let cache = PreviewCache.destinationScoped(destinationURL: destinationURL)
+        defer {
+            try? FileManager.default.removeItem(at: destinationURL)
+            try? FileManager.default.removeItem(at: outsideURL)
+        }
+
+        XCTAssertThrowsError(try cache.prepareDirectory(jobID: UUID()))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: outsideURL.path), [])
+    }
+
+    func testCapacityAssessmentBlocksOnlyTrustworthyLowReading() {
+        let requiredBytes: Int64 = 10 << 30
+
+        XCTAssertEqual(
+            PreviewCapacityAssessment.evaluate(
+                requiredBytes: requiredBytes,
+                readings: PreviewCapacityReadings(importantUsageBytes: 5 << 30, availableBytes: 5 << 30)
+            ),
+            .insufficient(requiredBytes: requiredBytes, availableBytes: 5 << 30)
+        )
+        XCTAssertEqual(
+            PreviewCapacityAssessment.evaluate(
+                requiredBytes: requiredBytes,
+                readings: PreviewCapacityReadings(importantUsageBytes: nil, availableBytes: 0)
+            ),
+            .unknown(requiredBytes: requiredBytes)
+        )
+        XCTAssertEqual(
+            PreviewCapacityAssessment.evaluate(
+                requiredBytes: requiredBytes,
+                readings: PreviewCapacityReadings(importantUsageBytes: 100 << 30, availableBytes: 5 << 30)
+            ),
+            .conflicting(requiredBytes: requiredBytes, lowerBytes: 5 << 30, upperBytes: 100 << 30)
+        )
+        XCTAssertEqual(
+            PreviewCapacityAssessment.evaluate(
+                requiredBytes: requiredBytes,
+                readings: PreviewCapacityReadings(importantUsageBytes: 100 << 30, availableBytes: 10 << 30)
+            ),
+            .sufficient(requiredBytes: requiredBytes, availableBytes: 10 << 30)
+        )
+    }
+}
+
+private struct FixedPreviewCapacityProvider: PreviewCapacityProviding, Sendable {
+    let importantUsageBytes: Int64?
+    let availableBytes: Int64?
+
+    func readings(for workspaceURL: URL) -> PreviewCapacityReadings {
+        PreviewCapacityReadings(
+            importantUsageBytes: importantUsageBytes,
+            availableBytes: availableBytes
+        )
     }
 }
 

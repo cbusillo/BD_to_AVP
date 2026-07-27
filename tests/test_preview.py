@@ -88,6 +88,138 @@ class PreviewSourceTests(unittest.TestCase):
             self.assertIn("0:s?", observed_command)
             self.assertFalse(output_path.with_suffix(".part.mkv").exists())
 
+    def test_owned_full_title_source_is_removed_after_bounded_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            selected_source = temporary_path / "movie.iso"
+            selected_source.write_bytes(b"iso")
+            output_folder = temporary_path / "output"
+            output_folder.mkdir()
+            full_title_path = output_folder / "movie.mkv"
+            full_title_path.write_bytes(b"full title")
+
+            with (
+                patch.object(config, "source_path", selected_source),
+                patch("bd_to_avp.modules.preview.run_process_capture", side_effect=self.write_output),
+                patch("bd_to_avp.modules.preview.run_ffprobe", side_effect=self.successful_probe_results()),
+            ):
+                output_path, _ = create_bounded_preview_source(
+                    full_title_path,
+                    output_folder,
+                    PreviewRange(3570, 60, 7200),
+                    owns_source=True,
+                )
+
+            self.assertTrue(output_path.exists())
+            self.assertFalse(full_title_path.exists())
+
+    def test_selected_direct_source_is_never_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.mkv"
+            source_path.write_bytes(b"source")
+            output_folder = temporary_path / "output"
+            output_folder.mkdir()
+
+            with (
+                patch.object(config, "source_path", source_path),
+                patch("bd_to_avp.modules.preview.run_process_capture", side_effect=self.write_output),
+                patch("bd_to_avp.modules.preview.run_ffprobe", side_effect=self.successful_probe_results()),
+            ):
+                create_bounded_preview_source(
+                    source_path,
+                    output_folder,
+                    PreviewRange(3570, 60, 7200),
+                    owns_source=True,
+                )
+
+            self.assertTrue(source_path.exists())
+
+    def test_source_outside_owned_output_folder_is_never_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            selected_source = temporary_path / "movie.iso"
+            selected_source.write_bytes(b"iso")
+            outside_source = temporary_path / "prepared.mkv"
+            outside_source.write_bytes(b"source")
+            output_folder = temporary_path / "output"
+            output_folder.mkdir()
+
+            with (
+                patch.object(config, "source_path", selected_source),
+                patch("bd_to_avp.modules.preview.run_process_capture", side_effect=self.write_output),
+                patch("bd_to_avp.modules.preview.run_ffprobe", side_effect=self.successful_probe_results()),
+            ):
+                create_bounded_preview_source(
+                    outside_source,
+                    output_folder,
+                    PreviewRange(3570, 60, 7200),
+                    owns_source=True,
+                )
+
+            self.assertTrue(outside_source.exists())
+
+    def test_owned_source_survives_failed_bounded_preparation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            selected_source = temporary_path / "movie.iso"
+            selected_source.write_bytes(b"iso")
+            output_folder = temporary_path / "output"
+            output_folder.mkdir()
+            full_title_path = output_folder / "movie.mkv"
+            full_title_path.write_bytes(b"full title")
+            calls = 0
+
+            def fail_normalization(command: list[object], _name: str, **_kwargs: object) -> object:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise RuntimeError("normalization failed")
+                Path(command[-1]).write_bytes(b"preview")
+                return object()
+
+            with (
+                patch.object(config, "source_path", selected_source),
+                patch("bd_to_avp.modules.preview.run_process_capture", side_effect=fail_normalization),
+                patch(
+                    "bd_to_avp.modules.preview.run_ffprobe",
+                    side_effect=self.successful_probe_results()[:2],
+                ),
+                self.assertRaisesRegex(RuntimeError, "normalization failed"),
+            ):
+                create_bounded_preview_source(
+                    full_title_path,
+                    output_folder,
+                    PreviewRange(3570, 60, 7200),
+                    owns_source=True,
+                )
+
+            self.assertTrue(full_title_path.exists())
+            self.assertFalse((output_folder / "movie_preview.range.mkv").exists())
+            self.assertFalse((output_folder / "movie_preview.part.mkv").exists())
+
+    @staticmethod
+    def write_output(command: list[object], _name: str, **_kwargs: object) -> object:
+        Path(command[-1]).write_bytes(b"preview")
+        return object()
+
+    @staticmethod
+    def successful_probe_results() -> list[dict[str, object]]:
+        return [
+            {
+                "format": {"start_time": "0", "duration": "7200"},
+                "streams": [{"codec_type": "video", "start_time": "0"}],
+            },
+            {
+                "format": {"start_time": "3569", "duration": "3629"},
+                "streams": [{"codec_type": "video", "start_time": "3569"}],
+            },
+            {
+                "format": {"start_time": "0", "duration": "61"},
+                "streams": [{"codec_type": "video", "start_time": "0"}],
+            },
+        ]
+
 
 if __name__ == "__main__":
     unittest.main()

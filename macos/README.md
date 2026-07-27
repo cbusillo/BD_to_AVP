@@ -69,10 +69,13 @@ falls back before media inspection, and preview child jobs report the same
 resolved route contract.
 Preferred-only audio keeps every metadata-language match and visibly falls
 back to the source-default or first audio stream when no match exists. MKV,
-MTS, M2TS, and ISO
-sources can create an isolated beginning, middle, or end preview child job with
-the current resolved profile. The finalized result is leased from the preview
-cache while the embedded AVPlayer is open and removed when the preview closes.
+MTS, M2TS, ISO, and Blu-ray-folder sources can create an isolated beginning,
+middle, or end preview child job with the current resolved profile. Direct-file
+previews use the bounded app cache. ISO and Blu-ray-folder previews use a hidden,
+capacity-checked per-job workspace on the selected destination so full-title
+preparation does not consume the Mac startup volume. The finalized result stays
+leased from that workspace while the embedded AVPlayer is open and is removed
+when the preview closes.
 See `docs/native-worker-protocol-v10.md` for the request, event, and ownership
 contract.
 
