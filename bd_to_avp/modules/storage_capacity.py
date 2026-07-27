@@ -34,7 +34,7 @@ def probe_storage_capacity(
     required_bytes: int | None = None,
     timeout_seconds: float = 2.0,
 ) -> ObservabilityStorage:
-    result: queue.Queue[_POSIXCapacitySnapshot | BaseException] = queue.Queue(maxsize=1)
+    result: queue.Queue[_POSIXCapacitySnapshot | Exception] = queue.Queue(maxsize=1)
 
     def collect() -> None:
         try:
@@ -56,7 +56,7 @@ def probe_storage_capacity(
                     writable=os.access(candidate, os.W_OK),
                 )
             )
-        except BaseException as error:
+        except Exception as error:
             result.put(error)
 
     thread = threading.Thread(target=collect, name="storage-capacity-probe", daemon=True)
@@ -68,7 +68,7 @@ def probe_storage_capacity(
     outcome = result.get_nowait()
     if isinstance(outcome, PermissionError):
         return _unknown_storage(role, status="inaccessible", reason="permission_denied")
-    if isinstance(outcome, BaseException):
+    if isinstance(outcome, Exception):
         return _unknown_storage(role, status="error", reason="unavailable")
 
     available_bytes = outcome.available_bytes
