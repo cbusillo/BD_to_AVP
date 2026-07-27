@@ -4,7 +4,7 @@
 
 Use an explicit **preserve / remap / downmix / fail** policy. FFmpeg decode success and audio-track count are not sufficient evidence of Apple compatibility. Every supported output must use a canonical AAC channel configuration, survive both Apple passthrough and Apple LPCM decode, and preserve the expected per-channel identity map.
 
-This qualification slice does **not** change Automatic runtime behavior. Production implementation belongs to #381, and signed-package/physical validation belongs to #382.
+The production runtime imports this same policy for Automatic and Convert-to-AAC processing. Signed-package and physical Vision Pro validation remains in #382.
 
 ## Evidence Method
 
@@ -82,7 +82,7 @@ Any missing, unknown, custom, discrete, or unlisted layout **fails** until a new
 
 ## Runtime Boundary
 
-The first PR deliberately leaves `AAC_COPY_LAYOUT_CHANNELS` and `AAC_TRANSCODE_LAYOUT_NORMALIZATION` unchanged. #381 must apply this table at the shared audio-planning boundary, emit a structured warning for every remap/downmix/fail decision, reject unqualified AAC copy, and add metadata/final-MOV coverage. #382 must then validate the exact signed package on Vision Pro before Automatic support broadens.
+`bd_to_avp/modules/aac_layout_policy.py` is the shared source of truth for this table. Automatic copies only the six qualified preserve layouts; any selected remap or downmix causes the whole selected set to be encoded with per-output policy filters. Missing, unknown, custom, discrete, or unlisted layouts stop before FFmpeg with a structured failure, and resumed prepared AAC is requalified before final muxing. #382 must validate the exact signed package on Vision Pro before this policy is considered physically validated.
 
 ## Regenerate
 
