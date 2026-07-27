@@ -23,7 +23,6 @@ from bd_to_avp.modules.aac_layout_policy import (
     LAYOUT_CHANNELS,
     UNLISTED_LAYOUT_POLICY,
     AacLayoutPolicy,
-    identity_map as identity_map,
 )
 from bd_to_avp.modules.config import config
 from scripts.create_spatial_audio_validation_fixtures import create_channel_identity_audio

@@ -9,7 +9,7 @@ from typing import Any, Protocol
 import ffmpeg
 
 from bd_to_avp.modules.aac_layout_policy import (
-    AAC_COPY_LAYOUT_CHANNELS as AAC_COPY_LAYOUT_CHANNELS,
+    AAC_COPY_LAYOUT_CHANNELS as _AAC_COPY_LAYOUT_CHANNELS,
     AacLayoutAction,
     AacLayoutDecision,
     AacLayoutPolicyError,
@@ -58,6 +58,7 @@ AAC_COPY_CODECS = frozenset({"aac"})
 EXPLICITLY_UNQUALIFIED_CODECS = frozenset({"ac3", "eac3", "ac-3", "e-ac-3"})
 AAC_COPY_PROFILES = frozenset({"lc", "he-aac", "he-aacv2", "mpeg-4 aac lc", "aac lc"})
 AAC_COPY_SAMPLE_RATES = frozenset({44_100, 48_000})
+AAC_COPY_LAYOUT_CHANNELS = _AAC_COPY_LAYOUT_CHANNELS
 
 
 def transcode_audio(

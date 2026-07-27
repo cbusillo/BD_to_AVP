@@ -1,5 +1,6 @@
 import unittest
 
+from bd_to_avp.modules.aac_layout_policy import identity_map
 from scripts import qualify_apple_aac_layouts as qualification
 
 
@@ -84,7 +85,7 @@ class AppleAacLayoutQualificationTests(unittest.TestCase):
             samples,
             output_channels,
             source_channels,
-            qualification.identity_map(SL="SL", SR="SR"),
+            identity_map(SL="SL", SR="SR"),
         )
 
         self.assertEqual(result["status"], "passed")
@@ -108,7 +109,7 @@ class AppleAacLayoutQualificationTests(unittest.TestCase):
             samples,
             output_channels,
             source_channels,
-            qualification.identity_map(FC=("FL", "FR")),
+            identity_map(FC=("FL", "FR")),
         )
 
         self.assertEqual(result["status"], "failed")
