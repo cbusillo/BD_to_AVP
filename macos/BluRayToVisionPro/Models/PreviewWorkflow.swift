@@ -74,6 +74,44 @@ enum PreviewVolumeName {
 struct PreviewCapacityReadings: Equatable, Sendable {
     let importantUsageBytes: Int64?
     let availableBytes: Int64?
+    let totalBytes: Int64?
+    let readOnly: Bool?
+    let writable: Bool?
+
+    init(
+        importantUsageBytes: Int64?,
+        availableBytes: Int64?,
+        totalBytes: Int64? = nil,
+        readOnly: Bool? = nil,
+        writable: Bool? = nil
+    ) {
+        self.importantUsageBytes = importantUsageBytes
+        self.availableBytes = availableBytes
+        self.totalBytes = totalBytes
+        self.readOnly = readOnly
+        self.writable = writable
+    }
+
+    var evidence: [StorageCapacityEvidence] {
+        [
+            StorageCapacityEvidence(
+                provenance: .swiftImportantUsage,
+                availableBytes: importantUsageBytes,
+                totalBytes: totalBytes,
+                writable: writable,
+                readOnly: readOnly,
+                unknownReason: importantUsageBytes == nil ? .unavailable : nil
+            ),
+            StorageCapacityEvidence(
+                provenance: .swiftAvailable,
+                availableBytes: availableBytes,
+                totalBytes: totalBytes,
+                writable: writable,
+                readOnly: readOnly,
+                unknownReason: availableBytes == nil ? .unavailable : nil
+            ),
+        ]
+    }
 }
 
 protocol PreviewCapacityProviding: Sendable {
@@ -88,17 +126,22 @@ struct SystemPreviewCapacityProvider: PreviewCapacityProviding, @unchecked Senda
     }
 
     func readings(for workspaceURL: URL) -> PreviewCapacityReadings {
-        guard fileManager.fileExists(atPath: workspaceURL.path),
-              let values = try? workspaceURL.resourceValues(forKeys: [
-                  .volumeAvailableCapacityForImportantUsageKey,
-                  .volumeAvailableCapacityKey,
-              ])
-        else {
+        let resolvedURL = workspaceURL.resolvingSymlinksInPath().standardizedFileURL
+        guard let values = try? resolvedURL.resourceValues(forKeys: [
+            .isWritableKey,
+            .volumeAvailableCapacityForImportantUsageKey,
+            .volumeAvailableCapacityKey,
+            .volumeTotalCapacityKey,
+            .volumeIsReadOnlyKey,
+        ]) else {
             return PreviewCapacityReadings(importantUsageBytes: nil, availableBytes: nil)
         }
         return PreviewCapacityReadings(
             importantUsageBytes: values.volumeAvailableCapacityForImportantUsage,
-            availableBytes: values.volumeAvailableCapacity.map(Int64.init)
+            availableBytes: values.volumeAvailableCapacity.map(Int64.init),
+            totalBytes: values.volumeTotalCapacity.map(Int64.init),
+            readOnly: values.volumeIsReadOnly,
+            writable: values.isWritable
         )
     }
 }
@@ -110,38 +153,35 @@ enum PreviewCapacityAssessment: Equatable, Sendable {
     case conflicting(requiredBytes: Int64, lowerBytes: Int64, upperBytes: Int64)
 
     static func evaluate(requiredBytes: Int64?, readings: PreviewCapacityReadings) -> PreviewCapacityAssessment {
-        guard let requiredBytes else {
-            return .unknown(requiredBytes: nil)
-        }
-
-        let important = readings.importantUsageBytes.flatMap(Self.nonNegative)
-        let available = readings.availableBytes.flatMap(Self.nonNegative)
-        switch (important, available) {
-        case let (first?, second?):
-            let lower = min(first, second)
-            let upper = max(first, second)
-            if upper < requiredBytes {
-                return .insufficient(requiredBytes: requiredBytes, availableBytes: upper)
-            }
-            if lower >= requiredBytes {
-                return .sufficient(requiredBytes: requiredBytes, availableBytes: lower)
-            }
-            return .conflicting(requiredBytes: requiredBytes, lowerBytes: lower, upperBytes: upper)
-        case let (value?, nil), let (nil, value?):
-            guard value > 0 else {
-                return .unknown(requiredBytes: requiredBytes)
-            }
-            if value < requiredBytes {
-                return .insufficient(requiredBytes: requiredBytes, availableBytes: value)
-            }
-            return .sufficient(requiredBytes: requiredBytes, availableBytes: value)
-        case (nil, nil):
-            return .unknown(requiredBytes: requiredBytes)
-        }
+        let result = StorageCapacityResult.evaluate(
+            requiredBytes: requiredBytes,
+            evidence: readings.evidence
+        )
+        return from(result)
     }
 
-    private static func nonNegative(_ value: Int64) -> Int64? {
-        value >= 0 ? value : nil
+    static func from(_ result: StorageCapacityResult) -> PreviewCapacityAssessment {
+        let requiredBytes = result.requiredBytes
+        switch (result.state, result.sufficiency) {
+        case (.known, .sufficient):
+            return .sufficient(
+                requiredBytes: requiredBytes ?? 0,
+                availableBytes: result.availableBytes ?? 0
+            )
+        case (.known, .insufficient):
+            return .insufficient(
+                requiredBytes: requiredBytes ?? 0,
+                availableBytes: result.availableBytes ?? 0
+            )
+        case (.conflicting, _):
+            return .conflicting(
+                requiredBytes: requiredBytes ?? 0,
+                lowerBytes: result.lowerAvailableBytes ?? 0,
+                upperBytes: result.upperAvailableBytes ?? 0
+            )
+        case (.unknown, _), (.known, .unknown):
+            return .unknown(requiredBytes: requiredBytes)
+        }
     }
 }
 
@@ -234,6 +274,7 @@ struct PreviewWorkspacePreparation: @unchecked Sendable {
     let cache: PreviewCache
     let directoryURL: URL
     let capacityAssessment: PreviewCapacityAssessment?
+    let capacityResult: StorageCapacityResult?
     let volumeName: String
 }
 
@@ -256,6 +297,7 @@ enum PreviewWorkspacePreparer {
             ? PreviewVolumeName.displayName(for: plan.capacityProbeURL)
             : "Mac startup volume"
         let assessment: PreviewCapacityAssessment?
+        let capacityResult: StorageCapacityResult?
         if plan.scope == .selectedDestination {
             let requiredBytes = PreviewCapacityRequirement.requiredBytes(
                 sourceKind: sourceKind,
@@ -263,10 +305,11 @@ enum PreviewWorkspacePreparer {
                 inspectedSizeBytes: inspectedSizeBytes,
                 fileManager: plan.cache.fileManager
             )
-            let evaluated = PreviewCapacityAssessment.evaluate(
+            let result = StorageCapacityResult.evaluate(
                 requiredBytes: requiredBytes,
-                readings: capacityProvider.readings(for: plan.capacityProbeURL)
+                evidence: capacityProvider.readings(for: plan.capacityProbeURL).evidence
             )
+            let evaluated = PreviewCapacityAssessment.from(result)
             if case .insufficient(let requiredBytes, let availableBytes) = evaluated {
                 throw PreviewWorkspacePreparationError.insufficientCapacity(
                     volumeName: volumeName,
@@ -275,8 +318,10 @@ enum PreviewWorkspacePreparer {
                 )
             }
             assessment = evaluated
+            capacityResult = result
         } else {
             assessment = nil
+            capacityResult = nil
         }
 
         var directoryURL: URL?
@@ -303,6 +348,7 @@ enum PreviewWorkspacePreparer {
             cache: plan.cache,
             directoryURL: directoryURL,
             capacityAssessment: assessment,
+            capacityResult: capacityResult,
             volumeName: volumeName
         )
     }

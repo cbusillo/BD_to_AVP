@@ -23,6 +23,44 @@ enum WorkerPhase: String, Equatable {
 enum WorkerOperationKind: Equatable {
     case inspection
     case conversion
+    case preview
+
+    var isInspection: Bool {
+        self == .inspection
+    }
+
+    var preparingMessage: String {
+        switch self {
+        case .inspection:
+            "Preparing analysis"
+        case .conversion:
+            "Preparing conversion"
+        case .preview:
+            "Preparing preview"
+        }
+    }
+
+    var startingMessage: String {
+        switch self {
+        case .inspection:
+            "Reading video details"
+        case .conversion:
+            "Starting conversion"
+        case .preview:
+            "Starting preview"
+        }
+    }
+
+    var stoppedMessage: String {
+        switch self {
+        case .inspection:
+            "Analysis stopped."
+        case .conversion:
+            "Conversion stopped."
+        case .preview:
+            "Preview stopped."
+        }
+    }
 }
 
 enum ElapsedTimeText {
@@ -79,6 +117,7 @@ struct WorkerLifecycleState: Equatable {
     private(set) var progress: WorkerProgress?
     private(set) var result: SourceInspection?
     private(set) var conversionResult: ConversionResult?
+    private(set) var previewResult: PreviewArtifact?
     private(set) var videoRoute: VideoRouteReport?
     private(set) var failureMessage: String?
     private(set) var failureDetails: String?
@@ -102,13 +141,13 @@ struct WorkerLifecycleState: Equatable {
         }
         let inspectionResult = result
         resetJobState()
-        if operationKind == .conversion {
+        if !operationKind.isInspection {
             result = inspectionResult
         }
         self.jobID = jobID
         self.operationKind = operationKind
-        phase = operationKind == .inspection ? .inspecting : .processing
-        stageMessage = operationKind == .inspection ? "Preparing analysis" : "Preparing conversion"
+        phase = operationKind.isInspection ? .inspecting : .processing
+        stageMessage = operationKind.preparingMessage
     }
 
     mutating func receive(_ event: WorkerEvent) throws {
@@ -139,14 +178,14 @@ struct WorkerLifecycleState: Equatable {
         switch event.type {
         case .workerReady:
             if phase != .stopping {
-                phase = operationKind == .inspection ? .inspecting : .processing
+                phase = operationKind.isInspection ? .inspecting : .processing
             }
-            stageMessage = operationKind == .inspection ? "Preparing source" : "Preparing conversion"
+            stageMessage = operationKind.isInspection ? "Preparing source" : operationKind.preparingMessage
         case .jobStarted:
             if phase != .stopping {
-                phase = operationKind == .inspection ? .inspecting : .processing
+                phase = operationKind.isInspection ? .inspecting : .processing
             }
-            stageMessage = operationKind == .inspection ? "Reading video details" : "Starting conversion"
+            stageMessage = operationKind.startingMessage
         case .stageStarted:
             phase = .processing
             stageMessage = event.payload.message ?? event.payload.stage ?? "Processing"
@@ -181,6 +220,13 @@ struct WorkerLifecycleState: Equatable {
                 conversionResult = convResult
                 videoRoute = convResult.videoRoute ?? videoRoute
                 stageMessage = "Conversion complete"
+            case .preview:
+                guard let completedPreview = event.payload.previewResult else {
+                    throw WorkerLifecycleError.missingPayload(event: event.type)
+                }
+                previewResult = completedPreview
+                videoRoute = completedPreview.videoRoute ?? videoRoute
+                stageMessage = "Preview complete"
             }
             progress = nil
             phase = .completed
@@ -195,7 +241,7 @@ struct WorkerLifecycleState: Equatable {
             progress = nil
             phase = .failed
         case .jobCancelled:
-            activityMessage = event.payload.message ?? (operationKind == .inspection ? "Analysis stopped." : "Conversion stopped.")
+            activityMessage = event.payload.message ?? operationKind.stoppedMessage
             progress = nil
             phase = .cancelled
         case .jobDecisionRequired:
@@ -232,7 +278,7 @@ struct WorkerLifecycleState: Equatable {
     }
 
     mutating func completeStop() {
-        activityMessage = operationKind == .inspection ? "Inspection stopped." : "Conversion stopped."
+        activityMessage = operationKind == .inspection ? "Inspection stopped." : operationKind.stoppedMessage
         progress = nil
         phase = .cancelled
     }
@@ -242,7 +288,7 @@ struct WorkerLifecycleState: Equatable {
             phase = .empty
             return
         }
-        let inspectionResult = operationKind == .conversion ? result : nil
+        let inspectionResult = operationKind.isInspection ? nil : result
         phase = .ready
         resetJobState()
         result = inspectionResult
@@ -271,6 +317,7 @@ struct WorkerLifecycleState: Equatable {
         progress = nil
         result = nil
         conversionResult = nil
+        previewResult = nil
         videoRoute = nil
         failureMessage = nil
         failureDetails = nil

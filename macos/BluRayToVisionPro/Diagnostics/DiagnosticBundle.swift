@@ -171,6 +171,21 @@ private enum DiagnosticSizeRounding {
         roundedDown(bytes, quantum: volumeCapacityQuantumBytes)
     }
 
+    static func volumeRequirement(_ bytes: Int64?) -> Int64? {
+        guard let bytes, bytes >= 0 else {
+            return nil
+        }
+        let remainder = bytes % volumeCapacityQuantumBytes
+        guard remainder != 0 else {
+            return bytes
+        }
+        let increment = volumeCapacityQuantumBytes - remainder
+        let (rounded, overflow) = bytes.addingReportingOverflow(increment)
+        return overflow
+            ? Int64.max - (Int64.max % volumeCapacityQuantumBytes)
+            : rounded
+    }
+
     static func byteRate(_ bytes: Int64?) -> Int64? {
         roundedDown(bytes, quantum: byteRateQuantum)
     }
@@ -402,8 +417,15 @@ final class DiagnosticBundleBuilder: Sendable {
             }
             for (role, url) in context.storageTargets {
                 let token = redactor.pathToken(for: url)
-                if role == .source || role == .output {
+                if role == .source || role == .canonicalOutput {
                     redactor.registerSensitiveName(url.lastPathComponent, replacement: token)
+                }
+                let resolvedURL = url.resolvingSymlinksInPath().standardizedFileURL
+                if resolvedURL != url.standardizedFileURL {
+                    _ = redactor.pathToken(for: resolvedURL)
+                }
+                if let volumeName = try? resolvedURL.resourceValues(forKeys: [.volumeNameKey]).volumeName {
+                    redactor.registerSensitiveName(volumeName)
                 }
             }
             for name in context.sensitiveNames {
@@ -474,7 +496,8 @@ final class DiagnosticBundleBuilder: Sendable {
         capturedAt: Date,
         redactor: DiagnosticRedactor
     ) throws -> StorageBuildResult {
-        let sanitizedProbes = probes.map { BundleStorageProbe(probe: $0, redactor: redactor) }
+        let reconciledProbes = probes.map { reconcile(probe: $0, samples: samples) }
+        let sanitizedProbes = reconciledProbes.map { BundleStorageProbe(probe: $0, redactor: redactor) }
         let sanitizedSamples = samples.map { BundleStorageSample(sample: $0, redactor: redactor) }
         var includedSamples = sanitizedSamples
         var archiveDropped = 0
@@ -510,6 +533,100 @@ final class DiagnosticBundleBuilder: Sendable {
             )
         }
         return StorageBuildResult(data: encoded, truncation: document.truncation)
+    }
+
+    private func reconcile(
+        probe: RawDiagnosticStorageProbe,
+        samples: [RawDiagnosticStorageSample]
+    ) -> RawDiagnosticStorageProbe {
+        guard let appCapacity = probe.capacity else {
+            return probe
+        }
+        let normalizedPath = probe.url.resolvingSymlinksInPath().standardizedFileURL.path
+        let matchingCapacities = samples.compactMap { sample -> StorageCapacityResult? in
+            guard sample.role == probe.role,
+                  sample.url.resolvingSymlinksInPath().standardizedFileURL.path == normalizedPath else {
+                return nil
+            }
+            return sample.capacity
+        }
+        guard matchingCapacities.contains(where: { $0.provenance.contains(.workerStatVFS) }) else {
+            return probe
+        }
+        let capacities = [appCapacity] + matchingCapacities
+        let requiredBytes = capacities.compactMap(\.requiredBytes).last
+        let evidence = capacities.flatMap(Self.capacityEvidence)
+        let reconciled = StorageCapacityResult.evaluate(
+            requiredBytes: requiredBytes,
+            evidence: evidence
+        )
+        return RawDiagnosticStorageProbe(
+            capturedAt: probe.capturedAt,
+            role: probe.role,
+            url: probe.url,
+            status: probe.status,
+            isDirectory: probe.isDirectory,
+            isReadable: probe.isReadable,
+            isWritable: probe.isWritable,
+            fileSizeBytes: probe.fileSizeBytes,
+            modificationAgeSeconds: probe.modificationAgeSeconds,
+            volumeAvailableBytes: reconciled.availableBytes,
+            volumeTotalBytes: probe.volumeTotalBytes,
+            volumeReadOnly: probe.volumeReadOnly,
+            errorKind: probe.errorKind,
+            capacity: reconciled
+        )
+    }
+
+    private static func capacityEvidence(
+        from capacity: StorageCapacityResult
+    ) -> [StorageCapacityEvidence] {
+        let provenances = capacity.provenance.isEmpty ? [.swiftAvailable] : capacity.provenance
+        if let availableBytes = capacity.availableBytes {
+            return provenances.map {
+                StorageCapacityEvidence(
+                    provenance: $0,
+                    availableBytes: availableBytes,
+                    totalBytes: nil,
+                    writable: nil,
+                    readOnly: nil,
+                    unknownReason: nil
+                )
+            }
+        }
+        if let lower = capacity.lowerAvailableBytes,
+           let upper = capacity.upperAvailableBytes,
+           let first = provenances.first,
+           let last = provenances.last {
+            return [
+                StorageCapacityEvidence(
+                    provenance: first,
+                    availableBytes: lower,
+                    totalBytes: nil,
+                    writable: nil,
+                    readOnly: nil,
+                    unknownReason: nil
+                ),
+                StorageCapacityEvidence(
+                    provenance: last,
+                    availableBytes: upper,
+                    totalBytes: nil,
+                    writable: nil,
+                    readOnly: nil,
+                    unknownReason: nil
+                ),
+            ]
+        }
+        return provenances.map {
+            StorageCapacityEvidence(
+                provenance: $0,
+                availableBytes: nil,
+                totalBytes: nil,
+                writable: nil,
+                readOnly: nil,
+                unknownReason: capacity.unknownReason ?? .unavailable
+            )
+        }
     }
 
     private func buildToolTail(
@@ -1057,6 +1174,19 @@ private struct BundleEvent: Encodable {
     let artifactSizeRoundedBytes: Int64?
     let artifactModificationAgeSeconds: Int64?
     let artifactGrowthRoundedBytesPerSecond: Int64?
+    let storageRole: String?
+    let storageStatus: String?
+    let storageCapacityState: String?
+    let storageCapacitySufficiency: String?
+    let storageCapacityProvenance: [String]?
+    let storageCapacityUnknownReason: String?
+    let storageAvailableRoundedBytes: Int64?
+    let storageTotalRoundedBytes: Int64?
+    let storageRequiredRoundedBytes: Int64?
+    let storageAvailableLowerRoundedBytes: Int64?
+    let storageAvailableUpperRoundedBytes: Int64?
+    let storageReadOnly: Bool?
+    let storageWritable: Bool?
     let privacy: String?
     let redaction: String?
     let messagePrivacy: String?
@@ -1108,6 +1238,25 @@ private struct BundleEvent: Encodable {
         artifactGrowthRoundedBytesPerSecond = DiagnosticSizeRounding.byteRate(
             event.artifactGrowthBytesPerSecond
         )
+        storageRole = bounded(event.storageRole, maximumBytes: 128)
+        storageStatus = bounded(event.storageStatus, maximumBytes: 128)
+        storageCapacityState = bounded(event.storageCapacityState, maximumBytes: 128)
+        storageCapacitySufficiency = bounded(event.storageCapacitySufficiency, maximumBytes: 128)
+        storageCapacityProvenance = event.storageCapacityProvenance?.map {
+            bounded($0, maximumBytes: 128) ?? "unknown"
+        }
+        storageCapacityUnknownReason = bounded(event.storageCapacityUnknownReason, maximumBytes: 128)
+        storageAvailableRoundedBytes = DiagnosticSizeRounding.volumeCapacity(event.storageAvailableBytes)
+        storageTotalRoundedBytes = DiagnosticSizeRounding.volumeCapacity(event.storageTotalBytes)
+        storageRequiredRoundedBytes = DiagnosticSizeRounding.volumeRequirement(event.storageRequiredBytes)
+        storageAvailableLowerRoundedBytes = DiagnosticSizeRounding.volumeCapacity(
+            event.storageAvailableLowerBytes
+        )
+        storageAvailableUpperRoundedBytes = DiagnosticSizeRounding.volumeCapacity(
+            event.storageAvailableUpperBytes
+        )
+        storageReadOnly = event.storageReadOnly
+        storageWritable = event.storageWritable
         privacy = bounded(event.privacy, maximumBytes: 128)
         redaction = bounded(event.redaction, maximumBytes: 128)
         messagePrivacy = bounded(event.messagePrivacy, maximumBytes: 128)
@@ -1150,6 +1299,13 @@ private struct BundleStorageProbe: Encodable {
     let volumeTotalRoundedBytes: Int64?
     let volumeReadOnly: Bool?
     let errorKind: String?
+    let capacityState: String?
+    let capacitySufficiency: String?
+    let capacityProvenance: [String]?
+    let capacityUnknownReason: String?
+    let capacityRequiredRoundedBytes: Int64?
+    let capacityLowerRoundedBytes: Int64?
+    let capacityUpperRoundedBytes: Int64?
 
     init(probe: RawDiagnosticStorageProbe, redactor: DiagnosticRedactor) {
         capturedAt = DiagnosticBundleBuilder.timestamp(probe.capturedAt)
@@ -1165,6 +1321,13 @@ private struct BundleStorageProbe: Encodable {
         volumeTotalRoundedBytes = DiagnosticSizeRounding.volumeCapacity(probe.volumeTotalBytes)
         volumeReadOnly = probe.volumeReadOnly
         errorKind = probe.errorKind?.rawValue
+        capacityState = probe.capacity?.state.rawValue
+        capacitySufficiency = probe.capacity?.sufficiency.rawValue
+        capacityProvenance = probe.capacity?.provenance.map(\.rawValue)
+        capacityUnknownReason = probe.capacity?.unknownReason?.rawValue
+        capacityRequiredRoundedBytes = DiagnosticSizeRounding.volumeRequirement(probe.capacity?.requiredBytes)
+        capacityLowerRoundedBytes = DiagnosticSizeRounding.volumeCapacity(probe.capacity?.lowerAvailableBytes)
+        capacityUpperRoundedBytes = DiagnosticSizeRounding.volumeCapacity(probe.capacity?.upperAvailableBytes)
     }
 }
 
@@ -1176,6 +1339,13 @@ private struct BundleStorageSample: Encodable {
     let fileSizeRoundedBytes: Int64?
     let modificationAgeSeconds: Int64?
     let volumeAvailableRoundedBytes: Int64?
+    let capacityState: String?
+    let capacitySufficiency: String?
+    let capacityProvenance: [String]?
+    let capacityUnknownReason: String?
+    let capacityRequiredRoundedBytes: Int64?
+    let capacityLowerRoundedBytes: Int64?
+    let capacityUpperRoundedBytes: Int64?
 
     init(sample: RawDiagnosticStorageSample, redactor: DiagnosticRedactor) {
         capturedAt = DiagnosticBundleBuilder.timestamp(sample.capturedAt)
@@ -1185,5 +1355,12 @@ private struct BundleStorageSample: Encodable {
         fileSizeRoundedBytes = DiagnosticSizeRounding.fileSize(sample.fileSizeBytes)
         modificationAgeSeconds = sample.modificationAgeSeconds
         volumeAvailableRoundedBytes = DiagnosticSizeRounding.volumeCapacity(sample.volumeAvailableBytes)
+        capacityState = sample.capacity?.state.rawValue
+        capacitySufficiency = sample.capacity?.sufficiency.rawValue
+        capacityProvenance = sample.capacity?.provenance.map(\.rawValue)
+        capacityUnknownReason = sample.capacity?.unknownReason?.rawValue
+        capacityRequiredRoundedBytes = DiagnosticSizeRounding.volumeRequirement(sample.capacity?.requiredBytes)
+        capacityLowerRoundedBytes = DiagnosticSizeRounding.volumeCapacity(sample.capacity?.lowerAvailableBytes)
+        capacityUpperRoundedBytes = DiagnosticSizeRounding.volumeCapacity(sample.capacity?.upperAvailableBytes)
     }
 }

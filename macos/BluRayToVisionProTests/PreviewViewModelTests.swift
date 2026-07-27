@@ -174,6 +174,16 @@ final class PreviewViewModelTests: XCTestCase {
             XCTAssertEqual(worker.receivedJob?.source.kind, .discImage)
             XCTAssertNotNil(worker.receivedJob?.source.titleID)
             XCTAssertNil(viewModel.capacityWarning)
+            XCTAssertTrue(viewModel.hasDiagnosticEvidence)
+            let diagnosticContext = DiagnosticJobContext(
+                jobID: UUID(),
+                draft: previewDraft,
+                workspaceURL: workspaceURL
+            )
+            XCTAssertEqual(
+                diagnosticContext.storageTargets.first(where: { $0.0 == .partialWorkspace })?.1,
+                workspaceURL.appendingPathComponent("temp_files", isDirectory: true)
+            )
         }
     }
 
@@ -249,6 +259,7 @@ final class PreviewViewModelTests: XCTestCase {
             while viewModel.hasActiveWorker { await Task.yield() }
 
             XCTAssertEqual(viewModel.phase, .failed)
+            XCTAssertTrue(viewModel.hasDiagnosticEvidence)
             XCTAssertFalse(clientCreated)
             XCTAssertTrue(viewModel.failureMessage?.contains("temporary preview workspace") == true)
             XCTAssertFalse(viewModel.failureMessage?.contains(destinationURL.path) == true)
@@ -594,6 +605,46 @@ final class PreviewCacheTests: XCTestCase {
             ),
             .sufficient(requiredBytes: requiredBytes, availableBytes: 10 << 30)
         )
+
+        let readOnlyWithoutRequirement = StorageCapacityResult.evaluate(
+            requiredBytes: requiredBytes,
+            evidence: [
+                StorageCapacityEvidence(
+                    provenance: .swiftAvailable,
+                    availableBytes: 100 << 30,
+                    totalBytes: 200 << 30,
+                    writable: false,
+                    readOnly: true,
+                    unknownReason: nil
+                ),
+            ]
+        )
+        XCTAssertEqual(readOnlyWithoutRequirement.state, .known)
+        XCTAssertEqual(readOnlyWithoutRequirement.sufficiency, .sufficient)
+
+        let workerConflict = StorageCapacityResult.evaluate(
+            requiredBytes: requiredBytes,
+            evidence: [
+                StorageCapacityEvidence(
+                    provenance: .swiftAvailable,
+                    availableBytes: 5 << 30,
+                    totalBytes: nil,
+                    writable: true,
+                    readOnly: false,
+                    unknownReason: nil
+                ),
+                StorageCapacityEvidence(
+                    provenance: .workerStatVFS,
+                    availableBytes: 100 << 30,
+                    totalBytes: nil,
+                    writable: true,
+                    readOnly: false,
+                    unknownReason: nil
+                ),
+            ]
+        )
+        XCTAssertEqual(workerConflict.state, .conflicting)
+        XCTAssertEqual(workerConflict.sufficiency, .unknown)
     }
 }
 

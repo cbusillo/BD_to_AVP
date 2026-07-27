@@ -60,7 +60,7 @@ final class DiagnosticReportClientTests: XCTestCase {
                 let metadata = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
                 XCTAssertEqual(metadata["bundle_schema_version"] as? Int, 1)
                 XCTAssertEqual(metadata["content_type"] as? String, "application/zip")
-                XCTAssertEqual(metadata["privacy_rules_version"] as? Int, 4)
+                XCTAssertEqual(metadata["privacy_rules_version"] as? Int, 5)
                 XCTAssertEqual(metadata["size_bytes"] as? Int, artifactFixture.data.count)
                 XCTAssertEqual(metadata["sha256"] as? String, checksum)
                 stub.respond(

@@ -13,6 +13,7 @@ from bd_to_avp.observability import (
     ObservabilityProgress,
     ObservabilityRedaction,
     ObservabilitySeverity,
+    ObservabilityStorage,
     ObservabilityText,
     bounded_utf8,
 )
@@ -66,6 +67,41 @@ class ObservabilityEventTests(unittest.TestCase):
         event = ObservabilityEvent.from_dict(fixture)
 
         self.assertEqual(event.kind, "future.tool.signal")
+
+    def test_storage_capacity_contract_round_trips(self) -> None:
+        event = self.make_event()
+        event = ObservabilityEvent(
+            emitter=event.emitter,
+            stream_id=event.stream_id,
+            sequence=event.sequence,
+            occurred_at=event.occurred_at,
+            elapsed_ms=event.elapsed_ms,
+            kind="storage.probed",
+            severity=event.severity,
+            privacy=event.privacy,
+            redaction=event.redaction,
+            context=event.context,
+            data=ObservabilityData(
+                storage=ObservabilityStorage(
+                    role="preview_workspace",
+                    status="available",
+                    available_bytes=17 * 1024**4,
+                    total_bytes=20 * 1024**4,
+                    read_only=False,
+                    writable=True,
+                    capacity_state="known",
+                    capacity_sufficiency="sufficient",
+                    capacity_provenance=("worker_posix_statvfs",),
+                    required_bytes=10 * 1024**3,
+                    available_lower_bytes=17 * 1024**4,
+                    available_upper_bytes=17 * 1024**4,
+                )
+            ),
+        )
+
+        restored = ObservabilityEvent.from_dict(event.to_dict())
+
+        self.assertEqual(restored, event)
 
     def test_unknown_nested_fields_are_ignored(self) -> None:
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))

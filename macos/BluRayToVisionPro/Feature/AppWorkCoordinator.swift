@@ -18,6 +18,26 @@ final class AppWorkCoordinator: UpdateInstallPostponing {
         conversion.hasActiveWork || preview.hasActiveWork
     }
 
+    var hasDiagnosticEvidence: Bool {
+        conversion.hasDiagnosticEvidence || preview.hasDiagnosticEvidence
+    }
+
+    func captureDiagnosticBundle(
+        in outputDirectory: URL? = nil,
+        userComment: DiagnosticUserComment? = nil
+    ) async throws -> DiagnosticBundleArtifact {
+        if shouldCapturePreviewDiagnostics {
+            return try await preview.captureDiagnosticBundle(
+                in: outputDirectory,
+                userComment: userComment
+            )
+        }
+        return try await conversion.captureDiagnosticBundle(
+            in: outputDirectory,
+            userComment: userComment
+        )
+    }
+
     func stopForQuit() async {
         async let conversionStop: Void = conversion.stopForQuit()
         async let previewStop: Void = preview.stopForQuit()
@@ -46,5 +66,18 @@ final class AppWorkCoordinator: UpdateInstallPostponing {
             }
         }
         return true
+    }
+
+    private var shouldCapturePreviewDiagnostics: Bool {
+        guard preview.hasDiagnosticEvidence else {
+            return false
+        }
+        if preview.hasActiveWork {
+            return true
+        }
+        if conversion.hasActiveWork {
+            return false
+        }
+        return preview.phase == .ready || preview.phase == .failed || preview.phase == .stopping
     }
 }

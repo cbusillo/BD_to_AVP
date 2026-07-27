@@ -256,6 +256,13 @@ class ObservabilityStorage:
     total_bytes: int | None = None
     read_only: bool | None = None
     writable: bool | None = None
+    capacity_state: str | None = None
+    capacity_sufficiency: str | None = None
+    capacity_provenance: tuple[str, ...] | None = None
+    capacity_unknown_reason: str | None = None
+    required_bytes: int | None = None
+    available_lower_bytes: int | None = None
+    available_upper_bytes: int | None = None
 
     def __post_init__(self) -> None:
         _validate_identifier(self.role, "storage.role")
@@ -266,6 +273,15 @@ class ObservabilityStorage:
         _validate_int(self.modification_age_seconds, "storage.modification_age_seconds")
         _validate_int(self.available_bytes, "storage.available_bytes")
         _validate_int(self.total_bytes, "storage.total_bytes")
+        _validate_identifier(self.capacity_state, "storage.capacity_state")
+        _validate_identifier(self.capacity_sufficiency, "storage.capacity_sufficiency")
+        if self.capacity_provenance is not None:
+            for provenance in self.capacity_provenance:
+                _validate_identifier(provenance, "storage.capacity_provenance")
+        _validate_identifier(self.capacity_unknown_reason, "storage.capacity_unknown_reason")
+        _validate_int(self.required_bytes, "storage.required_bytes")
+        _validate_int(self.available_lower_bytes, "storage.available_lower_bytes")
+        _validate_int(self.available_upper_bytes, "storage.available_upper_bytes")
         if self.read_only is not None and type(self.read_only) is not bool:
             raise TypeError("storage.read_only must be a boolean")
         if self.writable is not None and type(self.writable) is not bool:
@@ -516,6 +532,15 @@ def _optional_storage(value: dict[str, Any] | None) -> ObservabilityStorage | No
         total_bytes=value.get("total_bytes"),
         read_only=value.get("read_only"),
         writable=value.get("writable"),
+        capacity_state=value.get("capacity_state"),
+        capacity_sufficiency=value.get("capacity_sufficiency"),
+        capacity_provenance=(
+            tuple(value["capacity_provenance"]) if value.get("capacity_provenance") is not None else None
+        ),
+        capacity_unknown_reason=value.get("capacity_unknown_reason"),
+        required_bytes=value.get("required_bytes"),
+        available_lower_bytes=value.get("available_lower_bytes"),
+        available_upper_bytes=value.get("available_upper_bytes"),
     )
 
 
