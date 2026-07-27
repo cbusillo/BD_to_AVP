@@ -740,9 +740,9 @@ struct ContentView: View {
             return false
         }
         switch viewModel.source?.kind {
-        case .discImage, .matroska, .transportStream:
+        case .discImage, .bluRayFolder, .matroska, .transportStream:
             return true
-        case .physicalDisc, .bluRayFolder, .sourceFolder, .none:
+        case .physicalDisc, .sourceFolder, .none:
             return false
         }
     }
@@ -758,8 +758,8 @@ struct ContentView: View {
             return "A late-stage restart uses an existing video artifact. Choose an earlier start stage to generate a representative preview."
         }
         switch viewModel.source?.kind {
-        case .physicalDisc, .bluRayFolder:
-            return "The first preview slice supports MKV, MTS, M2TS, and ISO sources."
+        case .physicalDisc:
+            return "Preview supports MKV, MTS, M2TS, ISO, and Blu-ray-folder sources."
         default:
             return conversionUnavailableReason
         }
