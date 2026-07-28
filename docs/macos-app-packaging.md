@@ -96,10 +96,11 @@ only future newer builds and never downgrades the installed app. Published Beta
 3 (`0.3.0b3`, build `148`) is the one-time manual-download production seed:
 older Stable and RC installations cannot discover it, while an installed Beta
 3 exposes all four routes. Beta 4 (`0.3.0b4`, build `149`), Beta 5 (`0.3.0b5`,
-build `150`), and Beta 6 (`0.3.0b6`, build `151`) are published and immutable.
-Beta 7 (`0.3.0b7`, build `152`) is the next prepared target for the guarded
-exact-SHA Prerelease workflow. Its future cumulative item must sit above Beta 6,
-Beta 5, Beta 4, and Beta 3 and remain visible only to Beta and Alpha until a
+build `150`), Beta 6 (`0.3.0b6`, build `151`), and Beta 7 (`0.3.0b7`, build
+`152`) are published and immutable. Beta 8 (`0.3.0b8`, build `153`) is the next
+prepared target for the guarded exact-SHA Prerelease workflow. Its future
+cumulative item must sit above Beta 7, Beta 6, Beta 5, Beta 4, and Beta 3 and
+remain visible only to Beta and Alpha until a
 later newer Stable supersedes it.
 
 ## Release Workflow
@@ -152,15 +153,18 @@ behavior and engine architecture rather than release branding.
 
 ## Remaining Field Evidence
 
-Beta 3 through Beta 6 publication is complete, and signed installed-app
-diagnostics qualification is complete. Beta 7 exact-artifact qualification must
+Beta 3 through Beta 7 publication is complete, and signed installed-app
+diagnostics qualification is complete. Beta 8 exact-artifact qualification must
 prove that:
 
-- Beta 6 updates forward to Beta 7 on Beta and Alpha without changing the saved
+- Beta 7 updates forward to Beta 8 on Beta and Alpha without changing the saved
   route;
 - Stable and RC continue to exclude every Beta item;
 - the downloaded notarized DMG passes signature, staple, Gatekeeper, startup,
   bundled-helper, and worker-capability checks; and
 - packaged ordinary/direct-4K full conversion, finalized preview, visible
   fallback, and short physical Vision Pro playback still match the qualified
-  pre-release candidate.
+  pre-release candidate; and
+- the same exact package passes #392's field/NAS matrix and #382's packaged AAC
+  and physical Vision Pro gates without treating unsigned evidence as release
+  proof.

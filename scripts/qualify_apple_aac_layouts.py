@@ -45,6 +45,74 @@ IDENTITY_ANALYSIS_INSET_SECONDS = 0.02
 IDENTITY_RELATIVE_THRESHOLD = 0.08
 IDENTITY_ABSOLUTE_THRESHOLD = 0.01
 
+PACKAGED_FIXTURE_GATE_LINES = (
+    "## Packaged Fixture Gate",
+    "",
+    (
+        "`docs/qualification/apple-aac-package-fixtures-v1.json` is the checked release fixture contract. "
+        "It binds representative packaged-worker cases for canonical stereo and `5.1` preservation, "
+        "`5.1(side)` remapping, `7.1` downmixing, missing/unknown/PCE fail-closed behavior, multiple "
+        "languages, handler titles, and default disposition. Its channel-identity maps must remain identical "
+        "to the production policy."
+    ),
+    "",
+    (
+        "Each private fixture is a short MVC MKV with the #380 time-slotted channel-identity signal and the "
+        "exact stream metadata declared by the manifest. Run the verifier from the checkout that built the "
+        "candidate:"
+    ),
+    "",
+    (
+        "Create the private fixture set from a short real MVC MKV. The generator bounds source size and finite "
+        "duration, hashes inputs and tools before use, rechecks them before atomic publication, removes private "
+        "staging data after failures, Python interruptions, or handled termination signals, validates every audio "
+        "stream against the checked manifest, and records source, tool, and fixture hashes without storing the "
+        "private source path:"
+    ),
+    "",
+    "```bash",
+    "uv run python -m scripts.create_packaged_aac_layout_fixtures \\",
+    '  --mvc-source "$BD_TO_AVP_REAL_MVC_SOURCE" \\',
+    '  --output "$BD_TO_AVP_AAC_FIXTURE_ROOT"',
+    "```",
+    "",
+    (
+        "The schema-v2 generator receipt requires source, FFmpeg, FFprobe, and per-fixture provenance records while "
+        "recording that direct-MVC routing remains unproven. The receipt detects drift between generation and "
+        "verification; it is reproducibility evidence rather than a cryptographic signature. The packaged verifier "
+        "requires that receipt and exact fixture hashes before closing the routing gap by requiring every successful "
+        "case to report `direct_mv_hevc` from the packaged worker."
+    ),
+    "",
+    (
+        "Schema v2 supersedes the earlier schema-v1 fixture receipts and package evidence. Existing schema-v1 "
+        "artifacts remain historical records only: regenerate the private fixture directory with the current "
+        "generator and rerun package verification before using the result for a current release gate. The verifier "
+        "intentionally rejects schema-v1 receipts rather than silently upgrading or reusing them."
+    ),
+    "",
+    "```bash",
+    "uv run python -m scripts.verify_packaged_aac_layouts \\",
+    '  --app "$BD_TO_AVP_CANDIDATE_APP" \\',
+    '  --fixture-root "$BD_TO_AVP_AAC_FIXTURE_ROOT" \\',
+    '  --artifacts "$BD_TO_AVP_AAC_EVIDENCE_ROOT/artifacts" \\',
+    '  --output "$BD_TO_AVP_AAC_EVIDENCE_ROOT/evidence.json"',
+    "```",
+    "",
+    (
+        "The verifier rejects package-policy drift, requires failure coverage to match the declared rejection "
+        "semantics, binds every source to the generator receipt, validates each fixture before and after execution, "
+        "terminates the packaged worker on interruption, rechecks the package after the matrix, runs the packaged "
+        "worker with protocol v10, checks structured layout decisions and visible rejections, verifies final AAC "
+        "layout and metadata, runs Apple passthrough across the complete output, isolates each selected audio track "
+        "before Apple LPCM identity analysis, and records bounded package/source/output hashes. Final-output checks "
+        "own handler-title and default-disposition assertions; the Apple passthrough evidence names those fields as "
+        "not compared because Core Media normalizes them. An ad-hoc package run is deterministic package evidence "
+        "only. It does not establish Developer ID/notarization provenance, physical Vision Pro surround placement, "
+        "repeated device seeks, or perceptual lip-sync; those remain exact signed-candidate gates under #382."
+    ),
+)
+
 
 CHANNEL_FREQUENCIES = {
     "FL": 330,
@@ -661,8 +729,8 @@ def render_policy_markdown(report: Mapping[str, object]) -> str:
                 ),
                 "",
                 (
-                    "This qualification slice does **not** change Automatic runtime behavior. Production "
-                    "implementation belongs to #381, and signed-package/physical validation belongs to #382."
+                    "The production runtime imports this same policy for Automatic and Convert-to-AAC processing. "
+                    "Signed-package and physical Vision Pro validation remains in #382."
                 ),
                 "",
                 "## Evidence Method",
@@ -724,10 +792,15 @@ def render_policy_markdown(report: Mapping[str, object]) -> str:
                 "## Runtime Boundary",
                 "",
                 (
-                    "Production imports this exact table at the shared audio-planning boundary, emits structured "
-                    "remap/downmix/fail decisions, and rejects unqualified AAC copy. #382 must validate the exact "
-                    "signed package on Vision Pro before the qualified policy is considered physically validated."
+                    "`bd_to_avp/modules/aac_layout_policy.py` is the shared source of truth for this table. "
+                    "Automatic copies only the six qualified preserve layouts; any selected remap or downmix causes "
+                    "the whole selected set to be encoded with per-output policy filters. Missing, unknown, custom, "
+                    "discrete, or unlisted layouts stop before FFmpeg with a structured failure, and resumed prepared "
+                    "AAC is requalified before final muxing. #382 must validate the exact signed package on Vision Pro "
+                    "before this policy is considered physically validated."
                 ),
+                "",
+                *PACKAGED_FIXTURE_GATE_LINES,
                 "",
                 "## Regenerate",
                 "",

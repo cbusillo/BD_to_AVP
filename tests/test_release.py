@@ -156,34 +156,35 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         self.assertEqual(apps["bd-to-avp"]["min_os_version"], "14.0")
 
-    def test_repository_is_prepared_and_authorized_for_beta7(self) -> None:
+    def test_repository_is_prepared_and_authorized_for_beta8(self) -> None:
         metadata = release.load_release_metadata()
 
-        self.assertEqual(metadata.package_version, "0.3.0b7")
-        self.assertEqual(metadata.public_version, "0.3.0-beta.7")
-        self.assertEqual(metadata.build_version, "152")
-        self.assertEqual(metadata.release_tag, "v0.3.0-beta.7")
-        self.assertEqual(metadata.release_name, "v0.3.0-beta.7")
-        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.7.dmg")
+        self.assertEqual(metadata.package_version, "0.3.0b8")
+        self.assertEqual(metadata.public_version, "0.3.0-beta.8")
+        self.assertEqual(metadata.build_version, "153")
+        self.assertEqual(metadata.release_tag, "v0.3.0-beta.8")
+        self.assertEqual(metadata.release_name, "v0.3.0-beta.8")
+        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.8.dmg")
         self.assertEqual(metadata.channel, "beta")
         self.assertTrue(metadata.prerelease)
         self.assertFalse(metadata.make_latest)
         self.assertFalse(metadata.publish_pypi)
 
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
-        self.assertNotIn("v0.3.0-beta.7", freeze_policy["frozen_release_tags"])
+        self.assertNotIn("v0.3.0-beta.8", freeze_policy["frozen_release_tags"])
 
-        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.7-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.0b7`", cut_packet)
-        self.assertIn("Build `152`", cut_packet)
-        for pull_request in (349, 350, 360, 361, 362, 365, 368, 371, 372, 373, 374, 375, 378):
+        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.8-cut-packet.md").read_text(encoding="utf-8")
+        self.assertIn("`0.3.0b8`", cut_packet)
+        self.assertIn("Build `153`", cut_packet)
+        for pull_request in (383, 384, 393, 395, 396, 397, 400):
             self.assertIn(f"#{pull_request}", cut_packet)
         self.assertIn("Privacy rules version `4`", cut_packet)
-        self.assertIn("July 26, 2026 instruction to proceed", cut_packet)
+        self.assertIn("Issue #392", cut_packet)
+        self.assertIn("July 28, 2026 instruction to proceed", cut_packet)
         self.assertIn("does not pre-authorize", cut_packet)
         self.assertIn("that approval", cut_packet)
-        self.assertIn("pre-release qualification package was version `0.3.0b6`", cut_packet)
-        self.assertIn("The exact Beta 7 artifact remains pending", cut_packet)
+        self.assertIn("pre-release qualification package was version `0.3.0b7`", cut_packet)
+        self.assertIn("The exact Beta 8 artifact remains pending", cut_packet)
 
     def test_repository_beta3_recovery_evidence_is_exact(self) -> None:
         evidence = release.validate_beta3_recovery_evidence()

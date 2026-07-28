@@ -188,7 +188,7 @@ class SparkleAppcastTests(unittest.TestCase):
         self.assertNotIn("v0.3.0-beta.1", appcast_text)
         self.assertNotIn("v0.3.0-beta.2", appcast_text)
 
-    def test_beta7_appends_above_complete_immutable_production_history(self) -> None:
+    def test_beta8_appends_above_complete_immutable_production_history(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             base_feed = root / "base.xml"
@@ -197,6 +197,7 @@ class SparkleAppcastTests(unittest.TestCase):
             beta5_feed = root / "beta5.xml"
             beta6_feed = root / "beta6.xml"
             beta7_feed = root / "beta7.xml"
+            beta8_feed = root / "beta8.xml"
             base_feed.write_bytes(
                 (
                     Path(__file__).resolve().parents[1] / "docs" / "release-evidence" / "v0.2.143-appcast.xml"
@@ -227,19 +228,25 @@ class SparkleAppcastTests(unittest.TestCase):
                 beta7_feed,
                 item("152", "0.3.0b7", "beta", minimum_system_version="26.0"),
             )
+            sparkle_appcast.append_item(
+                beta7_feed,
+                beta8_feed,
+                item("153", "0.3.0b8", "beta", minimum_system_version="26.0"),
+            )
 
-            sparkle_appcast.validate_release_snapshot(beta7_feed, "0.3.0b7")
-            sparkle_appcast.validate_release_tag_snapshot(beta7_feed, "v0.3.0-beta.7")
-            _, channel = sparkle_appcast.load_appcast(beta7_feed)
+            sparkle_appcast.validate_release_snapshot(beta8_feed, "0.3.0b8")
+            sparkle_appcast.validate_release_tag_snapshot(beta8_feed, "v0.3.0-beta.8")
+            _, channel = sparkle_appcast.load_appcast(beta8_feed)
             items = channel.findall("item")
 
         self.assertEqual(
             [entry.findtext(f"{sparkle_appcast.SPARKLE}version") for entry in items],
-            ["152", "151", "150", "149", "148", "146", "145", "144"],
+            ["153", "152", "151", "150", "149", "148", "146", "145", "144"],
         )
         self.assertEqual(
             [entry.findtext(f"{sparkle_appcast.SPARKLE}shortVersionString") for entry in items],
             [
+                "0.3.0b8",
                 "0.3.0b7",
                 "0.3.0b6",
                 "0.3.0b5",
@@ -252,7 +259,7 @@ class SparkleAppcastTests(unittest.TestCase):
         )
         self.assertEqual(
             [entry.findtext(f"{sparkle_appcast.SPARKLE}channel") for entry in items],
-            ["beta", "beta", "beta", "beta", "beta", None, "rc", "rc"],
+            ["beta", "beta", "beta", "beta", "beta", "beta", None, "rc", "rc"],
         )
 
     def test_rejects_non_monotonic_build(self) -> None:
