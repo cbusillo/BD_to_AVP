@@ -19,11 +19,11 @@ from scripts.macos_release import (
     notarize_and_staple,
     parse_args,
     run,
-    smoke_native_app_startup,
+    smoke_native_app,
     smoke_packaged_tools,
     verify_release_app,
 )
-from scripts.native_app import NATIVE_APP_NAME, NATIVE_EXECUTABLE_NAME
+from scripts.native_app import NATIVE_APP_NAME
 from scripts.sparkle_bundle import SparkleBundleMetadata
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -104,7 +104,7 @@ class MacOSReleaseArtifactTests(unittest.TestCase):
         with (
             patch("scripts.macos_release.verify_layout") as verify_layout,
             patch("scripts.macos_release.inspect_app_bundle", return_value=metadata) as inspect_bundle,
-            patch("scripts.macos_release.smoke_native_app_startup") as smoke_app,
+            patch("scripts.macos_release.smoke_native_app") as smoke_app,
             patch("scripts.macos_release.smoke_packaged_tools") as smoke_tools,
             patch("scripts.macos_release.smoke_packaged_worker") as smoke_worker,
         ):
@@ -123,14 +123,12 @@ class MacOSReleaseArtifactTests(unittest.TestCase):
         smoke_tools.assert_called_once_with(app_path)
         smoke_worker.assert_called_once_with(app_path)
 
-    def test_native_startup_smoke_uses_explicit_exit_argument(self) -> None:
-        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+    def test_native_app_smoke_uses_packaged_native_smoke(self) -> None:
         app_path = Path("/tmp") / NATIVE_APP_NAME
-        with patch("scripts.macos_release.subprocess.run", return_value=completed) as run_mock:
-            smoke_native_app_startup(app_path)
+        with patch("scripts.macos_release.smoke_packaged_native_app") as packaged_smoke:
+            smoke_native_app(app_path)
 
-        command = run_mock.call_args.args[0]
-        self.assertEqual(command, [str(app_path / "Contents" / "MacOS" / NATIVE_EXECUTABLE_NAME), "--startup-smoke"])
+        packaged_smoke.assert_called_once_with(app_path)
 
     def test_packaged_tool_smoke_probes_release_tool_set(self) -> None:
         app_path = Path("/tmp") / NATIVE_APP_NAME

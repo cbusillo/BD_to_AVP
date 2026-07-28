@@ -17,6 +17,7 @@ struct BluRayToVisionProApp: App {
     private let capabilities = AppCapabilities.current
     private let workCoordinator: AppWorkCoordinator
     private let observabilityEventStore: any ObservabilityEventPersisting
+    private let previewPresentationSmokeConfiguration: PreviewPresentationSmokeConfiguration?
 
     init() {
         let observabilityEventStore = ObservabilityEventStore.automatic()
@@ -42,30 +43,38 @@ struct BluRayToVisionProApp: App {
         _updater = StateObject(wrappedValue: UpdateController(installPostponer: workCoordinator))
         self.workCoordinator = workCoordinator
         self.observabilityEventStore = observabilityEventStore
+        previewPresentationSmokeConfiguration = PreviewPresentationSmokeConfiguration.parse(
+            arguments: ProcessInfo.processInfo.arguments
+        )
         appDelegate.observabilityEventStore = observabilityEventStore
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView(
-                viewModel: viewModel,
-                previewViewModel: previewViewModel,
-                diagnosticReportViewModel: diagnosticReportViewModel,
-                settings: settings,
-                profileStore: profileStore,
-                capabilities: capabilities
-            )
-                .frame(minWidth: 1_080, minHeight: 680)
-                .background(
-                    WindowAccessor { window in
-                        appDelegate.attach(window: window, workCoordinator: workCoordinator)
-                    }
+            if let previewPresentationSmokeConfiguration {
+                PreviewPresentationSmokeView(configuration: previewPresentationSmokeConfiguration)
+                    .frame(width: 820, height: 620)
+            } else {
+                ContentView(
+                    viewModel: viewModel,
+                    previewViewModel: previewViewModel,
+                    diagnosticReportViewModel: diagnosticReportViewModel,
+                    settings: settings,
+                    profileStore: profileStore,
+                    capabilities: capabilities
                 )
-                .onAppear {
-                    updater.startIfNeeded()
-                    settings.selectedProfileID = profileStore.normalizedProfileID(settings.selectedProfileID)
-                    appDelegate.workCoordinator = workCoordinator
-                }
+                    .frame(minWidth: 1_080, minHeight: 680)
+                    .background(
+                        WindowAccessor { window in
+                            appDelegate.attach(window: window, workCoordinator: workCoordinator)
+                        }
+                    )
+                    .onAppear {
+                        updater.startIfNeeded()
+                        settings.selectedProfileID = profileStore.normalizedProfileID(settings.selectedProfileID)
+                        appDelegate.workCoordinator = workCoordinator
+                    }
+            }
         }
         .defaultSize(width: 1_120, height: 820)
         .windowResizability(.contentMinSize)

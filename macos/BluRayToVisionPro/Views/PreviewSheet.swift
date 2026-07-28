@@ -364,7 +364,7 @@ struct PreviewSheet: View {
     }
 }
 
-private struct PreviewPlayerView: View {
+struct PreviewPlayerView: View {
     let lease: PreviewArtifactLease
     let videoRoute: VideoRouteReport?
     let generateAgain: () -> Void

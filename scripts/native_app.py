@@ -140,6 +140,7 @@ def run(
     *,
     cwd: Path = REPO_ROOT,
     environment: dict[str, str] | None = None,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         command,
@@ -147,6 +148,7 @@ def run(
         cwd=cwd,
         env=environment,
         text=True,
+        timeout=timeout,
     )
 
 
@@ -595,9 +597,12 @@ def verify_codesign(app_path: Path) -> None:
 
 
 def smoke_packaged_native_app(app_path: Path) -> None:
+    from scripts.smoke_release_app import build_clean_env, read_bundle, verify_preview_presentation
+
     app_path = app_path.resolve()
     native_executable = app_path / "Contents" / "MacOS" / NATIVE_EXECUTABLE_NAME
-    run([str(native_executable), "--startup-smoke"], cwd=app_path)
+    run([str(native_executable), "--startup-smoke"], cwd=app_path, timeout=20)
+    verify_preview_presentation(read_bundle(app_path), build_clean_env())
 
 
 def smoke_packaged_mv_hevc_encoder(app_path: Path) -> None:

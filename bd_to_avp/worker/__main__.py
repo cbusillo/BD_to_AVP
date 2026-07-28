@@ -26,6 +26,24 @@ from bd_to_avp.worker.protocol import (
 )
 
 OperationRunner = Callable[[JobSpec, WorkerProcessOwner, WorkerActivityReporter], dict[str, object]]
+APPLE_VISION_OCR_SMOKE_ARGUMENT = "--smoke-apple-vision-ocr"
+
+
+def run_smoke_command(
+    arguments: list[str],
+    output_stream: TextIO,
+    *,
+    apple_vision_loader: Callable[[], object] | None = None,
+) -> int | None:
+    if arguments != [APPLE_VISION_OCR_SMOKE_ARGUMENT]:
+        return None
+    if apple_vision_loader is None:
+        from bd_to_avp.vendor.pgsrip.ocr import AppleVisionOcr
+
+        apple_vision_loader = AppleVisionOcr._load_frameworks
+    apple_vision_loader()
+    output_stream.write("Apple Vision OCR import smoke passed\n")
+    return 0
 
 
 def run_worker(
@@ -180,6 +198,9 @@ def _emit_heartbeats(
 
 
 def main() -> None:
+    smoke_result = run_smoke_command(sys.argv[1:], sys.stdout)
+    if smoke_result is not None:
+        raise SystemExit(smoke_result)
     raise SystemExit(run_worker(sys.stdin, sys.stdout, sys.stderr))
 
 
