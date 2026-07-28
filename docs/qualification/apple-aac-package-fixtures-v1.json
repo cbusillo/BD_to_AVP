@@ -65,7 +65,7 @@
       "tracks": [
         {
           "policy_id": "ch06-5_1_side",
-          "codec_name": "pcm_s24le",
+          "codec_name": "flac",
           "source_layout": "5.1(side)",
           "channels": 6,
           "aac_channel_configuration": null,
@@ -85,7 +85,7 @@
       "tracks": [
         {
           "policy_id": "ch08-7_1",
-          "codec_name": "pcm_s24le",
+          "codec_name": "flac",
           "source_layout": "7.1",
           "channels": 8,
           "aac_channel_configuration": null,
@@ -125,12 +125,12 @@
       "tracks": [
         {
           "policy_id": null,
-          "codec_name": "pcm_s24le",
-          "source_layout": "unknown",
-          "channels": 4,
+          "codec_name": "flac",
+          "source_layout": "3.1.2",
+          "channels": 6,
           "aac_channel_configuration": null,
           "language": "eng",
-          "handler_title": "Unknown Layout",
+          "handler_title": "Unqualified 3.1.2",
           "default": true
         }
       ]

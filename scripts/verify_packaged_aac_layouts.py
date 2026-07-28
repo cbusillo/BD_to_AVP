@@ -19,6 +19,7 @@ from pathlib import Path
 
 from bd_to_avp.modules.aac_layout_policy import (
     AAC_LAYOUT_POLICIES,
+    LAYOUT_CHANNELS,
     AacLayoutAction,
     AacLayoutPolicy,
 )
@@ -202,8 +203,10 @@ def _validate_case(case: FixtureCase) -> None:
         track.source_layout is not None or track.aac_channel_configuration is not None
     ):
         raise PackagedAacFailure(f"Fixture {case.case_id} does not model a missing layout.")
-    if "fail-unknown-layout" in case.coverage and track.source_layout != "unknown":
-        raise PackagedAacFailure(f"Fixture {case.case_id} does not model an unknown layout.")
+    if "fail-unknown-layout" in case.coverage and (
+        track.source_layout is None or track.source_layout in LAYOUT_CHANNELS
+    ):
+        raise PackagedAacFailure(f"Fixture {case.case_id} does not model an unqualified layout.")
     if "fail-pce-layout" in case.coverage and (
         track.codec_name != "aac" or track.source_layout is not None or track.aac_channel_configuration != 0
     ):
@@ -348,6 +351,10 @@ def validate_paths(
 def _require_apple_tools() -> None:
     if shutil.which("avconvert") is None:
         raise PackagedAacFailure("Apple media verification requires avconvert.")
+
+
+def _render_evidence(evidence: Mapping[str, object]) -> str:
+    return json.dumps(evidence, indent=2, sort_keys=True) + "\n"
 
 
 def _run(command: Sequence[str | Path]) -> subprocess.CompletedProcess[str]:
@@ -783,7 +790,7 @@ def verify_packaged_aac_layouts(
             "passed": True,
         },
     }
-    if len(json.dumps(evidence, sort_keys=True).encode("utf-8")) > MAX_EVIDENCE_BYTES:
+    if len(_render_evidence(evidence).encode("utf-8")) > MAX_EVIDENCE_BYTES:
         shutil.rmtree(artifact_directory, ignore_errors=True)
         raise PackagedAacFailure("AAC package evidence exceeded its bounded size limit.")
     return evidence
@@ -812,7 +819,7 @@ def main() -> int:
             artifacts,
             manifest_path=args.manifest.resolve(),
         )
-        text = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
+        text = _render_evidence(evidence)
         atomic_write_text(output, text)
         print(text, end="")
     except (

@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from pathlib import Path
@@ -7,10 +8,11 @@ from scripts import qualify_apple_aac_layouts as qualification
 
 
 class AppleAacLayoutQualificationTests(unittest.TestCase):
-    def test_generated_policy_keeps_packaged_fixture_gate(self) -> None:
+    def test_generated_policy_matches_committed_document(self) -> None:
         policy = Path("docs/apple-aac-layout-policy.md").read_text(encoding="utf-8")
+        report = json.loads(Path("docs/qualification/apple-aac-layouts-v1.json").read_text(encoding="utf-8"))
 
-        self.assertIn("\n".join(qualification.PACKAGED_FIXTURE_GATE_LINES), policy)
+        self.assertEqual(qualification.render_policy_markdown(report), policy)
 
     def test_matrix_covers_standard_layouts_from_one_through_eight_channels(self) -> None:
         layouts = {case.source_layout for case in qualification.LAYOUT_CASES}

@@ -696,8 +696,8 @@ def render_policy_markdown(report: Mapping[str, object]) -> str:
                 ),
                 "",
                 (
-                    "This qualification slice does **not** change Automatic runtime behavior. Production "
-                    "implementation belongs to #381, and signed-package/physical validation belongs to #382."
+                    "The production runtime imports this same policy for Automatic and Convert-to-AAC processing. "
+                    "Signed-package and physical Vision Pro validation remains in #382."
                 ),
                 "",
                 "## Evidence Method",
@@ -759,9 +759,12 @@ def render_policy_markdown(report: Mapping[str, object]) -> str:
                 "## Runtime Boundary",
                 "",
                 (
-                    "Production imports this exact table at the shared audio-planning boundary, emits structured "
-                    "remap/downmix/fail decisions, and rejects unqualified AAC copy. #382 must validate the exact "
-                    "signed package on Vision Pro before the qualified policy is considered physically validated."
+                    "`bd_to_avp/modules/aac_layout_policy.py` is the shared source of truth for this table. "
+                    "Automatic copies only the six qualified preserve layouts; any selected remap or downmix causes "
+                    "the whole selected set to be encoded with per-output policy filters. Missing, unknown, custom, "
+                    "discrete, or unlisted layouts stop before FFmpeg with a structured failure, and resumed prepared "
+                    "AAC is requalified before final muxing. #382 must validate the exact signed package on Vision Pro "
+                    "before this policy is considered physically validated."
                 ),
                 "",
                 *PACKAGED_FIXTURE_GATE_LINES,

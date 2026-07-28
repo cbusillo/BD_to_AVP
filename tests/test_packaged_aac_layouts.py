@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from bd_to_avp.modules.aac_layout_policy import LAYOUT_CHANNELS
 from scripts.verify_packaged_aac_layouts import (
     DEFAULT_MANIFEST,
     REQUIRED_COVERAGE,
@@ -15,6 +16,7 @@ from scripts.verify_packaged_aac_layouts import (
     _failed_case,
     _identity_evidence,
     _policy_evidence,
+    _render_evidence,
     _validate_streams,
     load_fixture_manifest,
     validate_paths,
@@ -63,6 +65,16 @@ class PackagedAacManifestTests(unittest.TestCase):
         self.assertEqual([track.handler_title for track in case.tracks], ["English Stereo", "Japanese 5.1"])
         self.assertEqual([track.default for track in case.tracks], [True, False])
 
+    def test_committed_manifest_uses_layout_carrying_lossless_sources(self) -> None:
+        cases = {case.case_id: case for case in load_fixture_manifest().cases}
+
+        self.assertEqual(cases["remap-5_1-side"].tracks[0].codec_name, "flac")
+        self.assertEqual(cases["downmix-7_1"].tracks[0].codec_name, "flac")
+        unqualified = cases["fail-unknown-layout"].tracks[0]
+        self.assertEqual(unqualified.codec_name, "flac")
+        self.assertEqual(unqualified.source_layout, "3.1.2")
+        self.assertNotIn(unqualified.source_layout, LAYOUT_CHANNELS)
+
     def test_manifest_rejects_policy_drift(self) -> None:
         document = json.loads(DEFAULT_MANIFEST.read_text(encoding="utf-8"))
         document["cases"][1]["tracks"][0]["policy_id"] = "wrong"
@@ -108,6 +120,19 @@ class PackagedAacManifestTests(unittest.TestCase):
             with self.assertRaisesRegex(PackagedAacFailure, "Apple-qualified"):
                 load_fixture_manifest(manifest_path)
 
+    def test_manifest_rejects_qualified_layout_as_unknown_coverage(self) -> None:
+        document = json.loads(DEFAULT_MANIFEST.read_text(encoding="utf-8"))
+        case = next(case for case in document["cases"] if case["id"] == "fail-unknown-layout")
+        case["tracks"][0]["source_layout"] = "quad"
+        case["tracks"][0]["channels"] = 4
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            manifest_path = Path(temporary_directory) / "manifest.json"
+            manifest_path.write_text(json.dumps(document), encoding="utf-8")
+
+            with self.assertRaisesRegex(PackagedAacFailure, "unqualified layout"):
+                load_fixture_manifest(manifest_path)
+
 
 class PackagedAacRequestTests(unittest.TestCase):
     def test_request_uses_current_protocol_and_disables_subtitles(self) -> None:
@@ -145,6 +170,11 @@ class PackagedAacRequestTests(unittest.TestCase):
 
 
 class PackagedAacEvidenceTests(unittest.TestCase):
+    def test_evidence_renderer_matches_persisted_format(self) -> None:
+        evidence = {"cases": [{"passed": True}], "schema_version": 1}
+
+        self.assertEqual(_render_evidence(evidence), json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+
     def test_remap_case_requires_exact_policy_warning(self) -> None:
         case = next(case for case in load_fixture_manifest().cases if case.case_id == "remap-5_1-side")
         execution = WorkerExecution(
