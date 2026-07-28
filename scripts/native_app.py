@@ -87,6 +87,11 @@ BANNED_RELEASE_IDENTIFIERS = (
     "Native worker prototype",
     "Protocol v1",
 )
+REQUIRED_NATIVE_FRAMEWORK_LINKS = frozenset(
+    {
+        "/System/Library/Frameworks/AVKit.framework/Versions/A/AVKit",
+    }
+)
 MACH_O_MAGICS = {
     b"\xca\xfe\xba\xbe",
     b"\xbe\xba\xfe\xca",
@@ -361,6 +366,7 @@ def verify_layout(app_path: Path, *, environment: Mapping[str, str] | None = Non
     for executable in (native_executable, worker_executable, ffprobe_executable, mv_hevc_encoder):
         if executable_architectures(executable) != {"arm64"}:
             raise RuntimeError(f"Packaged executable must be arm64-only: {executable}")
+    verify_native_framework_links(native_executable)
     verify_mach_o_minimum_system_versions(app_path, native_executable)
     verify_exact_minimum_system_version(mv_hevc_encoder, "MV-HEVC encoder")
     verify_native_binary_paths(native_executable)
@@ -438,6 +444,26 @@ def executable_architectures(path: Path) -> set[str]:
         text=True,
     )
     return set(completed.stdout.split())
+
+
+def linked_libraries(path: Path) -> set[str]:
+    completed = subprocess.run(
+        ["otool", "-L", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return {
+        line.strip().split(" (compatibility version", maxsplit=1)[0]
+        for line in completed.stdout.splitlines()
+        if line.strip() and not line.strip().endswith(":")
+    }
+
+
+def verify_native_framework_links(native_executable: Path) -> None:
+    missing = sorted(REQUIRED_NATIVE_FRAMEWORK_LINKS - linked_libraries(native_executable))
+    if missing:
+        raise RuntimeError("macOS app is missing required framework links:\n" + "\n".join(missing))
 
 
 def minimum_macos_versions(path: Path) -> set[str]:
