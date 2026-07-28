@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -30,12 +31,15 @@ from scripts.verify_packaged_aac_layouts import (
     TrackSpec,
     _audio_streams,
     _input_summary,
+    _managed_sigterm_exit,
     _validate_streams,
     load_fixture_manifest,
 )
 
 
 COMMAND_TIMEOUT_SECONDS = 30 * 60
+MAX_SOURCE_DURATION_SECONDS = 120.0
+MAX_SOURCE_SIZE_BYTES = 1024 * 1024 * 1024
 EXTRA_CHANNEL_FREQUENCIES = {"TFL": 1430, "TFR": 1540}
 FAILURE_IDENTITY_RECIPES = {
     "fail-missing-layout": ("5.1", ("FL", "FR", "FC", "LFE", "BL", "BR")),
@@ -46,6 +50,25 @@ FAILURE_IDENTITY_RECIPES = {
 
 class FixtureBuildFailure(RuntimeError):
     pass
+
+
+def _redact_command_paths(detail: str, command: Sequence[str | Path]) -> str:
+    redacted = detail
+    paths = {
+        str(item) for item in command if isinstance(item, Path) or (isinstance(item, str) and item.startswith("/"))
+    }
+    paths.add(str(Path.home()))
+    for path in sorted(paths, key=len, reverse=True):
+        if path:
+            redacted = redacted.replace(path, "<redacted-path>")
+    return redacted
+
+
+def _hash_file(path: Path, label: str) -> str:
+    try:
+        return sha256_file(path)
+    except OSError as error:
+        raise FixtureBuildFailure(f"Could not hash the {label}.") from error
 
 
 def _run(command: Sequence[str | Path]) -> subprocess.CompletedProcess[str]:
@@ -62,7 +85,10 @@ def _run(command: Sequence[str | Path]) -> subprocess.CompletedProcess[str]:
         raise FixtureBuildFailure(f"Fixture command timed out: {Path(str(command[0])).name}") from error
     except subprocess.CalledProcessError as error:
         detail = (error.stderr or error.stdout or "").strip()
-        raise FixtureBuildFailure(f"Fixture command failed: {detail or 'no diagnostic output'}") from error
+        safe_detail = _redact_command_paths(detail, command)
+        raise FixtureBuildFailure(f"Fixture command failed: {safe_detail or 'no diagnostic output'}") from error
+    except OSError as error:
+        raise FixtureBuildFailure(f"Fixture command could not start: {Path(str(command[0])).name}") from error
 
 
 def _probe_document(path: Path) -> Mapping[str, object]:
@@ -89,6 +115,12 @@ def _probe_document(path: Path) -> Mapping[str, object]:
 
 
 def _source_video_summary(source: Path) -> dict[str, object]:
+    try:
+        source_size = source.stat().st_size
+    except OSError as error:
+        raise FixtureBuildFailure("MVC fixture source metadata is unavailable.") from error
+    if source_size > MAX_SOURCE_SIZE_BYTES:
+        raise FixtureBuildFailure("MVC fixture source exceeds the bounded fixture-generation size limit.")
     document = _probe_document(source)
     raw_streams = document.get("streams")
     streams = raw_streams if isinstance(raw_streams, list) else []
@@ -103,9 +135,13 @@ def _source_video_summary(source: Path) -> dict[str, object]:
         duration_seconds = float(str(format_data.get("duration")))
     except (TypeError, ValueError) as error:
         raise FixtureBuildFailure("MVC fixture source duration is unavailable.") from error
+    if not math.isfinite(duration_seconds):
+        raise FixtureBuildFailure("MVC fixture source duration must be finite.")
     minimum_duration = 2 * IDENTITY_GUARD_SECONDS + 8 * IDENTITY_SLOT_SECONDS
     if duration_seconds < minimum_duration:
         raise FixtureBuildFailure("MVC fixture source is too short for the eight-channel identity signal.")
+    if duration_seconds > MAX_SOURCE_DURATION_SECONDS:
+        raise FixtureBuildFailure("MVC fixture source exceeds the bounded fixture-generation duration limit.")
     stream = video_streams[0]
     return {
         "codec_name": stream.get("codec_name"),
@@ -228,12 +264,37 @@ def create_packaged_aac_layout_fixtures(
     if output.exists():
         raise FixtureBuildFailure("Fixture output directory must not already exist.")
     output.parent.mkdir(parents=True, exist_ok=True)
-    source_video = _source_video_summary(source)
+    try:
+        source_size = source.stat().st_size
+    except OSError as error:
+        raise FixtureBuildFailure("MVC fixture source metadata is unavailable.") from error
+    if source_size > MAX_SOURCE_SIZE_BYTES:
+        raise FixtureBuildFailure("MVC fixture source exceeds the bounded fixture-generation size limit.")
+    source_sha256 = _hash_file(source, "MVC fixture source")
+    manifest_sha256 = _hash_file(manifest_path, "fixture manifest")
+    ffmpeg_sha256 = _hash_file(config.FFMPEG_PATH, "fixture FFmpeg")
+    ffprobe_sha256 = _hash_file(config.FFPROBE_PATH, "fixture FFprobe")
     manifest = load_fixture_manifest(manifest_path)
+    source_video = _source_video_summary(source)
+    ffmpeg_version = _version_line(config.FFMPEG_PATH)
+    ffprobe_version = _version_line(config.FFPROBE_PATH)
+    try:
+        validated_source_size = source.stat().st_size
+    except OSError as error:
+        raise FixtureBuildFailure("MVC fixture source metadata became unavailable.") from error
+    if validated_source_size != source_size or _hash_file(source, "MVC fixture source") != source_sha256:
+        raise FixtureBuildFailure("MVC fixture source changed during validation.")
+    if _hash_file(manifest_path, "fixture manifest") != manifest_sha256:
+        raise FixtureBuildFailure("Fixture manifest changed during validation.")
+    if _hash_file(config.FFMPEG_PATH, "fixture FFmpeg") != ffmpeg_sha256:
+        raise FixtureBuildFailure("Fixture FFmpeg changed during validation.")
+    if _hash_file(config.FFPROBE_PATH, "fixture FFprobe") != ffprobe_sha256:
+        raise FixtureBuildFailure("Fixture FFprobe changed during validation.")
     temporary = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
     work_directory = temporary / ".work"
     work_directory.mkdir()
     fixture_evidence: list[dict[str, object]] = []
+    published = False
     try:
         for case in manifest.cases:
             encoded_audio: list[Path] = []
@@ -251,25 +312,43 @@ def create_packaged_aac_layout_fixtures(
                 {
                     "id": case.case_id,
                     "file": case.source_file,
-                    "sha256": sha256_file(fixture_path),
+                    "sha256": _hash_file(fixture_path, f"fixture {case.case_id}"),
                     "size_bytes": fixture_path.stat().st_size,
                     "audio_streams": observed_streams,
                 }
             )
         shutil.rmtree(work_directory)
+        try:
+            current_source_size = source.stat().st_size
+        except OSError as error:
+            raise FixtureBuildFailure("MVC fixture source metadata became unavailable.") from error
+        if current_source_size != source_size or _hash_file(source, "MVC fixture source") != source_sha256:
+            raise FixtureBuildFailure("MVC fixture source changed during generation.")
+        if _hash_file(manifest_path, "fixture manifest") != manifest_sha256:
+            raise FixtureBuildFailure("Fixture manifest changed during generation.")
+        if _hash_file(config.FFMPEG_PATH, "fixture FFmpeg") != ffmpeg_sha256:
+            raise FixtureBuildFailure("Fixture FFmpeg changed during generation.")
+        if _hash_file(config.FFPROBE_PATH, "fixture FFprobe") != ffprobe_sha256:
+            raise FixtureBuildFailure("Fixture FFprobe changed during generation.")
         receipt: dict[str, object] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "generated_at_utc": datetime.now(UTC).isoformat(),
             "fixture_set_id": manifest.fixture_set_id,
-            "manifest_sha256": sha256_file(manifest_path),
+            "manifest_sha256": manifest_sha256,
             "source": {
-                "sha256": sha256_file(source),
-                "size_bytes": source.stat().st_size,
+                "sha256": source_sha256,
+                "size_bytes": source_size,
                 "video": source_video,
             },
             "tools": {
-                "ffmpeg": _version_line(config.FFMPEG_PATH),
-                "ffprobe": _version_line(config.FFPROBE_PATH),
+                "ffmpeg": {
+                    "sha256": ffmpeg_sha256,
+                    "version": ffmpeg_version,
+                },
+                "ffprobe": {
+                    "sha256": ffprobe_sha256,
+                    "version": ffprobe_version,
+                },
             },
             "fixtures": fixture_evidence,
         }
@@ -280,10 +359,11 @@ def create_packaged_aac_layout_fixtures(
         if output.exists():
             raise FixtureBuildFailure("Fixture output directory appeared during generation.")
         os.replace(temporary, output)
+        published = True
         return receipt
-    except Exception:
-        shutil.rmtree(temporary, ignore_errors=True)
-        raise
+    finally:
+        if not published:
+            shutil.rmtree(temporary, ignore_errors=True)
 
 
 def main() -> int:
@@ -295,13 +375,16 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     args = parser.parse_args()
     try:
-        receipt = create_packaged_aac_layout_fixtures(
-            args.mvc_source,
-            args.output,
-            manifest_path=args.manifest,
-        )
-    except (FixtureBuildFailure, PackagedAacFailure, OSError) as error:
+        with _managed_sigterm_exit():
+            receipt = create_packaged_aac_layout_fixtures(
+                args.mvc_source,
+                args.output,
+                manifest_path=args.manifest,
+            )
+    except (FixtureBuildFailure, PackagedAacFailure) as error:
         parser.exit(1, f"error: {error}\n")
+    except OSError:
+        parser.exit(1, "error: Fixture generation encountered a filesystem error.\n")
     print(json.dumps(receipt, indent=2, sort_keys=True))
     return 0
 

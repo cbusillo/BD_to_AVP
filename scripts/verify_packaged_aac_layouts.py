@@ -5,17 +5,21 @@ from __future__ import annotations
 import argparse
 import array
 import json
+import math
 import os
+import signal
 import shutil
 import subprocess
 import sys
 import tempfile
 import uuid
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import FrameType
 
 from bd_to_avp.modules.aac_layout_policy import (
     AAC_LAYOUT_POLICIES,
@@ -33,7 +37,7 @@ from scripts.qualify_apple_aac_layouts import (
     policy_digest,
 )
 from scripts.qualify_mv_hevc_quality_match import sha256_file
-from scripts.verify_apple_media import AppleMediaFailure, inspect_apple_media_conversion
+from scripts.verify_apple_media import AppleMediaConversionReport, AppleMediaFailure, inspect_apple_media_conversion
 from scripts.verify_packaged_mv_hevc_routes import (
     AppBundle,
     PackagedRouteFailure,
@@ -52,6 +56,9 @@ DEFAULT_MANIFEST = REPO_ROOT / "docs/qualification/apple-aac-package-fixtures-v1
 IDENTITY_SIGNAL_PATH = REPO_ROOT / "docs/qualification/apple-aac-layouts-v1.json"
 SOURCE_POLICY_PATH = REPO_ROOT / "bd_to_avp/modules/aac_layout_policy.py"
 PACKAGED_POLICY_PATH = Path("Contents/Resources/app/bd_to_avp/modules/aac_layout_policy.py")
+FIXTURE_RECEIPT_NAME = "fixture-receipt.json"
+FIXTURE_RECEIPT_SCHEMA_VERSION = 2
+EVIDENCE_SCHEMA_VERSION = 2
 MAX_EVIDENCE_BYTES = 256 * 1024
 COMMAND_TIMEOUT_SECONDS = 30 * 60
 POLICY_BY_ID = {policy.id: policy for policy in AAC_LAYOUT_POLICIES}
@@ -69,6 +76,11 @@ REQUIRED_COVERAGE = frozenset(
         "default-disposition",
     }
 )
+FAILURE_COVERAGE_REASONS = {
+    "fail-missing-layout": "channel_layout_missing",
+    "fail-unknown-layout": "channel_layout_not_qualified",
+    "fail-pce-layout": "channel_layout_missing",
+}
 
 
 class PackagedAacFailure(RuntimeError):
@@ -115,6 +127,12 @@ class FixtureManifest:
 
 
 @dataclass(frozen=True)
+class FixtureReceipt:
+    sha256: str
+    entries: Mapping[str, Mapping[str, object]]
+
+
+@dataclass(frozen=True)
 class WorkerExecution:
     returncode: int
     events: tuple[Mapping[str, object], ...]
@@ -155,6 +173,22 @@ def _strings(value: object, label: str) -> tuple[str, ...]:
     return items
 
 
+def _sha256_string(value: object, label: str) -> str:
+    digest = str(_string(value, label))
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        raise PackagedAacFailure(f"{label} must be a lowercase SHA-256 digest.")
+    return digest
+
+
+def _finite_number(value: object, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise PackagedAacFailure(f"{label} must be a finite number.")
+    number = float(value)
+    if not math.isfinite(number):
+        raise PackagedAacFailure(f"{label} must be a finite number.")
+    return number
+
+
 def _parse_track(raw: object, label: str) -> TrackSpec:
     track = _mapping(raw, label)
     policy_id = _string(track.get("policy_id"), f"{label}.policy_id", optional=True)
@@ -177,7 +211,10 @@ def _parse_track(raw: object, label: str) -> TrackSpec:
 def _validate_case(case: FixtureCase) -> None:
     if not case.tracks or not case.selected_tracks:
         raise PackagedAacFailure(f"Fixture {case.case_id} must select at least one audio track.")
+    failure_coverage = set(case.coverage).intersection(FAILURE_COVERAGE_REASONS)
     if case.expected_rejection is None:
+        if failure_coverage:
+            raise PackagedAacFailure(f"Fixture {case.case_id} completed cases must not claim failure coverage.")
         for track in case.selected_tracks:
             policy = track.policy
             if policy is None:
@@ -194,6 +231,11 @@ def _validate_case(case: FixtureCase) -> None:
             elif track.aac_channel_configuration is not None:
                 raise PackagedAacFailure(f"Fixture {case.case_id} non-AAC input must not declare AAC configuration.")
         return
+    if len(failure_coverage) != 1:
+        raise PackagedAacFailure(f"Fixture {case.case_id} rejected cases must claim one failure coverage reason.")
+    failure_label = next(iter(failure_coverage))
+    if case.expected_rejection != FAILURE_COVERAGE_REASONS[failure_label]:
+        raise PackagedAacFailure(f"Fixture {case.case_id} rejection does not match its failure coverage.")
     if case.expected_rejection not in {"channel_layout_missing", "channel_layout_not_qualified"}:
         raise PackagedAacFailure(f"Fixture {case.case_id} uses an unsupported rejection reason.")
     if len(case.tracks) != 1 or case.tracks[0].policy_id is not None:
@@ -239,8 +281,10 @@ def _validate_coverage(cases: Sequence[FixtureCase]) -> None:
 def load_fixture_manifest(path: Path = DEFAULT_MANIFEST) -> FixtureManifest:
     try:
         document = _mapping(json.loads(path.read_text(encoding="utf-8")), "fixture manifest")
-    except (OSError, json.JSONDecodeError) as error:
-        raise PackagedAacFailure(f"Could not read AAC package fixture manifest: {error}") from error
+    except OSError as error:
+        raise PackagedAacFailure("Could not read AAC package fixture manifest.") from error
+    except json.JSONDecodeError as error:
+        raise PackagedAacFailure("AAC package fixture manifest is not valid JSON.") from error
     if document.get("schema_version") != 1:
         raise PackagedAacFailure("Fixture manifest schema_version must be 1.")
     fixture_set_id = str(_string(document.get("fixture_set_id"), "fixture manifest.fixture_set_id"))
@@ -320,6 +364,118 @@ def load_fixture_manifest(path: Path = DEFAULT_MANIFEST) -> FixtureManifest:
     return FixtureManifest(fixture_set_id, tuple(cases))
 
 
+def _load_fixture_receipt(
+    fixture_root: Path,
+    manifest: FixtureManifest,
+    manifest_path: Path,
+) -> FixtureReceipt:
+    receipt_path = (fixture_root / FIXTURE_RECEIPT_NAME).resolve()
+    if not receipt_path.is_file() or not receipt_path.is_relative_to(fixture_root):
+        raise PackagedAacFailure("AAC fixture receipt is unavailable.")
+    try:
+        receipt = _mapping(json.loads(receipt_path.read_text(encoding="utf-8")), "AAC fixture receipt")
+    except OSError as error:
+        raise PackagedAacFailure("AAC fixture receipt could not be read.") from error
+    except json.JSONDecodeError as error:
+        raise PackagedAacFailure("AAC fixture receipt is not valid JSON.") from error
+    if _integer(receipt.get("schema_version"), "AAC fixture receipt.schema_version") != FIXTURE_RECEIPT_SCHEMA_VERSION:
+        raise PackagedAacFailure("AAC fixture receipt uses an unsupported schema version.")
+    _string(receipt.get("generated_at_utc"), "AAC fixture receipt.generated_at_utc")
+    if receipt.get("fixture_set_id") != manifest.fixture_set_id:
+        raise PackagedAacFailure("AAC fixture receipt names the wrong fixture set.")
+    if _sha256_string(receipt.get("manifest_sha256"), "AAC fixture receipt.manifest_sha256") != sha256_file(
+        manifest_path
+    ):
+        raise PackagedAacFailure("AAC fixture receipt does not match the checked manifest.")
+
+    source = _mapping(receipt.get("source"), "AAC fixture receipt.source")
+    _sha256_string(source.get("sha256"), "AAC fixture receipt.source.sha256")
+    source_size = _integer(source.get("size_bytes"), "AAC fixture receipt.source.size_bytes")
+    if source_size == 0:
+        raise PackagedAacFailure("AAC fixture receipt names an empty generator source.")
+    source_video = _mapping(source.get("video"), "AAC fixture receipt.source.video")
+    if source_video.get("codec_name") != "h264":
+        raise PackagedAacFailure("AAC fixture receipt generator source must be H.264.")
+    if (
+        _finite_number(
+            source_video.get("duration_seconds"),
+            "AAC fixture receipt.source.video.duration_seconds",
+        )
+        <= 0
+    ):
+        raise PackagedAacFailure("AAC fixture receipt generator source duration must be positive.")
+    if source_video.get("direct_mvc_route_proven") is not False:
+        raise PackagedAacFailure("AAC fixture receipt must defer direct MVC route proof to package verification.")
+
+    tools = _mapping(receipt.get("tools"), "AAC fixture receipt.tools")
+    for tool_name in ("ffmpeg", "ffprobe"):
+        tool = _mapping(tools.get(tool_name), f"AAC fixture receipt.tools.{tool_name}")
+        _sha256_string(tool.get("sha256"), f"AAC fixture receipt.tools.{tool_name}.sha256")
+        _string(tool.get("version"), f"AAC fixture receipt.tools.{tool_name}.version")
+
+    entries: dict[str, Mapping[str, object]] = {}
+    for index, raw_entry in enumerate(_sequence(receipt.get("fixtures"), "AAC fixture receipt.fixtures")):
+        entry = _mapping(raw_entry, f"AAC fixture receipt.fixtures[{index}]")
+        case_id = str(_string(entry.get("id"), f"AAC fixture receipt.fixtures[{index}].id"))
+        if case_id in entries:
+            raise PackagedAacFailure("AAC fixture receipt contains duplicate case identifiers.")
+        size_bytes = _integer(entry.get("size_bytes"), f"AAC fixture receipt.fixtures[{index}].size_bytes")
+        if size_bytes == 0:
+            raise PackagedAacFailure("AAC fixture receipt contains an empty fixture.")
+        entries[case_id] = {
+            "file": str(_string(entry.get("file"), f"AAC fixture receipt.fixtures[{index}].file")),
+            "sha256": _sha256_string(
+                entry.get("sha256"),
+                f"AAC fixture receipt.fixtures[{index}].sha256",
+            ),
+            "size_bytes": size_bytes,
+        }
+        for stream_index, raw_stream in enumerate(
+            _sequence(entry.get("audio_streams"), f"AAC fixture receipt.fixtures[{index}].audio_streams")
+        ):
+            _mapping(raw_stream, f"AAC fixture receipt.fixtures[{index}].audio_streams[{stream_index}]")
+
+    expected_files = {case.case_id: case.source_file for case in manifest.cases}
+    if set(entries) != set(expected_files):
+        raise PackagedAacFailure("AAC fixture receipt does not cover the checked fixture cases.")
+    if any(entries[case_id].get("file") != source_file for case_id, source_file in expected_files.items()):
+        raise PackagedAacFailure("AAC fixture receipt does not match the checked fixture filenames.")
+    return FixtureReceipt(sha256_file(receipt_path), entries)
+
+
+def _verified_fixture_identity(
+    case: FixtureCase,
+    source: Path,
+    receipt_entry: Mapping[str, object],
+) -> tuple[str, int]:
+    try:
+        size_bytes = source.stat().st_size
+    except OSError as error:
+        raise PackagedAacFailure(f"Fixture {case.case_id} source metadata is unavailable.") from error
+    try:
+        digest = sha256_file(source)
+    except OSError as error:
+        raise PackagedAacFailure(f"Fixture {case.case_id} could not be hashed.") from error
+    if size_bytes != receipt_entry.get("size_bytes") or digest != receipt_entry.get("sha256"):
+        raise PackagedAacFailure(f"Fixture {case.case_id} does not match its generator receipt.")
+    return digest, size_bytes
+
+
+def _verified_fixture_sources(
+    fixture_root: Path,
+    manifest: FixtureManifest,
+    receipt: FixtureReceipt,
+) -> dict[str, tuple[Path, str, int]]:
+    sources: dict[str, tuple[Path, str, int]] = {}
+    for case in manifest.cases:
+        source = (fixture_root / case.source_file).resolve()
+        if not source.is_file() or not source.is_relative_to(fixture_root):
+            raise PackagedAacFailure(f"Fixture {case.case_id} source is unavailable.")
+        digest, size_bytes = _verified_fixture_identity(case, source, receipt.entries[case.case_id])
+        sources[case.case_id] = (source, digest, size_bytes)
+    return sources
+
+
 def validate_paths(
     app_path: Path,
     fixture_root: Path,
@@ -357,6 +513,18 @@ def _render_evidence(evidence: Mapping[str, object]) -> str:
     return json.dumps(evidence, indent=2, sort_keys=True) + "\n"
 
 
+def _redact_command_paths(detail: str, command: Sequence[str | Path]) -> str:
+    redacted = detail
+    paths = {
+        str(item) for item in command if isinstance(item, Path) or (isinstance(item, str) and item.startswith("/"))
+    }
+    paths.add(str(Path.home()))
+    for path in sorted(paths, key=len, reverse=True):
+        if path:
+            redacted = redacted.replace(path, "<redacted-path>")
+    return redacted
+
+
 def _run(command: Sequence[str | Path]) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
@@ -371,7 +539,48 @@ def _run(command: Sequence[str | Path]) -> subprocess.CompletedProcess[str]:
         raise PackagedAacFailure(f"AAC package command timed out: {Path(str(command[0])).name}") from error
     except subprocess.CalledProcessError as error:
         detail = (error.stderr or error.stdout or "").strip()
-        raise PackagedAacFailure(f"AAC package command failed: {detail or 'no diagnostic output'}") from error
+        safe_detail = _redact_command_paths(detail, command)
+        raise PackagedAacFailure(f"AAC package command failed: {safe_detail or 'no diagnostic output'}") from error
+    except OSError as error:
+        raise PackagedAacFailure(f"AAC package command could not start: {Path(str(command[0])).name}") from error
+
+
+def _inspect_apple_media_conversion(
+    source: Path,
+    output: Path,
+    *,
+    preset: str = "PresetPassthrough",
+) -> AppleMediaConversionReport:
+    try:
+        return inspect_apple_media_conversion(source, output, preset=preset)
+    except AppleMediaFailure as error:
+        safe_detail = _redact_command_paths(str(error), (source, output))
+        raise PackagedAacFailure(f"Apple media verification failed: {safe_detail}") from error
+
+
+@contextmanager
+def _managed_artifact_directory(path: Path) -> Iterator[None]:
+    path.mkdir(mode=0o700, parents=True)
+    completed = False
+    try:
+        yield
+        completed = True
+    finally:
+        if not completed:
+            shutil.rmtree(path, ignore_errors=True)
+
+
+def _exit_on_sigterm(signum: int, _frame: FrameType | None) -> None:
+    raise SystemExit(128 + signum)
+
+
+@contextmanager
+def _managed_sigterm_exit() -> Iterator[None]:
+    previous = signal.signal(signal.SIGTERM, _exit_on_sigterm)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def _probe(app: AppBundle, path: Path) -> Mapping[str, object]:
@@ -510,6 +719,12 @@ def _execute_worker(
     except subprocess.TimeoutExpired as error:
         _terminate_worker_process(process)
         raise PackagedAacFailure("Packaged worker timed out during AAC fixture verification.") from error
+    except BaseException:
+        try:
+            _terminate_worker_process(process)
+        except Exception:
+            pass
+        raise
     if process.returncode is None:
         raise PackagedAacFailure("Packaged worker did not report an exit status.")
     return WorkerExecution(
@@ -637,7 +852,7 @@ def _identity_evidence(
                 apple_input,
             ]
         )
-        report = inspect_apple_media_conversion(apple_input, apple_lpcm, preset=APPLE_LPCM_PRESET)
+        report = _inspect_apple_media_conversion(apple_input, apple_lpcm, preset=APPLE_LPCM_PRESET)
         if report.source_streams["audio"] != 1 or report.output_streams["audio"] != 1:
             raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM conversion dropped audio track {index}.")
         apple_streams = _audio_streams(_probe(app, apple_lpcm))
@@ -709,7 +924,7 @@ def _completed_case(
     _validate_streams(case, output_streams, expected)
 
     passthrough = work_directory / "apple-passthrough.mov"
-    report = inspect_apple_media_conversion(output, passthrough)
+    report = _inspect_apple_media_conversion(output, passthrough)
     passthrough_streams = _audio_streams(_probe(app, passthrough))
     if report.output_streams["audio"] != len(expected):
         raise PackagedAacFailure(f"Fixture {case.case_id} lost audio in Apple passthrough.")
@@ -728,8 +943,28 @@ def _completed_case(
             "size_bytes": artifact.stat().st_size,
             "audio_streams": output_streams,
         },
-        "apple_passthrough": {"passed": True, "audio_streams": passthrough_streams},
+        "apple_passthrough": {
+            "passed": True,
+            "audio_streams": passthrough_streams,
+            "metadata_fields_not_compared": ["default", "handler_title"],
+        },
         "identity": _identity_evidence(app, case, output, work_directory),
+    }
+
+
+def _package_identity(app: AppBundle) -> dict[str, object]:
+    packaged_policy = app.path / PACKAGED_POLICY_PATH
+    if not packaged_policy.is_file() or sha256_file(packaged_policy) != sha256_file(SOURCE_POLICY_PATH):
+        raise PackagedAacFailure("Packaged AAC policy does not match the verifier checkout.")
+    return {
+        "app_tree_sha256": app_tree_sha256(app.path),
+        "bundle_identifier": app.bundle_identifier,
+        "version": app.version,
+        "worker_sha256": sha256_file(app.worker),
+        "ffmpeg_sha256": sha256_file(app.ffmpeg),
+        "ffprobe_sha256": sha256_file(app.ffprobe),
+        "helper_sha256": sha256_file(app.helper),
+        "aac_policy_sha256": sha256_file(packaged_policy),
     }
 
 
@@ -742,29 +977,17 @@ def verify_packaged_aac_layouts(
 ) -> dict[str, object]:
     _require_apple_tools()
     manifest = load_fixture_manifest(manifest_path)
+    receipt = _load_fixture_receipt(fixture_root, manifest, manifest_path)
+    fixture_sources = _verified_fixture_sources(fixture_root, manifest, receipt)
     app = read_app_bundle(app_path)
-    packaged_policy = app.path / PACKAGED_POLICY_PATH
-    if not packaged_policy.is_file() or sha256_file(packaged_policy) != sha256_file(SOURCE_POLICY_PATH):
-        raise PackagedAacFailure("Packaged AAC policy does not match the verifier checkout.")
-    package = {
-        "app_tree_sha256": app_tree_sha256(app.path),
-        "bundle_identifier": app.bundle_identifier,
-        "version": app.version,
-        "worker_sha256": sha256_file(app.worker),
-        "ffmpeg_sha256": sha256_file(app.ffmpeg),
-        "ffprobe_sha256": sha256_file(app.ffprobe),
-        "helper_sha256": sha256_file(app.helper),
-        "aac_policy_sha256": sha256_file(packaged_policy),
-    }
-    artifact_directory.mkdir(parents=True)
-    case_evidence: list[dict[str, object]] = []
-    try:
+    package = _package_identity(app)
+    with _managed_artifact_directory(artifact_directory):
+        case_evidence: list[dict[str, object]] = []
         with tempfile.TemporaryDirectory(prefix="bd-to-avp-aac-package-") as temporary_directory:
             temporary_root = Path(temporary_directory)
             for case in manifest.cases:
-                source = (fixture_root / case.source_file).resolve()
-                if not source.is_file() or not source.is_relative_to(fixture_root):
-                    raise PackagedAacFailure(f"Fixture {case.case_id} source is unavailable.")
+                source, source_sha256, source_size_bytes = fixture_sources[case.case_id]
+                _verified_fixture_identity(case, source, receipt.entries[case.case_id])
                 input_streams = _audio_streams(_probe(app, source))
                 _validate_streams(case, input_streams, [_input_summary(track) for track in case.tracks])
                 destination = temporary_root / case.case_id / "destination"
@@ -787,52 +1010,55 @@ def verify_packaged_aac_layouts(
                         temporary_root / case.case_id,
                     )
                 )
+                _verified_fixture_identity(case, source, receipt.entries[case.case_id])
                 case_evidence.append(
                     {
                         "id": case.case_id,
                         "coverage": list(case.coverage),
                         "source": {
-                            "sha256": sha256_file(source),
-                            "size_bytes": source.stat().st_size,
+                            "sha256": source_sha256,
+                            "size_bytes": source_size_bytes,
                             "audio_streams": input_streams,
                         },
                         "result": result,
                     }
                 )
-    except Exception:
-        shutil.rmtree(artifact_directory, ignore_errors=True)
-        raise
 
-    evidence = {
-        "schema_version": 1,
-        "generated_at_utc": datetime.now(UTC).isoformat(),
-        "fixture_set": {
-            "id": manifest.fixture_set_id,
-            "manifest_sha256": sha256_file(manifest_path),
-            "identity_signal_sha256": sha256_file(IDENTITY_SIGNAL_PATH),
-        },
-        "package": package,
-        "cases": case_evidence,
-        "package_gate": {
-            "fixture_manifest_checked": True,
-            "packaged_worker_executed": True,
-            "apple_passthrough_retained_audio": True,
-            "channel_identity_passed": True,
-            "metadata_preserved": True,
-            "fail_closed_visible": True,
-            "direct_mvc_route_executed": True,
-            "passed": True,
-        },
-        "remaining_gates": {
-            "signed_candidate_proven": False,
-            "physical_vision_pro_proven": False,
-            "issue_382_complete": False,
-        },
-    }
-    if len(_render_evidence(evidence).encode("utf-8")) > MAX_EVIDENCE_BYTES:
-        shutil.rmtree(artifact_directory, ignore_errors=True)
-        raise PackagedAacFailure("AAC package evidence exceeded its bounded size limit.")
-    return evidence
+        if _package_identity(app) != package:
+            raise PackagedAacFailure("Packaged application changed during AAC fixture verification.")
+
+        evidence = {
+            "schema_version": EVIDENCE_SCHEMA_VERSION,
+            "generated_at_utc": datetime.now(UTC).isoformat(),
+            "fixture_set": {
+                "id": manifest.fixture_set_id,
+                "manifest_sha256": sha256_file(manifest_path),
+                "identity_signal_sha256": sha256_file(IDENTITY_SIGNAL_PATH),
+                "receipt_schema_version": FIXTURE_RECEIPT_SCHEMA_VERSION,
+                "receipt_sha256": receipt.sha256,
+            },
+            "package": package,
+            "cases": case_evidence,
+            "package_gate": {
+                "fixture_manifest_checked": True,
+                "fixture_receipt_checked": True,
+                "packaged_worker_executed": True,
+                "apple_passthrough_retained_audio": True,
+                "channel_identity_passed": True,
+                "metadata_preserved": True,
+                "fail_closed_visible": True,
+                "direct_mvc_route_executed": True,
+                "passed": True,
+            },
+            "remaining_gates": {
+                "signed_candidate_proven": False,
+                "physical_vision_pro_proven": False,
+                "issue_382_complete": False,
+            },
+        }
+        if len(_render_evidence(evidence).encode("utf-8")) > MAX_EVIDENCE_BYTES:
+            raise PackagedAacFailure("AAC package evidence exceeded its bounded size limit.")
+        return evidence
 
 
 def main() -> int:
@@ -846,29 +1072,26 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     args = parser.parse_args()
     try:
-        app, fixtures, output, artifacts = validate_paths(
-            args.app,
-            args.fixture_root,
-            args.output,
-            args.artifacts,
-        )
-        evidence = verify_packaged_aac_layouts(
-            app,
-            fixtures,
-            artifacts,
-            manifest_path=args.manifest.resolve(),
-        )
-        text = _render_evidence(evidence)
-        atomic_write_text(output, text)
-        print(text, end="")
-    except (
-        AppleMediaFailure,
-        PackagedAacFailure,
-        PackagedRouteFailure,
-        OSError,
-        subprocess.SubprocessError,
-    ) as error:
+        with _managed_sigterm_exit():
+            app, fixtures, output, artifacts = validate_paths(
+                args.app,
+                args.fixture_root,
+                args.output,
+                args.artifacts,
+            )
+            evidence = verify_packaged_aac_layouts(
+                app,
+                fixtures,
+                artifacts,
+                manifest_path=args.manifest.resolve(),
+            )
+            text = _render_evidence(evidence)
+            atomic_write_text(output, text)
+            print(text, end="")
+    except (AppleMediaFailure, PackagedAacFailure, PackagedRouteFailure, subprocess.SubprocessError) as error:
         parser.exit(1, f"error: {error}\n")
+    except OSError:
+        parser.exit(1, "error: AAC package verification encountered a filesystem error.\n")
     return 0
 
 

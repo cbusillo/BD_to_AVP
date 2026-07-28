@@ -63,9 +63,11 @@ PACKAGED_FIXTURE_GATE_LINES = (
     ),
     "",
     (
-        "Create the private fixture set from a short real MVC MKV. The generator writes atomically to a new "
-        "directory, validates every audio stream against the checked manifest, and records source, tool, and "
-        "fixture hashes without storing the private source path:"
+        "Create the private fixture set from a short real MVC MKV. The generator bounds source size and finite "
+        "duration, hashes inputs and tools before use, rechecks them before atomic publication, removes private "
+        "staging data after failures, Python interruptions, or handled termination signals, validates every audio "
+        "stream against the checked manifest, and records source, tool, and fixture hashes without storing the "
+        "private source path:"
     ),
     "",
     "```bash",
@@ -75,8 +77,11 @@ PACKAGED_FIXTURE_GATE_LINES = (
     "```",
     "",
     (
-        "The generator receipt records that direct-MVC routing remains unproven. The packaged verifier closes "
-        "that gap by requiring every successful case to report `direct_mv_hevc` from the packaged worker."
+        "The schema-v2 generator receipt requires source, FFmpeg, FFprobe, and per-fixture provenance records while "
+        "recording that direct-MVC routing remains unproven. The receipt detects drift between generation and "
+        "verification; it is reproducibility evidence rather than a cryptographic signature. The packaged verifier "
+        "requires that receipt and exact fixture hashes before closing the routing gap by requiring every successful "
+        "case to report `direct_mv_hevc` from the packaged worker."
     ),
     "",
     "```bash",
@@ -88,12 +93,16 @@ PACKAGED_FIXTURE_GATE_LINES = (
     "```",
     "",
     (
-        "The verifier rejects package-policy drift, validates each fixture before execution, runs the packaged "
-        "worker with protocol v10, checks structured layout decisions and visible rejections, verifies final "
-        "AAC layout and metadata, runs Apple passthrough and LPCM identity analysis, and records bounded "
-        "package/source/output hashes. An ad-hoc package run is deterministic package evidence only. It does "
-        "not establish Developer ID/notarization provenance, physical Vision Pro surround placement, repeated "
-        "device seeks, or perceptual lip-sync; those remain exact signed-candidate gates under #382."
+        "The verifier rejects package-policy drift, requires failure coverage to match the declared rejection "
+        "semantics, binds every source to the generator receipt, validates each fixture before and after execution, "
+        "terminates the packaged worker on interruption, rechecks the package after the matrix, runs the packaged "
+        "worker with protocol v10, checks structured layout decisions and visible rejections, verifies final AAC "
+        "layout and metadata, runs Apple passthrough across the complete output, isolates each selected audio track "
+        "before Apple LPCM identity analysis, and records bounded package/source/output hashes. Final-output checks "
+        "own handler-title and default-disposition assertions; the Apple passthrough evidence names those fields as "
+        "not compared because Core Media normalizes them. An ad-hoc package run is deterministic package evidence "
+        "only. It does not establish Developer ID/notarization provenance, physical Vision Pro surround placement, "
+        "repeated device seeks, or perceptual lip-sync; those remain exact signed-candidate gates under #382."
     ),
 )
 

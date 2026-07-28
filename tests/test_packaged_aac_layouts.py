@@ -1,5 +1,8 @@
 import array
+import hashlib
 import json
+import stat
+import subprocess
 import tempfile
 import unittest
 
@@ -7,9 +10,13 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from bd_to_avp.modules.aac_layout_policy import LAYOUT_CHANNELS
+from scripts.verify_apple_media import AppleMediaFailure
 from scripts.verify_packaged_aac_layouts import (
     DEFAULT_MANIFEST,
+    EVIDENCE_SCHEMA_VERSION,
+    FIXTURE_RECEIPT_SCHEMA_VERSION,
     REQUIRED_COVERAGE,
+    FixtureReceipt,
     PackagedAacFailure,
     WorkerExecution,
     _audio_streams,
@@ -18,9 +25,15 @@ from scripts.verify_packaged_aac_layouts import (
     _execute_worker,
     _failed_case,
     _identity_evidence,
+    _inspect_apple_media_conversion,
+    _load_fixture_receipt,
+    _managed_artifact_directory,
     _policy_evidence,
     _render_evidence,
+    _run,
     _validate_streams,
+    _verified_fixture_identity,
+    _verified_fixture_sources,
     load_fixture_manifest,
     validate_paths,
 )
@@ -40,6 +53,39 @@ def worker_event(
         "job_id": job_id,
         "sequence": sequence,
         "payload": payload,
+    }
+
+
+def fixture_receipt_document() -> dict[str, object]:
+    manifest = load_fixture_manifest()
+    return {
+        "schema_version": FIXTURE_RECEIPT_SCHEMA_VERSION,
+        "generated_at_utc": "2026-07-28T00:00:00+00:00",
+        "fixture_set_id": manifest.fixture_set_id,
+        "manifest_sha256": hashlib.sha256(DEFAULT_MANIFEST.read_bytes()).hexdigest(),
+        "source": {
+            "sha256": "b" * 64,
+            "size_bytes": 1,
+            "video": {
+                "codec_name": "h264",
+                "duration_seconds": 4.213,
+                "direct_mvc_route_proven": False,
+            },
+        },
+        "tools": {
+            "ffmpeg": {"sha256": "c" * 64, "version": "ffmpeg test"},
+            "ffprobe": {"sha256": "d" * 64, "version": "ffprobe test"},
+        },
+        "fixtures": [
+            {
+                "id": case.case_id,
+                "file": case.source_file,
+                "sha256": "a" * 64,
+                "size_bytes": 1,
+                "audio_streams": [],
+            }
+            for case in manifest.cases
+        ],
     }
 
 
@@ -112,6 +158,31 @@ class PackagedAacManifestTests(unittest.TestCase):
             with self.assertRaisesRegex(PackagedAacFailure, "wrong policy"):
                 load_fixture_manifest(manifest_path)
 
+    def test_manifest_rejects_failure_coverage_on_success_case(self) -> None:
+        document = json.loads(DEFAULT_MANIFEST.read_text(encoding="utf-8"))
+        document["cases"][0]["coverage"].append("fail-missing-layout")
+        failure_case = next(case for case in document["cases"] if case["id"] == "fail-missing-layout")
+        failure_case["coverage"] = ["handler-titles"]
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            manifest_path = Path(temporary_directory) / "manifest.json"
+            manifest_path.write_text(json.dumps(document), encoding="utf-8")
+
+            with self.assertRaisesRegex(PackagedAacFailure, "must not claim failure coverage"):
+                load_fixture_manifest(manifest_path)
+
+    def test_manifest_rejects_failure_coverage_reason_mismatch(self) -> None:
+        document = json.loads(DEFAULT_MANIFEST.read_text(encoding="utf-8"))
+        failure_case = next(case for case in document["cases"] if case["id"] == "fail-unknown-layout")
+        failure_case["expected_rejection"] = "channel_layout_missing"
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            manifest_path = Path(temporary_directory) / "manifest.json"
+            manifest_path.write_text(json.dumps(document), encoding="utf-8")
+
+            with self.assertRaisesRegex(PackagedAacFailure, "does not match its failure coverage"):
+                load_fixture_manifest(manifest_path)
+
     def test_manifest_rejects_unqualified_policy_digest(self) -> None:
         document = json.loads(DEFAULT_MANIFEST.read_text(encoding="utf-8"))
         document["identity_signal"]["policy_sha256"] = "0" * 64
@@ -135,6 +206,124 @@ class PackagedAacManifestTests(unittest.TestCase):
 
             with self.assertRaisesRegex(PackagedAacFailure, "unqualified layout"):
                 load_fixture_manifest(manifest_path)
+
+
+class PackagedAacReceiptTests(unittest.TestCase):
+    def test_receipt_binds_checked_manifest_and_all_cases(self) -> None:
+        manifest = load_fixture_manifest()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            (root / "fixture-receipt.json").write_text(
+                json.dumps(fixture_receipt_document()),
+                encoding="utf-8",
+            )
+
+            receipt = _load_fixture_receipt(root, manifest, DEFAULT_MANIFEST)
+
+        self.assertEqual(set(receipt.entries), {case.case_id for case in manifest.cases})
+        self.assertEqual(len(receipt.sha256), 64)
+
+    def test_receipt_requires_generator_source_and_tool_provenance(self) -> None:
+        manifest = load_fixture_manifest()
+        for missing_field in ("source", "tools"):
+            document = fixture_receipt_document()
+            del document[missing_field]
+            with tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory).resolve()
+                (root / "fixture-receipt.json").write_text(json.dumps(document), encoding="utf-8")
+
+                with self.subTest(missing_field=missing_field):
+                    with self.assertRaisesRegex(PackagedAacFailure, missing_field):
+                        _load_fixture_receipt(root, manifest, DEFAULT_MANIFEST)
+
+    def test_receipt_rejects_stale_manifest_digest(self) -> None:
+        manifest = load_fixture_manifest()
+        document = fixture_receipt_document()
+        document["manifest_sha256"] = "0" * 64
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            (root / "fixture-receipt.json").write_text(json.dumps(document), encoding="utf-8")
+
+            with self.assertRaisesRegex(PackagedAacFailure, "checked manifest"):
+                _load_fixture_receipt(root, manifest, DEFAULT_MANIFEST)
+
+    def test_fixture_identity_rejects_tampered_bytes(self) -> None:
+        case = load_fixture_manifest().cases[0]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / case.source_file
+            source.write_bytes(b"fixture")
+            entry = {
+                "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "size_bytes": source.stat().st_size,
+            }
+            self.assertEqual(_verified_fixture_identity(case, source, entry), (entry["sha256"], 7))
+            source.write_bytes(b"tampered")
+
+            with self.assertRaisesRegex(PackagedAacFailure, "generator receipt"):
+                _verified_fixture_identity(case, source, entry)
+
+    def test_all_fixture_hashes_are_checked_before_execution(self) -> None:
+        manifest = load_fixture_manifest()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            entries: dict[str, dict[str, object]] = {}
+            for case in manifest.cases:
+                source = root / case.source_file
+                source.write_bytes(case.case_id.encode("utf-8"))
+                entries[case.case_id] = {
+                    "file": case.source_file,
+                    "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                    "size_bytes": source.stat().st_size,
+                }
+            (root / manifest.cases[-1].source_file).write_bytes(b"tampered later fixture")
+            receipt = FixtureReceipt("a" * 64, entries)
+
+            with self.assertRaisesRegex(PackagedAacFailure, "generator receipt"):
+                _verified_fixture_sources(root, manifest, receipt)
+
+    def test_evidence_schema_versions_the_gate_split(self) -> None:
+        self.assertEqual(EVIDENCE_SCHEMA_VERSION, 2)
+
+
+class PackagedAacSafetyTests(unittest.TestCase):
+    def test_command_failure_redacts_private_paths(self) -> None:
+        private_source = Path("/Users/example/private/fixture.mkv")
+        error = subprocess.CalledProcessError(
+            1,
+            ["ffprobe", private_source.as_posix()],
+            stderr=f"{private_source}: Invalid data found",
+        )
+
+        with patch("scripts.verify_packaged_aac_layouts.subprocess.run", side_effect=error):
+            with self.assertRaises(PackagedAacFailure) as context:
+                _run([Path("/private/tools/ffprobe"), private_source])
+
+        self.assertNotIn(private_source.as_posix(), str(context.exception))
+        self.assertIn("<redacted-path>", str(context.exception))
+
+    def test_apple_media_failure_redacts_private_paths(self) -> None:
+        source = Path("/Users/example/private/output.mov")
+        converted = Path("/Users/example/private/apple.mov")
+        with patch(
+            "scripts.verify_packaged_aac_layouts.inspect_apple_media_conversion",
+            side_effect=AppleMediaFailure(f"Could not open {source}"),
+        ):
+            with self.assertRaises(PackagedAacFailure) as context:
+                _inspect_apple_media_conversion(source, converted)
+
+        self.assertNotIn(source.as_posix(), str(context.exception))
+        self.assertIn("<redacted-path>", str(context.exception))
+
+    def test_artifact_directory_is_private_and_cleans_interruptions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifacts = Path(temporary_directory) / "artifacts"
+            with self.assertRaises(KeyboardInterrupt):
+                with _managed_artifact_directory(artifacts):
+                    self.assertEqual(stat.S_IMODE(artifacts.stat().st_mode), 0o700)
+                    (artifacts / "private.mov").write_bytes(b"private")
+                    raise KeyboardInterrupt
+
+            self.assertFalse(artifacts.exists())
 
 
 class PackagedAacRequestTests(unittest.TestCase):
@@ -170,6 +359,24 @@ class PackagedAacRequestTests(unittest.TestCase):
 
         self.assertEqual(execution.returncode, 1)
         self.assertEqual(execution.events[-1]["type"], "job.failed")
+
+    def test_worker_interrupt_terminates_process_group(self) -> None:
+        process = Mock(returncode=None)
+        process.communicate.side_effect = KeyboardInterrupt
+
+        with (
+            tempfile.TemporaryDirectory() as temporary_directory,
+            patch("scripts.verify_packaged_aac_layouts.subprocess.Popen", return_value=process),
+            patch("scripts.verify_packaged_aac_layouts._terminate_worker_process") as terminate,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                _execute_worker(
+                    Mock(worker=Path("/tmp/worker")),
+                    {"job_id": "job", "operation": "convert_source"},
+                    home_directory=Path(temporary_directory) / "home",
+                )
+
+        terminate.assert_called_once_with(process)
 
 
 class PackagedAacEvidenceTests(unittest.TestCase):
@@ -219,7 +426,7 @@ class PackagedAacEvidenceTests(unittest.TestCase):
         self.assertEqual(streams[1]["aac_channel_configuration"], 2)
 
     def test_evidence_renderer_matches_persisted_format(self) -> None:
-        evidence = {"cases": [{"passed": True}], "schema_version": 1}
+        evidence = {"cases": [{"passed": True}], "schema_version": EVIDENCE_SCHEMA_VERSION}
 
         self.assertEqual(_render_evidence(evidence), json.dumps(evidence, indent=2, sort_keys=True) + "\n")
 
