@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -306,17 +307,13 @@ def wait_for_preview_process_exit(result_path: Path, *, timeout: float) -> bool:
 def terminate_preview_processes(result_path: Path) -> None:
     process_ids = preview_process_ids(result_path)
     for process_id in process_ids:
-        try:
+        with suppress(ProcessLookupError):
             os.kill(process_id, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
     if not process_ids or wait_for_preview_process_exit(result_path, timeout=2):
         return
     for process_id in preview_process_ids(result_path):
-        try:
+        with suppress(ProcessLookupError):
             os.kill(process_id, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
 
 
 def verify_native_startup(bundle: AppBundle, clean_env: dict[str, str]) -> None:
