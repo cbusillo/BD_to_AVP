@@ -100,6 +100,8 @@ uv run python -m scripts.create_packaged_aac_layout_fixtures \
 
 The schema-v2 generator receipt requires source, FFmpeg, FFprobe, and per-fixture provenance records while recording that direct-MVC routing remains unproven. The receipt detects drift between generation and verification; it is reproducibility evidence rather than a cryptographic signature. The packaged verifier requires that receipt and exact fixture hashes before closing the routing gap by requiring every successful case to report `direct_mv_hevc` from the packaged worker.
 
+Schema v2 supersedes the earlier schema-v1 fixture receipts and package evidence. Existing schema-v1 artifacts remain historical records only: regenerate the private fixture directory with the current generator and rerun package verification before using the result for a current release gate. The verifier intentionally rejects schema-v1 receipts rather than silently upgrading or reusing them.
+
 ```bash
 uv run python -m scripts.verify_packaged_aac_layouts \
   --app "$BD_TO_AVP_CANDIDATE_APP" \

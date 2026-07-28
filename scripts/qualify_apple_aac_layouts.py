@@ -84,6 +84,13 @@ PACKAGED_FIXTURE_GATE_LINES = (
         "case to report `direct_mv_hevc` from the packaged worker."
     ),
     "",
+    (
+        "Schema v2 supersedes the earlier schema-v1 fixture receipts and package evidence. Existing schema-v1 "
+        "artifacts remain historical records only: regenerate the private fixture directory with the current "
+        "generator and rerun package verification before using the result for a current release gate. The verifier "
+        "intentionally rejects schema-v1 receipts rather than silently upgrading or reusing them."
+    ),
+    "",
     "```bash",
     "uv run python -m scripts.verify_packaged_aac_layouts \\",
     '  --app "$BD_TO_AVP_CANDIDATE_APP" \\',
