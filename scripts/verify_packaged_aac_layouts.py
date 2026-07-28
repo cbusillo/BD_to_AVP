@@ -407,14 +407,17 @@ def _audio_streams(probe: Mapping[str, object]) -> list[dict[str, object]]:
         tags: Mapping[str, object] = raw_tags if isinstance(raw_tags, Mapping) else {}
         raw_disposition = stream.get("disposition")
         disposition: Mapping[str, object] = raw_disposition if isinstance(raw_disposition, Mapping) else {}
+        codec_name = stream.get("codec_name")
         result.append(
             {
-                "codec_name": stream.get("codec_name"),
+                "codec_name": codec_name,
                 "profile": stream.get("profile"),
                 "sample_rate": _optional_int(stream.get("sample_rate")),
                 "channels": _optional_int(stream.get("channels")),
                 "channel_layout": stream.get("channel_layout") or None,
-                "aac_channel_configuration": parse_aac_channel_configuration(stream.get("extradata")),
+                "aac_channel_configuration": (
+                    parse_aac_channel_configuration(stream.get("extradata")) if codec_name == "aac" else None
+                ),
                 "language": tags.get("language"),
                 "handler_title": tags.get("title") or tags.get("handler_name"),
                 "default": bool(_optional_int(disposition.get("default")) or 0),
@@ -595,29 +598,54 @@ def _decode_track(app: AppBundle, source: Path, index: int, output: Path) -> arr
     return samples
 
 
+def _isolate_audio_track(app: AppBundle, source: Path, index: int, output: Path) -> None:
+    _run(
+        [
+            app.ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            source,
+            "-map",
+            "0:v:0",
+            "-map",
+            f"0:a:{index}",
+            "-c",
+            "copy",
+            "-disposition:a:0",
+            "default",
+            "-y",
+            output,
+        ]
+    )
+
+
 def _identity_evidence(
     app: AppBundle,
     case: FixtureCase,
     output: Path,
     work_directory: Path,
 ) -> list[Mapping[str, object]]:
-    apple_lpcm = work_directory / "apple-lpcm.mov"
-    report = inspect_apple_media_conversion(output, apple_lpcm, preset=APPLE_LPCM_PRESET)
-    if report.output_streams["audio"] != len(case.selected_tracks):
-        raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM conversion dropped audio.")
-    apple_streams = _audio_streams(_probe(app, apple_lpcm))
-    if len(apple_streams) != len(case.selected_tracks):
-        raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM stream count changed.")
     evidence: list[Mapping[str, object]] = []
     for index, track in enumerate(case.selected_tracks):
+        identity_source = work_directory / f"identity-source-{index}.mov"
+        _isolate_audio_track(app, output, index, identity_source)
+        apple_lpcm = work_directory / f"apple-lpcm-{index}.mov"
+        report = inspect_apple_media_conversion(identity_source, apple_lpcm, preset=APPLE_LPCM_PRESET)
+        if report.output_streams["audio"] != 1:
+            raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM conversion dropped audio.")
+        apple_streams = _audio_streams(_probe(app, apple_lpcm))
+        if len(apple_streams) != 1:
+            raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM stream count changed.")
         policy = track.policy
         assert policy is not None
         configuration = CANONICAL_AAC_CONFIGURATION[policy.target_layout]
         output_channel_names = AAC_CHANNEL_CONFIGURATION_LAYOUTS[configuration]
-        actual_channel_count = apple_streams[index].get("channels")
+        actual_channel_count = apple_streams[0].get("channels")
         if actual_channel_count != len(output_channel_names):
             raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM channel count changed.")
-        samples = _decode_track(app, apple_lpcm, index, work_directory / f"audio-{index}.f32")
+        samples = _decode_track(app, apple_lpcm, 0, work_directory / f"audio-{index}.f32")
         if len(samples) % len(output_channel_names) != 0:
             raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM samples are incomplete.")
         result = analyze_identity_samples(

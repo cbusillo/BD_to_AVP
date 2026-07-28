@@ -3,7 +3,7 @@ import tempfile
 import unittest
 
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from bd_to_avp.modules.aac_layout_policy import LAYOUT_CHANNELS
 from scripts.verify_packaged_aac_layouts import (
@@ -11,6 +11,7 @@ from scripts.verify_packaged_aac_layouts import (
     REQUIRED_COVERAGE,
     PackagedAacFailure,
     WorkerExecution,
+    _audio_streams,
     _build_request,
     _execute_worker,
     _failed_case,
@@ -285,6 +286,27 @@ class PackagedAacEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(PackagedAacFailure, "default"):
             _validate_streams(case, observed, expected)
 
+    def test_non_aac_extradata_is_not_parsed_as_aac_configuration(self) -> None:
+        streams = _audio_streams(
+            {
+                "streams": [
+                    {
+                        "codec_type": "audio",
+                        "codec_name": "flac",
+                        "extradata": "\n00000000: 1190 56e5 00  ..V..\n",
+                    },
+                    {
+                        "codec_type": "audio",
+                        "codec_name": "aac",
+                        "extradata": "\n00000000: 1190 56e5 00  ..V..\n",
+                    },
+                ]
+            }
+        )
+
+        self.assertIsNone(streams[0]["aac_channel_configuration"])
+        self.assertEqual(streams[1]["aac_channel_configuration"], 2)
+
     def test_identity_evidence_rejects_apple_channel_count_mismatch(self) -> None:
         case = next(case for case in load_fixture_manifest().cases if case.case_id == "remap-5_1-side")
         report = Mock(output_streams={"audio": 1})
@@ -292,6 +314,7 @@ class PackagedAacEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             work_directory = Path(temporary_directory)
             with (
+                patch("scripts.verify_packaged_aac_layouts._isolate_audio_track"),
                 patch("scripts.verify_packaged_aac_layouts.inspect_apple_media_conversion", return_value=report),
                 patch(
                     "scripts.verify_packaged_aac_layouts._probe",
@@ -303,6 +326,55 @@ class PackagedAacEvidenceTests(unittest.TestCase):
                     _identity_evidence(Mock(), case, work_directory / "output.mov", work_directory)
 
         decode_track.assert_not_called()
+
+    def test_identity_evidence_probes_multilingual_tracks_individually(self) -> None:
+        case = next(case for case in load_fixture_manifest().cases if case.case_id == "preserve-multilingual")
+        report = Mock(output_streams={"audio": 1})
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            work_directory = Path(temporary_directory)
+            output = work_directory / "output.mov"
+            app = Mock()
+            with (
+                patch("scripts.verify_packaged_aac_layouts._isolate_audio_track") as isolate_audio_track,
+                patch(
+                    "scripts.verify_packaged_aac_layouts.inspect_apple_media_conversion",
+                    return_value=report,
+                ) as inspect_apple_media_conversion,
+                patch(
+                    "scripts.verify_packaged_aac_layouts._probe",
+                    side_effect=[
+                        {"streams": [{"codec_type": "audio", "channels": 2}]},
+                        {"streams": [{"codec_type": "audio", "channels": 6}]},
+                    ],
+                ),
+                patch(
+                    "scripts.verify_packaged_aac_layouts._decode_track",
+                    side_effect=[[0.0, 0.0], [0.0] * 6],
+                ) as decode_track,
+                patch(
+                    "scripts.verify_packaged_aac_layouts.analyze_identity_samples",
+                    return_value={"status": "passed"},
+                ),
+            ):
+                evidence = _identity_evidence(app, case, output, work_directory)
+
+        self.assertEqual(evidence, [{"status": "passed"}, {"status": "passed"}])
+        self.assertEqual(
+            isolate_audio_track.call_args_list,
+            [
+                call(app, output, 0, work_directory / "identity-source-0.mov"),
+                call(app, output, 1, work_directory / "identity-source-1.mov"),
+            ],
+        )
+        self.assertEqual(
+            [args.args[0:3] for args in inspect_apple_media_conversion.call_args_list],
+            [
+                (work_directory / "identity-source-0.mov", work_directory / "apple-lpcm-0.mov"),
+                (work_directory / "identity-source-1.mov", work_directory / "apple-lpcm-1.mov"),
+            ],
+        )
+        self.assertEqual([args.args[2] for args in decode_track.call_args_list], [0, 0])
 
 
 class PackagedAacPathTests(unittest.TestCase):

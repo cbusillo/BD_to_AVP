@@ -73,10 +73,13 @@ PACKAGED_FIXTURE_GATE_LINES = (
     (
         "The verifier rejects package-policy drift, validates each fixture before execution, runs the packaged "
         "worker with protocol v10, checks structured layout decisions and visible rejections, verifies final "
-        "AAC layout and metadata, runs Apple passthrough and LPCM identity analysis, and records bounded "
-        "package/source/output hashes. An ad-hoc package run is deterministic package evidence only. It does "
-        "not establish Developer ID/notarization provenance, physical Vision Pro surround placement, repeated "
-        "device seeks, or perceptual lip-sync; those remain exact signed-candidate gates under #382."
+        "AAC layout and metadata, runs Apple passthrough across the complete output, and isolates each selected "
+        "audio track before Apple LPCM identity analysis. Per-track isolation matches the single-track LPCM "
+        "method qualified by the matrix while passthrough remains the multi-track retention gate. The verifier "
+        "records bounded package/source/output hashes. An ad-hoc package run is deterministic package evidence "
+        "only. It does not establish Developer ID/notarization provenance, physical Vision Pro surround "
+        "placement, repeated device seeks, or perceptual lip-sync; those remain exact signed-candidate gates "
+        "under #382."
     ),
 )
 
