@@ -317,12 +317,14 @@ class PackagedAacSafetyTests(unittest.TestCase):
     def test_artifact_directory_is_private_and_cleans_interruptions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             artifacts = Path(temporary_directory) / "artifacts"
+            interrupt = Mock(side_effect=KeyboardInterrupt)
             with self.assertRaises(KeyboardInterrupt):
                 with _managed_artifact_directory(artifacts):
                     self.assertEqual(stat.S_IMODE(artifacts.stat().st_mode), 0o700)
                     (artifacts / "private.mov").write_bytes(b"private")
-                    raise KeyboardInterrupt
+                    interrupt()
 
+            interrupt.assert_called_once_with()
             self.assertFalse(artifacts.exists())
 
 

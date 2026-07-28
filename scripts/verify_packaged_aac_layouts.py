@@ -15,7 +15,7 @@ import tempfile
 import uuid
 
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -720,10 +720,8 @@ def _execute_worker(
         _terminate_worker_process(process)
         raise PackagedAacFailure("Packaged worker timed out during AAC fixture verification.") from error
     except BaseException:
-        try:
+        with suppress(Exception):
             _terminate_worker_process(process)
-        except Exception:
-            pass
         raise
     if process.returncode is None:
         raise PackagedAacFailure("Packaged worker did not report an exit status.")
