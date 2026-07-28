@@ -34,6 +34,7 @@ targets:
         buildPhase: resources
     dependencies:
       - package: Sparkle
+      - sdk: AVKit.framework
     settings:
       base:
         CODE_SIGN_STYLE: Automatic

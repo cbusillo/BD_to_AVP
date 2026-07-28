@@ -22,6 +22,7 @@ from scripts.native_app import (
     NATIVE_PRODUCT_NAME,
     NATIVE_SHORT_VERSION,
     NATIVE_UPDATE_INFO,
+    REQUIRED_NATIVE_FRAMEWORK_LINKS,
     SUPPORT_DIAGNOSTICS_ENDPOINT_ENV,
     SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY,
     WORKER_PROTOCOL_VERSION,
@@ -33,6 +34,7 @@ from scripts.native_app import (
     install_mv_hevc_encoder,
     native_build_settings,
     minimum_macos_versions,
+    linked_libraries,
     package,
     parse_args,
     sign_package,
@@ -41,6 +43,7 @@ from scripts.native_app import (
     smoke_packaged_worker,
     validate_smoke_events,
     verify_native_binary_paths,
+    verify_native_framework_links,
     verify_mach_o_minimum_system_versions,
     verify_exact_minimum_system_version,
     verify_package_paths,
@@ -178,6 +181,7 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertNotIn(".native-preview", project_spec)
         self.assertEqual(project["packages"]["Sparkle"]["exactVersion"], sparkle_manifest["version"])
         self.assertIn({"package": "Sparkle"}, project["targets"]["BluRayToVisionPro"]["dependencies"])
+        self.assertIn({"sdk": "AVKit.framework"}, project["targets"]["BluRayToVisionPro"]["dependencies"])
         update_keys = {
             "BDToAVPDistributionChannel",
             "SUAllowsAutomaticUpdates",
@@ -359,6 +363,46 @@ Load command 3
 
         with patch("scripts.native_app.subprocess.run", return_value=completed):
             self.assertEqual(minimum_macos_versions(Path("/tmp/tool")), {"11.0", "26.0"})
+
+    def test_reads_linked_frameworks_from_otool(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="""
+/tmp/app:
+\t/System/Library/Frameworks/AVKit.framework/Versions/A/AVKit (compatibility version 1.0.0, current version 1000.0.0)
+\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)
+""",
+            stderr="",
+        )
+
+        with patch("scripts.native_app.subprocess.run", return_value=completed):
+            libraries = linked_libraries(Path("/tmp/app"))
+
+        self.assertEqual(
+            libraries,
+            {
+                "/System/Library/Frameworks/AVKit.framework/Versions/A/AVKit",
+                "/usr/lib/libSystem.B.dylib",
+            },
+        )
+        self.assertLessEqual(REQUIRED_NATIVE_FRAMEWORK_LINKS, libraries)
+
+    def test_rejects_native_app_without_required_framework_link(self) -> None:
+        native_executable = Path("/tmp/app")
+        with (
+            patch("scripts.native_app.linked_libraries", return_value=set()),
+            self.assertRaisesRegex(RuntimeError, "missing required framework links"),
+        ):
+            verify_native_framework_links(native_executable)
+
+    def test_accepts_native_app_with_required_framework_link(self) -> None:
+        native_executable = Path("/tmp/app")
+        with patch(
+            "scripts.native_app.linked_libraries",
+            return_value={"/System/Library/Frameworks/AVKit.framework/Versions/A/AVKit"},
+        ):
+            verify_native_framework_links(native_executable)
 
     def test_rejects_packaged_mach_o_requiring_newer_macos(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

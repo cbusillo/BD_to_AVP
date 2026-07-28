@@ -48,6 +48,9 @@ signature, launches the packaged app through `--startup-smoke`, and runs a real
 `inspect_source` request through the embedded worker. The worker smoke also
 requires canonical schema-v1 FFprobe observability in the protocol stream, so a
 package cannot pass while silently falling back to a legacy child-process path.
+Layout verification also checks the shipping Swift executable's direct platform
+framework links, including AVKit for the embedded preview player, so dead-linking
+cannot defer a missing superclass failure until the player is presented.
 Briefcase remains a runtime assembler; its Python GUI is no longer the shipping
 interface.
 
