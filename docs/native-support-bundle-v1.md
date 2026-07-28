@@ -186,6 +186,18 @@ exposes:
 
 ## Native Submission Flow
 
+The Activity drawer retains up to 200 deduplicated lifecycle messages for the
+current or most recently completed job. It shows newest entries first so live
+status remains visible while earlier stage, warning, completion, and failure
+messages remain available by scrolling. Starting the next job clears the prior
+history. The drawer stores only structured worker messages, not raw tool output
+or observability paths.
+
+Quiet-tool health checks remain separate from lifecycle history. When no recent
+tool output or artifact growth is visible, the UI says that the operation is
+still running and identifies the message as a status check rather than a
+failure. Confirmed warnings and failures retain distinct severity treatment.
+
 The Activity footer exposes one support action whenever the current session has
 diagnostic evidence. Failed source cards repeat the same action as a low-noise
 secondary entry point. Capturing, reviewing, uploading, cancelling, saving, and
