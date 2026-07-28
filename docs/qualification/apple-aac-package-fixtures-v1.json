@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "fixture_set_id": "apple-aac-packaged-v1",
+  "identity_signal": {
+    "path": "docs/qualification/apple-aac-layouts-v1.json",
+    "sha256": "a14847992a15796f7ac089ae123b0f6bcfc2159d9a642c2bf99990a45f7bb6ca",
+    "policy_sha256": "ce493276a758329ebdead492fe601db87c618992ca63fe8dabeb7162a7564eef"
+  },
+  "required_coverage": [
+    "preserve-stereo",
+    "preserve-5.1",
+    "remap-5.1(side)-to-5.1",
+    "downmix-7.1-to-5.1",
+    "fail-missing-layout",
+    "fail-unknown-layout",
+    "fail-pce-layout",
+    "multiple-languages",
+    "handler-titles",
+    "default-disposition"
+  ],
+  "cases": [
+    {
+      "id": "preserve-multilingual",
+      "source_file": "preserve-multilingual.mkv",
+      "coverage": [
+        "preserve-stereo",
+        "preserve-5.1",
+        "multiple-languages",
+        "handler-titles",
+        "default-disposition"
+      ],
+      "audio_mode": "automatic",
+      "preferred_language": null,
+      "expected_rejection": null,
+      "tracks": [
+        {
+          "policy_id": "ch02-stereo",
+          "codec_name": "aac",
+          "source_layout": "stereo",
+          "channels": 2,
+          "aac_channel_configuration": 2,
+          "language": "eng",
+          "handler_title": "English Stereo",
+          "default": true
+        },
+        {
+          "policy_id": "ch06-5_1",
+          "codec_name": "aac",
+          "source_layout": "5.1",
+          "channels": 6,
+          "aac_channel_configuration": 6,
+          "language": "jpn",
+          "handler_title": "Japanese 5.1",
+          "default": false
+        }
+      ]
+    },
+    {
+      "id": "remap-5_1-side",
+      "source_file": "remap-5_1-side.mkv",
+      "coverage": ["remap-5.1(side)-to-5.1", "handler-titles", "default-disposition"],
+      "audio_mode": "automatic",
+      "preferred_language": "eng",
+      "expected_rejection": null,
+      "tracks": [
+        {
+          "policy_id": "ch06-5_1_side",
+          "codec_name": "flac",
+          "source_layout": "5.1(side)",
+          "channels": 6,
+          "aac_channel_configuration": null,
+          "language": "eng",
+          "handler_title": "English Side 5.1",
+          "default": true
+        }
+      ]
+    },
+    {
+      "id": "downmix-7_1",
+      "source_file": "downmix-7_1.mkv",
+      "coverage": ["downmix-7.1-to-5.1", "handler-titles", "default-disposition"],
+      "audio_mode": "automatic",
+      "preferred_language": "jpn",
+      "expected_rejection": null,
+      "tracks": [
+        {
+          "policy_id": "ch08-7_1",
+          "codec_name": "flac",
+          "source_layout": "7.1",
+          "channels": 8,
+          "aac_channel_configuration": null,
+          "language": "jpn",
+          "handler_title": "Japanese 7.1",
+          "default": true
+        }
+      ]
+    },
+    {
+      "id": "fail-missing-layout",
+      "source_file": "fail-missing-layout.mkv",
+      "coverage": ["fail-missing-layout"],
+      "audio_mode": "convert_aac",
+      "preferred_language": null,
+      "expected_rejection": "channel_layout_missing",
+      "tracks": [
+        {
+          "policy_id": null,
+          "codec_name": "pcm_s24le",
+          "source_layout": null,
+          "channels": 6,
+          "aac_channel_configuration": null,
+          "language": "eng",
+          "handler_title": "Missing Layout",
+          "default": true
+        }
+      ]
+    },
+    {
+      "id": "fail-unknown-layout",
+      "source_file": "fail-unknown-layout.mkv",
+      "coverage": ["fail-unknown-layout"],
+      "audio_mode": "convert_aac",
+      "preferred_language": null,
+      "expected_rejection": "channel_layout_not_qualified",
+      "tracks": [
+        {
+          "policy_id": null,
+          "codec_name": "flac",
+          "source_layout": "3.1.2",
+          "channels": 6,
+          "aac_channel_configuration": null,
+          "language": "eng",
+          "handler_title": "Unqualified 3.1.2",
+          "default": true
+        }
+      ]
+    },
+    {
+      "id": "fail-pce-layout",
+      "source_file": "fail-pce-layout.mkv",
+      "coverage": ["fail-pce-layout"],
+      "audio_mode": "automatic",
+      "preferred_language": null,
+      "expected_rejection": "channel_layout_missing",
+      "tracks": [
+        {
+          "policy_id": null,
+          "codec_name": "aac",
+          "source_layout": null,
+          "channels": 6,
+          "aac_channel_configuration": 0,
+          "language": "eng",
+          "handler_title": "PCE 5.1 Side",
+          "default": true
+        }
+      ]
+    }
+  ]
+}
