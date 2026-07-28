@@ -267,24 +267,24 @@ Beta without pretending the current Stable or RC client can discover it.
    apps remain separate and cannot Sparkle-update into the production app. Do
    not reopen them to edit the shared profile library after Beta 3 installation.
 
-### Beta 7 Authorization Smoke
+### Beta 8 Authorization Smoke
 
-Run these checks after the Beta 7 metadata preparation lands and before workflow
+Run these checks after the Beta 8 metadata preparation lands and before workflow
 dispatch. They prove the committed target and authorization boundary, not a
 signed or published app.
 
 1. Run `uv run python -m scripts.release validate` and confirm internal
-   `0.3.0b7`, public `0.3.0-beta.7`, build `152`, Beta channel, prerelease,
+   `0.3.0b8`, public `0.3.0-beta.8`, build `153`, Beta channel, prerelease,
    non-Latest, and no PyPI publication.
 2. Run the Prerelease metadata policy with the committed target and confirm the
-   Beta 7 freeze is absent while all route, identity, and existing-release
+   Beta 8 freeze is absent while all route, identity, and existing-release
    guards remain active before packaging or signing.
-3. Validate a cumulative appcast fixture ordered Beta 7 build `152`, Beta 6
-   build `151`, Beta 5 build `150`, Beta 4 build `149`, Beta 3 build `148`, then
-   Stable build `146`, RC5 build `145`, and RC4 build `144`; Stable and RC must
+3. Validate a cumulative appcast fixture ordered Beta 8 build `153`, Beta 7
+   build `152`, Beta 6 build `151`, Beta 5 build `150`, Beta 4 build `149`, Beta
+   3 build `148`, then Stable build `146`, RC5 build `145`, and RC4 build `144`; Stable and RC must
    exclude every Beta item while Beta and Alpha admit them.
-4. Confirm the live repository has no Beta 7 tag, release, draft, or asset and
-   the public appcast still ends at Beta 6 build `151`.
+4. Confirm the live repository has no Beta 8 tag, release, draft, or asset and
+   the public appcast still ends at Beta 7 build `152`.
 5. Continue only through the exact-SHA Prerelease workflow. Signed-app,
    update-route, packaged direct/fallback, and physical-playback qualification
    remain incomplete until the guarded workflow and exact-artifact checks
