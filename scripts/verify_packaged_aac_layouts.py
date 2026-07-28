@@ -403,18 +403,21 @@ def _audio_streams(probe: Mapping[str, object]) -> list[dict[str, object]]:
     for stream in streams:
         if not isinstance(stream, Mapping) or stream.get("codec_type") != "audio":
             continue
+        codec_name = stream.get("codec_name")
         raw_tags = stream.get("tags")
         tags: Mapping[str, object] = raw_tags if isinstance(raw_tags, Mapping) else {}
         raw_disposition = stream.get("disposition")
         disposition: Mapping[str, object] = raw_disposition if isinstance(raw_disposition, Mapping) else {}
         result.append(
             {
-                "codec_name": stream.get("codec_name"),
+                "codec_name": codec_name,
                 "profile": stream.get("profile"),
                 "sample_rate": _optional_int(stream.get("sample_rate")),
                 "channels": _optional_int(stream.get("channels")),
                 "channel_layout": stream.get("channel_layout") or None,
-                "aac_channel_configuration": parse_aac_channel_configuration(stream.get("extradata")),
+                "aac_channel_configuration": (
+                    parse_aac_channel_configuration(stream.get("extradata")) if codec_name == "aac" else None
+                ),
                 "language": tags.get("language"),
                 "handler_title": tags.get("title") or tags.get("handler_name"),
                 "default": bool(_optional_int(disposition.get("default")) or 0),
@@ -566,6 +569,17 @@ def _policy_evidence(case: FixtureCase, execution: WorkerExecution) -> list[dict
     return evidence
 
 
+def _direct_video_route_evidence(case: FixtureCase, result: Mapping[str, object]) -> dict[str, object]:
+    route = _mapping(result.get("video_route"), f"fixture {case.case_id} video route")
+    if route.get("selected") != "direct_mv_hevc":
+        raise PackagedAacFailure(f"Fixture {case.case_id} did not exercise the direct MVC package route.")
+    return {
+        key: route.get(key)
+        for key in ("intent", "selected", "reason", "rate_control", "quality")
+        if route.get(key) is not None
+    }
+
+
 def _decode_track(app: AppBundle, source: Path, index: int, output: Path) -> array.array[float]:
     _run(
         [
@@ -601,23 +615,42 @@ def _identity_evidence(
     output: Path,
     work_directory: Path,
 ) -> list[Mapping[str, object]]:
-    apple_lpcm = work_directory / "apple-lpcm.mov"
-    report = inspect_apple_media_conversion(output, apple_lpcm, preset=APPLE_LPCM_PRESET)
-    if report.output_streams["audio"] != len(case.selected_tracks):
-        raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM conversion dropped audio.")
-    apple_streams = _audio_streams(_probe(app, apple_lpcm))
-    if len(apple_streams) != len(case.selected_tracks):
-        raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM stream count changed.")
     evidence: list[Mapping[str, object]] = []
     for index, track in enumerate(case.selected_tracks):
+        apple_input = work_directory / f"apple-input-{index}.mov"
+        apple_lpcm = work_directory / f"apple-lpcm-{index}.mov"
+        _run(
+            [
+                app.ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                output,
+                "-map",
+                "0:v:0",
+                "-map",
+                f"0:a:{index}",
+                "-c",
+                "copy",
+                "-y",
+                apple_input,
+            ]
+        )
+        report = inspect_apple_media_conversion(apple_input, apple_lpcm, preset=APPLE_LPCM_PRESET)
+        if report.source_streams["audio"] != 1 or report.output_streams["audio"] != 1:
+            raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM conversion dropped audio track {index}.")
+        apple_streams = _audio_streams(_probe(app, apple_lpcm))
+        if len(apple_streams) != 1:
+            raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM stream count changed for track {index}.")
         policy = track.policy
         assert policy is not None
         configuration = CANONICAL_AAC_CONFIGURATION[policy.target_layout]
         output_channel_names = AAC_CHANNEL_CONFIGURATION_LAYOUTS[configuration]
-        actual_channel_count = apple_streams[index].get("channels")
+        actual_channel_count = apple_streams[0].get("channels")
         if actual_channel_count != len(output_channel_names):
-            raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM channel count changed.")
-        samples = _decode_track(app, apple_lpcm, index, work_directory / f"audio-{index}.f32")
+            raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM channel count changed for track {index}.")
+        samples = _decode_track(app, apple_lpcm, 0, work_directory / f"audio-{index}.f32")
         if len(samples) % len(output_channel_names) != 0:
             raise PackagedAacFailure(f"Fixture {case.case_id} Apple LPCM samples are incomplete.")
         result = analyze_identity_samples(
@@ -628,7 +661,7 @@ def _identity_evidence(
         )
         if result.get("status") != "passed":
             raise PackagedAacFailure(f"Fixture {case.case_id} failed channel-identity analysis.")
-        evidence.append(result)
+        evidence.append({"track_index": index, **result})
     return evidence
 
 
@@ -663,6 +696,7 @@ def _completed_case(
 ) -> dict[str, object]:
     payload = _terminal(execution, "job.completed")
     result = _mapping(payload.get("conversion_result"), "packaged worker conversion result")
+    video_route = _direct_video_route_evidence(case, result)
     raw_output = result.get("output_path")
     if execution.returncode != 0 or not isinstance(raw_output, str):
         raise PackagedAacFailure(f"Fixture {case.case_id} did not complete successfully.")
@@ -686,6 +720,7 @@ def _completed_case(
     return {
         "passed": True,
         "terminal": "job.completed",
+        "video_route": video_route,
         "policy_decisions": _policy_evidence(case, execution),
         "output": {
             "file": artifact.name,
@@ -778,16 +813,20 @@ def verify_packaged_aac_layouts(
         },
         "package": package,
         "cases": case_evidence,
-        "acceptance": {
+        "package_gate": {
             "fixture_manifest_checked": True,
             "packaged_worker_executed": True,
             "apple_passthrough_retained_audio": True,
             "channel_identity_passed": True,
             "metadata_preserved": True,
             "fail_closed_visible": True,
+            "direct_mvc_route_executed": True,
+            "passed": True,
+        },
+        "remaining_gates": {
             "signed_candidate_proven": False,
             "physical_vision_pro_proven": False,
-            "passed": True,
+            "issue_382_complete": False,
         },
     }
     if len(_render_evidence(evidence).encode("utf-8")) > MAX_EVIDENCE_BYTES:

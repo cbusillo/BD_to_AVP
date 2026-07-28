@@ -62,6 +62,23 @@ PACKAGED_FIXTURE_GATE_LINES = (
         "candidate:"
     ),
     "",
+    (
+        "Create the private fixture set from a short real MVC MKV. The generator writes atomically to a new "
+        "directory, validates every audio stream against the checked manifest, and records source, tool, and "
+        "fixture hashes without storing the private source path:"
+    ),
+    "",
+    "```bash",
+    "uv run python -m scripts.create_packaged_aac_layout_fixtures \\",
+    '  --mvc-source "$BD_TO_AVP_REAL_MVC_SOURCE" \\',
+    '  --output "$BD_TO_AVP_AAC_FIXTURE_ROOT"',
+    "```",
+    "",
+    (
+        "The generator receipt records that direct-MVC routing remains unproven. The packaged verifier closes "
+        "that gap by requiring every successful case to report `direct_mv_hevc` from the packaged worker."
+    ),
+    "",
     "```bash",
     "uv run python -m scripts.verify_packaged_aac_layouts \\",
     '  --app "$BD_TO_AVP_CANDIDATE_APP" \\',
