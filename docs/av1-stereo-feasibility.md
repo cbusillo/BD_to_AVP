@@ -2,8 +2,11 @@
 
 ## Decision
 
-BD_to_AVP should offer an opt-in, software-encoded AV1 stereo export while
-retaining MV-HEVC as the default native Apple spatial-video output.
+BD_to_AVP may retain an opt-in, software-encoded AV1 stereo export only as an
+experimental M5 Apple Vision Pro path while retaining MV-HEVC as the default
+native Apple spatial-video output. Physical testing proves that M2 Apple Vision
+Pro cannot decode the AV1 output, even at a small control resolution. Physical
+M5 stereoscopic playback remains unqualified.
 
 AV1 can encode a full-resolution side-by-side raster, and the packaged FFmpeg
 build contains `libsvtav1`, `libaom-av1`, and `librav1e`. Apple's codec-agnostic
@@ -24,9 +27,10 @@ replacement for MV-HEVC spatial delivery:
 - AV1 hardware support is fragmented across the Apple devices this project
   targets, and Apple exposes no VideoToolbox AV1 encoder in the macOS 27 SDK.
 
-MV-HEVC therefore remains the native Apple spatial output. AV1 is a separate
-software stereo export for storage-conscious or custom-playback workflows; the
-UI and documentation must not describe it as MV-HEVC or native spatial video.
+MV-HEVC therefore remains the native Apple spatial output. AV1 is a separate,
+experimental software stereo export for M5 Vision Pro or custom-playback
+workflows; the UI and documentation must identify M2 Vision Pro as unsupported
+and must not describe AV1 as MV-HEVC or native spatial video.
 
 ## Standards Evidence
 
@@ -76,13 +80,15 @@ The macOS 27 SDK reinforces the distinction:
   MV-HEVC-specific.
 - `VTCopyVideoEncoderList` exposes no AV1 encoder on the tested M4 Max system.
 
-Apple's [M2 media-engine documentation][apple-m2] lists H.264, HEVC, and ProRes
-but not AV1. Apple introduced AV1 hardware decode in the
+Apple's [M2 media-engine documentation][apple-m2] and the original
+[M2 Vision Pro technical specifications][apple-vision-pro-m2] list H.264,
+HEVC, and ProRes but not AV1. Apple introduced AV1 hardware decode in the
 [M3 media engine][apple-m3]. Apple's [M5 Apple Vision Pro announcement][apple-vision-pro-m5-newsroom]
 and [technical specifications][apple-vision-pro-m5] list AV1 hardware decode.
-The original M2 Apple Vision Pro therefore cannot be assumed to have an AV1
-hardware path. Software fallback availability and performance are not a safe
-product contract for full-resolution stereo playback.
+Physical testing below confirms that the M2 Vision Pro has neither an AV1
+hardware path nor a usable AVFoundation software fallback. M5 hardware support
+is documented, but its packed-stereo RealityKit behavior still requires
+physical evidence.
 
 ## Repository And Toolchain Evidence
 
@@ -230,7 +236,7 @@ no playback configuration options. It did not return
 
 This proves an Apple-recognized packed-stereo asset contract. It does not prove
 stereoscopic rendering on every Apple Vision Pro generation; that device
-qualification remains separate in issue #200.
+qualification remains separate in issue #409.
 
 ### Implemented production-path probe
 
@@ -276,6 +282,26 @@ short run. The result cannot predict feature-film speed, size, thermals, or
 subjective quality. It does show that both completed defaults are decodable and
 that CRF 32 trades measurable quality for the storage-oriented AV1 mode.
 
+### Sustained encoder comparison
+
+On July 29, 2026, a longer encoding-only comparison used the same 60-second,
+24 fps, 1920x1080-per-eye synthetic source on an M4 Max Mac Studio. The AV1
+route encoded one 3840x1080 packed stream with `libsvtav1`, preset 9, CRF 32.
+The hardware HEVC route encoded two 1920x1080 eye streams concurrently with
+`hevc_videotoolbox` at 20 Mbps per eye. Both commands processed the same total
+pixel count and included the same synthetic source filters.
+
+| Mode | Run 1 | Run 2 | Run 3 | Mean | Relative elapsed time |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Software AV1 | 14.16 s | 14.65 s | 14.61 s | 14.47 s | 1.23× hardware HEVC |
+| Hardware HEVC eye streams | 11.82 s | 11.82 s | 11.78 s | 11.81 s | baseline |
+
+For this source and machine, the software AV1 encode stage was approximately
+23% slower than the two concurrent hardware HEVC eye encodes. Both completed
+faster than real time. This is not a quality-matched comparison and excludes
+the later MV-HEVC merge, stereo metadata finalization, and final audio/subtitle
+mux, so it should not be used as a universal whole-conversion estimate.
+
 The same source was swept at preset 9 to validate the exposed CRF control:
 
 | CRF | Encoded AV1 bytes | Mean PSNR | Mean SSIM |
@@ -290,12 +316,45 @@ CRF 32 remains the storage-conscious default; users can lower it when quality
 matters more than output size. The sweep is still synthetic and is not a
 feature-film recommendation by itself.
 
+### Physical M2 Vision Pro qualification
+
+On July 29, 2026, BD to AVP Playback Check 0.2.0 build 4 tested an immutable
+60-second production-contract candidate on physical `RealityDevice14,1`
+running visionOS 27.0 build `24M5326g`:
+
+- Source/tool package commit: `1eecfcfc9bd5b64c501976592db5b0516edfb6f4`.
+- Packaged app tree SHA-256:
+  `c8f053793a0f7f045a35de12e60ed2b46a96118b4ea1ccb77f0069bbbd9e25ef`.
+- Candidate: one 3840x1080 `av01` track, two AAC language tracks, English
+  subtitles, and Apple `vexu/eyes/pack` metadata.
+- Candidate SHA-256:
+  `bd67dab8ad3a5f4f88a4c555d576ffbbbec9d29662681bcf7c3ed1b33ee1f3ef`.
+
+The device reported `VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1) =
+false` and `VTIsStereoMVHEVCDecodeSupported() = true`. An independent
+`AVAssetReader` first-frame probe failed with `Cannot Decode` before RealityKit
+was involved. `AVPlayerItem` briefly became ready through a fallback route,
+then the RealityKit player also failed with `Cannot Decode` before rendering.
+
+A separate six-second 1280x360 packed AV1 control with SHA-256
+`4be7607cdda287b501e245e84681e5ba6962a482235ad36592812319f229a6e6`
+failed identically in both the independent AVFoundation decoder probe and the
+RealityKit renderer. This rules out full-resolution load and the MV-HEVC-derived
+test-player design as the cause. The tested M2 Vision Pro has no usable AV1
+decode path for this product.
+
+The M5 Vision Pro lists AV1 hardware decode in Apple's specifications, but no
+physical M5 packed-stereo run has been completed. The AV1 option therefore
+remains M5-targeted and experimental until an M5 wearer provides decode,
+stereoscopic presentation, eye-order, seek, sustained-playback, and thermal
+evidence.
+
 ## Result Matrix
 
 | Representation | Tool result | Apple-framework result | Product meaning |
 | --- | --- | --- | --- |
 | One side-by-side `av01` MP4 track | Encodes and muxes | Playable and seekable as 640x180; no stereo playback option | Unmarked packed video |
-| Side-by-side `av01` plus `vexu/eyes/pack` | Deterministic GPAC patch and final remux work | Left/right eyes and side-by-side packing recognized; `StereoVideo` option returned | Supported AV1 stereo asset, not spatial video |
+| Side-by-side `av01` plus `vexu/eyes/pack` | Deterministic GPAC patch and final remux work | macOS recognizes left/right eyes and `StereoVideo`; M2 Vision Pro returns `Cannot Decode` | Experimental M5-targeted AV1 stereo asset, not spatial video |
 | Two independent `av01` MP4 tracks | Encodes and muxes | Two selectable tracks; default track decoded | Alternatives, not eye views |
 | AV1 WebM with `StereoMode` | Standards-based packed metadata works | AVFoundation cannot open the container | Non-Apple delivery only |
 | MV-HEVC MOV | Existing pipeline works | Native stereo multiview and spatial metadata | Default Apple spatial output |
@@ -311,12 +370,13 @@ The first AV1 mode is deliberately narrow:
 4. No claim that AV1 is MV-HEVC, multiview-compressed, or Apple spatial video.
 5. MV-HEVC remains the default and retains the `_AVP.mov` filename; AV1 uses the
    distinct `_AV1_Stereo.mov` suffix.
+6. M2 Vision Pro is explicitly unsupported. The UI identifies M5 Vision Pro as
+   the experimental target while physical M5 qualification remains pending.
 
-Physical Apple Vision Pro testing should determine which device generations and
-renderers honor the recognized stereo contract at sustained feature-film
-resolution. Long-form compression, encode-time, thermal, file-size, and
-subjective-quality qualification remains separate from the bounded synthetic
-comparison above.
+The next physical gate is an M5 Vision Pro run using the immutable candidate or
+an equivalent finalized output. Long-form compression, file-size, and
+subjective-quality qualification remain separate from the bounded synthetic
+comparisons above.
 
 [av1-spec]: https://aomediacodec.github.io/av1-spec/av1-spec.pdf
 [av1-isobmff]: https://aomediacodec.github.io/av1-isobmff/v1.3.0.html
@@ -324,5 +384,6 @@ comparison above.
 [apple-sbs-to-mvhevc]: https://developer.apple.com/documentation/avfoundation/converting-side-by-side-3d-video-to-multiview-hevc-and-spatial-video
 [apple-m2]: https://www.apple.com/newsroom/2022/06/apple-unveils-m2-with-breakthrough-performance-and-capabilities/
 [apple-m3]: https://www.apple.com/newsroom/2023/10/apple-unveils-m3-m3-pro-and-m3-max-the-most-advanced-chips-for-a-personal-computer/
+[apple-vision-pro-m2]: https://support.apple.com/en-us/117810
 [apple-vision-pro-m5-newsroom]: https://www.apple.com/newsroom/2025/10/apple-vision-pro-upgraded-with-the-m5-chip-and-dual-knit-band/
 [apple-vision-pro-m5]: https://support.apple.com/en-us/125436

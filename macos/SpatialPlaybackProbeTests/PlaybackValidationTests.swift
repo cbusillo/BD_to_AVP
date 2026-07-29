@@ -1,3 +1,4 @@
+import CoreMedia
 import XCTest
 @testable import SpatialPlaybackProbe
 
@@ -21,7 +22,8 @@ final class PlaybackValidationTests: XCTestCase {
         }
         let observations = PlaybackObservations(
             videoRemainedVisible: .yes,
-            appearedThreeDimensional: .yes
+            appearedThreeDimensional: .yes,
+            eyeOrderAppearedCorrect: .yes
         )
 
         XCTAssertEqual(
@@ -37,7 +39,8 @@ final class PlaybackValidationTests: XCTestCase {
         checks[0].status = .failed
         let observations = PlaybackObservations(
             videoRemainedVisible: .yes,
-            appearedThreeDimensional: .yes
+            appearedThreeDimensional: .yes,
+            eyeOrderAppearedCorrect: .yes
         )
 
         XCTAssertEqual(
@@ -52,7 +55,8 @@ final class PlaybackValidationTests: XCTestCase {
         }
         let observations = PlaybackObservations(
             videoRemainedVisible: .no,
-            appearedThreeDimensional: .yes
+            appearedThreeDimensional: .yes,
+            eyeOrderAppearedCorrect: .yes
         )
 
         XCTAssertEqual(
@@ -67,7 +71,8 @@ final class PlaybackValidationTests: XCTestCase {
         }
         let observations = PlaybackObservations(
             videoRemainedVisible: .yes,
-            appearedThreeDimensional: .unsure
+            appearedThreeDimensional: .unsure,
+            eyeOrderAppearedCorrect: .yes
         )
 
         XCTAssertEqual(
@@ -78,7 +83,7 @@ final class PlaybackValidationTests: XCTestCase {
 
     func testReportContainsFilenameWithoutSourcePath() throws {
         let report = PlaybackValidationReport(
-            schemaVersion: 3,
+            schemaVersion: 4,
             validatorVersion: "0.1.0",
             validatorBuild: "42",
             generatedAt: "2026-07-17T20:00:00Z",
@@ -91,6 +96,21 @@ final class PlaybackValidationTests: XCTestCase {
                 audioOptionCount: 2,
                 subtitleOptionCount: 1
             ),
+            decode: PlaybackDecodeSummary(
+                videoCodec: .av1,
+                codecTag: "av01",
+                route: .fallback,
+                av1HardwareDecodeSupported: false,
+                stereoMVHEVCDecodeSupported: true,
+                independentFrameDecodeSucceeded: true,
+                independentFrameDecodeDetail: "decoded_first_frame"
+            ),
+            runtime: PlaybackRuntimeSummary(
+                hardwareModel: "RealityDevice14,1",
+                sustainedPlaybackSeconds: 30,
+                thermalStateBefore: "nominal",
+                thermalStateAfter: "fair"
+            ),
             presentation: PlaybackPresentationSummary(
                 expectation: .stereo,
                 viewingMode: "stereo",
@@ -100,7 +120,8 @@ final class PlaybackValidationTests: XCTestCase {
             automaticChecks: [],
             observations: PlaybackObservations(
                 videoRemainedVisible: .yes,
-                appearedThreeDimensional: .yes
+                appearedThreeDimensional: .yes,
+                eyeOrderAppearedCorrect: .yes
             ),
             result: .passed
         )
@@ -114,8 +135,104 @@ final class PlaybackValidationTests: XCTestCase {
         XCTAssertTrue(reportText.contains("subtitleOptionCount"))
         XCTAssertTrue(reportText.contains("spatialVideoMode"))
         XCTAssertTrue(reportText.contains("expectation"))
+        XCTAssertTrue(reportText.contains("av01"))
+        XCTAssertTrue(reportText.contains("fallback"))
+        XCTAssertTrue(reportText.contains("RealityDevice14,1"))
+        XCTAssertTrue(reportText.contains("eyeOrderAppearedCorrect"))
         XCTAssertFalse(reportText.contains("/Users/"))
         XCTAssertFalse(reportText.contains("sourcePath"))
+    }
+
+    func testCodecIdentificationAndDecodeAssessmentAreCodecAware() {
+        let av1Format = PlaybackVideoFormat(mediaSubtype: FourCharCode(0x6176_3031))
+        let hevcFormat = PlaybackVideoFormat(mediaSubtype: FourCharCode(0x6876_6331))
+        let unknownFormat = PlaybackVideoFormat(mediaSubtype: FourCharCode(0x7670_3039))
+
+        XCTAssertEqual(av1Format, PlaybackVideoFormat(mediaSubtype: FourCharCode(0x6176_3031)))
+        XCTAssertEqual(av1Format.codec, .av1)
+        XCTAssertEqual(av1Format.codecTag, "av01")
+        XCTAssertEqual(hevcFormat.codec, .hevc)
+        XCTAssertEqual(unknownFormat.codec, .unknown)
+
+        let fallback = PlaybackDecodeAssessment.evaluate(
+            format: av1Format,
+            playerReady: true,
+            av1HardwareDecodeSupported: false,
+            stereoMVHEVCDecodeSupported: true,
+            independentFrameDecodeSucceeded: true
+        )
+        XCTAssertEqual(fallback.route, .fallback)
+        XCTAssertTrue(fallback.passesCapabilityCheck)
+
+        let unsupportedHEVC = PlaybackDecodeAssessment.evaluate(
+            format: hevcFormat,
+            playerReady: true,
+            av1HardwareDecodeSupported: true,
+            stereoMVHEVCDecodeSupported: false,
+            independentFrameDecodeSucceeded: true
+        )
+        XCTAssertEqual(unsupportedHEVC.route, .unavailable)
+        XCTAssertFalse(unsupportedHEVC.passesCapabilityCheck)
+
+        let unknown = PlaybackDecodeAssessment.evaluate(
+            format: unknownFormat,
+            playerReady: true,
+            av1HardwareDecodeSupported: true,
+            stereoMVHEVCDecodeSupported: true,
+            independentFrameDecodeSucceeded: true
+        )
+        XCTAssertFalse(unknown.passesCapabilityCheck)
+
+        let failedFallback = PlaybackDecodeAssessment.evaluate(
+            format: av1Format,
+            playerReady: true,
+            av1HardwareDecodeSupported: false,
+            stereoMVHEVCDecodeSupported: true,
+            independentFrameDecodeSucceeded: false
+        )
+        XCTAssertEqual(failedFallback.route, .unavailable)
+        XCTAssertFalse(failedFallback.passesCapabilityCheck)
+
+        let failedHardwareDecode = PlaybackDecodeAssessment.evaluate(
+            format: av1Format,
+            playerReady: true,
+            av1HardwareDecodeSupported: true,
+            stereoMVHEVCDecodeSupported: true,
+            independentFrameDecodeSucceeded: false
+        )
+        XCTAssertEqual(failedHardwareDecode.route, .unavailable)
+        XCTAssertFalse(failedHardwareDecode.passesCapabilityCheck)
+
+        let notReadyFallback = PlaybackDecodeAssessment.evaluate(
+            format: av1Format,
+            playerReady: false,
+            av1HardwareDecodeSupported: false,
+            stereoMVHEVCDecodeSupported: true,
+            independentFrameDecodeSucceeded: true
+        )
+        XCTAssertEqual(notReadyFallback.route, .unavailable)
+        XCTAssertFalse(notReadyFallback.passesCapabilityCheck)
+    }
+
+    func testIncorrectEyeOrderFailsAndUnansweredEyeOrderIsIncomplete() {
+        let checks = PlaybackCheckID.allCases.map {
+            PlaybackCheck(id: $0, status: .passed, detail: "Passed")
+        }
+        let failedObservations = PlaybackObservations(
+            videoRemainedVisible: .yes,
+            appearedThreeDimensional: .yes,
+            eyeOrderAppearedCorrect: .no
+        )
+        XCTAssertEqual(
+            PlaybackValidationRules.result(checks: checks, observations: failedObservations),
+            .failed
+        )
+
+        let incompleteObservations = PlaybackObservations(
+            videoRemainedVisible: .yes,
+            appearedThreeDimensional: .yes
+        )
+        XCTAssertFalse(incompleteObservations.isComplete)
     }
 
     func testSeekRequiresPlaybackAdvanceAndFreshSpatialRendering() {
@@ -189,6 +306,31 @@ final class PlaybackValidationTests: XCTestCase {
                     stereoPresentation: false,
                     spatialPresentation: false,
                     requiresSpatialPresentation: false
+                )
+            )
+        )
+    }
+
+    func testSustainedPlaybackRequiresAdvanceRenderingAndPresentation() {
+        XCTAssertTrue(
+            PlaybackValidationRules.sustainedPlaybackPassed(
+                PlaybackSustainedEvidence(
+                    playbackAdvanceSeconds: 30,
+                    requiredPlaybackAdvanceSeconds: 30,
+                    renderingStayedReady: true,
+                    stereoPresentationStayedActive: true,
+                    expectedPresentationStayedActive: true
+                )
+            )
+        )
+        XCTAssertFalse(
+            PlaybackValidationRules.sustainedPlaybackPassed(
+                PlaybackSustainedEvidence(
+                    playbackAdvanceSeconds: 29,
+                    requiredPlaybackAdvanceSeconds: 30,
+                    renderingStayedReady: true,
+                    stereoPresentationStayedActive: true,
+                    expectedPresentationStayedActive: true
                 )
             )
         )
