@@ -1,5 +1,4 @@
 import os
-import queue
 import signal
 import subprocess
 import sys
@@ -737,6 +736,8 @@ class ChildProcessRunnerTests(unittest.TestCase):
         self.assertIn("observability event(s) were dropped", terminal_event.data.detail.value)
 
     def test_terminal_enqueue_is_atomic_against_concurrent_producers(self) -> None:
+        import queue
+
         sink_started = threading.Event()
         release_sink = threading.Event()
         events: list[ObservabilityEvent] = []
