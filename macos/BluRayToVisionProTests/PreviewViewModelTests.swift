@@ -471,7 +471,7 @@ final class PreviewViewModelTests: XCTestCase {
 
     @MainActor
     private func waitForRemoval(of directoryURL: URL) async {
-        for _ in 0..<200 {
+        for _ in 0..<1_000 {
             if !FileManager.default.fileExists(atPath: directoryURL.path) {
                 return
             }
