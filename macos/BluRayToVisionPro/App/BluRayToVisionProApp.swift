@@ -51,32 +51,28 @@ struct BluRayToVisionProApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if let previewPresentationSmokeConfiguration {
-                PreviewPresentationSmokeView(configuration: previewPresentationSmokeConfiguration)
-                    .frame(width: 820, height: 620)
-            } else {
-                ContentView(
-                    viewModel: viewModel,
-                    previewViewModel: previewViewModel,
-                    diagnosticReportViewModel: diagnosticReportViewModel,
-                    settings: settings,
-                    profileStore: profileStore,
-                    capabilities: capabilities
-                )
-                    .frame(minWidth: 1_080, minHeight: 680)
-                    .background(
-                        WindowAccessor { window in
-                            appDelegate.attach(window: window, workCoordinator: workCoordinator)
-                        }
-                    )
-                    .onAppear {
-                        updater.startIfNeeded()
-                        settings.selectedProfileID = profileStore.normalizedProfileID(settings.selectedProfileID)
-                        appDelegate.workCoordinator = workCoordinator
+            ContentView(
+                viewModel: viewModel,
+                previewViewModel: previewViewModel,
+                diagnosticReportViewModel: diagnosticReportViewModel,
+                settings: settings,
+                profileStore: profileStore,
+                capabilities: capabilities
+            )
+                .frame(minWidth: 1_080, minHeight: 680)
+                .background(
+                    WindowAccessor { window in
+                        appDelegate.attach(window: window, workCoordinator: workCoordinator)
                     }
-            }
+                )
+                .onAppear {
+                    updater.startIfNeeded()
+                    settings.selectedProfileID = profileStore.normalizedProfileID(settings.selectedProfileID)
+                    appDelegate.workCoordinator = workCoordinator
+                }
         }
         .defaultSize(width: 1_120, height: 820)
+        .defaultLaunchBehavior(previewPresentationSmokeConfiguration == nil ? .automatic : .suppressed)
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unified)
         .commands {
