@@ -214,6 +214,42 @@ class DirectQualitySweepSummaryTests(unittest.TestCase):
         self.assertEqual([candidate.candidate_id for candidate in _candidate_order(plan, 0)], ["q060", "q070", "q080"])
         self.assertEqual([candidate.candidate_id for candidate in _candidate_order(plan, 1)], ["q080", "q070", "q060"])
 
+    def test_candidate_can_finish_before_balanced_without_claiming_comparison(self) -> None:
+        plan = self._plan()
+        evidence: dict[str, object] = {
+            "source_git_sha": "b" * 40,
+            "manifest": {"sha256": "a" * 64},
+            "cases": [
+                {
+                    "id": "case-a",
+                    "candidates": [
+                        {
+                            "id": "q060",
+                            "quality": 0.6,
+                            "runs": [self._run(0, 0.94, 80, 2), self._run(1, 0.94, 80, 2)],
+                        },
+                        {"id": "q070", "quality": 0.7, "runs": [self._run(0, 0.96, 100, 2)]},
+                        {"id": "q080", "quality": 0.8, "runs": []},
+                    ],
+                }
+            ],
+            "candidate_summaries": [],
+            "monotonicity_warnings": [],
+        }
+        case = CorpusCase(
+            case_id="case-a",
+            tags=("real_mvc",),
+            source={"kind": "synthetic"},
+            eye_width=2,
+            eye_height=2,
+            frame_rate="24",
+        )
+
+        _refresh_summaries(evidence, plan, {"case-a": case}, all_gated_case_ids={"case-a"})
+
+        self.assertFalse(evidence["candidate_summaries"][0]["complete"])
+        self.assertFalse(evidence["acceptance"]["complete"])
+
 
 class DirectQualitySweepResumeTests(unittest.TestCase):
     @staticmethod

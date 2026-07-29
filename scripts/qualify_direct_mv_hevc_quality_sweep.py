@@ -390,7 +390,7 @@ def _refresh_summaries(
             assert isinstance(case, dict)
             record = _candidate_record(case, candidate.candidate_id)
             summary = record.get("summary") if record is not None else None
-            if isinstance(summary, Mapping):
+            if isinstance(summary, Mapping) and "quality_delta" in summary:
                 summaries.append(summary)
         complete = len(summaries) == len(case_definitions)
         aggregate: dict[str, object] = {
