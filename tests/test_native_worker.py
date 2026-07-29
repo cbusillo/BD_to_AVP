@@ -12,7 +12,7 @@ import unittest
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from bd_to_avp.modules.config import Stage, config
@@ -2225,6 +2225,24 @@ class WorkerProcessOwnerTests(unittest.TestCase):
             if child.poll() is None:
                 child.kill()
                 child.wait(timeout=3)
+
+    def test_terminate_descendants_waits_after_sigkill(self) -> None:
+        descendant = Mock()
+        owner_process = Mock()
+        owner_process.children.return_value = [descendant]
+
+        with (
+            patch("bd_to_avp.worker.ownership.psutil.Process", return_value=owner_process),
+            patch(
+                "bd_to_avp.worker.ownership.psutil.wait_procs",
+                side_effect=[([], [descendant]), ([descendant], [])],
+            ) as wait_procs,
+        ):
+            WorkerProcessOwner().terminate_descendants(timeout=0.1)
+
+        descendant.terminate.assert_called_once_with()
+        descendant.kill.assert_called_once_with()
+        self.assertEqual(wait_procs.call_count, 2)
 
 
 if __name__ == "__main__":

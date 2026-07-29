@@ -471,7 +471,7 @@ final class PreviewViewModelTests: XCTestCase {
 
     @MainActor
     private func waitForRemoval(of directoryURL: URL) async {
-        for _ in 0..<200 {
+        for _ in 0..<1_000 {
             if !FileManager.default.fileExists(atPath: directoryURL.path) {
                 return
             }
@@ -532,6 +532,28 @@ final class PreviewCacheTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: directoryURL.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: cache.rootURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: destinationURL.path))
+    }
+
+    func testCleanupRetriesTransientRemovalFailure() async throws {
+        let destinationURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileManager = TransientRemovalFailureFileManager(failuresRemaining: 1)
+        try fileManager.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+        let cache = PreviewCache.destinationScoped(destinationURL: destinationURL, fileManager: fileManager)
+        let directoryURL = try cache.prepareDirectory(jobID: UUID())
+        defer { try? FileManager.default.removeItem(at: destinationURL) }
+
+        let succeeded = await PreviewCleanup.remove(
+            cache: cache,
+            directoryURL: directoryURL,
+            retryDelays: [.zero]
+        )
+
+        XCTAssertTrue(succeeded)
+        XCTAssertGreaterThanOrEqual(fileManager.removalAttempts, 2)
+        XCTAssertFalse(fileManager.fileExists(atPath: directoryURL.path))
+        XCTAssertFalse(fileManager.fileExists(atPath: cache.rootURL.path))
+        XCTAssertTrue(fileManager.fileExists(atPath: destinationURL.path))
     }
 
     func testDestinationWorkspacePruningPreservesFreshSibling() throws {
@@ -645,6 +667,36 @@ final class PreviewCacheTests: XCTestCase {
         )
         XCTAssertEqual(workerConflict.state, .conflicting)
         XCTAssertEqual(workerConflict.sufficiency, .unknown)
+    }
+}
+
+private final class TransientRemovalFailureFileManager: FileManager, @unchecked Sendable {
+    private let stateLock = NSLock()
+    private var failuresRemaining: Int
+    private var recordedRemovalAttempts = 0
+
+    init(failuresRemaining: Int) {
+        self.failuresRemaining = failuresRemaining
+        super.init()
+    }
+
+    var removalAttempts: Int {
+        stateLock.withLock { recordedRemovalAttempts }
+    }
+
+    override func removeItem(at URL: URL) throws {
+        let shouldFail = stateLock.withLock { () -> Bool in
+            recordedRemovalAttempts += 1
+            guard failuresRemaining > 0 else {
+                return false
+            }
+            failuresRemaining -= 1
+            return true
+        }
+        if shouldFail {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try super.removeItem(at: URL)
     }
 }
 

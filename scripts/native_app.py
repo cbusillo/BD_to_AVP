@@ -608,12 +608,20 @@ def verify_codesign(app_path: Path) -> None:
 
 
 def smoke_packaged_native_app(app_path: Path) -> None:
-    from scripts.smoke_release_app import build_clean_env, read_bundle, verify_preview_presentation
+    from scripts.smoke_release_app import (
+        build_clean_env,
+        read_bundle,
+        verify_preview_presentation,
+        verify_worker_cancellation,
+    )
 
     app_path = app_path.resolve()
     native_executable = app_path / "Contents" / "MacOS" / NATIVE_EXECUTABLE_NAME
     run([str(native_executable), "--startup-smoke"], cwd=app_path, timeout=20)
-    verify_preview_presentation(read_bundle(app_path), build_clean_env())
+    bundle = read_bundle(app_path)
+    clean_env = build_clean_env()
+    verify_worker_cancellation(bundle, clean_env)
+    verify_preview_presentation(bundle, clean_env)
 
 
 def smoke_packaged_mv_hevc_encoder(app_path: Path) -> None:

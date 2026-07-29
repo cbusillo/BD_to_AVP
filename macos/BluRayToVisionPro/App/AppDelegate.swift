@@ -5,6 +5,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     nonisolated static let startupSmokeArgument = "--startup-smoke"
     nonisolated static let previewPresentationSmokeArgument = "--preview-presentation-smoke"
+    nonisolated static let workerCancellationSmokeArgument = "--worker-cancellation-smoke"
 
     weak var workCoordinator: AppWorkCoordinator?
     var observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared
@@ -14,9 +15,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var isStoppingForWindowClose = false
     private var isStoppingForTermination = false
     private var previewPresentationSmokeWindow: NSWindow?
+    private var workerCancellationSmokeTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let arguments = ProcessInfo.processInfo.arguments
+        if let configuration = WorkerCancellationSmokeConfiguration.parse(arguments: arguments) {
+            workerCancellationSmokeTask = Task {
+                await WorkerCancellationSmoke.run(configuration: configuration)
+                NSApp.terminate(nil)
+            }
+            return
+        }
         if let configuration = PreviewPresentationSmokeConfiguration.parse(arguments: arguments) {
             let window = NSWindow(
                 contentViewController: NSHostingController(
@@ -47,8 +56,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         arguments.contains(previewPresentationSmokeArgument)
     }
 
+    nonisolated static func isWorkerCancellationSmoke(arguments: [String]) -> Bool {
+        arguments.contains(workerCancellationSmokeArgument)
+    }
+
     nonisolated static func isAutomationSmoke(arguments: [String]) -> Bool {
-        isStartupSmoke(arguments: arguments) || isPreviewPresentationSmoke(arguments: arguments)
+        isStartupSmoke(arguments: arguments)
+            || isPreviewPresentationSmoke(arguments: arguments)
+            || isWorkerCancellationSmoke(arguments: arguments)
     }
 
     func attach(window: NSWindow, workCoordinator: AppWorkCoordinator) {

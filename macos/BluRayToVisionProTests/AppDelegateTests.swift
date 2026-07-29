@@ -16,10 +16,22 @@ final class AppDelegateTests: XCTestCase {
         XCTAssertFalse(AppDelegate.isPreviewPresentationSmoke(arguments: ["app"]))
     }
 
-    func testAutomationSmokeIncludesStartupAndPreviewPresentation() {
+    func testWorkerCancellationSmokeArgumentIsExplicit() {
+        XCTAssertTrue(
+            AppDelegate.isWorkerCancellationSmoke(
+                arguments: ["app", AppDelegate.workerCancellationSmokeArgument, "/tmp/worker", "/tmp/destination", "/tmp/result.json"]
+            )
+        )
+        XCTAssertFalse(AppDelegate.isWorkerCancellationSmoke(arguments: ["app"]))
+    }
+
+    func testAutomationSmokeIncludesStartupPreviewAndWorkerCancellation() {
         XCTAssertTrue(AppDelegate.isAutomationSmoke(arguments: ["app", AppDelegate.startupSmokeArgument]))
         XCTAssertTrue(
             AppDelegate.isAutomationSmoke(arguments: ["app", AppDelegate.previewPresentationSmokeArgument])
+        )
+        XCTAssertTrue(
+            AppDelegate.isAutomationSmoke(arguments: ["app", AppDelegate.workerCancellationSmokeArgument])
         )
         XCTAssertFalse(AppDelegate.isAutomationSmoke(arguments: ["app"]))
     }

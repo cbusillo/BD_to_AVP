@@ -51,7 +51,9 @@ uv run python scripts/native_app.py package
 Ad-hoc packages omit Hardened Runtime because ad-hoc signatures have no Team ID
 for dyld library validation; Developer ID packages retain Hardened Runtime. The
 package gate launches the signed Swift host with `--startup-smoke`, smokes the
-embedded conversion worker, and then performs strict deep signature validation.
+embedded conversion worker, verifies cooperative cancellation can reap a
+separate-session child and remove its preview workspace, and then performs
+strict deep signature validation.
 
 The app and engine use worker protocol v10. Audio and subtitle language controls
 are independent: built-in and new profile options default to preferred-only
