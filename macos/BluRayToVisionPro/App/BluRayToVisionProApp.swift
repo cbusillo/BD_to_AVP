@@ -17,7 +17,7 @@ struct BluRayToVisionProApp: App {
     private let capabilities = AppCapabilities.current
     private let workCoordinator: AppWorkCoordinator
     private let observabilityEventStore: any ObservabilityEventPersisting
-    private let previewPresentationSmokeConfiguration: PreviewPresentationSmokeConfiguration?
+    private let suppressDefaultLaunch: Bool
 
     init() {
         let observabilityEventStore = ObservabilityEventStore.automatic()
@@ -43,9 +43,7 @@ struct BluRayToVisionProApp: App {
         _updater = StateObject(wrappedValue: UpdateController(installPostponer: workCoordinator))
         self.workCoordinator = workCoordinator
         self.observabilityEventStore = observabilityEventStore
-        previewPresentationSmokeConfiguration = PreviewPresentationSmokeConfiguration.parse(
-            arguments: ProcessInfo.processInfo.arguments
-        )
+        suppressDefaultLaunch = AppDelegate.isAutomationSmoke(arguments: ProcessInfo.processInfo.arguments)
         appDelegate.observabilityEventStore = observabilityEventStore
     }
 
@@ -72,7 +70,7 @@ struct BluRayToVisionProApp: App {
                 }
         }
         .defaultSize(width: 1_120, height: 820)
-        .defaultLaunchBehavior(previewPresentationSmokeConfiguration == nil ? .automatic : .suppressed)
+        .defaultLaunchBehavior(suppressDefaultLaunch ? .suppressed : .automatic)
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unified)
         .commands {

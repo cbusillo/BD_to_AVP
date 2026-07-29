@@ -40,7 +40,7 @@ class WorkerProcessOwner:
             target=self.terminate_descendants,
             kwargs={"timeout": 0.5},
             name="worker-descendant-cleanup",
-            daemon=True,
+            daemon=False,
         ).start()
 
     def request_cancel(self) -> None:
@@ -70,6 +70,8 @@ class WorkerProcessOwner:
                     process.kill()
                 except psutil.Error:
                     continue
+            if alive:
+                psutil.wait_procs(alive, timeout=timeout)
 
 
 SessionSetup = Callable[[], int]

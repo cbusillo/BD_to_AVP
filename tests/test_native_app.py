@@ -1359,6 +1359,7 @@ Load command 3
                 patch("scripts.native_app.run") as run_mock,
                 patch("scripts.smoke_release_app.read_bundle", return_value=object()) as read_bundle,
                 patch("scripts.smoke_release_app.build_clean_env", return_value={"PATH": "/usr/bin"}) as build_env,
+                patch("scripts.smoke_release_app.verify_worker_cancellation") as verify_cancellation,
                 patch("scripts.smoke_release_app.verify_preview_presentation") as verify_preview,
             ):
                 smoke_packaged_native_app(relative_app_path)
@@ -1373,6 +1374,7 @@ Load command 3
         )
         read_bundle.assert_called_once_with(resolved_app_path)
         build_env.assert_called_once_with()
+        verify_cancellation.assert_called_once_with(read_bundle.return_value, build_env.return_value)
         verify_preview.assert_called_once_with(read_bundle.return_value, build_env.return_value)
 
     def test_mv_hevc_encoder_smoke_uses_the_signed_packaged_tool(self) -> None:

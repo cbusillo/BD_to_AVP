@@ -118,6 +118,7 @@ extension WorkerProcessRunning {
 final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
     typealias EventHandler = (WorkerEvent) async throws -> Void
 
+    private static let defaultCancellationEscalationDelay: TimeInterval = 15
     private static let ioQueue = DispatchQueue(
         label: "com.shinycomputers.bd-to-avp.worker-io",
         qos: .utility,
@@ -125,6 +126,7 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
     )
 
     private let configuration: WorkerLaunchConfiguration
+    private let cancellationEscalationDelay: TimeInterval
     private let stateLock = NSLock()
     private var activeProcess: Process?
     private var activeProcessGroupID: pid_t?
@@ -132,8 +134,13 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
     private var lastDiagnosticSnapshot = WorkerProcessDiagnosticSnapshot.empty
     private var cancellationRequested = false
 
-    init(configuration: WorkerLaunchConfiguration) {
+    init(
+        configuration: WorkerLaunchConfiguration,
+        cancellationEscalationDelay: TimeInterval = defaultCancellationEscalationDelay
+    ) {
+        precondition(cancellationEscalationDelay > 0)
         self.configuration = configuration
+        self.cancellationEscalationDelay = cancellationEscalationDelay
     }
 
     func run(job: WorkerJobSpec, onEvent: @escaping EventHandler) async throws -> WorkerRunResult {
@@ -281,7 +288,9 @@ final class WorkerProcessClient: WorkerProcessRunning, @unchecked Sendable {
             process.terminate()
         }
 
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 2) { [weak self, weak process] in
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(
+            deadline: .now() + cancellationEscalationDelay
+        ) { [weak self, weak process] in
             guard let self, let process, process.isRunning else {
                 return
             }
