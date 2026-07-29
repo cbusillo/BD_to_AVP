@@ -255,7 +255,7 @@ struct PlaybackProbeView: View {
                 .font(.title2.bold())
                 .foregroundStyle(.green)
 
-            Text("The check takes about 15 seconds. Keep this window visible while it plays the beginning, middle, and end.")
+            Text("The check takes about 45 seconds for a full-length movie. Keep this window visible during sustained playback and the beginning, middle, and end seeks.")
                 .foregroundStyle(.secondary)
 
             Text(model.expectedPresentationGuidance)
@@ -264,8 +264,8 @@ struct PlaybackProbeView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 instructionRow(number: 1, text: "Start the guided check")
-                instructionRow(number: 2, text: "Watch the picture during three short seeks")
-                instructionRow(number: 3, text: "Answer two plain-language questions")
+                instructionRow(number: 2, text: "Watch sustained playback and three short seeks")
+                instructionRow(number: 3, text: "Answer three plain-language questions")
             }
 
             Button {
@@ -310,15 +310,15 @@ struct PlaybackProbeView: View {
             .accessibilityIdentifier("automatic-check-status")
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Two things only you can confirm")
+                Text("Three things only you can confirm")
                     .font(.title2.bold())
                 Text("These answers record what you saw. They do not approve a release or publish anything.")
                     .foregroundStyle(.secondary)
             }
 
             observationCard(
-                title: "Did the picture stay visible during the entire check?",
-                detail: "Answer No if the video disappeared, turned black, or moved into a window you could not find.",
+                title: "Did the picture stay visible and free of obvious freezes or corruption?",
+                detail: "Answer No if the video disappeared, turned black, froze, or showed obvious visual corruption during sustained playback or a seek.",
                 keyPath: \.videoRemainedVisible
             )
 
@@ -326,6 +326,12 @@ struct PlaybackProbeView: View {
                 title: "Did the scene look three-dimensional rather than flat?",
                 detail: "Answer Not sure if the clip does not contain an obvious foreground and background.",
                 keyPath: \.appearedThreeDimensional
+            )
+
+            observationCard(
+                title: "Did the depth direction look correct and comfortable rather than inside-out?",
+                detail: "Answer No if foreground and background appeared reversed or the 3D view felt strongly inverted.",
+                keyPath: \.eyeOrderAppearedCorrect
             )
 
             Button {
@@ -432,7 +438,8 @@ struct PlaybackProbeView: View {
     private var technicalDetails: some View {
         DisclosureGroup("Technical details", isExpanded: $showsTechnicalDetails) {
             VStack(alignment: .leading, spacing: 14) {
-                statusRow(title: "Stereo decode support", value: model.decodeSupportText)
+                statusRow(title: "Video codec", value: model.sourceVideoCodecText)
+                statusRow(title: "Decode route", value: model.decodeSupportText)
                 statusRow(title: "Player", value: model.playerItemStatusText)
                 statusRow(title: "Rendering", value: model.renderingStatusText)
                 statusRow(title: "Expected presentation", value: model.expectedPresentationText)

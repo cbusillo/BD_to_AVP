@@ -403,7 +403,7 @@ extension VideoRouteReport {
         case "field_of_view_requires_generated_route":
             "The selected field of view requires the generated route."
         case "av1_output_requested":
-            "AV1 stereo output was requested."
+            "Experimental AV1 stereo output for M5 Vision Pro was requested. M2 Vision Pro playback is unsupported."
         case "resume_uses_existing_video_artifact":
             "The selected restart stage uses an existing encoded video artifact."
         case "direct_capability_unavailable":

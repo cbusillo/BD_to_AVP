@@ -1,5 +1,6 @@
 import AVFoundation
 import Combine
+import CoreVideo
 import Foundation
 import RealityKit
 import VideoToolbox
@@ -70,6 +71,11 @@ private struct PreparedMediaSelections {
     let subtitleSelectionByID: [String: AVMediaSelectionOption]
 }
 
+private struct ProbeIndependentDecodeResult: Sendable {
+    let succeeded: Bool
+    let detail: String
+}
+
 private final class ProbeSeekCompletion: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Bool, Never>?
@@ -111,6 +117,7 @@ final class PlaybackProbeModel: ObservableObject {
     @Published private(set) var durationSeconds = 0.0
     @Published private(set) var sourceFileSizeBytes: Int64?
     @Published private(set) var sourceSHA256 = ""
+    @Published private(set) var sourceVideoFormat = PlaybackVideoFormat.unknown
     @Published private(set) var failure: ProbeFailure?
     @Published private(set) var audioOptions: [ProbeMediaOption] = []
     @Published private(set) var subtitleOptions: [ProbeMediaOption] = []
@@ -126,7 +133,8 @@ final class PlaybackProbeModel: ObservableObject {
     @Published private(set) var currentValidationStepText = ""
     @Published private(set) var playerComponentInstalled = false
 
-    let stereoDecodeSupported = VTIsStereoMVHEVCDecodeSupported()
+    let stereoMVHEVCDecodeSupported = VTIsStereoMVHEVCDecodeSupported()
+    let av1HardwareDecodeSupported = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)
     let presentationExpectation = PlaybackPresentationExpectation.resolve(
         environment: ProcessInfo.processInfo.environment
     )
@@ -156,6 +164,11 @@ final class PlaybackProbeModel: ObservableObject {
         spatialVideoMode: "screen",
         immersiveViewingMode: "none"
     )
+    private var sustainedPlaybackSeconds = 0.0
+    private var thermalStateBefore = "not_measured"
+    private var thermalStateAfter = "not_measured"
+    private var independentFrameDecodeSucceeded = false
+    private var independentFrameDecodeDetail = "not_run"
 
     private var environment: [String: String] {
         ProcessInfo.processInfo.environment
@@ -166,7 +179,18 @@ final class PlaybackProbeModel: ObservableObject {
     }
 
     var decodeSupportText: String {
-        stereoDecodeSupported ? "Supported" : "Unavailable"
+        decodeAssessment.detail
+    }
+
+    var sourceVideoCodecText: String {
+        switch sourceVideoFormat.codec {
+        case .av1:
+            return "AV1 (\(sourceVideoFormat.codecTag))"
+        case .hevc:
+            return "HEVC (\(sourceVideoFormat.codecTag))"
+        case .unknown:
+            return "Unknown (\(sourceVideoFormat.codecTag))"
+        }
     }
 
     var expectedPresentationText: String {
@@ -224,6 +248,16 @@ final class PlaybackProbeModel: ObservableObject {
         return "\(completedCheckCount) of \(validationChecks.count) checks complete"
     }
 
+    private var decodeAssessment: PlaybackDecodeAssessment {
+        PlaybackDecodeAssessment.evaluate(
+            format: sourceVideoFormat,
+            playerReady: player.currentItem?.status == .readyToPlay,
+            av1HardwareDecodeSupported: av1HardwareDecodeSupported,
+            stereoMVHEVCDecodeSupported: stereoMVHEVCDecodeSupported,
+            independentFrameDecodeSucceeded: independentFrameDecodeSucceeded
+        )
+    }
+
     deinit {
         statusTask?.cancel()
         loadTask?.cancel()
@@ -242,7 +276,9 @@ final class PlaybackProbeModel: ObservableObject {
         emit(
             "capability",
             values: [
-                "stereo_mv_hevc_decode": String(stereoDecodeSupported),
+                "stereo_mv_hevc_decode": String(stereoMVHEVCDecodeSupported),
+                "av1_hardware_decode": String(av1HardwareDecodeSupported),
+                "hardware_model": PlaybackDeviceIdentity.hardwareModel(),
                 "visionos_version": ProcessInfo.processInfo.operatingSystemVersionString,
             ]
         )
@@ -252,16 +288,6 @@ final class PlaybackProbeModel: ObservableObject {
                 values: [
                     "category": "cache_cleanup_failed",
                     "message": "A previous temporary movie could not be removed.",
-                ]
-            )
-        }
-
-        if !stereoDecodeSupported {
-            emit(
-                "warning",
-                values: [
-                    "category": ProbeFailureCategory.unsupportedDecode.rawValue,
-                    "message": "This device does not currently report stereo MV-HEVC decode support.",
                 ]
             )
         }
@@ -433,6 +459,9 @@ final class PlaybackProbeModel: ObservableObject {
             spatialVideoMode: "screen",
             immersiveViewingMode: "none"
         )
+        sustainedPlaybackSeconds = 0
+        thermalStateBefore = "not_measured"
+        thermalStateAfter = "not_measured"
         validationPhase = .running
         currentValidationStepText = "Preparing the playback check…"
         requestSpatialPresentation(true)
@@ -463,8 +492,9 @@ final class PlaybackProbeModel: ObservableObject {
         currentValidationStepText = ""
 
         let generatedAt = Date()
+        let assessment = decodeAssessment
         let report = PlaybackValidationReport(
-            schemaVersion: 3,
+            schemaVersion: 4,
             validatorVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development",
             validatorBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development",
             generatedAt: ISO8601DateFormatter().string(from: generatedAt),
@@ -476,6 +506,21 @@ final class PlaybackProbeModel: ObservableObject {
                 durationSeconds: durationSeconds,
                 audioOptionCount: audioOptions.count,
                 subtitleOptionCount: max(0, subtitleOptions.count - 1)
+            ),
+            decode: PlaybackDecodeSummary(
+                videoCodec: sourceVideoFormat.codec,
+                codecTag: sourceVideoFormat.codecTag,
+                route: assessment.route,
+                av1HardwareDecodeSupported: av1HardwareDecodeSupported,
+                stereoMVHEVCDecodeSupported: stereoMVHEVCDecodeSupported,
+                independentFrameDecodeSucceeded: independentFrameDecodeSucceeded,
+                independentFrameDecodeDetail: independentFrameDecodeDetail
+            ),
+            runtime: PlaybackRuntimeSummary(
+                hardwareModel: PlaybackDeviceIdentity.hardwareModel(),
+                sustainedPlaybackSeconds: sustainedPlaybackSeconds,
+                thermalStateBefore: thermalStateBefore,
+                thermalStateAfter: thermalStateAfter
             ),
             presentation: validatedPresentation,
             automaticChecks: validationChecks,
@@ -535,6 +580,7 @@ final class PlaybackProbeModel: ObservableObject {
                 "result": result.rawValue,
                 "video_remained_visible": observations.videoRemainedVisible.rawValue,
                 "appeared_three_dimensional": observations.appearedThreeDimensional.rawValue,
+                "eye_order_appeared_correct": observations.eyeOrderAppearedCorrect.rawValue,
             ]
         )
     }
@@ -615,11 +661,21 @@ final class PlaybackProbeModel: ObservableObject {
         }
 
         isLoading = true
+        independentFrameDecodeSucceeded = false
+        independentFrameDecodeDetail = "not_run"
         let asset = AVURLAsset(url: url)
         let item = AVPlayerItem(asset: asset)
 
         do {
             let duration = try await asset.load(.duration)
+            guard generation == loadGeneration, !Task.isCancelled else {
+                return false
+            }
+            let videoFormat = try await loadVideoFormat(for: asset)
+            guard generation == loadGeneration, !Task.isCancelled else {
+                return false
+            }
+            let independentDecodeResult = await Self.decodeFirstVideoFrame(at: url)
             guard generation == loadGeneration, !Task.isCancelled else {
                 return false
             }
@@ -650,6 +706,9 @@ final class PlaybackProbeModel: ObservableObject {
             durationSeconds = duration.seconds.isFinite ? max(0, duration.seconds) : 0
             sourceFileSizeBytes = fileSize(at: url)
             sourceSHA256 = sourceHash
+            sourceVideoFormat = videoFormat
+            independentFrameDecodeSucceeded = independentDecodeResult.succeeded
+            independentFrameDecodeDetail = independentDecodeResult.detail
             audioGroup = preparedMediaSelections.audioGroup
             subtitleGroup = preparedMediaSelections.subtitleGroup
             audioOptions = preparedMediaSelections.audioOptions
@@ -670,6 +729,10 @@ final class PlaybackProbeModel: ObservableObject {
                     "sha256": sourceHash,
                     "duration_seconds": formatNumber(durationSeconds),
                     "file_size_bytes": sourceFileSizeBytes.map(String.init) ?? "unknown",
+                    "video_codec": videoFormat.codec.rawValue,
+                    "video_codec_tag": videoFormat.codecTag,
+                    "independent_frame_decode": String(independentDecodeResult.succeeded),
+                    "independent_frame_decode_detail": independentDecodeResult.detail,
                     "audio_options": String(audioOptions.count),
                     "subtitle_options": String(max(0, subtitleOptions.count - 1)),
                 ]
@@ -730,7 +793,25 @@ final class PlaybackProbeModel: ObservableObject {
             if validationPhase == .preparing {
                 validationPhase = .ready
             }
-            emit("player_item", values: ["status": "ready_to_play"])
+            let assessment = decodeAssessment
+            emit(
+                "player_item",
+                values: [
+                    "status": "ready_to_play",
+                    "video_codec": sourceVideoFormat.codec.rawValue,
+                    "video_codec_tag": sourceVideoFormat.codecTag,
+                    "decode_route": assessment.route.rawValue,
+                ]
+            )
+            if assessment.route == .fallback {
+                emit(
+                    "warning",
+                    values: [
+                        "category": ProbeFailureCategory.unsupportedDecode.rawValue,
+                        "message": assessment.detail,
+                    ]
+                )
+            }
             scheduleAutomatedValidationIfNeeded()
         case .failed:
             setFailure(
@@ -834,15 +915,20 @@ final class PlaybackProbeModel: ObservableObject {
             return
         }
 
+        let playerReady = player.currentItem?.status == .readyToPlay
+        let assessment = PlaybackDecodeAssessment.evaluate(
+            format: sourceVideoFormat,
+            playerReady: playerReady,
+            av1HardwareDecodeSupported: av1HardwareDecodeSupported,
+            stereoMVHEVCDecodeSupported: stereoMVHEVCDecodeSupported,
+            independentFrameDecodeSucceeded: independentFrameDecodeSucceeded
+        )
         updateCheck(
             .stereoDecode,
-            status: stereoDecodeSupported ? .passed : .failed,
-            detail: stereoDecodeSupported
-                ? "This Vision Pro reports support for stereo MV-HEVC playback."
-                : "This device does not report support for stereo MV-HEVC playback."
+            status: assessment.passesCapabilityCheck ? .passed : .failed,
+            detail: assessment.detail
         )
 
-        let playerReady = player.currentItem?.status == .readyToPlay
         updateCheck(
             .playerReady,
             status: playerReady ? .passed : .failed,
@@ -890,6 +976,15 @@ final class PlaybackProbeModel: ObservableObject {
             status: presentationMatchesExpectation ? .passed : .failed,
             detail: presentationModeDetail(matchesExpectation: presentationMatchesExpectation)
         )
+
+        await runSustainedPlaybackCheck(
+            generation: generation,
+            item: validationItem,
+            presentationMatchesExpectation: presentationMatchesExpectation
+        )
+        guard isValidationCurrent(generation, item: validationItem) else {
+            return
+        }
 
         for position in ProbeSeekPosition.allCases {
             guard isValidationCurrent(generation, item: validationItem) else {
@@ -987,6 +1082,12 @@ final class PlaybackProbeModel: ObservableObject {
                 "rendering_status": renderingStatusText.lowercased(),
                 "actual_presentation": actualPresentationText.lowercased(),
                 "expected_presentation": presentationExpectation.rawValue,
+                "video_codec": sourceVideoFormat.codec.rawValue,
+                "video_codec_tag": sourceVideoFormat.codecTag,
+                "decode_route": assessment.route.rawValue,
+                "sustained_playback_seconds": formatNumber(sustainedPlaybackSeconds),
+                "thermal_state_before": thermalStateBefore,
+                "thermal_state_after": thermalStateAfter,
                 "checks_passed": String(automaticChecksPassed),
                 "audio_options": String(audioOptions.count),
                 "subtitle_options": String(max(0, subtitleOptions.count - 1)),
@@ -1007,6 +1108,87 @@ final class PlaybackProbeModel: ObservableObject {
             return
         }
         validationPhase = .observations
+    }
+
+    private func runSustainedPlaybackCheck(
+        generation: Int,
+        item: AVPlayerItem,
+        presentationMatchesExpectation: Bool
+    ) async {
+        currentValidationStepText = "Checking sustained playback…"
+        updateCheck(
+            .sustainedPlayback,
+            status: .running,
+            detail: "Watching up to 30 seconds for continuous stereoscopic playback."
+        )
+
+        let seekFinished = await seek(to: 0)
+        guard isValidationCurrent(generation, item: item) else {
+            return
+        }
+        let presentationReady = await waitForCondition(maxAttempts: 20) { [weak self] in
+            guard let self else {
+                return false
+            }
+            return self.renderingStatusText == "Ready"
+                && self.isActuallyStereo
+                && self.presentationExpectation.matches(
+                    isStereo: self.isActuallyStereo,
+                    isSpatial: self.isActuallySpatial
+                )
+        }
+        guard isValidationCurrent(generation, item: item) else {
+            return
+        }
+
+        let startSeconds = normalizedTime(player.currentTime().seconds)
+        let availablePlaybackSeconds = max(0, durationSeconds - startSeconds - 0.25)
+        let requiredPlaybackSeconds = min(30, max(0.25, availablePlaybackSeconds))
+        var renderingStayedReady = seekFinished && presentationReady
+        var stereoPresentationStayedActive = seekFinished && presentationReady
+        var expectedPresentationStayedActive = seekFinished
+            && presentationReady
+            && presentationMatchesExpectation
+
+        thermalStateBefore = currentThermalState()
+        player.play()
+        let maxAttempts = Int(ceil((requiredPlaybackSeconds + 5) / 0.25))
+        for _ in 0 ..< maxAttempts {
+            guard isValidationCurrent(generation, item: item) else {
+                return
+            }
+            let playbackAdvance = normalizedTime(player.currentTime().seconds) - startSeconds
+            if playbackAdvance >= requiredPlaybackSeconds {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            renderingStayedReady = renderingStayedReady && renderingStatusText == "Ready"
+            stereoPresentationStayedActive = stereoPresentationStayedActive && isActuallyStereo
+            expectedPresentationStayedActive = expectedPresentationStayedActive
+                && presentationExpectation.matches(
+                    isStereo: isActuallyStereo,
+                    isSpatial: isActuallySpatial
+                )
+        }
+        player.pause()
+        thermalStateAfter = currentThermalState()
+        sustainedPlaybackSeconds = max(0, normalizedTime(player.currentTime().seconds) - startSeconds)
+
+        let evidence = PlaybackSustainedEvidence(
+            playbackAdvanceSeconds: sustainedPlaybackSeconds,
+            requiredPlaybackAdvanceSeconds: requiredPlaybackSeconds,
+            renderingStayedReady: renderingStayedReady,
+            stereoPresentationStayedActive: stereoPresentationStayedActive,
+            expectedPresentationStayedActive: expectedPresentationStayedActive
+        )
+        let passed = PlaybackValidationRules.sustainedPlaybackPassed(evidence)
+        updateCheck(
+            .sustainedPlayback,
+            status: passed ? .passed : .failed,
+            detail: passed
+                ? "Playback advanced \(formatNumber(sustainedPlaybackSeconds)) seconds with stereoscopic rendering intact; thermal state was \(thermalStateBefore) before and \(thermalStateAfter) after."
+                : "Sustained playback did not remain ready in the expected stereoscopic mode for \(formatNumber(requiredPlaybackSeconds)) seconds."
+        )
     }
 
     private func waitForCondition(
@@ -1156,8 +1338,77 @@ final class PlaybackProbeModel: ObservableObject {
             spatialVideoMode: "screen",
             immersiveViewingMode: "none"
         )
+        sustainedPlaybackSeconds = 0
+        thermalStateBefore = "not_measured"
+        thermalStateAfter = "not_measured"
         currentValidationStepText = ""
         validationPhase = phase
+    }
+
+    nonisolated private static func decodeFirstVideoFrame(at url: URL) async -> ProbeIndependentDecodeResult {
+        await Task.detached(priority: .userInitiated) {
+            do {
+                let asset = AVURLAsset(url: url)
+                let videoTracks = try await asset.loadTracks(withMediaType: .video)
+                guard let videoTrack = videoTracks.first else {
+                    return ProbeIndependentDecodeResult(succeeded: false, detail: "no_video_track")
+                }
+
+                let reader = try AVAssetReader(asset: asset)
+                let output = AVAssetReaderTrackOutput(
+                    track: videoTrack,
+                    outputSettings: [
+                        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                    ]
+                )
+                output.alwaysCopiesSampleData = false
+                guard reader.canAdd(output) else {
+                    return ProbeIndependentDecodeResult(succeeded: false, detail: "asset_reader_rejected_output")
+                }
+                reader.add(output)
+                guard reader.startReading() else {
+                    return ProbeIndependentDecodeResult(
+                        succeeded: false,
+                        detail: reader.error?.localizedDescription ?? "asset_reader_start_failed"
+                    )
+                }
+                guard output.copyNextSampleBuffer() != nil else {
+                    let detail = reader.error?.localizedDescription ?? "asset_reader_returned_no_frame"
+                    reader.cancelReading()
+                    return ProbeIndependentDecodeResult(succeeded: false, detail: detail)
+                }
+                reader.cancelReading()
+                return ProbeIndependentDecodeResult(succeeded: true, detail: "decoded_first_frame")
+            } catch {
+                return ProbeIndependentDecodeResult(succeeded: false, detail: error.localizedDescription)
+            }
+        }.value
+    }
+
+    private func loadVideoFormat(for asset: AVAsset) async throws -> PlaybackVideoFormat {
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        guard let videoTrack = videoTracks.first else {
+            return .unknown
+        }
+        let formatDescriptions = try await videoTrack.load(.formatDescriptions)
+        return PlaybackVideoFormat(
+            mediaSubtype: formatDescriptions.first.map(CMFormatDescriptionGetMediaSubType)
+        )
+    }
+
+    private func currentThermalState() -> String {
+        switch ProcessInfo.processInfo.thermalState {
+        case .nominal:
+            return "nominal"
+        case .fair:
+            return "fair"
+        case .serious:
+            return "serious"
+        case .critical:
+            return "critical"
+        @unknown default:
+            return "unknown"
+        }
     }
 
     private func prepareMediaSelections(
@@ -1292,6 +1543,9 @@ final class PlaybackProbeModel: ObservableObject {
         requestSpatialPresentation(false)
         sourceFileSizeBytes = nil
         sourceSHA256 = ""
+        sourceVideoFormat = .unknown
+        independentFrameDecodeSucceeded = false
+        independentFrameDecodeDetail = "not_run"
         audioOptions = []
         subtitleOptions = []
         audioGroup = nil

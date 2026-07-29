@@ -393,7 +393,10 @@ class Config:
         parser.add_argument(
             "--video-mode",
             choices=[mode.value for mode in VideoMode],
-            help="Video output mode: mv_hevc for native Apple spatial video or av1_sbs for software AV1 stereo.",
+            help=(
+                "Video output mode: mv_hevc for native Apple spatial video or av1_sbs for experimental "
+                "software AV1 stereo targeting M5 Vision Pro; M2 Vision Pro cannot decode AV1."
+            ),
         )
         parser.add_argument(
             "--av1-crf",
