@@ -38,6 +38,13 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(draft.proposedOutputURL.path, "/Movies/Feature_AV1_Stereo.mov")
     }
 
+    func testAV1ModeCopyNamesM5RequirementAndM2UnsupportedBoundary() {
+        XCTAssertTrue(VideoOutputMode.av1Stereo.title.contains("M5 Vision Pro"))
+        XCTAssertTrue(VideoOutputMode.av1Stereo.title.contains("Experimental"))
+        XCTAssertTrue(VideoOutputMode.av1Stereo.detail.contains("M2 Vision Pro cannot decode AV1"))
+        XCTAssertTrue(VideoOutputMode.av1Stereo.detail.contains("pending physical M5 validation"))
+    }
+
     func testDraftPreservesDotsInExtensionlessInspectedName() {
         let draft = ConversionDraft(
             source: ConversionSource(
@@ -377,7 +384,10 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         XCTAssertEqual(av1.displayTitle, "AV1 stereo")
         XCTAssertEqual(av1.settingsSummary, "CRF 32")
-        XCTAssertEqual(av1.displayDetail, "AV1 stereo output was requested.")
+        XCTAssertEqual(
+            av1.displayDetail,
+            "Experimental AV1 stereo output for M5 Vision Pro was requested. M2 Vision Pro playback is unsupported."
+        )
 
         let existing = VideoRouteReport(
             intent: "existing_artifact",

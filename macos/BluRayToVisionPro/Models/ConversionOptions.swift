@@ -167,7 +167,7 @@ enum VideoOutputMode: String, CaseIterable, Codable, Identifiable {
         case .mvHEVC:
             "Apple Spatial (MV-HEVC)"
         case .av1Stereo:
-            "AV1 Stereo (Software)"
+            "AV1 Stereo — M5 Vision Pro (Experimental)"
         }
     }
 
@@ -176,7 +176,7 @@ enum VideoOutputMode: String, CaseIterable, Codable, Identifiable {
         case .mvHEVC:
             "Native Apple spatial-video output using hardware HEVC encoding by default."
         case .av1Stereo:
-            "Full-resolution side-by-side AV1 with Apple stereo metadata. Encoding is software-only and may take substantially longer."
+            "Full-resolution side-by-side AV1 with Apple stereo metadata. Encoding is software-only. M2 Vision Pro cannot decode AV1; M5 Vision Pro hardware is required, and stereoscopic playback remains experimental pending physical M5 validation."
         }
     }
 

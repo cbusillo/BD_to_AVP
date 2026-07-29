@@ -136,7 +136,7 @@ struct PreviewSheet: View {
                     Divider()
                         .gridCellColumns(2)
                     Label(
-                        "AV1 previews contain a full side-by-side frame. Stereo presentation depends on the player and device.",
+                        "AV1 previews contain a full side-by-side frame. M2 Vision Pro cannot decode AV1; M5 Vision Pro stereo playback remains experimental pending physical validation.",
                         systemImage: "rectangle.split.2x1"
                     )
                     .font(.caption)

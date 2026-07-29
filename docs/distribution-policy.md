@@ -93,15 +93,16 @@ document it as an external dependency with preflight behavior.
   production GUI path. The protected-main release workflow builds that app with
   the production name and bundle identifier on a pinned GitHub-hosted macOS 26
   toolchain, then verifies the exact DMG again in a separate macOS 26 job.
-- Beta 4 (`v0.3.0-beta.4`, internal version `0.3.0b4`, build `149`), Beta 5
-  (`v0.3.0-beta.5`, internal version `0.3.0b5`, build `150`), Beta 6
-  (`v0.3.0-beta.6`, internal version `0.3.0b6`, build `151`), and Beta 7
-  (`v0.3.0-beta.7`, internal version `0.3.0b7`, build `152`) are published and
-  immutable. The next prepared production-identity field build is Beta 8
-  (`v0.3.0-beta.8`, internal version `0.3.0b8`, build `153`). It remains
-  unpublished until exact-SHA signing and public verification complete. Beta 3
-  build `148` remains the manual-download seed and immutable appcast history
-  below the later Beta releases.
+- Beta 4 (`v0.3.0-beta.4`, internal version `0.3.0b4`, build `149`) through
+  Beta 8 (`v0.3.0-beta.8`, internal version `0.3.0b8`, build `153`) are
+  published and immutable. Beta 9 (`v0.3.0-beta.9`, internal version
+  `0.3.0b9`, build `154`) failed after production signing but before DMG
+  creation and is permanently burned without publication. The next prepared
+  production-identity field build is Beta 10 (`v0.3.0-beta.10`, internal
+  version `0.3.0b10`, build `155`). It remains unpublished until exact-SHA
+  signing and public verification complete. Beta 3 build `148` remains the
+  manual-download seed and immutable appcast history below the later Beta
+  releases.
 - Stable, RC, Beta, and Alpha are routes for the same product, bundle identifier,
   feed, Sparkle key, signing team, and diagnostics endpoint. Stable is default;
   broader routes include progressively earlier stages without permitting

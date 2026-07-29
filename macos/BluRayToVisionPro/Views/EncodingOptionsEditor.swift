@@ -64,6 +64,16 @@ struct EncodingOptionsEditor: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
+                    if options.videoOutputMode == .av1Stereo {
+                        Label(
+                            "M2 Vision Pro is not supported. Use AV1 only for M5 Vision Pro testing until physical M5 stereo playback is confirmed.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+
                     Divider()
                     VideoRouteSummaryView(plan: routePlan)
 

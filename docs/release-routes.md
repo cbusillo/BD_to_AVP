@@ -6,11 +6,12 @@ closed when it cannot satisfy this contract.
 
 The application preference model, release metadata/history parser, appcast
 tooling, reusable release engine, and guarded operator entrypoints implement
-this four-route contract. Beta 3 through Beta 7 are published and immutable at
-builds `148` through `152`, with build `147` permanently burned. The next
-prepared target is Beta 8 at `0.3.0b8` build `153`. Issue #392 and the explicit
-Beta 8 request authorize reviewed exact-SHA dispatch; run-bound signing approval remains a
-separate authorization boundary.
+this four-route contract. Beta 3 through Beta 8 are published and immutable at
+builds `148` through `153`, with builds `147` and `154` permanently burned.
+Failed Beta 9 (`0.3.0b9`, build `154`) was never published. The next prepared
+target is Beta 10 at `0.3.0b10` build `155`. Issue #392 and the July 29, 2026
+authorization to continue the beta release authorize reviewed exact-SHA
+dispatch; run-bound signing approval remains a separate authorization boundary.
 
 ## Production Identity
 
@@ -51,7 +52,7 @@ only the public tag forms above. Historical compact production RC tags such as
 `v0.2.143rc5` remain valid read-only history inputs and are never renamed.
 
 Externally visible DMG names use the public version stem, for example
-`3D-Blu-ray-to-Vision-Pro-0.3.0-beta.8.dmg`. Workflow names and operator intent
+`3D-Blu-ray-to-Vision-Pro-0.3.0-beta.10.dmg`. Workflow names and operator intent
 must not appear in versions, release titles, notes, artifact names, app metadata,
 or appcast content.
 
@@ -82,6 +83,14 @@ metadata with `0.3.0b3` build `148`. Build `147` is permanently burned and
 normal forward-only enforcement has resumed. The ordinary release preparation
 command still rejects that backward stage move, and the recovery command
 rejects every other source, target, evidence record, and rerun.
+
+Guarded Beta 9 run `30426833488` built and production-signed the app at
+protected-main commit `355a5f559ba36d4e6862ad93c7d48527f8c7d5c0`, then failed its
+packaged preview presentation smoke before DMG creation. It left no tag,
+release, draft, DMG, appcast item, Pages mutation, Latest change, or package
+publication. Build `154` and prerelease version `0.3.0b9` are permanently
+burned; the corrected source advances to Beta 10 build `155` rather than
+reusing either identity.
 
 ## Sparkle Route Eligibility
 
@@ -138,9 +147,9 @@ prereleases. Beta 3 remains immutable production/feed history in the cumulative
 appcast even though older clients cannot discover it.
 
 Selecting Stable after installing Beta 3 does not downgrade to `0.2.143`; the
-client waits for a newer eligible Stable build. Beta 4, Beta 5, Beta 6, and Beta
-7 are immutable production history, and Beta 8 reserves the next global build,
-`153`.
+client waits for a newer eligible Stable build. Beta 4 through Beta 8 are
+immutable production history. Failed Beta 9 burns build `154`, and Beta 10
+reserves the next global build, `155`.
 
 ## Beta 6 Published History
 
@@ -178,9 +187,9 @@ The cumulative appcast places Beta 7 above immutable Beta 6 build `151`, Beta 5 
 admit them. Historical metadata and release evidence are in
 [the Beta 7 cut packet](0.3.0-beta.7-cut-packet.md).
 
-## Beta 8 Authorized Target
+## Beta 8 Published History
 
-The repository is prepared for the guarded `v0.3.0-beta.8` Prerelease workflow:
+Published `v0.3.0-beta.8` is immutable production history:
 
 - internal version `0.3.0b8`;
 - public tag and title `v0.3.0-beta.8`;
@@ -190,17 +199,54 @@ The repository is prepared for the guarded `v0.3.0-beta.8` Prerelease workflow:
 - the same production product, bundle, feed, key, signing team, and diagnostics
   endpoint as Beta 7.
 
-Publication must place Beta 8 above immutable Beta 7 build `152`, Beta 6 build
+The cumulative appcast places Beta 8 above immutable Beta 7 build `152`, Beta 6 build
 `151`, Beta 5 build `150`, Beta 4 build `149`, Beta 3 build `148`, Stable build
 `146`, RC5 build `145`, and RC4 build `144`. Stable and RC exclude all Beta
-items; Beta and Alpha admit them, allowing an installed earlier Beta to update
-forward to Beta 8 without changing the saved route.
-
-Issue #392 and the explicit Beta 8 request authorize metadata preparation and
-exact-SHA dispatch. The repository has no freeze entry for this exact tag; that absence
-authorizes workflow preflight but does not assert that a tag, draft, DMG,
-release, or appcast item exists. The reviewed metadata and release-note seed are
+items; Beta and Alpha admit them. Historical metadata and release evidence are
 in [the Beta 8 cut packet](0.3.0-beta.8-cut-packet.md).
+
+## Beta 9 Failed Attempt
+
+Beta 9 is failed, unpublished, and permanently burned:
+
+- internal version `0.3.0b9`;
+- intended public tag and title `v0.3.0-beta.9`;
+- global build `154`;
+- guarded Prerelease run `30426833488`, attempt 1;
+- exact protected-main commit `355a5f559ba36d4e6862ad93c7d48527f8c7d5c0`;
+- production signing completed before the package smoke failed; and
+- no tag, release, draft, DMG, appcast item, Pages mutation, Latest change,
+  PyPI, or Homebrew publication.
+
+Beta 9 never entered cumulative production history and must not be rebuilt,
+retagged, published, or represented as an updater item. Its failed-attempt
+evidence is in [the Beta 9 cut packet](0.3.0-beta.9-cut-packet.md).
+
+## Beta 10 Authorized Target
+
+The repository is prepared for the guarded `v0.3.0-beta.10` Prerelease workflow:
+
+- internal version `0.3.0b10`;
+- public tag and title `v0.3.0-beta.10`;
+- global build `155`;
+- Sparkle channel `beta`;
+- GitHub prerelease, never Latest, PyPI, or Homebrew; and
+- the same production product, bundle, feed, key, signing team, and diagnostics
+  endpoint as Beta 8.
+
+Publication must place Beta 10 above immutable Beta 8 build `153`, Beta 7 build
+`152`, Beta 6 build `151`, Beta 5 build `150`, Beta 4 build `149`, Beta 3 build
+`148`, Stable build `146`, RC5 build `145`, and RC4 build `144`, with burned
+build `154` absent. Stable and RC exclude all Beta items; Beta and Alpha admit
+them, allowing an installed earlier Beta to update forward to Beta 10 without
+changing the saved route.
+
+Issue #392 and the July 29, 2026 authorization to continue the beta release
+authorize replacement metadata preparation and exact-SHA dispatch. The
+repository has no freeze entry for this exact tag; that absence authorizes
+workflow preflight but does not assert that a tag, draft, DMG, release, or
+appcast item exists. The reviewed metadata and release-note seed are in
+[the Beta 10 cut packet](0.3.0-beta.10-cut-packet.md).
 
 ## Historical Boundaries
 

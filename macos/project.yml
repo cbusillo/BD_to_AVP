@@ -38,13 +38,13 @@ targets:
     settings:
       base:
         CODE_SIGN_STYLE: Automatic
-        CURRENT_PROJECT_VERSION: 153
+        CURRENT_PROJECT_VERSION: 155
         BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: ""
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: YES
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: BluRayToVisionPro/Info.plist
-        MARKETING_VERSION: 0.3.0b8
+        MARKETING_VERSION: 0.3.0b10
         PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp
         PRODUCT_MODULE_NAME: BluRayToVisionPro
         PRODUCT_NAME: 3D Blu-ray to Vision Pro
@@ -88,10 +88,10 @@ targets:
     settings:
       base:
         CODE_SIGN_STYLE: Automatic
-        CURRENT_PROJECT_VERSION: 1
+        CURRENT_PROJECT_VERSION: 4
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: SpatialPlaybackProbe/Info.plist
-        MARKETING_VERSION: 0.1.0
+        MARKETING_VERSION: 0.2.0
         PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.spatial-playback-probe
         PRODUCT_MODULE_NAME: SpatialPlaybackProbe
         PRODUCT_NAME: BD to AVP Playback Check
