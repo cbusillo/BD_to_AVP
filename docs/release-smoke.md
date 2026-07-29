@@ -282,25 +282,25 @@ Beta without pretending the current Stable or RC client can discover it.
    apps remain separate and cannot Sparkle-update into the production app. Do
    not reopen them to edit the shared profile library after Beta 3 installation.
 
-### Beta 9 Authorization Smoke
+### Beta 10 Authorization Smoke
 
-Run these checks after the Beta 9 metadata preparation lands and before workflow
+Run these checks after the Beta 10 metadata preparation lands and before workflow
 dispatch. They prove the committed target and authorization boundary, not a
 signed or published app.
 
 1. Run `uv run python -m scripts.release validate` and confirm internal
-   `0.3.0b9`, public `0.3.0-beta.9`, build `154`, Beta channel, prerelease,
+   `0.3.0b10`, public `0.3.0-beta.10`, build `155`, Beta channel, prerelease,
    non-Latest, and no PyPI publication.
 2. Run the Prerelease metadata policy with the committed target and confirm the
-   Beta 9 freeze is absent while all route, identity, and existing-release
+   Beta 10 freeze is absent while all route, identity, and existing-release
    guards remain active before packaging or signing.
-3. Validate a cumulative appcast fixture ordered Beta 9 build `154`, Beta 8
+3. Validate a cumulative appcast fixture ordered Beta 10 build `155`, Beta 8
    build `153`, Beta 7 build `152`, Beta 6 build `151`, Beta 5 build `150`, Beta
    4 build `149`, Beta 3 build `148`, then Stable build `146`, RC5 build `145`,
-   and RC4 build `144`; Stable and RC must exclude every Beta item while Beta
-   and Alpha admit them.
-4. Confirm the live repository has no Beta 9 tag, release, draft, or asset and
-   the public appcast still ends at Beta 8 build `153`.
+   and RC4 build `144`; burned Beta 9 build `154` must be absent, Stable and RC
+   must exclude every Beta item, and Beta and Alpha must admit them.
+4. Confirm the live repository has no Beta 9 or Beta 10 tag, release, draft, or
+   asset and the public appcast still ends at Beta 8 build `153`.
 5. Continue only through the exact-SHA Prerelease workflow. Signed-app,
    update-route, installed-player presentation, capacity, cleanup, and final-
    output qualification remain incomplete until the guarded workflow and exact-

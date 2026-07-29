@@ -156,35 +156,49 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         self.assertEqual(apps["bd-to-avp"]["min_os_version"], "14.0")
 
-    def test_repository_is_prepared_and_authorized_for_beta9(self) -> None:
+    def test_repository_is_prepared_and_authorized_for_beta10(self) -> None:
         metadata = release.load_release_metadata()
 
-        self.assertEqual(metadata.package_version, "0.3.0b9")
-        self.assertEqual(metadata.public_version, "0.3.0-beta.9")
-        self.assertEqual(metadata.build_version, "154")
-        self.assertEqual(metadata.release_tag, "v0.3.0-beta.9")
-        self.assertEqual(metadata.release_name, "v0.3.0-beta.9")
-        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.9.dmg")
+        self.assertEqual(metadata.package_version, "0.3.0b10")
+        self.assertEqual(metadata.public_version, "0.3.0-beta.10")
+        self.assertEqual(metadata.build_version, "155")
+        self.assertEqual(metadata.release_tag, "v0.3.0-beta.10")
+        self.assertEqual(metadata.release_name, "v0.3.0-beta.10")
+        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.10.dmg")
         self.assertEqual(metadata.channel, "beta")
         self.assertTrue(metadata.prerelease)
         self.assertFalse(metadata.make_latest)
         self.assertFalse(metadata.publish_pypi)
 
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
-        self.assertNotIn("v0.3.0-beta.9", freeze_policy["frozen_release_tags"])
+        self.assertNotIn("v0.3.0-beta.10", freeze_policy["frozen_release_tags"])
 
-        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.9-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.0b9`", cut_packet)
-        self.assertIn("Build `154`", cut_packet)
-        for pull_request in (404, 405, 406, 410, 411):
+        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.10-cut-packet.md").read_text(encoding="utf-8")
+        self.assertIn("`0.3.0b10`", cut_packet)
+        self.assertIn("Build `155`", cut_packet)
+        for pull_request in (404, 405, 406, 410, 411, 413):
             self.assertIn(f"#{pull_request}", cut_packet)
         self.assertIn("Privacy rules version `4`", cut_packet)
         self.assertIn("Issue #392", cut_packet)
-        self.assertIn("July 29, 2026 instruction to proceed", cut_packet)
+        self.assertIn("July 29, 2026 authorization to continue", cut_packet)
         self.assertIn("does not pre-authorize", cut_packet)
         self.assertIn("that approval", cut_packet)
-        self.assertIn("previous exact production artifact is immutable Beta 8", cut_packet)
-        self.assertIn("The exact Beta 9 artifact remains pending", cut_packet)
+        self.assertIn("last exact public artifact is immutable Beta 8", cut_packet)
+        self.assertIn("The exact Beta 10 artifact remains pending", cut_packet)
+
+    def test_beta9_cut_packet_records_failed_burned_identity(self) -> None:
+        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.9-cut-packet.md").read_text(encoding="utf-8")
+
+        self.assertIn("Failed, unpublished, and permanently burned", cut_packet)
+        self.assertIn("`30426833488`", cut_packet)
+        self.assertIn("`355a5f559ba36d4e6862ad93c7d48527f8c7d5c0`", cut_packet)
+        self.assertIn("Build `154`", cut_packet)
+        self.assertIn("`1d8ca100cc43bdcf6dc678838de2cb99cf5c018024e871b06dec87b606a6f2a2`", cut_packet)
+        self.assertIn("`4313b95146c4e7ca89c6cc0fd6838708a3d4a904`", cut_packet)
+        self.assertIn("No tag, draft, release, DMG, appcast item", cut_packet)
+        self.assertIn("must not be appended to the appcast", cut_packet)
+        self.assertNotIn("Authorized metadata; publication pending", cut_packet)
+        self.assertNotIn("The exact Beta 9 artifact remains pending", cut_packet)
 
     def test_beta8_cut_packet_records_immutable_published_identity(self) -> None:
         cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.8-cut-packet.md").read_text(encoding="utf-8")

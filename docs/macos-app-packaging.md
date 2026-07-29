@@ -114,9 +114,11 @@ only future newer builds and never downgrades the installed app. Published Beta
 older Stable and RC installations cannot discover it, while an installed Beta
 3 exposes all four routes. Beta 4 (`0.3.0b4`, build `149`) through Beta 8
 (`0.3.0b8`, build `153`) are published and immutable. Beta 9 (`0.3.0b9`, build
-`154`) is the next prepared target for the guarded exact-SHA Prerelease
-workflow. Its future cumulative item must sit above Beta 8 through Beta 3 and
-remain visible only to Beta and Alpha until a later newer Stable supersedes it.
+`154`) failed after production signing and is burned without a public appcast
+item. Beta 10 (`0.3.0b10`, build `155`) is the next prepared target for the
+guarded exact-SHA Prerelease workflow. Its future cumulative item must sit above
+Beta 8 through Beta 3, skip burned build `154`, and remain visible only to Beta
+and Alpha until a later newer Stable supersedes it.
 
 ## Release Workflow
 
@@ -173,9 +175,9 @@ qualification is complete, and #382's signed AAC/package/physical Vision Pro
 matrix passed on the exact Beta 8 artifact. Beta 8 exposed a packaged GUI
 preview crash after its worker completed the preview route; PRs #404 and #405
 fixed the missing AVKit link and added an installed-player presentation smoke.
-Beta 9 exact-artifact qualification must prove that:
+Beta 10 exact-artifact qualification must prove that:
 
-- Beta 8 updates forward to Beta 9 on Beta and Alpha without changing the saved
+- Beta 8 updates forward to Beta 10 on Beta and Alpha without changing the saved
   route;
 - Stable and RC continue to exclude every Beta item;
 - the downloaded notarized DMG passes signature, staple, Gatekeeper, startup,
