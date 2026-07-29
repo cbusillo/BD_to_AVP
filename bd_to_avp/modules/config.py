@@ -14,6 +14,7 @@ from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.modules.languages import LanguageCodeError, normalize_language_code
 from bd_to_avp.modules.util import get_pyproject_data
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.modules.video_quality_defaults import DEFAULT_AV1_CRF, DEFAULT_UPSCALE_QUALITY
 
 
 SCRIPT_PATH = Path(__file__).parent.parent
@@ -194,11 +195,11 @@ class Config:
         self.audio_bitrate = 384
         self.audio_preferred_language: str | None = None
         self.video_mode = VideoMode.MV_HEVC
-        self.av1_crf = 32
+        self.av1_crf = DEFAULT_AV1_CRF
         self.left_right_bitrate = 20
         self.link_quality = True
-        self.mv_hevc_quality = 75
-        self.upscale_quality = self.mv_hevc_quality
+        self.mv_hevc_quality = DEFAULT_UPSCALE_QUALITY
+        self.upscale_quality = DEFAULT_UPSCALE_QUALITY
         self.fov = 90
         self.frame_rate = ""
         self.resolution = ""

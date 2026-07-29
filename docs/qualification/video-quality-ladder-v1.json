@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "calibration_id": "route-relative-video-quality-v1",
+  "balanced_step_id": "balanced",
+  "steps": [
+    {"id": "space_saver", "ordinal": 1, "label": "Space Saver"},
+    {"id": "compact", "ordinal": 2, "label": "Compact"},
+    {"id": "efficient", "ordinal": 3, "label": "Efficient"},
+    {"id": "balanced", "ordinal": 4, "label": "Balanced"},
+    {"id": "detailed", "ordinal": 5, "label": "Detailed"},
+    {"id": "high_detail", "ordinal": 6, "label": "High Detail"},
+    {"id": "maximum_detail", "ordinal": 7, "label": "Maximum Detail"}
+  ],
+  "custom": {
+    "id": "custom",
+    "label": "Custom",
+    "mode": "exact_route_controls",
+    "separate_from_ladder": true
+  },
+  "corpus": {
+    "path": "docs/qualification/direct-mv-hevc-corpus-v1.json",
+    "corpus_id": "direct-mv-hevc-prerelease-v1",
+    "sha256": "d6cfc14cb9f29e14639d40a96516fe14f47a64df850fe0928833b77b077e87b1",
+    "required_coverage": [
+      "real_mvc",
+      "motion",
+      "grain",
+      "dark",
+      "animation",
+      "crop",
+      "disparity",
+      "frame_rate_override",
+      "bit_depth_8"
+    ]
+  },
+  "evidence_contract": {
+    "required_metrics": ["quality_delta", "output_size_ratio", "encode_time_seconds", "rationale"],
+    "required_identities": ["artifact_sha256", "source_git_sha", "fixture_manifest_sha256"],
+    "physical_anchor_step_ids": ["space_saver", "balanced", "maximum_detail"],
+    "physical_checks": [
+      "stereo_presentation",
+      "beginning_seek",
+      "middle_seek",
+      "end_seek",
+      "sustained_playback"
+    ]
+  },
+  "calibration_targets": [
+    {
+      "id": "direct_mv_hevc",
+      "label": "Direct MV-HEVC",
+      "ladder_exposure": "pending_calibration",
+      "controls": [
+        {"id": "quality", "type": "number", "minimum": 0.0, "maximum": 1.0, "higher_step_direction": "increase"}
+      ],
+      "mappings": [
+        {"step_id": "space_saver", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "compact", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "efficient", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "balanced", "status": "baseline_anchor", "values": {"quality": 0.7}, "evidence": {"kind": "current_default", "sources": ["bd_to_avp.modules.video_route.AUTOMATIC_DIRECT_QUALITY"], "rationale": "Reproduces current Automatic direct MV-HEVC behavior."}},
+        {"step_id": "detailed", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "high_detail", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "maximum_detail", "status": "needs_calibration", "values": null, "evidence": null}
+      ]
+    },
+    {
+      "id": "direct_mv_hevc_metalfx_2x",
+      "label": "Direct MV-HEVC with MetalFX 2x",
+      "ladder_exposure": "pending_calibration",
+      "controls": [
+        {"id": "quality", "type": "number", "minimum": 0.0, "maximum": 1.0, "higher_step_direction": "increase"}
+      ],
+      "mappings": [
+        {"step_id": "space_saver", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "compact", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "efficient", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "balanced", "status": "baseline_anchor", "values": {"quality": 0.6}, "evidence": {"kind": "current_default", "sources": ["bd_to_avp.modules.video_route.AUTOMATIC_DIRECT_UPSCALE_QUALITY"], "rationale": "Reproduces current Automatic direct MetalFX 2x behavior."}},
+        {"step_id": "detailed", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "high_detail", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "maximum_detail", "status": "needs_calibration", "values": null, "evidence": null}
+      ]
+    },
+    {
+      "id": "generated_mv_hevc",
+      "label": "Generated MV-HEVC",
+      "ladder_exposure": "pending_calibration",
+      "controls": [
+        {"id": "eye_bitrate_mbps", "type": "integer", "minimum": 1, "maximum": 500, "higher_step_direction": "increase"},
+        {"id": "merge_quality", "type": "integer", "minimum": 0, "maximum": 100, "higher_step_direction": "increase"}
+      ],
+      "mappings": [
+        {"step_id": "space_saver", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "compact", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "efficient", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "balanced", "status": "baseline_anchor", "values": {"eye_bitrate_mbps": 20, "merge_quality": 75}, "evidence": {"kind": "current_default", "sources": ["bd_to_avp.modules.video_route.AUTOMATIC_GENERATED_EYE_BITRATE_MBPS", "bd_to_avp.modules.video_route.AUTOMATIC_GENERATED_MERGE_QUALITY"], "rationale": "Reproduces current Automatic generated MV-HEVC behavior."}},
+        {"step_id": "detailed", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "high_detail", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "maximum_detail", "status": "needs_calibration", "values": null, "evidence": null}
+      ]
+    },
+    {
+      "id": "upscale_quality",
+      "label": "File-based Upscale Quality",
+      "ladder_exposure": "pending_calibration",
+      "controls": [
+        {"id": "upscale_quality", "type": "integer", "minimum": 0, "maximum": 100, "higher_step_direction": "increase"}
+      ],
+      "mappings": [
+        {"step_id": "space_saver", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "compact", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "efficient", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "balanced", "status": "baseline_anchor", "values": {"upscale_quality": 75}, "evidence": {"kind": "current_default", "sources": ["bd_to_avp.modules.video_quality_defaults.DEFAULT_UPSCALE_QUALITY"], "rationale": "Reproduces the current linked file-based upscale quality."}},
+        {"step_id": "detailed", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "high_detail", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "maximum_detail", "status": "needs_calibration", "values": null, "evidence": null}
+      ]
+    },
+    {
+      "id": "av1_sbs",
+      "label": "AV1 Side-by-Side",
+      "ladder_exposure": "custom_only",
+      "blocker": "#409",
+      "controls": [
+        {"id": "crf", "type": "integer", "minimum": 0, "maximum": 63, "higher_step_direction": "decrease"}
+      ],
+      "mappings": [
+        {"step_id": "space_saver", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "compact", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "efficient", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "balanced", "status": "baseline_anchor", "values": {"crf": 32}, "evidence": {"kind": "current_default", "sources": ["bd_to_avp.modules.video_quality_defaults.DEFAULT_AV1_CRF"], "rationale": "Records the current AV1 default without enabling ladder exposure before physical M5 evidence."}},
+        {"step_id": "detailed", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "high_detail", "status": "needs_calibration", "values": null, "evidence": null},
+        {"step_id": "maximum_detail", "status": "needs_calibration", "values": null, "evidence": null}
+      ]
+    }
+  ]
+}

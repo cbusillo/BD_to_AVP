@@ -12,15 +12,17 @@ from typing import Callable, Mapping
 from bd_to_avp.modules.command import run_process_capture
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.modules.video_quality_defaults import (
+    AUTOMATIC_DIRECT_QUALITY,
+    AUTOMATIC_DIRECT_UPSCALE_QUALITY,
+    AUTOMATIC_GENERATED_EYE_BITRATE_MBPS,
+    AUTOMATIC_GENERATED_MERGE_QUALITY,
+)
 from bd_to_avp.observability import ObservabilityContext
 from bd_to_avp.process_runner import ProcessCancelled, ProcessExecutionError, ProcessRunnerError
 from bd_to_avp.runtime import RunContext
 from bd_to_avp.worker.protocol import BitrateMode, BitrateOptions, EncodingOptions, JobOptions, VideoRouteIntent
 
-AUTOMATIC_DIRECT_QUALITY = 0.7
-AUTOMATIC_DIRECT_UPSCALE_QUALITY = 0.6
-AUTOMATIC_GENERATED_EYE_BITRATE_MBPS = 20
-AUTOMATIC_GENERATED_MERGE_QUALITY = 75
 DIRECT_CAPABILITY_TIMEOUT_SECONDS = 15
 
 
