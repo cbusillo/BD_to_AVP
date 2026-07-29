@@ -88,9 +88,13 @@ Expected result:
 - Every executable probe has a bounded timeout, including the native GUI host.
 - The native launcher starts through its supported `--startup-smoke` contract;
   the smoke never sends legacy CLI `--version` or `--help` arguments to the GUI.
-- The player probe opens a fresh app instance through macOS LaunchServices so
-  SwiftUI creates the real window scene; direct executable launch is retained
-  only for the non-UI startup contract.
+- The player probe opens a fresh foreground app instance through macOS
+  LaunchServices. Smoke mode creates a dedicated AppKit window hosting the
+  existing `PreviewPlayerView`, so a fresh profile does not depend on saved
+  SwiftUI window restoration; direct executable launch is retained only for the
+  non-UI startup contract. The harness forwards its isolated environment
+  explicitly, captures app stdout/stderr, and reports process plus log-tail
+  evidence if the bounded receipt wait expires.
 - `Info.plist` supplies the package version, and the packaged worker reports the
   same version through a protocol-v10 inspection request.
 - The packaged Apple Vision OCR smoke runs through the bundled worker entrypoint
@@ -278,28 +282,29 @@ Beta without pretending the current Stable or RC client can discover it.
    apps remain separate and cannot Sparkle-update into the production app. Do
    not reopen them to edit the shared profile library after Beta 3 installation.
 
-### Beta 8 Authorization Smoke
+### Beta 10 Authorization Smoke
 
-Run these checks after the Beta 8 metadata preparation lands and before workflow
+Run these checks after the Beta 10 metadata preparation lands and before workflow
 dispatch. They prove the committed target and authorization boundary, not a
 signed or published app.
 
 1. Run `uv run python -m scripts.release validate` and confirm internal
-   `0.3.0b8`, public `0.3.0-beta.8`, build `153`, Beta channel, prerelease,
+   `0.3.0b10`, public `0.3.0-beta.10`, build `155`, Beta channel, prerelease,
    non-Latest, and no PyPI publication.
 2. Run the Prerelease metadata policy with the committed target and confirm the
-   Beta 8 freeze is absent while all route, identity, and existing-release
+   Beta 10 freeze is absent while all route, identity, and existing-release
    guards remain active before packaging or signing.
-3. Validate a cumulative appcast fixture ordered Beta 8 build `153`, Beta 7
-   build `152`, Beta 6 build `151`, Beta 5 build `150`, Beta 4 build `149`, Beta
-   3 build `148`, then Stable build `146`, RC5 build `145`, and RC4 build `144`; Stable and RC must
-   exclude every Beta item while Beta and Alpha admit them.
-4. Confirm the live repository has no Beta 8 tag, release, draft, or asset and
-   the public appcast still ends at Beta 7 build `152`.
+3. Validate a cumulative appcast fixture ordered Beta 10 build `155`, Beta 8
+   build `153`, Beta 7 build `152`, Beta 6 build `151`, Beta 5 build `150`, Beta
+   4 build `149`, Beta 3 build `148`, then Stable build `146`, RC5 build `145`,
+   and RC4 build `144`; burned Beta 9 build `154` must be absent, Stable and RC
+   must exclude every Beta item, and Beta and Alpha must admit them.
+4. Confirm the live repository has no Beta 9 or Beta 10 tag, release, draft, or
+   asset and the public appcast still ends at Beta 8 build `153`.
 5. Continue only through the exact-SHA Prerelease workflow. Signed-app,
-   update-route, packaged direct/fallback, and physical-playback qualification
-   remain incomplete until the guarded workflow and exact-artifact checks
-   finish.
+   update-route, installed-player presentation, capacity, cleanup, and final-
+   output qualification remain incomplete until the guarded workflow and exact-
+   artifact checks finish. Physical M5 Vision Pro AV1 evidence stays in #409.
 
 ## Follow-Up Routing
 

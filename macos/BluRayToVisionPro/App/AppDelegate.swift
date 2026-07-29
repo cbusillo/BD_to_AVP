@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -12,9 +13,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var allowManagedWindowClose = false
     private var isStoppingForWindowClose = false
     private var isStoppingForTermination = false
+    private var previewPresentationSmokeWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard Self.isStartupSmoke(arguments: ProcessInfo.processInfo.arguments) else {
+        let arguments = ProcessInfo.processInfo.arguments
+        if let configuration = PreviewPresentationSmokeConfiguration.parse(arguments: arguments) {
+            let window = NSWindow(
+                contentViewController: NSHostingController(
+                    rootView: PreviewPresentationSmokeView(configuration: configuration)
+                        .frame(width: 820, height: 620)
+                )
+            )
+            window.title = "Preview Presentation Smoke"
+            window.isReleasedWhenClosed = false
+            window.center()
+            previewPresentationSmokeWindow = window
+            window.orderFrontRegardless()
+            return
+        }
+        guard Self.isStartupSmoke(arguments: arguments) else {
             return
         }
         DispatchQueue.main.async {
