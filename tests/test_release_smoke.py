@@ -98,6 +98,8 @@ class ReleaseSmokeTests(unittest.TestCase):
             bundle = smoke_release_app.read_bundle(app_path)
             media_path = Path(temp_dir) / "preview.mov"
             result_path = Path(temp_dir) / "result.json"
+            stdout_path = Path(temp_dir) / "stdout.log"
+            stderr_path = Path(temp_dir) / "stderr.log"
             environment = {"HOME": temp_dir}
 
             with patch.object(smoke_release_app, "run") as run:
@@ -105,6 +107,8 @@ class ReleaseSmokeTests(unittest.TestCase):
                     bundle,
                     media_path,
                     result_path,
+                    stdout_path,
+                    stderr_path,
                     environment=environment,
                     cwd=Path(temp_dir),
                 )
@@ -113,8 +117,14 @@ class ReleaseSmokeTests(unittest.TestCase):
             run.call_args.args[0],
             [
                 "/usr/bin/open",
-                "-g",
+                "-F",
                 "-n",
+                "-o",
+                stdout_path,
+                "--stderr",
+                stderr_path,
+                "--env",
+                f"HOME={temp_dir}",
                 bundle.path,
                 "--args",
                 smoke_release_app.PREVIEW_PRESENTATION_SMOKE_ARGUMENT,
@@ -123,6 +133,7 @@ class ReleaseSmokeTests(unittest.TestCase):
             ],
         )
         self.assertEqual(run.call_args.kwargs["env"], environment)
+        self.assertEqual(run.call_args.kwargs["timeout"], smoke_release_app.PREVIEW_LAUNCH_TIMEOUT_SECONDS)
 
     def test_preview_presentation_timeout_terminates_matching_process(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -131,8 +142,35 @@ class ReleaseSmokeTests(unittest.TestCase):
             with (
                 patch.object(smoke_release_app, "launch_preview_application"),
                 patch.object(smoke_release_app, "wait_for_path", return_value=False),
+                patch.object(smoke_release_app, "preview_process_summary", return_value="matching process IDs: 42"),
+                patch.object(
+                    smoke_release_app, "read_preview_log_tail", side_effect=["launch stdout", "launch stderr"]
+                ),
                 patch.object(smoke_release_app, "terminate_preview_processes") as terminate,
-                self.assertRaisesRegex(smoke_release_app.SmokeFailure, "result receipt"),
+            ):
+                with self.assertRaises(smoke_release_app.SmokeFailure) as raised:
+                    smoke_release_app.verify_preview_presentation(bundle, smoke_release_app.build_clean_env())
+
+        terminate.assert_called_once()
+        message = str(raised.exception)
+        self.assertIn("result receipt", message)
+        self.assertIn("matching process IDs: 42", message)
+        self.assertIn("launch stdout", message)
+        self.assertIn("launch stderr", message)
+
+    def test_preview_presentation_exit_timeout_terminates_matching_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = make_fake_app(Path(temp_dir), version="1.2.3")
+            bundle = smoke_release_app.read_bundle(app_path)
+            with (
+                patch.object(
+                    smoke_release_app,
+                    "launch_preview_application",
+                    side_effect=complete_preview_smoke,
+                ),
+                patch.object(smoke_release_app, "wait_for_preview_process_exit", return_value=False),
+                patch.object(smoke_release_app, "terminate_preview_processes") as terminate,
+                self.assertRaisesRegex(smoke_release_app.SmokeFailure, "did not terminate"),
             ):
                 smoke_release_app.verify_preview_presentation(bundle, smoke_release_app.build_clean_env())
 
@@ -341,11 +379,13 @@ def complete_preview_smoke(
     bundle: smoke_release_app.AppBundle,
     media_path: Path,
     result_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
     *,
     environment: dict[str, str],
     cwd: Path,
 ) -> None:
-    del bundle, environment, cwd
+    del bundle, stdout_path, stderr_path, environment, cwd
     shutil.rmtree(media_path.parent)
     result_path.write_text(
         json.dumps(

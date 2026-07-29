@@ -96,6 +96,12 @@ jobs:
       - name: macOS app tests
         run: uv run python scripts/native_app.py test
 
+      - name: Package native macOS app smoke
+        env:
+          BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: https://diagnostics.shinycomputers.com
+          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+        run: uv run python scripts/native_app.py package
+
       - name: Import smoke
         run: >-
           uv run python -c

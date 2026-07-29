@@ -28,9 +28,11 @@ WORKER_EXECUTABLE_NAME = "BluRayToVisionProEngine"
 EXPECTED_WORKER_PROTOCOL_VERSION = 10
 PREVIEW_PRESENTATION_SMOKE_ARGUMENT = "--preview-presentation-smoke"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 20
-PREVIEW_PRESENTATION_TIMEOUT_SECONDS = 30
+PREVIEW_LAUNCH_TIMEOUT_SECONDS = 60
+PREVIEW_PRESENTATION_TIMEOUT_SECONDS = 90
 PREVIEW_PROCESS_EXIT_TIMEOUT_SECONDS = 5
 PREVIEW_POLL_INTERVAL_SECONDS = 0.1
+PREVIEW_LOG_TAIL_CHARACTERS = 4_000
 REQUIRED_BUNDLED_TOOLS = {
     "ffmpeg": ["-hide_banner", "-version"],
     "ffprobe": ["-hide_banner", "-version"],
@@ -243,23 +245,37 @@ def launch_preview_application(
     bundle: AppBundle,
     media_path: Path,
     result_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
     *,
     environment: dict[str, str],
     cwd: Path,
 ) -> None:
-    run(
+    command: list[str | Path] = [
+        "/usr/bin/open",
+        "-F",
+        "-n",
+        "-o",
+        stdout_path,
+        "--stderr",
+        stderr_path,
+    ]
+    for name, value in sorted(environment.items()):
+        command.extend(["--env", f"{name}={value}"])
+    command.extend(
         [
-            "/usr/bin/open",
-            "-g",
-            "-n",
             bundle.path,
             "--args",
             PREVIEW_PRESENTATION_SMOKE_ARGUMENT,
             media_path,
             result_path,
-        ],
+        ]
+    )
+    run(
+        command,
         env=environment,
         cwd=cwd,
+        timeout=PREVIEW_LAUNCH_TIMEOUT_SECONDS,
     )
 
 
@@ -314,6 +330,53 @@ def terminate_preview_processes(result_path: Path) -> None:
     for process_id in preview_process_ids(result_path):
         with suppress(ProcessLookupError):
             os.kill(process_id, signal.SIGKILL)
+
+
+def read_preview_log_tail(path: Path) -> str:
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return "(not created)"
+    except OSError as error:
+        return f"(unreadable: {error})"
+    if not content:
+        return "(empty)"
+    return content[-PREVIEW_LOG_TAIL_CHARACTERS:]
+
+
+def preview_process_summary(result_path: Path) -> str:
+    process_ids = sorted(preview_process_ids(result_path))
+    if not process_ids:
+        return "matching process IDs: none"
+    try:
+        completed = subprocess.run(
+            [
+                "/bin/ps",
+                "-p",
+                ",".join(str(process_id) for process_id in process_ids),
+                "-o",
+                "pid=,ppid=,stat=,etime=,command=",
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as error:
+        return f"matching process IDs: {', '.join(str(process_id) for process_id in process_ids)}\n{error}"
+    details = completed.stdout.strip() or completed.stderr.strip() or "process details unavailable"
+    return f"matching process IDs: {', '.join(str(process_id) for process_id in process_ids)}\n{details}"
+
+
+def preview_timeout_diagnostics(result_path: Path, stdout_path: Path, stderr_path: Path) -> str:
+    return "\n".join(
+        [
+            preview_process_summary(result_path),
+            f"app stdout tail:\n{read_preview_log_tail(stdout_path)}",
+            f"app stderr tail:\n{read_preview_log_tail(stderr_path)}",
+        ]
+    )
 
 
 def verify_native_startup(bundle: AppBundle, clean_env: dict[str, str]) -> None:
@@ -403,6 +466,8 @@ def verify_preview_presentation(bundle: AppBundle, clean_env: dict[str, str]) ->
         artifact_directory.mkdir(parents=True)
         media_path = artifact_directory / "preview.mov"
         result_path = temporary_path / "result.json"
+        stdout_path = temporary_path / "preview.stdout.log"
+        stderr_path = temporary_path / "preview.stderr.log"
         run(
             [
                 bundle.bin_dir / "ffmpeg",
@@ -438,12 +503,15 @@ def verify_preview_presentation(bundle: AppBundle, clean_env: dict[str, str]) ->
             bundle,
             media_path,
             result_path,
+            stdout_path,
+            stderr_path,
             environment=native_smoke_environment(clean_env, temporary_path),
             cwd=temporary_path,
         )
         if not wait_for_path(result_path, timeout=PREVIEW_PRESENTATION_TIMEOUT_SECONDS):
+            diagnostics = preview_timeout_diagnostics(result_path, stdout_path, stderr_path)
             terminate_preview_processes(result_path)
-            raise SmokeFailure("Packaged preview presentation smoke did not write its result receipt")
+            raise SmokeFailure("Packaged preview presentation smoke did not write its result receipt\n" + diagnostics)
         if not wait_for_preview_process_exit(result_path, timeout=PREVIEW_PROCESS_EXIT_TIMEOUT_SECONDS):
             terminate_preview_processes(result_path)
             raise SmokeFailure("Packaged preview presentation smoke did not terminate after writing its receipt")

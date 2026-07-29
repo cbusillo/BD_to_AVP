@@ -88,9 +88,13 @@ Expected result:
 - Every executable probe has a bounded timeout, including the native GUI host.
 - The native launcher starts through its supported `--startup-smoke` contract;
   the smoke never sends legacy CLI `--version` or `--help` arguments to the GUI.
-- The player probe opens a fresh app instance through macOS LaunchServices so
-  SwiftUI creates the real window scene; direct executable launch is retained
-  only for the non-UI startup contract.
+- The player probe opens a fresh foreground app instance through macOS
+  LaunchServices. Smoke mode creates a dedicated AppKit window hosting the
+  existing `PreviewPlayerView`, so a fresh profile does not depend on saved
+  SwiftUI window restoration; direct executable launch is retained only for the
+  non-UI startup contract. The harness forwards its isolated environment
+  explicitly, captures app stdout/stderr, and reports process plus log-tail
+  evidence if the bounded receipt wait expires.
 - `Info.plist` supplies the package version, and the packaged worker reports the
   same version through a protocol-v10 inspection request.
 - The packaged Apple Vision OCR smoke runs through the bundled worker entrypoint
