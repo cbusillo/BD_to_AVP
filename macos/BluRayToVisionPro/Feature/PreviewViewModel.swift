@@ -547,12 +547,7 @@ final class PreviewViewModel: ObservableObject, UpdateInstallPostponing {
     private func startCleanup(cache: PreviewCache, directoryURL: URL) {
         isCleaningUp = true
         let backgroundTask = Task.detached(priority: .utility) { () -> Bool in
-            do {
-                try cache.remove(directoryURL)
-                return true
-            } catch {
-                return false
-            }
+            await PreviewCleanup.remove(cache: cache, directoryURL: directoryURL)
         }
         cleanupTask = Task { [weak self] in
             let succeeded = await backgroundTask.value

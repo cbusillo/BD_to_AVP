@@ -520,6 +520,45 @@ struct PreviewCache: @unchecked Sendable {
     }
 }
 
+enum PreviewCleanup {
+    static let defaultRetryDelays: [Duration] = [
+        .milliseconds(250),
+        .milliseconds(500),
+        .seconds(1),
+        .seconds(2),
+        .seconds(4),
+    ]
+
+    static func remove(
+        cache: PreviewCache,
+        directoryURL: URL,
+        retryDelays: [Duration] = defaultRetryDelays
+    ) async -> Bool {
+        if removeOnce(cache: cache, directoryURL: directoryURL) {
+            return true
+        }
+        for delay in retryDelays {
+            if Task.isCancelled {
+                return false
+            }
+            try? await Task.sleep(for: delay)
+            if removeOnce(cache: cache, directoryURL: directoryURL) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func removeOnce(cache: PreviewCache, directoryURL: URL) -> Bool {
+        do {
+            try cache.remove(directoryURL)
+            return true
+        } catch {
+            return false
+        }
+    }
+}
+
 final class PreviewArtifactLease {
     let artifact: PreviewArtifact
     let directoryURL: URL
@@ -544,9 +583,7 @@ final class PreviewArtifactLease {
         let directoryURL = directoryURL
         let cleanupFailureHandler = cleanupFailureHandler
         Task.detached(priority: .utility) {
-            do {
-                try cache.remove(directoryURL)
-            } catch {
+            if !(await PreviewCleanup.remove(cache: cache, directoryURL: directoryURL)) {
                 cleanupFailureHandler()
             }
         }

@@ -99,6 +99,12 @@ Expected result:
   same version through a protocol-v10 inspection request.
 - The packaged Apple Vision OCR smoke runs through the bundled worker entrypoint
   with a sanitized `PATH`.
+- The native host cancels a fixture worker that owns a stubborn child in a
+  separate process session. The receipt proves the worker reached its terminal
+  `job.cancelled` event, reaped the child, and removed the destination-scoped
+  `.BluRayToVisionProPreviews` workspace before the app exited. This guards the
+  package-level cancellation lifecycle; it does not replace signed-app testing
+  with MakeMKV on a mounted network destination.
 - A one-second local H.264 fixture is presented through the existing
   `PreviewPlayerView`. The receipt proves the player view attached, AVFoundation
   accepted the media, the app remained alive, and the isolated artifact

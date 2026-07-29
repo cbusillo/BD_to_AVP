@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import BluRayToVisionPro
@@ -166,6 +167,76 @@ final class WorkerProcessClientTests: XCTestCase {
             XCTFail("Expected cancellation before a terminal event to fail the run")
         }
         XCTAssertFalse(client.diagnosticSnapshot().isRunning)
+    }
+
+    func testCancellationAllowsWorkerToReapSeparateSessionChild() async throws {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let childPIDPath = temporaryDirectory.appendingPathComponent("child.pid")
+        let cleanupMarkerPath = temporaryDirectory.appendingPathComponent("cleanup.txt")
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        defer {
+            if let childPIDText = try? String(contentsOf: childPIDPath, encoding: .utf8),
+               let childPID = pid_t(childPIDText) {
+                kill(-childPID, SIGKILL)
+                kill(childPID, SIGKILL)
+            }
+            try? FileManager.default.removeItem(at: temporaryDirectory)
+        }
+        let client = fixtureClient(
+            body: """
+            import pathlib
+            import signal
+            import subprocess
+
+            child = subprocess.Popen(
+                [sys.executable, "-c", "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"],
+                start_new_session=True,
+            )
+            pathlib.Path(os.environ["BD_TO_AVP_CHILD_PID_PATH"]).write_text(str(child.pid), encoding="utf-8")
+
+            def cancel_worker(_signum, _frame):
+                try:
+                    os.killpg(child.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                time.sleep(3)
+                if child.poll() is None:
+                    os.killpg(child.pid, signal.SIGKILL)
+                child.wait()
+                pathlib.Path(os.environ["BD_TO_AVP_CLEANUP_MARKER_PATH"]).write_text("reaped", encoding="utf-8")
+                print(json.dumps({"protocol_version": \(WorkerJobSpec.protocolVersion), "type": "job.cancelled", "job_id": job_id, "sequence": 1, "payload": {"message": "Worker job cancelled."}}), flush=True)
+                sys.exit(130)
+
+            signal.signal(signal.SIGTERM, cancel_worker)
+            \(readyEvent())
+            while True:
+                time.sleep(1)
+            """,
+            environment: [
+                "BD_TO_AVP_CHILD_PID_PATH": childPIDPath.path,
+                "BD_TO_AVP_CLEANUP_MARKER_PATH": cleanupMarkerPath.path,
+            ]
+        )
+        let job = WorkerJobSpec(sourceURL: URL(fileURLWithPath: "/tmp/movie.m2ts"), jobID: jobID)
+        let ready = expectation(description: "worker ready")
+        let task = Task {
+            try await client.run(job: job) { event in
+                if event.type == .workerReady {
+                    ready.fulfill()
+                }
+            }
+        }
+
+        await fulfillment(of: [ready], timeout: 5)
+        client.cancel()
+        let result = try await task.value
+
+        XCTAssertEqual(result.terminalEvent.type, .jobCancelled)
+        XCTAssertEqual(result.exitStatus, 130)
+        XCTAssertEqual(try String(contentsOf: cleanupMarkerPath, encoding: .utf8), "reaped")
+        let childPID = try XCTUnwrap(pid_t(String(contentsOf: childPIDPath, encoding: .utf8)))
+        XCTAssertEqual(kill(childPID, 0), -1)
     }
 
     func testStreamsAndBoundsDiagnosticsWhileWorkerIsActive() async throws {
@@ -401,7 +472,10 @@ final class WorkerProcessClientTests: XCTestCase {
         return false
     }
 
-    private func fixtureClient(body: String) -> WorkerProcessClient {
+    private func fixtureClient(
+        body: String,
+        environment overrides: [String: String] = [:]
+    ) -> WorkerProcessClient {
         let script = """
         import json
         import os
@@ -414,6 +488,8 @@ final class WorkerProcessClientTests: XCTestCase {
         job_id = request["job_id"]
         \(body)
         """
+        var environment = ProcessInfo.processInfo.environment
+        environment.merge(overrides) { _, replacement in replacement }
         return WorkerProcessClient(
             configuration: WorkerLaunchConfiguration(
                 executableURL: URL(
@@ -422,7 +498,7 @@ final class WorkerProcessClientTests: XCTestCase {
                 ),
                 arguments: ["-c", script],
                 currentDirectoryURL: nil,
-                environment: ProcessInfo.processInfo.environment
+                environment: environment
             )
         )
     }

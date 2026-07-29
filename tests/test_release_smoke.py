@@ -28,6 +28,11 @@ class ReleaseSmokeTests(unittest.TestCase):
             app_path = make_fake_app(Path(temp_dir), version="1.2.3")
 
             with (
+                patch.object(
+                    smoke_release_app,
+                    "launch_worker_cancellation_application",
+                    side_effect=complete_worker_cancellation_smoke,
+                ),
                 patch.object(smoke_release_app, "launch_preview_application", side_effect=complete_preview_smoke),
                 patch.object(smoke_release_app, "wait_for_preview_process_exit", return_value=True),
             ):
@@ -91,6 +96,23 @@ class ReleaseSmokeTests(unittest.TestCase):
                 smoke_release_app.verify_preview_presentation(bundle, smoke_release_app.build_clean_env())
 
         self.assertEqual(launch_preview.call_args.args[0], bundle)
+
+    def test_worker_cancellation_uses_native_smoke_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = make_fake_app(Path(temp_dir), version="1.2.3")
+            bundle = smoke_release_app.read_bundle(app_path)
+
+            with (
+                patch.object(
+                    smoke_release_app,
+                    "launch_worker_cancellation_application",
+                    side_effect=complete_worker_cancellation_smoke,
+                ) as launch_cancellation,
+                patch.object(smoke_release_app, "wait_for_preview_process_exit", return_value=True),
+            ):
+                smoke_release_app.verify_worker_cancellation(bundle, smoke_release_app.build_clean_env())
+
+        self.assertEqual(launch_cancellation.call_args.args[0], bundle)
 
     def test_preview_presentation_launches_bundle_through_launchservices(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -393,6 +415,36 @@ def complete_preview_smoke(
                 "schema_version": 1,
                 "player_presented": True,
                 "media_ready": True,
+                "cleanup_complete": True,
+                "message": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def complete_worker_cancellation_smoke(
+    bundle: smoke_release_app.AppBundle,
+    worker_path: Path,
+    destination_path: Path,
+    result_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+    *,
+    environment: dict[str, str],
+    cwd: Path,
+) -> None:
+    del bundle, worker_path, stdout_path, stderr_path, environment, cwd
+    hidden_root = destination_path / ".BluRayToVisionProPreviews"
+    hidden_root.mkdir(parents=True)
+    shutil.rmtree(hidden_root)
+    result_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "worker_ready": True,
+                "terminal_cancelled": True,
+                "child_reaped": True,
                 "cleanup_complete": True,
                 "message": None,
             }

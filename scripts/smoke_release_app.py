@@ -27,6 +27,7 @@ APP_BIN_PATH = APP_RESOURCE_APP_PATH / "bd_to_avp" / "bin"
 WORKER_EXECUTABLE_NAME = "BluRayToVisionProEngine"
 EXPECTED_WORKER_PROTOCOL_VERSION = 10
 PREVIEW_PRESENTATION_SMOKE_ARGUMENT = "--preview-presentation-smoke"
+WORKER_CANCELLATION_SMOKE_ARGUMENT = "--worker-cancellation-smoke"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 20
 PREVIEW_LAUNCH_TIMEOUT_SECONDS = 60
 PREVIEW_PRESENTATION_TIMEOUT_SECONDS = 90
@@ -279,6 +280,46 @@ def launch_preview_application(
     )
 
 
+def launch_worker_cancellation_application(
+    bundle: AppBundle,
+    worker_path: Path,
+    destination_path: Path,
+    result_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+    *,
+    environment: dict[str, str],
+    cwd: Path,
+) -> None:
+    command: list[str | Path] = [
+        "/usr/bin/open",
+        "-F",
+        "-n",
+        "-o",
+        stdout_path,
+        "--stderr",
+        stderr_path,
+    ]
+    for name, value in sorted(environment.items()):
+        command.extend(["--env", f"{name}={value}"])
+    command.extend(
+        [
+            bundle.path,
+            "--args",
+            WORKER_CANCELLATION_SMOKE_ARGUMENT,
+            worker_path,
+            destination_path,
+            result_path,
+        ]
+    )
+    run(
+        command,
+        env=environment,
+        cwd=cwd,
+        timeout=PREVIEW_LAUNCH_TIMEOUT_SECONDS,
+    )
+
+
 def wait_for_path(path: Path, *, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -458,6 +499,125 @@ def verify_apple_vision_ocr(bundle: AppBundle, clean_env: dict[str, str]) -> Non
         raise SmokeFailure(f"Apple Vision OCR smoke output was unexpected: {output}")
 
 
+def write_worker_cancellation_fixture(path: Path) -> None:
+    path.write_text(
+        """#!/usr/bin/python3
+import json
+import os
+import pathlib
+import signal
+import subprocess
+import sys
+import time
+
+if os.getpgrp() != os.getpid():
+    os.setsid()
+
+request = json.loads(sys.stdin.read())
+job_id = request["job_id"]
+workspace = pathlib.Path(os.environ["BD_TO_AVP_CANCELLATION_SMOKE_WORKSPACE"])
+marker = pathlib.Path(os.environ["BD_TO_AVP_CANCELLATION_SMOKE_MARKER"])
+result_path = os.environ["BD_TO_AVP_CANCELLATION_SMOKE_RESULT"]
+held_path = workspace / "held-open.tmp"
+child_code = (
+    "import signal, sys, time; "
+    "held = open(sys.argv[1], 'wb'); "
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+    "time.sleep(30)"
+)
+child = subprocess.Popen(
+    [sys.executable, "-c", child_code, str(held_path), result_path],
+    start_new_session=True,
+)
+
+def cancel_worker(_signum, _frame):
+    try:
+        os.killpg(child.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    time.sleep(3)
+    if child.poll() is None:
+        os.killpg(child.pid, signal.SIGKILL)
+    child.wait()
+    marker.write_text("reaped", encoding="utf-8")
+    print(json.dumps({
+        "protocol_version": 10,
+        "type": "job.cancelled",
+        "job_id": job_id,
+        "sequence": 1,
+        "payload": {"message": "Worker job cancelled."},
+    }), flush=True)
+    raise SystemExit(130)
+
+signal.signal(signal.SIGTERM, cancel_worker)
+print(json.dumps({
+    "protocol_version": 10,
+    "type": "worker.ready",
+    "job_id": job_id,
+    "sequence": 0,
+    "payload": {"worker_version": "cancellation-smoke", "process_group_id": os.getpid()},
+}), flush=True)
+while True:
+    time.sleep(1)
+""",
+        encoding="utf-8",
+    )
+    path.chmod(path.stat().st_mode | 0o111)
+
+
+def verify_worker_cancellation(bundle: AppBundle, clean_env: dict[str, str]) -> None:
+    with tempfile.TemporaryDirectory(prefix="bd-to-avp-installed-cancellation-") as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        worker_path = temporary_path / "cancellation-worker.py"
+        destination_path = temporary_path / "destination"
+        result_path = temporary_path / "result.json"
+        stdout_path = temporary_path / "cancellation.stdout.log"
+        stderr_path = temporary_path / "cancellation.stderr.log"
+        write_worker_cancellation_fixture(worker_path)
+        launch_worker_cancellation_application(
+            bundle,
+            worker_path,
+            destination_path,
+            result_path,
+            stdout_path,
+            stderr_path,
+            environment=native_smoke_environment(clean_env, temporary_path),
+            cwd=temporary_path,
+        )
+        if not wait_for_path(result_path, timeout=PREVIEW_PRESENTATION_TIMEOUT_SECONDS):
+            diagnostics = preview_timeout_diagnostics(result_path, stdout_path, stderr_path)
+            terminate_preview_processes(result_path)
+            raise SmokeFailure("Packaged worker cancellation smoke did not write its result receipt\n" + diagnostics)
+        if not wait_for_preview_process_exit(result_path, timeout=PREVIEW_PROCESS_EXIT_TIMEOUT_SECONDS):
+            terminate_preview_processes(result_path)
+            raise SmokeFailure("Packaged worker cancellation smoke did not terminate after writing its receipt")
+        try:
+            receipt = json.loads(result_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise SmokeFailure("Packaged worker cancellation smoke wrote invalid JSON") from error
+        expected = {
+            "schema_version": 1,
+            "worker_ready": True,
+            "terminal_cancelled": True,
+            "child_reaped": True,
+            "cleanup_complete": True,
+        }
+        mismatches = [
+            f"{key}: expected {value!r}, found {receipt.get(key)!r}"
+            for key, value in expected.items()
+            if receipt.get(key) != value
+        ]
+        if mismatches:
+            message = receipt.get("message")
+            if isinstance(message, str) and message:
+                mismatches.append(message)
+            raise SmokeFailure("Packaged worker cancellation smoke failed:\n" + "\n".join(mismatches))
+        hidden_root = destination_path / ".BluRayToVisionProPreviews"
+        if hidden_root.exists():
+            raise SmokeFailure("Packaged worker cancellation smoke left its preview workspace behind")
+    print("Packaged worker cancellation smoke passed")
+
+
 def verify_preview_presentation(bundle: AppBundle, clean_env: dict[str, str]) -> None:
     with tempfile.TemporaryDirectory(prefix="bd-to-avp-installed-preview-") as temporary_directory:
         temporary_path = Path(temporary_directory)
@@ -565,6 +725,7 @@ def smoke_app(app_path: Path, *, skip_spctl: bool) -> None:
     verify_native_startup(bundle, clean_env)
     verify_worker_protocol(bundle, clean_env)
     verify_apple_vision_ocr(bundle, clean_env)
+    verify_worker_cancellation(bundle, clean_env)
     verify_preview_presentation(bundle, clean_env)
     verify_makemkv_probe(bundle, clean_env)
     print("Release app smoke passed")
