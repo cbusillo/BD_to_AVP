@@ -200,6 +200,9 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertEqual(state.failureDetails, "bad stream")
         XCTAssertEqual(state.failureCode, "probe_failed")
         XCTAssertFalse(state.failureRetryable)
+        XCTAssertEqual(state.activityHistory.last?.message, "Could not inspect source.")
+        XCTAssertEqual(state.activityHistory.last?.severity, .failure)
+        XCTAssertFalse(state.activityHistory.map(\.message).contains("bad stream"))
     }
 
     func testRetryableFailureIsExposedToTheInterface() throws {
@@ -333,6 +336,9 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertTrue(state.failureRetryable)
         XCTAssertEqual(state.recoveryDecision, decision)
         XCTAssertTrue(state.phase.isTerminal)
+        XCTAssertEqual(state.activityHistory.last?.message, "Subtitle extraction needs attention.")
+        XCTAssertEqual(state.activityHistory.last?.severity, .warning)
+        XCTAssertFalse(state.activityHistory.map(\.message).contains("Disable subtitle extraction to retry."))
     }
 
     func testCancellingRecoveryLeavesActionableFailureWithoutDecision() throws {
@@ -441,12 +447,120 @@ final class WorkerLifecycleTests: XCTestCase {
         try state.receive(event(.workerReady, sequence: 0))
         let phase = state.phase
         let stageMessage = state.stageMessage
+        let activityHistory = state.activityHistory
 
         try state.receive(event(.observability, sequence: 1))
 
         XCTAssertEqual(state.phase, phase)
         XCTAssertEqual(state.stageMessage, stageMessage)
+        XCTAssertEqual(state.activityHistory, activityHistory)
         XCTAssertEqual(state.lastSequence, 1)
+    }
+
+    func testActivityHistoryRetainsDistinctMessagesAndSeverity() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID, operationKind: .conversion)
+        try state.receive(
+            event(
+                .stageStarted,
+                sequence: 0,
+                payload: .init(message: "Encoding video")
+            )
+        )
+        try state.receive(
+            event(
+                .heartbeat,
+                sequence: 1,
+                payload: .init(message: "Encoding frame 100")
+            )
+        )
+        try state.receive(
+            event(
+                .warning,
+                sequence: 2,
+                payload: .init(message: "Using the fallback route")
+            )
+        )
+        try state.receive(
+            event(
+                .jobCompleted,
+                sequence: 3,
+                payload: .init(conversionResult: ConversionResult(outputPath: "/out.mov"))
+            )
+        )
+
+        XCTAssertEqual(
+            state.activityHistory.map(\.message),
+            [
+                "Preparing conversion",
+                "Encoding video",
+                "Encoding frame 100",
+                "Using the fallback route",
+                "Conversion complete",
+            ]
+        )
+        XCTAssertEqual(
+            state.activityHistory.map(\.severity),
+            [.information, .information, .information, .warning, .success]
+        )
+    }
+
+    func testActivityHistoryDeduplicatesConsecutiveMessages() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID, operationKind: .conversion)
+        try state.receive(event(.heartbeat, sequence: 0, payload: .init(message: "Encoding video")))
+        try state.receive(event(.heartbeat, sequence: 1, payload: .init(message: "Encoding video")))
+
+        XCTAssertEqual(
+            state.activityHistory.map(\.message),
+            ["Preparing conversion", "Encoding video"]
+        )
+    }
+
+    func testActivityHistoryDropsOldestEntriesAtItsBound() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID, operationKind: .conversion)
+
+        for sequence in 0...WorkerLifecycleState.maximumActivityEntries {
+            try state.receive(
+                event(
+                    .log,
+                    sequence: sequence,
+                    payload: .init(message: "Update \(sequence)")
+                )
+            )
+        }
+
+        XCTAssertEqual(state.activityHistory.count, WorkerLifecycleState.maximumActivityEntries)
+        XCTAssertEqual(state.activityHistory.first?.message, "Update 1")
+        XCTAssertEqual(state.activityHistory.last?.message, "Update 200")
+    }
+
+    func testStartingNewJobReplacesPriorActivityHistory() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID, operationKind: .conversion)
+        try state.receive(event(.log, sequence: 0, payload: .init(message: "Old job activity")))
+
+        try state.begin(jobID: UUID(), operationKind: .conversion)
+
+        XCTAssertEqual(state.activityHistory.map(\.message), ["Preparing conversion"])
+    }
+
+    func testTransportFailureKeepsTechnicalDetailsOutOfActivityHistory() throws {
+        var state = WorkerLifecycleState()
+        state.selectSource(sourceURL)
+        try state.begin(jobID: jobID, operationKind: .conversion)
+
+        state.failTransport(message: "The engine stopped.", details: "No terminal event was received.")
+
+        XCTAssertEqual(state.failureDetails, "No terminal event was received.")
+        XCTAssertEqual(state.activityHistory.last?.message, "The engine stopped.")
+        XCTAssertEqual(state.activityHistory.last?.severity, .failure)
+        XCTAssertFalse(state.activityHistory.map(\.message).contains("No terminal event was received."))
     }
 
     private func event(
