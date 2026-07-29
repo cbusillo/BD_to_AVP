@@ -125,7 +125,7 @@ struct UpdateEnvironment: Equatable {
         allowsAutomaticUpdates = boolValue("SUAllowsAutomaticUpdates")
         verifiesBeforeExtraction = boolValue("SUVerifyUpdateBeforeExtraction")
         automaticChecksSettingPresent = bundle.object(forInfoDictionaryKey: "SUEnableAutomaticChecks") != nil
-        startupSuppressed = AppDelegate.isStartupSmoke(arguments: arguments)
+        startupSuppressed = AppDelegate.isAutomationSmoke(arguments: arguments)
             || processEnvironment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
     }
 

@@ -104,7 +104,22 @@ enum WorkerLifecycleError: Error, LocalizedError, Equatable {
     }
 }
 
+struct WorkerActivityEntry: Equatable, Identifiable, Sendable {
+    enum Severity: Equatable, Sendable {
+        case information
+        case success
+        case warning
+        case failure
+    }
+
+    let id: Int
+    let severity: Severity
+    let message: String
+}
+
 struct WorkerLifecycleState: Equatable {
+    static let maximumActivityEntries = 200
+
     private(set) var phase: WorkerPhase = .empty
     private(set) var operationKind: WorkerOperationKind = .inspection
     private(set) var sourceURL: URL?
@@ -124,6 +139,8 @@ struct WorkerLifecycleState: Equatable {
     private(set) var failureCode: String?
     private(set) var failureRetryable = false
     private(set) var recoveryDecision: WorkerDecision?
+    private(set) var activityHistory: [WorkerActivityEntry] = []
+    private var nextActivityEntryID = 0
 
     var elapsedText: String? {
         ElapsedTimeText.format(seconds: elapsedSeconds)
@@ -148,6 +165,7 @@ struct WorkerLifecycleState: Equatable {
         self.operationKind = operationKind
         phase = operationKind.isInspection ? .inspecting : .processing
         stageMessage = operationKind.preparingMessage
+        appendActivity(stageMessage)
     }
 
     mutating func receive(_ event: WorkerEvent) throws {
@@ -181,28 +199,35 @@ struct WorkerLifecycleState: Equatable {
                 phase = operationKind.isInspection ? .inspecting : .processing
             }
             stageMessage = operationKind.isInspection ? "Preparing source" : operationKind.preparingMessage
+            appendActivity(stageMessage)
         case .jobStarted:
             if phase != .stopping {
                 phase = operationKind.isInspection ? .inspecting : .processing
             }
             stageMessage = operationKind.startingMessage
+            appendActivity(stageMessage)
         case .stageStarted:
             phase = .processing
             stageMessage = event.payload.message ?? event.payload.stage ?? "Processing"
             progress = event.payload.progress?.normalized
+            appendActivity(stageMessage)
         case .heartbeat:
             phase = .processing
             elapsedSeconds = event.payload.elapsedSeconds ?? elapsedSeconds
             activityMessage = event.payload.message
+            appendActivity(activityMessage)
             if let incomingProgress = event.payload.progress {
                 progress = incomingProgress.normalized
             }
         case .log:
             activityMessage = event.payload.message
+            appendActivity(activityMessage)
         case .warning:
             warningMessage = event.payload.message ?? "The operation reported a warning."
+            appendActivity(warningMessage, severity: .warning)
         case .artifactReady:
             activityMessage = "Preview artifact is ready."
+            appendActivity(activityMessage)
         case .observability:
             break
         case .jobCompleted:
@@ -230,6 +255,7 @@ struct WorkerLifecycleState: Equatable {
             }
             progress = nil
             phase = .completed
+            appendActivity(stageMessage, severity: .success)
         case .jobFailed:
             guard let failure = event.payload.error else {
                 throw WorkerLifecycleError.missingPayload(event: event.type)
@@ -240,10 +266,12 @@ struct WorkerLifecycleState: Equatable {
             failureRetryable = failure.retryable
             progress = nil
             phase = .failed
+            appendActivity(failure.message, severity: .failure)
         case .jobCancelled:
             activityMessage = event.payload.message ?? operationKind.stoppedMessage
             progress = nil
             phase = .cancelled
+            appendActivity(activityMessage)
         case .jobDecisionRequired:
             guard let decision = event.payload.decision else {
                 throw WorkerLifecycleError.missingPayload(event: event.type)
@@ -255,6 +283,7 @@ struct WorkerLifecycleState: Equatable {
             failureRetryable = true
             progress = nil
             phase = .decisionRequired
+            appendActivity(decision.prompt, severity: .warning)
         }
     }
 
@@ -265,6 +294,7 @@ struct WorkerLifecycleState: Equatable {
         phase = .stopping
         stageMessage = "Stopping safely"
         progress = nil
+        appendActivity(stageMessage)
     }
 
     mutating func failTransport(message: String, details: String? = nil, retryable: Bool = true) {
@@ -275,12 +305,14 @@ struct WorkerLifecycleState: Equatable {
         recoveryDecision = nil
         progress = nil
         phase = .failed
+        appendActivity(message, severity: .failure)
     }
 
     mutating func completeStop() {
         activityMessage = operationKind == .inspection ? "Inspection stopped." : operationKind.stoppedMessage
         progress = nil
         phase = .cancelled
+        appendActivity(activityMessage)
     }
 
     mutating func prepareForRetry() {
@@ -307,6 +339,37 @@ struct WorkerLifecycleState: Equatable {
         self = WorkerLifecycleState()
     }
 
+    private mutating func appendActivity(
+        _ message: String?,
+        severity: WorkerActivityEntry.Severity = .information
+    ) {
+        guard let message else {
+            return
+        }
+        let normalizedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedMessage.isEmpty else {
+            return
+        }
+        if let lastEntry = activityHistory.last,
+           lastEntry.message == normalizedMessage,
+           lastEntry.severity == severity
+        {
+            return
+        }
+        activityHistory.append(
+            WorkerActivityEntry(
+                id: nextActivityEntryID,
+                severity: severity,
+                message: normalizedMessage
+            )
+        )
+        nextActivityEntryID += 1
+        let overflow = activityHistory.count - Self.maximumActivityEntries
+        if overflow > 0 {
+            activityHistory.removeFirst(overflow)
+        }
+    }
+
     private mutating func resetJobState() {
         jobID = nil
         lastSequence = nil
@@ -324,5 +387,7 @@ struct WorkerLifecycleState: Equatable {
         failureCode = nil
         failureRetryable = false
         recoveryDecision = nil
+        activityHistory.removeAll(keepingCapacity: true)
+        nextActivityEntryID = 0
     }
 }

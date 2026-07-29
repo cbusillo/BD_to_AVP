@@ -15,8 +15,8 @@ from pathlib import Path
 
 from scripts.native_app import (
     NATIVE_APP_NAME,
-    NATIVE_EXECUTABLE_NAME,
     NATIVE_PRODUCT_NAME,
+    smoke_packaged_native_app,
     smoke_packaged_worker,
     verify_layout,
 )
@@ -51,7 +51,7 @@ def verify_release_app(
         run(["xcrun", "stapler", "validate", str(app_path)])
         run(["spctl", "--assess", "--type", "execute", "--verbose=4", str(app_path)])
     if smoke_app:
-        smoke_native_app_startup(app_path)
+        smoke_native_app(app_path)
     if smoke_tools:
         smoke_packaged_tools(app_path)
     if smoke_worker:
@@ -59,26 +59,11 @@ def verify_release_app(
     return metadata
 
 
-def smoke_native_app_startup(app_path: Path) -> None:
-    executable = app_path / "Contents" / "MacOS" / NATIVE_EXECUTABLE_NAME
-    with tempfile.TemporaryDirectory(prefix="macos-release-startup-") as temporary_directory:
-        environment = os.environ.copy()
-        environment["HOME"] = temporary_directory
-        environment["TMPDIR"] = temporary_directory
-        try:
-            completed = subprocess.run(
-                [str(executable), "--startup-smoke"],
-                cwd=temporary_directory,
-                env=environment,
-                capture_output=True,
-                text=True,
-                timeout=20,
-            )
-        except subprocess.TimeoutExpired as error:
-            raise MacOSReleaseError("macOS app startup smoke did not exit within 20 seconds.") from error
-    if completed.returncode != 0:
-        details = (completed.stderr or completed.stdout).strip()
-        raise MacOSReleaseError(f"macOS app startup smoke exited with status {completed.returncode}: {details}")
+def smoke_native_app(app_path: Path) -> None:
+    try:
+        smoke_packaged_native_app(app_path)
+    except (RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise MacOSReleaseError(f"macOS native app smoke failed: {error}") from error
 
 
 def smoke_packaged_tools(app_path: Path) -> None:

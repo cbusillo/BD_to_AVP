@@ -26,7 +26,7 @@ from bd_to_avp.modules.video_route import DirectMVHEVCCapability, VideoRouteInte
 from bd_to_avp.observability import ObservabilityEmitter
 from bd_to_avp.process_runner import ChildProcessRunner, ProcessCancelled, ProcessSpec
 from bd_to_avp.runtime import ObservabilityStream
-from bd_to_avp.worker.__main__ import run_worker
+from bd_to_avp.worker.__main__ import APPLE_VISION_OCR_SMOKE_ARGUMENT, run_smoke_command, run_worker
 from bd_to_avp.worker.operations import (
     WorkerDecisionRequired,
     WorkerOperationError,
@@ -845,6 +845,23 @@ class WorkerActivityReporterTests(unittest.TestCase):
 
 
 class WorkerRuntimeTests(unittest.TestCase):
+    def test_apple_vision_ocr_smoke_uses_worker_entrypoint(self) -> None:
+        output = io.StringIO()
+        calls: list[str] = []
+
+        result = run_smoke_command(
+            [APPLE_VISION_OCR_SMOKE_ARGUMENT],
+            output,
+            apple_vision_loader=lambda: calls.append("loaded"),
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, ["loaded"])
+        self.assertEqual(output.getvalue(), "Apple Vision OCR import smoke passed\n")
+
+    def test_unknown_worker_argument_falls_through_to_protocol(self) -> None:
+        self.assertIsNone(run_smoke_command(["--unknown"], io.StringIO(), apple_vision_loader=lambda: None))
+
     def test_tool_output_reaches_diagnostic_stream_before_operation_finishes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             source_path = Path(temporary_directory) / "movie.m2ts"

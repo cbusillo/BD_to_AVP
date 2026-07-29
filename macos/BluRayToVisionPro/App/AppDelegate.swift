@@ -3,6 +3,7 @@ import AppKit
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     nonisolated static let startupSmokeArgument = "--startup-smoke"
+    nonisolated static let previewPresentationSmokeArgument = "--preview-presentation-smoke"
 
     weak var workCoordinator: AppWorkCoordinator?
     var observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared
@@ -23,6 +24,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     nonisolated static func isStartupSmoke(arguments: [String]) -> Bool {
         arguments.contains(startupSmokeArgument)
+    }
+
+    nonisolated static func isPreviewPresentationSmoke(arguments: [String]) -> Bool {
+        arguments.contains(previewPresentationSmokeArgument)
+    }
+
+    nonisolated static func isAutomationSmoke(arguments: [String]) -> Bool {
+        isStartupSmoke(arguments: arguments) || isPreviewPresentationSmoke(arguments: arguments)
     }
 
     func attach(window: NSWindow, workCoordinator: AppWorkCoordinator) {
@@ -65,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if Self.isStartupSmoke(arguments: ProcessInfo.processInfo.arguments) {
+        if Self.isAutomationSmoke(arguments: ProcessInfo.processInfo.arguments) {
             return .terminateNow
         }
         if isStoppingForTermination {

@@ -1006,43 +1006,121 @@ private struct SaveProfileSheet: View {
     }
 }
 
-private struct ActivityDrawer: View {
+struct ActivityDrawer: View {
     let state: WorkerLifecycleState
     let observabilityStatus: LiveObservabilityStatus
     let showTechnicalDetails: Bool
 
-    private var activityText: String {
-        let entries = [
-            state.stageMessage,
-            state.activityMessage,
-            state.warningMessage,
-            state.failureMessage,
-            state.failureDetails,
-        ]
-            .compactMap { $0 }
-            .filter { !$0.isEmpty }
-        return entries.isEmpty ? "Activity will appear here when source analysis or conversion begins." : entries.joined(separator: "\n")
+    private var activityEntries: [WorkerActivityEntry] {
+        Array(state.activityHistory.reversed())
+    }
+
+    private var historySummary: String {
+        let count = activityEntries.count
+        return count == 1 ? "1 entry · newest first" : "\(count) entries · newest first"
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(activityText)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-
-                if showTechnicalDetails, observabilityStatus.hasDetails {
-                    Divider()
-                    LiveObservabilityStatusView(status: observabilityStatus)
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Label("Activity History", systemImage: "clock.arrow.circlepath")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                if !activityEntries.isEmpty {
+                    Text(historySummary)
+                        .font(.caption2)
                 }
             }
-            .padding(12)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 9) {
+                    if showTechnicalDetails, observabilityStatus.hasDetails {
+                        LiveObservabilityStatusView(status: observabilityStatus)
+                        Divider()
+                    }
+
+                    if activityEntries.isEmpty {
+                        Text("Activity will appear here when source analysis or conversion begins.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    } else {
+                        ForEach(activityEntries) { entry in
+                            ActivityEntryRow(entry: entry)
+                        }
+                    }
+                }
+                .padding(12)
+            }
         }
-        .frame(height: 145)
+        .frame(height: 190)
         .background(Color(nsColor: .textBackgroundColor))
         .accessibilityLabel("Activity details")
+    }
+}
+
+private struct ActivityEntryRow: View {
+    let entry: WorkerActivityEntry
+
+    private var symbolName: String {
+        switch entry.severity {
+        case .information:
+            "circle.fill"
+        case .success:
+            "checkmark.circle.fill"
+        case .warning:
+            "exclamationmark.triangle.fill"
+        case .failure:
+            "xmark.octagon.fill"
+        }
+    }
+
+    private var symbolColor: Color {
+        switch entry.severity {
+        case .information:
+            Color(nsColor: .secondaryLabelColor)
+        case .success:
+            .green
+        case .warning:
+            .orange
+        case .failure:
+            .red
+        }
+    }
+
+    private var severityLabel: String {
+        switch entry.severity {
+        case .information:
+            "Status"
+        case .success:
+            "Completed"
+        case .warning:
+            "Warning"
+        case .failure:
+            "Error"
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: symbolName)
+                .font(.caption2)
+                .foregroundStyle(symbolColor)
+                .accessibilityHidden(true)
+
+            Text(entry.message)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(severityLabel): \(entry.message)")
     }
 }
 
@@ -1071,7 +1149,7 @@ private struct LiveObservabilityStatusView: View {
         case .toolQuietArtifactsActive:
             return "Tool output quiet; artifact growth continues"
         case .stalled:
-            return "No recent tool output or artifact growth"
+            return "Waiting for tool output or artifact updates"
         }
     }
 
@@ -1095,9 +1173,12 @@ private struct LiveObservabilityStatusView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             } else if activityState == .stalled {
-                Label("No recent tool output or artifact growth", systemImage: "clock.badge.exclamationmark")
+                Label("Still running; waiting for tool output or artifact updates", systemImage: "clock")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.secondary)
+                Text("This is a status check, not a failure.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             statusRow("Stage", value: status.stageID)

@@ -62,16 +62,15 @@ that first user-approved launch, quit the app and run the automated smoke.
 
 ## Automated App Smoke
 
-Run the shell smoke script from a checkout, copied script, or downloaded source
-archive. It uses macOS system tools and the packaged app, so it is the preferred
-VM command:
+Run the shell smoke script from a checkout or downloaded source archive. It
+delegates to the maintained Python harness through `uv` when available and
+otherwise uses `python3`, so both commands execute the same checks:
 
 ```bash
 sh scripts/smoke_release_app.sh "/Applications/3D Blu-ray to Vision Pro.app"
 ```
 
-For an in-repo Python harness with the same core checks, use a machine that
-already has Python available:
+The Python entrypoint can also be invoked directly:
 
 ```bash
 python3 scripts/smoke_release_app.py \
@@ -86,9 +85,21 @@ Expected result:
 - If Xcode Command Line Tools are available, bundled tools do not link to
   `/opt/homebrew` or `/usr/local`. If developer tools are not installed, the
   scripts say the linkage check was skipped.
-- The packaged CLI `--version` matches `Info.plist`.
-- The packaged CLI `--help` runs with a sanitized `PATH`.
-- The packaged Apple Vision OCR smoke runs with a sanitized `PATH`.
+- Every executable probe has a bounded timeout, including the native GUI host.
+- The native launcher starts through its supported `--startup-smoke` contract;
+  the smoke never sends legacy CLI `--version` or `--help` arguments to the GUI.
+- The player probe opens a fresh app instance through macOS LaunchServices so
+  SwiftUI creates the real window scene; direct executable launch is retained
+  only for the non-UI startup contract.
+- `Info.plist` supplies the package version, and the packaged worker reports the
+  same version through a protocol-v10 inspection request.
+- The packaged Apple Vision OCR smoke runs through the bundled worker entrypoint
+  with a sanitized `PATH`.
+- A one-second local H.264 fixture is presented through the existing
+  `PreviewPlayerView`. The receipt proves the player view attached, AVFoundation
+  accepted the media, the app remained alive, and the isolated artifact
+  workspace was removed before exit. This is a packaged player-presentation
+  smoke, not a second preview feature or a NAS/conversion qualification.
 - If MakeMKV is absent, the script records that the first-run path should ask
   the user to install MakeMKV.
 
