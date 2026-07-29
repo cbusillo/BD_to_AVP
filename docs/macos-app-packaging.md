@@ -112,13 +112,11 @@ missing or unknown values fail closed to Stable. Choosing a safer route affects
 only future newer builds and never downgrades the installed app. Published Beta
 3 (`0.3.0b3`, build `148`) is the one-time manual-download production seed:
 older Stable and RC installations cannot discover it, while an installed Beta
-3 exposes all four routes. Beta 4 (`0.3.0b4`, build `149`), Beta 5 (`0.3.0b5`,
-build `150`), Beta 6 (`0.3.0b6`, build `151`), and Beta 7 (`0.3.0b7`, build
-`152`) are published and immutable. Beta 8 (`0.3.0b8`, build `153`) is the next
-prepared target for the guarded exact-SHA Prerelease workflow. Its future
-cumulative item must sit above Beta 7, Beta 6, Beta 5, Beta 4, and Beta 3 and
-remain visible only to Beta and Alpha until a
-later newer Stable supersedes it.
+3 exposes all four routes. Beta 4 (`0.3.0b4`, build `149`) through Beta 8
+(`0.3.0b8`, build `153`) are published and immutable. Beta 9 (`0.3.0b9`, build
+`154`) is the next prepared target for the guarded exact-SHA Prerelease
+workflow. Its future cumulative item must sit above Beta 8 through Beta 3 and
+remain visible only to Beta and Alpha until a later newer Stable supersedes it.
 
 ## Release Workflow
 
@@ -170,18 +168,21 @@ behavior and engine architecture rather than release branding.
 
 ## Remaining Field Evidence
 
-Beta 3 through Beta 7 publication is complete, and signed installed-app
-diagnostics qualification is complete. Beta 8 exact-artifact qualification must
-prove that:
+Beta 3 through Beta 8 publication is complete, signed installed-app diagnostics
+qualification is complete, and #382's signed AAC/package/physical Vision Pro
+matrix passed on the exact Beta 8 artifact. Beta 8 exposed a packaged GUI
+preview crash after its worker completed the preview route; PRs #404 and #405
+fixed the missing AVKit link and added an installed-player presentation smoke.
+Beta 9 exact-artifact qualification must prove that:
 
-- Beta 7 updates forward to Beta 8 on Beta and Alpha without changing the saved
+- Beta 8 updates forward to Beta 9 on Beta and Alpha without changing the saved
   route;
 - Stable and RC continue to exclude every Beta item;
 - the downloaded notarized DMG passes signature, staple, Gatekeeper, startup,
   bundled-helper, and worker-capability checks; and
-- packaged ordinary/direct-4K full conversion, finalized preview, visible
-  fallback, and short physical Vision Pro playback still match the qualified
-  pre-release candidate; and
-- the same exact package passes #392's field/NAS matrix and #382's packaged AAC
-  and physical Vision Pro gates without treating unsigned evidence as release
-  proof.
+- packaged GUI preview presentation, ordinary/direct-4K full conversion,
+  visible fallback, capacity, cleanup, and final output satisfy #392 without
+  treating unsigned evidence as release proof; and
+- the release package smoke executes the real installed player guard before
+  publication. Physical M5 Vision Pro AV1 evidence remains separately tracked
+  by #409 and is not inferred from publication.
