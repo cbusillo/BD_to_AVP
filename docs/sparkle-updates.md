@@ -70,7 +70,8 @@ Sparkle uses its adaptive native text view without loading GitHub page chrome or
 making a second release-note request. A full-release link remains available for
 downloads and extended context, and historical external-link items remain valid.
 The live feed now carries cumulative production history through Beta 8 build
-`153`; prepared Beta 9 metadata does not alter it before guarded publication.
+`153`. Failed Beta 9 build `154` never entered the feed; prepared Beta 10
+metadata does not alter it before guarded publication.
 See [release-process.md](release-process.md) for the operator sequence.
 
 Stable `0.2.143` remains compatible with macOS 14. The production SwiftUI line
@@ -267,10 +268,11 @@ select Beta or Alpha for future prereleases. Retired `v0.3.0-beta.1` and
 Sparkle-upgrade into Beta 3.
 
 Published `v0.3.0-beta.8` (`0.3.0b8`, build `153`) is the immutable head of the
-current cumulative feed above Beta 7 through Beta 3. The next prepared item is
-`v0.3.0-beta.9` (`0.3.0b9`, build `154`). Publication must append Beta 9
-above the existing Betas, remain excluded from Stable and RC, and be eligible to
-Beta and Alpha. The exact-SHA Prerelease workflow, signing approval,
+current cumulative feed above Beta 7 through Beta 3. Failed Beta 9 build `154`
+is burned and omitted from public history. The next prepared item is
+`v0.3.0-beta.10` (`0.3.0b10`, build `155`). Publication must append Beta 10
+above the existing Betas, remain excluded from Stable and RC, and be eligible
+to Beta and Alpha. The exact-SHA Prerelease workflow, signing approval,
 notarization, and public verification remain separate fail-closed boundaries.
 
 ## Runtime Integration and UX
