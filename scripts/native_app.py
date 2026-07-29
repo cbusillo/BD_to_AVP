@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import plistlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import tomllib
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -19,6 +23,7 @@ from uuid import uuid4
 
 from bd_to_avp.observability import ObservabilityEvent
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
+from scripts.artifact_identity import app_tree_sha256
 from scripts.build_mv_hevc_encoder_macos import build_encoder as build_mv_hevc_encoder
 from scripts.production_identity import (
     PRODUCTION_BUNDLE_IDENTIFIER,
@@ -54,6 +59,12 @@ NATIVE_APP_NAME = f"{NATIVE_PRODUCT_NAME}.app"
 BRIEFCASE_APP = REPO_ROOT / "build" / "bd-to-avp" / "macos" / "app" / "3D Blu-ray to Vision Pro.app"
 PACKAGE_ROOT = MACOS_ROOT / "build" / "package"
 PACKAGED_APP = PACKAGE_ROOT / NATIVE_APP_NAME
+CURRENT_BUILD_DIRECTORY_NAME = "BD to AVP Builds"
+CURRENT_APP_LINK_NAME = "3D Blu-ray to Vision Pro Current.app"
+CURRENT_METADATA_LINK_NAME = "3D Blu-ray to Vision Pro Current.build.json"
+CURRENT_BUILD_METADATA_NAME = "build.json"
+CURRENT_POINTER_LINK_NAME = ".3D Blu-ray to Vision Pro Current"
+CURRENT_PUBLISH_LOCK_NAME = ".3D Blu-ray to Vision Pro Current.lock"
 MV_HEVC_ENCODER_NAME = "mv-hevc-encoder"
 PACKAGED_MV_HEVC_ENCODER = PACKAGE_ROOT / "native-tools" / MV_HEVC_ENCODER_NAME
 WORKER_EXECUTABLE_NAME = "BluRayToVisionProEngine"
@@ -783,7 +794,7 @@ def validate_smoke_events(events: list[object], job_id: str) -> None:
         raise ValueError("Worker smoke returned an invalid result shape.")
 
 
-def package(identity: str, keychain: str | None = None) -> None:
+def package(identity: str, keychain: str | None = None) -> Path:
     mv_hevc_encoder_path = build_packaged_mv_hevc_encoder()
     prepare_briefcase_runtime()
     xcodebuild("build", NATIVE_PACKAGE_CONFIGURATION)
@@ -794,6 +805,357 @@ def package(identity: str, keychain: str | None = None) -> None:
     smoke_packaged_worker(app_path)
     verify_codesign(app_path)
     print(app_path)
+    return app_path
+
+
+def git_output(*arguments: str) -> str:
+    result = subprocess.run(
+        ["git", *arguments],
+        check=True,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    value = result.stdout.strip()
+    if not value:
+        raise RuntimeError(f"Git returned no value for: {' '.join(arguments)}")
+    return value
+
+
+def ensure_clean_worktree() -> None:
+    result = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=normal"],
+        check=True,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if result.stdout.strip():
+        raise RuntimeError("Publishing the current app requires a clean Git worktree.")
+
+
+def validate_full_git_sha(value: str, description: str) -> str:
+    if re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise ValueError(f"{description} must be a full lowercase Git SHA.")
+    return value
+
+
+def bundle_versions(app_path: Path) -> tuple[str, str]:
+    info_path = app_path / "Contents" / "Info.plist"
+    with info_path.open("rb") as info_file:
+        info = plistlib.load(info_file)
+    short_version = info.get("CFBundleShortVersionString")
+    build_version = info.get("CFBundleVersion")
+    if not isinstance(short_version, str) or not isinstance(build_version, str):
+        raise RuntimeError("Packaged app is missing version identity.")
+    return short_version, build_version
+
+
+def require_replaceable_symlink(path: Path) -> None:
+    if os.path.lexists(path) and not path.is_symlink():
+        raise RuntimeError(f"Refusing to replace non-symlink path: {path}")
+
+
+def replace_symlink(target: Path, link_path: Path) -> None:
+    require_replaceable_symlink(link_path)
+    temporary_link = link_path.with_name(f".{link_path.name}.{uuid4().hex}.tmp")
+    try:
+        os.symlink(target, temporary_link)
+        require_replaceable_symlink(link_path)
+        os.replace(temporary_link, link_path)
+    finally:
+        temporary_link.unlink(missing_ok=True)
+
+
+def require_real_directory(path: Path, description: str) -> None:
+    try:
+        status = path.lstat()
+    except FileNotFoundError as error:
+        raise RuntimeError(f"{description} is missing: {path}") from error
+    if not stat.S_ISDIR(status.st_mode):
+        raise RuntimeError(f"{description} must be a real directory: {path}")
+
+
+def require_real_file(path: Path, description: str) -> None:
+    try:
+        status = path.lstat()
+    except FileNotFoundError as error:
+        raise RuntimeError(f"{description} is missing: {path}") from error
+    if not stat.S_ISREG(status.st_mode):
+        raise RuntimeError(f"{description} must be a real file: {path}")
+
+
+def validate_app_symlinks(app_path: Path) -> None:
+    app_root = app_path.resolve()
+    for directory, directory_names, file_names in os.walk(app_root, followlinks=False):
+        parent = Path(directory)
+        for name in (*directory_names, *file_names):
+            path = parent / name
+            if not path.is_symlink():
+                continue
+            try:
+                target = path.resolve(strict=True)
+            except (OSError, RuntimeError) as error:
+                raise RuntimeError(f"App bundle contains a broken symlink: {path}") from error
+            if not target.is_relative_to(app_root):
+                raise RuntimeError(f"App bundle symlink escapes the bundle: {path}")
+
+
+def validate_built_at_utc(value: object, metadata_path: Path) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value) is None:
+        raise RuntimeError(f"Existing build metadata has an invalid UTC build time: {metadata_path}")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise RuntimeError(f"Existing build metadata has an invalid UTC build time: {metadata_path}") from error
+    normalized = parsed.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    if normalized != value:
+        raise RuntimeError(f"Existing build metadata has an invalid UTC build time: {metadata_path}")
+    return value
+
+
+def prepare_applications_directory(path: Path) -> Path:
+    requested_path = path.expanduser()
+    if os.path.lexists(requested_path) and requested_path.is_symlink():
+        raise RuntimeError(f"Applications destination must not be a symlink: {requested_path}")
+    resolved_path = requested_path.resolve(strict=False)
+    if resolved_path == Path("/Applications"):
+        raise RuntimeError("Refusing to publish a local current build into /Applications.")
+    requested_path.mkdir(parents=True, exist_ok=True)
+    resolved_path = requested_path.resolve()
+    require_real_directory(resolved_path, "Applications destination")
+    return resolved_path
+
+
+@contextmanager
+def current_publish_lock(applications_directory: Path) -> Iterator[None]:
+    lock_path = applications_directory / CURRENT_PUBLISH_LOCK_NAME
+    if os.path.lexists(lock_path) and lock_path.is_symlink():
+        raise RuntimeError(f"Current-build lock must not be a symlink: {lock_path}")
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as error:
+        raise RuntimeError(f"Unable to open current-build lock: {lock_path}") from error
+    with os.fdopen(descriptor, "r+") as lock_file:
+        if not stat.S_ISREG(os.fstat(lock_file.fileno()).st_mode):
+            raise RuntimeError(f"Current-build lock must be a real file: {lock_path}")
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        yield
+
+
+def resolve_symlink(path: Path, description: str) -> Path:
+    if not path.is_symlink():
+        raise RuntimeError(f"{description} must be a symlink: {path}")
+    try:
+        return path.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise RuntimeError(f"{description} is broken: {path}") from error
+
+
+def validate_version_directory(path: Path, build_root: Path, description: str) -> Path:
+    resolved_path = path.resolve(strict=True)
+    require_real_directory(resolved_path, description)
+    if resolved_path.parent != build_root or re.fullmatch(r"[0-9a-f]{40}", resolved_path.name) is None:
+        raise RuntimeError(f"{description} is outside the immutable build root: {resolved_path}")
+    return resolved_path
+
+
+def publish_stable_current_links(
+    *,
+    build_root: Path,
+    version_directory: Path,
+    stable_app: Path,
+    stable_metadata: Path,
+) -> None:
+    current_pointer = stable_app.parent / CURRENT_POINTER_LINK_NAME
+    require_replaceable_symlink(current_pointer)
+    require_replaceable_symlink(stable_app)
+    require_replaceable_symlink(stable_metadata)
+
+    app_route = Path(CURRENT_POINTER_LINK_NAME) / NATIVE_APP_NAME
+    metadata_route = Path(CURRENT_POINTER_LINK_NAME) / CURRENT_BUILD_METADATA_NAME
+    version_route = Path(CURRENT_BUILD_DIRECTORY_NAME) / version_directory.name
+    pointer_directory: Path
+
+    if os.path.lexists(current_pointer):
+        pointer_directory = validate_version_directory(
+            resolve_symlink(current_pointer, "Current-build pointer"),
+            build_root,
+            "Current-build pointer target",
+        )
+    elif not os.path.lexists(stable_app) and not os.path.lexists(stable_metadata):
+        replace_symlink(version_route, current_pointer)
+        pointer_directory = version_directory
+    elif os.path.lexists(stable_app) and os.path.lexists(stable_metadata):
+        if os.readlink(stable_app) == str(app_route) and os.readlink(stable_metadata) == str(metadata_route):
+            replace_symlink(version_route, current_pointer)
+            pointer_directory = version_directory
+        else:
+            existing_app = resolve_symlink(stable_app, "Stable current app")
+            existing_metadata = resolve_symlink(stable_metadata, "Stable current metadata")
+            if (
+                existing_app.name != NATIVE_APP_NAME
+                or existing_metadata.name != CURRENT_BUILD_METADATA_NAME
+                or existing_app.parent != existing_metadata.parent
+            ):
+                raise RuntimeError("Existing stable current links do not identify one immutable build.")
+            pointer_directory = validate_version_directory(
+                existing_app.parent,
+                build_root,
+                "Existing stable current build",
+            )
+            replace_symlink(
+                Path(CURRENT_BUILD_DIRECTORY_NAME) / pointer_directory.name,
+                current_pointer,
+            )
+    else:
+        raise RuntimeError("Existing stable current links are incomplete.")
+
+    for path, route, expected_target in (
+        (stable_metadata, metadata_route, pointer_directory / CURRENT_BUILD_METADATA_NAME),
+        (stable_app, app_route, pointer_directory / NATIVE_APP_NAME),
+    ):
+        if os.path.lexists(path) and os.readlink(path) != str(route):
+            if resolve_symlink(path, f"Stable current path {path.name}") != expected_target:
+                raise RuntimeError(f"Existing stable current path disagrees with the current pointer: {path}")
+        if not os.path.lexists(path) or os.readlink(path) != str(route):
+            replace_symlink(route, path)
+
+    if stable_app.resolve(strict=True) != pointer_directory / NATIVE_APP_NAME:
+        raise RuntimeError("Stable current app did not resolve through the current-build pointer.")
+    if stable_metadata.resolve(strict=True) != pointer_directory / CURRENT_BUILD_METADATA_NAME:
+        raise RuntimeError("Stable current metadata did not resolve through the current-build pointer.")
+
+    if pointer_directory != version_directory:
+        replace_symlink(version_route, current_pointer)
+    if stable_app.resolve(strict=True) != version_directory / NATIVE_APP_NAME:
+        raise RuntimeError("Stable current app did not switch to the published build.")
+    if stable_metadata.resolve(strict=True) != version_directory / CURRENT_BUILD_METADATA_NAME:
+        raise RuntimeError("Stable current metadata did not switch to the published build.")
+
+
+def publish_current_app(
+    app_path: Path,
+    *,
+    applications_directory: Path,
+    source_commit: str,
+    base_main_commit: str,
+    built_at: datetime | None = None,
+) -> Path:
+    source_commit = validate_full_git_sha(source_commit, "Source commit")
+    base_main_commit = validate_full_git_sha(base_main_commit, "Base main commit")
+    require_real_directory(app_path, "Packaged app")
+    validate_app_symlinks(app_path)
+
+    applications_directory = prepare_applications_directory(applications_directory)
+    stable_app = applications_directory / CURRENT_APP_LINK_NAME
+    stable_metadata = applications_directory / CURRENT_METADATA_LINK_NAME
+
+    verify_codesign(app_path)
+    source_app_hash = app_tree_sha256(app_path)
+    short_version, build_version = bundle_versions(app_path)
+    build_time = built_at or datetime.now(UTC)
+    if build_time.utcoffset() is None:
+        raise ValueError("Build time must include a timezone.")
+    built_at_utc = build_time.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+    build_root = applications_directory / CURRENT_BUILD_DIRECTORY_NAME
+    version_directory = build_root / source_commit
+    versioned_app = version_directory / NATIVE_APP_NAME
+    metadata_path = version_directory / CURRENT_BUILD_METADATA_NAME
+    metadata = {
+        "app_tree_sha256": source_app_hash,
+        "base_main_commit": base_main_commit,
+        "build_version": build_version,
+        "built_at_utc": built_at_utc,
+        "release_status": "not a production-signed release",
+        "short_version": short_version,
+        "signing": "ad-hoc local",
+        "source_commit": source_commit,
+        "stable_path": str(stable_app),
+    }
+
+    with current_publish_lock(applications_directory):
+        require_replaceable_symlink(applications_directory / CURRENT_POINTER_LINK_NAME)
+        require_replaceable_symlink(stable_app)
+        require_replaceable_symlink(stable_metadata)
+        if os.path.lexists(build_root):
+            require_real_directory(build_root, "Current-build root")
+        else:
+            build_root.mkdir()
+        if os.path.lexists(version_directory):
+            require_real_directory(version_directory, "Existing current-build directory")
+            require_real_directory(versioned_app, "Existing current-build app")
+            require_real_file(metadata_path, "Existing current-build metadata")
+            validate_app_symlinks(versioned_app)
+            verify_codesign(versioned_app)
+            if app_tree_sha256(versioned_app) != source_app_hash:
+                raise RuntimeError(f"Existing build for {source_commit} has a different app tree.")
+            try:
+                existing_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise RuntimeError(f"Existing build metadata is invalid: {metadata_path}") from error
+            if not isinstance(existing_metadata, dict) or set(existing_metadata) != set(metadata):
+                raise RuntimeError(f"Existing build metadata has an unexpected schema: {metadata_path}")
+            existing_built_at = validate_built_at_utc(existing_metadata["built_at_utc"], metadata_path)
+            expected_metadata = {**metadata, "built_at_utc": existing_built_at}
+            if existing_metadata != expected_metadata:
+                mismatched_key = next(
+                    key for key, expected_value in expected_metadata.items() if existing_metadata[key] != expected_value
+                )
+                raise RuntimeError(f"Existing build metadata does not match {mismatched_key}: {metadata_path}")
+        else:
+            temporary_directory = Path(tempfile.mkdtemp(prefix=f".{source_commit}.", dir=build_root))
+            try:
+                temporary_app = temporary_directory / NATIVE_APP_NAME
+                shutil.copytree(app_path, temporary_app, symlinks=True)
+                require_real_directory(temporary_app, "Copied current-build app")
+                validate_app_symlinks(temporary_app)
+                verify_codesign(temporary_app)
+                if app_tree_sha256(temporary_app) != source_app_hash:
+                    raise RuntimeError("Copied current app does not match the packaged app tree.")
+                (temporary_directory / CURRENT_BUILD_METADATA_NAME).write_text(
+                    json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                if os.path.lexists(version_directory):
+                    raise RuntimeError(f"Current-build destination appeared during publication: {version_directory}")
+                os.replace(temporary_directory, version_directory)
+            finally:
+                shutil.rmtree(temporary_directory, ignore_errors=True)
+
+        publish_stable_current_links(
+            build_root=build_root,
+            version_directory=version_directory,
+            stable_app=stable_app,
+            stable_metadata=stable_metadata,
+        )
+    return stable_app
+
+
+def publish_current(applications_directory: Path | None = None) -> Path:
+    ensure_clean_worktree()
+    source_commit = git_output("rev-parse", "HEAD")
+    base_main_commit = git_output("merge-base", "HEAD", "origin/main")
+    app_path = package("-")
+    ensure_clean_worktree()
+    packaged_source_commit = git_output("rev-parse", "HEAD")
+    if packaged_source_commit != source_commit:
+        raise RuntimeError("Git HEAD changed while packaging the current app.")
+    packaged_base_main_commit = git_output("merge-base", "HEAD", "origin/main")
+    if packaged_base_main_commit != base_main_commit:
+        raise RuntimeError("The origin/main merge base changed while packaging the current app.")
+    stable_app = publish_current_app(
+        app_path,
+        applications_directory=applications_directory or Path.home() / "Applications",
+        source_commit=source_commit,
+        base_main_commit=base_main_commit,
+    )
+    print(f"Published current app: {stable_app}")
+    return stable_app
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -802,6 +1164,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     commands.add_parser("generate", help="Generate the Xcode project from macos/project.yml.")
     commands.add_parser("test", help="Run the macOS application unit tests.")
     commands.add_parser("build", help="Build the macOS Development app without embedding Python.")
+    commands.add_parser(
+        "publish-current",
+        help="Package and publish an immutable local app behind a stable Current.app link.",
+        description=(
+            "Package an ad-hoc local app and publish it behind a stable Current.app link. "
+            f"Requires {SUPPORT_DIAGNOSTICS_ENDPOINT_ENV}."
+        ),
+    )
     package_parser = commands.add_parser("package", help="Build, embed, sign, and smoke the Python worker.")
     package_parser.add_argument(
         "--sign-identity",
@@ -824,6 +1194,8 @@ def main(argv: list[str] | None = None) -> None:
         xcodebuild("test", "Debug")
     elif args.command == "build":
         xcodebuild("build", "Debug")
+    elif args.command == "publish-current":
+        publish_current()
     elif args.command == "package":
         package(args.sign_identity, args.sign_keychain)
 

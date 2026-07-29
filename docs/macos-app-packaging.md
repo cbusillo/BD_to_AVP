@@ -39,6 +39,8 @@ uv run python scripts/native_app.py generate
 uv run python scripts/native_app.py test
 uv run python scripts/native_app.py build
 uv run python scripts/native_app.py package
+BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://diagnostics.shinycomputers.com \
+  uv run python scripts/native_app.py publish-current
 ```
 
 `package` builds or updates the Briefcase staging app, builds the Xcode
@@ -58,6 +60,18 @@ Ad-hoc packaging is the default for local validation. Developer ID packaging
 passes `--sign-identity` and `--sign-keychain`. Ad-hoc packages omit Hardened
 Runtime because they have no Team ID for dyld library validation; Developer ID
 packages retain Hardened Runtime.
+
+`publish-current` requires a clean Git worktree, runs the complete ad-hoc
+`package` pipeline, and publishes the validated result under
+`~/Applications/BD to AVP Builds/<full-commit>/`. The stable app and adjacent
+metadata links route through one hidden current-build pointer, so publishing a
+new validated build switches both paths at the same atomic filesystem step.
+The metadata records the source commit, merge base with `origin/main`, UTC build
+time, app-tree SHA-256, app version and build, and the local ad-hoc signing
+status. Existing commit-addressed builds are immutable and retained. The
+command serializes concurrent publishers, refuses symlinked or conflicting
+destination objects, and never modifies the production-signed app under
+`/Applications`.
 
 The auxiliary launcher receives the direct-distribution entitlements required
 by CPython and extension modules. Those entitlements belong only to the worker,

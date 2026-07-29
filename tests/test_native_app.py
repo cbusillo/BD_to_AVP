@@ -7,11 +7,18 @@ import tomllib
 import unittest
 
 from contextlib import chdir
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from bd_to_avp.worker.protocol import PROTOCOL_VERSION
+from scripts.artifact_identity import app_tree_sha256
 from scripts.native_app import (
+    CURRENT_APP_LINK_NAME,
+    CURRENT_BUILD_DIRECTORY_NAME,
+    CURRENT_BUILD_METADATA_NAME,
+    CURRENT_METADATA_LINK_NAME,
+    CURRENT_POINTER_LINK_NAME,
     MV_HEVC_ENCODER_NAME,
     NATIVE_APP_NAME,
     NATIVE_BUNDLE_IDENTIFIER,
@@ -31,12 +38,15 @@ from scripts.native_app import (
     REPO_ROOT,
     SCHEME,
     build_packaged_mv_hevc_encoder,
+    ensure_clean_worktree,
     install_mv_hevc_encoder,
     native_build_settings,
     minimum_macos_versions,
     linked_libraries,
     package,
     parse_args,
+    publish_current,
+    publish_current_app,
     sign_package,
     smoke_packaged_mv_hevc_encoder,
     smoke_packaged_native_app,
@@ -50,6 +60,7 @@ from scripts.native_app import (
     verify_product_identity,
     verify_product_source_copy,
 )
+from scripts.verify_packaged_mv_hevc_routes import app_tree_sha256 as qualification_app_tree_sha256
 
 yaml = importlib.import_module("yaml")
 
@@ -88,6 +99,23 @@ def production_info(*, support_diagnostics_endpoint: object = "https://support.e
         **NATIVE_UPDATE_INFO,
         SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY: support_diagnostics_endpoint,
     }
+
+
+def test_app(root: Path, payload: bytes = b"current build") -> Path:
+    app_path = root / NATIVE_APP_NAME
+    contents = app_path / "Contents"
+    resources = contents / "Resources"
+    resources.mkdir(parents=True)
+    with (contents / "Info.plist").open("wb") as info_file:
+        plistlib.dump(
+            {
+                "CFBundleShortVersionString": "1.2.3",
+                "CFBundleVersion": "456",
+            },
+            info_file,
+        )
+    (resources / "payload.bin").write_bytes(payload)
+    return app_path
 
 
 class NativeAppPackagingTests(unittest.TestCase):
@@ -463,6 +491,13 @@ Load command 3
         self.assertEqual(args.sign_identity, "Developer ID Application: Example")
         self.assertEqual(args.sign_keychain, "/tmp/release.keychain-db")
 
+    def test_publish_current_command_has_no_signing_options(self) -> None:
+        args = parse_args(["publish-current"])
+
+        self.assertEqual(args.command, "publish-current")
+        self.assertFalse(hasattr(args, "sign_identity"))
+        self.assertFalse(hasattr(args, "sign_keychain"))
+
     def test_package_builds_installs_signs_and_smokes_mv_hevc_encoder(self) -> None:
         encoder_path = Path("/tmp/native-tools/mv-hevc-encoder")
         app_path = Path("/tmp") / NATIVE_APP_NAME
@@ -478,7 +513,7 @@ Load command 3
             patch("scripts.native_app.verify_codesign") as verify,
             patch("builtins.print"),
         ):
-            package("Developer ID Application: Example", "/tmp/release.keychain-db")
+            result = package("Developer ID Application: Example", "/tmp/release.keychain-db")
 
         build_encoder.assert_called_once_with()
         prepare_runtime.assert_called_once_with()
@@ -489,6 +524,509 @@ Load command 3
         smoke_encoder.assert_called_once_with(app_path)
         smoke_worker.assert_called_once_with(app_path)
         verify.assert_called_once_with(app_path)
+        self.assertEqual(result, app_path)
+
+    def test_publish_current_app_creates_immutable_build_and_stable_links(self) -> None:
+        source_commit = "a" * 40
+        base_main_commit = "b" * 40
+        built_at = datetime(2026, 7, 29, 1, 2, 3, tzinfo=UTC)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_app = test_app(root / "source")
+            applications_directory = root / "Applications"
+            retained_build = applications_directory / CURRENT_BUILD_DIRECTORY_NAME / "retained"
+            retained_build.mkdir(parents=True)
+
+            with patch("scripts.native_app.verify_codesign") as verify:
+                stable_app = publish_current_app(
+                    source_app,
+                    applications_directory=applications_directory,
+                    source_commit=source_commit,
+                    base_main_commit=base_main_commit,
+                    built_at=built_at,
+                )
+
+            version_directory = applications_directory / CURRENT_BUILD_DIRECTORY_NAME / source_commit
+            versioned_app = version_directory / NATIVE_APP_NAME
+            metadata_path = version_directory / CURRENT_BUILD_METADATA_NAME
+            stable_metadata = applications_directory / CURRENT_METADATA_LINK_NAME
+            current_pointer = applications_directory / CURRENT_POINTER_LINK_NAME
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(stable_app, applications_directory.resolve() / CURRENT_APP_LINK_NAME)
+            self.assertTrue(stable_app.is_symlink())
+            self.assertEqual(stable_app.readlink(), Path(CURRENT_POINTER_LINK_NAME) / NATIVE_APP_NAME)
+            self.assertEqual(stable_app.resolve(), versioned_app.resolve())
+            self.assertTrue(stable_metadata.is_symlink())
+            self.assertEqual(
+                stable_metadata.readlink(),
+                Path(CURRENT_POINTER_LINK_NAME) / CURRENT_BUILD_METADATA_NAME,
+            )
+            self.assertEqual(stable_metadata.resolve(), metadata_path.resolve())
+            self.assertEqual(
+                current_pointer.readlink(),
+                Path(CURRENT_BUILD_DIRECTORY_NAME) / source_commit,
+            )
+            self.assertTrue(retained_build.is_dir())
+            self.assertEqual(metadata["source_commit"], source_commit)
+            self.assertEqual(metadata["base_main_commit"], base_main_commit)
+            self.assertEqual(metadata["built_at_utc"], "2026-07-29T01:02:03Z")
+            self.assertEqual(metadata["app_tree_sha256"], app_tree_sha256(source_app))
+            self.assertEqual(metadata["short_version"], "1.2.3")
+            self.assertEqual(metadata["build_version"], "456")
+            self.assertEqual(metadata["signing"], "ad-hoc local")
+            self.assertEqual(metadata["release_status"], "not a production-signed release")
+            self.assertEqual(metadata["stable_path"], str(stable_app))
+            self.assertEqual(verify.call_count, 2)
+
+            with patch("scripts.native_app.verify_codesign"):
+                repeated_app = publish_current_app(
+                    source_app,
+                    applications_directory=applications_directory,
+                    source_commit=source_commit,
+                    base_main_commit=base_main_commit,
+                    built_at=built_at + timedelta(days=1),
+                )
+
+            repeated_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            self.assertEqual(repeated_app, stable_app)
+            self.assertEqual(repeated_metadata["built_at_utc"], "2026-07-29T01:02:03Z")
+            self.assertEqual(repeated_app.resolve(), versioned_app.resolve())
+            self.assertEqual(stable_metadata.resolve(), metadata_path.resolve())
+
+    def test_publish_current_app_switches_app_and_metadata_through_one_pointer(self) -> None:
+        first_commit = "a" * 40
+        second_commit = "c" * 40
+        base_main_commit = "b" * 40
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            applications_directory = root / "Applications"
+            first_app = test_app(root / "first", b"first build")
+            second_app = test_app(root / "second", b"second build")
+
+            with patch("scripts.native_app.verify_codesign"):
+                stable_app = publish_current_app(
+                    first_app,
+                    applications_directory=applications_directory,
+                    source_commit=first_commit,
+                    base_main_commit=base_main_commit,
+                )
+                stable_metadata = applications_directory / CURRENT_METADATA_LINK_NAME
+                app_route = stable_app.readlink()
+                metadata_route = stable_metadata.readlink()
+
+                publish_current_app(
+                    second_app,
+                    applications_directory=applications_directory,
+                    source_commit=second_commit,
+                    base_main_commit=base_main_commit,
+                )
+
+            second_directory = applications_directory / CURRENT_BUILD_DIRECTORY_NAME / second_commit
+            self.assertEqual(stable_app.readlink(), app_route)
+            self.assertEqual(stable_metadata.readlink(), metadata_route)
+            self.assertEqual(stable_app.resolve(), second_directory.resolve() / NATIVE_APP_NAME)
+            self.assertEqual(
+                stable_metadata.resolve(),
+                second_directory.resolve() / CURRENT_BUILD_METADATA_NAME,
+            )
+            self.assertTrue((applications_directory / CURRENT_BUILD_DIRECTORY_NAME / first_commit).is_dir())
+
+    def test_publish_current_app_migrates_matching_direct_stable_links(self) -> None:
+        old_commit = "a" * 40
+        new_commit = "c" * 40
+        base_main_commit = "b" * 40
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            applications_directory = root / "Applications"
+            old_directory = applications_directory / CURRENT_BUILD_DIRECTORY_NAME / old_commit
+            old_app = test_app(old_directory)
+            old_metadata = old_directory / CURRENT_BUILD_METADATA_NAME
+            old_metadata.write_text("{}", encoding="utf-8")
+            stable_app = applications_directory / CURRENT_APP_LINK_NAME
+            stable_metadata = applications_directory / CURRENT_METADATA_LINK_NAME
+            stable_app.symlink_to(old_app)
+            stable_metadata.symlink_to(old_metadata)
+            new_app = test_app(root / "new", b"new build")
+
+            with patch("scripts.native_app.verify_codesign"):
+                publish_current_app(
+                    new_app,
+                    applications_directory=applications_directory,
+                    source_commit=new_commit,
+                    base_main_commit=base_main_commit,
+                )
+
+            new_directory = applications_directory / CURRENT_BUILD_DIRECTORY_NAME / new_commit
+            self.assertEqual(stable_app.readlink(), Path(CURRENT_POINTER_LINK_NAME) / NATIVE_APP_NAME)
+            self.assertEqual(
+                stable_metadata.readlink(),
+                Path(CURRENT_POINTER_LINK_NAME) / CURRENT_BUILD_METADATA_NAME,
+            )
+            self.assertEqual(stable_app.resolve(), new_directory.resolve() / NATIVE_APP_NAME)
+            self.assertEqual(stable_metadata.resolve(), new_directory.resolve() / CURRENT_BUILD_METADATA_NAME)
+
+    def test_publish_current_app_rejects_direct_links_outside_build_root(self) -> None:
+        old_commit = "a" * 40
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            applications_directory = root / "Applications"
+            applications_directory.mkdir()
+            outside_directory = root / old_commit
+            old_app = test_app(outside_directory)
+            old_metadata = outside_directory / CURRENT_BUILD_METADATA_NAME
+            old_metadata.write_text("{}", encoding="utf-8")
+            stable_app = applications_directory / CURRENT_APP_LINK_NAME
+            stable_metadata = applications_directory / CURRENT_METADATA_LINK_NAME
+            stable_app.symlink_to(old_app)
+            stable_metadata.symlink_to(old_metadata)
+
+            with (
+                patch("scripts.native_app.verify_codesign"),
+                self.assertRaisesRegex(RuntimeError, "outside the immutable build root"),
+            ):
+                publish_current_app(
+                    test_app(root / "new", b"new build"),
+                    applications_directory=applications_directory,
+                    source_commit="c" * 40,
+                    base_main_commit="b" * 40,
+                )
+
+            self.assertEqual(stable_app.resolve(), old_app.resolve())
+            self.assertEqual(stable_metadata.resolve(), old_metadata.resolve())
+
+    def test_publish_current_app_rejects_same_commit_with_different_base(self) -> None:
+        source_commit = "a" * 40
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_app = test_app(root / "source")
+            applications_directory = root / "Applications"
+
+            with patch("scripts.native_app.verify_codesign"):
+                publish_current_app(
+                    source_app,
+                    applications_directory=applications_directory,
+                    source_commit=source_commit,
+                    base_main_commit="b" * 40,
+                )
+                with self.assertRaisesRegex(RuntimeError, "base_main_commit"):
+                    publish_current_app(
+                        source_app,
+                        applications_directory=applications_directory,
+                        source_commit=source_commit,
+                        base_main_commit="c" * 40,
+                    )
+
+    def test_publish_current_app_rejects_tampered_metadata_schema(self) -> None:
+        source_commit = "a" * 40
+        base_main_commit = "b" * 40
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_app = test_app(root / "source")
+            applications_directory = root / "Applications"
+
+            with patch("scripts.native_app.verify_codesign"):
+                publish_current_app(
+                    source_app,
+                    applications_directory=applications_directory,
+                    source_commit=source_commit,
+                    base_main_commit=base_main_commit,
+                )
+                metadata_path = (
+                    applications_directory / CURRENT_BUILD_DIRECTORY_NAME / source_commit / CURRENT_BUILD_METADATA_NAME
+                )
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                metadata["unexpected"] = True
+                metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+                with self.assertRaisesRegex(RuntimeError, "unexpected schema"):
+                    publish_current_app(
+                        source_app,
+                        applications_directory=applications_directory,
+                        source_commit=source_commit,
+                        base_main_commit=base_main_commit,
+                    )
+
+    def test_publish_current_app_rejects_invalid_metadata_timestamp(self) -> None:
+        source_commit = "a" * 40
+        base_main_commit = "b" * 40
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_app = test_app(root / "source")
+            applications_directory = root / "Applications"
+
+            with patch("scripts.native_app.verify_codesign"):
+                publish_current_app(
+                    source_app,
+                    applications_directory=applications_directory,
+                    source_commit=source_commit,
+                    base_main_commit=base_main_commit,
+                )
+                metadata_path = (
+                    applications_directory / CURRENT_BUILD_DIRECTORY_NAME / source_commit / CURRENT_BUILD_METADATA_NAME
+                )
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                metadata["built_at_utc"] = "not-a-time"
+                metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+                with self.assertRaisesRegex(RuntimeError, "invalid UTC build time"):
+                    publish_current_app(
+                        source_app,
+                        applications_directory=applications_directory,
+                        source_commit=source_commit,
+                        base_main_commit=base_main_commit,
+                    )
+
+    def test_publish_current_app_refuses_system_applications_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source_app = test_app(Path(temporary_directory) / "source")
+
+            with self.assertRaisesRegex(RuntimeError, "Refusing to publish.* /Applications"):
+                publish_current_app(
+                    source_app,
+                    applications_directory=Path("/Applications"),
+                    source_commit="a" * 40,
+                    base_main_commit="b" * 40,
+                )
+
+    def test_publish_current_app_rejects_symlinked_build_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_app = test_app(root / "source")
+            applications_directory = root / "Applications"
+            applications_directory.mkdir()
+            redirected_build_root = root / "redirected"
+            redirected_build_root.mkdir()
+            (applications_directory / CURRENT_BUILD_DIRECTORY_NAME).symlink_to(
+                redirected_build_root,
+                target_is_directory=True,
+            )
+
+            with (
+                patch("scripts.native_app.verify_codesign"),
+                self.assertRaisesRegex(RuntimeError, "Current-build root must be a real directory"),
+            ):
+                publish_current_app(
+                    source_app,
+                    applications_directory=applications_directory,
+                    source_commit="a" * 40,
+                    base_main_commit="b" * 40,
+                )
+
+    def test_publish_current_app_rejects_symlinked_commit_app(self) -> None:
+        source_commit = "a" * 40
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_app = test_app(root / "source")
+            applications_directory = root / "Applications"
+            version_directory = applications_directory / CURRENT_BUILD_DIRECTORY_NAME / source_commit
+            version_directory.mkdir(parents=True)
+            (version_directory / NATIVE_APP_NAME).symlink_to(source_app, target_is_directory=True)
+            (version_directory / CURRENT_BUILD_METADATA_NAME).write_text("{}", encoding="utf-8")
+
+            with (
+                patch("scripts.native_app.verify_codesign"),
+                self.assertRaisesRegex(RuntimeError, "Existing current-build app must be a real directory"),
+            ):
+                publish_current_app(
+                    source_app,
+                    applications_directory=applications_directory,
+                    source_commit=source_commit,
+                    base_main_commit="b" * 40,
+                )
+
+    def test_publish_current_app_rejects_bundle_symlink_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_app = test_app(root / "source")
+            outside = root / "outside"
+            outside.write_text("outside", encoding="utf-8")
+            (source_app / "Contents" / "Resources" / "escape").symlink_to(outside)
+
+            with self.assertRaisesRegex(RuntimeError, "symlink escapes the bundle"):
+                publish_current_app(
+                    source_app,
+                    applications_directory=root / "Applications",
+                    source_commit="a" * 40,
+                    base_main_commit="b" * 40,
+                )
+
+    def test_publish_current_app_rejects_commit_collision(self) -> None:
+        source_commit = "a" * 40
+        base_main_commit = "b" * 40
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_app = test_app(root / "source")
+            applications_directory = root / "Applications"
+            with patch("scripts.native_app.verify_codesign"):
+                publish_current_app(
+                    source_app,
+                    applications_directory=applications_directory,
+                    source_commit=source_commit,
+                    base_main_commit=base_main_commit,
+                )
+
+                (source_app / "Contents" / "Resources" / "payload.bin").write_bytes(b"different build")
+                with self.assertRaisesRegex(RuntimeError, "different app tree"):
+                    publish_current_app(
+                        source_app,
+                        applications_directory=applications_directory,
+                        source_commit=source_commit,
+                        base_main_commit=base_main_commit,
+                    )
+
+    def test_publish_current_app_refuses_non_symlink_stable_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_app = test_app(root / "source")
+            applications_directory = root / "Applications"
+            stable_app = applications_directory / CURRENT_APP_LINK_NAME
+            stable_app.mkdir(parents=True)
+
+            with (
+                patch("scripts.native_app.verify_codesign"),
+                self.assertRaisesRegex(RuntimeError, "Refusing to replace non-symlink path"),
+            ):
+                publish_current_app(
+                    source_app,
+                    applications_directory=applications_directory,
+                    source_commit="a" * 40,
+                    base_main_commit="b" * 40,
+                )
+
+            self.assertFalse((applications_directory / CURRENT_BUILD_DIRECTORY_NAME).exists())
+
+    def test_publish_current_app_cleans_partial_copy_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_app = test_app(root / "source")
+            applications_directory = root / "Applications"
+
+            def fail_copy(_source: Path, destination: Path, **_options: object) -> None:
+                destination.mkdir(parents=True)
+                (destination / "partial").write_text("partial", encoding="utf-8")
+                raise OSError("copy failed")
+
+            with (
+                patch("scripts.native_app.verify_codesign"),
+                patch("scripts.native_app.shutil.copytree", side_effect=fail_copy),
+                self.assertRaisesRegex(OSError, "copy failed"),
+            ):
+                publish_current_app(
+                    source_app,
+                    applications_directory=applications_directory,
+                    source_commit="a" * 40,
+                    base_main_commit="b" * 40,
+                )
+
+            build_root = applications_directory / CURRENT_BUILD_DIRECTORY_NAME
+            self.assertEqual(list(build_root.iterdir()), [])
+
+    def test_publish_current_packages_ad_hoc_from_clean_git_identity(self) -> None:
+        source_commit = "a" * 40
+        base_main_commit = "b" * 40
+        packaged_app = Path("/tmp") / NATIVE_APP_NAME
+        stable_app = Path("/tmp/Applications") / CURRENT_APP_LINK_NAME
+        applications_directory = Path("/tmp/Applications")
+        with (
+            patch("scripts.native_app.ensure_clean_worktree") as ensure_clean,
+            patch(
+                "scripts.native_app.git_output",
+                side_effect=[source_commit, base_main_commit, source_commit, base_main_commit],
+            ) as git_value,
+            patch("scripts.native_app.package", return_value=packaged_app) as package_mock,
+            patch("scripts.native_app.publish_current_app", return_value=stable_app) as publish,
+            patch("builtins.print"),
+        ):
+            result = publish_current(applications_directory)
+
+        self.assertEqual(result, stable_app)
+        self.assertEqual(ensure_clean.call_count, 2)
+        self.assertEqual(
+            [call.args for call in git_value.call_args_list],
+            [
+                ("rev-parse", "HEAD"),
+                ("merge-base", "HEAD", "origin/main"),
+                ("rev-parse", "HEAD"),
+                ("merge-base", "HEAD", "origin/main"),
+            ],
+        )
+        package_mock.assert_called_once_with("-")
+        publish.assert_called_once_with(
+            packaged_app,
+            applications_directory=applications_directory,
+            source_commit=source_commit,
+            base_main_commit=base_main_commit,
+        )
+
+    def test_publish_current_rejects_head_change_during_package(self) -> None:
+        source_commit = "a" * 40
+        base_main_commit = "b" * 40
+        packaged_app = Path("/tmp") / NATIVE_APP_NAME
+        with (
+            patch("scripts.native_app.ensure_clean_worktree"),
+            patch(
+                "scripts.native_app.git_output",
+                side_effect=[source_commit, base_main_commit, "c" * 40],
+            ),
+            patch("scripts.native_app.package", return_value=packaged_app),
+            patch("scripts.native_app.publish_current_app") as publish,
+            self.assertRaisesRegex(RuntimeError, "Git HEAD changed"),
+        ):
+            publish_current(Path("/tmp/Applications"))
+
+        publish.assert_not_called()
+
+    def test_publish_current_rejects_base_main_change_during_package(self) -> None:
+        source_commit = "a" * 40
+        base_main_commit = "b" * 40
+        packaged_app = Path("/tmp") / NATIVE_APP_NAME
+        with (
+            patch("scripts.native_app.ensure_clean_worktree"),
+            patch(
+                "scripts.native_app.git_output",
+                side_effect=[source_commit, base_main_commit, source_commit, "c" * 40],
+            ),
+            patch("scripts.native_app.package", return_value=packaged_app),
+            patch("scripts.native_app.publish_current_app") as publish,
+            self.assertRaisesRegex(RuntimeError, "origin/main merge base changed"),
+        ):
+            publish_current(Path("/tmp/Applications"))
+
+        publish.assert_not_called()
+
+    def test_ensure_clean_worktree_rejects_changes(self) -> None:
+        dirty_result = subprocess.CompletedProcess(
+            args=["git", "status"],
+            returncode=0,
+            stdout=" M scripts/native_app.py\n",
+            stderr="",
+        )
+        with (
+            patch("scripts.native_app.subprocess.run", return_value=dirty_result),
+            self.assertRaisesRegex(RuntimeError, "clean Git worktree"),
+        ):
+            ensure_clean_worktree()
+
+    def test_app_tree_sha256_is_deterministic_and_tracks_symlink_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            app_path = root / "Hash.app"
+            app_path.mkdir()
+            (app_path / "first").write_bytes(b"same")
+            (app_path / "second").write_bytes(b"same")
+            link_path = app_path / "current"
+            link_path.symlink_to("first")
+
+            first_hash = app_tree_sha256(app_path)
+            self.assertEqual(first_hash, app_tree_sha256(app_path))
+            self.assertEqual(first_hash, qualification_app_tree_sha256(app_path))
+
+            link_path.unlink()
+            link_path.symlink_to("second")
+            second_hash = app_tree_sha256(app_path)
+            self.assertNotEqual(first_hash, second_hash)
+            self.assertEqual(second_hash, qualification_app_tree_sha256(app_path))
 
     def test_package_signing_uses_the_explicit_keychain(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

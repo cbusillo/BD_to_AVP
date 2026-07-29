@@ -16,3 +16,16 @@
 - Keep `main` fixed while either release workflow is nonterminal. Coordinate a
   temporary merge hold on other pull requests because the workflows intentionally
   reject a release when protected `main` moves.
+
+# Local Current Build
+
+- When producing a user-launchable local build, use
+  `BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://diagnostics.shinycomputers.com uv run python scripts/native_app.py publish-current`
+  instead of leaving the app inside a disposable worktree.
+- The command requires a clean worktree, publishes an immutable commit-addressed
+  ad-hoc app, and refreshes
+  `~/Applications/3D Blu-ray to Vision Pro Current.app` plus its adjacent build
+  metadata link. It must never replace the production-signed app in
+  `/Applications`.
+- Keep `scripts/native_app.py package` as the underlying package/release
+  verification command; `publish-current` is the local durable handoff command.
