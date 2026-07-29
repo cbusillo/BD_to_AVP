@@ -7,6 +7,9 @@ resolution-markers = [
     "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')",
 ]
 
+[manifest]
+constraints = [{ name = "gitpython", specifier = ">=3.1.55,<4" }]
+
 [[package]]
 name = "anyio"
 version = "4.14.1"

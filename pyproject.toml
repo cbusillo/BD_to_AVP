@@ -57,6 +57,7 @@ dev = [
 [tool.uv]
 required-version = "==0.11.29"
 default-groups = "all"
+constraint-dependencies = ["gitpython>=3.1.55,<4"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["bd_to_avp"]
