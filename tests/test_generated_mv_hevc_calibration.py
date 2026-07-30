@@ -11,6 +11,7 @@ from unittest.mock import patch
 from scripts.qualify_direct_mv_hevc import CURRENT_REQUIRED_BOX_TYPES, QualificationFailure
 from scripts.qualify_generated_mv_hevc_calibration import (
     DEFAULT_EXPERIMENT_PLAN,
+    DEFAULT_REFINEMENT_PLAN,
     CorpusBinding,
     ExperimentCell,
     ExperimentPlan,
@@ -26,8 +27,10 @@ from scripts.qualify_generated_mv_hevc_calibration import (
     _reset_case_directory,
     _summarize_measurement_runs,
     _validate_run_record,
+    _verify_refinement_source_receipt,
     calibration_lock,
     load_experiment_plan,
+    main,
     parse_corpus_binding,
     parse_experiment_plan,
 )
@@ -42,6 +45,7 @@ from scripts.qualify_mv_hevc_corpus import (
 class GeneratedCalibrationPlanTests(unittest.TestCase):
     def setUp(self) -> None:
         self.document = json.loads(DEFAULT_EXPERIMENT_PLAN.read_text(encoding="utf-8"))
+        self.refinement_document = json.loads(DEFAULT_REFINEMENT_PLAN.read_text(encoding="utf-8"))
         self.binding_document = json.loads(
             DEFAULT_EXPERIMENT_PLAN.with_name("generated-mv-hevc-corpus-v1.json").read_text(encoding="utf-8")
         )
@@ -87,6 +91,55 @@ class GeneratedCalibrationPlanTests(unittest.TestCase):
         document["decision_policy"]["ladder_mapping_selected"] = True
 
         with self.assertRaisesRegex(QualificationFailure, "must not select"):
+            parse_experiment_plan(document)
+
+    def test_committed_refinement_plan_pins_thresholds_without_selecting_mapping(self) -> None:
+        plan, binding, plan_digest, binding_digest = load_experiment_plan(DEFAULT_REFINEMENT_PLAN)
+
+        self.assertEqual(plan.schema_version, 2)
+        self.assertEqual(plan.eye_bitrates_mbps, (20,))
+        self.assertEqual(plan.merge_qualities, (65, 68, 71, 75, 79, 82, 85))
+        self.assertEqual(plan.cells[3].cell_id, "b020-m075")
+        self.assertEqual(plan.decision_stage, "merge_response_refinement_only")
+        self.assertIsNotNone(plan.source_evidence)
+        self.assertIsNotNone(plan.thresholds)
+        assert plan.source_evidence is not None
+        assert plan.thresholds is not None
+        self.assertEqual(
+            plan.source_evidence.receipt_sha256,
+            "fe3c81e96771f9d0f4dc1f6461556d5fdf22c95034776b044f268978d68bd07f",
+        )
+        self.assertEqual(plan.thresholds.aggregate_quality_non_inferiority_margin, 0.0006)
+        self.assertEqual(binding.binding_id, "generated-mv-hevc-stress-v1")
+        self.assertEqual(len(plan_digest), 64)
+        self.assertEqual(len(binding_digest), 64)
+
+    def test_refinement_rejects_changed_merge_levels(self) -> None:
+        document = copy.deepcopy(self.refinement_document)
+        document["axes"]["merge_quality"][1] = 69
+
+        with self.assertRaisesRegex(QualificationFailure, "checked seven-level"):
+            parse_experiment_plan(document)
+
+    def test_refinement_rejects_threshold_below_checked_noise_floor(self) -> None:
+        document = copy.deepcopy(self.refinement_document)
+        document["pre_registered_thresholds"]["aggregate_quality_distinguishability"] = 0.0005
+
+        with self.assertRaisesRegex(QualificationFailure, "checked rounded 2x noise derivation"):
+            parse_experiment_plan(document)
+
+    def test_refinement_rejects_output_cap_below_distinguishable_growth(self) -> None:
+        document = copy.deepcopy(self.refinement_document)
+        document["pre_registered_thresholds"]["maximum_output_size_ratio"] = 1.0
+
+        with self.assertRaisesRegex(QualificationFailure, "checked rounded 2x noise derivation"):
+            parse_experiment_plan(document)
+
+    def test_refinement_rejects_more_permissive_threshold(self) -> None:
+        document = copy.deepcopy(self.refinement_document)
+        document["pre_registered_thresholds"]["repeat_ssim_spread_limit"] = 0.001
+
+        with self.assertRaisesRegex(QualificationFailure, "checked rounded 2x noise derivation"):
             parse_experiment_plan(document)
 
     def test_rejects_duplicate_binding_cases(self) -> None:
@@ -254,6 +307,27 @@ class GeneratedCalibrationSummaryTests(unittest.TestCase):
         self.assertFalse(evidence["acceptance"]["thresholds_selected"])
         self.assertFalse(evidence["acceptance"]["ladder_mapping_selected"])
 
+    def test_completed_schema_one_receipt_tolerates_absent_refinement_fields(self) -> None:
+        plan = self._plan()
+        binding = self._binding("case-a")
+        definition = self._definition()
+        evidence: dict[str, object] = {"cases": [self._case_record(plan)]}
+        _refresh_summaries(evidence, plan, binding, {"case-a": definition})
+        evidence.pop("refinement_cell_evaluations")
+        evidence.pop("refinement_adjacent_evaluations")
+        acceptance = evidence["acceptance"]
+        for key in (
+            "thresholds_pre_registered",
+            "thresholds_evaluated",
+            "refinement_evidence_ready",
+            "refinement_decision_ready",
+            "technically_eligible_cell_count",
+            "ambiguous_adjacent_count",
+        ):
+            acceptance.pop(key)
+
+        self.assertTrue(_completed_resume_is_consistent(evidence, plan, binding, {"case-a": definition}))
+
     def test_subset_execution_does_not_claim_planned_stress_corpus(self) -> None:
         plan = self._plan()
         binding = self._binding("case-a", "case-b")
@@ -303,6 +377,74 @@ class GeneratedCalibrationSummaryTests(unittest.TestCase):
         self.assertEqual(_cell_order(plan, 1), plan.cells[3:] + plan.cells[:3])
         self.assertEqual(_cell_order(plan, 2), plan.cells[6:] + plan.cells[:6])
 
+    def test_refinement_cell_order_rotates_seven_cells_across_repeats(self) -> None:
+        plan, _, _, _ = load_experiment_plan(DEFAULT_REFINEMENT_PLAN)
+
+        orders = [tuple(cell.cell_id for cell in _cell_order(plan, index)) for index in range(3)]
+
+        self.assertEqual([order[0] for order in orders], ["b020-m065", "b020-m071", "b020-m079"])
+        self.assertEqual({cell_id for order in orders for cell_id in order}, {cell.cell_id for cell in plan.cells})
+
+    def test_refinement_refresh_evaluates_thresholds_without_selecting_mapping(self) -> None:
+        plan, _, _, _ = load_experiment_plan(DEFAULT_REFINEMENT_PLAN)
+        binding = self._binding("case-a")
+        evidence: dict[str, object] = {"cases": [self._case_record(plan)]}
+
+        _refresh_summaries(evidence, plan, binding, {"case-a": self._definition()})
+
+        self.assertEqual(len(evidence["refinement_cell_evaluations"]), 7)
+        self.assertEqual(len(evidence["refinement_adjacent_evaluations"]), 6)
+        self.assertTrue(evidence["acceptance"]["thresholds_pre_registered"])
+        self.assertTrue(evidence["acceptance"]["thresholds_evaluated"])
+        self.assertTrue(evidence["acceptance"]["refinement_evidence_ready"])
+        self.assertFalse(evidence["acceptance"]["ladder_evidence_ready"])
+        self.assertFalse(evidence["acceptance"]["ladder_mapping_selected"])
+
+    def test_refinement_marks_pair_ambiguous_when_one_case_is_not_distinct(self) -> None:
+        plan, _, _, _ = load_experiment_plan(DEFAULT_REFINEMENT_PLAN)
+        binding = self._binding("case-a", "case-b", "case-c")
+        cases = [self._case_record(plan, case_id) for case_id in binding.selected_case_ids]
+        ambiguous_case = cases[-1]
+        lower = next(cell for cell in ambiguous_case["cells"] if cell["id"] == "b020-m065")
+        higher = next(cell for cell in ambiguous_case["cells"] if cell["id"] == "b020-m068")
+        for lower_run, higher_run in zip(lower["runs"], higher["runs"], strict=True):
+            for key in (
+                "left_match_ssim",
+                "right_match_ssim",
+                "min_same_eye_ssim",
+                "minimum_frame_same_eye_ssim",
+                "p05_frame_same_eye_ssim",
+                "median_frame_same_eye_ssim",
+            ):
+                higher_run[key] = lower_run[key]
+        definitions = {case_id: self._definition(case_id) for case_id in binding.selected_case_ids}
+        evidence: dict[str, object] = {"cases": cases}
+
+        _refresh_summaries(evidence, plan, binding, definitions)
+
+        evaluation = next(
+            item
+            for item in evidence["refinement_adjacent_evaluations"]
+            if item["lower_cell_id"] == "b020-m065" and item["higher_cell_id"] == "b020-m068"
+        )
+        self.assertFalse(evaluation["quality_distinct"])
+        self.assertTrue(evaluation["requires_collapse_or_blinded_review"])
+
+    def test_refinement_eye_order_failure_disqualifies_cell(self) -> None:
+        plan, _, _, _ = load_experiment_plan(DEFAULT_REFINEMENT_PLAN)
+        binding = self._binding("case-a")
+        case = self._case_record(plan)
+        failed_cell = next(cell for cell in case["cells"] if cell["id"] == "b020-m079")
+        for run in failed_cell["runs"]:
+            run["min_eye_order_margin"] = 0.0
+        evidence: dict[str, object] = {"cases": [case]}
+
+        _refresh_summaries(evidence, plan, binding, {"case-a": self._definition()})
+
+        evaluation = next(item for item in evidence["refinement_cell_evaluations"] if item["cell_id"] == "b020-m079")
+        self.assertFalse(evaluation["candidate_constraints_passed"])
+        self.assertFalse(evidence["acceptance"]["eye_order_passed"])
+
     def test_run_validation_rejects_contradictory_eye_metrics(self) -> None:
         plan = self._plan()
         cell = plan.cells[0]
@@ -313,7 +455,47 @@ class GeneratedCalibrationSummaryTests(unittest.TestCase):
             _validate_run_record(run, cell, 0)
 
 
+class GeneratedCalibrationCliTests(unittest.TestCase):
+    @staticmethod
+    def _args() -> list[str]:
+        return ["--output", "receipt.json", "--work-directory", "work"]
+
+    def test_refinement_returns_one_when_decision_requires_review(self) -> None:
+        evidence = {
+            "method": {"decision_stage": "merge_response_refinement_only"},
+            "acceptance": {"execution_passed": True, "refinement_decision_ready": False},
+        }
+
+        with patch("scripts.qualify_generated_mv_hevc_calibration.run_calibration", return_value=evidence):
+            self.assertEqual(main(self._args()), 1)
+
+    def test_refinement_returns_zero_only_when_decision_is_ready(self) -> None:
+        evidence = {
+            "method": {"decision_stage": "merge_response_refinement_only"},
+            "acceptance": {"execution_passed": True, "refinement_decision_ready": True},
+        }
+
+        with patch("scripts.qualify_generated_mv_hevc_calibration.run_calibration", return_value=evidence):
+            self.assertEqual(main(self._args()), 0)
+
+
 class GeneratedCalibrationReceiptTests(unittest.TestCase):
+    def test_refinement_requires_pinned_source_receipt(self) -> None:
+        plan, _, _, _ = load_experiment_plan(DEFAULT_REFINEMENT_PLAN)
+
+        with self.assertRaisesRegex(QualificationFailure, "requires --source-evidence-receipt"):
+            _verify_refinement_source_receipt(plan, None)
+
+    def test_refinement_rejects_wrong_source_receipt_hash(self) -> None:
+        plan, _, _, _ = load_experiment_plan(DEFAULT_REFINEMENT_PLAN)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            receipt = Path(temporary_directory) / "receipt.json"
+            receipt.write_text("{}\n", encoding="utf-8")
+            receipt.chmod(0o444)
+
+            with self.assertRaisesRegex(QualificationFailure, "pinned SHA-256"):
+                _verify_refinement_source_receipt(plan, receipt)
+
     def test_binding_rejects_changed_source_manifest_identity(self) -> None:
         document = json.loads(
             DEFAULT_EXPERIMENT_PLAN.with_name("generated-mv-hevc-corpus-v1.json").read_text(encoding="utf-8")
@@ -416,6 +598,35 @@ class GeneratedCalibrationReceiptTests(unittest.TestCase):
                     plan_sha256=plan_sha256,
                     binding_sha256=binding_sha256,
                     environment=changed,
+                    selected_cases=[case],
+                    private_paths=(),
+                )
+
+    def test_refinement_resume_rejects_top_level_threshold_tampering(self) -> None:
+        plan, binding, plan_sha256, binding_sha256 = load_experiment_plan(DEFAULT_REFINEMENT_PLAN)
+        environment = {"git_head": "d" * 40, "ffmpeg_sha256": "e" * 64}
+        case = CorpusCase(
+            case_id="case-a",
+            tags=("animation",),
+            source={"kind": "synthetic"},
+            eye_width=2,
+            eye_height=2,
+            frame_rate="24",
+        )
+        evidence = _new_evidence(plan, binding, plan_sha256, binding_sha256, environment, [case])
+        evidence["pre_registered_thresholds"]["repeat_ssim_spread_limit"] = 0.001
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output = Path(temporary_directory) / "receipt.json"
+            output.write_text(json.dumps(evidence), encoding="utf-8")
+
+            with self.assertRaisesRegex(QualificationFailure, "pre_registered_thresholds"):
+                _load_resume_evidence(
+                    output,
+                    plan=plan,
+                    binding=binding,
+                    plan_sha256=plan_sha256,
+                    binding_sha256=binding_sha256,
+                    environment=environment,
                     selected_cases=[case],
                     private_paths=(),
                 )

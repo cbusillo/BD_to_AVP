@@ -100,6 +100,42 @@ axis findings, and adjacent `2x2` interaction observations. Findings remain desc
 chooses thresholds nor assigns ladder steps. Its measured noise floor and interaction evidence must be pinned in a
 later refinement plan before seven generated mappings are selected.
 
+## Generated Merge Refinement
+
+`docs/qualification/generated-mv-hevc-merge-refinement-v1.json` pins the next adaptive stage to the completed
+interaction receipt SHA-256 `fe3c81e96771f9d0f4dc1f6461556d5fdf22c95034776b044f268978d68bd07f`. It holds
+the production eye bitrate at `20` Mbps and measures merge quality `65`, `68`, `71`, `75`, `79`, `82`, and `85`
+three times on the same four-case stress corpus. This maps the dominant control before any per-tier bitrate search;
+it is not a seven-step product mapping.
+
+The plan pre-registers conservative thresholds at twice the worst measured `Balanced` repeat spread, rounded upward:
+`0.0006` aggregate SSIM for non-inferiority and distinguishability, `0.02` for storage separation and repeat-size
+spread, plus checked per-frame minimum, fifth-percentile, temporal-variation, and sudden-drop limits. A `3.0x`
+output-size cap prevents an extreme merge setting from becoming technically eligible. The runner records every
+per-case threshold result and adjacent response, marks ambiguous pairs for collapse or blinded review, and keeps
+`ladder_evidence_ready` and `ladder_mapping_selected` false.
+
+After committing the plan and runner in a clean worktree, run the checked refinement with a new output and work
+directory:
+
+```bash
+BD_TO_AVP_RELEASE_MVC_SOURCE=/private/source.mkv \
+uv run python scripts/qualify_generated_mv_hevc_calibration.py \
+  --experiment-plan docs/qualification/generated-mv-hevc-merge-refinement-v1.json \
+  --source-evidence-receipt /private/full-stress-receipt.json \
+  --output build/qualification/generated-mv-hevc-merge-refinement-v1.json \
+  --work-directory build/qualification/generated-mv-hevc-merge-refinement-v1-work
+```
+
+The refinement receipt may identify technically eligible cells and objectively separable adjacent responses. It may
+not assign public quality steps. The next checked stage searches downward for the Pareto-minimal per-eye bitrate at
+each viable merge tier, followed by full eight-case confirmation and any required blinded review.
+
+The refinement command exits `0` only when the complete stress corpus passes and every adjacent response clears all
+pre-registered per-case quality and storage thresholds. It exits `1` with a complete immutable receipt when a pair
+must be collapsed or escalated to blinded review, when no cell remains technically eligible, or when only a subset
+was run. Fatal identity, source, tool, privacy, or evidence errors exit `2`.
+
 ## Validation
 
 Run the structural and production-anchor check with:

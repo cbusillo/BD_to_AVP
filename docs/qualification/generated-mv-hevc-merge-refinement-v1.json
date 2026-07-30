@@ -1,0 +1,62 @@
+{
+  "schema_version": 2,
+  "experiment_id": "generated-mv-hevc-merge-refinement-v1",
+  "target_id": "generated_mv_hevc",
+  "purpose": "merge_response_refinement_not_ladder_mappings",
+  "design": "fixed_bitrate_merge_sweep_v1",
+  "corpus_binding": {
+    "path": "docs/qualification/generated-mv-hevc-corpus-v1.json",
+    "binding_id": "generated-mv-hevc-stress-v1",
+    "sha256": "2d6d25d89258ec24f28375749f9fe833595eaed005bbcc8d6f798f3efd0d0049"
+  },
+  "balanced": {
+    "eye_bitrate_mbps": 20,
+    "eye_bitrate_source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_GENERATED_EYE_BITRATE_MBPS",
+    "merge_quality": 75,
+    "merge_quality_source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_GENERATED_MERGE_QUALITY"
+  },
+  "runs_per_cell": 3,
+  "execution_order": "cyclic_balanced",
+  "axes": {
+    "eye_bitrate_mbps": [20],
+    "merge_quality": [65, 68, 71, 75, 79, 82, 85]
+  },
+  "source_evidence": {
+    "experiment_id": "generated-mv-hevc-interaction-v1",
+    "receipt_sha256": "fe3c81e96771f9d0f4dc1f6461556d5fdf22c95034776b044f268978d68bd07f",
+    "source_git_sha": "4c21ebb2cb42632a1aa0d37aa1ca47bd51b3500e",
+    "baseline_cell_id": "b020-m075",
+    "maximum_repeat_ssim_spread": 0.000274,
+    "maximum_repeat_size_ratio_spread": 0.008639211494662749,
+    "maximum_minimum_frame_ssim_spread": 0.00031399999999992545,
+    "maximum_p05_frame_ssim_spread": 0.0004979999999999984,
+    "maximum_frame_ssim_standard_deviation_spread": 0.00009296255193789321,
+    "maximum_adjacent_frame_ssim_drop_spread": 0.00037199999999992794
+  },
+  "pre_registered_thresholds": {
+    "noise_multiplier": 2,
+    "aggregate_quality_non_inferiority_margin": 0.0006,
+    "aggregate_quality_distinguishability": 0.0006,
+    "storage_distinguishability_ratio": 0.02,
+    "repeat_ssim_spread_limit": 0.0006,
+    "repeat_size_ratio_spread_limit": 0.02,
+    "minimum_frame_quality_non_inferiority_margin": 0.0007,
+    "p05_frame_quality_non_inferiority_margin": 0.001,
+    "frame_ssim_standard_deviation_increase_limit": 0.0002,
+    "adjacent_frame_ssim_drop_increase_limit": 0.0008,
+    "maximum_output_size_ratio": 3.0
+  },
+  "toolchain": {
+    "ffmpeg_manifest": {
+      "path": "vendor/ffmpeg-macos-arm64.toml",
+      "sha256": "a8afa883b2128ee925276953193aa179acdb1378873960286082debb20ae1fb5"
+    },
+    "generated_encoder_contract": "production_generated_mv_hevc_v1",
+    "metric_contract": "ffmpeg_ssim_aggregate_and_per_frame_v1"
+  },
+  "decision_policy": {
+    "stage": "merge_response_refinement_only",
+    "post_hoc_thresholds_forbidden": true,
+    "ladder_mapping_selected": false
+  }
+}

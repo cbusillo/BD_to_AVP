@@ -55,6 +55,7 @@ from scripts.qualify_mv_hevc_quality_match import sha256_file
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXPERIMENT_PLAN = REPOSITORY_ROOT / "docs/qualification/generated-mv-hevc-calibration-sweep-v1.json"
+DEFAULT_REFINEMENT_PLAN = REPOSITORY_ROOT / "docs/qualification/generated-mv-hevc-merge-refinement-v1.json"
 EVIDENCE_SCHEMA_VERSION = 1
 MAX_RUNS = 10
 WORK_DIRECTORY_MARKER = ".bd-to-avp-generated-mv-hevc-calibration.json"
@@ -81,6 +82,34 @@ class ExperimentCell:
 
 
 @dataclass(frozen=True)
+class RefinementSourceEvidence:
+    experiment_id: str
+    receipt_sha256: str
+    source_git_sha: str
+    baseline_cell_id: str
+    maximum_repeat_ssim_spread: float
+    maximum_repeat_size_ratio_spread: float
+    maximum_minimum_frame_ssim_spread: float
+    maximum_p05_frame_ssim_spread: float
+    maximum_frame_ssim_standard_deviation_spread: float
+    maximum_adjacent_frame_ssim_drop_spread: float
+
+
+@dataclass(frozen=True)
+class RefinementThresholds:
+    aggregate_quality_non_inferiority_margin: float
+    aggregate_quality_distinguishability: float
+    storage_distinguishability_ratio: float
+    repeat_ssim_spread_limit: float
+    repeat_size_ratio_spread_limit: float
+    minimum_frame_quality_non_inferiority_margin: float
+    p05_frame_quality_non_inferiority_margin: float
+    frame_ssim_standard_deviation_increase_limit: float
+    adjacent_frame_ssim_drop_increase_limit: float
+    maximum_output_size_ratio: float
+
+
+@dataclass(frozen=True)
 class ExperimentPlan:
     experiment_id: str
     binding_path: Path
@@ -97,6 +126,13 @@ class ExperimentPlan:
     generated_encoder_contract: str
     metric_contract: str
     relative_path: str | None = None
+    schema_version: int = 1
+    purpose: str = "joint_interaction_characterization_not_ladder_mappings"
+    design: str = "full_factorial_3x3"
+    execution_order: str = "cyclic_thirds"
+    decision_stage: str = "interaction_characterization_only"
+    source_evidence: RefinementSourceEvidence | None = None
+    thresholds: RefinementThresholds | None = None
 
 
 def _mapping(value: object, label: str) -> Mapping[str, object]:
@@ -124,23 +160,188 @@ def _sha256_identity(value: object, label: str) -> str:
     return digest
 
 
+def _git_sha_identity(value: object, label: str) -> str:
+    digest = _string(value, label)
+    if len(digest) != 40 or any(character not in "0123456789abcdef" for character in digest):
+        raise QualificationFailure(f"{label} must be a lowercase full Git SHA.")
+    return digest
+
+
 def _integer(value: object, label: str, *, minimum: int, maximum: int) -> int:
     if type(value) is not int or not minimum <= value <= maximum:
         raise QualificationFailure(f"{label} must be an integer between {minimum} and {maximum}.")
     return value
 
 
-def _integer_axis(value: object, label: str, *, minimum: int, maximum: int) -> tuple[int, ...]:
+def _number(value: object, label: str, *, positive: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise QualificationFailure(f"{label} must be numeric.")
+    parsed = float(value)
+    if not math.isfinite(parsed) or (positive and parsed <= 0):
+        qualifier = "positive and finite" if positive else "finite"
+        raise QualificationFailure(f"{label} must be {qualifier}.")
+    return parsed
+
+
+def _integer_axis(
+    value: object,
+    label: str,
+    *,
+    minimum: int,
+    maximum: int,
+    expected_length: int = 3,
+) -> tuple[int, ...]:
     raw_values = _array(value, label)
     values = tuple(
         _integer(raw_value, f"{label}[{index}]", minimum=minimum, maximum=maximum)
         for index, raw_value in enumerate(raw_values)
     )
-    if len(values) != 3:
-        raise QualificationFailure(f"{label} must contain exactly three levels for the checked 3x3 design.")
+    if len(values) != expected_length:
+        raise QualificationFailure(f"{label} must contain exactly {expected_length} levels.")
     if tuple(sorted(values)) != values or len(set(values)) != len(values):
         raise QualificationFailure(f"{label} must be unique and strictly increasing.")
     return values
+
+
+def _refinement_source_evidence(value: object) -> RefinementSourceEvidence:
+    document = _mapping(value, "source_evidence")
+    return RefinementSourceEvidence(
+        experiment_id=_string(document.get("experiment_id"), "source_evidence.experiment_id"),
+        receipt_sha256=_sha256_identity(document.get("receipt_sha256"), "source_evidence.receipt_sha256"),
+        source_git_sha=_git_sha_identity(document.get("source_git_sha"), "source_evidence.source_git_sha"),
+        baseline_cell_id=_string(document.get("baseline_cell_id"), "source_evidence.baseline_cell_id"),
+        maximum_repeat_ssim_spread=_number(
+            document.get("maximum_repeat_ssim_spread"),
+            "source_evidence.maximum_repeat_ssim_spread",
+            positive=True,
+        ),
+        maximum_repeat_size_ratio_spread=_number(
+            document.get("maximum_repeat_size_ratio_spread"),
+            "source_evidence.maximum_repeat_size_ratio_spread",
+            positive=True,
+        ),
+        maximum_minimum_frame_ssim_spread=_number(
+            document.get("maximum_minimum_frame_ssim_spread"),
+            "source_evidence.maximum_minimum_frame_ssim_spread",
+            positive=True,
+        ),
+        maximum_p05_frame_ssim_spread=_number(
+            document.get("maximum_p05_frame_ssim_spread"),
+            "source_evidence.maximum_p05_frame_ssim_spread",
+            positive=True,
+        ),
+        maximum_frame_ssim_standard_deviation_spread=_number(
+            document.get("maximum_frame_ssim_standard_deviation_spread"),
+            "source_evidence.maximum_frame_ssim_standard_deviation_spread",
+            positive=True,
+        ),
+        maximum_adjacent_frame_ssim_drop_spread=_number(
+            document.get("maximum_adjacent_frame_ssim_drop_spread"),
+            "source_evidence.maximum_adjacent_frame_ssim_drop_spread",
+            positive=True,
+        ),
+    )
+
+
+def _round_up(value: float, increment: float) -> float:
+    return math.ceil(value / increment - 1e-12) * increment
+
+
+def _refinement_thresholds(value: object, source: RefinementSourceEvidence) -> RefinementThresholds:
+    document = _mapping(value, "pre_registered_thresholds")
+    if document.get("noise_multiplier") != 2:
+        raise QualificationFailure("pre_registered_thresholds.noise_multiplier must be 2.")
+    thresholds = RefinementThresholds(
+        aggregate_quality_non_inferiority_margin=_number(
+            document.get("aggregate_quality_non_inferiority_margin"),
+            "pre_registered_thresholds.aggregate_quality_non_inferiority_margin",
+            positive=True,
+        ),
+        aggregate_quality_distinguishability=_number(
+            document.get("aggregate_quality_distinguishability"),
+            "pre_registered_thresholds.aggregate_quality_distinguishability",
+            positive=True,
+        ),
+        storage_distinguishability_ratio=_number(
+            document.get("storage_distinguishability_ratio"),
+            "pre_registered_thresholds.storage_distinguishability_ratio",
+            positive=True,
+        ),
+        repeat_ssim_spread_limit=_number(
+            document.get("repeat_ssim_spread_limit"),
+            "pre_registered_thresholds.repeat_ssim_spread_limit",
+            positive=True,
+        ),
+        repeat_size_ratio_spread_limit=_number(
+            document.get("repeat_size_ratio_spread_limit"),
+            "pre_registered_thresholds.repeat_size_ratio_spread_limit",
+            positive=True,
+        ),
+        minimum_frame_quality_non_inferiority_margin=_number(
+            document.get("minimum_frame_quality_non_inferiority_margin"),
+            "pre_registered_thresholds.minimum_frame_quality_non_inferiority_margin",
+            positive=True,
+        ),
+        p05_frame_quality_non_inferiority_margin=_number(
+            document.get("p05_frame_quality_non_inferiority_margin"),
+            "pre_registered_thresholds.p05_frame_quality_non_inferiority_margin",
+            positive=True,
+        ),
+        frame_ssim_standard_deviation_increase_limit=_number(
+            document.get("frame_ssim_standard_deviation_increase_limit"),
+            "pre_registered_thresholds.frame_ssim_standard_deviation_increase_limit",
+            positive=True,
+        ),
+        adjacent_frame_ssim_drop_increase_limit=_number(
+            document.get("adjacent_frame_ssim_drop_increase_limit"),
+            "pre_registered_thresholds.adjacent_frame_ssim_drop_increase_limit",
+            positive=True,
+        ),
+        maximum_output_size_ratio=_number(
+            document.get("maximum_output_size_ratio"),
+            "pre_registered_thresholds.maximum_output_size_ratio",
+            positive=True,
+        ),
+    )
+    expected = {
+        "aggregate_quality_non_inferiority_margin": _round_up(
+            2 * source.maximum_repeat_ssim_spread,
+            0.0001,
+        ),
+        "aggregate_quality_distinguishability": _round_up(
+            2 * source.maximum_repeat_ssim_spread,
+            0.0001,
+        ),
+        "storage_distinguishability_ratio": _round_up(
+            2 * source.maximum_repeat_size_ratio_spread,
+            0.01,
+        ),
+        "repeat_ssim_spread_limit": _round_up(2 * source.maximum_repeat_ssim_spread, 0.0001),
+        "repeat_size_ratio_spread_limit": _round_up(2 * source.maximum_repeat_size_ratio_spread, 0.01),
+        "minimum_frame_quality_non_inferiority_margin": _round_up(
+            2 * source.maximum_minimum_frame_ssim_spread,
+            0.0001,
+        ),
+        "p05_frame_quality_non_inferiority_margin": _round_up(
+            2 * source.maximum_p05_frame_ssim_spread,
+            0.0001,
+        ),
+        "frame_ssim_standard_deviation_increase_limit": _round_up(
+            2 * source.maximum_frame_ssim_standard_deviation_spread,
+            0.0001,
+        ),
+        "adjacent_frame_ssim_drop_increase_limit": _round_up(
+            2 * source.maximum_adjacent_frame_ssim_drop_spread,
+            0.0001,
+        ),
+        "maximum_output_size_ratio": 3.0,
+    }
+    for field, expected_value in expected.items():
+        if not math.isclose(getattr(thresholds, field), expected_value, rel_tol=0.0, abs_tol=1e-12):
+            raise QualificationFailure(
+                f"pre_registered_thresholds.{field} must match the checked rounded 2x noise derivation."
+            )
+    return thresholds
 
 
 def _repository_path(relative_path: str, label: str) -> Path:
@@ -248,15 +449,22 @@ def _cell_id(eye_bitrate_mbps: int, merge_quality: int) -> str:
 
 def parse_experiment_plan(raw: object) -> ExperimentPlan:
     document = _mapping(raw, "experiment plan")
-    if document.get("schema_version") != 1:
-        raise QualificationFailure("experiment plan schema_version must be 1.")
+    schema_version = document.get("schema_version")
+    if schema_version not in {1, 2}:
+        raise QualificationFailure("experiment plan schema_version must be 1 or 2.")
     experiment_id = _string(document.get("experiment_id"), "experiment_id")
     if document.get("target_id") != "generated_mv_hevc":
         raise QualificationFailure("experiment plan target_id must be 'generated_mv_hevc'.")
-    if document.get("purpose") != "joint_interaction_characterization_not_ladder_mappings":
-        raise QualificationFailure("experiment plan must characterize interaction without assigning ladder mappings.")
-    if document.get("design") != "full_factorial_3x3":
-        raise QualificationFailure("experiment plan design must be 'full_factorial_3x3'.")
+    purpose = _string(document.get("purpose"), "purpose")
+    design = _string(document.get("design"), "design")
+    expected_purpose = (
+        "joint_interaction_characterization_not_ladder_mappings"
+        if schema_version == 1
+        else "merge_response_refinement_not_ladder_mappings"
+    )
+    expected_design = "full_factorial_3x3" if schema_version == 1 else "fixed_bitrate_merge_sweep_v1"
+    if purpose != expected_purpose or design != expected_design:
+        raise QualificationFailure("experiment plan purpose and design do not match its schema version.")
 
     corpus_binding = _mapping(document.get("corpus_binding"), "corpus_binding")
     binding_path = _repository_path(
@@ -297,25 +505,37 @@ def parse_experiment_plan(raw: object) -> ExperimentPlan:
     runs_per_cell = document.get("runs_per_cell")
     if runs_per_cell != 3:
         raise QualificationFailure("runs_per_cell must be 3 for the checked cyclic ordering design.")
-    if document.get("execution_order") != "cyclic_thirds":
-        raise QualificationFailure("execution_order must be 'cyclic_thirds'.")
+    execution_order = _string(document.get("execution_order"), "execution_order")
+    expected_execution_order = "cyclic_thirds" if schema_version == 1 else "cyclic_balanced"
+    if execution_order != expected_execution_order:
+        raise QualificationFailure(f"execution_order must be '{expected_execution_order}'.")
     axes = _mapping(document.get("axes"), "axes")
     eye_bitrates_mbps = _integer_axis(
         axes.get("eye_bitrate_mbps"),
         "axes.eye_bitrate_mbps",
         minimum=1,
         maximum=500,
+        expected_length=3 if schema_version == 1 else 1,
     )
     merge_qualities = _integer_axis(
         axes.get("merge_quality"),
         "axes.merge_quality",
         minimum=0,
         maximum=100,
+        expected_length=3 if schema_version == 1 else 7,
     )
-    if eye_bitrates_mbps[1] != balanced_eye_bitrate_mbps:
-        raise QualificationFailure("Balanced eye bitrate must be the center level of the checked design.")
-    if merge_qualities[1] != balanced_merge_quality:
-        raise QualificationFailure("Balanced merge quality must be the center level of the checked design.")
+    if schema_version == 1:
+        if eye_bitrates_mbps[1] != balanced_eye_bitrate_mbps:
+            raise QualificationFailure("Balanced eye bitrate must be the center level of the checked design.")
+        if merge_qualities[1] != balanced_merge_quality:
+            raise QualificationFailure("Balanced merge quality must be the center level of the checked design.")
+    else:
+        if eye_bitrates_mbps != (balanced_eye_bitrate_mbps,):
+            raise QualificationFailure("Merge refinement must hold eye bitrate at the production default.")
+        if merge_qualities != (65, 68, 71, 75, 79, 82, 85):
+            raise QualificationFailure("Merge refinement levels must match the checked seven-level response design.")
+        if merge_qualities[len(merge_qualities) // 2] != balanced_merge_quality:
+            raise QualificationFailure("Balanced merge quality must remain the center refinement level.")
 
     toolchain = _mapping(document.get("toolchain"), "toolchain")
     ffmpeg_manifest = _mapping(toolchain.get("ffmpeg_manifest"), "toolchain.ffmpeg_manifest")
@@ -338,12 +558,24 @@ def parse_experiment_plan(raw: object) -> ExperimentPlan:
         raise QualificationFailure("toolchain metric contract is unsupported.")
 
     decision_policy = _mapping(document.get("decision_policy"), "decision_policy")
-    if decision_policy.get("stage") != "interaction_characterization_only":
-        raise QualificationFailure("decision_policy.stage must remain interaction_characterization_only.")
+    decision_stage = _string(decision_policy.get("stage"), "decision_policy.stage")
+    expected_stage = "interaction_characterization_only" if schema_version == 1 else "merge_response_refinement_only"
+    if decision_stage != expected_stage:
+        raise QualificationFailure(f"decision_policy.stage must be '{expected_stage}'.")
     if decision_policy.get("post_hoc_thresholds_forbidden") is not True:
         raise QualificationFailure("decision policy must forbid post-hoc thresholds.")
     if decision_policy.get("ladder_mapping_selected") is not False:
-        raise QualificationFailure("interaction experiment must not select a ladder mapping.")
+        raise QualificationFailure("generated calibration experiments must not select a ladder mapping.")
+    source_evidence = None
+    thresholds = None
+    if schema_version == 2:
+        source_evidence = _refinement_source_evidence(document.get("source_evidence"))
+        thresholds = _refinement_thresholds(document.get("pre_registered_thresholds"), source_evidence)
+        if source_evidence.baseline_cell_id != _cell_id(
+            balanced_eye_bitrate_mbps,
+            balanced_merge_quality,
+        ):
+            raise QualificationFailure("source_evidence baseline cell must match the production Balanced cell.")
 
     cells = tuple(
         ExperimentCell(_cell_id(eye_bitrate, merge_quality), eye_bitrate, merge_quality)
@@ -364,6 +596,13 @@ def parse_experiment_plan(raw: object) -> ExperimentPlan:
         ffmpeg_manifest_sha256=ffmpeg_manifest_sha256,
         generated_encoder_contract=generated_encoder_contract,
         metric_contract=metric_contract,
+        schema_version=schema_version,
+        purpose=purpose,
+        design=design,
+        execution_order=execution_order,
+        decision_stage=decision_stage,
+        source_evidence=source_evidence,
+        thresholds=thresholds,
     )
 
 
@@ -404,6 +643,13 @@ def load_experiment_plan(path: Path) -> tuple[ExperimentPlan, CorpusBinding, str
         generated_encoder_contract=parsed.generated_encoder_contract,
         metric_contract=parsed.metric_contract,
         relative_path=relative_path,
+        schema_version=parsed.schema_version,
+        purpose=parsed.purpose,
+        design=parsed.design,
+        execution_order=parsed.execution_order,
+        decision_stage=parsed.decision_stage,
+        source_evidence=parsed.source_evidence,
+        thresholds=parsed.thresholds,
     )
     return plan, binding, sha256_file(resolved_path), binding_sha256
 
@@ -525,20 +771,59 @@ def _environment_evidence(
     }
 
 
-def _method_record(plan: ExperimentPlan) -> dict[str, object]:
+def _source_evidence_record(source: RefinementSourceEvidence) -> dict[str, object]:
     return {
-        "design": "full_factorial_3x3",
+        "experiment_id": source.experiment_id,
+        "receipt_sha256": source.receipt_sha256,
+        "source_git_sha": source.source_git_sha,
+        "baseline_cell_id": source.baseline_cell_id,
+        "maximum_repeat_ssim_spread": source.maximum_repeat_ssim_spread,
+        "maximum_repeat_size_ratio_spread": source.maximum_repeat_size_ratio_spread,
+        "maximum_minimum_frame_ssim_spread": source.maximum_minimum_frame_ssim_spread,
+        "maximum_p05_frame_ssim_spread": source.maximum_p05_frame_ssim_spread,
+        "maximum_frame_ssim_standard_deviation_spread": (source.maximum_frame_ssim_standard_deviation_spread),
+        "maximum_adjacent_frame_ssim_drop_spread": source.maximum_adjacent_frame_ssim_drop_spread,
+    }
+
+
+def _threshold_record(thresholds: RefinementThresholds) -> dict[str, object]:
+    return {
+        "noise_multiplier": 2,
+        "aggregate_quality_non_inferiority_margin": thresholds.aggregate_quality_non_inferiority_margin,
+        "aggregate_quality_distinguishability": thresholds.aggregate_quality_distinguishability,
+        "storage_distinguishability_ratio": thresholds.storage_distinguishability_ratio,
+        "repeat_ssim_spread_limit": thresholds.repeat_ssim_spread_limit,
+        "repeat_size_ratio_spread_limit": thresholds.repeat_size_ratio_spread_limit,
+        "minimum_frame_quality_non_inferiority_margin": (thresholds.minimum_frame_quality_non_inferiority_margin),
+        "p05_frame_quality_non_inferiority_margin": thresholds.p05_frame_quality_non_inferiority_margin,
+        "frame_ssim_standard_deviation_increase_limit": (thresholds.frame_ssim_standard_deviation_increase_limit),
+        "adjacent_frame_ssim_drop_increase_limit": thresholds.adjacent_frame_ssim_drop_increase_limit,
+        "maximum_output_size_ratio": thresholds.maximum_output_size_ratio,
+    }
+
+
+def _method_record(plan: ExperimentPlan) -> dict[str, object]:
+    method: dict[str, object] = {
+        "design": plan.design,
         "runs_per_cell": plan.runs_per_cell,
         "balanced": {
             "eye_bitrate_mbps": plan.balanced_eye_bitrate_mbps,
             "merge_quality": plan.balanced_merge_quality,
         },
-        "cell_order": "cyclic_thirds",
+        "cell_order": plan.execution_order,
         "quality_metric": "aggregate and per-frame decoded same-eye SSIM",
-        "interaction_metric": "adjacent 2x2 difference of merge-quality effects",
+        "interaction_metric": (
+            "adjacent 2x2 difference of merge-quality effects"
+            if plan.schema_version == 1
+            else "pre-registered adjacent merge-quality response thresholds"
+        ),
         "post_hoc_thresholds_forbidden": True,
-        "decision_stage": "interaction_characterization_only",
+        "decision_stage": plan.decision_stage,
     }
+    if plan.source_evidence is not None and plan.thresholds is not None:
+        method["source_evidence"] = _source_evidence_record(plan.source_evidence)
+        method["pre_registered_thresholds"] = _threshold_record(plan.thresholds)
+    return method
 
 
 def _string_values(value: object) -> Iterator[str]:
@@ -834,7 +1119,12 @@ def _run_complete(cell_record: Mapping[str, object], cell: ExperimentCell, run_i
 
 
 def _cell_order(plan: ExperimentPlan, run_index: int) -> tuple[ExperimentCell, ...]:
-    shift = (run_index % 3) * (len(plan.cells) // 3)
+    if plan.execution_order == "cyclic_thirds":
+        shift = (run_index % 3) * (len(plan.cells) // 3)
+    elif plan.execution_order == "cyclic_balanced":
+        shift = (run_index * len(plan.cells)) // plan.runs_per_cell
+    else:
+        raise QualificationFailure(f"Unsupported calibration execution order: {plan.execution_order}")
     return plan.cells[shift:] + plan.cells[:shift]
 
 
@@ -982,6 +1272,154 @@ def _interaction_observations(case: Mapping[str, object], plan: ExperimentPlan) 
     return observations
 
 
+def _refinement_evaluations(
+    cases: Sequence[Mapping[str, object]],
+    plan: ExperimentPlan,
+    case_definitions: Mapping[str, CorpusCase],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    thresholds = plan.thresholds
+    if thresholds is None:
+        return [], []
+    balanced = _balanced_cell(plan)
+    cell_evaluations: list[dict[str, object]] = []
+    for cell in plan.cells:
+        case_evaluations: list[dict[str, object]] = []
+        for case in cases:
+            case_id = str(case["id"])
+            candidate_record = _cell_record(case, cell.cell_id)
+            balanced_record = _cell_record(case, balanced.cell_id)
+            candidate = candidate_record.get("summary") if candidate_record is not None else None
+            baseline = balanced_record.get("summary") if balanced_record is not None else None
+            if not isinstance(candidate, Mapping) or not isinstance(baseline, Mapping):
+                continue
+            quality_delta = float(candidate["median_min_same_eye_ssim"]) - float(baseline["median_min_same_eye_ssim"])
+            minimum_frame_delta = float(candidate["minimum_frame_same_eye_ssim"]) - float(
+                baseline["minimum_frame_same_eye_ssim"]
+            )
+            p05_frame_delta = float(candidate["median_p05_frame_same_eye_ssim"]) - float(
+                baseline["median_p05_frame_same_eye_ssim"]
+            )
+            standard_deviation_increase = float(candidate["maximum_frame_ssim_standard_deviation"]) - float(
+                baseline["maximum_frame_ssim_standard_deviation"]
+            )
+            adjacent_drop_increase = float(candidate["maximum_adjacent_frame_ssim_drop"]) - float(
+                baseline["maximum_adjacent_frame_ssim_drop"]
+            )
+            output_size_ratio = float(candidate["median_final_bytes"]) / float(baseline["median_final_bytes"])
+            if cell.merge_quality < balanced.merge_quality:
+                storage_direction_passed = output_size_ratio <= 1.0 - thresholds.storage_distinguishability_ratio
+            elif cell.merge_quality > balanced.merge_quality:
+                storage_direction_passed = output_size_ratio >= 1.0 + thresholds.storage_distinguishability_ratio
+            else:
+                storage_direction_passed = math.isclose(output_size_ratio, 1.0, rel_tol=0.0, abs_tol=1e-12)
+            repeatability_passed = (
+                float(candidate["repeat_ssim_spread"]) <= thresholds.repeat_ssim_spread_limit
+                and float(candidate["repeat_size_ratio_spread_vs_balanced"])
+                <= thresholds.repeat_size_ratio_spread_limit
+            )
+            eye_order_passed = (
+                float(candidate["minimum_eye_order_margin"]) >= case_definitions[case_id].minimum_eye_order_margin
+            )
+            result = {
+                "case_id": case_id,
+                "quality_delta": quality_delta,
+                "minimum_frame_quality_delta": minimum_frame_delta,
+                "p05_frame_quality_delta": p05_frame_delta,
+                "frame_ssim_standard_deviation_increase": standard_deviation_increase,
+                "adjacent_frame_ssim_drop_increase": adjacent_drop_increase,
+                "output_size_ratio": output_size_ratio,
+                "quality_non_inferiority_passed": (
+                    quality_delta >= -thresholds.aggregate_quality_non_inferiority_margin
+                ),
+                "minimum_frame_non_inferiority_passed": (
+                    minimum_frame_delta >= -thresholds.minimum_frame_quality_non_inferiority_margin
+                ),
+                "p05_frame_non_inferiority_passed": (
+                    p05_frame_delta >= -thresholds.p05_frame_quality_non_inferiority_margin
+                ),
+                "temporal_stability_passed": (
+                    standard_deviation_increase <= thresholds.frame_ssim_standard_deviation_increase_limit
+                    and adjacent_drop_increase <= thresholds.adjacent_frame_ssim_drop_increase_limit
+                ),
+                "repeatability_passed": repeatability_passed,
+                "eye_order_passed": eye_order_passed,
+                "storage_direction_passed": storage_direction_passed,
+                "output_size_cap_passed": output_size_ratio <= thresholds.maximum_output_size_ratio,
+            }
+            result["candidate_constraints_passed"] = all(
+                bool(result[key])
+                for key in (
+                    "quality_non_inferiority_passed",
+                    "minimum_frame_non_inferiority_passed",
+                    "p05_frame_non_inferiority_passed",
+                    "temporal_stability_passed",
+                    "repeatability_passed",
+                    "eye_order_passed",
+                    "storage_direction_passed",
+                    "output_size_cap_passed",
+                )
+            )
+            case_evaluations.append(result)
+        complete = len(case_evaluations) == len(case_definitions)
+        cell_evaluations.append(
+            {
+                "cell_id": cell.cell_id,
+                "eye_bitrate_mbps": cell.eye_bitrate_mbps,
+                "merge_quality": cell.merge_quality,
+                "complete": complete,
+                "case_evaluations": case_evaluations,
+                "candidate_constraints_passed": complete
+                and all(bool(item["candidate_constraints_passed"]) for item in case_evaluations),
+            }
+        )
+
+    adjacent_evaluations: list[dict[str, object]] = []
+    for lower_cell, higher_cell in pairwise(plan.cells):
+        case_evaluations = []
+        for case in cases:
+            lower_record = _cell_record(case, lower_cell.cell_id)
+            higher_record = _cell_record(case, higher_cell.cell_id)
+            lower = lower_record.get("summary") if lower_record is not None else None
+            higher = higher_record.get("summary") if higher_record is not None else None
+            if not isinstance(lower, Mapping) or not isinstance(higher, Mapping):
+                continue
+            quality_separation = float(higher["median_min_same_eye_ssim"]) - float(lower["median_min_same_eye_ssim"])
+            storage_growth_ratio = float(higher["median_final_bytes"]) / float(lower["median_final_bytes"]) - 1.0
+            case_evaluations.append(
+                {
+                    "case_id": case["id"],
+                    "quality_separation": quality_separation,
+                    "storage_growth_ratio": storage_growth_ratio,
+                }
+            )
+        complete = len(case_evaluations) == len(case_definitions)
+        quality_values = [float(item["quality_separation"]) for item in case_evaluations]
+        storage_values = [float(item["storage_growth_ratio"]) for item in case_evaluations]
+        quality_monotonic = complete and min(quality_values) >= -thresholds.aggregate_quality_non_inferiority_margin
+        storage_monotonic = complete and min(storage_values) >= -thresholds.storage_distinguishability_ratio
+        quality_distinct = quality_monotonic and min(quality_values) >= thresholds.aggregate_quality_distinguishability
+        storage_distinct = storage_monotonic and min(storage_values) >= thresholds.storage_distinguishability_ratio
+        adjacent_evaluations.append(
+            {
+                "lower_cell_id": lower_cell.cell_id,
+                "higher_cell_id": higher_cell.cell_id,
+                "complete": complete,
+                "case_evaluations": case_evaluations,
+                "minimum_quality_separation": min(quality_values) if quality_values else None,
+                "median_quality_separation": statistics.median(quality_values) if quality_values else None,
+                "minimum_storage_growth_ratio": min(storage_values) if storage_values else None,
+                "median_storage_growth_ratio": statistics.median(storage_values) if storage_values else None,
+                "quality_monotonic": quality_monotonic,
+                "quality_distinct": quality_distinct,
+                "storage_monotonic": storage_monotonic,
+                "storage_distinct": storage_distinct,
+                "response_separable": quality_distinct and storage_distinct,
+                "requires_collapse_or_blinded_review": not (quality_distinct and storage_distinct),
+            }
+        )
+    return cell_evaluations, adjacent_evaluations
+
+
 def _refresh_summaries(
     evidence: dict[str, object],
     plan: ExperimentPlan,
@@ -1121,6 +1559,13 @@ def _refresh_summaries(
         if isinstance(case, Mapping)
         for observation in _interaction_observations(case, plan)
     ]
+    refinement_cell_evaluations, refinement_adjacent_evaluations = _refinement_evaluations(
+        [case for case in cases if isinstance(case, Mapping)],
+        plan,
+        case_definitions,
+    )
+    evidence["refinement_cell_evaluations"] = refinement_cell_evaluations
+    evidence["refinement_adjacent_evaluations"] = refinement_adjacent_evaluations
 
     cells_complete = len(cell_summaries) == len(plan.cells) and all(
         summary["complete"] is True for summary in cell_summaries
@@ -1141,6 +1586,26 @@ def _refresh_summaries(
     interaction_observations_complete = (
         cells_complete and len(evidence["interaction_observations"]) == expected_interactions
     )
+    refinement_evaluations_complete = plan.thresholds is None or (
+        cells_complete
+        and len(refinement_cell_evaluations) == len(plan.cells)
+        and all(evaluation["complete"] is True for evaluation in refinement_cell_evaluations)
+        and len(refinement_adjacent_evaluations) == len(plan.cells) - 1
+        and all(evaluation["complete"] is True for evaluation in refinement_adjacent_evaluations)
+    )
+    technically_eligible_cell_count = sum(
+        evaluation["candidate_constraints_passed"] is True for evaluation in refinement_cell_evaluations
+    )
+    ambiguous_adjacent_count = sum(
+        evaluation["requires_collapse_or_blinded_review"] is True for evaluation in refinement_adjacent_evaluations
+    )
+    refinement_evidence_ready = (
+        plan.thresholds is not None
+        and cells_complete
+        and planned_stress_corpus
+        and eye_order_passed
+        and refinement_evaluations_complete
+    )
     evidence["acceptance"] = {
         "complete": cells_complete,
         "planned_stress_corpus": planned_stress_corpus,
@@ -1149,11 +1614,23 @@ def _refresh_summaries(
         "baseline_repeatability_ready": len(baseline_cases) == len(case_definitions),
         "interaction_observations_complete": interaction_observations_complete,
         "execution_passed": cells_complete and eye_order_passed,
-        "thresholds_selected": False,
+        "thresholds_selected": plan.thresholds is not None,
+        "thresholds_pre_registered": plan.thresholds is not None,
+        "thresholds_evaluated": refinement_evaluations_complete and plan.thresholds is not None,
+        "refinement_evidence_ready": refinement_evidence_ready,
+        "refinement_decision_ready": (
+            refinement_evidence_ready and technically_eligible_cell_count > 0 and ambiguous_adjacent_count == 0
+        ),
+        "technically_eligible_cell_count": technically_eligible_cell_count,
+        "ambiguous_adjacent_count": ambiguous_adjacent_count,
         "ladder_evidence_ready": False,
         "ladder_mapping_selected": False,
         "experiment_complete": (
-            cells_complete and planned_stress_corpus and eye_order_passed and interaction_observations_complete
+            cells_complete
+            and planned_stress_corpus
+            and eye_order_passed
+            and interaction_observations_complete
+            and refinement_evaluations_complete
         ),
     }
 
@@ -1169,7 +1646,7 @@ def _new_evidence(
     if plan.relative_path is None or binding.relative_path is None:
         raise QualificationFailure("Generated calibration plan identities are not repository-bound.")
     now = datetime.now(UTC).isoformat()
-    return {
+    evidence: dict[str, object] = {
         "schema_version": EVIDENCE_SCHEMA_VERSION,
         "experiment_id": plan.experiment_id,
         "created_at": now,
@@ -1203,6 +1680,8 @@ def _new_evidence(
         "cell_summaries": [],
         "axis_findings": [],
         "interaction_observations": [],
+        "refinement_cell_evaluations": [],
+        "refinement_adjacent_evaluations": [],
         "acceptance": {
             "complete": False,
             "planned_stress_corpus": False,
@@ -1211,12 +1690,22 @@ def _new_evidence(
             "baseline_repeatability_ready": False,
             "interaction_observations_complete": False,
             "execution_passed": False,
-            "thresholds_selected": False,
+            "thresholds_selected": plan.thresholds is not None,
+            "thresholds_pre_registered": plan.thresholds is not None,
+            "thresholds_evaluated": False,
+            "refinement_evidence_ready": False,
+            "refinement_decision_ready": False,
+            "technically_eligible_cell_count": 0,
+            "ambiguous_adjacent_count": 0,
             "ladder_evidence_ready": False,
             "ladder_mapping_selected": False,
             "experiment_complete": False,
         },
     }
+    if plan.source_evidence is not None and plan.thresholds is not None:
+        evidence["source_evidence"] = _source_evidence_record(plan.source_evidence)
+        evidence["pre_registered_thresholds"] = _threshold_record(plan.thresholds)
+    return evidence
 
 
 def _validate_resume_cases(
@@ -1329,6 +1818,9 @@ def _load_resume_evidence(
             for cell in plan.cells
         ],
     }
+    if plan.source_evidence is not None and plan.thresholds is not None:
+        expected_identity["source_evidence"] = _source_evidence_record(plan.source_evidence)
+        expected_identity["pre_registered_thresholds"] = _threshold_record(plan.thresholds)
     for key, expected in expected_identity.items():
         if evidence.get(key) != expected:
             raise QualificationFailure(f"Resume evidence {key} does not match the current experiment identity.")
@@ -1373,9 +1865,37 @@ def _completed_resume_is_consistent(
         return False
     refreshed = copy.deepcopy(evidence)
     _refresh_summaries(refreshed, plan, binding, case_definitions)
-    for key in ("baseline_repeatability", "cell_summaries", "axis_findings", "interaction_observations", "acceptance"):
+    summary_keys = [
+        "baseline_repeatability",
+        "cell_summaries",
+        "axis_findings",
+        "interaction_observations",
+    ]
+    if plan.schema_version == 2:
+        summary_keys.extend(("refinement_cell_evaluations", "refinement_adjacent_evaluations"))
+    for key in summary_keys:
         if refreshed.get(key) != evidence.get(key):
             raise QualificationFailure("Completed resume evidence summaries contradict the recorded runs.")
+    refreshed_acceptance = _mapping(refreshed.get("acceptance"), "refreshed acceptance")
+    recorded_acceptance = _mapping(evidence.get("acceptance"), "recorded acceptance")
+    if plan.schema_version == 1:
+        legacy_keys = (
+            "complete",
+            "planned_stress_corpus",
+            "objective_validation_passed",
+            "eye_order_passed",
+            "baseline_repeatability_ready",
+            "interaction_observations_complete",
+            "execution_passed",
+            "thresholds_selected",
+            "ladder_evidence_ready",
+            "ladder_mapping_selected",
+            "experiment_complete",
+        )
+        if any(refreshed_acceptance.get(key) != recorded_acceptance.get(key) for key in legacy_keys):
+            raise QualificationFailure("Completed resume evidence acceptance contradicts the recorded runs.")
+    elif refreshed_acceptance != recorded_acceptance:
+        raise QualificationFailure("Completed resume evidence acceptance contradicts the recorded runs.")
     return True
 
 
@@ -1430,6 +1950,75 @@ def _inspect_generated_output(ffprobe: str, prepared, output_path: Path) -> dict
     }
 
 
+def _verify_refinement_source_receipt(plan: ExperimentPlan, receipt_path: Path | None) -> None:
+    source = plan.source_evidence
+    if source is None:
+        if receipt_path is not None:
+            raise QualificationFailure("A source evidence receipt is not valid for this experiment plan.")
+        return
+    if receipt_path is None:
+        raise QualificationFailure("Merge refinement requires --source-evidence-receipt.")
+    resolved = receipt_path.resolve()
+    if receipt_path.is_symlink() or not resolved.is_file():
+        raise QualificationFailure("The source evidence receipt is unavailable or unsafe.")
+    if stat.S_IMODE(resolved.stat().st_mode) != 0o444:
+        raise QualificationFailure("The source evidence receipt must be frozen read-only.")
+    if sha256_file(resolved) != source.receipt_sha256:
+        raise QualificationFailure("The source evidence receipt does not match its pinned SHA-256 identity.")
+    try:
+        receipt = _mapping(json.loads(resolved.read_text(encoding="utf-8")), "source evidence receipt")
+    except (OSError, json.JSONDecodeError) as error:
+        raise QualificationFailure("Could not read the source evidence receipt.") from error
+    if (
+        receipt.get("experiment_id") != source.experiment_id
+        or receipt.get("source_git_sha") != source.source_git_sha
+        or receipt.get("source_tree_dirty") is not False
+    ):
+        raise QualificationFailure("The source evidence receipt identity is inconsistent with the checked plan.")
+    acceptance = _mapping(receipt.get("acceptance"), "source evidence receipt acceptance")
+    if acceptance.get("experiment_complete") is not True or acceptance.get("ladder_mapping_selected") is not False:
+        raise QualificationFailure("The source evidence receipt is not a completed non-mapping experiment.")
+    baseline = _mapping(receipt.get("baseline_repeatability"), "source evidence receipt baseline")
+    if baseline.get("cell_id") != source.baseline_cell_id:
+        raise QualificationFailure("The source evidence receipt baseline cell does not match the checked plan.")
+    expected_baseline = {
+        "maximum_repeat_ssim_spread": source.maximum_repeat_ssim_spread,
+        "maximum_repeat_size_ratio_spread": source.maximum_repeat_size_ratio_spread,
+    }
+    for key, expected in expected_baseline.items():
+        observed = _number(baseline.get(key), f"source evidence receipt baseline {key}")
+        if not math.isclose(observed, expected, rel_tol=0.0, abs_tol=1e-15):
+            raise QualificationFailure("The source evidence receipt noise floor does not match the checked plan.")
+
+    cases = _array(receipt.get("cases"), "source evidence receipt cases")
+    metric_keys = {
+        "minimum_frame_same_eye_ssim": source.maximum_minimum_frame_ssim_spread,
+        "p05_frame_same_eye_ssim": source.maximum_p05_frame_ssim_spread,
+        "frame_ssim_standard_deviation": source.maximum_frame_ssim_standard_deviation_spread,
+        "maximum_adjacent_frame_ssim_drop": source.maximum_adjacent_frame_ssim_drop_spread,
+    }
+    maximum_spreads = dict.fromkeys(metric_keys, 0.0)
+    for raw_case in cases:
+        case = _mapping(raw_case, "source evidence receipt case")
+        cells = _array(case.get("cells"), "source evidence receipt case cells")
+        baseline_cells = [
+            _mapping(cell, "source evidence receipt cell")
+            for cell in cells
+            if isinstance(cell, Mapping) and cell.get("id") == source.baseline_cell_id
+        ]
+        if len(baseline_cells) != 1:
+            raise QualificationFailure("The source evidence receipt has an invalid baseline cell set.")
+        runs = _array(baseline_cells[0].get("runs"), "source evidence receipt baseline runs")
+        if len(runs) < 2:
+            raise QualificationFailure("The source evidence receipt baseline has insufficient repeat runs.")
+        for metric_key in metric_keys:
+            values = [_number(_mapping(run, "source evidence receipt run").get(metric_key), metric_key) for run in runs]
+            maximum_spreads[metric_key] = max(maximum_spreads[metric_key], max(values) - min(values))
+    for metric_key, expected in metric_keys.items():
+        if not math.isclose(maximum_spreads[metric_key], expected, rel_tol=0.0, abs_tol=1e-15):
+            raise QualificationFailure("The source evidence receipt per-frame noise floor does not match the plan.")
+
+
 def _validate_prepared_source(binding: CorpusBinding, prepared) -> None:
     expected = binding.expected_case_sources[prepared.definition.case_id]
     if dict(prepared.source_evidence) != dict(expected):
@@ -1445,6 +2034,7 @@ def _run_calibration_unlocked(
     *,
     resume: bool,
     case_ids: Sequence[str] = (),
+    source_evidence_receipt: Path | None = None,
 ) -> dict[str, object]:
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise QualificationFailure("Generated MV-HEVC calibration requires macOS arm64.")
@@ -1453,6 +2043,7 @@ def _run_calibration_unlocked(
             raise QualificationFailure(f"Required bundled tool is unavailable: {tool.name}")
     source_git_sha = _git_head_from_clean_worktree()
     plan, binding, plan_sha256, binding_sha256 = load_experiment_plan(experiment_plan_path)
+    _verify_refinement_source_receipt(plan, source_evidence_receipt)
     if _require_head_tracked_file(experiment_plan_path, "Experiment plan") != plan.relative_path:
         raise QualificationFailure("Experiment plan repository identity changed during validation.")
     if _require_head_tracked_file(plan.binding_path, "Corpus binding") != binding.relative_path:
@@ -1631,6 +2222,7 @@ def run_calibration(
     *,
     resume: bool,
     case_ids: Sequence[str] = (),
+    source_evidence_receipt: Path | None = None,
 ) -> dict[str, object]:
     with calibration_lock(output_path, work_directory):
         return _run_calibration_unlocked(
@@ -1639,16 +2231,18 @@ def run_calibration(
             work_directory,
             resume=resume,
             case_ids=case_ids,
+            source_evidence_receipt=source_evidence_receipt,
         )
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Measure a checked generated MV-HEVC bitrate and merge-quality interaction grid."
+        description="Measure a checked generated MV-HEVC interaction or merge-refinement plan."
     )
     parser.add_argument("--experiment-plan", type=Path, default=DEFAULT_EXPERIMENT_PLAN)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--work-directory", type=Path, required=True)
+    parser.add_argument("--source-evidence-receipt", type=Path)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--case-id", action="append", default=[])
     return parser
@@ -1663,6 +2257,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.work_directory.absolute(),
             resume=args.resume,
             case_ids=args.case_id,
+            source_evidence_receipt=(
+                args.source_evidence_receipt.absolute() if args.source_evidence_receipt is not None else None
+            ),
         )
     except (
         AssertionError,
@@ -1679,6 +2276,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not isinstance(acceptance, Mapping):
         print("Generated MV-HEVC calibration failed: acceptance record is missing.", file=sys.stderr)
         return 2
+    method = evidence.get("method")
+    if isinstance(method, Mapping) and method.get("decision_stage") == "merge_response_refinement_only":
+        return 0 if acceptance.get("refinement_decision_ready") is True else 1
     return 0 if acceptance.get("execution_passed") is True else 1
 
 
