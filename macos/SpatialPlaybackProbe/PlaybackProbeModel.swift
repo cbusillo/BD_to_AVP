@@ -98,6 +98,11 @@ private final class ProbeSeekCompletion: @unchecked Sendable {
 
 @MainActor
 final class PlaybackProbeModel: ObservableObject {
+    private struct PendingImportedAsset {
+        let url: URL
+        let replacedURL: URL?
+    }
+
     static let defaultTransferredAssetName = "Probe.mov"
 
     let player = AVPlayer()
@@ -117,6 +122,7 @@ final class PlaybackProbeModel: ObservableObject {
     @Published private(set) var durationSeconds = 0.0
     @Published private(set) var sourceFileSizeBytes: Int64?
     @Published private(set) var sourceSHA256 = ""
+    @Published private(set) var sourceFingerprintReady = false
     @Published private(set) var sourceVideoFormat = PlaybackVideoFormat.unknown
     @Published private(set) var failure: ProbeFailure?
     @Published private(set) var audioOptions: [ProbeMediaOption] = []
@@ -143,6 +149,7 @@ final class PlaybackProbeModel: ObservableObject {
     private var timeObserver: Any?
     private var statusTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
+    private var fingerprintTask: Task<Void, Never>?
     private var validationTask: Task<Void, Never>?
     private var logSequence = 0
     private var audioGroup: AVMediaSelectionGroup?
@@ -154,6 +161,8 @@ final class PlaybackProbeModel: ObservableObject {
     private var validationGeneration = 0
     private var componentStatusSampleSequence = 0
     private var currentImportedURL: URL?
+    private var pendingImportedAsset: PendingImportedAsset?
+    private var assetLoadedEventEmitted = false
     private var hasBootstrapped = false
     private var actualViewingModeValue = "unknown"
     private var actualSpatialVideoModeValue = "screen"
@@ -205,6 +214,12 @@ final class PlaybackProbeModel: ObservableObject {
         player.currentItem?.status == .readyToPlay && validationPhase != .running
     }
 
+    var canChooseMovie: Bool {
+        !isLoading
+            && validationPhase != .running
+            && (!hasLoadedAsset || sourceFingerprintReady)
+    }
+
     var canSeek: Bool {
         canControlPlayback && durationSeconds.isFinite && durationSeconds > 0
     }
@@ -216,6 +231,7 @@ final class PlaybackProbeModel: ObservableObject {
             && player.currentItem?.status == .readyToPlay
             && durationSeconds.isFinite
             && durationSeconds > 0
+            && sourceFingerprintReady
             && validationPhase != .preparing
             && validationPhase != .running
             && validationPhase != .observations
@@ -261,6 +277,7 @@ final class PlaybackProbeModel: ObservableObject {
     deinit {
         statusTask?.cancel()
         loadTask?.cancel()
+        fingerprintTask?.cancel()
         validationTask?.cancel()
         if let timeObserver {
             player.removeTimeObserver(timeObserver)
@@ -304,20 +321,37 @@ final class PlaybackProbeModel: ObservableObject {
                     ? requestedDisplayName ?? automaticAssetURL.lastPathComponent
                     : automaticAssetURL.lastPathComponent
                 do {
-                    let localURL = try await Self.copyImportedAsset(automaticAssetURL)
+                    let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                    let requiresCacheCopy = Self.requiresAutomaticAssetCacheCopy(
+                        sourceURL: automaticAssetURL,
+                        documentsURL: documentsURL
+                    )
+                    let localURL = requiresCacheCopy
+                        ? try await Self.copyImportedAsset(automaticAssetURL)
+                        : automaticAssetURL
                     guard generation == loadGeneration else {
-                        removeImportedAsset(localURL, reason: "superseded_automatic_import")
+                        if requiresCacheCopy {
+                            removeImportedAsset(localURL, reason: "superseded_automatic_import")
+                        }
                         return
                     }
+                    emit(
+                        "automatic_asset_prepared",
+                        values: ["storage": requiresCacheCopy ? "cache_copy" : "documents_direct"]
+                    )
                     let loaded = await loadAsset(
                         at: localURL,
                         displayName: displayName,
-                        generation: generation
+                        generation: generation,
+                        pendingImportedAsset: requiresCacheCopy
+                            ? PendingImportedAsset(url: localURL, replacedURL: currentImportedURL)
+                            : nil
                     )
-                    if loaded {
-                        currentImportedURL = localURL
-                    } else {
-                        removeImportedAsset(localURL, reason: "automatic_load_failed")
+                    if !loaded && requiresCacheCopy {
+                        discardPendingImportedAsset(
+                            matching: localURL,
+                            reason: "automatic_load_failed"
+                        )
                     }
                 } catch {
                     guard generation == loadGeneration else {
@@ -367,6 +401,10 @@ final class PlaybackProbeModel: ObservableObject {
     }
 
     func importAsset(from sourceURL: URL) {
+        guard canChooseMovie else {
+            return
+        }
+
         loadGeneration += 1
         let requestedGeneration = loadGeneration
         let displayName = sourceURL.lastPathComponent
@@ -395,20 +433,26 @@ final class PlaybackProbeModel: ObservableObject {
                 let loaded = await loadAsset(
                     at: localURL,
                     displayName: displayName,
-                    generation: requestedGeneration
+                    generation: requestedGeneration,
+                    pendingImportedAsset: PendingImportedAsset(
+                        url: localURL,
+                        replacedURL: previousImportedURL
+                    )
                 )
                 guard requestedGeneration == loadGeneration else {
-                    removeImportedAsset(localURL, reason: "superseded_load")
+                    discardPendingImportedAsset(
+                        matching: localURL,
+                        reason: "superseded_load"
+                    )
                     return
                 }
 
-                if loaded {
-                    currentImportedURL = localURL
-                    if let previousImportedURL, previousImportedURL != localURL {
-                        removeImportedAsset(previousImportedURL, reason: "replaced_movie")
-                    }
-                } else {
-                    removeImportedAsset(localURL, reason: "import_load_failed")
+                if !loaded {
+                    restorePreservedPlayerObservation(generation: requestedGeneration)
+                    discardPendingImportedAsset(
+                        matching: localURL,
+                        reason: "import_load_failed"
+                    )
                 }
             } catch {
                 guard requestedGeneration == loadGeneration else {
@@ -419,6 +463,7 @@ final class PlaybackProbeModel: ObservableObject {
                     title: "Movie import failed",
                     message: error.localizedDescription
                 )
+                restorePreservedPlayerObservation(generation: requestedGeneration)
             }
         }
     }
@@ -648,7 +693,12 @@ final class PlaybackProbeModel: ObservableObject {
         emit("subtitle_selected", values: ["name": option?.displayName ?? "Off"])
     }
 
-    private func loadAsset(at url: URL, displayName: String, generation: Int) async -> Bool {
+    private func loadAsset(
+        at url: URL,
+        displayName: String,
+        generation: Int,
+        pendingImportedAsset: PendingImportedAsset?
+    ) async -> Bool {
         guard FileManager.default.fileExists(atPath: url.path) else {
             if generation == loadGeneration {
                 reportLoadFailure(
@@ -661,8 +711,6 @@ final class PlaybackProbeModel: ObservableObject {
         }
 
         isLoading = true
-        independentFrameDecodeSucceeded = false
-        independentFrameDecodeDetail = "not_run"
         let asset = AVURLAsset(url: url)
         let item = AVPlayerItem(asset: asset)
 
@@ -671,14 +719,23 @@ final class PlaybackProbeModel: ObservableObject {
             guard generation == loadGeneration, !Task.isCancelled else {
                 return false
             }
+            emit("asset_load_stage", values: ["stage": "duration_loaded"])
             let videoFormat = try await loadVideoFormat(for: asset)
             guard generation == loadGeneration, !Task.isCancelled else {
                 return false
             }
+            emit("asset_load_stage", values: ["stage": "video_format_loaded"])
             let independentDecodeResult = await Self.decodeFirstVideoFrame(at: url)
             guard generation == loadGeneration, !Task.isCancelled else {
                 return false
             }
+            emit(
+                "asset_load_stage",
+                values: [
+                    "stage": "independent_decode_finished",
+                    "succeeded": String(independentDecodeResult.succeeded),
+                ]
+            )
             let preparedMediaSelections = try await prepareMediaSelections(
                 for: asset,
                 item: item,
@@ -687,14 +744,14 @@ final class PlaybackProbeModel: ObservableObject {
             guard generation == loadGeneration, !Task.isCancelled else {
                 return false
             }
-            let sourceHash = try await PlaybackArtifactHasher.sha256Hex(at: url)
-            guard generation == loadGeneration, !Task.isCancelled else {
-                return false
-            }
+            emit("asset_load_stage", values: ["stage": "media_selections_loaded"])
 
+            fingerprintTask?.cancel()
             validationTask?.cancel()
+            self.pendingImportedAsset = pendingImportedAsset
             failure = nil
             hasLoadedAsset = true
+            assetLoadedEventEmitted = false
             assetName = displayName
             playerItemStatusText = "Loading"
             renderingStatusText = "Loading"
@@ -705,7 +762,8 @@ final class PlaybackProbeModel: ObservableObject {
             currentSeconds = 0
             durationSeconds = duration.seconds.isFinite ? max(0, duration.seconds) : 0
             sourceFileSizeBytes = fileSize(at: url)
-            sourceSHA256 = sourceHash
+            sourceSHA256 = ""
+            sourceFingerprintReady = false
             sourceVideoFormat = videoFormat
             independentFrameDecodeSucceeded = independentDecodeResult.succeeded
             independentFrameDecodeDetail = independentDecodeResult.detail
@@ -723,20 +781,36 @@ final class PlaybackProbeModel: ObservableObject {
             observe(item, generation: generation)
             player.replaceCurrentItem(with: item)
             emit(
-                "asset_loaded",
+                "asset_load_stage",
                 values: [
-                    "file": displayName,
-                    "sha256": sourceHash,
-                    "duration_seconds": formatNumber(durationSeconds),
+                    "stage": "sha256_started",
                     "file_size_bytes": sourceFileSizeBytes.map(String.init) ?? "unknown",
-                    "video_codec": videoFormat.codec.rawValue,
-                    "video_codec_tag": videoFormat.codecTag,
-                    "independent_frame_decode": String(independentDecodeResult.succeeded),
-                    "independent_frame_decode_detail": independentDecodeResult.detail,
-                    "audio_options": String(audioOptions.count),
-                    "subtitle_options": String(max(0, subtitleOptions.count - 1)),
                 ]
             )
+            fingerprintTask = Task { [weak self] in
+                do {
+                    let sourceHash = try await PlaybackArtifactHasher.sha256Hex(at: url)
+                    guard let self, generation == self.loadGeneration, !Task.isCancelled else {
+                        return
+                    }
+                    self.sourceSHA256 = sourceHash
+                    self.sourceFingerprintReady = true
+                    self.emit("asset_load_stage", values: ["stage": "sha256_finished"])
+                    self.markReadyIfPrepared()
+                    self.scheduleAutomatedValidationIfNeeded()
+                } catch is CancellationError {
+                    return
+                } catch {
+                    guard let self, generation == self.loadGeneration, !Task.isCancelled else {
+                        return
+                    }
+                    self.setFailure(
+                        category: .transferFailure,
+                        title: "Movie fingerprint could not be created",
+                        message: error.localizedDescription
+                    )
+                }
+            }
         } catch is CancellationError {
             return false
         } catch {
@@ -790,9 +864,6 @@ final class PlaybackProbeModel: ObservableObject {
         case .readyToPlay:
             playerItemStatusText = "Ready to play"
             isLoading = false
-            if validationPhase == .preparing {
-                validationPhase = .ready
-            }
             let assessment = decodeAssessment
             emit(
                 "player_item",
@@ -812,6 +883,7 @@ final class PlaybackProbeModel: ObservableObject {
                     ]
                 )
             }
+            markReadyIfPrepared()
             scheduleAutomatedValidationIfNeeded()
         case .failed:
             setFailure(
@@ -821,6 +893,83 @@ final class PlaybackProbeModel: ObservableObject {
             )
         @unknown default:
             playerItemStatusText = "Unknown"
+        }
+    }
+
+    private func markReadyIfPrepared() {
+        guard validationPhase == .preparing,
+              PlaybackValidationRules.preparationCompleted(
+                  playerReady: player.currentItem?.status == .readyToPlay,
+                  fingerprintReady: sourceFingerprintReady
+              )
+        else {
+            return
+        }
+
+        finalizePendingImportedAsset()
+        validationPhase = .ready
+        if !assetLoadedEventEmitted {
+            assetLoadedEventEmitted = true
+            emit(
+                "asset_loaded",
+                values: [
+                    "file": assetName,
+                    "sha256": sourceSHA256,
+                    "duration_seconds": formatNumber(durationSeconds),
+                    "file_size_bytes": sourceFileSizeBytes.map(String.init) ?? "unknown",
+                    "video_codec": sourceVideoFormat.codec.rawValue,
+                    "video_codec_tag": sourceVideoFormat.codecTag,
+                    "independent_frame_decode": String(independentFrameDecodeSucceeded),
+                    "independent_frame_decode_detail": independentFrameDecodeDetail,
+                    "audio_options": String(audioOptions.count),
+                    "subtitle_options": String(max(0, subtitleOptions.count - 1)),
+                ]
+            )
+        }
+    }
+
+    private func restorePreservedPlayerObservation(generation: Int) {
+        guard hasLoadedAsset,
+              sourceFingerprintReady,
+              let currentItem = player.currentItem
+        else {
+            return
+        }
+
+        observe(currentItem, generation: generation)
+    }
+
+    private func finalizePendingImportedAsset() {
+        guard let pendingImportedAsset else {
+            return
+        }
+
+        self.pendingImportedAsset = nil
+        currentImportedURL = pendingImportedAsset.url
+        if let replacedURL = pendingImportedAsset.replacedURL,
+           replacedURL != pendingImportedAsset.url
+        {
+            removeImportedAsset(replacedURL, reason: "replaced_movie")
+        }
+    }
+
+    private func discardPendingImportedAsset(matching url: URL? = nil, reason: String) {
+        guard let pendingImportedAsset else {
+            if let url {
+                removeImportedAsset(url, reason: reason)
+            }
+            return
+        }
+        guard url == nil || pendingImportedAsset.url == url else {
+            if let url {
+                removeImportedAsset(url, reason: reason)
+            }
+            return
+        }
+
+        self.pendingImportedAsset = nil
+        if pendingImportedAsset.url != currentImportedURL {
+            removeImportedAsset(pendingImportedAsset.url, reason: reason)
         }
     }
 
@@ -1505,11 +1654,9 @@ final class PlaybackProbeModel: ObservableObject {
 
     private func reportLoadFailure(category: ProbeFailureCategory, title: String, message: String) {
         isLoading = false
-        if hasLoadedAsset {
+        if hasLoadedAsset && sourceFingerprintReady {
             failure = ProbeFailure(category: category, title: title, message: message)
-            if validationPhase == .preparing {
-                validationPhase = .ready
-            }
+            markReadyIfPrepared()
             emit(
                 "failure",
                 values: [
@@ -1524,7 +1671,10 @@ final class PlaybackProbeModel: ObservableObject {
     }
 
     private func setFailure(category: ProbeFailureCategory, title: String, message: String) {
+        fingerprintTask?.cancel()
         validationTask?.cancel()
+        let preservedImportedURL = pendingImportedAsset?.replacedURL
+        discardPendingImportedAsset(reason: "failed_movie")
         isLoading = false
         hasLoadedAsset = false
         player.pause()
@@ -1543,6 +1693,8 @@ final class PlaybackProbeModel: ObservableObject {
         requestSpatialPresentation(false)
         sourceFileSizeBytes = nil
         sourceSHA256 = ""
+        sourceFingerprintReady = false
+        assetLoadedEventEmitted = false
         sourceVideoFormat = .unknown
         independentFrameDecodeSucceeded = false
         independentFrameDecodeDetail = "not_run"
@@ -1552,7 +1704,7 @@ final class PlaybackProbeModel: ObservableObject {
         subtitleGroup = nil
         audioSelectionByID.removeAll()
         subtitleSelectionByID.removeAll()
-        if let currentImportedURL {
+        if let currentImportedURL, currentImportedURL != preservedImportedURL {
             removeImportedAsset(currentImportedURL, reason: "failed_movie")
             self.currentImportedURL = nil
         }
@@ -1653,5 +1805,14 @@ final class PlaybackProbeModel: ObservableObject {
             try fileManager.copyItem(at: sourceURL, to: destinationURL)
             return destinationURL
         }.value
+    }
+
+    nonisolated static func requiresAutomaticAssetCacheCopy(
+        sourceURL: URL,
+        documentsURL: URL
+    ) -> Bool {
+        let sourcePath = sourceURL.standardizedFileURL.path
+        let documentsPath = documentsURL.standardizedFileURL.path
+        return sourcePath != documentsPath && !sourcePath.hasPrefix(documentsPath + "/")
     }
 }

@@ -376,6 +376,10 @@ struct PlaybackSustainedEvidence: Equatable {
 }
 
 enum PlaybackValidationRules {
+    static func preparationCompleted(playerReady: Bool, fingerprintReady: Bool) -> Bool {
+        playerReady && fingerprintReady
+    }
+
     static func result(
         checks: [PlaybackCheck],
         observations: PlaybackObservations
@@ -470,8 +474,11 @@ enum PlaybackReportStore {
 }
 
 enum PlaybackArtifactHasher {
+    private static let chunkSizeBytes = 4 * 1_024 * 1_024
+    private static let interChunkDelayNanoseconds: UInt64 = 25_000_000
+
     static func sha256Hex(at url: URL) async throws -> String {
-        try await Task.detached(priority: .utility) {
+        let hashTask = Task.detached(priority: .background) {
             let fileHandle = try FileHandle(forReadingFrom: url)
             defer {
                 try? fileHandle.close()
@@ -482,14 +489,23 @@ enum PlaybackArtifactHasher {
                 if Task.isCancelled {
                     throw CancellationError()
                 }
-                let data = try fileHandle.read(upToCount: 4 * 1_024 * 1_024) ?? Data()
+                let data = try fileHandle.read(upToCount: chunkSizeBytes) ?? Data()
                 if data.isEmpty {
                     break
                 }
                 hasher.update(data: data)
+                if data.count == chunkSizeBytes {
+                    try await Task.sleep(nanoseconds: interChunkDelayNanoseconds)
+                }
             }
 
             return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-        }.value
+        }
+
+        return try await withTaskCancellationHandler {
+            try await hashTask.value
+        } onCancel: {
+            hashTask.cancel()
+        }
     }
 }

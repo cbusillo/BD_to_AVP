@@ -3,6 +3,44 @@ import XCTest
 @testable import SpatialPlaybackProbe
 
 final class PlaybackValidationTests: XCTestCase {
+    func testPreparationRequiresPlayerAndFingerprint() {
+        XCTAssertFalse(
+            PlaybackValidationRules.preparationCompleted(playerReady: false, fingerprintReady: false)
+        )
+        XCTAssertFalse(
+            PlaybackValidationRules.preparationCompleted(playerReady: true, fingerprintReady: false)
+        )
+        XCTAssertFalse(
+            PlaybackValidationRules.preparationCompleted(playerReady: false, fingerprintReady: true)
+        )
+        XCTAssertTrue(
+            PlaybackValidationRules.preparationCompleted(playerReady: true, fingerprintReady: true)
+        )
+    }
+
+    func testTransferredDocumentMovieDoesNotRequireSecondFullFileCopy() {
+        let documentsURL = URL(fileURLWithPath: "/container/Documents", isDirectory: true)
+
+        XCTAssertFalse(
+            PlaybackProbeModel.requiresAutomaticAssetCacheCopy(
+                sourceURL: documentsURL.appendingPathComponent("Probe.mov"),
+                documentsURL: documentsURL
+            )
+        )
+        XCTAssertFalse(
+            PlaybackProbeModel.requiresAutomaticAssetCacheCopy(
+                sourceURL: documentsURL.appendingPathComponent("Nested/Probe.mov"),
+                documentsURL: documentsURL
+            )
+        )
+        XCTAssertTrue(
+            PlaybackProbeModel.requiresAutomaticAssetCacheCopy(
+                sourceURL: URL(fileURLWithPath: "/external/Probe.mov"),
+                documentsURL: documentsURL
+            )
+        )
+    }
+
     func testPresentationExpectationDefaultsToStereoAndAcceptsSpatialOverride() {
         XCTAssertEqual(PlaybackPresentationExpectation.resolve(environment: [:]), .stereo)
         XCTAssertEqual(
@@ -350,6 +388,28 @@ final class PlaybackValidationTests: XCTestCase {
             digest,
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         )
+    }
+
+    func testArtifactHasherPropagatesCancellation() async throws {
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("playback-validator-cancelled-hash-\(UUID().uuidString).bin")
+        defer {
+            try? FileManager.default.removeItem(at: temporaryURL)
+        }
+        try Data(repeating: 0xA5, count: 5 * 1_024 * 1_024).write(to: temporaryURL)
+
+        let task = Task {
+            try await PlaybackArtifactHasher.sha256Hex(at: temporaryURL)
+        }
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected hashing to stop when its caller is cancelled.")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Expected CancellationError, got \(error).")
+        }
     }
 
     func testReportStoreWritesNamedArchiveAndLatestCopy() throws {

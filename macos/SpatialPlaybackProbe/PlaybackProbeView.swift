@@ -63,7 +63,7 @@ struct PlaybackProbeView: View {
             Button("Choose Movie…") {
                 isImporting = true
             }
-            .disabled(model.validationPhase == .running || model.isLoading)
+            .disabled(!model.canChooseMovie)
             .accessibilityIdentifier("choose-movie-button")
         }
         .padding(.horizontal, 24)
@@ -232,6 +232,7 @@ struct PlaybackProbeView: View {
                 Label("Choose a Movie", systemImage: "folder")
                     .frame(maxWidth: .infinity)
             }
+            .disabled(!model.canChooseMovie)
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
         }
@@ -243,7 +244,7 @@ struct PlaybackProbeView: View {
                 .controlSize(.large)
             Text("Preparing the movie")
                 .font(.title2.bold())
-            Text("The app is preparing a temporary local copy, reading its playback options, and creating a SHA-256 fingerprint. A full-length movie can take several minutes.")
+            Text("The app is reading playback options and creating a full-file SHA-256 fingerprint before checks begin. Files chosen through Files are copied into app storage; transferred Documents files are read in place. A full-length movie can take several minutes.")
                 .foregroundStyle(.secondary)
             assuranceCard
         }

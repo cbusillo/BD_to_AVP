@@ -13,7 +13,7 @@ The validator asks the person wearing Apple Vision Pro to do four things:
 
 Nothing in the app publishes a build, approves a GitHub deployment, merges code, or authorizes a release. A passing report is playback evidence for the named movie and device; it is not a release approval by itself.
 
-Movies selected through Files are copied into the app's cache so playback can continue after the picker closes. The temporary copy is removed when replaced or when the app next launches. Nothing is uploaded.
+Movies selected through Files are copied into the app's cache so playback can continue after the picker closes. The temporary copy is removed when replaced or when the app next launches. A movie transferred into the app's Documents directory for autorun is validated in place instead of being duplicated into cache. Nothing is uploaded.
 
 ## What It Checks Automatically
 
@@ -158,7 +158,7 @@ xcrun devicectl device process launch \
   com.shinycomputers.bd-to-avp.spatial-playback-probe
 ```
 
-Autorun starts the automatic sequence after the player is ready. It stops at the three human observations; automation does not fabricate visible playback answers. The physical UI test uses the spatial calibration expectation, requires all automatic checks to pass, and verifies that the observation screen is presented.
+Autorun starts the automatic sequence only after the player is ready and the full-file SHA-256 fingerprint is complete. Large movies can remain in the preparing state for several minutes while the cooperative background fingerprint pass runs. It stops at the three human observations; automation does not fabricate visible playback answers. The physical UI test uses the spatial calibration expectation, requires all automatic checks to pass, and verifies that the observation screen is presented.
 
 After the operator selects **Finish Check**, retrieve the report directly without asking them to save share-sheet text manually:
 
