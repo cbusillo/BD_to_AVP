@@ -16,6 +16,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from fractions import Fraction
+from itertools import pairwise
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -23,6 +24,7 @@ from scripts import build_mv_hevc_encoder_macos
 from scripts.qualify_direct_mv_hevc import (
     COMMAND_TIMEOUT_SECONDS,
     MP4BOX,
+    SSIM_PATTERN,
     SPATIAL_MEDIA_TOOL,
     QualificationFailure,
     command_path,
@@ -71,6 +73,7 @@ MANIFEST_SCHEMA_VERSION = 1
 EVIDENCE_SCHEMA_VERSION = 1
 CASE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 PRIVATE_SOURCE_PLACEHOLDER = "<private-source>"
+FRAME_SSIM_PATTERN = re.compile(r"(?:^| )All:([0-9.]+)")
 
 
 @dataclass(frozen=True)
@@ -731,6 +734,12 @@ def _encode_generated(
             "hvc1",
             "-b:v",
             f"{eye_bitrate_mbps:g}M",
+            "-bufsize",
+            f"{eye_bitrate_mbps * 2:g}M",
+            "-profile:v",
+            "main",
+            "-r",
+            prepared.definition.output_frame_rate,
             "-y",
             left_path,
             "-map",
@@ -741,6 +750,12 @@ def _encode_generated(
             "hvc1",
             "-b:v",
             f"{eye_bitrate_mbps:g}M",
+            "-bufsize",
+            f"{eye_bitrate_mbps * 2:g}M",
+            "-profile:v",
+            "main",
+            "-r",
+            prepared.definition.output_frame_rate,
             "-y",
             right_path,
         ]
@@ -760,6 +775,8 @@ def _encode_generated(
             "90",
             "--horizontal-disparity-adjustment",
             "0",
+            "--color-depth",
+            "8",
             "--output-file",
             output_path,
         ]
@@ -826,6 +843,66 @@ def _encode_direct(
         raise QualificationFailure("Direct encoder reported an unexpected bitrate setting.")
 
 
+def _ssim_with_frame_scores(ffmpeg: str, candidate: Path, reference: Path) -> tuple[float, list[float]]:
+    with tempfile.NamedTemporaryFile(prefix="bd-to-avp-ssim-", suffix=".log", delete=False) as stats_file:
+        stats_path = Path(stats_file.name)
+    escaped_stats_path = stats_path.as_posix().replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    try:
+        process = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-i",
+                candidate,
+                "-i",
+                reference,
+                "-lavfi",
+                f"[0:v][1:v]ssim=stats_file='{escaped_stats_path}'",
+                "-f",
+                "null",
+                "-",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+        if process.returncode != 0:
+            raise QualificationFailure(f"Per-frame SSIM comparison failed:\n{process.stderr.strip()}")
+        aggregate_matches = SSIM_PATTERN.findall(process.stderr)
+        if not aggregate_matches:
+            raise QualificationFailure("Per-frame SSIM comparison did not report an aggregate score.")
+        frame_scores = [
+            float(match.group(1))
+            for line in stats_path.read_text(encoding="utf-8").splitlines()
+            if (match := FRAME_SSIM_PATTERN.search(line)) is not None
+        ]
+        if not frame_scores:
+            raise QualificationFailure("Per-frame SSIM comparison did not report frame scores.")
+        return float(aggregate_matches[-1]), frame_scores
+    finally:
+        stats_path.unlink(missing_ok=True)
+
+
+def summarize_frame_quality(left_scores: Sequence[float], right_scores: Sequence[float]) -> dict[str, object]:
+    if not left_scores or len(left_scores) != len(right_scores):
+        raise QualificationFailure("Per-frame eye quality scores must be non-empty and aligned.")
+    same_eye_scores = [min(left, right) for left, right in zip(left_scores, right_scores, strict=True)]
+    ordered_scores = sorted(same_eye_scores)
+    p05_index = max(0, math.ceil(len(ordered_scores) * 0.05) - 1)
+    return {
+        "frame_quality_sample_count": len(same_eye_scores),
+        "minimum_frame_same_eye_ssim": min(same_eye_scores),
+        "p05_frame_same_eye_ssim": ordered_scores[p05_index],
+        "median_frame_same_eye_ssim": statistics.median(same_eye_scores),
+        "frame_ssim_standard_deviation": statistics.pstdev(same_eye_scores),
+        "maximum_adjacent_frame_ssim_drop": max(
+            (max(0.0, previous - current) for previous, current in pairwise(same_eye_scores)),
+            default=0.0,
+        ),
+    }
+
+
 def _measure_output(
     ffmpeg: str,
     prepared: PreparedCase,
@@ -833,11 +910,16 @@ def _measure_output(
     split_directory: Path,
     *,
     target_bitrate_mbps: float | None,
+    include_frame_metrics: bool = False,
 ) -> dict[str, object]:
     left, right = split_mv_hevc(output_path, split_directory)
-    left_match = ssim(ffmpeg, left, prepared.reference_left)
+    if include_frame_metrics:
+        left_match, left_frame_scores = _ssim_with_frame_scores(ffmpeg, left, prepared.reference_left)
+        right_match, right_frame_scores = _ssim_with_frame_scores(ffmpeg, right, prepared.reference_right)
+    else:
+        left_match = ssim(ffmpeg, left, prepared.reference_left)
+        right_match = ssim(ffmpeg, right, prepared.reference_right)
     left_cross = ssim(ffmpeg, left, prepared.reference_right)
-    right_match = ssim(ffmpeg, right, prepared.reference_right)
     right_cross = ssim(ffmpeg, right, prepared.reference_left)
     final_bytes = output_path.stat().st_size
     record: dict[str, object] = {
@@ -855,6 +937,8 @@ def _measure_output(
         "sha256": sha256_file(output_path),
         "target_bitrate_mbps": target_bitrate_mbps,
     }
+    if include_frame_metrics:
+        record.update(summarize_frame_quality(left_frame_scores, right_frame_scores))
     shutil.rmtree(split_directory, ignore_errors=True)
     output_path.unlink(missing_ok=True)
     return record

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "binding_id": "generated-mv-hevc-stress-v1",
+  "purpose": "matched_stress_subset_not_full_corpus",
+  "source_manifest": {
+    "path": "docs/qualification/direct-mv-hevc-corpus-v1.json",
+    "corpus_id": "direct-mv-hevc-prerelease-v1",
+    "sha256": "d6cfc14cb9f29e14639d40a96516fe14f47a64df850fe0928833b77b077e87b1"
+  },
+  "selected_case_ids": [
+    "production-dark",
+    "production-grain-rain",
+    "production-motion",
+    "synthetic-animation"
+  ],
+  "expected_case_sources": {
+    "production-dark": {
+      "kind": "mvc_container",
+      "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+      "requested_duration_seconds": 4.0,
+      "segment_bytes": 21840575,
+      "segment_sha256": "ccdb4c1e52246b2f49909c3485af95792c20990cbc79e9925666ace0acd5cf74",
+      "start_seconds": 300.0
+    },
+    "production-grain-rain": {
+      "kind": "mvc_container",
+      "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+      "requested_duration_seconds": 4.0,
+      "segment_bytes": 25291348,
+      "segment_sha256": "901fa6697d34e949748eba636854f208fc97a3e55ed41d21e1fd91d26d6f2038",
+      "start_seconds": 1200.0
+    },
+    "production-motion": {
+      "kind": "mvc_container",
+      "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+      "requested_duration_seconds": 4.0,
+      "segment_bytes": 20585951,
+      "segment_sha256": "d2b655ce10831f8416f701c259a536c1fed815a53ca03be573f5cbcc61bcd76b",
+      "start_seconds": 4500.0
+    },
+    "synthetic-animation": {
+      "filter_sha256": "9e444324f690682ea3a106a91f428b943176f6cc80404a258e072e889184cbb8",
+      "kind": "synthetic",
+      "requested_duration_seconds": 4.0
+    }
+  },
+  "required_coverage": [
+    "dark",
+    "grain",
+    "motion",
+    "animation",
+    "disparity"
+  ]
+}
