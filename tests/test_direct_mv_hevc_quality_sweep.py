@@ -37,6 +37,14 @@ class DirectQualitySweepPlanTests(unittest.TestCase):
         self.assertEqual([candidate.quality for candidate in plan.candidates], [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
         self.assertEqual(len(digest), 64)
 
+    def test_committed_upper_plan_refines_practical_range(self) -> None:
+        plan, digest = load_sweep_plan(DEFAULT_SWEEP_PLAN.with_name("direct-mv-hevc-quality-sweep-upper-v1.json"))
+
+        self.assertEqual(plan.balanced_quality, 0.7)
+        self.assertEqual(plan.runs_per_candidate, 3)
+        self.assertEqual([candidate.quality for candidate in plan.candidates], [0.7, 0.75, 0.8, 0.82, 0.85])
+        self.assertEqual(len(digest), 64)
+
     def test_rejects_plan_without_balanced_candidate(self) -> None:
         document = copy.deepcopy(self.document)
         document["candidates"] = [candidate for candidate in document["candidates"] if candidate["quality"] != 0.7]
