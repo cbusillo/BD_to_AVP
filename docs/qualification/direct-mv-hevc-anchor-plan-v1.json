@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "qualification_id": "direct-mv-hevc-full-length-anchors-v1",
+  "target_id": "direct_mv_hevc",
+  "purpose": "physical_anchor_candidates_not_ladder_mappings",
+  "source": {
+    "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+    "sha256": "a1e3adf85f64a5a667d16ef4aa5a982183acece5af1cf7142e49da620982f97c",
+    "size_bytes": 32056079827,
+    "duration_seconds": 5737.76,
+    "frame_rate": "24000/1001",
+    "frame_count": 137568,
+    "width": 1920,
+    "height": 1080,
+    "pixel_format": "yuv420p"
+  },
+  "prior_evidence": {
+    "coarse": {
+      "path_env": "BD_TO_AVP_DIRECT_QUALITY_COARSE_RECEIPT",
+      "sha256": "0a0cba80f4d4300f2da5ac40c8f6bdf1292f4d7e5b03baa8b3ec1eae80804d96",
+      "sweep_id": "direct-mv-hevc-quality-coarse-v1"
+    },
+    "upper": {
+      "path_env": "BD_TO_AVP_DIRECT_QUALITY_UPPER_RECEIPT",
+      "sha256": "af9df7f73f768b4fa69efc190c82a51f344e8cdaf6725b1b33ebc5d674936219",
+      "sweep_id": "direct-mv-hevc-quality-upper-v1"
+    }
+  },
+  "production_options": {
+    "audio_mode": "automatic",
+    "audio_bitrate_kbps": 384,
+    "audio_preferred_language": "eng",
+    "subtitles": "off",
+    "crop_black_bars": false,
+    "swap_eyes": false,
+    "upscale": false,
+    "fov": 90
+  },
+  "execution": {
+    "minimum_initial_free_bytes": 103079215104,
+    "reserve_free_bytes": 34359738368,
+    "transient_copy_count": 2
+  },
+  "candidates": [
+    {
+      "id": "q070",
+      "quality": 0.7,
+      "position": "balanced",
+      "maximum_size_ratio": 1.0,
+      "rationale": "Reproduce the current Automatic direct MV-HEVC default as the same-source full-length baseline."
+    },
+    {
+      "id": "q085",
+      "quality": 0.85,
+      "position": "high",
+      "maximum_size_ratio": 4.868287573181594,
+      "rationale": "Exercise the highest practical candidate below the measured q0.9 storage cliff."
+    },
+    {
+      "id": "q040",
+      "quality": 0.4,
+      "position": "low",
+      "maximum_size_ratio": 0.24008678027804417,
+      "rationale": "Exercise the lowest measured candidate with strong storage savings and clean corpus separation."
+    }
+  ]
+}
