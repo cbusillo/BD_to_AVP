@@ -400,6 +400,46 @@ class GeneratedCalibrationSummaryTests(unittest.TestCase):
         self.assertFalse(evidence["acceptance"]["ladder_evidence_ready"])
         self.assertFalse(evidence["acceptance"]["ladder_mapping_selected"])
 
+    def test_refinement_allows_intentional_quality_loss_for_lower_merge_tier(self) -> None:
+        plan, _, _, _ = load_experiment_plan(DEFAULT_REFINEMENT_PLAN)
+        binding = self._binding("case-a")
+        evidence: dict[str, object] = {"cases": [self._case_record(plan)]}
+
+        _refresh_summaries(evidence, plan, binding, {"case-a": self._definition()})
+
+        evaluation = next(item for item in evidence["refinement_cell_evaluations"] if item["cell_id"] == "b020-m065")
+        case_evaluation = evaluation["case_evaluations"][0]
+        self.assertFalse(case_evaluation["quality_non_inferiority_passed"])
+        self.assertTrue(evaluation["candidate_constraints_passed"])
+
+    def test_refinement_disqualifies_quality_regression_for_higher_merge_tier(self) -> None:
+        plan, _, _, _ = load_experiment_plan(DEFAULT_REFINEMENT_PLAN)
+        binding = self._binding("case-a")
+        case = self._case_record(plan)
+        higher = next(cell for cell in case["cells"] if cell["id"] == "b020-m079")
+        for run_index, run in enumerate(higher["runs"]):
+            run.update(
+                {
+                    "left_match_ssim": 0.90,
+                    "right_match_ssim": 0.9001,
+                    "left_cross_ssim": 0.70,
+                    "right_cross_ssim": 0.7001,
+                    "min_same_eye_ssim": 0.90,
+                    "min_eye_order_margin": 0.2,
+                    "minimum_frame_same_eye_ssim": 0.89,
+                    "p05_frame_same_eye_ssim": 0.895,
+                    "median_frame_same_eye_ssim": 0.90,
+                    "final_bytes": 1300 + run_index,
+                }
+            )
+        evidence: dict[str, object] = {"cases": [case]}
+
+        _refresh_summaries(evidence, plan, binding, {"case-a": self._definition()})
+
+        evaluation = next(item for item in evidence["refinement_cell_evaluations"] if item["cell_id"] == "b020-m079")
+        self.assertFalse(evaluation["case_evaluations"][0]["quality_non_inferiority_passed"])
+        self.assertFalse(evaluation["candidate_constraints_passed"])
+
     def test_refinement_marks_pair_ambiguous_when_one_case_is_not_distinct(self) -> None:
         plan, _, _, _ = load_experiment_plan(DEFAULT_REFINEMENT_PLAN)
         binding = self._binding("case-a", "case-b", "case-c")

@@ -1346,19 +1346,22 @@ def _refinement_evaluations(
                 "storage_direction_passed": storage_direction_passed,
                 "output_size_cap_passed": output_size_ratio <= thresholds.maximum_output_size_ratio,
             }
-            result["candidate_constraints_passed"] = all(
-                bool(result[key])
-                for key in (
-                    "quality_non_inferiority_passed",
-                    "minimum_frame_non_inferiority_passed",
-                    "p05_frame_non_inferiority_passed",
-                    "temporal_stability_passed",
-                    "repeatability_passed",
-                    "eye_order_passed",
-                    "storage_direction_passed",
-                    "output_size_cap_passed",
+            constraint_keys = [
+                "temporal_stability_passed",
+                "repeatability_passed",
+                "eye_order_passed",
+                "storage_direction_passed",
+                "output_size_cap_passed",
+            ]
+            if cell.merge_quality >= balanced.merge_quality:
+                constraint_keys.extend(
+                    (
+                        "quality_non_inferiority_passed",
+                        "minimum_frame_non_inferiority_passed",
+                        "p05_frame_non_inferiority_passed",
+                    )
                 )
-            )
+            result["candidate_constraints_passed"] = all(bool(result[key]) for key in constraint_keys)
             case_evaluations.append(result)
         complete = len(case_evaluations) == len(case_definitions)
         cell_evaluations.append(

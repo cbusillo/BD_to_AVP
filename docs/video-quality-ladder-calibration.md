@@ -115,6 +115,13 @@ output-size cap prevents an extreme merge setting from becoming technically elig
 per-case threshold result and adjacent response, marks ambiguous pairs for collapse or blinded review, and keeps
 `ladder_evidence_ready` and `ladder_mapping_selected` false.
 
+Aggregate and per-frame non-inferiority to `Balanced` applies only to `Balanced` and higher merge-quality candidates:
+a higher-quality choice must not improve the average while regressing tail or temporal quality. Lower merge-quality
+candidates intentionally trade quality for storage, so they remain eligible when structural, eye-order, temporal,
+repeatability, storage-direction, and size-cap gates pass. Their quality loss must still be monotonic and objectively
+separable before a public step can use them. The later bitrate-minimization stage applies same-tier non-inferiority
+against each accepted merge tier's `20 Mbps/eye` anchor.
+
 After committing the plan and runner in a clean worktree, run the checked refinement with a new output and work
 directory:
 
