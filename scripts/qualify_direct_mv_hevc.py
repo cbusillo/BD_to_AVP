@@ -365,7 +365,7 @@ def ffprobe_stream(ffprobe: str, path: Path) -> dict[str, object]:
             "-count_frames",
             "-show_entries",
             (
-                "stream=codec_name,codec_tag_string,width,height,avg_frame_rate,nb_read_frames,"
+                "stream=codec_name,codec_tag_string,width,height,avg_frame_rate,r_frame_rate,nb_read_frames,"
                 "color_range,color_space,color_transfer,color_primaries"
             ),
             "-of",

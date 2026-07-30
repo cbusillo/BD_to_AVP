@@ -739,6 +739,7 @@ def _validate_run_record(run: Mapping[str, object], cell: ExperimentCell, run_in
         "eye_bitrate_mbps",
         "final_bytes",
         "frame_count",
+        "frame_rate",
         "frame_quality_sample_count",
         "frame_ssim_standard_deviation",
         "left_cross_ssim",
@@ -774,6 +775,8 @@ def _validate_run_record(run: Mapping[str, object], cell: ExperimentCell, run_in
         raise QualificationFailure(f"Cell {cell.cell_id} run {run_index} frame_count must be positive.")
     if type(run.get("frame_quality_sample_count")) is not int or int(run["frame_quality_sample_count"]) <= 0:
         raise QualificationFailure(f"Cell {cell.cell_id} run {run_index} frame quality count must be positive.")
+    if not isinstance(run.get("frame_rate"), str) or not str(run["frame_rate"]).strip():
+        raise QualificationFailure(f"Cell {cell.cell_id} run {run_index} frame rate is invalid.")
     if run.get("codec_name") != "hevc" or run.get("codec_tag_string") != "hvc1":
         raise QualificationFailure(f"Cell {cell.cell_id} run {run_index} is not an hvc1 HEVC stream.")
     _finite_number(run.get("effective_bitrate_mbps"), "effective_bitrate_mbps", positive=True)
@@ -1388,7 +1391,7 @@ def _inspect_generated_output(ffprobe: str, prepared, output_path: Path) -> dict
     if stream.get("nb_read_frames") != str(prepared.frame_count):
         raise QualificationFailure("Generated calibration output has an unexpected decoded frame count.")
     try:
-        if Fraction(str(stream.get("avg_frame_rate"))) != Fraction(prepared.definition.output_frame_rate):
+        if Fraction(str(stream.get("r_frame_rate"))) != Fraction(prepared.definition.output_frame_rate):
             raise QualificationFailure("Generated calibration output has an unexpected frame rate.")
     except (ValueError, ZeroDivisionError) as error:
         raise QualificationFailure("Generated calibration output has an invalid frame rate.") from error
@@ -1422,6 +1425,7 @@ def _inspect_generated_output(ffprobe: str, prepared, output_path: Path) -> dict
         "codec_tag_string": "hvc1",
         "duration_seconds": duration_seconds,
         "frame_count": prepared.frame_count,
+        "frame_rate": str(stream["r_frame_rate"]),
         "observed_box_types": sorted(observed_box_types),
     }
 

@@ -165,6 +165,7 @@ class GeneratedCalibrationSummaryTests(unittest.TestCase):
             "eye_bitrate_mbps": cell.eye_bitrate_mbps,
             "final_bytes": size,
             "frame_count": 96,
+            "frame_rate": "24",
             "frame_quality_sample_count": 96,
             "frame_ssim_standard_deviation": 0.001,
             "left_cross_ssim": left_cross,
