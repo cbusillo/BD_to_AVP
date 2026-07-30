@@ -12,11 +12,13 @@ from scripts.qualify_direct_mv_hevc_quality_sweep import (
     SweepPlan,
     _candidate_order,
     _case_complete,
+    _completed_resume_is_consistent,
     _load_resume_evidence,
     _new_evidence,
     _prepare_owned_work_directory,
     _refresh_summaries,
     _require_head_tracked_file,
+    _reset_case_directory,
     _validate_resume_cases,
     load_sweep_plan,
     parse_sweep_plan,
@@ -257,6 +259,8 @@ class DirectQualitySweepSummaryTests(unittest.TestCase):
 
         self.assertFalse(evidence["candidate_summaries"][0]["complete"])
         self.assertFalse(evidence["acceptance"]["complete"])
+        self.assertFalse(evidence["acceptance"]["strict_monotonicity_passed"])
+        self.assertFalse(evidence["acceptance"]["candidate_separation_passed"])
 
 
 class DirectQualitySweepResumeTests(unittest.TestCase):
@@ -315,6 +319,63 @@ class DirectQualitySweepResumeTests(unittest.TestCase):
         with self.assertRaisesRegex(QualificationFailure, "duplicate run indices"):
             _validate_resume_cases({"cases": [case]}, plan, ["case-a"])
 
+    def test_resume_rejects_contradictory_same_eye_metric(self) -> None:
+        plan = DirectQualitySweepSummaryTests._plan()
+        case = self._resume_case(plan)
+        case["candidates"][0]["runs"][0]["min_same_eye_ssim"] = 0.8
+
+        with self.assertRaisesRegex(QualificationFailure, "min_same_eye_ssim contradicts"):
+            _validate_resume_cases({"cases": [case]}, plan, ["case-a"])
+
+    def test_resume_rejects_contradictory_eye_order_margin(self) -> None:
+        plan = DirectQualitySweepSummaryTests._plan()
+        case = self._resume_case(plan)
+        case["candidates"][0]["runs"][0]["min_eye_order_margin"] = 0.3
+
+        with self.assertRaisesRegex(QualificationFailure, "min_eye_order_margin contradicts"):
+            _validate_resume_cases({"cases": [case]}, plan, ["case-a"])
+
+    def test_completed_resume_is_validated_without_mutation(self) -> None:
+        plan = DirectQualitySweepSummaryTests._plan()
+        case = self._resume_case(plan)
+        definition = CorpusCase(
+            case_id="case-a",
+            tags=("animation",),
+            source={"kind": "synthetic"},
+            eye_width=2,
+            eye_height=2,
+            frame_rate="24",
+        )
+        evidence: dict[str, object] = {
+            "source_git_sha": "b" * 40,
+            "manifest": {"sha256": "a" * 64},
+            "cases": [case],
+            "candidate_summaries": [],
+            "monotonicity_warnings": [],
+            "acceptance": {},
+        }
+        _refresh_summaries(evidence, plan, {"case-a": definition}, all_gated_case_ids={"case-a"})
+        original = copy.deepcopy(evidence)
+
+        self.assertTrue(
+            _completed_resume_is_consistent(
+                evidence,
+                plan,
+                {"case-a": definition},
+                all_gated_case_ids={"case-a"},
+            )
+        )
+        self.assertEqual(evidence, original)
+
+        evidence["acceptance"]["complete"] = False
+        with self.assertRaisesRegex(QualificationFailure, "summaries contradict"):
+            _completed_resume_is_consistent(
+                evidence,
+                plan,
+                {"case-a": definition},
+                all_gated_case_ids={"case-a"},
+            )
+
     def test_nonowned_nonempty_work_directory_is_rejected(self) -> None:
         plan, plan_sha256 = load_sweep_plan(DEFAULT_SWEEP_PLAN)
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -324,6 +385,33 @@ class DirectQualitySweepResumeTests(unittest.TestCase):
 
             with self.assertRaisesRegex(QualificationFailure, "no ownership marker"):
                 _prepare_owned_work_directory(work_directory, plan, plan_sha256)
+
+    def test_case_work_directory_rejects_symlink_to_work_root(self) -> None:
+        plan, plan_sha256 = load_sweep_plan(DEFAULT_SWEEP_PLAN)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            work_directory = _prepare_owned_work_directory(Path(temporary_directory) / "work", plan, plan_sha256)
+            case_link = work_directory / "case-a"
+            case_link.symlink_to(work_directory, target_is_directory=True)
+
+            with self.assertRaisesRegex(QualificationFailure, "must not be a symlink"):
+                _reset_case_directory(work_directory, "case-a")
+
+            self.assertTrue((work_directory / ".bd-to-avp-direct-quality-sweep.json").is_file())
+
+    def test_case_work_directory_rejects_symlink_to_sibling(self) -> None:
+        plan, plan_sha256 = load_sweep_plan(DEFAULT_SWEEP_PLAN)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            work_directory = _prepare_owned_work_directory(Path(temporary_directory) / "work", plan, plan_sha256)
+            sibling = work_directory / "sibling"
+            sibling.mkdir()
+            sentinel = sibling / "preserve.txt"
+            sentinel.write_text("preserve", encoding="utf-8")
+            (work_directory / "case-a").symlink_to(sibling, target_is_directory=True)
+
+            with self.assertRaisesRegex(QualificationFailure, "must not be a symlink"):
+                _reset_case_directory(work_directory, "case-a")
+
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "preserve")
 
     def test_resume_rejects_changed_toolchain(self) -> None:
         plan, plan_sha256 = load_sweep_plan(DEFAULT_SWEEP_PLAN)

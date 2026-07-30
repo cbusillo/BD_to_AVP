@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import os
@@ -311,11 +312,26 @@ def _validate_run_record(run: Mapping[str, object], candidate: SweepCandidate, r
     if type(run.get("final_bytes")) is not int or int(run["final_bytes"]) <= 0:
         raise QualificationFailure(f"Candidate {candidate.candidate_id} run {run_index} final_bytes must be positive.")
     _finite_number(run.get("effective_bitrate_mbps"), "effective_bitrate_mbps", positive=True)
+    ssim_values: dict[str, float] = {}
     for key in ("left_cross_ssim", "left_match_ssim", "min_same_eye_ssim", "right_cross_ssim", "right_match_ssim"):
         value = _finite_number(run.get(key), key)
         if not 0 <= value <= 1:
             raise QualificationFailure(f"Candidate {candidate.candidate_id} run {run_index} {key} must be 0..1.")
-    _finite_number(run.get("min_eye_order_margin"), "min_eye_order_margin")
+        ssim_values[key] = value
+    eye_order_margin = _finite_number(run.get("min_eye_order_margin"), "min_eye_order_margin")
+    expected_same_eye = min(ssim_values["left_match_ssim"], ssim_values["right_match_ssim"])
+    expected_eye_order_margin = min(
+        ssim_values["left_match_ssim"] - ssim_values["left_cross_ssim"],
+        ssim_values["right_match_ssim"] - ssim_values["right_cross_ssim"],
+    )
+    if not math.isclose(ssim_values["min_same_eye_ssim"], expected_same_eye, rel_tol=0, abs_tol=1e-12):
+        raise QualificationFailure(
+            f"Candidate {candidate.candidate_id} run {run_index} min_same_eye_ssim contradicts raw SSIM values."
+        )
+    if not math.isclose(eye_order_margin, expected_eye_order_margin, rel_tol=0, abs_tol=1e-12):
+        raise QualificationFailure(
+            f"Candidate {candidate.candidate_id} run {run_index} min_eye_order_margin contradicts raw SSIM values."
+        )
     _finite_number(run.get("elapsed_seconds"), "elapsed_seconds", positive=True)
     _finite_number(run.get("user_cpu_seconds"), "user_cpu_seconds", nonnegative=True)
     _finite_number(run.get("system_cpu_seconds"), "system_cpu_seconds", nonnegative=True)
@@ -515,10 +531,10 @@ def _refresh_summaries(
         "complete": cells_complete,
         "full_quality_gated_corpus": full_corpus,
         "eye_order_passed": eye_order_passed,
-        "strict_monotonicity_passed": not any(
-            warning["code"] in {"quality_reversal", "storage_reversal"} for warning in warnings
-        ),
-        "candidate_separation_passed": not any(
+        "strict_monotonicity_passed": cells_complete
+        and not any(warning["code"] in {"quality_reversal", "storage_reversal"} for warning in warnings),
+        "candidate_separation_passed": cells_complete
+        and not any(
             warning["code"] in {"quality_not_distinct_from_repeat_noise", "storage_not_distinct_from_repeat_noise"}
             for warning in warnings
         ),
@@ -569,11 +585,20 @@ def _prepare_owned_work_directory(work_directory: Path, plan: SweepPlan, plan_sh
 
 
 def _owned_case_directory(work_directory: Path, case_id: str) -> Path:
-    case_directory = (work_directory / case_id).resolve()
-    try:
-        case_directory.relative_to(work_directory)
-    except ValueError as error:
-        raise QualificationFailure(f"Unsafe corpus case work path: {case_id}") from error
+    resolved_work_directory = work_directory.resolve()
+    relative_case = Path(case_id)
+    if (
+        not case_id
+        or relative_case.is_absolute()
+        or len(relative_case.parts) != 1
+        or relative_case.name in {"", ".", ".."}
+    ):
+        raise QualificationFailure(f"Unsafe corpus case work path: {case_id}")
+    case_directory = resolved_work_directory / relative_case
+    if case_directory.is_symlink():
+        raise QualificationFailure(f"Corpus case work path must not be a symlink: {case_id}")
+    if case_directory.exists() and not case_directory.is_dir():
+        raise QualificationFailure(f"Corpus case work path must be a directory: {case_id}")
     marker = work_directory / WORK_DIRECTORY_MARKER
     if not marker.is_file():
         raise QualificationFailure("Sweep work-directory ownership marker is missing.")
@@ -763,6 +788,32 @@ def _case_complete(case: Mapping[str, object], plan: SweepPlan) -> bool:
     return True
 
 
+def _completed_resume_is_consistent(
+    evidence: Mapping[str, object],
+    plan: SweepPlan,
+    case_definitions: Mapping[str, CorpusCase],
+    *,
+    all_gated_case_ids: set[str],
+) -> bool:
+    cases = evidence.get("cases")
+    if not isinstance(cases, list) or len(cases) != len(case_definitions):
+        return False
+    for case_id in case_definitions:
+        case = _case_record(evidence, case_id)
+        if case is None or not _case_complete(case, plan):
+            return False
+    recomputed = copy.deepcopy(evidence)
+    _refresh_summaries(
+        recomputed,
+        plan,
+        case_definitions,
+        all_gated_case_ids=all_gated_case_ids,
+    )
+    if recomputed != evidence:
+        raise QualificationFailure("Completed resumable sweep summaries contradict validated run records.")
+    return True
+
+
 def run_quality_sweep(
     sweep_plan_path: Path,
     output_path: Path,
@@ -824,6 +875,13 @@ def run_quality_sweep(
         _atomic_write(output_path, evidence)
 
     case_definitions = {case.case_id: case for case in selected_cases}
+    if _completed_resume_is_consistent(
+        evidence,
+        plan,
+        case_definitions,
+        all_gated_case_ids=set(gated_by_id),
+    ):
+        return evidence
     for definition in selected_cases:
         existing_case = _case_record(evidence, definition.case_id)
         case_work = _reset_case_directory(work_directory, definition.case_id)
