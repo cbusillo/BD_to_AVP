@@ -59,6 +59,47 @@ Exit `0` means the selected cells completed and passed eye-order checks; a subse
 remaining explicitly non-qualifying. A complete corpus exits `1` when monotonicity or repeat-noise warnings require
 review, and fatal tool, source, ownership, or evidence errors exit `2`.
 
+## Generated Interaction Sweep
+
+`docs/qualification/generated-mv-hevc-corpus-v1.json` binds a four-case stress subset to the existing direct
+MV-HEVC corpus by path, corpus ID, and SHA-256. It reuses the exact source segments without duplicating their private
+source paths, and pins each prepared segment or synthetic-filter identity from the completed direct sweep. The subset
+covers darkness, grain, motion, animation, and disparity; it is an interaction-search corpus rather than the final
+eight-case qualification corpus.
+
+`docs/qualification/generated-mv-hevc-calibration-sweep-v1.json` defines a checked `3x3` experiment around the
+production `Balanced` default of `20` Mbps per eye plus merge quality `75`. The initial levels are `16`, `20`, and
+`24` Mbps per eye crossed with merge quality `65`, `75`, and `85`. Every cell runs three times with a checked cyclic
+schedule that places each cell in the early, middle, and late third once, exposing repeat noise without confounding
+one setting with thermal order.
+
+The experiment also pins `vendor/ffmpeg-macos-arm64.toml` and refuses PATH-selected media tools. Install the checked
+FFmpeg and FFprobe binaries into the task worktree before running:
+
+```bash
+uv run python -m scripts.vendor_ffmpeg_macos
+```
+
+Run the complete checked stress experiment with:
+
+```bash
+BD_TO_AVP_RELEASE_MVC_SOURCE=/private/source.mkv \
+uv run python scripts/qualify_generated_mv_hevc_calibration.py \
+  --output build/qualification/generated-mv-hevc-interaction-v1.json \
+  --work-directory build/qualification/generated-mv-hevc-interaction-v1-work
+```
+
+Use repeatable `--case-id` options for a bounded smoke. A subset can prove execution and structural validity, but it
+cannot claim the planned stress corpus. The runner requires a clean worktree and HEAD-identical checked manifests,
+records exact source, tool, macOS-build, and Apple hardware identities, uses a single-writer lock, writes evidence
+atomically after every encode, supports `--resume`, and freezes a completed canonical receipt read-only.
+
+The receipt includes the fresh `20/75` repeatability baseline, every raw per-eye SSIM and eye-order measurement,
+per-frame minimum and fifth-percentile SSIM, temporal quality variation and sudden-drop evidence, output size, runtime,
+axis findings, and adjacent `2x2` interaction observations. Findings remain descriptive: this experiment neither
+chooses thresholds nor assigns ladder steps. Its measured noise floor and interaction evidence must be pinned in a
+later refinement plan before seven generated mappings are selected.
+
 ## Validation
 
 Run the structural and production-anchor check with:

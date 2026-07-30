@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "experiment_id": "generated-mv-hevc-interaction-v1",
+  "target_id": "generated_mv_hevc",
+  "purpose": "joint_interaction_characterization_not_ladder_mappings",
+  "design": "full_factorial_3x3",
+  "corpus_binding": {
+    "path": "docs/qualification/generated-mv-hevc-corpus-v1.json",
+    "binding_id": "generated-mv-hevc-stress-v1",
+    "sha256": "2d6d25d89258ec24f28375749f9fe833595eaed005bbcc8d6f798f3efd0d0049"
+  },
+  "balanced": {
+    "eye_bitrate_mbps": 20,
+    "eye_bitrate_source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_GENERATED_EYE_BITRATE_MBPS",
+    "merge_quality": 75,
+    "merge_quality_source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_GENERATED_MERGE_QUALITY"
+  },
+  "runs_per_cell": 3,
+  "execution_order": "cyclic_thirds",
+  "axes": {
+    "eye_bitrate_mbps": [16, 20, 24],
+    "merge_quality": [65, 75, 85]
+  },
+  "toolchain": {
+    "ffmpeg_manifest": {
+      "path": "vendor/ffmpeg-macos-arm64.toml",
+      "sha256": "a8afa883b2128ee925276953193aa179acdb1378873960286082debb20ae1fb5"
+    },
+    "generated_encoder_contract": "production_generated_mv_hevc_v1",
+    "metric_contract": "ffmpeg_ssim_aggregate_and_per_frame_v1"
+  },
+  "decision_policy": {
+    "stage": "interaction_characterization_only",
+    "post_hoc_thresholds_forbidden": true,
+    "ladder_mapping_selected": false
+  }
+}
