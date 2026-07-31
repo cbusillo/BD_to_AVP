@@ -48,11 +48,53 @@ enum QualityStep: String, CaseIterable, Codable, Identifiable {
             "Maximum Detail"
         }
     }
+
+    var detail: String {
+        switch self {
+        case .spaceSaver:
+            "Prioritizes smaller files over fine detail."
+        case .compact:
+            "Reduces storage while preserving everyday clarity."
+        case .efficient:
+            "Leans toward smaller files with moderate detail."
+        case .balanced:
+            "Recommended balance of detail, storage, and compatibility."
+        case .detailed:
+            "Preserves more texture at a higher storage cost."
+        case .highDetail:
+            "Favors fine detail and larger output files."
+        case .maximumDetail:
+            "Prioritizes maximum retained detail and the largest files."
+        }
+    }
 }
 
 enum QualityIntentMode: String, Codable {
     case ladder
     case custom
+}
+
+enum VideoQualitySelection: Equatable, Identifiable {
+    case step(QualityStep)
+    case custom
+
+    var id: String {
+        switch self {
+        case let .step(step):
+            step.rawValue
+        case .custom:
+            "custom"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case let .step(step):
+            step.title
+        case .custom:
+            "Custom"
+        }
+    }
 }
 
 enum VideoQualityTarget: String, CaseIterable, Codable {
@@ -110,6 +152,10 @@ enum VideoQualityCatalog {
             && supports(step, for: .directMVHEVCMetalFX2x)
             && supports(step, for: .generatedMVHEVC)
             && supports(step, for: .fileUpscale)
+    }
+
+    static var selectableMVHEVCSteps: [QualityStep] {
+        QualityStep.allCases.filter(supportsCompleteMVHEVCIntent)
     }
 }
 
@@ -199,6 +245,19 @@ struct VideoQualityIntent: Codable, Equatable {
     var selectedStep: QualityStep? {
         mode == .ladder ? lastLadderStep : nil
     }
+
+    var selection: VideoQualitySelection {
+        switch mode {
+        case .ladder:
+            .step(lastLadderStep)
+        case .custom:
+            .custom
+        }
+    }
+
+    var displayTitle: String {
+        selection.title
+    }
 }
 
 enum VideoQualityStateError: LocalizedError, Equatable {
@@ -228,9 +287,19 @@ extension CodingUserInfoKey {
 }
 
 extension EncodingOptions {
+    mutating func selectVideoOutputMode(_ mode: VideoOutputMode) {
+        if mode == .av1Stereo {
+            selectCustomQuality()
+        }
+        videoOutputMode = mode
+    }
+
     mutating func selectQualityStep(_ step: QualityStep) throws {
         guard VideoQualityCatalog.supportsCompleteMVHEVCIntent(step) else {
             throw VideoQualityStateError.unsupportedStep(step)
+        }
+        guard videoOutputMode == .mvHEVC else {
+            throw VideoQualityStateError.incompatibleOutputMode
         }
         if videoQuality.mode == .custom {
             videoQuality.custom = currentCustomVideoQuality

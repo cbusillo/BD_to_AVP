@@ -28,6 +28,7 @@ final class VideoQualityTests: XCTestCase {
                 "Maximum Detail",
             ]
         )
+        XCTAssertTrue(QualityStep.allCases.allSatisfy { !$0.detail.isEmpty })
     }
 
     func testCatalogPublishesOnlyCheckedBalancedMappings() {
@@ -49,6 +50,7 @@ final class VideoQualityTests: XCTestCase {
         )
         XCTAssertNil(VideoQualityCatalog.mapping(for: .balanced, target: .av1Stereo))
         XCTAssertNil(VideoQualityCatalog.mapping(for: .detailed, target: .directMVHEVC))
+        XCTAssertEqual(VideoQualityCatalog.selectableMVHEVCSteps, [.balanced])
     }
 
     func testDefaultOptionsUseBalancedIntentAndRetainIndependentCustomValues() {
@@ -100,12 +102,55 @@ final class VideoQualityTests: XCTestCase {
     }
 
     func testUnsupportedKnownStepFailsClosed() {
+        for step in QualityStep.allCases where step != .balanced {
+            var options = EncodingOptions()
+
+            XCTAssertThrowsError(try options.selectQualityStep(step)) { error in
+                XCTAssertEqual(error as? VideoQualityStateError, .unsupportedStep(step))
+            }
+            XCTAssertEqual(options.videoQuality.selectedStep, .balanced)
+        }
+    }
+
+    func testSelectionDistinguishesCustomFromBalancedWithoutFallbackAlias() {
         var options = EncodingOptions()
 
-        XCTAssertThrowsError(try options.selectQualityStep(.detailed)) { error in
-            XCTAssertEqual(error as? VideoQualityStateError, .unsupportedStep(.detailed))
+        XCTAssertEqual(options.videoQuality.selection, .step(.balanced))
+        XCTAssertEqual(options.videoQuality.displayTitle, "Balanced")
+
+        options.selectCustomQuality()
+
+        XCTAssertEqual(options.videoQuality.selection, .custom)
+        XCTAssertEqual(options.videoQuality.displayTitle, "Custom")
+        XCTAssertEqual(options.videoQuality.lastLadderStep, .balanced)
+    }
+
+    func testSelectingAV1RestoresRetainedCustomCRF() throws {
+        var options = EncodingOptions()
+        options.editCustomQuality { custom in
+            custom.av1CRF = 24
         }
-        XCTAssertEqual(options.videoQuality.selectedStep, .balanced)
+        try options.selectQualityStep(.balanced)
+
+        options.selectVideoOutputMode(.av1Stereo)
+
+        XCTAssertEqual(options.videoOutputMode, .av1Stereo)
+        XCTAssertEqual(options.videoQuality.selection, .custom)
+        XCTAssertEqual(options.av1CRF, 24)
+    }
+
+    func testSelectingLadderForAV1FailsWithoutMutatingCustomIntent() {
+        var options = EncodingOptions()
+        options.editCustomQuality { custom in
+            custom.av1CRF = 24
+        }
+        options.selectVideoOutputMode(.av1Stereo)
+        let before = options
+
+        XCTAssertThrowsError(try options.selectQualityStep(.balanced)) { error in
+            XCTAssertEqual(error as? VideoQualityStateError, .incompatibleOutputMode)
+        }
+        XCTAssertEqual(options, before)
     }
 
     func testSingleExpertEditPreservesUnrelatedAutomaticBitratePolicies() {

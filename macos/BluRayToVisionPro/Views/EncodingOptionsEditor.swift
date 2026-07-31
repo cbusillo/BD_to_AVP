@@ -21,9 +21,6 @@ struct EncodingOptionsEditor: View {
     let section: EncodingOptionsSection
     let jobOptions: JobOptions?
 
-    @State private var showsAdvancedDirectBitrate: Bool
-    @State private var showsAdvancedGeneratedBitrate: Bool
-
     init(
         options: Binding<EncodingOptions>,
         section: EncodingOptionsSection,
@@ -32,12 +29,6 @@ struct EncodingOptionsEditor: View {
         _options = options
         self.section = section
         self.jobOptions = jobOptions
-        _showsAdvancedDirectBitrate = State(
-            initialValue: options.wrappedValue.mvHEVC.directFinalBitrate.mode == .custom
-        )
-        _showsAdvancedGeneratedBitrate = State(
-            initialValue: options.wrappedValue.mvHEVC.generatedEyeBitrate.mode == .custom
-        )
     }
 
     var body: some View {
@@ -76,121 +67,7 @@ struct EncodingOptionsEditor: View {
 
                     Divider()
                     VideoRouteSummaryView(plan: routePlan)
-
-                    if routePlan.kind == .existingArtifact {
-                        if options.videoOutputMode == .mvHEVC,
-                           routePlan.startStage == ConversionStage.upscaleVideo.rawValue
-                        {
-                            Toggle("AI FX upscale to 2× resolution", isOn: $options.upscaleEnabled)
-                            if options.upscaleEnabled {
-                                EncodingQualitySliderRow(title: "Upscale quality", value: upscaleQualityBinding)
-                            }
-                        }
-                    } else if options.videoOutputMode == .mvHEVC {
-                        if routePlan.usesGeneratedSettings {
-                            EncodingQualitySliderRow(
-                                title: "MV-HEVC merge quality",
-                                value: hevcQualityBinding
-                            )
-
-                            LabeledContent("Eye intermediate bitrate") {
-                                Text(generatedEyeBitrateSummary)
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.trailing)
-                            }
-
-                            DisclosureGroup(
-                                "Advanced eye intermediate bitrate",
-                                isExpanded: $showsAdvancedGeneratedBitrate
-                            ) {
-                                Picker("Bitrate policy", selection: generatedEyeBitrateModeBinding) {
-                                    Text("Automatic (Recommended)").tag(BitrateMode.automatic)
-                                    Text("Custom").tag(BitrateMode.custom)
-                                }
-                                .pickerStyle(.segmented)
-
-                                if options.mvHEVC.generatedEyeBitrate.mode == .custom {
-                                    LabeledContent("Custom target") {
-                                        Stepper(value: generatedEyeBitrateBinding, in: 1 ... 500) {
-                                            Text("\(options.generatedEyeCustomBitrateMbps) Mbps per eye")
-                                                .monospacedDigit()
-                                                .multilineTextAlignment(.trailing)
-                                        }
-                                    }
-                                } else {
-                                    Text(
-                                        "Automatic currently resolves to \(VideoRoutePlan.automaticGeneratedEyeBitrateMbps) Mbps per eye."
-                                    )
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                Text("This target applies only to generated left- and right-eye movies.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        } else {
-                            LabeledContent("Final bitrate") {
-                                Text(directFinalBitrateSummary)
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.trailing)
-                            }
-
-                            DisclosureGroup(
-                                "Advanced final bitrate",
-                                isExpanded: $showsAdvancedDirectBitrate
-                            ) {
-                                Picker("Bitrate policy", selection: directFinalBitrateModeBinding) {
-                                    Text("Automatic (Recommended)").tag(BitrateMode.automatic)
-                                    Text("Custom").tag(BitrateMode.custom)
-                                }
-                                .pickerStyle(.segmented)
-
-                                if options.mvHEVC.directFinalBitrate.mode == .custom {
-                                    LabeledContent("Custom target") {
-                                        Stepper(value: directFinalBitrateBinding, in: 1 ... 500) {
-                                            Text("\(directFinalCustomBitrateMbps) Mbps final")
-                                                .monospacedDigit()
-                                                .multilineTextAlignment(.trailing)
-                                        }
-                                    }
-                                } else {
-                                    Text(
-                                        "Automatic adapts bitrate to source complexity. Output size varies with content."
-                                    )
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                Text("This target applies only when direct MV-HEVC is selected during preflight.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-
-                        Toggle("AI FX upscale to 2× resolution", isOn: $options.upscaleEnabled)
-
-                        if options.upscaleEnabled {
-                            EncodingQualitySliderRow(title: "Upscale quality", value: upscaleQualityBinding)
-                            Toggle(
-                                "Link HEVC and upscale quality",
-                                isOn: linkGeneratedAndUpscaleQualityBinding
-                            )
-                        }
-                    } else {
-                        LabeledContent("AV1 quality") {
-                            Stepper(value: av1CRFBinding, in: 0 ... 63) {
-                                Text("CRF \(options.av1CRF)")
-                                    .monospacedDigit()
-                                    .frame(width: 74, alignment: .trailing)
-                            }
-                        }
-
-                        Text("Lower CRF values preserve more detail and create larger files. CRF 32 is the balanced default.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    VideoQualityEditor(options: $options, context: qualityEditorContext)
                 }
 
                 if routePlan.kind != .existingArtifact {
@@ -231,12 +108,6 @@ struct EncodingOptionsEditor: View {
             }
         }
         .formStyle(.grouped)
-        .onChange(of: options.mvHEVC.directFinalBitrate.mode) { _, mode in
-            showsAdvancedDirectBitrate = mode == .custom
-        }
-        .onChange(of: options.mvHEVC.generatedEyeBitrate.mode) { _, mode in
-            showsAdvancedGeneratedBitrate = mode == .custom
-        }
     }
 
     private var audioAndSubtitlesForm: some View {
@@ -309,29 +180,11 @@ struct EncodingOptionsEditor: View {
         .formStyle(.grouped)
     }
 
-    private var hevcQualityBinding: Binding<Int> {
-        Binding(
-            get: { options.mvHEVC.generatedMergeQuality },
-            set: { newValue in
-                let linked = options.mvHEVC.linkGeneratedAndUpscaleQuality
-                options.editCustomQuality { custom in
-                    custom.generatedMergeQuality = newValue
-                    if linked {
-                        custom.upscaleQuality = newValue
-                    }
-                }
-            }
-        )
-    }
-
     private var videoOutputModeBinding: Binding<VideoOutputMode> {
         Binding(
             get: { options.videoOutputMode },
             set: { mode in
-                if mode == .av1Stereo {
-                    options.selectCustomQuality()
-                }
-                options.videoOutputMode = mode
+                options.selectVideoOutputMode(mode)
             }
         )
     }
@@ -343,144 +196,7 @@ struct EncodingOptionsEditor: View {
         )
     }
 
-    private var generatedEyeBitrateSummary: String {
-        switch options.mvHEVC.generatedEyeBitrate.mode {
-        case .automatic:
-            "Automatic (Recommended) · \(VideoRoutePlan.automaticGeneratedEyeBitrateMbps) Mbps per eye"
-        case .custom:
-            "Custom · \(options.generatedEyeCustomBitrateMbps) Mbps per eye"
-        }
-    }
-
-    private var directFinalBitrateSummary: String {
-        switch options.mvHEVC.directFinalBitrate.mode {
-        case .automatic:
-            "Automatic (Recommended) · content-adaptive quality"
-        case .custom:
-            "Custom · \(directFinalCustomBitrateMbps) Mbps final"
-        }
-    }
-
-    private var directFinalCustomBitrateMbps: Int {
-        options.mvHEVC.directFinalBitrate.customMbps ?? VideoRoutePlan.defaultDirectCustomBitrateMbps
-    }
-
-    private var directFinalBitrateModeBinding: Binding<BitrateMode> {
-        Binding(
-            get: { options.mvHEVC.directFinalBitrate.mode },
-            set: { mode in
-                options.editCustomQuality { custom in
-                    custom.directFinalBitrate.mode = mode
-                    if mode == .custom, custom.directFinalBitrate.customMbps == nil {
-                        custom.directFinalBitrate.customMbps = VideoRoutePlan.defaultDirectCustomBitrateMbps
-                    }
-                }
-            }
-        )
-    }
-
-    private var directFinalBitrateBinding: Binding<Int> {
-        Binding(
-            get: { directFinalCustomBitrateMbps },
-            set: { newValue in
-                options.editCustomQuality { custom in
-                    custom.directFinalBitrate.mode = .custom
-                    custom.directFinalBitrate.customMbps = newValue
-                }
-            }
-        )
-    }
-
-    private var generatedEyeBitrateModeBinding: Binding<BitrateMode> {
-        Binding(
-            get: { options.mvHEVC.generatedEyeBitrate.mode },
-            set: { mode in
-                options.editCustomQuality { custom in
-                    custom.generatedEyeBitrate.mode = mode
-                    if mode == .custom, custom.generatedEyeBitrate.customMbps == nil {
-                        custom.generatedEyeBitrate.customMbps = MVHEVCOptions.defaultGeneratedEyeBitrate
-                    }
-                }
-            }
-        )
-    }
-
-    private var generatedEyeBitrateBinding: Binding<Int> {
-        Binding(
-            get: { options.generatedEyeCustomBitrateMbps },
-            set: { newValue in
-                options.editCustomQuality { custom in
-                    custom.generatedEyeBitrate.mode = .custom
-                    custom.generatedEyeBitrate.customMbps = newValue
-                }
-            }
-        )
-    }
-
-    private var upscaleQualityBinding: Binding<Int> {
-        Binding(
-            get: { options.upscaleQuality },
-            set: { newValue in
-                let linked = options.mvHEVC.linkGeneratedAndUpscaleQuality
-                options.editCustomQuality { custom in
-                    custom.upscaleQuality = newValue
-                    if linked {
-                        custom.generatedMergeQuality = newValue
-                    }
-                }
-            }
-        )
-    }
-
-    private var linkGeneratedAndUpscaleQualityBinding: Binding<Bool> {
-        Binding(
-            get: { options.mvHEVC.linkGeneratedAndUpscaleQuality },
-            set: { linked in
-                options.selectCustomQuality()
-                options.mvHEVC.linkGeneratedAndUpscaleQuality = linked
-                if linked {
-                    let mergeQuality = options.mvHEVC.generatedMergeQuality
-                    options.editCustomQuality { custom in
-                        custom.upscaleQuality = mergeQuality
-                    }
-                }
-            }
-        )
-    }
-
-    private var av1CRFBinding: Binding<Int> {
-        Binding(
-            get: { options.av1CRF },
-            set: { newValue in
-                options.editCustomQuality { custom in
-                    custom.av1CRF = newValue
-                }
-            }
-        )
-    }
-}
-
-private struct EncodingQualitySliderRow: View {
-    let title: String
-    @Binding var value: Int
-
-    var body: some View {
-        LabeledContent(title) {
-            HStack(spacing: 10) {
-                Slider(
-                    value: Binding(
-                        get: { Double(value) },
-                        set: { value = Int($0.rounded()) }
-                    ),
-                    in: 0 ... 100,
-                    step: 1
-                )
-                .frame(minWidth: 120, idealWidth: 180)
-
-                Text("\(value)")
-                    .monospacedDigit()
-                    .frame(width: 30, alignment: .trailing)
-            }
-        }
+    private var qualityEditorContext: VideoQualityEditor.Context {
+        jobOptions.map(VideoQualityEditor.Context.conversion) ?? .profile
     }
 }
