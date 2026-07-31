@@ -13,10 +13,15 @@ from uuid import UUID
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.languages import LanguageCodeError, normalize_language_code
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.modules.video_quality_defaults import (
+    AUTOMATIC_GENERATED_MERGE_QUALITY,
+    DEFAULT_UPSCALE_QUALITY,
+)
 from bd_to_avp.observability import ObservabilityEvent
 from bd_to_avp.runtime import RunContext
 
-PROTOCOL_VERSION = 10
+PROTOCOL_VERSION = 11
+VIDEO_QUALITY_MAPPING_VERSION = 1
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_DETAIL_BYTES = 64 * 1024
@@ -61,6 +66,21 @@ class VideoRouteIntent(StrEnum):
     GENERATED = "generated"
     ENCODE = "encode"
     EXISTING_ARTIFACT = "existing_artifact"
+
+
+class QualityIntentMode(StrEnum):
+    LADDER = "ladder"
+    CUSTOM = "custom"
+
+
+class QualityStep(StrEnum):
+    SPACE_SAVER = "space_saver"
+    COMPACT = "compact"
+    EFFICIENT = "efficient"
+    BALANCED = "balanced"
+    DETAILED = "detailed"
+    HIGH_DETAIL = "high_detail"
+    MAXIMUM_DETAIL = "maximum_detail"
 
 
 class WorkerEventType(StrEnum):
@@ -127,12 +147,27 @@ class BitrateOptions:
 
 
 @dataclass(frozen=True)
+class VideoQualityIntent:
+    mode: QualityIntentMode
+    step: QualityStep | None = None
+    mapping_version: int | None = None
+
+
+@dataclass(frozen=True)
+class GeneratedFallbackOptions:
+    eye_bitrate: BitrateOptions
+    merge_quality: int
+
+
+@dataclass(frozen=True)
 class VideoOptions:
     mode: VideoMode
     route_intent: VideoRouteIntent
+    quality_intent: VideoQualityIntent | None = None
     direct_bitrate: BitrateOptions | None = None
     generated_eye_bitrate: BitrateOptions | None = None
     generated_merge_quality: int | None = None
+    generated_fallback: GeneratedFallbackOptions | None = None
     av1_crf: int | None = None
 
 
@@ -392,6 +427,25 @@ class JobSpec:
                     "Jobs starting after stage 5 must request the existing video artifact route.",
                     job_id=job_id,
                 )
+            active_upscale = job.start_stage == 6 and video.mode is VideoMode.MV_HEVC and encoding.upscale.enabled
+            if encoding.upscale.enabled and not active_upscale:
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    "Existing video artifact routes can enable upscale only when starting at stage 6.",
+                    job_id=job_id,
+                )
+            if active_upscale and video.quality_intent is None:
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    "A stage 6 existing-artifact upscale requires quality intent.",
+                    job_id=job_id,
+                )
+            if not active_upscale and video.quality_intent is not None:
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    "Existing video artifact routes can include quality intent only for an active stage 6 upscale.",
+                    job_id=job_id,
+                )
             return
         if video.route_intent is VideoRouteIntent.EXISTING_ARTIFACT:
             raise WorkerProtocolError(
@@ -421,6 +475,101 @@ class JobSpec:
                 f"{generated_requirement} the generated MV-HEVC route.",
                 job_id=job_id,
             )
+
+    @staticmethod
+    def _validate_video_quality_intent(
+        encoding: EncodingOptions,
+        job_id: str,
+    ) -> None:
+        video = encoding.video
+        if video.route_intent is VideoRouteIntent.EXISTING_ARTIFACT:
+            quality_intent = video.quality_intent
+            if quality_intent is None:
+                return
+            if video.mode is not VideoMode.MV_HEVC or not encoding.upscale.enabled:
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    "Existing video artifact quality intent requires an active MV-HEVC upscale.",
+                    job_id=job_id,
+                )
+            if quality_intent.mode is QualityIntentMode.CUSTOM:
+                return
+            if quality_intent.step is not QualityStep.BALANCED:
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    "Only the checked Balanced quality step is available for existing-artifact upscales.",
+                    job_id=job_id,
+                )
+            if encoding.upscale.quality != DEFAULT_UPSCALE_QUALITY:
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    "Balanced quality intent requires the checked file-upscale quality.",
+                    job_id=job_id,
+                )
+            return
+
+        quality_intent = video.quality_intent
+        if quality_intent is None:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "Active video encoding requires quality intent.",
+                job_id=job_id,
+            )
+        if video.mode is VideoMode.AV1_SBS:
+            if quality_intent.mode is not QualityIntentMode.CUSTOM:
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    "AV1 stereo encoding requires Custom quality intent.",
+                    job_id=job_id,
+                )
+            return
+        if quality_intent.mode is QualityIntentMode.CUSTOM:
+            return
+        if quality_intent.step is not QualityStep.BALANCED:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "Only the checked Balanced quality step is available for MV-HEVC routes.",
+                job_id=job_id,
+            )
+        if encoding.upscale.enabled and encoding.upscale.quality != DEFAULT_UPSCALE_QUALITY:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "Balanced quality intent requires the checked file-upscale quality.",
+                job_id=job_id,
+            )
+
+        if video.route_intent is VideoRouteIntent.AUTOMATIC:
+            fallback = video.generated_fallback
+            if (
+                video.direct_bitrate is None
+                or video.direct_bitrate.mode is not BitrateMode.AUTOMATIC
+                or fallback is None
+                or fallback.eye_bitrate.mode is not BitrateMode.AUTOMATIC
+                or fallback.merge_quality != AUTOMATIC_GENERATED_MERGE_QUALITY
+            ):
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    "Balanced quality intent does not match its direct and generated fallback controls.",
+                    job_id=job_id,
+                )
+            return
+        if video.route_intent is VideoRouteIntent.GENERATED:
+            if (
+                video.generated_eye_bitrate is None
+                or video.generated_eye_bitrate.mode is not BitrateMode.AUTOMATIC
+                or video.generated_merge_quality != AUTOMATIC_GENERATED_MERGE_QUALITY
+            ):
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    "Balanced quality intent does not match its generated route controls.",
+                    job_id=job_id,
+                )
+            return
+        raise WorkerProtocolError(
+            "invalid_encoding_options",
+            "Guided quality intent is not valid for this video route.",
+            job_id=job_id,
+        )
 
     @staticmethod
     def _parse_job_id(value: Any) -> str:
@@ -514,6 +663,7 @@ class JobSpec:
                 "AV1 stereo export always preserves full source resolution per eye.",
                 job_id=job_id,
             )
+        cls._validate_video_quality_intent(encoding, job_id)
         return encoding
 
     @classmethod
@@ -530,7 +680,7 @@ class JobSpec:
         if mode is VideoMode.MV_HEVC and route_intent is VideoRouteIntent.AUTOMATIC:
             cls._require_exact_keys(
                 value,
-                {"mode", "route_intent", "direct_bitrate"},
+                {"mode", "route_intent", "quality_intent", "direct_bitrate", "generated_fallback"},
                 "encoding.video",
                 job_id,
                 error_code="invalid_encoding_options",
@@ -538,16 +688,27 @@ class JobSpec:
             return VideoOptions(
                 mode=mode,
                 route_intent=route_intent,
+                quality_intent=cls._parse_video_quality_intent(value.get("quality_intent"), job_id),
                 direct_bitrate=cls._parse_bitrate_options(
                     value.get("direct_bitrate"),
                     "encoding.video.direct_bitrate",
+                    job_id,
+                ),
+                generated_fallback=cls._parse_generated_fallback(
+                    value.get("generated_fallback"),
                     job_id,
                 ),
             )
         if mode is VideoMode.MV_HEVC and route_intent is VideoRouteIntent.GENERATED:
             cls._require_exact_keys(
                 value,
-                {"mode", "route_intent", "generated_eye_bitrate", "generated_merge_quality"},
+                {
+                    "mode",
+                    "route_intent",
+                    "quality_intent",
+                    "generated_eye_bitrate",
+                    "generated_merge_quality",
+                },
                 "encoding.video",
                 job_id,
                 error_code="invalid_encoding_options",
@@ -555,6 +716,7 @@ class JobSpec:
             return VideoOptions(
                 mode=mode,
                 route_intent=route_intent,
+                quality_intent=cls._parse_video_quality_intent(value.get("quality_intent"), job_id),
                 generated_eye_bitrate=cls._parse_bitrate_options(
                     value.get("generated_eye_bitrate"),
                     "encoding.video.generated_eye_bitrate",
@@ -573,7 +735,7 @@ class JobSpec:
         if mode is VideoMode.AV1_SBS and route_intent is VideoRouteIntent.ENCODE:
             cls._require_exact_keys(
                 value,
-                {"mode", "route_intent", "crf"},
+                {"mode", "route_intent", "quality_intent", "crf"},
                 "encoding.video",
                 job_id,
                 error_code="invalid_encoding_options",
@@ -581,6 +743,7 @@ class JobSpec:
             return VideoOptions(
                 mode=mode,
                 route_intent=route_intent,
+                quality_intent=cls._parse_video_quality_intent(value.get("quality_intent"), job_id),
                 av1_crf=cls._parse_int(
                     value,
                     "crf",
@@ -592,19 +755,131 @@ class JobSpec:
                 ),
             )
         if route_intent is VideoRouteIntent.EXISTING_ARTIFACT:
+            allowed_keys = {"mode", "route_intent"}
+            quality_intent = None
+            if "quality_intent" in value:
+                allowed_keys.add("quality_intent")
+                quality_intent = cls._parse_video_quality_intent(value.get("quality_intent"), job_id)
             cls._require_exact_keys(
                 value,
-                {"mode", "route_intent"},
+                allowed_keys,
                 "encoding.video",
                 job_id,
                 error_code="invalid_encoding_options",
             )
-            return VideoOptions(mode=mode, route_intent=route_intent)
+            return VideoOptions(
+                mode=mode,
+                route_intent=route_intent,
+                quality_intent=quality_intent,
+            )
 
         raise WorkerProtocolError(
             "invalid_encoding_options",
             f"encoding.video route {route_intent.value!r} is not valid for {mode.value!r} output.",
             job_id=job_id,
+        )
+
+    @classmethod
+    def _parse_video_quality_intent(cls, value: Any, job_id: str) -> VideoQualityIntent:
+        if not isinstance(value, Mapping):
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "encoding.video.quality_intent must be an object.",
+                job_id=job_id,
+            )
+        raw_mode = value.get("mode")
+        if not isinstance(raw_mode, str):
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "encoding.video.quality_intent.mode must be a string.",
+                job_id=job_id,
+            )
+        try:
+            mode = QualityIntentMode(raw_mode)
+        except ValueError as error:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                f"Unsupported encoding.video.quality_intent.mode: {raw_mode!r}.",
+                job_id=job_id,
+            ) from error
+
+        if mode is QualityIntentMode.CUSTOM:
+            cls._require_exact_keys(
+                value,
+                {"mode"},
+                "encoding.video.quality_intent",
+                job_id,
+                error_code="invalid_encoding_options",
+            )
+            return VideoQualityIntent(mode=mode)
+
+        cls._require_exact_keys(
+            value,
+            {"mode", "step", "mapping_version"},
+            "encoding.video.quality_intent",
+            job_id,
+            error_code="invalid_encoding_options",
+        )
+        raw_step = value.get("step")
+        if not isinstance(raw_step, str):
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "encoding.video.quality_intent.step must be a string.",
+                job_id=job_id,
+            )
+        try:
+            step = QualityStep(raw_step)
+        except ValueError as error:
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                f"Unsupported encoding.video.quality_intent.step: {raw_step!r}.",
+                job_id=job_id,
+            ) from error
+        mapping_version = cls._parse_int(
+            value,
+            "mapping_version",
+            "encoding.video.quality_intent",
+            job_id,
+            minimum=VIDEO_QUALITY_MAPPING_VERSION,
+            maximum=VIDEO_QUALITY_MAPPING_VERSION,
+            error_code="invalid_encoding_options",
+        )
+        return VideoQualityIntent(
+            mode=mode,
+            step=step,
+            mapping_version=mapping_version,
+        )
+
+    @classmethod
+    def _parse_generated_fallback(cls, value: Any, job_id: str) -> GeneratedFallbackOptions:
+        if not isinstance(value, Mapping):
+            raise WorkerProtocolError(
+                "invalid_encoding_options",
+                "encoding.video.generated_fallback must be an object.",
+                job_id=job_id,
+            )
+        cls._require_exact_keys(
+            value,
+            {"eye_bitrate", "merge_quality"},
+            "encoding.video.generated_fallback",
+            job_id,
+            error_code="invalid_encoding_options",
+        )
+        return GeneratedFallbackOptions(
+            eye_bitrate=cls._parse_bitrate_options(
+                value.get("eye_bitrate"),
+                "encoding.video.generated_fallback.eye_bitrate",
+                job_id,
+            ),
+            merge_quality=cls._parse_int(
+                value,
+                "merge_quality",
+                "encoding.video.generated_fallback",
+                job_id,
+                minimum=0,
+                maximum=100,
+                error_code="invalid_encoding_options",
+            ),
         )
 
     @classmethod

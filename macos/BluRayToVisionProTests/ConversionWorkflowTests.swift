@@ -349,10 +349,11 @@ final class ConversionWorkflowTests: XCTestCase {
             mergeQuality: 75,
             crf: nil,
             fallbackReason: nil,
-            fallbackTiming: nil
+            fallbackTiming: nil,
+            upscaleQuality: 75
         )
         XCTAssertEqual(generated.displayTitle, "Generated MV-HEVC")
-        XCTAssertEqual(generated.settingsSummary, "20 Mbps per eye · merge 75")
+        XCTAssertEqual(generated.settingsSummary, "20 Mbps per eye · merge 75 · upscale 75")
         XCTAssertEqual(generated.displayDetail, "Reusable intermediate files were requested.")
 
         let fallback = VideoRouteReport(
@@ -364,11 +365,28 @@ final class ConversionWorkflowTests: XCTestCase {
             mergeQuality: 75,
             crf: nil,
             fallbackReason: "helper_missing",
-            fallbackTiming: "pre_input"
+            fallbackTiming: "pre_input",
+            qualityIntent: VideoRouteReport.QualityIntent(
+                mode: "ladder",
+                step: "balanced",
+                mappingVersion: 1
+            ),
+            requested: VideoRouteReport.RouteSettings(
+                route: "direct_mv_hevc",
+                bitrateMbps: nil,
+                eyeBitrateMbps: nil,
+                mergeQuality: nil,
+                crf: nil,
+                rateControl: "quality",
+                quality: 0.7,
+                upscaleMode: nil,
+                upscaleQuality: nil
+            )
         )
         XCTAssertEqual(fallback.displayTitle, "Generated MV-HEVC fallback")
         XCTAssertTrue(fallback.isFallback)
         XCTAssertTrue(fallback.displayDetail.contains("packaged direct MV-HEVC encoder was unavailable"))
+        XCTAssertTrue(fallback.displayDetail.contains("Balanced quality intent"))
         XCTAssertTrue(fallback.displayDetail.contains("before conversion input was read"))
 
         let av1 = VideoRouteReport(
@@ -925,6 +943,10 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertTrue(previewSpec.encoding?.upscale.enabled == true)
         XCTAssertNil(fullSpec.encoding?.video.generatedEyeBitrate)
         XCTAssertNil(previewSpec.encoding?.video.generatedEyeBitrate)
+        XCTAssertEqual(fullSpec.encoding?.video.qualityIntent, previewSpec.encoding?.video.qualityIntent)
+        XCTAssertEqual(fullSpec.encoding?.video.generatedFallback, previewSpec.encoding?.video.generatedFallback)
+        XCTAssertEqual(fullSpec.encoding?.video.qualityIntent?.mode, .custom)
+        XCTAssertNil(fullSpec.encoding?.video.qualityIntent?.step)
     }
 
     func testAV1JobSpecClearsIncompatibleUpscaleAndResolution() {
@@ -945,6 +967,7 @@ final class ConversionWorkflowTests: XCTestCase {
 
         XCTAssertEqual(workerEncoding?.video.mode, .av1Stereo)
         XCTAssertEqual(workerEncoding?.video.av1CRF, 28)
+        XCTAssertEqual(workerEncoding?.video.qualityIntent?.mode, .custom)
         XCTAssertEqual(workerEncoding?.resolution, "")
         XCTAssertFalse(workerEncoding?.upscale.enabled == true)
         XCTAssertTrue(encoding.upscaleEnabled)
@@ -1137,9 +1160,18 @@ final class ConversionWorkflowTests: XCTestCase {
         let video = try XCTUnwrap(encoding["video"] as? [String: Any])
         XCTAssertEqual(video["mode"] as? String, "mv_hevc")
         XCTAssertEqual(video["route_intent"] as? String, "automatic")
+        let qualityIntent = try XCTUnwrap(video["quality_intent"] as? [String: Any])
+        XCTAssertEqual(qualityIntent["mode"] as? String, "ladder")
+        XCTAssertEqual(qualityIntent["step"] as? String, "balanced")
+        XCTAssertEqual(qualityIntent["mapping_version"] as? Int, 1)
         let directBitrate = try XCTUnwrap(video["direct_bitrate"] as? [String: Any])
         XCTAssertEqual(directBitrate["mode"] as? String, "automatic")
         XCTAssertNil(directBitrate["mbps"])
+        let generatedFallback = try XCTUnwrap(video["generated_fallback"] as? [String: Any])
+        let fallbackBitrate = try XCTUnwrap(generatedFallback["eye_bitrate"] as? [String: Any])
+        XCTAssertEqual(fallbackBitrate["mode"] as? String, "automatic")
+        XCTAssertNil(fallbackBitrate["mbps"])
+        XCTAssertEqual(generatedFallback["merge_quality"] as? Int, 75)
         XCTAssertNil(video["generated_eye_bitrate"])
         XCTAssertNil(video["generated_merge_quality"])
         XCTAssertNil(video["crf"])
@@ -1181,10 +1213,18 @@ final class ConversionWorkflowTests: XCTestCase {
         let encoding = try XCTUnwrap(json["encoding"] as? [String: Any])
         let video = try XCTUnwrap(encoding["video"] as? [String: Any])
         let bitrate = try XCTUnwrap(video["direct_bitrate"] as? [String: Any])
+        let qualityIntent = try XCTUnwrap(video["quality_intent"] as? [String: Any])
+        let generatedFallback = try XCTUnwrap(video["generated_fallback"] as? [String: Any])
+        let fallbackBitrate = try XCTUnwrap(generatedFallback["eye_bitrate"] as? [String: Any])
 
         XCTAssertEqual(video["route_intent"] as? String, "automatic")
+        XCTAssertEqual(qualityIntent["mode"] as? String, "custom")
+        XCTAssertEqual(Set(qualityIntent.keys), ["mode"])
         XCTAssertEqual(bitrate["mode"] as? String, "custom")
         XCTAssertEqual(bitrate["mbps"] as? Int, 37)
+        XCTAssertEqual(fallbackBitrate["mode"] as? String, "custom")
+        XCTAssertEqual(fallbackBitrate["mbps"] as? Int, 42)
+        XCTAssertEqual(generatedFallback["merge_quality"] as? Int, 88)
         XCTAssertNil(video["generated_eye_bitrate"])
         XCTAssertNil(video["generated_merge_quality"])
     }
@@ -1215,6 +1255,62 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertThrowsError(try JSONEncoder().encode(bitrate))
     }
 
+    func testUncheckedLadderStepFailsWireEncoding() {
+        var options = ConversionOptions()
+        options.encoding.videoQuality.lastLadderStep = .detailed
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/movie.mkv")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            options: options
+        )
+
+        XCTAssertThrowsError(try JSONEncoder().encode(WorkerJobSpec(draft: draft)))
+    }
+
+    func testInvalidRetainedCustomValuesFailWireEncoding() {
+        var options = ConversionOptions()
+        options.encoding.videoQuality.custom.av1CRF = -1
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/movie.mkv")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            options: options
+        )
+
+        XCTAssertThrowsError(try JSONEncoder().encode(WorkerJobSpec(draft: draft)))
+    }
+
+    func testLaterExistingArtifactRestartIgnoresDormantQualityErrors() throws {
+        var options = ConversionOptions()
+        options.encoding.videoQuality.lastLadderStep = .detailed
+        options.encoding.videoQuality.custom.av1CRF = -1
+        options.encoding.upscaleEnabled = true
+        options.job.startStage = .transcodeAudio
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/movie.mkv")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            options: options
+        )
+
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(WorkerJobSpec(draft: draft)))
+                as? [String: Any]
+        )
+        let encoding = try XCTUnwrap(json["encoding"] as? [String: Any])
+        let video = try XCTUnwrap(encoding["video"] as? [String: Any])
+        let upscale = try XCTUnwrap(encoding["upscale"] as? [String: Any])
+
+        XCTAssertEqual(Set(video.keys), ["mode", "route_intent"])
+        XCTAssertEqual(video["route_intent"] as? String, "existing_artifact")
+        XCTAssertEqual(upscale["enabled"] as? Bool, false)
+        XCTAssertNil(upscale["quality"])
+    }
+
     func testReusableIntermediatesSendOnlyGeneratedMVHEVCSettings() throws {
         var options = ConversionOptions()
         options.encoding.mvHEVC.directFinalBitrate = BitratePreference(mode: .custom, customMbps: 37)
@@ -1236,12 +1332,15 @@ final class ConversionWorkflowTests: XCTestCase {
         let encoding = try XCTUnwrap(json["encoding"] as? [String: Any])
         let video = try XCTUnwrap(encoding["video"] as? [String: Any])
         let bitrate = try XCTUnwrap(video["generated_eye_bitrate"] as? [String: Any])
+        let qualityIntent = try XCTUnwrap(video["quality_intent"] as? [String: Any])
 
         XCTAssertEqual(video["route_intent"] as? String, "generated")
+        XCTAssertEqual(qualityIntent["mode"] as? String, "custom")
         XCTAssertEqual(bitrate["mode"] as? String, "custom")
         XCTAssertEqual(bitrate["mbps"] as? Int, 42)
         XCTAssertEqual(video["generated_merge_quality"] as? Int, 88)
         XCTAssertNil(video["direct_bitrate"])
+        XCTAssertNil(video["generated_fallback"])
     }
 
     func testPreviewPreservesGeneratedRouteIntentWithoutKeepingArtifacts() throws {
@@ -1273,9 +1372,12 @@ final class ConversionWorkflowTests: XCTestCase {
         let encoding = try XCTUnwrap(json["encoding"] as? [String: Any])
         let video = try XCTUnwrap(encoding["video"] as? [String: Any])
         let bitrate = try XCTUnwrap(video["generated_eye_bitrate"] as? [String: Any])
+        let qualityIntent = try XCTUnwrap(video["quality_intent"] as? [String: Any])
         let job = try XCTUnwrap(json["job"] as? [String: Any])
 
         XCTAssertEqual(video["route_intent"] as? String, "generated")
+        XCTAssertEqual(qualityIntent["mode"] as? String, "ladder")
+        XCTAssertEqual(qualityIntent["step"] as? String, "balanced")
         XCTAssertEqual(bitrate["mode"] as? String, "automatic")
         XCTAssertNil(bitrate["mbps"])
         XCTAssertEqual(job["keep_files"] as? Bool, false)
@@ -1429,7 +1531,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(changedEncoding.audio, originalEncoding.audio)
     }
 
-    func testConversionJobSpecMatchesSharedV10WorkerFixture() throws {
+    func testConversionJobSpecMatchesSharedV11WorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic
         let draft = ConversionDraft(
@@ -1445,13 +1547,13 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_convert_v10.json")
+            with: sharedFixtureData(named: "native_worker_convert_v11.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
     }
 
-    func testGeneratedRouteJobSpecMatchesSharedV10WorkerFixture() throws {
+    func testGeneratedRouteJobSpecMatchesSharedV11WorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic
         options.job.intermediatePolicy = .reusable
@@ -1468,13 +1570,13 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_convert_generated_v10.json")
+            with: sharedFixtureData(named: "native_worker_convert_generated_v11.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
     }
 
-    func testExistingArtifactJobSpecMatchesSharedV10WorkerFixture() throws {
+    func testExistingArtifactJobSpecMatchesSharedV11WorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic
         options.job.startStage = .upscaleVideo
@@ -1491,7 +1593,32 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_convert_existing_artifact_v10.json")
+            with: sharedFixtureData(named: "native_worker_convert_existing_artifact_v11.json")
+        ) as? NSDictionary
+
+        XCTAssertEqual(encoded, fixture)
+    }
+
+    func testExistingArtifactUpscaleJobSpecMatchesSharedV11WorkerFixture() throws {
+        var options = ConversionOptions()
+        options.encoding.audioHandling = .automatic
+        options.encoding.upscaleEnabled = true
+        options.encoding.upscaleQuality = 66
+        options.job.startStage = .upscaleVideo
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/movie.mkv")),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/output", isDirectory: true),
+            options: options
+        )
+        let spec = WorkerJobSpec(
+            draft: draft,
+            jobID: try XCTUnwrap(UUID(uuidString: "55555555-5555-4555-8555-555555555555"))
+        )
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
+        let fixture = try JSONSerialization.jsonObject(
+            with: sharedFixtureData(named: "native_worker_convert_existing_artifact_upscale_v11.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
@@ -1522,7 +1649,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(source["title_id"] as? String, "provider:playlist-01005")
     }
 
-    func testPreviewJobSpecMatchesSharedV10WorkerFixture() throws {
+    func testPreviewJobSpecMatchesSharedV11WorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic
         let conversion = ConversionDraft(
@@ -1550,13 +1677,13 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_preview_v10.json")
+            with: sharedFixtureData(named: "native_worker_preview_v11.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)
     }
 
-    func testPhysicalDiscJobSpecMatchesSharedV10WorkerFixture() throws {
+    func testPhysicalDiscJobSpecMatchesSharedV11WorkerFixture() throws {
         var options = ConversionOptions()
         options.encoding.audioHandling = .automatic
         let draft = ConversionDraft(
@@ -1585,7 +1712,7 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(spec)) as? NSDictionary
         let fixture = try JSONSerialization.jsonObject(
-            with: sharedFixtureData(named: "native_worker_convert_physical_disc_v10.json")
+            with: sharedFixtureData(named: "native_worker_convert_physical_disc_v11.json")
         ) as? NSDictionary
 
         XCTAssertEqual(encoded, fixture)

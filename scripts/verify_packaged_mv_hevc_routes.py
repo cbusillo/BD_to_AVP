@@ -22,7 +22,7 @@ from typing import Iterator, Mapping, Sequence
 
 import psutil
 
-from bd_to_avp.modules.video_route import (
+from bd_to_avp.modules.video_quality_defaults import (
     AUTOMATIC_DIRECT_QUALITY,
     AUTOMATIC_DIRECT_UPSCALE_QUALITY,
     AUTOMATIC_GENERATED_EYE_BITRATE_MBPS,
@@ -38,7 +38,7 @@ from scripts.qualify_mv_hevc_quality_match import sha256_file
 from scripts.verify_apple_media import verify_apple_media_compatible
 
 
-PROTOCOL_VERSION = 10
+PROTOCOL_VERSION = 11
 WORKER_EXECUTABLE_NAME = "BluRayToVisionProEngine"
 PACKAGE_BIN_RELATIVE_PATH = Path("Contents/Resources/app/bd_to_avp/bin")
 HELPER_RELATIVE_PATH = PACKAGE_BIN_RELATIVE_PATH / "mv-hevc-encoder"
@@ -198,7 +198,12 @@ def build_worker_request(
             "video": {
                 "mode": "mv_hevc",
                 "route_intent": "automatic",
+                "quality_intent": {"mode": "custom"},
                 "direct_bitrate": {"mode": "automatic"},
+                "generated_fallback": {
+                    "eye_bitrate": {"mode": "automatic"},
+                    "merge_quality": 75,
+                },
             },
             "upscale": {"enabled": True, "quality": 80} if upscale_enabled else {"enabled": False},
             "fov": 90,

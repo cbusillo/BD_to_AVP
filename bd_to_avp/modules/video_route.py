@@ -16,14 +16,22 @@ from bd_to_avp.modules.video_quality_defaults import (
     AUTOMATIC_DIRECT_QUALITY,
     AUTOMATIC_DIRECT_UPSCALE_QUALITY,
     AUTOMATIC_GENERATED_EYE_BITRATE_MBPS,
-    AUTOMATIC_GENERATED_MERGE_QUALITY,
+    AUTOMATIC_GENERATED_MERGE_QUALITY as _AUTOMATIC_GENERATED_MERGE_QUALITY,
 )
 from bd_to_avp.observability import ObservabilityContext
 from bd_to_avp.process_runner import ProcessCancelled, ProcessExecutionError, ProcessRunnerError
 from bd_to_avp.runtime import RunContext
-from bd_to_avp.worker.protocol import BitrateMode, BitrateOptions, EncodingOptions, JobOptions, VideoRouteIntent
+from bd_to_avp.worker.protocol import (
+    BitrateMode,
+    BitrateOptions,
+    EncodingOptions,
+    JobOptions,
+    VideoQualityIntent,
+    VideoRouteIntent,
+)
 
 DIRECT_CAPABILITY_TIMEOUT_SECONDS = 15
+AUTOMATIC_GENERATED_MERGE_QUALITY = _AUTOMATIC_GENERATED_MERGE_QUALITY
 
 
 class VideoRouteKind(StrEnum):
@@ -45,29 +53,18 @@ class DirectMVHEVCCapability:
 
 
 @dataclass(frozen=True)
-class ResolvedVideoRoute:
-    intent: VideoRouteIntent
-    selected: VideoRouteKind
-    reason: str
-    output_mode: VideoMode
+class VideoRouteSettings:
+    route: VideoRouteKind
     direct_bitrate_mbps: int | None = None
     direct_quality: float | None = None
     generated_eye_bitrate_mbps: int | None = None
     generated_merge_quality: int | None = None
     av1_crf: int | None = None
-    fallback_reason: str | None = None
     direct_upscale_mode: DirectUpscaleMode | None = None
-
-    @property
-    def uses_in_process_upscale(self) -> bool:
-        return self.selected is VideoRouteKind.DIRECT_MV_HEVC and self.direct_upscale_mode is not None
+    upscale_quality: int | None = None
 
     def report(self) -> dict[str, object]:
-        report: dict[str, object] = {
-            "intent": self.intent.value,
-            "selected": self.selected.value,
-            "reason": self.reason,
-        }
+        report: dict[str, object] = {"route": self.route.value}
         if self.direct_quality is not None:
             report["rate_control"] = "quality"
             report["quality"] = self.direct_quality
@@ -82,6 +79,63 @@ class ResolvedVideoRoute:
             report["crf"] = self.av1_crf
         if self.direct_upscale_mode is not None:
             report["upscale_mode"] = self.direct_upscale_mode.value
+        if self.upscale_quality is not None:
+            report["upscale_quality"] = self.upscale_quality
+        return report
+
+
+@dataclass(frozen=True)
+class ResolvedVideoRoute:
+    intent: VideoRouteIntent
+    selected: VideoRouteKind
+    reason: str
+    output_mode: VideoMode
+    quality_intent: VideoQualityIntent | None = None
+    requested_settings: VideoRouteSettings | None = None
+    direct_bitrate_mbps: int | None = None
+    direct_quality: float | None = None
+    generated_eye_bitrate_mbps: int | None = None
+    generated_merge_quality: int | None = None
+    av1_crf: int | None = None
+    fallback_reason: str | None = None
+    direct_upscale_mode: DirectUpscaleMode | None = None
+    upscale_quality: int | None = None
+
+    @property
+    def uses_in_process_upscale(self) -> bool:
+        return self.selected is VideoRouteKind.DIRECT_MV_HEVC and self.direct_upscale_mode is not None
+
+    def report(self) -> dict[str, object]:
+        report: dict[str, object] = {
+            "intent": self.intent.value,
+            "selected": self.selected.value,
+            "reason": self.reason,
+        }
+        if self.quality_intent is not None:
+            quality_intent: dict[str, object] = {"mode": self.quality_intent.mode.value}
+            if self.quality_intent.step is not None:
+                quality_intent["step"] = self.quality_intent.step.value
+            if self.quality_intent.mapping_version is not None:
+                quality_intent["mapping_version"] = self.quality_intent.mapping_version
+            report["quality_intent"] = quality_intent
+        if self.requested_settings is not None:
+            report["requested"] = self.requested_settings.report()
+        if self.direct_quality is not None:
+            report["rate_control"] = "quality"
+            report["quality"] = self.direct_quality
+        elif self.direct_bitrate_mbps is not None:
+            report["rate_control"] = "average_bitrate"
+            report["bitrate_mbps"] = self.direct_bitrate_mbps
+        if self.generated_eye_bitrate_mbps is not None:
+            report["eye_bitrate_mbps"] = self.generated_eye_bitrate_mbps
+        if self.generated_merge_quality is not None:
+            report["merge_quality"] = self.generated_merge_quality
+        if self.av1_crf is not None:
+            report["crf"] = self.av1_crf
+        if self.direct_upscale_mode is not None:
+            report["upscale_mode"] = self.direct_upscale_mode.value
+        if self.upscale_quality is not None:
+            report["upscale_quality"] = self.upscale_quality
         if self.fallback_reason is not None:
             report["fallback_reason"] = self.fallback_reason
             report["fallback_timing"] = "pre_input"
@@ -108,11 +162,22 @@ def resolve_video_route(
     start_stage = Stage.get_stage(job.start_stage)
 
     if start_stage.value > Stage.COMBINE_TO_MV_HEVC.value:
+        active_upscale_quality = (
+            encoding.upscale.quality
+            if start_stage is Stage.UPSCALE_VIDEO and video.mode is VideoMode.MV_HEVC and encoding.upscale.enabled
+            else None
+        )
         return ResolvedVideoRoute(
             intent=video.route_intent,
             selected=VideoRouteKind.EXISTING_ARTIFACT,
             reason="resume_uses_existing_video_artifact",
             output_mode=video.mode,
+            quality_intent=video.quality_intent if active_upscale_quality is not None else None,
+            requested_settings=VideoRouteSettings(
+                route=VideoRouteKind.EXISTING_ARTIFACT,
+                upscale_quality=active_upscale_quality,
+            ),
+            upscale_quality=active_upscale_quality,
         )
     if video.route_intent is VideoRouteIntent.EXISTING_ARTIFACT:
         raise VideoRoutePreflightError("The existing video artifact route requires a start stage after stage 5.")
@@ -125,6 +190,11 @@ def resolve_video_route(
             selected=VideoRouteKind.AV1,
             reason="av1_output_requested",
             output_mode=video.mode,
+            quality_intent=video.quality_intent,
+            requested_settings=VideoRouteSettings(
+                route=VideoRouteKind.AV1,
+                av1_crf=video.av1_crf,
+            ),
             av1_crf=video.av1_crf,
         )
 
@@ -133,7 +203,13 @@ def resolve_video_route(
 
     generated_reason = _generated_constraint_reason(encoding, job, start_stage)
     if generated_reason is not None:
-        return _generated_route(encoding, reason=generated_reason, use_requested_settings=False)
+        fallback = video.generated_fallback
+        return _generated_route(
+            encoding,
+            reason=generated_reason,
+            eye_bitrate=fallback.eye_bitrate if fallback is not None else None,
+            merge_quality=fallback.merge_quality if fallback is not None else None,
+        )
 
     if video.route_intent is not VideoRouteIntent.AUTOMATIC:
         raise VideoRoutePreflightError(
@@ -141,6 +217,21 @@ def resolve_video_route(
         )
     if video.direct_bitrate is None:
         raise VideoRoutePreflightError("Automatic MV-HEVC routing requires an active direct rate-control policy.")
+
+    direct_upscale_mode = DirectUpscaleMode.METAL_FX if encoding.upscale.enabled else None
+    automatic_quality = (
+        AUTOMATIC_DIRECT_UPSCALE_QUALITY if direct_upscale_mode is not None else AUTOMATIC_DIRECT_QUALITY
+    )
+    direct_bitrate_mbps, direct_quality = _resolve_direct_rate_control(
+        video.direct_bitrate,
+        automatic_quality=automatic_quality,
+    )
+    requested_settings = VideoRouteSettings(
+        route=VideoRouteKind.DIRECT_MV_HEVC,
+        direct_bitrate_mbps=direct_bitrate_mbps,
+        direct_quality=direct_quality,
+        direct_upscale_mode=direct_upscale_mode,
+    )
 
     probe = capability_probe or (
         lambda: probe_direct_mv_hevc_capability(
@@ -151,33 +242,35 @@ def resolve_video_route(
     )
     capability = probe()
     if not capability.supported:
+        if video.generated_fallback is None:
+            raise VideoRoutePreflightError("Automatic MV-HEVC fallback requires generated settings.")
         return _generated_route(
             encoding,
             reason="direct_capability_unavailable",
             fallback_reason=capability.reason,
-            use_requested_settings=False,
+            eye_bitrate=video.generated_fallback.eye_bitrate,
+            merge_quality=video.generated_fallback.merge_quality,
+            requested_settings=requested_settings,
         )
     if encoding.upscale.enabled and not capability.metalfx_2x_mv_hevc_supported:
+        if video.generated_fallback is None:
+            raise VideoRoutePreflightError("Automatic MV-HEVC fallback requires generated settings.")
         return _generated_route(
             encoding,
             reason="direct_capability_unavailable",
             fallback_reason="metalfx_2x_mv_hevc_unavailable",
-            use_requested_settings=False,
+            eye_bitrate=video.generated_fallback.eye_bitrate,
+            merge_quality=video.generated_fallback.merge_quality,
+            requested_settings=requested_settings,
         )
 
-    direct_upscale_mode = DirectUpscaleMode.METAL_FX if encoding.upscale.enabled else None
-    automatic_quality = (
-        AUTOMATIC_DIRECT_UPSCALE_QUALITY if direct_upscale_mode is not None else AUTOMATIC_DIRECT_QUALITY
-    )
-    direct_bitrate_mbps, direct_quality = _resolve_direct_rate_control(
-        video.direct_bitrate,
-        automatic_quality=automatic_quality,
-    )
     return ResolvedVideoRoute(
         intent=video.route_intent,
         selected=VideoRouteKind.DIRECT_MV_HEVC,
         reason="direct_upscale_eligible" if direct_upscale_mode is not None else "direct_eligible",
         output_mode=video.mode,
+        quality_intent=video.quality_intent,
+        requested_settings=requested_settings,
         direct_bitrate_mbps=direct_bitrate_mbps,
         direct_quality=direct_quality,
         direct_upscale_mode=direct_upscale_mode,
@@ -315,25 +408,34 @@ def _generated_route(
     *,
     reason: str,
     fallback_reason: str | None = None,
-    use_requested_settings: bool = True,
+    eye_bitrate: BitrateOptions | None = None,
+    merge_quality: int | None = None,
+    requested_settings: VideoRouteSettings | None = None,
 ) -> ResolvedVideoRoute:
     video = encoding.video
-    if use_requested_settings:
-        if video.generated_eye_bitrate is None or video.generated_merge_quality is None:
-            raise VideoRoutePreflightError("Generated MV-HEVC routing requires active generated settings.")
-        eye_bitrate = _resolve_bitrate(video.generated_eye_bitrate, AUTOMATIC_GENERATED_EYE_BITRATE_MBPS)
-        merge_quality = video.generated_merge_quality
-    else:
-        eye_bitrate = AUTOMATIC_GENERATED_EYE_BITRATE_MBPS
-        merge_quality = AUTOMATIC_GENERATED_MERGE_QUALITY
+    eye_bitrate = eye_bitrate or video.generated_eye_bitrate
+    merge_quality = merge_quality if merge_quality is not None else video.generated_merge_quality
+    if eye_bitrate is None or merge_quality is None:
+        raise VideoRoutePreflightError("Generated MV-HEVC routing requires active generated settings.")
+    resolved_eye_bitrate = _resolve_bitrate(eye_bitrate, AUTOMATIC_GENERATED_EYE_BITRATE_MBPS)
+    upscale_quality = encoding.upscale.quality if encoding.upscale.enabled else None
+    selected_settings = VideoRouteSettings(
+        route=VideoRouteKind.GENERATED_MV_HEVC,
+        generated_eye_bitrate_mbps=resolved_eye_bitrate,
+        generated_merge_quality=merge_quality,
+        upscale_quality=upscale_quality,
+    )
     return ResolvedVideoRoute(
         intent=video.route_intent,
         selected=VideoRouteKind.GENERATED_MV_HEVC,
         reason=reason,
         output_mode=video.mode,
-        generated_eye_bitrate_mbps=eye_bitrate,
+        quality_intent=video.quality_intent,
+        requested_settings=requested_settings or selected_settings,
+        generated_eye_bitrate_mbps=resolved_eye_bitrate,
         generated_merge_quality=merge_quality,
         fallback_reason=fallback_reason,
+        upscale_quality=upscale_quality,
     )
 
 

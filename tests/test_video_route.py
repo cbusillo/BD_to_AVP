@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -11,7 +11,6 @@ from bd_to_avp.modules.video_route import (
     AUTOMATIC_DIRECT_QUALITY,
     AUTOMATIC_DIRECT_UPSCALE_QUALITY,
     AUTOMATIC_GENERATED_EYE_BITRATE_MBPS,
-    AUTOMATIC_GENERATED_MERGE_QUALITY,
     DirectUpscaleMode,
     DirectMVHEVCCapability,
     VideoRouteKind,
@@ -19,17 +18,22 @@ from bd_to_avp.modules.video_route import (
     probe_direct_mv_hevc_capability,
     resolve_video_route,
 )
+from bd_to_avp.modules.video_quality_defaults import AUTOMATIC_GENERATED_MERGE_QUALITY
 from bd_to_avp.process_runner import ProcessExecutionError, ProcessOutputSnapshot
 from bd_to_avp.worker.protocol import (
     AudioOptions,
     BitrateMode,
     BitrateOptions,
     EncodingOptions,
+    GeneratedFallbackOptions,
     JobOptions,
+    QualityIntentMode,
+    QualityStep,
     SubtitleMode,
     SubtitleOptions,
     UpscaleOptions,
     VideoOptions,
+    VideoQualityIntent,
     VideoRouteIntent,
 )
 
@@ -40,6 +44,8 @@ def mv_hevc_encoding(
     direct_bitrate: BitrateOptions | None = None,
     generated_eye_bitrate: BitrateOptions | None = None,
     generated_merge_quality: int | None = None,
+    fallback_eye_bitrate: BitrateOptions | None = None,
+    fallback_merge_quality: int = 75,
     upscale: bool = False,
     fov: int = 90,
     resolution: str = "",
@@ -47,17 +53,44 @@ def mv_hevc_encoding(
 ) -> EncodingOptions:
     if intent is VideoRouteIntent.AUTOMATIC and direct_bitrate is None:
         direct_bitrate = BitrateOptions(BitrateMode.AUTOMATIC)
+    generated_fallback = None
+    if intent is VideoRouteIntent.AUTOMATIC:
+        generated_fallback = GeneratedFallbackOptions(
+            eye_bitrate=fallback_eye_bitrate or BitrateOptions(BitrateMode.AUTOMATIC),
+            merge_quality=fallback_merge_quality,
+        )
     if intent is VideoRouteIntent.GENERATED:
         generated_eye_bitrate = generated_eye_bitrate or BitrateOptions(BitrateMode.AUTOMATIC)
         generated_merge_quality = generated_merge_quality if generated_merge_quality is not None else 75
+    uses_custom_quality = (
+        (direct_bitrate is not None and direct_bitrate.mode is BitrateMode.CUSTOM)
+        or (generated_eye_bitrate is not None and generated_eye_bitrate.mode is BitrateMode.CUSTOM)
+        or generated_merge_quality not in {None, 75}
+        or (
+            generated_fallback is not None
+            and (generated_fallback.eye_bitrate.mode is BitrateMode.CUSTOM or generated_fallback.merge_quality != 75)
+        )
+    )
+    if intent is VideoRouteIntent.EXISTING_ARTIFACT:
+        quality_intent = None
+    elif uses_custom_quality:
+        quality_intent = VideoQualityIntent(mode=QualityIntentMode.CUSTOM)
+    else:
+        quality_intent = VideoQualityIntent(
+            mode=QualityIntentMode.LADDER,
+            step=QualityStep.BALANCED,
+            mapping_version=1,
+        )
     return EncodingOptions(
         audio=AudioOptions(AudioMode.AUTOMATIC, 384, "eng"),
         video=VideoOptions(
             mode=VideoMode.MV_HEVC,
             route_intent=intent,
+            quality_intent=quality_intent,
             direct_bitrate=direct_bitrate,
             generated_eye_bitrate=generated_eye_bitrate,
             generated_merge_quality=generated_merge_quality,
+            generated_fallback=generated_fallback,
         ),
         upscale=UpscaleOptions(enabled=upscale, quality=75 if upscale else None),
         fov=fov,
@@ -75,6 +108,7 @@ def av1_encoding(*, existing: bool = False) -> EncodingOptions:
         video=VideoOptions(
             mode=VideoMode.AV1_SBS,
             route_intent=VideoRouteIntent.EXISTING_ARTIFACT if existing else VideoRouteIntent.ENCODE,
+            quality_intent=None if existing else VideoQualityIntent(mode=QualityIntentMode.CUSTOM),
             av1_crf=None if existing else 31,
         ),
         upscale=UpscaleOptions(enabled=False),
@@ -120,6 +154,14 @@ class VideoRouteResolverTests(unittest.TestCase):
         self.assertEqual(route.report()["quality"], AUTOMATIC_DIRECT_QUALITY)
         self.assertNotIn("bitrate_mbps", route.report())
         self.assertEqual(route.report()["reason"], "direct_eligible")
+        self.assertEqual(
+            route.report()["quality_intent"],
+            {"mode": "ladder", "step": "balanced", "mapping_version": 1},
+        )
+        self.assertEqual(
+            route.report()["requested"],
+            {"route": "direct_mv_hevc", "rate_control": "quality", "quality": 0.7},
+        )
 
     def test_selects_direct_custom_bitrate(self) -> None:
         route = resolve_video_route(
@@ -146,6 +188,29 @@ class VideoRouteResolverTests(unittest.TestCase):
         self.assertEqual(route.generated_merge_quality, AUTOMATIC_GENERATED_MERGE_QUALITY)
         self.assertEqual(route.report()["fallback_timing"], "pre_input")
         self.assertNotIn("bitrate_mbps", route.report())
+        self.assertEqual(route.report()["quality_intent"], {"mode": "custom"})
+        self.assertEqual(
+            route.report()["requested"],
+            {"route": "direct_mv_hevc", "rate_control": "average_bitrate", "bitrate_mbps": 37},
+        )
+
+    def test_custom_fallback_uses_retained_generated_settings(self) -> None:
+        route = resolve_video_route(
+            mv_hevc_encoding(
+                direct_bitrate=BitrateOptions(BitrateMode.CUSTOM, 37),
+                fallback_eye_bitrate=BitrateOptions(BitrateMode.CUSTOM, 42),
+                fallback_merge_quality=88,
+            ),
+            job_options(),
+            capability_probe=lambda: DirectMVHEVCCapability(False, "stereo_mv_hevc_encode_unavailable"),
+        )
+
+        self.assertEqual(route.generated_eye_bitrate_mbps, 42)
+        self.assertEqual(route.generated_merge_quality, 88)
+        self.assertEqual(route.report()["eye_bitrate_mbps"], 42)
+        self.assertEqual(route.report()["merge_quality"], 88)
+        self.assertEqual(route.report()["quality_intent"], {"mode": "custom"})
+        self.assertEqual(route.report()["requested"]["bitrate_mbps"], 37)
 
     def test_generated_request_uses_only_generated_settings(self) -> None:
         probe = Mock()
@@ -216,6 +281,8 @@ class VideoRouteResolverTests(unittest.TestCase):
         self.assertEqual(route.selected, VideoRouteKind.GENERATED_MV_HEVC)
         self.assertEqual(route.fallback_reason, "metalfx_2x_mv_hevc_unavailable")
         self.assertEqual(route.report()["fallback_timing"], "pre_input")
+        self.assertEqual(route.report()["requested"]["upscale_mode"], "metalfx")
+        self.assertEqual(route.report()["upscale_quality"], 75)
 
     def test_incompatible_upscale_geometry_forces_generated_without_probe(self) -> None:
         cases = (
@@ -268,7 +335,37 @@ class VideoRouteResolverTests(unittest.TestCase):
         )
 
         self.assertEqual(route.selected, VideoRouteKind.EXISTING_ARTIFACT)
+        self.assertIsNone(route.quality_intent)
+        self.assertIsNone(route.upscale_quality)
         probe.assert_not_called()
+
+    def test_stage_six_existing_artifact_upscale_reports_active_quality(self) -> None:
+        encoding = mv_hevc_encoding(intent=VideoRouteIntent.EXISTING_ARTIFACT, upscale=True)
+        encoding = replace(
+            encoding,
+            video=replace(
+                encoding.video,
+                quality_intent=VideoQualityIntent(mode=QualityIntentMode.CUSTOM),
+            ),
+            upscale=UpscaleOptions(enabled=True, quality=66),
+        )
+
+        route = resolve_video_route(encoding, job_options(start_stage=6))
+
+        self.assertEqual(route.selected, VideoRouteKind.EXISTING_ARTIFACT)
+        self.assertEqual(route.quality_intent, VideoQualityIntent(mode=QualityIntentMode.CUSTOM))
+        self.assertEqual(route.upscale_quality, 66)
+        self.assertEqual(
+            route.report(),
+            {
+                "intent": "existing_artifact",
+                "selected": "existing_artifact",
+                "reason": "resume_uses_existing_video_artifact",
+                "quality_intent": {"mode": "custom"},
+                "requested": {"route": "existing_artifact", "upscale_quality": 66},
+                "upscale_quality": 66,
+            },
+        )
 
     def test_existing_artifact_intent_before_stage_six_is_rejected(self) -> None:
         with self.assertRaisesRegex(VideoRoutePreflightError, "requires a start stage after stage 5"):

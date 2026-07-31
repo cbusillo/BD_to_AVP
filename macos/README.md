@@ -55,7 +55,7 @@ embedded conversion worker, verifies cooperative cancellation can reap a
 separate-session child and remove its preview workspace, and then performs
 strict deep signature validation.
 
-The app and engine use worker protocol v10. Audio and subtitle language controls
+The app and engine use worker protocol v11. Audio and subtitle language controls
 are independent: built-in and new profile options default to preferred-only
 English audio, while existing profile choices remain unchanged and version-1
 through version-3 profiles migrate to all-languages behavior. Profile document
@@ -65,12 +65,14 @@ Version-1 through version-4 profiles migrate losslessly: exact production
 defaults become `Balanced`, while every other combination remains `Custom`.
 Only checked `Balanced` mappings are currently resolvable; the other stable step
 identifiers fail closed until their route mappings are qualified.
-Protocol v10 projects only the active route controls. Eligible automatic
-MV-HEVC jobs use the packaged direct encoder during stage 4, while reusable
-intermediates, software encoding, upscaling, and restart workflows retain the
-generated/file-backed route. A valid unavailable capability result visibly
-falls back before media inspection, and preview child jobs report the same
-resolved route contract.
+Protocol v11 projects the requested route controls plus one concrete generated
+fallback only when direct capability selection can require it. Eligible
+automatic MV-HEVC jobs use the packaged direct encoder during stage 4, while
+reusable intermediates, software encoding, incompatible upscale geometry, and
+restart workflows retain the generated/file-backed route. A valid unavailable
+capability result preserves the same Balanced or Custom intent, visibly reports
+requested and selected settings before media inspection, and preview child jobs
+use the same route contract as full conversions.
 Preferred-only audio keeps every metadata-language match and visibly falls
 back to the source-default or first audio stream when no match exists. MKV,
 MTS, M2TS, ISO, and Blu-ray-folder sources can create an isolated beginning,
@@ -80,7 +82,7 @@ capacity-checked per-job workspace on the selected destination so full-title
 preparation does not consume the Mac startup volume. The finalized result stays
 leased from that workspace while the embedded AVPlayer is open and is removed
 when the preview closes.
-See `docs/native-worker-protocol-v10.md` for the request, event, and ownership
+See `docs/native-worker-protocol-v11.md` for the request, event, and ownership
 contract.
 
 The application targets Apple Silicon macOS 26 or later and uses the pinned
