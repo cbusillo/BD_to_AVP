@@ -17,7 +17,7 @@ baseline for `0.3.0` and later.
 | Area | Result | Evidence |
 | --- | --- | --- |
 | Deployment floor | Pass | XcodeGen and `MACOSX_DEPLOYMENT_TARGET` remain 26.0; package compatibility is enforced separately. |
-| Profiles | Pass | Built-ins are immutable; custom profiles support create, duplicate, rename, edit, reorder, delete, default selection, atomic persistence, and corruption recovery. Built-in and new profile options default to preferred-only English audio. Profile document v4 stores explicit choices, while v1-v3 migrations retain all audio languages. |
+| Profiles | Pass | Built-ins are immutable; custom profiles support create, duplicate, rename, edit, reorder, delete, default selection, atomic persistence, and corruption recovery. Built-in and new profile options default to preferred-only English audio. Profile document v5 stores stable quality intent plus independent retained Custom controls; v1-v4 migrate losslessly and v1-v3 retain all audio languages. |
 | Current-job isolation | Pass | Profile writes contain only reusable encoding settings. Source, destination, preview intent, and job/recovery options remain outside the stored profile. |
 | Audio and subtitle languages | Pass | Audio defaults to `Preferred Language Only` with English selected and also exposes `All Languages`; subtitles retain separate handling and `Subtitle language` controls. Job and profile summaries label Video, Audio, and Subtitles independently. |
 | Standard platform controls | Pass | The application uses platform windows, toolbar/menu roles, forms, pickers, lists, split views, materials, and AVKit playback rather than custom replicas. |

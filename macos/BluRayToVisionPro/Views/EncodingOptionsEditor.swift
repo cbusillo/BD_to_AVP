@@ -53,7 +53,7 @@ struct EncodingOptionsEditor: View {
         Form {
             Group {
                 Section("Video Output") {
-                    Picker("Format", selection: $options.videoOutputMode) {
+                    Picker("Format", selection: videoOutputModeBinding) {
                         ForEach(VideoOutputMode.allCases) { mode in
                             Text(mode.title).tag(mode)
                         }
@@ -174,17 +174,12 @@ struct EncodingOptionsEditor: View {
                             EncodingQualitySliderRow(title: "Upscale quality", value: upscaleQualityBinding)
                             Toggle(
                                 "Link HEVC and upscale quality",
-                                isOn: $options.mvHEVC.linkGeneratedAndUpscaleQuality
+                                isOn: linkGeneratedAndUpscaleQualityBinding
                             )
-                                .onChange(of: options.mvHEVC.linkGeneratedAndUpscaleQuality) { _, linked in
-                                    if linked {
-                                        options.upscaleQuality = options.mvHEVC.generatedMergeQuality
-                                    }
-                                }
                         }
                     } else {
                         LabeledContent("AV1 quality") {
-                            Stepper(value: $options.av1CRF, in: 0 ... 63) {
+                            Stepper(value: av1CRFBinding, in: 0 ... 63) {
                                 Text("CRF \(options.av1CRF)")
                                     .monospacedDigit()
                                     .frame(width: 74, alignment: .trailing)
@@ -318,10 +313,25 @@ struct EncodingOptionsEditor: View {
         Binding(
             get: { options.mvHEVC.generatedMergeQuality },
             set: { newValue in
-                options.mvHEVC.generatedMergeQuality = newValue
-                if options.mvHEVC.linkGeneratedAndUpscaleQuality {
-                    options.upscaleQuality = newValue
+                let linked = options.mvHEVC.linkGeneratedAndUpscaleQuality
+                options.editCustomQuality { custom in
+                    custom.generatedMergeQuality = newValue
+                    if linked {
+                        custom.upscaleQuality = newValue
+                    }
                 }
+            }
+        )
+    }
+
+    private var videoOutputModeBinding: Binding<VideoOutputMode> {
+        Binding(
+            get: { options.videoOutputMode },
+            set: { mode in
+                if mode == .av1Stereo {
+                    options.selectCustomQuality()
+                }
+                options.videoOutputMode = mode
             }
         )
     }
@@ -359,9 +369,11 @@ struct EncodingOptionsEditor: View {
         Binding(
             get: { options.mvHEVC.directFinalBitrate.mode },
             set: { mode in
-                options.mvHEVC.directFinalBitrate.mode = mode
-                if mode == .custom, options.mvHEVC.directFinalBitrate.customMbps == nil {
-                    options.mvHEVC.directFinalBitrate.customMbps = VideoRoutePlan.defaultDirectCustomBitrateMbps
+                options.editCustomQuality { custom in
+                    custom.directFinalBitrate.mode = mode
+                    if mode == .custom, custom.directFinalBitrate.customMbps == nil {
+                        custom.directFinalBitrate.customMbps = VideoRoutePlan.defaultDirectCustomBitrateMbps
+                    }
                 }
             }
         )
@@ -371,8 +383,10 @@ struct EncodingOptionsEditor: View {
         Binding(
             get: { directFinalCustomBitrateMbps },
             set: { newValue in
-                options.mvHEVC.directFinalBitrate.mode = .custom
-                options.mvHEVC.directFinalBitrate.customMbps = newValue
+                options.editCustomQuality { custom in
+                    custom.directFinalBitrate.mode = .custom
+                    custom.directFinalBitrate.customMbps = newValue
+                }
             }
         )
     }
@@ -381,9 +395,11 @@ struct EncodingOptionsEditor: View {
         Binding(
             get: { options.mvHEVC.generatedEyeBitrate.mode },
             set: { mode in
-                options.mvHEVC.generatedEyeBitrate.mode = mode
-                if mode == .custom, options.mvHEVC.generatedEyeBitrate.customMbps == nil {
-                    options.mvHEVC.generatedEyeBitrate.customMbps = MVHEVCOptions.defaultGeneratedEyeBitrate
+                options.editCustomQuality { custom in
+                    custom.generatedEyeBitrate.mode = mode
+                    if mode == .custom, custom.generatedEyeBitrate.customMbps == nil {
+                        custom.generatedEyeBitrate.customMbps = MVHEVCOptions.defaultGeneratedEyeBitrate
+                    }
                 }
             }
         )
@@ -393,8 +409,10 @@ struct EncodingOptionsEditor: View {
         Binding(
             get: { options.generatedEyeCustomBitrateMbps },
             set: { newValue in
-                options.mvHEVC.generatedEyeBitrate.mode = .custom
-                options.mvHEVC.generatedEyeBitrate.customMbps = newValue
+                options.editCustomQuality { custom in
+                    custom.generatedEyeBitrate.mode = .custom
+                    custom.generatedEyeBitrate.customMbps = newValue
+                }
             }
         )
     }
@@ -403,9 +421,39 @@ struct EncodingOptionsEditor: View {
         Binding(
             get: { options.upscaleQuality },
             set: { newValue in
-                options.upscaleQuality = newValue
-                if options.mvHEVC.linkGeneratedAndUpscaleQuality {
-                    options.mvHEVC.generatedMergeQuality = newValue
+                let linked = options.mvHEVC.linkGeneratedAndUpscaleQuality
+                options.editCustomQuality { custom in
+                    custom.upscaleQuality = newValue
+                    if linked {
+                        custom.generatedMergeQuality = newValue
+                    }
+                }
+            }
+        )
+    }
+
+    private var linkGeneratedAndUpscaleQualityBinding: Binding<Bool> {
+        Binding(
+            get: { options.mvHEVC.linkGeneratedAndUpscaleQuality },
+            set: { linked in
+                options.selectCustomQuality()
+                options.mvHEVC.linkGeneratedAndUpscaleQuality = linked
+                if linked {
+                    let mergeQuality = options.mvHEVC.generatedMergeQuality
+                    options.editCustomQuality { custom in
+                        custom.upscaleQuality = mergeQuality
+                    }
+                }
+            }
+        )
+    }
+
+    private var av1CRFBinding: Binding<Int> {
+        Binding(
+            get: { options.av1CRF },
+            set: { newValue in
+                options.editCustomQuality { custom in
+                    custom.av1CRF = newValue
                 }
             }
         )

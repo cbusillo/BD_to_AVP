@@ -444,6 +444,8 @@ struct DiagnosticJobSettings: Encodable, Equatable {
     let profileKind: String
     let builtInProfileID: String?
     let videoOutputMode: String
+    let videoQualityMode: String
+    let videoQualityStep: String?
     let requestedVideoRoute: String
     let routeRequirement: String?
     let directBitrateMode: String?
@@ -473,11 +475,14 @@ struct DiagnosticJobSettings: Encodable, Equatable {
 
     init(draft: ConversionDraft) {
         let encoding = draft.options.encoding
+        let videoQuality = try? encoding.normalizedQualityState().videoQuality
         let job = draft.options.job
         let route = VideoRoutePlan(options: draft.options)
         profileKind = draft.profile.kind.rawValue
         builtInProfileID = draft.profile.isBuiltIn ? draft.profile.id : nil
         videoOutputMode = encoding.videoOutputMode.rawValue
+        videoQualityMode = videoQuality?.mode.rawValue ?? "invalid"
+        videoQualityStep = videoQuality?.selectedStep?.rawValue
         requestedVideoRoute = route.kind.rawValue
         routeRequirement = route.generatedRequirement?.identifier
         directBitrateMode = route.kind == .directMVHEVC

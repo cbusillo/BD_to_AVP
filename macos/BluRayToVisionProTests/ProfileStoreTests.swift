@@ -79,12 +79,74 @@ final class ProfileStoreTests: XCTestCase {
         let store = ProfileStore(fileURL: fileURL)
 
         XCTAssertNil(store.loadErrorMessage)
+        XCTAssertEqual(store.customProfiles[0].options.videoQuality.mode, .ladder)
+        XCTAssertEqual(store.customProfiles[0].options.videoQuality.selectedStep, .balanced)
         XCTAssertEqual(store.customProfiles[0].options.mvHEVC.generatedEyeBitrate.mode, .automatic)
         XCTAssertEqual(store.customProfiles[0].options.mvHEVC.generatedEyeBitrate.customMbps, 20)
+        XCTAssertEqual(store.customProfiles[0].options.mvHEVC.directFinalBitrate.customMbps, 40)
+        XCTAssertEqual(store.customProfiles[0].options.videoQuality.custom.directFinalBitrate.customMbps, 40)
+        XCTAssertEqual(store.customProfiles[0].options.videoQuality.custom.generatedEyeBitrate.customMbps, 20)
+        XCTAssertEqual(store.customProfiles[0].options.videoQuality.custom.directFinalBitrate.mode, .automatic)
+        XCTAssertEqual(store.customProfiles[0].options.videoQuality.custom.generatedEyeBitrate.mode, .automatic)
+        XCTAssertEqual(store.customProfiles[1].options.videoQuality.mode, .custom)
         XCTAssertEqual(store.customProfiles[1].options.mvHEVC.generatedEyeBitrate.mode, .custom)
         XCTAssertEqual(store.customProfiles[1].options.mvHEVC.generatedEyeBitrate.customMbps, 35)
         XCTAssertTrue(store.customProfiles.allSatisfy { $0.options.mvHEVC.directFinalBitrate.mode == .automatic })
-        XCTAssertTrue(store.customProfiles.allSatisfy { $0.options.mvHEVC.directFinalBitrate.customMbps == nil })
+        XCTAssertNil(store.customProfiles[1].options.mvHEVC.directFinalBitrate.customMbps)
+    }
+
+    @MainActor
+    func testCurrentVersionFourExplicitCustomEqualToBalancedRemainsCustom() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        var options = EncodingOptions()
+        options.mvHEVC.generatedEyeBitrate = BitratePreference(mode: .custom, customMbps: 20)
+        let document: [String: Any] = [
+            "version": 4,
+            "profiles": [
+                [
+                    "id": "A4CC523E-72FA-4F36-A38D-1FB0D6A84742",
+                    "name": "Explicit Twenty",
+                    "options": try currentVersionFourOptions(options),
+                ]
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]).write(to: fileURL)
+
+        let store = ProfileStore(fileURL: fileURL)
+
+        let migrated = try XCTUnwrap(store.customProfiles.first?.options)
+        XCTAssertEqual(migrated.videoQuality.mode, .custom)
+        XCTAssertEqual(migrated.mvHEVC.generatedEyeBitrate.mode, .custom)
+        XCTAssertEqual(migrated.mvHEVC.generatedEyeBitrate.customMbps, 20)
+    }
+
+    @MainActor
+    func testInvalidLegacyQualityValuesUseCorruptionRecovery() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        let document: [String: Any] = [
+            "version": 4,
+            "profiles": [
+                [
+                    "id": "A4CC523E-72FA-4F36-A38D-1FB0D6A84742",
+                    "name": "Invalid Bitrate",
+                    "options": try legacyVersionFourOptions(leftRightBitrate: 501),
+                ]
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
+        try data.write(to: fileURL)
+
+        let store = ProfileStore(fileURL: fileURL)
+
+        XCTAssertTrue(store.customProfiles.isEmpty)
+        XCTAssertNotNil(store.loadErrorMessage)
+        XCTAssertEqual(try Data(contentsOf: fileURL.appendingPathExtension("corrupt")), data)
     }
 
     @MainActor
@@ -104,10 +166,11 @@ final class ProfileStoreTests: XCTestCase {
         let document = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
         )
-        XCTAssertEqual(document["version"] as? Int, 4)
+        XCTAssertEqual(document["version"] as? Int, 5)
         let profiles = try XCTUnwrap(document["profiles"] as? [[String: Any]])
         let persistedOptions = try XCTUnwrap(profiles.first?["options"] as? [String: Any])
         let currentMVHEVC = try XCTUnwrap(persistedOptions["mvHEVC"] as? [String: Any])
+        let videoQuality = try XCTUnwrap(persistedOptions["videoQuality"] as? [String: Any])
         let directFinalBitrate = try XCTUnwrap(currentMVHEVC["directFinalBitrate"] as? [String: Any])
         let generatedEyeBitrate = try XCTUnwrap(currentMVHEVC["generatedEyeBitrate"] as? [String: Any])
 
@@ -118,6 +181,8 @@ final class ProfileStoreTests: XCTestCase {
         XCTAssertEqual(persistedOptions["hevcQuality"] as? Int, 84)
         XCTAssertEqual(persistedOptions["leftRightBitrate"] as? Int, 37)
         XCTAssertEqual(persistedOptions["linkQuality"] as? Bool, false)
+        XCTAssertEqual(videoQuality["mode"] as? String, "custom")
+        XCTAssertEqual(videoQuality["lastLadderStep"] as? String, "balanced")
 
         let stableOptions = try JSONDecoder().decode(
             StableEncodingOptionsV4.self,
@@ -126,6 +191,65 @@ final class ProfileStoreTests: XCTestCase {
         XCTAssertEqual(stableOptions.hevcQuality, 84)
         XCTAssertEqual(stableOptions.leftRightBitrate, 37)
         XCTAssertFalse(stableOptions.linkQuality)
+    }
+
+    @MainActor
+    func testVersionFiveRequiresVideoQualityIntent() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        let document: [String: Any] = [
+            "version": 5,
+            "profiles": [
+                [
+                    "id": "A4CC523E-72FA-4F36-A38D-1FB0D6A84742",
+                    "name": "Missing Intent",
+                    "options": try legacyVersionFourOptions(leftRightBitrate: 20),
+                ]
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
+        try data.write(to: fileURL)
+
+        let store = ProfileStore(fileURL: fileURL)
+
+        XCTAssertTrue(store.customProfiles.isEmpty)
+        XCTAssertNotNil(store.loadErrorMessage)
+        XCTAssertEqual(try Data(contentsOf: fileURL.appendingPathExtension("corrupt")), data)
+    }
+
+    @MainActor
+    func testVersionFiveRejectsIntentAndConcreteMirrorMismatch() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        var options = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(EncodingOptions())) as? [String: Any]
+        )
+        var mvHEVC = try XCTUnwrap(options["mvHEVC"] as? [String: Any])
+        mvHEVC["generatedMergeQuality"] = 84
+        options["mvHEVC"] = mvHEVC
+        options["hevcQuality"] = 84
+        let document: [String: Any] = [
+            "version": 5,
+            "profiles": [
+                [
+                    "id": "A4CC523E-72FA-4F36-A38D-1FB0D6A84742",
+                    "name": "Mismatched Intent",
+                    "options": options,
+                ]
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
+        try data.write(to: fileURL)
+
+        let store = ProfileStore(fileURL: fileURL)
+
+        XCTAssertTrue(store.customProfiles.isEmpty)
+        XCTAssertNotNil(store.loadErrorMessage)
+        XCTAssertEqual(try Data(contentsOf: fileURL.appendingPathExtension("corrupt")), data)
     }
 
     func testEncodingOptionsRejectMismatchedCompatibilityKeys() throws {
@@ -182,7 +306,7 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testVersionTwoProfilesMigrateAllAudioHandlingRawValuesToVersionFour() throws {
+    func testVersionTwoProfilesMigrateAllAudioHandlingRawValuesToVersionFive() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -223,7 +347,7 @@ final class ProfileStoreTests: XCTestCase {
         let persistedDocument = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
         )
-        XCTAssertEqual(persistedDocument["version"] as? Int, 4)
+        XCTAssertEqual(persistedDocument["version"] as? Int, 5)
         let persistedProfiles = try XCTUnwrap(persistedDocument["profiles"] as? [[String: Any]])
         let persistedRawValues = try persistedProfiles.map { profile in
             let options = try XCTUnwrap(profile["options"] as? [String: Any])
@@ -233,7 +357,7 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testVersionThreeProfilesMigrateToAllAudioLanguagesInVersionFour() throws {
+    func testVersionThreeProfilesMigrateToAllAudioLanguagesInVersionFive() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -263,7 +387,7 @@ final class ProfileStoreTests: XCTestCase {
         let persistedDocument = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
         )
-        XCTAssertEqual(persistedDocument["version"] as? Int, 4)
+        XCTAssertEqual(persistedDocument["version"] as? Int, 5)
         let persistedProfiles = try XCTUnwrap(persistedDocument["profiles"] as? [[String: Any]])
         let persistedOptions = try XCTUnwrap(persistedProfiles.first?["options"] as? [String: Any])
         let audioLanguages = try XCTUnwrap(persistedOptions["audioLanguages"] as? [String: Any])
@@ -272,7 +396,7 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testVersionOneProfilesMigrateAtomicallyToCanonicalVersionFourData() throws {
+    func testVersionOneProfilesMigrateAtomicallyToCanonicalVersionFiveData() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -342,7 +466,7 @@ final class ProfileStoreTests: XCTestCase {
         let migratedJSON = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
         )
-        XCTAssertEqual(migratedJSON["version"] as? Int, 4)
+        XCTAssertEqual(migratedJSON["version"] as? Int, 5)
         let profiles = try XCTUnwrap(migratedJSON["profiles"] as? [[String: Any]])
         let options = try XCTUnwrap(profiles.first?["options"] as? [String: Any])
         let subtitles = try XCTUnwrap(options["subtitles"] as? [String: Any])
@@ -539,8 +663,11 @@ final class ProfileStoreTests: XCTestCase {
 
         XCTAssertTrue(store.customProfiles.isEmpty)
         XCTAssertNotNil(store.loadErrorMessage)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
-        XCTAssertEqual(try Data(contentsOf: fileURL.appendingPathExtension("corrupt")), document)
+        XCTAssertEqual(try Data(contentsOf: fileURL), document)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.appendingPathExtension("corrupt").path))
+        XCTAssertThrowsError(try store.createProfile(name: "Blocked", options: EncodingOptions())) { error in
+            XCTAssertEqual(error as? ProfileStoreError, .recoveryRequired)
+        }
     }
 
     private func temporaryDirectoryURL() -> URL {
@@ -572,8 +699,17 @@ final class ProfileStoreTests: XCTestCase {
             try JSONSerialization.jsonObject(with: JSONEncoder().encode(EncodingOptions())) as? [String: Any]
         )
         options.removeValue(forKey: "mvHEVC")
+        options.removeValue(forKey: "videoQuality")
         options["leftRightBitrate"] = leftRightBitrate
         return options
+    }
+
+    private func currentVersionFourOptions(_ options: EncodingOptions) throws -> [String: Any] {
+        var encoded = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(options)) as? [String: Any]
+        )
+        encoded.removeValue(forKey: "videoQuality")
+        return encoded
     }
 
     private func legacyProfile(

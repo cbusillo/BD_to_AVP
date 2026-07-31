@@ -53,10 +53,11 @@ final class ProfileStore: ObservableObject {
 
     func createProfile(name: String, options: EncodingOptions) throws -> String {
         let normalizedName = try validatedName(name)
+        let normalizedOptions = try normalizedQualityOptions(options)
         let profile = EncodingProfile(
             id: "custom.\(idGenerator().uuidString.lowercased())",
             name: normalizedName,
-            options: options,
+            options: normalizedOptions,
             kind: .custom,
             systemImage: "slider.horizontal.3"
         )
@@ -86,7 +87,7 @@ final class ProfileStore: ObservableObject {
         let normalizedName = try validatedName(name, excluding: identifier)
         var updatedProfiles = customProfiles
         updatedProfiles[index].name = normalizedName
-        updatedProfiles[index].options = options
+        updatedProfiles[index].options = try normalizedQualityOptions(options)
         try persist(updatedProfiles)
         customProfiles = updatedProfiles
     }
@@ -136,6 +137,14 @@ final class ProfileStore: ObservableObject {
         }
     }
 
+    private func normalizedQualityOptions(_ options: EncodingOptions) throws -> EncodingOptions {
+        do {
+            return try options.normalizedQualityState()
+        } catch {
+            throw ProfileStoreError.invalidDocument
+        }
+    }
+
     private func loadProfiles() {
         guard fileManager.fileExists(atPath: fileURL.path) else {
             return
@@ -159,13 +168,22 @@ final class ProfileStore: ObservableObject {
                 let legacyDocument = try decoder.decode(LegacyProfileDocumentV3.self, from: data)
                 storedProfiles = legacyDocument.profiles.map { $0.migrated() }
                 needsMigration = true
+            case 4:
+                decoder.userInfo[.requiresVideoQualityIntent] = false
+                storedProfiles = try decoder.decode(ProfileDocument.self, from: data).profiles
+                needsMigration = true
             case ProfileDocument.currentVersion:
+                decoder.userInfo[.requiresVideoQualityIntent] = true
                 storedProfiles = try decoder.decode(ProfileDocument.self, from: data).profiles
                 needsMigration = false
             default:
                 throw ProfileStoreError.unsupportedVersion(version)
             }
-            let loadedProfiles = try restoreProfiles(storedProfiles)
+            let loadedProfiles = try restoreProfiles(storedProfiles).map { profile in
+                var normalizedProfile = profile
+                normalizedProfile.options = try normalizedQualityOptions(profile.options)
+                return normalizedProfile
+            }
             if needsMigration {
                 do {
                     try persist(loadedProfiles)
@@ -177,15 +195,27 @@ final class ProfileStore: ObservableObject {
                 }
             }
             customProfiles = loadedProfiles
-        } catch {
-            if let recoveryURL = preserveUnreadableFile() {
-                loadErrorMessage = "Custom profiles could not be loaded. The original library was preserved as \(recoveryURL.lastPathComponent)."
-            } else {
+        } catch let error as ProfileStoreError {
+            if case let .unsupportedVersion(version) = error {
                 writesBlocked = true
-                loadErrorMessage = "Custom profiles could not be loaded or preserved. Profile changes are disabled to protect the original library."
+                loadErrorMessage = "Profile library version \(version) is newer than this app. Profile changes are disabled to protect it."
+                customProfiles = []
+                return
             }
-            customProfiles = []
+            recoverFromUnreadableFile()
+        } catch {
+            recoverFromUnreadableFile()
         }
+    }
+
+    private func recoverFromUnreadableFile() {
+        if let recoveryURL = preserveUnreadableFile() {
+            loadErrorMessage = "Custom profiles could not be loaded. The original library was preserved as \(recoveryURL.lastPathComponent)."
+        } else {
+            writesBlocked = true
+            loadErrorMessage = "Custom profiles could not be loaded or preserved. Profile changes are disabled to protect the original library."
+        }
+        customProfiles = []
     }
 
     private func restoreProfiles(_ storedProfiles: [StoredProfile]) throws -> [EncodingProfile] {
@@ -285,7 +315,7 @@ enum ProfileStoreError: LocalizedError, Equatable {
 }
 
 private struct ProfileDocument: Codable {
-    static let currentVersion = 4
+    static let currentVersion = 5
 
     let version: Int
     let profiles: [StoredProfile]
