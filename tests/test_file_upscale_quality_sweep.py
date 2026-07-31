@@ -19,6 +19,7 @@ from scripts.qualify_file_upscale_quality_sweep import (
     _candidate_order,
     _completed_resume_is_consistent,
     _configured_private_paths,
+    _format_duration_seconds,
     _load_resume_evidence,
     _new_evidence,
     _prepare_owned_work_directory,
@@ -461,6 +462,12 @@ class FileUpscaleQualityEvidenceTests(unittest.TestCase):
 
             with patch("scripts.qualify_file_upscale_quality_sweep.run", side_effect=fake_run):
                 self.assertEqual(_run_fx_upscale(Path("fx-upscale"), input_path, 75), output_path)
+
+    def test_ffprobe_duration_accepts_numeric_string(self) -> None:
+        completed = subprocess.CompletedProcess([], 0, stdout='{"format":{"duration":"4.000000"}}')
+
+        with patch("scripts.qualify_file_upscale_quality_sweep.run", return_value=completed):
+            self.assertEqual(_format_duration_seconds("ffprobe", Path("movie.mov")), 4.0)
 
 
 if __name__ == "__main__":

@@ -907,12 +907,9 @@ def _format_duration_seconds(ffprobe: str, path: Path) -> float:
     )
     try:
         document = json.loads(completed.stdout)
-        duration = _number(
-            _mapping(document.get("format"), "ffprobe format").get("duration"),
-            "ffprobe format.duration",
-            positive=True,
-        )
-    except (json.JSONDecodeError, QualificationFailure) as error:
+        raw_duration = _mapping(document.get("format"), "ffprobe format").get("duration")
+        duration = _number(float(raw_duration), "ffprobe format.duration", positive=True)
+    except (TypeError, ValueError, json.JSONDecodeError, QualificationFailure) as error:
         raise QualificationFailure(f"Could not read output duration for {path.name}.") from error
     return duration
 
