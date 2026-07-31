@@ -355,7 +355,8 @@ extension VideoRouteReport {
             return usesMetalFXUpscale ? "\(rateControlSummary) · 2× MetalFX" : rateControlSummary
         case .generatedMVHEVC:
             if let eyeBitrateMbps, let mergeQuality {
-                return "\(eyeBitrateMbps) Mbps per eye · merge \(mergeQuality)"
+                let generated = "\(eyeBitrateMbps) Mbps per eye · merge \(mergeQuality)"
+                return upscaleQuality.map { "\(generated) · upscale \($0)" } ?? generated
             }
             return "Generated stereo video"
         case .av1Stereo:
@@ -374,12 +375,30 @@ extension VideoRouteReport {
     var displayDetail: String {
         if let fallbackReason {
             let fallback = Self.fallbackDescription(fallbackReason)
+            let preservedIntent = qualityIntentDescription.map {
+                " The \($0) quality intent was resolved through the generated route."
+            } ?? ""
             if fallbackTiming == "pre_input" {
-                return "\(fallback) The route changed before conversion input was read."
+                return "\(fallback)\(preservedIntent) The route changed before conversion input was read."
             }
-            return fallback
+            return "\(fallback)\(preservedIntent)"
         }
         return Self.reasonDescription(reason)
+    }
+
+    private var qualityIntentDescription: String? {
+        guard let qualityIntent else {
+            return nil
+        }
+        if qualityIntent.mode == QualityIntentMode.custom.rawValue {
+            return "Custom"
+        }
+        guard let rawStep = qualityIntent.step,
+              let step = QualityStep(rawValue: rawStep)
+        else {
+            return "guided"
+        }
+        return step.title
     }
 
     private static func reasonDescription(_ reason: String) -> String {

@@ -2,7 +2,7 @@
 
 Issue #347 asks whether the decoded stereo stream can become a final Apple-compatible MV-HEVC movie without first
 writing left and right HEVC eye movies. The bounded prototype proves that this boundary is viable on Apple Silicon,
-and the completed qualification clears it for product integration. Protocol v10 now activates the qualified route for
+and the completed qualification clears it for product integration. Protocol v11 now activates the qualified route for
 eligible native-app conversions while preserving the generated path for explicit workflow constraints and preflight
 fallback.
 
@@ -227,7 +227,7 @@ continue through upscale and final mux without changing later artifact names.
   bundled-tool deployment-target checks.
 - No third-party runtime, source archive, or additional license notice is required; the implementation uses Apple SDK
   frameworks.
-- The packaged helper is consumed only through `Config.MV_HEVC_ENCODER_PATH`. Protocol v10 resolves capability before
+- The packaged helper is consumed only through `Config.MV_HEVC_ENCODER_PATH`. Protocol v11 resolves capability before
   input, executes direct output during stage 4, and preserves the generated route for restart and reusable artifacts.
 
 ## Reproduction
@@ -294,7 +294,7 @@ uv run python -m unittest \
 | Restart and fallback behavior | Defined |
 | Runtime, license, macOS, architecture, signing, notarization, and bundle implications | Recorded |
 
-The prototype is fully qualified and its runtime route is active under protocol v10. Issue #364 rejected the fixed
+The prototype is fully qualified and its runtime route is active under protocol v11. Issue #364 rejected the fixed
 Automatic bitrate; issue #366 qualifies content-adaptive quality `0.7` across the representative corpus, packaged full
 and preview routes, generated fallback, and physical Vision Pro playback. The native-only issue #357 boundary and
 direct 4K follow-up are documented in `docs/metalfx-mv-hevc-prototype.md` and

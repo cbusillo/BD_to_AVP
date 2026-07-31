@@ -147,7 +147,7 @@ intermediate PCM MOV, and MVC video is demuxed as Annex B into the native
 splitter without an intermediate `.h264` file.
 
 The MVC path uses the shared bounded process supervisor. Generated MV-HEVC and
-AV1 use source FFmpeg to `edge264_test` to encoding FFmpeg. Eligible protocol-v10
+AV1 use source FFmpeg to `edge264_test` to encoding FFmpeg. Eligible protocol-v11
 MV-HEVC jobs add the packaged `mv-hevc-encoder` after an FFmpeg geometry
 normalizer and write `_MV-HEVC.mov` directly during stage 4. Subtitles, AAC,
 the mode-specific finalized video, and the final movie remain named stage

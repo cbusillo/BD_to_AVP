@@ -64,7 +64,7 @@ def worker_result(
 
 
 class PackagedRequestTests(unittest.TestCase):
-    def test_full_request_uses_protocol_v10_automatic_direct_intent(self) -> None:
+    def test_full_request_uses_protocol_v11_automatic_direct_intent(self) -> None:
         request = build_worker_request(
             "convert_source",
             Path("/tmp/source.mkv"),
@@ -72,10 +72,15 @@ class PackagedRequestTests(unittest.TestCase):
             job_id="full-job",
         )
 
-        self.assertEqual(request["protocol_version"], 10)
+        self.assertEqual(request["protocol_version"], 11)
         self.assertEqual(request["operation"], "convert_source")
         self.assertEqual(request["encoding"]["video"]["route_intent"], "automatic")
+        self.assertEqual(request["encoding"]["video"]["quality_intent"], {"mode": "custom"})
         self.assertEqual(request["encoding"]["video"]["direct_bitrate"], {"mode": "automatic"})
+        self.assertEqual(
+            request["encoding"]["video"]["generated_fallback"],
+            {"eye_bitrate": {"mode": "automatic"}, "merge_quality": 75},
+        )
         self.assertNotIn("preview", request)
 
     def test_preview_request_preserves_parent_and_duration(self) -> None:
@@ -117,7 +122,7 @@ class PackagedRequestTests(unittest.TestCase):
 
 
 class PackagedEventTests(unittest.TestCase):
-    def test_event_parser_requires_contiguous_protocol_v10_stream(self) -> None:
+    def test_event_parser_requires_contiguous_protocol_v11_stream(self) -> None:
         stdout = "\n".join(
             json.dumps(item)
             for item in (

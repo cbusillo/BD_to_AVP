@@ -1,9 +1,47 @@
 import Foundation
 
 struct VideoRouteReport: Decodable, Equatable {
+    struct QualityIntent: Decodable, Equatable {
+        let mode: String
+        let step: String?
+        let mappingVersion: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case mode
+            case step
+            case mappingVersion = "mapping_version"
+        }
+    }
+
+    struct RouteSettings: Decodable, Equatable {
+        let route: String
+        let bitrateMbps: Int?
+        let eyeBitrateMbps: Int?
+        let mergeQuality: Int?
+        let crf: Int?
+        let rateControl: String?
+        let quality: Double?
+        let upscaleMode: String?
+        let upscaleQuality: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case route
+            case bitrateMbps = "bitrate_mbps"
+            case eyeBitrateMbps = "eye_bitrate_mbps"
+            case mergeQuality = "merge_quality"
+            case crf
+            case rateControl = "rate_control"
+            case quality
+            case upscaleMode = "upscale_mode"
+            case upscaleQuality = "upscale_quality"
+        }
+    }
+
     let intent: String
     let selected: String
     let reason: String
+    let qualityIntent: QualityIntent?
+    let requested: RouteSettings?
     let bitrateMbps: Int?
     let eyeBitrateMbps: Int?
     let mergeQuality: Int?
@@ -13,6 +51,7 @@ struct VideoRouteReport: Decodable, Equatable {
     let rateControl: String?
     let quality: Double?
     let upscaleMode: String?
+    let upscaleQuality: Int?
 
     init(
         intent: String,
@@ -26,11 +65,16 @@ struct VideoRouteReport: Decodable, Equatable {
         fallbackTiming: String?,
         rateControl: String? = nil,
         quality: Double? = nil,
-        upscaleMode: String? = nil
+        upscaleMode: String? = nil,
+        upscaleQuality: Int? = nil,
+        qualityIntent: QualityIntent? = nil,
+        requested: RouteSettings? = nil
     ) {
         self.intent = intent
         self.selected = selected
         self.reason = reason
+        self.qualityIntent = qualityIntent
+        self.requested = requested
         self.bitrateMbps = bitrateMbps
         self.eyeBitrateMbps = eyeBitrateMbps
         self.mergeQuality = mergeQuality
@@ -40,12 +84,15 @@ struct VideoRouteReport: Decodable, Equatable {
         self.rateControl = rateControl
         self.quality = quality
         self.upscaleMode = upscaleMode
+        self.upscaleQuality = upscaleQuality
     }
 
     enum CodingKeys: String, CodingKey {
         case intent
         case selected
         case reason
+        case qualityIntent = "quality_intent"
+        case requested
         case bitrateMbps = "bitrate_mbps"
         case eyeBitrateMbps = "eye_bitrate_mbps"
         case mergeQuality = "merge_quality"
@@ -55,6 +102,7 @@ struct VideoRouteReport: Decodable, Equatable {
         case rateControl = "rate_control"
         case quality
         case upscaleMode = "upscale_mode"
+        case upscaleQuality = "upscale_quality"
     }
 }
 

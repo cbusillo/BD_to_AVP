@@ -103,7 +103,7 @@ PACKAGED_FIXTURE_GATE_LINES = (
         "The verifier rejects package-policy drift, requires failure coverage to match the declared rejection "
         "semantics, binds every source to the generator receipt, validates each fixture before and after execution, "
         "terminates the packaged worker on interruption, rechecks the package after the matrix, runs the packaged "
-        "worker with protocol v10, checks structured layout decisions and visible rejections, verifies final AAC "
+        "worker with protocol v11, checks structured layout decisions and visible rejections, verifies final AAC "
         "layout and metadata, runs Apple passthrough across the complete output, isolates each selected audio track "
         "before Apple LPCM identity analysis, and records bounded package/source/output hashes. Final-output checks "
         "own handler-title and default-disposition assertions; the Apple passthrough evidence names those fields as "

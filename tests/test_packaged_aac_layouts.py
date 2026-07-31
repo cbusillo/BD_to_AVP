@@ -334,13 +334,14 @@ class PackagedAacRequestTests(unittest.TestCase):
 
         request = _build_request(case, Path("/tmp/source.mkv"), Path("/tmp/output"), "job")
 
-        self.assertEqual(request["protocol_version"], 10)
+        self.assertEqual(request["protocol_version"], 11)
         self.assertEqual(
             request["encoding"]["audio"],
             {"mode": "automatic", "bitrate": 384, "preferred_language": "eng"},
         )
         self.assertEqual(request["encoding"]["subtitles"], {"mode": "off", "preferred_language": None})
         self.assertEqual(request["encoding"]["video"]["route_intent"], "automatic")
+        self.assertEqual(request["encoding"]["video"]["quality_intent"], {"mode": "custom"})
 
     def test_worker_execution_preserves_structured_failure(self) -> None:
         process = Mock(returncode=1)

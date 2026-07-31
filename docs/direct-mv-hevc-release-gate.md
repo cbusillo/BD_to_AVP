@@ -15,8 +15,9 @@ adapting effective bitrate from 2.00 to 13.74 Mbps, and the exact package fixtur
 - Keep broader noncanonical multichannel AAC policy in #367; this gate changes only the physically proven
   `5.1(side)` case.
 
-Protocol v10 request shape remains unchanged: Automatic still sends `{ "mode": "automatic" }` with no numeric
-sentinel, while the worker owns the qualified policy. Direct 4K upscaling has its own separately qualified release gate
+Protocol v11 preserves the Automatic direct bitrate object with no numeric sentinel, while adding checked quality
+intent and a concrete generated fallback projection. The worker still owns the qualified direct quality policy. Direct
+4K upscaling has its own separately qualified release gate
 in [Direct 4K MV-HEVC prerelease gate](direct-4k-mv-hevc-release-gate.md). Live processed-frame preview remains a
 separate future issue.
 
@@ -90,7 +91,7 @@ The worst gated quality delta is -0.000370, the smallest eye-order margin is 0.0
 
 ## Packaged route gate
 
-`scripts/verify_packaged_mv_hevc_routes.py` runs one real 65-second MVC source through the packaged protocol-v10
+`scripts/verify_packaged_mv_hevc_routes.py` runs one real 65-second MVC source through the packaged protocol-v11
 worker four times:
 
 1. supported direct full conversion;

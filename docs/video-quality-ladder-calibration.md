@@ -19,7 +19,9 @@ the UI and profile model from shipping guessed mappings.
 The native profile schema may persist all seven stable step identifiers before they are exposed. Runtime mapping
 version 1 resolves only the checked `Balanced` defaults across current MV-HEVC targets; unsupported step selections
 fail closed. `Custom` remains a separate mode with independently retained exact route controls, so profile migration
-does not manufacture mappings or discard expert values.
+does not manufacture mappings or discard expert values. Worker protocol v11 sends only the requested route controls
+plus a concrete generated fallback when direct capability selection can require one. The worker validates the
+metadata against checked mappings and reports both requested and selected route settings.
 
 ## Direct Quality Sweep
 
