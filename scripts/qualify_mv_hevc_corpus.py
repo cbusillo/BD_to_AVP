@@ -911,6 +911,7 @@ def _measure_output(
     *,
     target_bitrate_mbps: float | None,
     include_frame_metrics: bool = False,
+    delete_output: bool = True,
 ) -> dict[str, object]:
     left, right = split_mv_hevc(output_path, split_directory)
     if include_frame_metrics:
@@ -940,7 +941,8 @@ def _measure_output(
     if include_frame_metrics:
         record.update(summarize_frame_quality(left_frame_scores, right_frame_scores))
     shutil.rmtree(split_directory, ignore_errors=True)
-    output_path.unlink(missing_ok=True)
+    if delete_output:
+        output_path.unlink(missing_ok=True)
     return record
 
 

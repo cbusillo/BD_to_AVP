@@ -1,0 +1,119 @@
+{
+  "schema_version": 3,
+  "experiment_id": "generated-mv-hevc-bitrate-search-v1",
+  "target_id": "generated_mv_hevc",
+  "purpose": "same_tier_bitrate_minimization_not_ladder_mapping",
+  "design": "full_integer_bitrate_sweep_1_to_20_v1",
+  "corpus_binding": {
+    "path": "docs/qualification/generated-mv-hevc-corpus-v1.json",
+    "binding_id": "generated-mv-hevc-stress-v1",
+    "sha256": "2d6d25d89258ec24f28375749f9fe833595eaed005bbcc8d6f798f3efd0d0049"
+  },
+  "balanced": {
+    "eye_bitrate_mbps": 20,
+    "eye_bitrate_source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_GENERATED_EYE_BITRATE_MBPS",
+    "merge_quality": 75,
+    "merge_quality_source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_GENERATED_MERGE_QUALITY"
+  },
+  "runs_per_cell": 3,
+  "execution_order": "latin_thirds",
+  "axes": {
+    "eye_bitrate_mbps": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20
+    ],
+    "merge_quality": [
+      65,
+      75
+    ]
+  },
+  "bitrate_search": {
+    "merge_refinement_receipt": {
+      "schema_version": 1,
+      "evidence_id": "generated-mv-hevc-merge-refinement-v1",
+      "sha256": "e6b4d5a8908352f1667c092e199853f3cfc25256f22d803e56f94b30783dcbdf",
+      "source_git_sha": "1a3b2c3b25351a9f981bf7bd65415bd8f5688f85",
+      "required_file_mode": "0444"
+    },
+    "collapse_receipt": {
+      "schema_version": 1,
+      "evidence_id": "generated-mv-hevc-collapse-analysis-v1",
+      "sha256": "23d4564abf0f04b897e1c42b0c88d7af686b1b47ff892ee7c77d79e2c288b07f",
+      "source_git_sha": "a89207857fe8016c938f60a28d30b9cd886e920f",
+      "required_file_mode": "0444"
+    },
+    "collapse_plan": {
+      "path": "docs/qualification/generated-mv-hevc-collapse-analysis-v1.json",
+      "sha256": "c662580160e23454581f9abc084aecf562486f328d4c7a84256900669dfe1ee2",
+      "schema_version": 1
+    },
+    "threshold_noise_evidence": {
+      "experiment_id": "generated-mv-hevc-interaction-v1",
+      "receipt_sha256": "fe3c81e96771f9d0f4dc1f6461556d5fdf22c95034776b044f268978d68bd07f",
+      "source_git_sha": "4c21ebb2cb42632a1aa0d37aa1ca47bd51b3500e",
+      "baseline_cell_id": "b020-m075",
+      "maximum_repeat_ssim_spread": 0.000274,
+      "maximum_repeat_size_ratio_spread": 0.008639211494662749,
+      "maximum_minimum_frame_ssim_spread": 0.00031399999999992545,
+      "maximum_p05_frame_ssim_spread": 0.0004979999999999984,
+      "maximum_frame_ssim_standard_deviation_spread": 0.00009296255193789321,
+      "maximum_adjacent_frame_ssim_drop_spread": 0.00037199999999992794
+    },
+    "accepted_merge_qualities": [
+      65,
+      75
+    ],
+    "guided_anchor_count": 2,
+    "custom_exact_retained": true,
+    "maximum_case_size_ratio_vs_tier_anchor": 1.02,
+    "minimum_aggregate_storage_reduction_ratio": 0.02
+  },
+  "pre_registered_thresholds": {
+    "noise_multiplier": 2,
+    "aggregate_quality_non_inferiority_margin": 0.0006,
+    "aggregate_quality_distinguishability": 0.0006,
+    "storage_distinguishability_ratio": 0.02,
+    "repeat_ssim_spread_limit": 0.0006,
+    "repeat_size_ratio_spread_limit": 0.02,
+    "minimum_frame_quality_non_inferiority_margin": 0.0007,
+    "p05_frame_quality_non_inferiority_margin": 0.001,
+    "frame_ssim_standard_deviation_increase_limit": 0.0002,
+    "adjacent_frame_ssim_drop_increase_limit": 0.0008,
+    "maximum_output_size_ratio": 3.0
+  },
+  "toolchain": {
+    "ffmpeg_manifest": {
+      "path": "vendor/ffmpeg-macos-arm64.toml",
+      "sha256": "a8afa883b2128ee925276953193aa179acdb1378873960286082debb20ae1fb5"
+    },
+    "generated_encoder_contract": "production_generated_mv_hevc_v1",
+    "metric_contract": "ffmpeg_ssim_aggregate_and_per_frame_v1"
+  },
+  "decision_policy": {
+    "stage": "same_tier_bitrate_minimization_only",
+    "same_tier_anchor_eye_bitrate_mbps": 20,
+    "frontier_order": "failed_then_passed",
+    "selection": "lowest_passing_integer_with_storage_benefit_else_anchor",
+    "full_corpus_confirmation_required": true,
+    "post_hoc_thresholds_forbidden": true,
+    "ladder_mapping_selected": false
+  }
+}

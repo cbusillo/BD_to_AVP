@@ -170,6 +170,45 @@ only if seven technically defensible cells survive. It exits `1` with a frozen i
 setting `product_decision_required` and leaving bitrate search and ladder selection false. Fatal provenance, schema,
 privacy, threshold, Balanced, or evidence inconsistencies exit `2`.
 
+## Generated Bitrate Minimization
+
+`docs/qualification/generated-mv-hevc-bitrate-search-v1.json` records the post-collapse product decision: generated
+MV-HEVC has two guided anchors, merge `65` and `75`, plus exact reversible `Custom`. It binds the frozen merge
+refinement and collapse receipts, the checked collapse plan, unchanged noise-derived thresholds, the four-case stress
+corpus, and the production generated encoder/toolchain identities.
+
+The checked design measures every integer bitrate from `1` through `20` Mbps per eye at both accepted merge tiers,
+three times per cell. The exhaustive `40`-cell, `480`-encode stress sweep avoids interpolation and post-hoc refinement.
+A checked three-group Latin schedule places every cell, including both `20 Mbps/eye` anchors, exactly once in early,
+middle, and late execution windows across the three repeats. Every lower candidate is compared only with the anchor at
+the same merge quality.
+
+The technical frontier excludes storage benefit so an encoder cap that does not bind cannot create an artificial
+fail/pass inversion. Every candidate must pass aggregate, minimum-frame, fifth-percentile, temporal-stability,
+repeatability, eye-order, artifact-structure, and per-case size non-regression gates. The pass sequence must be a
+single fail-then-pass frontier. The lowest technical pass is adopted only when total median bytes across the complete
+stress subset improve by at least the checked `2%`; otherwise the same-tier `20 Mbps/eye` anchor remains selected.
+The receipt fails closed on incomplete cases, a failing anchor, a non-monotone frontier, changed source evidence, or
+changed thresholds.
+
+After committing the plan and runner in a clean worktree, run:
+
+```bash
+BD_TO_AVP_RELEASE_MVC_SOURCE=/private/source.mkv \
+uv run python scripts/qualify_generated_mv_hevc_calibration.py \
+  --experiment-plan docs/qualification/generated-mv-hevc-bitrate-search-v1.json \
+  --source-evidence-receipt /private/generated-mv-hevc-merge-refinement-receipt.json \
+  --collapse-receipt /private/generated-mv-hevc-collapse-analysis-receipt.json \
+  --output build/qualification/generated-mv-hevc-bitrate-search-v1.json \
+  --work-directory build/qualification/generated-mv-hevc-bitrate-search-v1-work
+```
+
+The command exits `0` only when both integer frontiers are decision-ready on the complete checked stress subset. It
+exits `1` with a frozen receipt for a subset run or an unresolved frontier, and `2` for fatal source, plan, tool,
+privacy, schema, or evidence errors. Even exit `0` keeps `ladder_mapping_selected=false`: the selected stress minima
+still require full eight-case confirmation, packaged-app validation, and physical Vision Pro playback before the
+generated route table can freeze.
+
 ## Validation
 
 Run the structural and production-anchor check with:
