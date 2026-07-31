@@ -862,13 +862,22 @@ def _private_source_paths(cases: Sequence[CorpusCase]) -> tuple[Path, ...]:
 
 def _configured_private_paths() -> tuple[Path, ...]:
     paths: set[Path] = set()
-    for environment_name in PRIVATE_SOURCE_ENV_NAMES:
-        configured = os.environ.get(environment_name)
-        if configured:
-            expanded = Path(configured).expanduser()
-            paths.add(expanded)
-            paths.add(expanded.resolve())
+    try:
+        for environment_name in PRIVATE_SOURCE_ENV_NAMES:
+            configured = os.environ.get(environment_name)
+            if configured:
+                expanded = Path(configured).expanduser()
+                paths.add(expanded)
+                paths.add(expanded.resolve())
+    except (OSError, RuntimeError) as error:
+        raise QualificationFailure("Configured private source path could not be normalized.") from error
     return tuple(paths)
+
+
+def _safe_error_message(error: BaseException, private_paths: Sequence[Path]) -> str:
+    if isinstance(error, subprocess.SubprocessError):
+        return "Subprocess execution failed."
+    return redact_private_source_paths(str(error), private_paths)
 
 
 def _candidate_for_quality(plan: SweepPlan, quality: int) -> UpscaleCandidate:
@@ -1168,7 +1177,8 @@ def _validate_base_record(base: Mapping[str, object], plan: SweepPlan, repeat_in
     if set(base) != expected_keys:
         raise QualificationFailure(f"Repeat {repeat_index} generated base has an invalid record shape.")
     if (
-        base.get("repeat_index") != repeat_index
+        type(base.get("repeat_index")) is not int
+        or base.get("repeat_index") != repeat_index
         or base.get("generated_eye_bitrate_mbps") != plan.base_eye_bitrate_mbps
         or base.get("generated_merge_quality") != plan.base_merge_quality
         or base.get("target_total_eye_bitrate_mbps") != plan.base_eye_bitrate_mbps * 2
@@ -1204,6 +1214,28 @@ def _validate_base_record(base: Mapping[str, object], plan: SweepPlan, repeat_in
         set(str(item) for item in base["observed_box_types"])
     ):
         raise QualificationFailure(f"Repeat {repeat_index} generated base is missing spatial metadata.")
+
+
+def _validate_base_against_case(
+    base: Mapping[str, object],
+    definition: CorpusCase,
+    prepared: Mapping[str, object],
+) -> None:
+    prepared_source_sha256 = _sha256_identity(prepared.get("source_sha256"), "prepared.source_sha256")
+    expected_frame_rate = _frame_rate(definition.output_frame_rate, "expected case frame rate")
+    if (
+        base.get("source_sha256") != prepared_source_sha256
+        or base.get("frame_count") != prepared.get("frame_count")
+        or base.get("width") != definition.output_eye_width
+        or base.get("height") != definition.output_eye_height
+        or _frame_rate(base.get("frame_rate"), "base.frame_rate") != expected_frame_rate
+        or _frame_rate(base.get("r_frame_rate"), "base.r_frame_rate") != expected_frame_rate
+    ):
+        raise QualificationFailure(f"Repeat base does not match prepared case {definition.case_id}.")
+    expected_duration = int(base["frame_count"]) / float(expected_frame_rate)
+    duration_tolerance = int(base["duration_tolerance_frames"]) / float(expected_frame_rate)
+    if abs(float(base["duration_seconds"]) - expected_duration) > duration_tolerance + 1e-6:
+        raise QualificationFailure(f"Repeat base timing does not match prepared case {definition.case_id}.")
 
 
 def _validate_paired_delta(delta: object, candidate: UpscaleCandidate) -> None:
@@ -1283,7 +1315,11 @@ def _validate_candidate_record(
     if set(record) != expected_keys:
         raise QualificationFailure(f"Candidate {candidate.candidate_id} repeat {repeat_index} has an invalid shape.")
     if (
-        record.get("id") != candidate.candidate_id
+        type(record.get("repeat_index")) is not int
+        or type(record.get("execution_ordinal")) is not int
+        or type(record.get("quality")) is not int
+        or type(record.get("geometry_scale")) is not int
+        or record.get("id") != candidate.candidate_id
         or record.get("repeat_index") != repeat_index
         or record.get("execution_ordinal") != execution_ordinal
         or record.get("quality") != candidate.quality
@@ -1845,7 +1881,9 @@ def _validate_resume_cases(
                 raise QualificationFailure(f"Resume evidence case {case_id} repeat order changed.")
             base = repeat.get("base")
             if base is not None:
-                _validate_base_record(_mapping(base, "repeat.base"), plan, repeat_index)
+                base_record = _mapping(base, "repeat.base")
+                _validate_base_record(base_record, plan, repeat_index)
+                _validate_base_against_case(base_record, definition, prepared)
             candidates = repeat.get("candidates")
             if not isinstance(candidates, list) or len(candidates) > len(plan.candidates):
                 raise QualificationFailure(f"Resume evidence case {case_id} repeat candidates are invalid.")
@@ -1914,6 +1952,13 @@ def _load_resume_evidence(
     complete = isinstance(acceptance, Mapping) and acceptance.get("complete") is True
     planned_full = isinstance(acceptance, Mapping) and acceptance.get("planned_full_stress_subset") is True
     finalized = isinstance(acceptance, Mapping) and acceptance.get("finalized") is True
+    if (complete or planned_full or finalized) and not _completed_resume_is_consistent(
+        evidence,
+        plan,
+        binding,
+        {case.case_id: case for case in selected_cases},
+    ):
+        raise QualificationFailure("Resume evidence completion claims contradict the recorded runs.")
     writable = bool(output_path.stat().st_mode & 0o222)
     if complete and planned_full:
         canonical = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
@@ -2076,14 +2121,15 @@ def _run_quality_sweep_unlocked(
             prepared = prepare_case(definition, case_work, ffmpeg=ffmpeg, ffprobe=ffprobe)
             _validate_prepared_source(binding, prepared)
         except (OSError, subprocess.SubprocessError, QualificationFailure, ValueError) as error:
-            raise QualificationFailure(redact_private_source_paths(str(error), private_paths)) from None
+            raise QualificationFailure(_safe_error_message(error, private_paths)) from None
+        expected_case = _case_record_template(definition, prepared)
+        prepared_record = _mapping(expected_case["prepared"], "prepared case metadata")
         if existing_case is None:
-            existing_case = _case_record_template(definition, prepared)
+            existing_case = expected_case
             evidence["cases"].append(existing_case)
             evidence["updated_at"] = datetime.now(UTC).isoformat()
             _atomic_write(output_path, evidence, private_paths)
         else:
-            expected_case = _case_record_template(definition, prepared)
             for key in ("source", "prepared", "tags", "quality_gate"):
                 if existing_case.get(key) != expected_case[key]:
                     raise QualificationFailure(
@@ -2112,13 +2158,15 @@ def _run_quality_sweep_unlocked(
                     base_path.unlink(missing_ok=True)
                     base = _record_base(ffmpeg, ffprobe, prepared, plan, repeat_index, base_path)
                 except (OSError, subprocess.SubprocessError, QualificationFailure, ValueError) as error:
-                    raise QualificationFailure(redact_private_source_paths(str(error), private_paths)) from None
+                    raise QualificationFailure(_safe_error_message(error, private_paths)) from None
+                _validate_base_against_case(base, definition, prepared_record)
                 repeat["base"] = base
                 evidence["updated_at"] = datetime.now(UTC).isoformat()
                 _atomic_write(output_path, evidence, private_paths)
             else:
                 base = _mapping(base, "repeat.base")
                 _validate_base_record(base, plan, repeat_index)
+                _validate_base_against_case(base, definition, prepared_record)
                 if not base_path.is_file() or sha256_file(base_path) != base["sha256"]:
                     has_candidate_record = any(
                         _candidate_record(repeat, candidate.candidate_id) is not None for candidate in plan.candidates
@@ -2129,6 +2177,7 @@ def _run_quality_sweep_unlocked(
                         )
                     base_path.unlink(missing_ok=True)
                     base = _record_base(ffmpeg, ffprobe, prepared, plan, repeat_index, base_path)
+                    _validate_base_against_case(base, definition, prepared_record)
                     repeat["base"] = base
                     evidence["updated_at"] = datetime.now(UTC).isoformat()
                     _atomic_write(output_path, evidence, private_paths)
@@ -2153,7 +2202,7 @@ def _run_quality_sweep_unlocked(
                         repeat_directory,
                     )
                 except (OSError, subprocess.SubprocessError, QualificationFailure, ValueError) as error:
-                    raise QualificationFailure(redact_private_source_paths(str(error), private_paths)) from None
+                    raise QualificationFailure(_safe_error_message(error, private_paths)) from None
                 candidates.append(record)
                 _refresh_summaries(evidence, plan, binding, case_definitions)
                 evidence["updated_at"] = datetime.now(UTC).isoformat()
@@ -2243,8 +2292,9 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    private_paths = _configured_private_paths()
+    private_paths: tuple[Path, ...] = ()
     try:
+        private_paths = _configured_private_paths()
         evidence = run_quality_sweep(
             args.sweep_plan.resolve(),
             args.output.absolute(),
@@ -2262,7 +2312,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         QualificationFailure,
         ValueError,
     ) as error:
-        message = redact_private_source_paths(str(error), private_paths)
+        message = _safe_error_message(error, private_paths)
         print(f"File-upscale quality sweep failed: {message}", file=sys.stderr)
         return 2
 

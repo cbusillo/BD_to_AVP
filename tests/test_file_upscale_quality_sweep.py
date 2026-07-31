@@ -354,6 +354,41 @@ class FileUpscaleQualityEvidenceTests(unittest.TestCase):
                 {self.full_cases[0].case_id: self.full_cases[0]},
             )
 
+    def test_candidate_validation_rejects_boolean_execution_ordinal(self) -> None:
+        case = self.full_cases[0]
+        record = _candidate_record(case, 65, 0, 0, final_bytes=650, quality_score=0.961)
+        record["execution_ordinal"] = False
+
+        with self.assertRaisesRegex(QualificationFailure, "identity changed"):
+            _validate_candidate_record(record, self.plan.candidates[0], 0, 0)
+
+    def test_resume_binds_base_timing_and_source_to_prepared_case(self) -> None:
+        case_definitions = {self.full_cases[0].case_id: self.full_cases[0]}
+
+        timing_tampered = self._evidence(self.full_cases[:1])
+        for repeat in timing_tampered["cases"][0]["repeats"]:
+            base = repeat["base"]
+            base["frame_rate"] = "25"
+            base["r_frame_rate"] = "25"
+            base["duration_seconds"] = 123.0
+            base["effective_bitrate_mbps"] = _bitrate_mbps(base["bytes"], 123.0)
+            for record in repeat["candidates"]:
+                record["frame_rate"] = "25"
+                record["r_frame_rate"] = "25"
+                record["duration_seconds"] = 123.0
+                record["base_effective_bitrate_mbps"] = base["effective_bitrate_mbps"]
+                record["effective_bitrate_mbps"] = _bitrate_mbps(record["final_bytes"], 123.0)
+        with self.assertRaisesRegex(QualificationFailure, "prepared case"):
+            _validate_resume_cases(timing_tampered, self.plan, self.binding, case_definitions)
+
+        source_tampered = self._evidence(self.full_cases[:1])
+        for repeat in source_tampered["cases"][0]["repeats"]:
+            repeat["base"]["source_sha256"] = "e" * 64
+            for record in repeat["candidates"]:
+                record["source_sha256"] = "e" * 64
+        with self.assertRaisesRegex(QualificationFailure, "prepared case"):
+            _validate_resume_cases(source_tampered, self.plan, self.binding, case_definitions)
+
     def test_ssim_direction_is_descriptive_without_a_threshold(self) -> None:
         evidence = self._evidence(
             self.full_cases,
@@ -423,8 +458,31 @@ class FileUpscaleQualityEvidenceTests(unittest.TestCase):
             self.assertTrue(loaded["acceptance"]["complete"])
             self.assertFalse(loaded["acceptance"]["finalized"])
 
+    def test_resume_rejects_false_completion_claims(self) -> None:
+        evidence = self._evidence(self.full_cases[:1], complete=False)
+        evidence["acceptance"]["complete"] = True
+        evidence["acceptance"]["planned_full_stress_subset"] = True
+        evidence["acceptance"]["finalized"] = True
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "receipt.json"
+            output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            output.chmod(0o444)
+
+            with self.assertRaisesRegex(QualificationFailure, "completion claims"):
+                _load_resume_evidence(
+                    output,
+                    plan=self.plan,
+                    binding=self.binding,
+                    plan_sha256=self.plan_sha,
+                    binding_sha256=self.binding_sha,
+                    environment=self.environment,
+                    selected_cases=self.full_cases[:1],
+                    private_paths=(),
+                )
+
     def test_timeout_diagnostic_redacts_configured_private_source(self) -> None:
-        private_source = "/private/very-sensitive-release-source.mkv"
+        private_source = "/private/very-sensitive\\release\nsource.mkv"
         stderr = io.StringIO()
         timeout = subprocess.TimeoutExpired(["tool", private_source], 30)
 
@@ -437,7 +495,21 @@ class FileUpscaleQualityEvidenceTests(unittest.TestCase):
             self.assertEqual(main([]), 2)
 
         self.assertNotIn(private_source, stderr.getvalue())
-        self.assertIn("<private-source>", stderr.getvalue())
+        self.assertIn("Subprocess execution failed.", stderr.getvalue())
+
+    def test_private_source_normalization_error_exits_two(self) -> None:
+        stderr = io.StringIO()
+
+        with (
+            patch.dict(
+                os.environ,
+                {"BD_TO_AVP_RELEASE_MVC_SOURCE": "~bd_to_avp_user_that_does_not_exist/private.mkv"},
+            ),
+            contextlib.redirect_stderr(stderr),
+        ):
+            self.assertEqual(main([]), 2)
+
+        self.assertIn("could not be normalized", stderr.getvalue())
 
     def test_owned_work_directory_marker_is_atomic_and_identity_checked(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
