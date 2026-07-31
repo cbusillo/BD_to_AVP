@@ -284,6 +284,7 @@ enum IntermediatePolicy: String, Codable {
 
 struct EncodingOptions: Codable, Equatable {
     var videoOutputMode: VideoOutputMode
+    var videoQuality: VideoQualityIntent
     var av1CRF: Int
     var mvHEVC: MVHEVCOptions
     var upscaleEnabled: Bool
@@ -301,6 +302,7 @@ struct EncodingOptions: Codable, Equatable {
 
     init(
         videoOutputMode: VideoOutputMode = .mvHEVC,
+        videoQuality: VideoQualityIntent? = nil,
         av1CRF: Int = 32,
         mvHEVC: MVHEVCOptions = MVHEVCOptions(),
         upscaleEnabled: Bool = false,
@@ -316,6 +318,7 @@ struct EncodingOptions: Codable, Equatable {
         subtitles: SubtitlePolicy = SubtitlePolicy()
     ) {
         self.videoOutputMode = videoOutputMode
+        self.videoQuality = videoQuality ?? .balanced
         self.av1CRF = av1CRF
         self.mvHEVC = mvHEVC
         self.upscaleEnabled = upscaleEnabled
@@ -329,11 +332,46 @@ struct EncodingOptions: Codable, Equatable {
         self.audioBitrate = audioBitrate
         self.audioLanguages = audioLanguages
         self.subtitles = subtitles
+        if videoQuality == nil {
+            do {
+                try applyDecodedLegacyQualityIntent()
+            } catch {
+                self.videoQuality = .custom(
+                    mvHEVC: self.mvHEVC,
+                    av1CRF: self.av1CRF,
+                    upscaleQuality: self.upscaleQuality
+                )
+            }
+        } else {
+            do {
+                try applyVideoQualityIntent()
+            } catch {
+                self.videoQuality = .custom(
+                    lastLadderStep: self.videoQuality.lastLadderStep,
+                    mvHEVC: self.mvHEVC,
+                    av1CRF: self.av1CRF,
+                    upscaleQuality: self.upscaleQuality
+                )
+            }
+        }
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         videoOutputMode = try container.decode(VideoOutputMode.self, forKey: .videoOutputMode)
+        let decodedVideoQuality = try container.decodeIfPresent(VideoQualityIntent.self, forKey: .videoQuality)
+        if decodedVideoQuality == nil,
+           decoder.userInfo[.requiresVideoQualityIntent] as? Bool == true
+        {
+            throw DecodingError.keyNotFound(
+                CodingKeys.videoQuality,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Profile document version 5 requires video quality intent."
+                )
+            )
+        }
+        videoQuality = decodedVideoQuality ?? .balanced
         av1CRF = try container.decode(Int.self, forKey: .av1CRF)
         let legacyMergeQuality = try container.decode(Int.self, forKey: .hevcQuality)
         let legacyEyeBitrate = try container.decode(Int.self, forKey: .leftRightBitrate)
@@ -373,27 +411,53 @@ struct EncodingOptions: Codable, Equatable {
         audioBitrate = try container.decode(Int.self, forKey: .audioBitrate)
         audioLanguages = try container.decode(AudioLanguagePolicy.self, forKey: .audioLanguages)
         subtitles = try container.decode(SubtitlePolicy.self, forKey: .subtitles)
+        do {
+            if decodedVideoQuality == nil {
+                try applyDecodedLegacyQualityIntent()
+            } else {
+                try validateQualityMirrors()
+            }
+        } catch {
+            throw DecodingError.dataCorruptedError(
+                forKey: .videoQuality,
+                in: container,
+                debugDescription: error.localizedDescription
+            )
+        }
     }
 
     func encode(to encoder: Encoder) throws {
+        let normalized: EncodingOptions
+        do {
+            normalized = try normalizedQualityState()
+        } catch {
+            throw EncodingError.invalidValue(
+                self,
+                EncodingError.Context(
+                    codingPath: encoder.codingPath,
+                    debugDescription: error.localizedDescription
+                )
+            )
+        }
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(videoOutputMode, forKey: .videoOutputMode)
-        try container.encode(av1CRF, forKey: .av1CRF)
-        try container.encode(mvHEVC, forKey: .mvHEVC)
-        try container.encode(mvHEVC.generatedMergeQuality, forKey: .hevcQuality)
-        try container.encode(generatedEyeCustomBitrateMbps, forKey: .leftRightBitrate)
-        try container.encode(mvHEVC.linkGeneratedAndUpscaleQuality, forKey: .linkQuality)
-        try container.encode(upscaleEnabled, forKey: .upscaleEnabled)
-        try container.encode(upscaleQuality, forKey: .upscaleQuality)
-        try container.encode(fieldOfView, forKey: .fieldOfView)
-        try container.encode(frameRateOverride, forKey: .frameRateOverride)
-        try container.encode(resolutionOverride, forKey: .resolutionOverride)
-        try container.encode(cropBlackBars, forKey: .cropBlackBars)
-        try container.encode(swapEyes, forKey: .swapEyes)
-        try container.encode(audioHandling, forKey: .audioHandling)
-        try container.encode(audioBitrate, forKey: .audioBitrate)
-        try container.encode(audioLanguages, forKey: .audioLanguages)
-        try container.encode(subtitles, forKey: .subtitles)
+        try container.encode(normalized.videoOutputMode, forKey: .videoOutputMode)
+        try container.encode(normalized.videoQuality, forKey: .videoQuality)
+        try container.encode(normalized.av1CRF, forKey: .av1CRF)
+        try container.encode(normalized.mvHEVC, forKey: .mvHEVC)
+        try container.encode(normalized.mvHEVC.generatedMergeQuality, forKey: .hevcQuality)
+        try container.encode(normalized.generatedEyeCustomBitrateMbps, forKey: .leftRightBitrate)
+        try container.encode(normalized.mvHEVC.linkGeneratedAndUpscaleQuality, forKey: .linkQuality)
+        try container.encode(normalized.upscaleEnabled, forKey: .upscaleEnabled)
+        try container.encode(normalized.upscaleQuality, forKey: .upscaleQuality)
+        try container.encode(normalized.fieldOfView, forKey: .fieldOfView)
+        try container.encode(normalized.frameRateOverride, forKey: .frameRateOverride)
+        try container.encode(normalized.resolutionOverride, forKey: .resolutionOverride)
+        try container.encode(normalized.cropBlackBars, forKey: .cropBlackBars)
+        try container.encode(normalized.swapEyes, forKey: .swapEyes)
+        try container.encode(normalized.audioHandling, forKey: .audioHandling)
+        try container.encode(normalized.audioBitrate, forKey: .audioBitrate)
+        try container.encode(normalized.audioLanguages, forKey: .audioLanguages)
+        try container.encode(normalized.subtitles, forKey: .subtitles)
     }
 
     var generatedEyeCustomBitrateMbps: Int {
@@ -430,6 +494,7 @@ struct EncodingOptions: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case videoOutputMode
+        case videoQuality
         case av1CRF
         case mvHEVC
         case hevcQuality
@@ -556,23 +621,35 @@ extension BuiltInProfile {
     var options: EncodingOptions {
         switch self {
         case .balanced:
-            EncodingOptions()
+            return EncodingOptions(videoQuality: .balanced)
         case .originalResolution:
-            EncodingOptions(
-                mvHEVC: MVHEVCOptions(
-                    generatedMergeQuality: 85,
-                    linkGeneratedAndUpscaleQuality: true
+            let mvHEVC = MVHEVCOptions(
+                generatedMergeQuality: 85,
+                linkGeneratedAndUpscaleQuality: true
+            )
+            return EncodingOptions(
+                videoQuality: .custom(
+                    mvHEVC: mvHEVC,
+                    av1CRF: 32,
+                    upscaleQuality: 85
                 ),
+                mvHEVC: mvHEVC,
                 upscaleEnabled: false,
                 upscaleQuality: 85,
                 fieldOfView: 90
             )
         case .fourKUpscale:
-            EncodingOptions(
-                mvHEVC: MVHEVCOptions(
-                    generatedMergeQuality: 80,
-                    linkGeneratedAndUpscaleQuality: true
+            let mvHEVC = MVHEVCOptions(
+                generatedMergeQuality: 80,
+                linkGeneratedAndUpscaleQuality: true
+            )
+            return EncodingOptions(
+                videoQuality: .custom(
+                    mvHEVC: mvHEVC,
+                    av1CRF: 32,
+                    upscaleQuality: 80
                 ),
+                mvHEVC: mvHEVC,
                 upscaleEnabled: true,
                 upscaleQuality: 80,
                 fieldOfView: 90
