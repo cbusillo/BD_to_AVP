@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "experiment_id": "file-upscale-quality-sweep-v1",
+  "target_id": "upscale_quality",
+  "purpose": "independent_response_characterization_not_ladder_mappings",
+  "design": "fixed_integer_quality_sweep_65_75_85_v1",
+  "corpus_binding": {
+    "path": "docs/qualification/file-upscale-quality-corpus-v1.json",
+    "binding_id": "file-upscale-quality-corpus-v1",
+    "sha256": "d214008100cdfa9bcb56078658eb51ae3583292b1181305272e9784bf73efaa7"
+  },
+  "balanced": {
+    "quality": 75,
+    "quality_source": "bd_to_avp.modules.video_quality_defaults.DEFAULT_UPSCALE_QUALITY"
+  },
+  "generated_base": {
+    "eye_bitrate_mbps": 20,
+    "eye_bitrate_source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_GENERATED_EYE_BITRATE_MBPS",
+    "merge_quality": 75,
+    "merge_quality_source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_GENERATED_MERGE_QUALITY",
+    "contract": "production_generated_mv_hevc_v1"
+  },
+  "runs_per_candidate": 3,
+  "execution_order": "explicit_cyclic_quality_orders",
+  "orders": [
+    [65, 75, 85],
+    [75, 85, 65],
+    [85, 65, 75]
+  ],
+  "candidates": [
+    {"id": "q065", "quality": 65},
+    {"id": "q075", "quality": 75},
+    {"id": "q085", "quality": 85}
+  ],
+  "toolchain": {
+    "ffmpeg_manifest": {
+      "path": "vendor/ffmpeg-macos-arm64.toml",
+      "sha256": "a8afa883b2128ee925276953193aa179acdb1378873960286082debb20ae1fb5"
+    },
+    "generated_encoder_contract": "production_generated_mv_hevc_v1",
+    "file_upscale_command_contract": "bd_to_avp.modules.video.fx_upscale_command_v1",
+    "fx_upscale_binary": {
+      "path": "bd_to_avp/bin/fx-upscale",
+      "sha256": "80ba011745c105a23db74bcd7d4d0bbbe26084cf2d65911b0347c2c530baa022"
+    },
+    "bundled_tools": {
+      "edge264_test": {
+        "path": "bd_to_avp/bin/edge264_test",
+        "sha256": "20538cc8f6c89973fe645b1ad51b30d40529f20cce3a43e53c8d77ccfcb1f6e6"
+      },
+      "mp4box": {
+        "path": "bd_to_avp/bin/MP4Box",
+        "sha256": "61ddca2713e5de02798820e9e295edc959d09a8b15a30dcacc3d9c14df627a6a"
+      },
+      "spatial_media_tool": {
+        "path": "bd_to_avp/bin/spatial-media-kit-tool",
+        "sha256": "97e42c6b04f32b27edd486a33b74d5cd23973a2875d066baa15d0de8397359f9"
+      }
+    },
+    "metric_contract": "ffmpeg_ssim_aggregate_and_per_frame_v1",
+    "geometry_contract": "fx_upscale_2x_spatial_output_v1",
+    "timing_contract": {
+      "frame_rate": "exact_rational_match_v1",
+      "duration_tolerance_frames": 1
+    }
+  },
+  "decision_policy": {
+    "stage": "response_characterization_only",
+    "post_hoc_thresholds_forbidden": true,
+    "public_mapping_changes_forbidden": true,
+    "ladder_mapping_selected": false,
+    "thresholds_selected": false,
+    "perceptual_4k_quality_claim_forbidden": true,
+    "vision_pro_quality_claim_forbidden": true
+  }
+}

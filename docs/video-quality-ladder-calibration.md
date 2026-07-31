@@ -66,6 +66,59 @@ Exit `0` means the selected cells completed and passed eye-order checks; a subse
 remaining explicitly non-qualifying. A complete corpus exits `1` when monotonicity or repeat-noise warnings require
 review, and fatal tool, source, ownership, or evidence errors exit `2`.
 
+## File Upscale Quality Sweep
+
+`docs/qualification/file-upscale-quality-corpus-v1.json` binds a five-case stress subset to the existing direct
+MV-HEVC corpus by exact path, corpus ID, and SHA-256. The subset covers real MVC footage, motion, grain, darkness,
+animation, crop handling, disparity, frame-rate override, and 8-bit source material. Private source identity is pinned
+from the direct anchor plan where the production-derived cases require it.
+
+`docs/qualification/file-upscale-quality-sweep-v1.json` defines a checked exploratory sweep for the file-based
+`upscale_quality` control only. It measures integer qualities `65`, `75`, and `85`, with production `Balanced = 75`
+resolved from `DEFAULT_UPSCALE_QUALITY`. Each candidate runs three repeats in cyclic orders `[65,75,85]`,
+`[75,85,65]`, and `[85,65,75]`. For every case and repeat, the runner creates one fresh production-parity generated
+base at `20` Mbps per eye with merge quality `75`, then runs all three upscale candidates against exact copies of
+that same base.
+
+Run the complete checked stress subset from a clean committed worktree with:
+
+```bash
+BD_TO_AVP_RELEASE_MVC_SOURCE=/private/source.mkv \
+uv run python scripts/qualify_file_upscale_quality_sweep.py \
+  --output build/qualification/file-upscale-quality-sweep-v1.json \
+  --work-directory build/qualification/file-upscale-quality-sweep-v1-work
+```
+
+Use `--resume` with the same output and work directory after an interrupted run. A bounded smoke can select one or
+more planned cases, but it remains non-qualifying even when structurally valid:
+
+```bash
+BD_TO_AVP_RELEASE_MVC_SOURCE=/private/source.mkv \
+uv run python scripts/qualify_file_upscale_quality_sweep.py \
+  --case-id synthetic-animation \
+  --output build/qualification/file-upscale-quality-sweep-smoke.json \
+  --work-directory build/qualification/file-upscale-quality-sweep-smoke-work
+```
+
+The runner uses the same `fx_upscale_command(input_path, quality)` helper as production file upscale, records the
+canonical quality factor as `quality / 100`, validates 2x spatial output, downsamples each final eye back to source
+dimensions for aggregate and per-frame SSIM, and records cross-eye margins, frame-tail statistics, bytes, effective
+bitrate, base ratio, upscale-only time, projected full-route time, source/base/final hashes, and source/tool/Git
+provenance. The checked timing contract requires exact rational frame-rate preservation and allows at most one frame
+of container-duration tolerance; effective bitrate uses the validated output duration. Evidence is written atomically
+after every base and candidate, and work directories are owned and locked for safe resume.
+
+Exit `0` means the complete planned stress subset is structurally decision-ready with valid eye order and monotonic
+output-size response. Exit `1` means the complete planned stress subset produced valid but ambiguous or non-monotonic
+exploratory evidence. Fatal schema, source, tool, provenance, ownership, privacy, or execution errors exit `2`.
+Subset or otherwise incomplete resumable evidence exits `3`.
+
+This slice cannot assign public ladder mappings, alter `docs/qualification/video-quality-ladder-v1.json`, choose
+thresholds after seeing results, or claim perceptual 4K or Vision Pro playback quality. Passing evidence only
+characterizes the independent file-upscale response around production `Balanced = 75`. SSIM deltas and repeat spread
+remain descriptive in this stage; they are not converted into an undeclared pass/fail threshold. Public mappings still
+require a later checked calibration and physical-device validation.
+
 ## Generated Interaction Sweep
 
 `docs/qualification/generated-mv-hevc-corpus-v1.json` binds a four-case stress subset to the existing direct

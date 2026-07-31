@@ -1370,12 +1370,7 @@ def upscale_file(
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
 ) -> None:
-    upscale_command = [
-        config.FX_UPSCALE_PATH,
-        "--bitrate-scaling-factor",
-        config.upscale_quality / 100,
-        input_path,
-    ]
+    upscale_command = fx_upscale_command(input_path, config.upscale_quality)
     run_process_capture(
         upscale_command,
         "Upscale video with FX Upscale plugin.",
@@ -1386,6 +1381,19 @@ def upscale_file(
         capture_overflow=CaptureOverflowPolicy.TRUNCATE,
         show_spinner=True,
     )
+
+
+def fx_upscale_command(input_path: Path, quality: int) -> list[str | Path]:
+    if type(quality) is not int or not 0 <= quality <= 100:
+        raise ValueError("FX Upscale quality must be an integer from 0 through 100.")
+    whole, hundredths = divmod(quality, 100)
+    factor = str(whole) if hundredths == 0 else f"{whole}.{hundredths:02d}".rstrip("0")
+    return [
+        config.FX_UPSCALE_PATH,
+        "--bitrate-scaling-factor",
+        factor,
+        input_path,
+    ]
 
 
 def create_left_right_files(
