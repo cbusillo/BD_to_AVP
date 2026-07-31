@@ -1,0 +1,110 @@
+{
+  "schema_version": 4,
+  "experiment_id": "generated-mv-hevc-full-corpus-confirmation-v1",
+  "target_id": "generated_mv_hevc",
+  "purpose": "fixed_full_corpus_confirmation_not_ladder_mapping",
+  "design": "fixed_six_cell_full_corpus_confirmation_v1",
+  "corpus_binding": {
+    "path": "docs/qualification/generated-mv-hevc-full-corpus-v1.json",
+    "binding_id": "generated-mv-hevc-full-corpus-v1",
+    "sha256": "0f53fd73ea60ccb80f48afc8750c5b8d62e9fdb6cce3017dc09fb78dbc851adc"
+  },
+  "balanced": {
+    "eye_bitrate_mbps": 20,
+    "eye_bitrate_source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_GENERATED_EYE_BITRATE_MBPS",
+    "merge_quality": 75,
+    "merge_quality_source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_GENERATED_MERGE_QUALITY"
+  },
+  "runs_per_cell": 3,
+  "execution_order": "cyclic_balanced",
+  "full_corpus_confirmation": {
+    "source_receipt": {
+      "schema_version": 1,
+      "evidence_id": "generated-mv-hevc-bitrate-search-v1",
+      "sha256": "ca975aa92853614fbad696c1cadf52f26e726b06e2ffbad02f6bdcba9ed06325",
+      "source_git_sha": "98d8808595911dc95c7fdbdb7bc43b8343f5a90d",
+      "required_file_mode": "0444"
+    },
+    "source_plan": {
+      "path": "docs/qualification/generated-mv-hevc-bitrate-search-v1.json",
+      "sha256": "1ad4a59df1821e31c7c13f835173122a4b0b31a256052e23aa9fc655185a8886",
+      "schema_version": 3
+    },
+    "threshold_noise_evidence": {
+      "experiment_id": "generated-mv-hevc-interaction-v1",
+      "receipt_sha256": "fe3c81e96771f9d0f4dc1f6461556d5fdf22c95034776b044f268978d68bd07f",
+      "source_git_sha": "4c21ebb2cb42632a1aa0d37aa1ca47bd51b3500e",
+      "baseline_cell_id": "b020-m075",
+      "maximum_repeat_ssim_spread": 0.000274,
+      "maximum_repeat_size_ratio_spread": 0.008639211494662749,
+      "maximum_minimum_frame_ssim_spread": 0.00031399999999992545,
+      "maximum_p05_frame_ssim_spread": 0.0004979999999999984,
+      "maximum_frame_ssim_standard_deviation_spread": 0.00009296255193789321,
+      "maximum_adjacent_frame_ssim_drop_spread": 0.00037199999999992794
+    },
+    "tiers": [
+      {
+        "merge_quality": 65,
+        "lower_cell": {
+          "cell_id": "b011-m065",
+          "eye_bitrate_mbps": 11
+        },
+        "selected_cell": {
+          "cell_id": "b012-m065",
+          "eye_bitrate_mbps": 12
+        },
+        "anchor_cell": {
+          "cell_id": "b020-m065",
+          "eye_bitrate_mbps": 20
+        }
+      },
+      {
+        "merge_quality": 75,
+        "lower_cell": {
+          "cell_id": "b012-m075",
+          "eye_bitrate_mbps": 12
+        },
+        "selected_cell": {
+          "cell_id": "b013-m075",
+          "eye_bitrate_mbps": 13
+        },
+        "anchor_cell": {
+          "cell_id": "b020-m075",
+          "eye_bitrate_mbps": 20
+        }
+      }
+    ],
+    "maximum_case_size_ratio_vs_tier_anchor": 1.02,
+    "minimum_aggregate_storage_reduction_ratio": 0.02
+  },
+  "pre_registered_thresholds": {
+    "noise_multiplier": 2,
+    "aggregate_quality_non_inferiority_margin": 0.0006,
+    "aggregate_quality_distinguishability": 0.0006,
+    "storage_distinguishability_ratio": 0.02,
+    "repeat_ssim_spread_limit": 0.0006,
+    "repeat_size_ratio_spread_limit": 0.02,
+    "minimum_frame_quality_non_inferiority_margin": 0.0007,
+    "p05_frame_quality_non_inferiority_margin": 0.001,
+    "frame_ssim_standard_deviation_increase_limit": 0.0002,
+    "adjacent_frame_ssim_drop_increase_limit": 0.0008,
+    "maximum_output_size_ratio": 3.0
+  },
+  "toolchain": {
+    "ffmpeg_manifest": {
+      "path": "vendor/ffmpeg-macos-arm64.toml",
+      "sha256": "a8afa883b2128ee925276953193aa179acdb1378873960286082debb20ae1fb5"
+    },
+    "generated_encoder_contract": "production_generated_mv_hevc_v1",
+    "metric_contract": "ffmpeg_ssim_aggregate_and_per_frame_v1"
+  },
+  "decision_policy": {
+    "stage": "fixed_full_corpus_confirmation_only",
+    "confirmation": "confirm_frozen_cells_or_fail",
+    "source_result_reselection_forbidden": true,
+    "package_validation_required": true,
+    "physical_vision_pro_validation_required": true,
+    "post_hoc_thresholds_forbidden": true,
+    "ladder_mapping_selected": false
+  }
+}

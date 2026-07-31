@@ -58,6 +58,9 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXPERIMENT_PLAN = REPOSITORY_ROOT / "docs/qualification/generated-mv-hevc-calibration-sweep-v1.json"
 DEFAULT_REFINEMENT_PLAN = REPOSITORY_ROOT / "docs/qualification/generated-mv-hevc-merge-refinement-v1.json"
 DEFAULT_BITRATE_SEARCH_PLAN = REPOSITORY_ROOT / "docs/qualification/generated-mv-hevc-bitrate-search-v1.json"
+DEFAULT_FULL_CORPUS_CONFIRMATION_PLAN = (
+    REPOSITORY_ROOT / "docs/qualification/generated-mv-hevc-full-corpus-confirmation-v1.json"
+)
 EVIDENCE_SCHEMA_VERSION = 1
 MAX_RUNS = 10
 WORK_DIRECTORY_MARKER = ".bd-to-avp-generated-mv-hevc-calibration.json"
@@ -74,6 +77,10 @@ class CorpusBinding:
     expected_case_sources: Mapping[str, Mapping[str, object]]
     required_coverage: tuple[str, ...]
     relative_path: str | None = None
+    schema_version: int = 1
+    purpose: str = "matched_stress_subset_not_full_corpus"
+    quality_gated_case_ids: tuple[str, ...] = ()
+    informational_case_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -141,6 +148,24 @@ class BitrateSearchPolicy:
 
 
 @dataclass(frozen=True)
+class FullCorpusConfirmationTier:
+    merge_quality: int
+    lower_cell: ExperimentCell
+    selected_cell: ExperimentCell
+    anchor_cell: ExperimentCell
+
+
+@dataclass(frozen=True)
+class FullCorpusConfirmationPolicy:
+    source_receipt: FrozenEvidenceBinding
+    source_plan: CheckedPlanBinding
+    noise_evidence: RefinementSourceEvidence
+    tiers: tuple[FullCorpusConfirmationTier, ...]
+    maximum_case_size_ratio_vs_tier_anchor: float
+    minimum_aggregate_storage_reduction_ratio: float
+
+
+@dataclass(frozen=True)
 class ExperimentPlan:
     experiment_id: str
     binding_path: Path
@@ -165,6 +190,7 @@ class ExperimentPlan:
     source_evidence: RefinementSourceEvidence | None = None
     thresholds: RefinementThresholds | None = None
     bitrate_search: BitrateSearchPolicy | None = None
+    full_corpus_confirmation: FullCorpusConfirmationPolicy | None = None
 
 
 def _mapping(value: object, label: str) -> Mapping[str, object]:
@@ -311,7 +337,7 @@ def _checked_plan_binding(value: object, label: str) -> CheckedPlanBinding:
     return CheckedPlanBinding(
         path=_repository_path(_string(document.get("path"), f"{label}.path"), f"{label} path"),
         sha256=_sha256_identity(document.get("sha256"), f"{label}.sha256"),
-        schema_version=_integer(document.get("schema_version"), f"{label}.schema_version", minimum=1, maximum=1),
+        schema_version=_integer(document.get("schema_version"), f"{label}.schema_version", minimum=1, maximum=4),
     )
 
 
@@ -369,6 +395,89 @@ def _bitrate_search_policy(value: object) -> BitrateSearchPolicy:
         accepted_merge_qualities=accepted_merge_qualities,
         guided_anchor_count=guided_anchor_count,
         custom_exact_retained=True,
+        maximum_case_size_ratio_vs_tier_anchor=maximum_case_size_ratio,
+        minimum_aggregate_storage_reduction_ratio=minimum_storage_reduction,
+    )
+
+
+def _confirmation_cell(value: object, label: str, merge_quality: int) -> ExperimentCell:
+    document = _mapping(value, label)
+    eye_bitrate_mbps = _integer(
+        document.get("eye_bitrate_mbps"),
+        f"{label}.eye_bitrate_mbps",
+        minimum=1,
+        maximum=500,
+    )
+    cell_id = _string(document.get("cell_id"), f"{label}.cell_id")
+    if cell_id != _cell_id(eye_bitrate_mbps, merge_quality):
+        raise QualificationFailure(f"{label}.cell_id does not match its bitrate and merge-quality identity.")
+    return ExperimentCell(cell_id, eye_bitrate_mbps, merge_quality)
+
+
+def _full_corpus_confirmation_policy(value: object) -> FullCorpusConfirmationPolicy:
+    document = _mapping(value, "full_corpus_confirmation")
+    source_receipt = _frozen_evidence_binding(
+        document.get("source_receipt"),
+        "full_corpus_confirmation.source_receipt",
+    )
+    if source_receipt.evidence_id != "generated-mv-hevc-bitrate-search-v1":
+        raise QualificationFailure("Full-corpus confirmation source evidence ID is unsupported.")
+    source_plan = _checked_plan_binding(
+        document.get("source_plan"),
+        "full_corpus_confirmation.source_plan",
+    )
+    if source_plan.schema_version != 3:
+        raise QualificationFailure("Full-corpus confirmation source plan must use schema version 3.")
+    raw_tiers = _array(document.get("tiers"), "full_corpus_confirmation.tiers")
+    expected_tiers = ((65, 11, 12, 20), (75, 12, 13, 20))
+    if len(raw_tiers) != len(expected_tiers):
+        raise QualificationFailure("Full-corpus confirmation must define exactly two fixed tiers.")
+    tiers: list[FullCorpusConfirmationTier] = []
+    for index, (raw_tier, expected) in enumerate(zip(raw_tiers, expected_tiers, strict=True)):
+        label = f"full_corpus_confirmation.tiers[{index}]"
+        tier = _mapping(raw_tier, label)
+        merge_quality = _integer(tier.get("merge_quality"), f"{label}.merge_quality", minimum=0, maximum=100)
+        expected_merge, expected_lower, expected_selected, expected_anchor = expected
+        lower_cell = _confirmation_cell(tier.get("lower_cell"), f"{label}.lower_cell", merge_quality)
+        selected_cell = _confirmation_cell(tier.get("selected_cell"), f"{label}.selected_cell", merge_quality)
+        anchor_cell = _confirmation_cell(tier.get("anchor_cell"), f"{label}.anchor_cell", merge_quality)
+        observed = (
+            merge_quality,
+            lower_cell.eye_bitrate_mbps,
+            selected_cell.eye_bitrate_mbps,
+            anchor_cell.eye_bitrate_mbps,
+        )
+        if observed != (expected_merge, expected_lower, expected_selected, expected_anchor):
+            raise QualificationFailure("Full-corpus confirmation tier cells must match the frozen search result.")
+        tiers.append(
+            FullCorpusConfirmationTier(
+                merge_quality=merge_quality,
+                lower_cell=lower_cell,
+                selected_cell=selected_cell,
+                anchor_cell=anchor_cell,
+            )
+        )
+    maximum_case_size_ratio = _number(
+        document.get("maximum_case_size_ratio_vs_tier_anchor"),
+        "full_corpus_confirmation.maximum_case_size_ratio_vs_tier_anchor",
+        positive=True,
+    )
+    minimum_storage_reduction = _number(
+        document.get("minimum_aggregate_storage_reduction_ratio"),
+        "full_corpus_confirmation.minimum_aggregate_storage_reduction_ratio",
+        positive=True,
+    )
+    if not math.isclose(maximum_case_size_ratio, 1.02, rel_tol=0.0, abs_tol=1e-12):
+        raise QualificationFailure(
+            "Full-corpus confirmation maximum case size ratio must preserve the checked 2% tolerance."
+        )
+    if not math.isclose(minimum_storage_reduction, 0.02, rel_tol=0.0, abs_tol=1e-12):
+        raise QualificationFailure("Full-corpus confirmation minimum aggregate storage reduction must be 2%.")
+    return FullCorpusConfirmationPolicy(
+        source_receipt=source_receipt,
+        source_plan=source_plan,
+        noise_evidence=_refinement_source_evidence(document.get("threshold_noise_evidence")),
+        tiers=tuple(tiers),
         maximum_case_size_ratio_vs_tier_anchor=maximum_case_size_ratio,
         minimum_aggregate_storage_reduction_ratio=minimum_storage_reduction,
     )
@@ -493,11 +602,17 @@ def _relative_repository_path(path: Path, label: str) -> str:
 
 def parse_corpus_binding(raw: object) -> CorpusBinding:
     document = _mapping(raw, "corpus binding")
-    if document.get("schema_version") != 1:
-        raise QualificationFailure("corpus binding schema_version must be 1.")
+    schema_version = document.get("schema_version")
+    if schema_version not in {1, 2}:
+        raise QualificationFailure("corpus binding schema_version must be 1 or 2.")
     binding_id = _string(document.get("binding_id"), "binding_id")
-    if document.get("purpose") != "matched_stress_subset_not_full_corpus":
-        raise QualificationFailure("corpus binding must identify a matched stress subset rather than a full corpus.")
+    purpose = _string(document.get("purpose"), "purpose")
+    expected_purpose = {
+        1: "matched_stress_subset_not_full_corpus",
+        2: "full_corpus_confirmation_all_cases",
+    }[schema_version]
+    if purpose != expected_purpose:
+        raise QualificationFailure("corpus binding purpose does not match its schema version.")
     source_manifest = _mapping(document.get("source_manifest"), "source_manifest")
     source_manifest_path = _repository_path(
         _string(source_manifest.get("path"), "source_manifest.path"),
@@ -511,6 +626,34 @@ def parse_corpus_binding(raw: object) -> CorpusBinding:
     )
     if not selected_case_ids or len(set(selected_case_ids)) != len(selected_case_ids):
         raise QualificationFailure("selected_case_ids must be non-empty and unique.")
+    if schema_version == 1:
+        quality_gated_case_ids = selected_case_ids
+        informational_case_ids: tuple[str, ...] = ()
+    else:
+        quality_gated_case_ids = tuple(
+            _string(case_id, f"quality_gated_case_ids[{index}]")
+            for index, case_id in enumerate(_array(document.get("quality_gated_case_ids"), "quality_gated_case_ids"))
+        )
+        informational_case_ids = tuple(
+            _string(case_id, f"informational_case_ids[{index}]")
+            for index, case_id in enumerate(_array(document.get("informational_case_ids"), "informational_case_ids"))
+        )
+        if not quality_gated_case_ids or not informational_case_ids:
+            raise QualificationFailure("Full-corpus binding must contain gated and informational cases.")
+        if len(set(quality_gated_case_ids)) != len(quality_gated_case_ids) or len(set(informational_case_ids)) != len(
+            informational_case_ids
+        ):
+            raise QualificationFailure("Full-corpus gate partitions must be unique.")
+        if set(quality_gated_case_ids) & set(informational_case_ids) or set(quality_gated_case_ids) | set(
+            informational_case_ids
+        ) != set(selected_case_ids):
+            raise QualificationFailure("Full-corpus gate partitions must cover selected_case_ids exactly.")
+        if tuple(case_id for case_id in selected_case_ids if case_id in set(quality_gated_case_ids)) != (
+            quality_gated_case_ids
+        ) or tuple(case_id for case_id in selected_case_ids if case_id in set(informational_case_ids)) != (
+            informational_case_ids
+        ):
+            raise QualificationFailure("Full-corpus gate partitions must preserve selected-case order.")
     expected_case_sources_document = _mapping(document.get("expected_case_sources"), "expected_case_sources")
     if set(expected_case_sources_document) != set(selected_case_ids):
         raise QualificationFailure("expected_case_sources must identify every selected case exactly once.")
@@ -532,6 +675,10 @@ def parse_corpus_binding(raw: object) -> CorpusBinding:
         selected_case_ids=selected_case_ids,
         expected_case_sources=expected_case_sources,
         required_coverage=required_coverage,
+        schema_version=schema_version,
+        purpose=purpose,
+        quality_gated_case_ids=quality_gated_case_ids,
+        informational_case_ids=informational_case_ids,
     )
 
 
@@ -553,11 +700,26 @@ def load_corpus_binding(path: Path) -> tuple[CorpusBinding, str]:
     manifest = load_manifest(parsed.source_manifest_path)
     if manifest.corpus_id != parsed.source_corpus_id:
         raise QualificationFailure("The bound source corpus ID does not match the referenced manifest.")
-    gated_cases = {case.case_id: case for case in manifest.cases if case.quality_gate}
-    unknown = sorted(set(parsed.selected_case_ids) - set(gated_cases))
+    cases_by_id = {case.case_id: case for case in manifest.cases}
+    unknown = sorted(set(parsed.selected_case_ids) - set(cases_by_id))
     if unknown:
-        raise QualificationFailure("Corpus binding references unknown or non-gating cases: " + ", ".join(unknown))
-    observed_coverage = {tag for case_id in parsed.selected_case_ids for tag in gated_cases[case_id].tags}
+        raise QualificationFailure("Corpus binding references unknown cases: " + ", ".join(unknown))
+    if parsed.schema_version == 1:
+        non_gating = [case_id for case_id in parsed.selected_case_ids if not cases_by_id[case_id].quality_gate]
+        if non_gating:
+            raise QualificationFailure("Stress corpus binding references non-gating cases: " + ", ".join(non_gating))
+    else:
+        manifest_case_ids = tuple(case.case_id for case in manifest.cases)
+        manifest_gated_case_ids = tuple(case.case_id for case in manifest.cases if case.quality_gate)
+        manifest_informational_case_ids = tuple(case.case_id for case in manifest.cases if not case.quality_gate)
+        if parsed.selected_case_ids != manifest_case_ids:
+            raise QualificationFailure("Full-corpus binding must preserve the complete source-manifest case order.")
+        if (
+            parsed.quality_gated_case_ids != manifest_gated_case_ids
+            or parsed.informational_case_ids != manifest_informational_case_ids
+        ):
+            raise QualificationFailure("Full-corpus gate partition does not match the source manifest.")
+    observed_coverage = {tag for case_id in parsed.quality_gated_case_ids for tag in cases_by_id[case_id].tags}
     missing_coverage = sorted(set(parsed.required_coverage) - observed_coverage)
     if missing_coverage:
         raise QualificationFailure("Corpus binding is missing required coverage: " + ", ".join(missing_coverage))
@@ -570,6 +732,10 @@ def load_corpus_binding(path: Path) -> tuple[CorpusBinding, str]:
         expected_case_sources=parsed.expected_case_sources,
         required_coverage=parsed.required_coverage,
         relative_path=relative_path,
+        schema_version=parsed.schema_version,
+        purpose=parsed.purpose,
+        quality_gated_case_ids=parsed.quality_gated_case_ids,
+        informational_case_ids=parsed.informational_case_ids,
     )
     return binding, sha256_file(resolved_path)
 
@@ -581,8 +747,8 @@ def _cell_id(eye_bitrate_mbps: int, merge_quality: int) -> str:
 def parse_experiment_plan(raw: object) -> ExperimentPlan:
     document = _mapping(raw, "experiment plan")
     schema_version = document.get("schema_version")
-    if schema_version not in {1, 2, 3}:
-        raise QualificationFailure("experiment plan schema_version must be 1, 2, or 3.")
+    if schema_version not in {1, 2, 3, 4}:
+        raise QualificationFailure("experiment plan schema_version must be 1, 2, 3, or 4.")
     experiment_id = _string(document.get("experiment_id"), "experiment_id")
     if document.get("target_id") != "generated_mv_hevc":
         raise QualificationFailure("experiment plan target_id must be 'generated_mv_hevc'.")
@@ -592,11 +758,13 @@ def parse_experiment_plan(raw: object) -> ExperimentPlan:
         1: "joint_interaction_characterization_not_ladder_mappings",
         2: "merge_response_refinement_not_ladder_mappings",
         3: "same_tier_bitrate_minimization_not_ladder_mapping",
+        4: "fixed_full_corpus_confirmation_not_ladder_mapping",
     }[schema_version]
     expected_design = {
         1: "full_factorial_3x3",
         2: "fixed_bitrate_merge_sweep_v1",
         3: "full_integer_bitrate_sweep_1_to_20_v1",
+        4: "fixed_six_cell_full_corpus_confirmation_v1",
     }[schema_version]
     if purpose != expected_purpose or design != expected_design:
         raise QualificationFailure("experiment plan purpose and design do not match its schema version.")
@@ -645,24 +813,31 @@ def parse_experiment_plan(raw: object) -> ExperimentPlan:
         1: "cyclic_thirds",
         2: "cyclic_balanced",
         3: "latin_thirds",
+        4: "cyclic_balanced",
     }[schema_version]
     if execution_order != expected_execution_order:
         raise QualificationFailure(f"execution_order must be '{expected_execution_order}'.")
-    axes = _mapping(document.get("axes"), "axes")
-    eye_bitrates_mbps = _integer_axis(
-        axes.get("eye_bitrate_mbps"),
-        "axes.eye_bitrate_mbps",
-        minimum=1,
-        maximum=500,
-        expected_length={1: 3, 2: 1, 3: 20}[schema_version],
-    )
-    merge_qualities = _integer_axis(
-        axes.get("merge_quality"),
-        "axes.merge_quality",
-        minimum=0,
-        maximum=100,
-        expected_length={1: 3, 2: 7, 3: 2}[schema_version],
-    )
+    if schema_version == 4:
+        if document.get("axes") is not None:
+            raise QualificationFailure("Full-corpus confirmation must define fixed tier cells rather than axes.")
+        eye_bitrates_mbps = (11, 12, 13, 20)
+        merge_qualities = (65, 75)
+    else:
+        axes = _mapping(document.get("axes"), "axes")
+        eye_bitrates_mbps = _integer_axis(
+            axes.get("eye_bitrate_mbps"),
+            "axes.eye_bitrate_mbps",
+            minimum=1,
+            maximum=500,
+            expected_length={1: 3, 2: 1, 3: 20}[schema_version],
+        )
+        merge_qualities = _integer_axis(
+            axes.get("merge_quality"),
+            "axes.merge_quality",
+            minimum=0,
+            maximum=100,
+            expected_length={1: 3, 2: 7, 3: 2}[schema_version],
+        )
     if schema_version == 1:
         if eye_bitrates_mbps[1] != balanced_eye_bitrate_mbps:
             raise QualificationFailure("Balanced eye bitrate must be the center level of the checked design.")
@@ -675,7 +850,7 @@ def parse_experiment_plan(raw: object) -> ExperimentPlan:
             raise QualificationFailure("Merge refinement levels must match the checked seven-level response design.")
         if merge_qualities[len(merge_qualities) // 2] != balanced_merge_quality:
             raise QualificationFailure("Balanced merge quality must remain the center refinement level.")
-    else:
+    elif schema_version == 3:
         if eye_bitrates_mbps != tuple(range(1, balanced_eye_bitrate_mbps + 1)):
             raise QualificationFailure("Bitrate search must cover every integer Mbps/eye value from 1 through 20.")
         if merge_qualities != (65, balanced_merge_quality):
@@ -707,6 +882,7 @@ def parse_experiment_plan(raw: object) -> ExperimentPlan:
         1: "interaction_characterization_only",
         2: "merge_response_refinement_only",
         3: "same_tier_bitrate_minimization_only",
+        4: "fixed_full_corpus_confirmation_only",
     }[schema_version]
     if decision_stage != expected_stage:
         raise QualificationFailure(f"decision_policy.stage must be '{expected_stage}'.")
@@ -723,9 +899,19 @@ def parse_experiment_plan(raw: object) -> ExperimentPlan:
             raise QualificationFailure("Bitrate search selection policy is unsupported.")
         if decision_policy.get("full_corpus_confirmation_required") is not True:
             raise QualificationFailure("Bitrate search must require later full-corpus confirmation.")
+    elif schema_version == 4:
+        if decision_policy.get("confirmation") != "confirm_frozen_cells_or_fail":
+            raise QualificationFailure("Full-corpus confirmation policy must confirm frozen cells or fail.")
+        if decision_policy.get("source_result_reselection_forbidden") is not True:
+            raise QualificationFailure("Full-corpus confirmation must forbid source-result reselection.")
+        if decision_policy.get("package_validation_required") is not True:
+            raise QualificationFailure("Full-corpus confirmation must require packaged-app validation.")
+        if decision_policy.get("physical_vision_pro_validation_required") is not True:
+            raise QualificationFailure("Full-corpus confirmation must require physical Vision Pro validation.")
     source_evidence = None
     thresholds = None
     bitrate_search = None
+    full_corpus_confirmation = None
     if schema_version == 2:
         source_evidence = _refinement_source_evidence(document.get("source_evidence"))
         thresholds = _refinement_thresholds(document.get("pre_registered_thresholds"), source_evidence)
@@ -745,11 +931,34 @@ def parse_experiment_plan(raw: object) -> ExperimentPlan:
             balanced_merge_quality,
         ):
             raise QualificationFailure("Bitrate search noise baseline must match the production Balanced cell.")
+    elif schema_version == 4:
+        full_corpus_confirmation = _full_corpus_confirmation_policy(document.get("full_corpus_confirmation"))
+        thresholds = _refinement_thresholds(
+            document.get("pre_registered_thresholds"),
+            full_corpus_confirmation.noise_evidence,
+        )
+        if full_corpus_confirmation.noise_evidence.baseline_cell_id != _cell_id(
+            balanced_eye_bitrate_mbps,
+            balanced_merge_quality,
+        ):
+            raise QualificationFailure(
+                "Full-corpus confirmation noise baseline must match the production Balanced cell."
+            )
 
-    cells = tuple(
-        ExperimentCell(_cell_id(eye_bitrate, merge_quality), eye_bitrate, merge_quality)
-        for eye_bitrate, merge_quality in product(eye_bitrates_mbps, merge_qualities)
-    )
+    if full_corpus_confirmation is None:
+        cells = tuple(
+            ExperimentCell(_cell_id(eye_bitrate, merge_quality), eye_bitrate, merge_quality)
+            for eye_bitrate, merge_quality in product(eye_bitrates_mbps, merge_qualities)
+        )
+    else:
+        tiers = full_corpus_confirmation.tiers
+        cells = tuple(
+            [tier.lower_cell for tier in tiers]
+            + [tier.selected_cell for tier in tiers]
+            + [tier.anchor_cell for tier in tiers]
+        )
+        if len(cells) != 6 or len({cell.cell_id for cell in cells}) != len(cells):
+            raise QualificationFailure("Full-corpus confirmation must derive exactly six unique fixed cells.")
     return ExperimentPlan(
         experiment_id=experiment_id,
         binding_path=binding_path,
@@ -773,6 +982,7 @@ def parse_experiment_plan(raw: object) -> ExperimentPlan:
         source_evidence=source_evidence,
         thresholds=thresholds,
         bitrate_search=bitrate_search,
+        full_corpus_confirmation=full_corpus_confirmation,
     )
 
 
@@ -793,6 +1003,9 @@ def load_experiment_plan(path: Path) -> tuple[ExperimentPlan, CorpusBinding, str
         raise QualificationFailure("The corpus binding does not match its pinned SHA-256 identity.")
     if binding.binding_id != parsed.binding_id:
         raise QualificationFailure("The corpus binding ID does not match the experiment plan.")
+    expected_binding_schema = 2 if parsed.schema_version == 4 else 1
+    if binding.schema_version != expected_binding_schema:
+        raise QualificationFailure("The corpus binding schema does not match the experiment stage.")
     if not parsed.ffmpeg_manifest_path.is_file():
         raise QualificationFailure("The pinned FFmpeg vendor manifest is unavailable.")
     if sha256_file(parsed.ffmpeg_manifest_path) != parsed.ffmpeg_manifest_sha256:
@@ -810,6 +1023,40 @@ def load_experiment_plan(path: Path) -> tuple[ExperimentPlan, CorpusBinding, str
             or collapse_plan.get("analysis_id") != parsed.bitrate_search.collapse_receipt.evidence_id
         ):
             raise QualificationFailure("The collapse analysis plan identity does not match the bitrate search plan.")
+    if parsed.full_corpus_confirmation is not None:
+        policy = parsed.full_corpus_confirmation
+        if not policy.source_plan.path.is_file():
+            raise QualificationFailure("The checked bitrate-search source plan is unavailable.")
+        source_plan, source_binding, source_plan_sha256, _ = load_experiment_plan(policy.source_plan.path)
+        if (
+            source_plan_sha256 != policy.source_plan.sha256
+            or source_plan.schema_version != policy.source_plan.schema_version
+        ):
+            raise QualificationFailure("The bitrate-search source plan does not match its checked identity.")
+        if source_plan.experiment_id != policy.source_receipt.evidence_id or source_plan.bitrate_search is None:
+            raise QualificationFailure("The full-corpus source plan is not the checked bitrate-search experiment.")
+        if source_plan.thresholds != parsed.thresholds:
+            raise QualificationFailure("Full-corpus confirmation thresholds changed from the bitrate-search plan.")
+        if (
+            source_plan.ffmpeg_manifest_sha256 != parsed.ffmpeg_manifest_sha256
+            or source_plan.generated_encoder_contract != parsed.generated_encoder_contract
+            or source_plan.metric_contract != parsed.metric_contract
+        ):
+            raise QualificationFailure("Full-corpus confirmation toolchain changed from the bitrate-search plan.")
+        if (
+            source_binding.source_manifest_path != binding.source_manifest_path
+            or source_binding.source_corpus_id != binding.source_corpus_id
+            or source_binding.source_manifest_sha256 != binding.source_manifest_sha256
+        ):
+            raise QualificationFailure("Full-corpus confirmation changed the bound direct corpus manifest.")
+        source_policy = source_plan.bitrate_search
+        if (
+            tuple(tier.merge_quality for tier in policy.tiers) != source_policy.accepted_merge_qualities
+            or policy.maximum_case_size_ratio_vs_tier_anchor != source_policy.maximum_case_size_ratio_vs_tier_anchor
+            or policy.minimum_aggregate_storage_reduction_ratio
+            != source_policy.minimum_aggregate_storage_reduction_ratio
+        ):
+            raise QualificationFailure("Full-corpus confirmation policy changed from the bitrate-search plan.")
     plan = ExperimentPlan(
         experiment_id=parsed.experiment_id,
         binding_path=parsed.binding_path,
@@ -834,6 +1081,7 @@ def load_experiment_plan(path: Path) -> tuple[ExperimentPlan, CorpusBinding, str
         source_evidence=parsed.source_evidence,
         thresholds=parsed.thresholds,
         bitrate_search=parsed.bitrate_search,
+        full_corpus_confirmation=parsed.full_corpus_confirmation,
     )
     return plan, binding, sha256_file(resolved_path), binding_sha256
 
@@ -1002,6 +1250,34 @@ def _bitrate_search_record(policy: BitrateSearchPolicy) -> dict[str, object]:
     }
 
 
+def _full_corpus_confirmation_record(policy: FullCorpusConfirmationPolicy) -> dict[str, object]:
+    return {
+        "source_receipt": _frozen_evidence_record(policy.source_receipt),
+        "source_plan": _checked_plan_record(policy.source_plan),
+        "threshold_noise_evidence": _source_evidence_record(policy.noise_evidence),
+        "tiers": [
+            {
+                "merge_quality": tier.merge_quality,
+                "lower_cell": {
+                    "cell_id": tier.lower_cell.cell_id,
+                    "eye_bitrate_mbps": tier.lower_cell.eye_bitrate_mbps,
+                },
+                "selected_cell": {
+                    "cell_id": tier.selected_cell.cell_id,
+                    "eye_bitrate_mbps": tier.selected_cell.eye_bitrate_mbps,
+                },
+                "anchor_cell": {
+                    "cell_id": tier.anchor_cell.cell_id,
+                    "eye_bitrate_mbps": tier.anchor_cell.eye_bitrate_mbps,
+                },
+            }
+            for tier in policy.tiers
+        ],
+        "maximum_case_size_ratio_vs_tier_anchor": policy.maximum_case_size_ratio_vs_tier_anchor,
+        "minimum_aggregate_storage_reduction_ratio": policy.minimum_aggregate_storage_reduction_ratio,
+    }
+
+
 def _threshold_record(thresholds: RefinementThresholds) -> dict[str, object]:
     return {
         "noise_multiplier": 2,
@@ -1032,6 +1308,7 @@ def _method_record(plan: ExperimentPlan) -> dict[str, object]:
             1: "adjacent 2x2 difference of merge-quality effects",
             2: "pre-registered adjacent merge-quality response thresholds",
             3: "same-tier integer bitrate non-inferiority frontier",
+            4: "fixed full-corpus same-tier confirmation",
         }[plan.schema_version],
         "post_hoc_thresholds_forbidden": True,
         "decision_stage": plan.decision_stage,
@@ -1041,6 +1318,9 @@ def _method_record(plan: ExperimentPlan) -> dict[str, object]:
         method["pre_registered_thresholds"] = _threshold_record(plan.thresholds)
     if plan.bitrate_search is not None and plan.thresholds is not None:
         method["bitrate_search"] = _bitrate_search_record(plan.bitrate_search)
+        method["pre_registered_thresholds"] = _threshold_record(plan.thresholds)
+    if plan.full_corpus_confirmation is not None and plan.thresholds is not None:
+        method["full_corpus_confirmation"] = _full_corpus_confirmation_record(plan.full_corpus_confirmation)
         method["pre_registered_thresholds"] = _threshold_record(plan.thresholds)
     return method
 
@@ -1826,6 +2106,183 @@ def _bitrate_search_evaluations(
     return tier_evaluations
 
 
+def _confirmation_case_evaluation(
+    case: Mapping[str, object],
+    candidate_cell: ExperimentCell,
+    anchor_cell: ExperimentCell,
+    thresholds: RefinementThresholds,
+    maximum_case_size_ratio: float,
+    definition: CorpusCase,
+) -> tuple[dict[str, object], int, int] | None:
+    candidate_record = _cell_record(case, candidate_cell.cell_id)
+    anchor_record = _cell_record(case, anchor_cell.cell_id)
+    candidate = candidate_record.get("summary") if candidate_record is not None else None
+    baseline = anchor_record.get("summary") if anchor_record is not None else None
+    if not isinstance(candidate, Mapping) or not isinstance(baseline, Mapping):
+        return None
+    candidate_bytes_value = candidate.get("median_final_bytes")
+    anchor_bytes_value = baseline.get("median_final_bytes")
+    if type(candidate_bytes_value) is not int or type(anchor_bytes_value) is not int:
+        raise QualificationFailure("Full-corpus confirmation median byte counts must be exact integers.")
+    candidate_bytes = int(candidate_bytes_value)
+    anchor_bytes = int(anchor_bytes_value)
+    if candidate_bytes <= 0 or anchor_bytes <= 0:
+        raise QualificationFailure("Full-corpus confirmation median byte counts must be positive.")
+    quality_delta = float(candidate["median_min_same_eye_ssim"]) - float(baseline["median_min_same_eye_ssim"])
+    minimum_frame_delta = float(candidate["minimum_frame_same_eye_ssim"]) - float(
+        baseline["minimum_frame_same_eye_ssim"]
+    )
+    p05_frame_delta = float(candidate["median_p05_frame_same_eye_ssim"]) - float(
+        baseline["median_p05_frame_same_eye_ssim"]
+    )
+    standard_deviation_increase = float(candidate["maximum_frame_ssim_standard_deviation"]) - float(
+        baseline["maximum_frame_ssim_standard_deviation"]
+    )
+    adjacent_drop_increase = float(candidate["maximum_adjacent_frame_ssim_drop"]) - float(
+        baseline["maximum_adjacent_frame_ssim_drop"]
+    )
+    output_size_ratio = candidate_bytes / anchor_bytes
+    result: dict[str, object] = {
+        "case_id": case["id"],
+        "quality_delta": quality_delta,
+        "minimum_frame_quality_delta": minimum_frame_delta,
+        "p05_frame_quality_delta": p05_frame_delta,
+        "frame_ssim_standard_deviation_increase": standard_deviation_increase,
+        "adjacent_frame_ssim_drop_increase": adjacent_drop_increase,
+        "candidate_median_final_bytes": candidate_bytes,
+        "anchor_median_final_bytes": anchor_bytes,
+        "output_size_ratio_vs_tier_anchor": output_size_ratio,
+        "quality_non_inferiority_passed": quality_delta >= -thresholds.aggregate_quality_non_inferiority_margin,
+        "minimum_frame_non_inferiority_passed": (
+            minimum_frame_delta >= -thresholds.minimum_frame_quality_non_inferiority_margin
+        ),
+        "p05_frame_non_inferiority_passed": (p05_frame_delta >= -thresholds.p05_frame_quality_non_inferiority_margin),
+        "temporal_stability_passed": (
+            standard_deviation_increase <= thresholds.frame_ssim_standard_deviation_increase_limit
+            and adjacent_drop_increase <= thresholds.adjacent_frame_ssim_drop_increase_limit
+        ),
+        "repeatability_passed": (
+            float(candidate["repeat_ssim_spread"]) <= thresholds.repeat_ssim_spread_limit
+            and float(candidate["repeat_size_ratio_spread"]) <= thresholds.repeat_size_ratio_spread_limit
+        ),
+        "eye_order_passed": float(candidate["minimum_eye_order_margin"]) >= definition.minimum_eye_order_margin,
+        "case_size_non_regression_passed": output_size_ratio <= maximum_case_size_ratio,
+        "artifact_structure_passed": True,
+    }
+    constraint_keys = (
+        "quality_non_inferiority_passed",
+        "minimum_frame_non_inferiority_passed",
+        "p05_frame_non_inferiority_passed",
+        "temporal_stability_passed",
+        "repeatability_passed",
+        "eye_order_passed",
+        "case_size_non_regression_passed",
+        "artifact_structure_passed",
+    )
+    result["candidate_constraints_passed"] = all(bool(result[key]) for key in constraint_keys)
+    return result, candidate_bytes, anchor_bytes
+
+
+def _full_corpus_confirmation_evaluations(
+    cases: Sequence[Mapping[str, object]],
+    plan: ExperimentPlan,
+    binding: CorpusBinding,
+    case_definitions: Mapping[str, CorpusCase],
+) -> list[dict[str, object]]:
+    policy = plan.full_corpus_confirmation
+    thresholds = plan.thresholds
+    if policy is None or thresholds is None:
+        return []
+    cases_by_id = {str(case["id"]): case for case in cases}
+    gated_case_ids = binding.quality_gated_case_ids or binding.selected_case_ids
+    tier_evaluations: list[dict[str, object]] = []
+    for tier in policy.tiers:
+        role_evaluations: dict[str, dict[str, object]] = {}
+        for role, cell in (
+            ("lower", tier.lower_cell),
+            ("selected", tier.selected_cell),
+            ("anchor", tier.anchor_cell),
+        ):
+            case_evaluations: list[dict[str, object]] = []
+            candidate_total_bytes = 0
+            anchor_total_bytes = 0
+            for case_id in gated_case_ids:
+                case = cases_by_id.get(case_id)
+                if case is None:
+                    continue
+                evaluated = _confirmation_case_evaluation(
+                    case,
+                    cell,
+                    tier.anchor_cell,
+                    thresholds,
+                    policy.maximum_case_size_ratio_vs_tier_anchor,
+                    case_definitions[case_id],
+                )
+                if evaluated is None:
+                    continue
+                case_evaluation, candidate_bytes, anchor_bytes = evaluated
+                case_evaluations.append(case_evaluation)
+                candidate_total_bytes += candidate_bytes
+                anchor_total_bytes += anchor_bytes
+            complete = len(case_evaluations) == len(gated_case_ids)
+            aggregate_size_ratio = (
+                candidate_total_bytes / anchor_total_bytes if complete and anchor_total_bytes > 0 else None
+            )
+            aggregate_storage_reduction = 1.0 - aggregate_size_ratio if aggregate_size_ratio is not None else None
+            storage_boundary_left = 100 * candidate_total_bytes
+            storage_boundary_right = 98 * anchor_total_bytes
+            role_evaluations[role] = {
+                "role": role,
+                "cell_id": cell.cell_id,
+                "eye_bitrate_mbps": cell.eye_bitrate_mbps,
+                "merge_quality": cell.merge_quality,
+                "complete": complete,
+                "case_evaluations": case_evaluations,
+                "candidate_total_median_bytes": candidate_total_bytes if complete else None,
+                "anchor_total_median_bytes": anchor_total_bytes if complete else None,
+                "aggregate_size_ratio_vs_tier_anchor": aggregate_size_ratio,
+                "aggregate_storage_reduction_ratio": aggregate_storage_reduction,
+                "storage_boundary_left": storage_boundary_left if complete else None,
+                "storage_boundary_right": storage_boundary_right if complete else None,
+                "candidate_constraints_passed": complete
+                and all(bool(item["candidate_constraints_passed"]) for item in case_evaluations),
+                "storage_benefit_passed": complete and storage_boundary_left <= storage_boundary_right,
+            }
+        lower = role_evaluations["lower"]
+        selected = role_evaluations["selected"]
+        anchor = role_evaluations["anchor"]
+        lower_quality_rejection_case_ids = [
+            str(item["case_id"])
+            for item in lower["case_evaluations"]
+            if isinstance(item, Mapping)
+            and float(item["quality_delta"]) < -thresholds.aggregate_quality_non_inferiority_margin
+        ]
+        lower_rejection_confirmed = lower["complete"] is True and bool(lower_quality_rejection_case_ids)
+        selected_confirmed = (
+            selected["complete"] is True
+            and selected["candidate_constraints_passed"] is True
+            and selected["storage_benefit_passed"] is True
+        )
+        anchor_confirmed = anchor["complete"] is True and anchor["candidate_constraints_passed"] is True
+        tier_evaluations.append(
+            {
+                "merge_quality": tier.merge_quality,
+                "lower_cell_id": tier.lower_cell.cell_id,
+                "selected_cell_id": tier.selected_cell.cell_id,
+                "anchor_cell_id": tier.anchor_cell.cell_id,
+                "cell_evaluations": [lower, selected, anchor],
+                "complete": all(evaluation["complete"] is True for evaluation in role_evaluations.values()),
+                "lower_quality_rejection_case_ids": lower_quality_rejection_case_ids,
+                "lower_rejection_confirmed": lower_rejection_confirmed,
+                "selected_constraints_passed": selected["candidate_constraints_passed"],
+                "selected_storage_benefit_passed": selected["storage_benefit_passed"],
+                "anchor_passed": anchor_confirmed,
+                "confirmation_passed": lower_rejection_confirmed and selected_confirmed and anchor_confirmed,
+            }
+        )
+    return tier_evaluations
+
+
 def _refresh_summaries(
     evidence: dict[str, object],
     plan: ExperimentPlan,
@@ -1958,15 +2415,17 @@ def _refresh_summaries(
     }
     typed_cases = [case for case in cases if isinstance(case, Mapping)]
     evidence["axis_findings"] = (
-        [] if plan.schema_version == 3 else [finding for case in typed_cases for finding in _axis_findings(case, plan)]
+        []
+        if plan.schema_version in {3, 4}
+        else [finding for case in typed_cases for finding in _axis_findings(case, plan)]
     )
     evidence["interaction_observations"] = (
         []
-        if plan.schema_version == 3
+        if plan.schema_version in {3, 4}
         else [observation for case in typed_cases for observation in _interaction_observations(case, plan)]
     )
     refinement_cell_evaluations, refinement_adjacent_evaluations = (
-        ([], []) if plan.schema_version == 3 else _refinement_evaluations(typed_cases, plan, case_definitions)
+        ([], []) if plan.schema_version in {3, 4} else _refinement_evaluations(typed_cases, plan, case_definitions)
     )
     evidence["refinement_cell_evaluations"] = refinement_cell_evaluations
     evidence["refinement_adjacent_evaluations"] = refinement_adjacent_evaluations
@@ -1983,6 +2442,27 @@ def _refresh_summaries(
         for evaluation in bitrate_tier_evaluations
         if evaluation["decision_ready"] is True
     ]
+    confirmation_tier_evaluations = _full_corpus_confirmation_evaluations(
+        typed_cases,
+        plan,
+        binding,
+        case_definitions,
+    )
+    if plan.full_corpus_confirmation is not None:
+        evidence["confirmation_tier_evaluations"] = confirmation_tier_evaluations
+        evidence["fixed_bitrate_cells"] = [
+            {
+                "merge_quality": evaluation["merge_quality"],
+                "cell_id": evaluation["selected_cell_id"],
+                "confirmation_passed": evaluation["confirmation_passed"],
+                "aggregate_storage_reduction_ratio": next(
+                    cell["aggregate_storage_reduction_ratio"]
+                    for cell in evaluation["cell_evaluations"]
+                    if cell["role"] == "selected"
+                ),
+            }
+            for evaluation in confirmation_tier_evaluations
+        ]
 
     cells_complete = len(cell_summaries) == len(plan.cells) and all(
         summary["complete"] is True for summary in cell_summaries
@@ -1999,6 +2479,62 @@ def _refresh_summaries(
             if isinstance(cell, Mapping) and isinstance(cell.get("summary"), Mapping)
         ]
     )
+    if plan.schema_version == 4:
+        policy = plan.full_corpus_confirmation
+        assert policy is not None
+        planned_full_corpus = tuple(case_definitions) == binding.selected_case_ids
+        informational_cases_complete = all(
+            (case := _case_record(evidence, case_id)) is not None and _case_complete(case, plan)
+            for case_id in binding.informational_case_ids
+        )
+        relevant_eye_order_results = [
+            bool(case_evaluation["eye_order_passed"])
+            for tier in confirmation_tier_evaluations
+            for cell_evaluation in tier["cell_evaluations"]
+            if cell_evaluation["role"] in {"selected", "anchor"}
+            for case_evaluation in cell_evaluation["case_evaluations"]
+        ]
+        gated_eye_order_passed = bool(relevant_eye_order_results) and all(relevant_eye_order_results)
+        tier_evaluations_complete = (
+            cells_complete
+            and len(confirmation_tier_evaluations) == len(policy.tiers)
+            and all(evaluation["complete"] is True for evaluation in confirmation_tier_evaluations)
+        )
+        full_corpus_confirmation_ready = (
+            tier_evaluations_complete
+            and planned_full_corpus
+            and informational_cases_complete
+            and all(evaluation["confirmation_passed"] is True for evaluation in confirmation_tier_evaluations)
+        )
+        evidence["acceptance"] = {
+            "complete": cells_complete,
+            "planned_full_corpus": planned_full_corpus,
+            "objective_validation_passed": cells_complete,
+            "eye_order_passed": gated_eye_order_passed,
+            "baseline_repeatability_ready": len(baseline_cases) == len(case_definitions),
+            "execution_passed": cells_complete,
+            "thresholds_selected": True,
+            "thresholds_pre_registered": True,
+            "thresholds_evaluated": tier_evaluations_complete,
+            "source_evidence_verified": True,
+            "gated_case_count": len(binding.quality_gated_case_ids),
+            "informational_case_count": len(binding.informational_case_ids),
+            "informational_cases_complete": informational_cases_complete,
+            "fixed_tier_count": len(policy.tiers),
+            "tier_evaluations_complete": tier_evaluations_complete,
+            "confirmed_tier_count": sum(
+                evaluation["confirmation_passed"] is True for evaluation in confirmation_tier_evaluations
+            ),
+            "source_result_reselected": False,
+            "full_corpus_confirmation_ready": full_corpus_confirmation_ready,
+            "full_corpus_evidence_ready": full_corpus_confirmation_ready,
+            "package_validation_required": True,
+            "physical_vision_pro_validation_required": True,
+            "ladder_evidence_ready": False,
+            "ladder_mapping_selected": False,
+            "experiment_complete": cells_complete,
+        }
+        return
     if plan.schema_version == 3:
         planned_tier_count = len(plan.bitrate_search.accepted_merge_qualities) if plan.bitrate_search else 0
         tier_evaluations_complete = (
@@ -2190,6 +2726,37 @@ def _new_evidence(
             "ladder_mapping_selected": False,
             "experiment_complete": False,
         }
+    if plan.full_corpus_confirmation is not None and plan.thresholds is not None:
+        evidence["full_corpus_confirmation"] = _full_corpus_confirmation_record(plan.full_corpus_confirmation)
+        evidence["pre_registered_thresholds"] = _threshold_record(plan.thresholds)
+        evidence["confirmation_tier_evaluations"] = []
+        evidence["fixed_bitrate_cells"] = []
+        evidence["acceptance"] = {
+            "complete": False,
+            "planned_full_corpus": False,
+            "objective_validation_passed": False,
+            "eye_order_passed": False,
+            "baseline_repeatability_ready": False,
+            "execution_passed": False,
+            "thresholds_selected": True,
+            "thresholds_pre_registered": True,
+            "thresholds_evaluated": False,
+            "source_evidence_verified": True,
+            "gated_case_count": len(binding.quality_gated_case_ids),
+            "informational_case_count": len(binding.informational_case_ids),
+            "informational_cases_complete": False,
+            "fixed_tier_count": len(plan.full_corpus_confirmation.tiers),
+            "tier_evaluations_complete": False,
+            "confirmed_tier_count": 0,
+            "source_result_reselected": False,
+            "full_corpus_confirmation_ready": False,
+            "full_corpus_evidence_ready": False,
+            "package_validation_required": True,
+            "physical_vision_pro_validation_required": True,
+            "ladder_evidence_ready": False,
+            "ladder_mapping_selected": False,
+            "experiment_complete": False,
+        }
     return evidence
 
 
@@ -2211,7 +2778,7 @@ def _validate_resume_cases(
         definition = case_definitions.get(case_id)
         if definition is None:
             raise QualificationFailure("Resume evidence contains an unselected case.")
-        if case.get("tags") != list(definition.tags) or case.get("quality_gate") is not True:
+        if case.get("tags") != list(definition.tags) or case.get("quality_gate") is not definition.quality_gate:
             raise QualificationFailure(f"Resume evidence case {case_id} metadata changed.")
         if case.get("source") != dict(binding.expected_case_sources[case_id]):
             raise QualificationFailure(f"Resume evidence case {case_id} source identity changed.")
@@ -2310,6 +2877,9 @@ def _load_resume_evidence(
     if plan.bitrate_search is not None and plan.thresholds is not None:
         expected_identity["bitrate_search"] = _bitrate_search_record(plan.bitrate_search)
         expected_identity["pre_registered_thresholds"] = _threshold_record(plan.thresholds)
+    if plan.full_corpus_confirmation is not None and plan.thresholds is not None:
+        expected_identity["full_corpus_confirmation"] = _full_corpus_confirmation_record(plan.full_corpus_confirmation)
+        expected_identity["pre_registered_thresholds"] = _threshold_record(plan.thresholds)
     for key, expected in expected_identity.items():
         if evidence.get(key) != expected:
             raise QualificationFailure(f"Resume evidence {key} does not match the current experiment identity.")
@@ -2364,6 +2934,8 @@ def _completed_resume_is_consistent(
         summary_keys.extend(("refinement_cell_evaluations", "refinement_adjacent_evaluations"))
     elif plan.schema_version == 3:
         summary_keys.extend(("bitrate_tier_evaluations", "selected_bitrate_cells"))
+    elif plan.schema_version == 4:
+        summary_keys.extend(("confirmation_tier_evaluations", "fixed_bitrate_cells"))
     for key in summary_keys:
         if refreshed.get(key) != evidence.get(key):
             raise QualificationFailure("Completed resume evidence summaries contradict the recorded runs.")
@@ -2542,12 +3114,183 @@ def _verify_refinement_source_receipt(plan: ExperimentPlan, receipt_path: Path |
             raise QualificationFailure("The source evidence receipt per-frame noise floor does not match the plan.")
 
 
+def _verify_full_corpus_source_receipt(
+    plan: ExperimentPlan,
+    binding: CorpusBinding,
+    receipt_path: Path | None,
+    current_environment: Mapping[str, object] | None,
+) -> None:
+    policy = plan.full_corpus_confirmation
+    if policy is None:
+        return
+    receipt = _read_frozen_evidence(
+        receipt_path,
+        policy.source_receipt,
+        "Bitrate-search source receipt",
+    )
+    if (
+        receipt.get("schema_version") != policy.source_receipt.schema_version
+        or receipt.get("experiment_id") != policy.source_receipt.evidence_id
+        or receipt.get("source_git_sha") != policy.source_receipt.source_git_sha
+        or receipt.get("source_tree_dirty") is not False
+    ):
+        raise QualificationFailure("The bitrate-search source receipt identity is inconsistent with the checked plan.")
+    source_plan, source_binding, source_plan_sha256, source_binding_sha256 = load_experiment_plan(
+        policy.source_plan.path
+    )
+    if (
+        source_plan_sha256 != policy.source_plan.sha256
+        or source_plan.schema_version != policy.source_plan.schema_version
+        or source_plan.experiment_id != policy.source_receipt.evidence_id
+        or source_plan.bitrate_search is None
+        or source_plan.thresholds is None
+    ):
+        raise QualificationFailure("The checked bitrate-search source plan is inconsistent.")
+    expected_source_plan = {
+        "path": _relative_repository_path(policy.source_plan.path, "Bitrate-search source plan"),
+        "sha256": policy.source_plan.sha256,
+    }
+    if receipt.get("experiment_plan") != expected_source_plan:
+        raise QualificationFailure("The bitrate-search source receipt does not bind the checked source plan.")
+    expected_source_binding = {
+        "path": source_binding.relative_path,
+        "binding_id": source_binding.binding_id,
+        "sha256": source_binding_sha256,
+    }
+    if receipt.get("corpus_binding") != expected_source_binding:
+        raise QualificationFailure("The bitrate-search source receipt changed its stress-corpus binding.")
+    expected_manifest = {
+        "path": _relative_repository_path(source_binding.source_manifest_path, "Bitrate-search source manifest"),
+        "corpus_id": source_binding.source_corpus_id,
+        "sha256": source_binding.source_manifest_sha256,
+    }
+    if receipt.get("manifest") != expected_manifest:
+        raise QualificationFailure("The bitrate-search source receipt changed its direct corpus manifest.")
+    if (
+        binding.source_manifest_path != source_binding.source_manifest_path
+        or binding.source_corpus_id != source_binding.source_corpus_id
+        or binding.source_manifest_sha256 != source_binding.source_manifest_sha256
+    ):
+        raise QualificationFailure("Full-corpus confirmation does not use the source receipt's direct corpus manifest.")
+    if receipt.get("method") != _method_record(source_plan):
+        raise QualificationFailure("The bitrate-search source receipt method changed from its checked plan.")
+    if receipt.get("pre_registered_thresholds") != _threshold_record(plan.thresholds):
+        raise QualificationFailure("The bitrate-search source receipt thresholds changed before confirmation.")
+    if receipt.get("bitrate_search") != _bitrate_search_record(source_plan.bitrate_search):
+        raise QualificationFailure("The bitrate-search source receipt policy changed before confirmation.")
+    if receipt.get("selected_case_ids") != list(source_binding.selected_case_ids):
+        raise QualificationFailure("The bitrate-search source receipt stress cases changed before confirmation.")
+    expected_source_cells = [
+        {
+            "id": cell.cell_id,
+            "eye_bitrate_mbps": cell.eye_bitrate_mbps,
+            "merge_quality": cell.merge_quality,
+        }
+        for cell in source_plan.cells
+    ]
+    if receipt.get("cells") != expected_source_cells:
+        raise QualificationFailure("The bitrate-search source receipt cell grid changed before confirmation.")
+    source_acceptance = _mapping(receipt.get("acceptance"), "bitrate-search source acceptance")
+    required_acceptance = {
+        "complete": True,
+        "bitrate_search_ready": True,
+        "stress_subset_evidence_ready": True,
+        "full_corpus_confirmation_required": True,
+        "tier_decisions_ready": True,
+        "ladder_mapping_selected": False,
+    }
+    if any(source_acceptance.get(key) != expected for key, expected in required_acceptance.items()):
+        raise QualificationFailure("The bitrate-search source receipt is not decision-ready non-mapping evidence.")
+    selected_cells = _array(receipt.get("selected_bitrate_cells"), "bitrate-search selected cells")
+    expected_selected_cells = [tier.selected_cell for tier in policy.tiers]
+    if len(selected_cells) != len(expected_selected_cells):
+        raise QualificationFailure("The bitrate-search source receipt selected-cell count changed.")
+    for raw_selected, expected_cell in zip(selected_cells, expected_selected_cells, strict=True):
+        selected = _mapping(raw_selected, "bitrate-search selected cell")
+        if (
+            selected.get("cell_id") != expected_cell.cell_id
+            or selected.get("eye_bitrate_mbps") != expected_cell.eye_bitrate_mbps
+            or selected.get("merge_quality") != expected_cell.merge_quality
+            or selected.get("minimization_adopted") is not True
+        ):
+            raise QualificationFailure("The bitrate-search source receipt selected different fixed cells.")
+    source_tiers = _array(receipt.get("bitrate_tier_evaluations"), "bitrate-search tier evaluations")
+    if len(source_tiers) != len(policy.tiers):
+        raise QualificationFailure("The bitrate-search source receipt tier count changed.")
+    for raw_source_tier, expected_tier in zip(source_tiers, policy.tiers, strict=True):
+        source_tier = _mapping(raw_source_tier, "bitrate-search tier evaluation")
+        if (
+            source_tier.get("merge_quality") != expected_tier.merge_quality
+            or source_tier.get("anchor_cell_id") != expected_tier.anchor_cell.cell_id
+            or source_tier.get("core_minimum_cell_id") != expected_tier.selected_cell.cell_id
+            or source_tier.get("selected_cell_id") != expected_tier.selected_cell.cell_id
+            or source_tier.get("minimum_bracketed") is not True
+            or source_tier.get("frontier_monotone") is not True
+            or source_tier.get("decision_ready") is not True
+        ):
+            raise QualificationFailure("The bitrate-search source receipt tier decision changed before confirmation.")
+        source_cell_evaluations = {
+            _string(_mapping(raw_cell, "bitrate-search source cell").get("cell_id"), "source cell ID"): _mapping(
+                raw_cell,
+                "bitrate-search source cell",
+            )
+            for raw_cell in _array(source_tier.get("cell_evaluations"), "bitrate-search source cells")
+        }
+        lower = source_cell_evaluations.get(expected_tier.lower_cell.cell_id)
+        selected = source_cell_evaluations.get(expected_tier.selected_cell.cell_id)
+        anchor = source_cell_evaluations.get(expected_tier.anchor_cell.cell_id)
+        if lower is None or selected is None or anchor is None:
+            raise QualificationFailure("The bitrate-search source receipt is missing a fixed confirmation cell.")
+        lower_cases = _array(lower.get("case_evaluations"), "bitrate-search lower case evaluations")
+        lower_quality_rejected = any(
+            _mapping(raw_case, "bitrate-search lower case").get("quality_non_inferiority_passed") is False
+            and _number(_mapping(raw_case, "bitrate-search lower case").get("quality_delta"), "quality_delta")
+            < -plan.thresholds.aggregate_quality_non_inferiority_margin
+            for raw_case in lower_cases
+        )
+        if (
+            lower.get("candidate_constraints_passed") is not False
+            or not lower_quality_rejected
+            or selected.get("candidate_constraints_passed") is not True
+            or selected.get("storage_benefit_passed") is not True
+            or anchor.get("candidate_constraints_passed") is not True
+        ):
+            raise QualificationFailure("The bitrate-search source receipt does not preserve the fixed brackets.")
+    source_environment = _mapping(receipt.get("environment"), "bitrate-search source environment")
+    if source_environment.get("git_head") != policy.source_receipt.source_git_sha:
+        raise QualificationFailure("The bitrate-search source receipt environment Git identity changed.")
+    if current_environment is not None:
+        tool_identity_keys = (
+            "edge264_sha256",
+            "ffmpeg_sha256",
+            "ffmpeg_vendor_manifest_sha256",
+            "ffprobe_sha256",
+            "generated_encoder_contract",
+            "metric_contract",
+            "mp4box_sha256",
+            "spatial_media_tool_sha256",
+        )
+        if any(source_environment.get(key) != current_environment.get(key) for key in tool_identity_keys):
+            raise QualificationFailure("The confirmation toolchain changed from the bitrate-search source receipt.")
+
+
 def _verify_bitrate_search_source_receipts(
     plan: ExperimentPlan,
     binding: CorpusBinding,
     refinement_receipt_path: Path | None,
     collapse_receipt_path: Path | None,
+    current_environment: Mapping[str, object] | None = None,
 ) -> None:
+    if plan.full_corpus_confirmation is not None:
+        if collapse_receipt_path is not None:
+            raise QualificationFailure("A collapse receipt is not valid for full-corpus confirmation.")
+        _verify_full_corpus_source_receipt(
+            plan,
+            binding,
+            refinement_receipt_path,
+            current_environment,
+        )
+        return
     policy = plan.bitrate_search
     if policy is None:
         if collapse_receipt_path is not None:
@@ -2702,9 +3445,13 @@ def _run_calibration_unlocked(
     _require_head_tracked_file(plan.ffmpeg_manifest_path, "FFmpeg vendor manifest")
     if plan.bitrate_search is not None:
         _require_head_tracked_file(plan.bitrate_search.collapse_plan.path, "Collapse analysis plan")
+    if plan.full_corpus_confirmation is not None:
+        _require_head_tracked_file(plan.full_corpus_confirmation.source_plan.path, "Bitrate-search source plan")
     manifest = load_manifest(binding.source_manifest_path)
-    gated_by_id = {case.case_id: case for case in manifest.cases if case.quality_gate}
-    planned_cases = tuple(gated_by_id[case_id] for case_id in binding.selected_case_ids)
+    cases_by_id = {case.case_id: case for case in manifest.cases}
+    planned_cases = tuple(cases_by_id[case_id] for case_id in binding.selected_case_ids)
+    if plan.schema_version == 4 and case_ids:
+        raise QualificationFailure("Full-corpus confirmation does not permit --case-id subsets.")
     if case_ids:
         if len(set(case_ids)) != len(case_ids):
             raise QualificationFailure("Subset case IDs must not contain duplicates.")
@@ -2723,6 +3470,13 @@ def _run_calibration_unlocked(
     environment = _environment_evidence(plan, ffmpeg, ffprobe, source_git_sha)
     if environment["git_head"] != source_git_sha:
         raise QualificationFailure("Calibration environment Git identity changed during preflight.")
+    _verify_bitrate_search_source_receipts(
+        plan,
+        binding,
+        source_evidence_receipt,
+        collapse_receipt,
+        environment,
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     work_directory = _prepare_owned_work_directory(work_directory, plan, plan_sha256)
     private_paths = _private_source_paths(selected_cases)
@@ -2764,7 +3518,7 @@ def _run_calibration_unlocked(
             existing_case = {
                 "id": definition.case_id,
                 "tags": list(definition.tags),
-                "quality_gate": True,
+                "quality_gate": definition.quality_gate,
                 "source": dict(prepared.source_evidence),
                 "prepared": {
                     "duration_seconds": prepared.duration_seconds,
@@ -2861,6 +3615,26 @@ def _run_calibration_unlocked(
         _atomic_write(output_path, evidence, private_paths)
         shutil.rmtree(case_work)
 
+    if _git_head_from_clean_worktree() != source_git_sha:
+        raise QualificationFailure("Calibration Git identity changed before final receipt freeze.")
+    final_plan, final_binding, final_plan_sha256, final_binding_sha256 = load_experiment_plan(experiment_plan_path)
+    if (
+        final_plan_sha256 != plan_sha256
+        or final_binding_sha256 != binding_sha256
+        or final_plan != plan
+        or final_binding != binding
+    ):
+        raise QualificationFailure("Calibration plan or corpus binding changed before final receipt freeze.")
+    final_environment = _environment_evidence(plan, ffmpeg, ffprobe, source_git_sha)
+    if final_environment != environment:
+        raise QualificationFailure("Calibration environment changed before final receipt freeze.")
+    _verify_bitrate_search_source_receipts(
+        plan,
+        binding,
+        source_evidence_receipt,
+        collapse_receipt,
+        final_environment,
+    )
     evidence["updated_at"] = datetime.now(UTC).isoformat()
     _refresh_summaries(evidence, plan, binding, case_definitions)
     _atomic_write(output_path, evidence, private_paths)
@@ -2893,7 +3667,10 @@ def run_calibration(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Measure a checked generated MV-HEVC interaction, merge-refinement, or bitrate-search plan."
+        description=(
+            "Measure a checked generated MV-HEVC interaction, merge-refinement, bitrate-search, "
+            "or full-corpus confirmation plan."
+        )
     )
     parser.add_argument("--experiment-plan", type=Path, default=DEFAULT_EXPERIMENT_PLAN)
     parser.add_argument("--output", type=Path, required=True)
@@ -2939,6 +3716,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if acceptance.get("refinement_decision_ready") is True else 1
     if isinstance(method, Mapping) and method.get("decision_stage") == "same_tier_bitrate_minimization_only":
         return 0 if acceptance.get("bitrate_search_ready") is True else 1
+    if isinstance(method, Mapping) and method.get("decision_stage") == "fixed_full_corpus_confirmation_only":
+        return 0 if acceptance.get("full_corpus_confirmation_ready") is True else 1
     return 0 if acceptance.get("execution_passed") is True else 1
 
 
