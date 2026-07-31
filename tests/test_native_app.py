@@ -234,13 +234,16 @@ class NativeAppPackagingTests(unittest.TestCase):
         encoding_editor = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "EncodingOptionsEditor.swift").read_text(
             encoding="utf-8"
         )
+        quality_editor = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "VideoQualityEditor.swift").read_text(
+            encoding="utf-8"
+        )
         language_picker = (MACOS_ROOT / "BluRayToVisionPro" / "Views" / "LanguagePickerField.swift").read_text(
             encoding="utf-8"
         )
         conversion_options = (MACOS_ROOT / "BluRayToVisionPro" / "Models" / "ConversionOptions.swift").read_text(
             encoding="utf-8"
         )
-        conversion_ui = setup_view + encoding_editor + language_picker + conversion_options
+        conversion_ui = setup_view + encoding_editor + quality_editor + language_picker + conversion_options
 
         self.assertIn('.accessibilityLabel("\\(purpose.label): \\(selection.displayName)")', language_picker)
         self.assertNotIn('.accessibilityLabel("Preferred language:', language_picker)
@@ -254,11 +257,13 @@ class NativeAppPackagingTests(unittest.TestCase):
             source_view.index("Import MTS or M2TS transport stream"),
         )
         for label in (
-            "Final bitrate",
-            "Advanced final bitrate",
-            "MV-HEVC merge quality",
-            "Eye intermediate bitrate",
-            "Advanced eye intermediate bitrate",
+            "Video quality",
+            "Custom",
+            "Expert quality controls",
+            "Direct final rate control",
+            "Direct final bitrate",
+            "Generated fallback",
+            "eye bitrate",
             "Video Output",
             "AV1 quality",
             "AI FX upscale to 2\u00d7 resolution",

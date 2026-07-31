@@ -196,11 +196,11 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertTrue(EncodingOptions().compactSummary.contains("Subtitles: English + others"))
         XCTAssertEqual(
             EncodingOptions(audioHandling: .automatic, audioBitrate: 448).compactSummary,
-            "Direct MV-HEVC when available · Automatic · content-adaptive quality · source resolution · Audio: automatic audio (AAC fallback 448 kbps), English only · Subtitles: English + others"
+            "Direct MV-HEVC when available · Balanced · Adaptive content quality · source resolution · Audio: automatic audio (AAC fallback 448 kbps), English only · Subtitles: English + others"
         )
         XCTAssertEqual(
             EncodingOptions(audioHandling: .convertAAC, audioBitrate: 448).compactSummary,
-            "Direct MV-HEVC when available · Automatic · content-adaptive quality · source resolution · Audio: AAC 448 kbps, English only · Subtitles: English + others"
+            "Direct MV-HEVC when available · Balanced · Adaptive content quality · source resolution · Audio: AAC 448 kbps, English only · Subtitles: English + others"
         )
         XCTAssertTrue(BuiltInProfile.balanced.summary.contains("English audio only"))
     }
@@ -229,12 +229,25 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(route.kind, .directMVHEVC)
         XCTAssertNil(route.generatedRequirement)
         XCTAssertTrue(route.includesUpscale)
-        XCTAssertEqual(route.settingsSummary, "Automatic · content-adaptive quality · 2× MetalFX")
+        XCTAssertEqual(route.settingsSummary, "Balanced · Adaptive content quality · 2× MetalFX")
+        XCTAssertEqual(
+            route.generatedFallbackSummary,
+            "Balanced · Recommended 20 Mbps per eye · merge 75 · upscale 75"
+        )
+        XCTAssertEqual(
+            route.speedGuidance,
+            "One hardware encode with inline MetalFX when direct preflight succeeds."
+        )
 
         options.encoding.cropBlackBars = true
         route = VideoRoutePlan(options: options)
         XCTAssertEqual(route.kind, .generatedMVHEVC)
         XCTAssertEqual(route.generatedRequirement, .upscaleCrop)
+        XCTAssertEqual(
+            route.settingsSummary,
+            "Balanced · Recommended 20 Mbps per eye · merge 75 · upscale 75"
+        )
+        XCTAssertEqual(route.speedGuidance, "Two eye encodes, MV-HEVC assembly, and file upscale.")
 
         options.encoding.cropBlackBars = false
         options.encoding.resolutionOverride = "3840x2160"
@@ -252,6 +265,8 @@ final class ConversionWorkflowTests: XCTestCase {
         route = VideoRoutePlan(options: options)
         XCTAssertEqual(route.kind, .existingArtifact)
         XCTAssertFalse(route.allowsFinalizedPreview)
+        XCTAssertFalse(route.includesUpscale)
+        XCTAssertEqual(route.settingsSummary, "No video re-encode")
 
         route = VideoRoutePlan(
             encoding: options.encoding,
@@ -267,7 +282,7 @@ final class ConversionWorkflowTests: XCTestCase {
         let direct = EncodingOptions()
         XCTAssertEqual(
             direct.videoSummary,
-            "Direct MV-HEVC when available · Automatic · content-adaptive quality · source resolution"
+            "Direct MV-HEVC when available · Balanced · Adaptive content quality · source resolution"
         )
         XCTAssertFalse(direct.videoSummary.contains("Mbps per eye"))
         XCTAssertFalse(direct.videoSummary.contains("merge 75"))
@@ -279,7 +294,7 @@ final class ConversionWorkflowTests: XCTestCase {
 
         XCTAssertEqual(
             generated.videoSummary,
-            "Generated MV-HEVC · Custom · 35 Mbps per eye · merge 82 · source resolution"
+            "Generated MV-HEVC · Custom · Fixed 35 Mbps per eye · merge 82 · source resolution"
         )
         XCTAssertTrue(generated.compactSummary.contains("Generated MV-HEVC"))
 
@@ -287,8 +302,33 @@ final class ConversionWorkflowTests: XCTestCase {
         customDirect.mvHEVC.directFinalBitrate = BitratePreference(mode: .custom, customMbps: 48)
         XCTAssertEqual(
             customDirect.videoSummary,
-            "Direct MV-HEVC when available · Custom · 48 Mbps final · source resolution"
+            "Direct MV-HEVC when available · Custom · Fixed 48 Mbps final · source resolution"
         )
+    }
+
+    func testExistingArtifactUpscaleSummaryUsesOnlyActiveStageSixQuality() {
+        var options = ConversionOptions()
+        options.encoding.upscaleEnabled = true
+        options.encoding.editCustomQuality { custom in
+            custom.upscaleQuality = 66
+        }
+        options.job.startStage = .upscaleVideo
+
+        var route = VideoRoutePlan(options: options)
+
+        XCTAssertEqual(route.kind, .existingArtifact)
+        XCTAssertTrue(route.includesUpscale)
+        XCTAssertEqual(route.title, "Existing artifact + 2× upscale")
+        XCTAssertEqual(route.settingsSummary, "Custom · upscale quality 66")
+        XCTAssertEqual(route.speedGuidance, "Reuses the encoded artifact and runs file upscale.")
+
+        options.job.startStage = .transcodeAudio
+        route = VideoRoutePlan(options: options)
+
+        XCTAssertFalse(route.includesUpscale)
+        XCTAssertEqual(route.title, "Existing encoded video artifact")
+        XCTAssertEqual(route.settingsSummary, "No video re-encode")
+        XCTAssertEqual(route.speedGuidance, "Reuses the encoded artifact.")
     }
 
     func testVideoRouteReportPresentationCoversEveryRouteAndFallback() {
@@ -385,6 +425,11 @@ final class ConversionWorkflowTests: XCTestCase {
         )
         XCTAssertEqual(fallback.displayTitle, "Generated MV-HEVC fallback")
         XCTAssertTrue(fallback.isFallback)
+        XCTAssertEqual(fallback.settingsSummary, "Balanced · 20 Mbps per eye · merge 75")
+        XCTAssertEqual(
+            fallback.requestedSettingsSummary,
+            "Direct MV-HEVC · Balanced · Adaptive quality 0.70"
+        )
         XCTAssertTrue(fallback.displayDetail.contains("packaged direct MV-HEVC encoder was unavailable"))
         XCTAssertTrue(fallback.displayDetail.contains("Balanced quality intent"))
         XCTAssertTrue(fallback.displayDetail.contains("before conversion input was read"))
@@ -421,6 +466,26 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(existing.displayTitle, "Existing encoded video artifact")
         XCTAssertEqual(existing.settingsSummary, "No video re-encode")
         XCTAssertEqual(existing.displayDetail, "The selected restart stage uses an existing encoded video artifact.")
+
+        let existingUpscale = VideoRouteReport(
+            intent: "existing_artifact",
+            selected: "existing_artifact",
+            reason: "resume_uses_existing_video_artifact",
+            bitrateMbps: nil,
+            eyeBitrateMbps: nil,
+            mergeQuality: nil,
+            crf: nil,
+            fallbackReason: nil,
+            fallbackTiming: nil,
+            upscaleQuality: 66,
+            qualityIntent: VideoRouteReport.QualityIntent(
+                mode: "custom",
+                step: nil,
+                mappingVersion: nil
+            )
+        )
+        XCTAssertEqual(existingUpscale.displayTitle, "Existing artifact + 2× upscale")
+        XCTAssertEqual(existingUpscale.settingsSummary, "Custom · Upscale quality 66")
 
         let unknown = VideoRouteReport(
             intent: "future",

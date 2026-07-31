@@ -59,12 +59,17 @@ struct VideoRoutePlan: Equatable {
     let generatedRequirement: GeneratedVideoRouteRequirement?
     let startStage: Int
     let includesUpscale: Bool
+    let qualitySelection: VideoQualitySelection
     let directBitrateMode: BitrateMode?
     let directBitrateMbps: Int?
     let generatedEyeBitrateMode: BitrateMode?
     let generatedEyeBitrateMbps: Int?
     let generatedMergeQuality: Int?
+    let fallbackGeneratedEyeBitrateMode: BitrateMode?
+    let fallbackGeneratedEyeBitrateMbps: Int?
+    let fallbackGeneratedMergeQuality: Int?
     let av1CRF: Int?
+    let upscaleQuality: Int?
 
     init(
         options: ConversionOptions,
@@ -101,7 +106,11 @@ struct VideoRoutePlan: Equatable {
         allowsExistingArtifact: Bool
     ) {
         self.startStage = startStage
-        includesUpscale = encoding.videoOutputMode == .mvHEVC && encoding.upscaleEnabled
+        qualitySelection = (try? encoding.normalizedQualityState().videoQuality.selection)
+            ?? encoding.videoQuality.selection
+        includesUpscale = encoding.videoOutputMode == .mvHEVC
+            && encoding.upscaleEnabled
+            && startStage <= ConversionStage.upscaleVideo.rawValue
 
         if allowsExistingArtifact, startStage > ConversionStage.combineToMVHEVC.rawValue {
             kind = .existingArtifact
@@ -111,7 +120,11 @@ struct VideoRoutePlan: Equatable {
             generatedEyeBitrateMode = nil
             generatedEyeBitrateMbps = nil
             generatedMergeQuality = nil
+            fallbackGeneratedEyeBitrateMode = nil
+            fallbackGeneratedEyeBitrateMbps = nil
+            fallbackGeneratedMergeQuality = nil
             av1CRF = nil
+            upscaleQuality = includesUpscale ? encoding.upscaleQuality : nil
             return
         }
 
@@ -123,7 +136,11 @@ struct VideoRoutePlan: Equatable {
             generatedEyeBitrateMode = nil
             generatedEyeBitrateMbps = nil
             generatedMergeQuality = nil
+            fallbackGeneratedEyeBitrateMode = nil
+            fallbackGeneratedEyeBitrateMbps = nil
+            fallbackGeneratedMergeQuality = nil
             av1CRF = encoding.av1CRF
+            upscaleQuality = nil
             return
         }
 
@@ -155,7 +172,11 @@ struct VideoRoutePlan: Equatable {
                 automatic: Self.automaticGeneratedEyeBitrateMbps
             )
             generatedMergeQuality = encoding.mvHEVC.generatedMergeQuality
+            fallbackGeneratedEyeBitrateMode = nil
+            fallbackGeneratedEyeBitrateMbps = nil
+            fallbackGeneratedMergeQuality = nil
             av1CRF = nil
+            upscaleQuality = includesUpscale ? encoding.upscaleQuality : nil
             return
         }
 
@@ -168,7 +189,14 @@ struct VideoRoutePlan: Equatable {
         generatedEyeBitrateMode = nil
         generatedEyeBitrateMbps = nil
         generatedMergeQuality = nil
+        fallbackGeneratedEyeBitrateMode = encoding.mvHEVC.generatedEyeBitrate.mode
+        fallbackGeneratedEyeBitrateMbps = Self.resolvedBitrate(
+            encoding.mvHEVC.generatedEyeBitrate,
+            automatic: Self.automaticGeneratedEyeBitrateMbps
+        )
+        fallbackGeneratedMergeQuality = encoding.mvHEVC.generatedMergeQuality
         av1CRF = nil
+        upscaleQuality = includesUpscale ? encoding.upscaleQuality : nil
     }
 
     var usesGeneratedSettings: Bool {
@@ -188,7 +216,7 @@ struct VideoRoutePlan: Equatable {
         case .av1Stereo:
             "AV1 stereo"
         case .existingArtifact:
-            "Existing encoded video artifact"
+            includesUpscale ? "Existing artifact + 2× upscale" : "Existing encoded video artifact"
         }
     }
 
@@ -210,17 +238,55 @@ struct VideoRoutePlan: Equatable {
         case .directMVHEVC:
             let rateControl: String
             if let directBitrateMbps {
-                rateControl = "Custom · \(directBitrateMbps) Mbps final"
+                rateControl = "Fixed \(directBitrateMbps) Mbps final"
             } else {
-                rateControl = "Automatic · content-adaptive quality"
+                rateControl = "Adaptive content quality"
             }
-            return includesUpscale ? "\(rateControl) · 2× MetalFX" : rateControl
+            let summary = "\(qualitySelection.title) · \(rateControl)"
+            return includesUpscale ? "\(summary) · 2× MetalFX" : summary
         case .generatedMVHEVC:
-            return "\(bitratePolicyTitle(generatedEyeBitrateMode)) · \(generatedEyeBitrateMbps ?? Self.automaticGeneratedEyeBitrateMbps) Mbps per eye · merge \(generatedMergeQuality ?? Self.automaticGeneratedMergeQuality)"
+            return generatedSettingsSummary(
+                mode: generatedEyeBitrateMode,
+                bitrateMbps: generatedEyeBitrateMbps,
+                mergeQuality: generatedMergeQuality,
+                upscaleQuality: upscaleQuality
+            )
         case .av1Stereo:
-            return "CRF \(av1CRF ?? 32)"
+            return "Custom · CRF \(av1CRF ?? 32)"
         case .existingArtifact:
+            if let upscaleQuality {
+                return "\(qualitySelection.title) · upscale quality \(upscaleQuality)"
+            }
             return "No video re-encode"
+        }
+    }
+
+    var generatedFallbackSummary: String? {
+        guard kind == .directMVHEVC else {
+            return nil
+        }
+        return generatedSettingsSummary(
+            mode: fallbackGeneratedEyeBitrateMode,
+            bitrateMbps: fallbackGeneratedEyeBitrateMbps,
+            mergeQuality: fallbackGeneratedMergeQuality,
+            upscaleQuality: upscaleQuality
+        )
+    }
+
+    var speedGuidance: String {
+        switch kind {
+        case .directMVHEVC:
+            includesUpscale
+                ? "One hardware encode with inline MetalFX when direct preflight succeeds."
+                : "One hardware encode when direct preflight succeeds."
+        case .generatedMVHEVC:
+            includesUpscale
+                ? "Two eye encodes, MV-HEVC assembly, and file upscale."
+                : "Two eye encodes plus MV-HEVC assembly."
+        case .av1Stereo:
+            "Software-only AV1 encoding."
+        case .existingArtifact:
+            includesUpscale ? "Reuses the encoded artifact and runs file upscale." : "Reuses the encoded artifact."
         }
     }
 
@@ -232,16 +298,20 @@ struct VideoRoutePlan: Equatable {
         switch kind {
         case .directMVHEVC:
             if includesUpscale {
-                "The engine confirms stereo MV-HEVC and MetalFX 2× support before reading conversion input. It scales both eyes inside the direct encoder and visibly uses the generated file route if unavailable."
+                "The engine confirms stereo MV-HEVC and MetalFX 2× support before reading conversion input. It scales both eyes inside the direct encoder and uses \(generatedFallbackSummary ?? "the generated fallback") if unavailable."
             } else {
-                "Automatic adapts bitrate to source complexity. The engine confirms stereo MV-HEVC support before reading conversion input and visibly uses Automatic generated settings if unavailable."
+                "The engine confirms stereo MV-HEVC support before reading conversion input and uses \(generatedFallbackSummary ?? "the generated fallback") if unavailable."
             }
         case .generatedMVHEVC:
             generatedRequirement?.detail ?? "This job creates left- and right-eye movies before assembling MV-HEVC."
         case .av1Stereo:
             "The bundled software encoder creates a full side-by-side AV1 movie."
         case .existingArtifact:
-            "The selected restart stage resumes from an existing encoded video artifact, so encoder controls are not applied."
+            if includesUpscale {
+                "The selected restart stage reuses the encoded video artifact and applies the active file-upscale quality."
+            } else {
+                "The selected restart stage resumes from an existing encoded video artifact, so encoder controls are not applied."
+            }
         }
     }
 
@@ -294,8 +364,15 @@ struct VideoRoutePlan: Equatable {
         return automatic
     }
 
-    private func bitratePolicyTitle(_ mode: BitrateMode?) -> String {
-        mode == .custom ? "Custom" : "Automatic"
+    private func generatedSettingsSummary(
+        mode: BitrateMode?,
+        bitrateMbps: Int?,
+        mergeQuality: Int?,
+        upscaleQuality: Int?
+    ) -> String {
+        let policy = mode == .custom ? "Fixed" : "Recommended"
+        let generated = "\(qualitySelection.title) · \(policy) \(bitrateMbps ?? Self.automaticGeneratedEyeBitrateMbps) Mbps per eye · merge \(mergeQuality ?? Self.automaticGeneratedMergeQuality)"
+        return upscaleQuality.map { "\(generated) · upscale \($0)" } ?? generated
     }
 }
 
@@ -321,7 +398,7 @@ extension VideoRouteReport {
         case .av1Stereo:
             "AV1 stereo"
         case .existingArtifact:
-            "Existing encoded video artifact"
+            upscaleQuality == nil ? "Existing encoded video artifact" : "Existing artifact + 2× upscale"
         case .none:
             "Video route"
         }
@@ -343,28 +420,26 @@ extension VideoRouteReport {
     }
 
     var settingsSummary: String {
-        switch kind {
-        case .directMVHEVC:
-            let rateControlSummary: String
-            if rateControl == "quality" || quality != nil {
-                rateControlSummary = "Automatic · content-adaptive quality"
-            } else {
-                rateControlSummary = bitrateMbps.map { "\($0) Mbps final" }
-                    ?? "Automatic · content-adaptive quality"
-            }
-            return usesMetalFXUpscale ? "\(rateControlSummary) · 2× MetalFX" : rateControlSummary
-        case .generatedMVHEVC:
-            if let eyeBitrateMbps, let mergeQuality {
-                let generated = "\(eyeBitrateMbps) Mbps per eye · merge \(mergeQuality)"
-                return upscaleQuality.map { "\(generated) · upscale \($0)" } ?? generated
-            }
-            return "Generated stereo video"
-        case .av1Stereo:
-            return crf.map { "CRF \($0)" } ?? "Software AV1"
-        case .existingArtifact:
-            return "No video re-encode"
-        case .none:
-            return selected.replacingOccurrences(of: "_", with: " ")
+        selectedSettingsSummary
+    }
+
+    var selectedSettingsSummary: String {
+        VideoRouteReport.RouteSettings(
+            route: selected,
+            bitrateMbps: bitrateMbps,
+            eyeBitrateMbps: eyeBitrateMbps,
+            mergeQuality: mergeQuality,
+            crf: crf,
+            rateControl: rateControl,
+            quality: quality,
+            upscaleMode: upscaleMode,
+            upscaleQuality: upscaleQuality
+        ).settingsSummary(qualityTitle: qualityIntentDescription)
+    }
+
+    var requestedSettingsSummary: String? {
+        requested.map {
+            "\($0.displayTitle) · \($0.settingsSummary(qualityTitle: qualityIntentDescription))"
         }
     }
 
@@ -445,6 +520,77 @@ extension VideoRouteReport {
         default:
             "Direct MV-HEVC was unavailable, so the job uses generated eye movies."
         }
+    }
+}
+
+extension VideoRouteReport.RouteSettings {
+    var kind: VideoRouteKind? {
+        VideoRouteKind(rawValue: route)
+    }
+
+    var displayTitle: String {
+        switch kind {
+        case .directMVHEVC:
+            upscaleMode == "metalfx" ? "Direct 4K MV-HEVC" : "Direct MV-HEVC"
+        case .generatedMVHEVC:
+            "Generated MV-HEVC"
+        case .av1Stereo:
+            "AV1 stereo"
+        case .existingArtifact:
+            upscaleQuality == nil ? "Existing encoded video artifact" : "Existing artifact + 2× upscale"
+        case .none:
+            route.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+
+    func settingsSummary(qualityTitle: String?) -> String {
+        let concrete: String
+        switch kind {
+        case .directMVHEVC:
+            if qualityTitle == nil {
+                let legacy: String
+                if rateControl == "quality" || quality != nil {
+                    legacy = "Automatic · content-adaptive quality"
+                } else {
+                    legacy = bitrateMbps.map { "\($0) Mbps final" }
+                        ?? "Automatic · content-adaptive quality"
+                }
+                return upscaleMode == "metalfx" ? "\(legacy) · 2× MetalFX" : legacy
+            }
+            if rateControl == "quality" || quality != nil {
+                concrete = quality.map { "Adaptive quality \(String(format: "%.2f", $0))" }
+                    ?? "Adaptive content quality"
+            } else {
+                concrete = bitrateMbps.map { "Fixed \($0) Mbps final" }
+                    ?? "Adaptive content quality"
+            }
+            let direct = upscaleMode == "metalfx" ? "\(concrete) · 2× MetalFX" : concrete
+            return Self.withQualityTitle(qualityTitle, concrete: direct)
+        case .generatedMVHEVC:
+            if let eyeBitrateMbps, let mergeQuality {
+                let generated = "\(eyeBitrateMbps) Mbps per eye · merge \(mergeQuality)"
+                let selected = upscaleQuality.map {
+                    qualityTitle == nil
+                        ? "\(generated) · upscale \($0)"
+                        : "\(generated) · upscale quality \($0)"
+                } ?? generated
+                return Self.withQualityTitle(qualityTitle, concrete: selected)
+            }
+            return Self.withQualityTitle(qualityTitle, concrete: "Generated stereo video")
+        case .av1Stereo:
+            return Self.withQualityTitle(qualityTitle, concrete: crf.map { "CRF \($0)" } ?? "Software AV1")
+        case .existingArtifact:
+            if let upscaleQuality {
+                return Self.withQualityTitle(qualityTitle, concrete: "Upscale quality \(upscaleQuality)")
+            }
+            return "No video re-encode"
+        case .none:
+            return route.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+
+    private static func withQualityTitle(_ qualityTitle: String?, concrete: String) -> String {
+        qualityTitle.map { "\($0) · \(concrete)" } ?? concrete
     }
 }
 

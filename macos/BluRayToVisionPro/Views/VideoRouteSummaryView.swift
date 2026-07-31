@@ -6,6 +6,9 @@ struct VideoRouteSummaryView: View {
     let detail: String
     let systemImage: String
     let isFallback: Bool
+    let supplementalLabel: String?
+    let supplementalSettings: String?
+    let workload: String?
 
     init(plan: VideoRoutePlan) {
         title = plan.title
@@ -13,6 +16,9 @@ struct VideoRouteSummaryView: View {
         detail = plan.detail
         systemImage = plan.systemImage
         isFallback = false
+        supplementalLabel = plan.generatedFallbackSummary == nil ? nil : "Fallback if unavailable"
+        supplementalSettings = plan.generatedFallbackSummary.map { "Generated MV-HEVC · \($0)" }
+        workload = plan.speedGuidance
     }
 
     init(report: VideoRouteReport) {
@@ -21,6 +27,9 @@ struct VideoRouteSummaryView: View {
         detail = report.displayDetail
         systemImage = report.systemImage
         isFallback = report.isFallback
+        supplementalLabel = report.requestedSettingsSummary == nil ? nil : "Requested"
+        supplementalSettings = report.requestedSettingsSummary
+        workload = nil
     }
 
     var body: some View {
@@ -51,13 +60,44 @@ struct VideoRouteSummaryView: View {
                     .font(.caption)
                     .foregroundStyle(isFallback ? tint : .secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if let supplementalLabel, let supplementalSettings {
+                    LabeledContent(supplementalLabel) {
+                        Text(supplementalSettings)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    .font(.caption)
+                }
+
+                if let workload {
+                    LabeledContent("Workload") {
+                        Text(workload)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    .font(.caption)
+                }
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title). \(settings). \(detail)")
+        .accessibilityLabel(title)
+        .accessibilityValue(accessibilityValue)
+        .accessibilityHint(detail)
     }
 
     private var tint: Color {
         isFallback ? .orange : .accentColor
+    }
+
+    private var accessibilityValue: String {
+        var values = [settings]
+        if let supplementalLabel, let supplementalSettings {
+            values.append("\(supplementalLabel): \(supplementalSettings)")
+        }
+        if let workload {
+            values.append("Workload: \(workload)")
+        }
+        return values.joined(separator: ". ")
     }
 }

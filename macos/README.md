@@ -65,6 +65,13 @@ Version-1 through version-4 profiles migrate losslessly: exact production
 defaults become `Balanced`, while every other combination remains `Custom`.
 Only checked `Balanced` mappings are currently resolvable; the other stable step
 identifiers fail closed until their route mappings are qualified.
+The video editor exposes all seven stable positions without aliasing unavailable
+steps: `Balanced` is selectable today, unavailable positions are labeled as not
+calibrated, and `Custom` restores the independently retained expert settings.
+Expert edits activate `Custom`, while returning to `Balanced` preserves the
+retained snapshot. Direct-route summaries include the concrete generated
+fallback, resolved fallback reports show separate requested and selected rows,
+and stage-6 existing-artifact upscale shows only its active quality.
 Protocol v11 projects the requested route controls plus one concrete generated
 fallback only when direct capability selection can require it. Eligible
 automatic MV-HEVC jobs use the packaged direct encoder during stage 4, while

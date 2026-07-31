@@ -468,12 +468,21 @@ private struct ProfileEncodingSummaryView: View {
         let route = VideoRoutePlan(encoding: options)
         var items = [
             ProfileSummaryItem(title: "Format", value: options.videoOutputMode.title),
+            ProfileSummaryItem(title: "Quality", value: options.videoQuality.displayTitle),
             ProfileSummaryItem(title: "Route", value: route.title),
         ]
         switch route.kind {
         case .directMVHEVC:
-            items.append(ProfileSummaryItem(title: "Final bitrate", value: route.settingsSummary))
-            items.append(ProfileSummaryItem(title: "AI FX upscale to 2× resolution", value: "Disabled"))
+            items.append(ProfileSummaryItem(title: "Direct final rate control", value: directFinalRateSummary))
+            if let generatedFallbackSummary = route.generatedFallbackSummary {
+                items.append(ProfileSummaryItem(title: "Generated fallback", value: generatedFallbackSummary))
+            }
+            items.append(
+                ProfileSummaryItem(
+                    title: "AI FX upscale to 2× resolution",
+                    value: enabledText(options.upscaleEnabled)
+                )
+            )
         case .generatedMVHEVC:
             items.append(contentsOf: [
                 ProfileSummaryItem(
@@ -513,6 +522,15 @@ private struct ProfileEncodingSummaryView: View {
             "Automatic (Recommended) · \(VideoRoutePlan.automaticGeneratedEyeBitrateMbps) Mbps per eye"
         case .custom:
             "Custom · \(options.generatedEyeCustomBitrateMbps) Mbps per eye"
+        }
+    }
+
+    private var directFinalRateSummary: String {
+        switch options.mvHEVC.directFinalBitrate.mode {
+        case .automatic:
+            "Adaptive · content-dependent"
+        case .custom:
+            "Fixed · \(options.mvHEVC.directFinalBitrate.customMbps ?? VideoRoutePlan.defaultDirectCustomBitrateMbps) Mbps final"
         }
     }
 
@@ -669,7 +687,14 @@ private struct ProfileEditorSheet: View {
             }
         }
         .padding(24)
-        .frame(width: 760, height: 620)
+        .frame(
+            minWidth: 560,
+            idealWidth: 760,
+            maxWidth: 900,
+            minHeight: 500,
+            idealHeight: 620,
+            maxHeight: 760
+        )
         .alert(
             "Profile Could Not Be Saved",
             isPresented: Binding(
