@@ -1,9 +1,11 @@
 import copy
+import hashlib
 import json
 import stat
 import tempfile
 import unittest
 
+from dataclasses import replace
 from itertools import product
 from pathlib import Path
 from unittest.mock import patch
@@ -11,6 +13,7 @@ from unittest.mock import patch
 from scripts.qualify_direct_mv_hevc import CURRENT_REQUIRED_BOX_TYPES, QualificationFailure
 from scripts.qualify_generated_mv_hevc_calibration import (
     DEFAULT_EXPERIMENT_PLAN,
+    DEFAULT_BITRATE_SEARCH_PLAN,
     DEFAULT_REFINEMENT_PLAN,
     CorpusBinding,
     ExperimentCell,
@@ -26,7 +29,9 @@ from scripts.qualify_generated_mv_hevc_calibration import (
     _refresh_summaries,
     _reset_case_directory,
     _summarize_measurement_runs,
+    _threshold_record,
     _validate_run_record,
+    _verify_bitrate_search_source_receipts,
     _verify_refinement_source_receipt,
     calibration_lock,
     load_experiment_plan,
@@ -38,6 +43,7 @@ from scripts.qualify_mv_hevc_corpus import (
     CorpusCase,
     PreparedCase,
     _encode_generated,
+    _measure_output,
     summarize_frame_quality,
 )
 
@@ -46,6 +52,7 @@ class GeneratedCalibrationPlanTests(unittest.TestCase):
     def setUp(self) -> None:
         self.document = json.loads(DEFAULT_EXPERIMENT_PLAN.read_text(encoding="utf-8"))
         self.refinement_document = json.loads(DEFAULT_REFINEMENT_PLAN.read_text(encoding="utf-8"))
+        self.bitrate_search_document = json.loads(DEFAULT_BITRATE_SEARCH_PLAN.read_text(encoding="utf-8"))
         self.binding_document = json.loads(
             DEFAULT_EXPERIMENT_PLAN.with_name("generated-mv-hevc-corpus-v1.json").read_text(encoding="utf-8")
         )
@@ -141,6 +148,83 @@ class GeneratedCalibrationPlanTests(unittest.TestCase):
 
         with self.assertRaisesRegex(QualificationFailure, "checked rounded 2x noise derivation"):
             parse_experiment_plan(document)
+
+    def test_committed_bitrate_search_plan_covers_exact_integer_frontiers(self) -> None:
+        plan, binding, plan_digest, binding_digest = load_experiment_plan(DEFAULT_BITRATE_SEARCH_PLAN)
+
+        self.assertEqual(plan.schema_version, 3)
+        self.assertEqual(plan.eye_bitrates_mbps, tuple(range(1, 21)))
+        self.assertEqual(plan.merge_qualities, (65, 75))
+        self.assertEqual(len(plan.cells), 40)
+        self.assertEqual(plan.decision_stage, "same_tier_bitrate_minimization_only")
+        self.assertIsNotNone(plan.bitrate_search)
+        self.assertIsNotNone(plan.thresholds)
+        assert plan.bitrate_search is not None
+        self.assertEqual(plan.bitrate_search.accepted_merge_qualities, (65, 75))
+        self.assertEqual(plan.bitrate_search.guided_anchor_count, 2)
+        self.assertTrue(plan.bitrate_search.custom_exact_retained)
+        self.assertEqual(binding.binding_id, "generated-mv-hevc-stress-v1")
+        self.assertEqual(len(plan_digest), 64)
+        self.assertEqual(len(binding_digest), 64)
+
+    def test_bitrate_search_rejects_incomplete_integer_grid(self) -> None:
+        document = copy.deepcopy(self.bitrate_search_document)
+        document["axes"]["eye_bitrate_mbps"].remove(11)
+
+        with self.assertRaisesRegex(QualificationFailure, "exactly 20 levels"):
+            parse_experiment_plan(document)
+
+    def test_bitrate_search_rejects_changed_product_decision(self) -> None:
+        document = copy.deepcopy(self.bitrate_search_document)
+        document["bitrate_search"]["accepted_merge_qualities"] = [65, 71, 75]
+
+        with self.assertRaisesRegex(QualificationFailure, r"must be \[65, 75\]"):
+            parse_experiment_plan(document)
+
+    def test_bitrate_search_rejects_post_hoc_storage_threshold(self) -> None:
+        document = copy.deepcopy(self.bitrate_search_document)
+        document["bitrate_search"]["minimum_aggregate_storage_reduction_ratio"] = 0.01
+
+        with self.assertRaisesRegex(QualificationFailure, "must be 2%"):
+            parse_experiment_plan(document)
+
+    def test_bitrate_search_latin_order_balances_every_cell_across_execution_windows(self) -> None:
+        plan, _, _, _ = load_experiment_plan(DEFAULT_BITRATE_SEARCH_PLAN)
+        orders = [_cell_order(plan, run_index) for run_index in range(plan.runs_per_cell)]
+        window_bounds = ((14, 27), (13, 26), (13, 27))
+
+        for cell in plan.cells:
+            windows: list[str] = []
+            for order, (early_end, middle_end) in zip(orders, window_bounds, strict=True):
+                position = order.index(cell)
+                windows.append("early" if position < early_end else "middle" if position < middle_end else "late")
+            self.assertEqual(set(windows), {"early", "middle", "late"})
+
+        for anchor_id in ("b020-m065", "b020-m075"):
+            anchor = next(cell for cell in plan.cells if cell.cell_id == anchor_id)
+            self.assertEqual(
+                [order.index(anchor) for order in orders],
+                [
+                    38 if anchor_id.endswith("065") else 39,
+                    24 if anchor_id.endswith("065") else 25,
+                    11 if anchor_id.endswith("065") else 12,
+                ],
+            )
+
+    def test_plan_and_binding_loaders_reject_duplicate_json_keys(self) -> None:
+        build_directory = DEFAULT_EXPERIMENT_PLAN.parents[2] / "build"
+        build_directory.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=build_directory) as temporary_directory:
+            root = Path(temporary_directory)
+            plan_path = root / "plan.json"
+            binding_path = root / "binding.json"
+            plan_path.write_text('{"schema_version":1,"schema_version":1}\n', encoding="utf-8")
+            binding_path.write_text('{"schema_version":1,"schema_version":1}\n', encoding="utf-8")
+
+            with self.assertRaisesRegex(QualificationFailure, "duplicate key"):
+                load_experiment_plan(plan_path)
+            with self.assertRaisesRegex(QualificationFailure, "duplicate key"):
+                load_corpus_binding(binding_path)
 
     def test_rejects_duplicate_binding_cases(self) -> None:
         document = copy.deepcopy(self.binding_document)
@@ -265,6 +349,45 @@ class GeneratedCalibrationSummaryTests(unittest.TestCase):
                         "summary": None,
                     }
                 )
+        return {"id": case_id, "cells": cells}
+
+    @classmethod
+    def _bitrate_case_record(
+        cls,
+        plan: ExperimentPlan,
+        case_id: str = "case-a",
+        *,
+        frontiers: dict[int, int] | None = None,
+        storage_benefit: bool = True,
+    ) -> dict[str, object]:
+        frontier_by_merge = frontiers or {65: 5, 75: 8}
+        cells: list[dict[str, object]] = []
+        for cell in plan.cells:
+            anchor_quality = 0.95 if cell.merge_quality == 65 else 0.96
+            if cell.eye_bitrate_mbps == 20:
+                quality = anchor_quality
+            elif cell.eye_bitrate_mbps >= frontier_by_merge[cell.merge_quality]:
+                quality = anchor_quality - 0.0002
+            else:
+                quality = anchor_quality - 0.002
+            anchor_size = 10_000 if cell.merge_quality == 65 else 20_000
+            if storage_benefit:
+                size = int(anchor_size * (0.5 + 0.5 * cell.eye_bitrate_mbps / 20))
+            else:
+                size = anchor_size
+            runs = [
+                cls._run(cell, run_index, quality + run_index * 0.00005, size + run_index, 2 + run_index)
+                for run_index in range(plan.runs_per_cell)
+            ]
+            cells.append(
+                {
+                    "id": cell.cell_id,
+                    "eye_bitrate_mbps": cell.eye_bitrate_mbps,
+                    "merge_quality": cell.merge_quality,
+                    "runs": runs,
+                    "summary": None,
+                }
+            )
         return {"id": case_id, "cells": cells}
 
     @staticmethod
@@ -485,6 +608,88 @@ class GeneratedCalibrationSummaryTests(unittest.TestCase):
         self.assertFalse(evaluation["candidate_constraints_passed"])
         self.assertFalse(evidence["acceptance"]["eye_order_passed"])
 
+    def test_bitrate_search_selects_exact_same_tier_integer_frontiers(self) -> None:
+        plan, _, _, _ = load_experiment_plan(DEFAULT_BITRATE_SEARCH_PLAN)
+        binding = self._binding("case-a")
+        evidence: dict[str, object] = {"cases": [self._bitrate_case_record(plan)]}
+
+        _refresh_summaries(evidence, plan, binding, {"case-a": self._definition()})
+
+        evaluations = {item["merge_quality"]: item for item in evidence["bitrate_tier_evaluations"]}
+        self.assertEqual(evaluations[65]["core_minimum_cell_id"], "b005-m065")
+        self.assertEqual(evaluations[65]["selected_cell_id"], "b005-m065")
+        self.assertEqual(evaluations[75]["core_minimum_cell_id"], "b008-m075")
+        self.assertEqual(evaluations[75]["selected_cell_id"], "b008-m075")
+        self.assertTrue(evaluations[65]["frontier_monotone"])
+        self.assertTrue(evaluations[75]["minimization_adopted"])
+        self.assertTrue(evidence["acceptance"]["bitrate_search_ready"])
+        self.assertFalse(evidence["acceptance"]["ladder_mapping_selected"])
+
+    def test_bitrate_search_fails_closed_on_non_monotone_frontier(self) -> None:
+        plan, _, _, _ = load_experiment_plan(DEFAULT_BITRATE_SEARCH_PLAN)
+        binding = self._binding("case-a")
+        case = self._bitrate_case_record(plan)
+        failed_cell = next(cell for cell in case["cells"] if cell["id"] == "b006-m065")
+        for run in failed_cell["runs"]:
+            quality = 0.948
+            run["left_match_ssim"] = quality
+            run["right_match_ssim"] = quality + 0.0001
+            run["left_cross_ssim"] = quality - 0.2
+            run["right_cross_ssim"] = quality - 0.1999
+            run["min_same_eye_ssim"] = quality
+            run["minimum_frame_same_eye_ssim"] = quality - 0.01
+            run["p05_frame_same_eye_ssim"] = quality - 0.005
+            run["median_frame_same_eye_ssim"] = quality
+        evidence: dict[str, object] = {"cases": [case]}
+
+        _refresh_summaries(evidence, plan, binding, {"case-a": self._definition()})
+
+        evaluation = next(item for item in evidence["bitrate_tier_evaluations"] if item["merge_quality"] == 65)
+        self.assertFalse(evaluation["frontier_monotone"])
+        self.assertFalse(evaluation["decision_ready"])
+        self.assertFalse(evidence["acceptance"]["bitrate_search_ready"])
+
+    def test_bitrate_search_keeps_storage_benefit_out_of_quality_frontier(self) -> None:
+        plan, _, _, _ = load_experiment_plan(DEFAULT_BITRATE_SEARCH_PLAN)
+        binding = self._binding("case-a")
+        evidence: dict[str, object] = {"cases": [self._bitrate_case_record(plan, storage_benefit=False)]}
+
+        _refresh_summaries(evidence, plan, binding, {"case-a": self._definition()})
+
+        evaluations = {item["merge_quality"]: item for item in evidence["bitrate_tier_evaluations"]}
+        self.assertTrue(evaluations[65]["frontier_monotone"])
+        self.assertTrue(evaluations[65]["decision_ready"])
+        self.assertFalse(evaluations[65]["minimization_adopted"])
+        self.assertEqual(evaluations[65]["selected_cell_id"], "b020-m065")
+        self.assertTrue(evidence["acceptance"]["bitrate_search_ready"])
+
+    def test_bitrate_search_storage_benefit_uses_total_case_bytes(self) -> None:
+        plan, _, _, _ = load_experiment_plan(DEFAULT_BITRATE_SEARCH_PLAN)
+        binding = self._binding("case-a", "case-b")
+        first = self._bitrate_case_record(plan, "case-a", storage_benefit=False)
+        second = self._bitrate_case_record(plan, "case-b", storage_benefit=False)
+
+        def set_sizes(case: dict[str, object], cell_id: str, size: int) -> None:
+            cell = next(item for item in case["cells"] if item["id"] == cell_id)
+            for run_index, run in enumerate(cell["runs"]):
+                run["final_bytes"] = size + run_index
+
+        for bitrate in plan.eye_bitrates_mbps:
+            set_sizes(first, f"b{bitrate:03d}-m065", 1_000)
+            set_sizes(second, f"b{bitrate:03d}-m065", 100_000)
+        set_sizes(first, "b005-m065", 500)
+        set_sizes(second, "b005-m065", 99_000)
+        definitions = {case_id: self._definition(case_id) for case_id in binding.selected_case_ids}
+        evidence: dict[str, object] = {"cases": [first, second]}
+
+        _refresh_summaries(evidence, plan, binding, definitions)
+
+        tier = next(item for item in evidence["bitrate_tier_evaluations"] if item["merge_quality"] == 65)
+        candidate = next(item for item in tier["cell_evaluations"] if item["cell_id"] == "b005-m065")
+        self.assertAlmostEqual(candidate["aggregate_size_ratio_vs_tier_anchor"], 99_502 / 101_002)
+        self.assertFalse(candidate["storage_benefit_passed"])
+        self.assertEqual(tier["selected_cell_id"], "b020-m065")
+
     def test_run_validation_rejects_contradictory_eye_metrics(self) -> None:
         plan = self._plan()
         cell = plan.cells[0]
@@ -518,8 +723,33 @@ class GeneratedCalibrationCliTests(unittest.TestCase):
         with patch("scripts.qualify_generated_mv_hevc_calibration.run_calibration", return_value=evidence):
             self.assertEqual(main(self._args()), 0)
 
+    def test_bitrate_search_returns_one_when_frontier_is_not_ready(self) -> None:
+        evidence = {
+            "method": {"decision_stage": "same_tier_bitrate_minimization_only"},
+            "acceptance": {"execution_passed": True, "bitrate_search_ready": False},
+        }
+
+        with patch("scripts.qualify_generated_mv_hevc_calibration.run_calibration", return_value=evidence):
+            self.assertEqual(main(self._args()), 1)
+
+    def test_bitrate_search_returns_zero_only_when_frontiers_are_ready(self) -> None:
+        evidence = {
+            "method": {"decision_stage": "same_tier_bitrate_minimization_only"},
+            "acceptance": {"execution_passed": True, "bitrate_search_ready": True},
+        }
+
+        with patch("scripts.qualify_generated_mv_hevc_calibration.run_calibration", return_value=evidence):
+            self.assertEqual(main(self._args()), 0)
+
 
 class GeneratedCalibrationReceiptTests(unittest.TestCase):
+    @staticmethod
+    def _write_frozen_document(path: Path, document: object) -> str:
+        data = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
+        path.write_bytes(data)
+        path.chmod(0o444)
+        return hashlib.sha256(data).hexdigest()
+
     def test_refinement_requires_pinned_source_receipt(self) -> None:
         plan, _, _, _ = load_experiment_plan(DEFAULT_REFINEMENT_PLAN)
 
@@ -535,6 +765,124 @@ class GeneratedCalibrationReceiptTests(unittest.TestCase):
 
             with self.assertRaisesRegex(QualificationFailure, "pinned SHA-256"):
                 _verify_refinement_source_receipt(plan, receipt)
+
+    def test_bitrate_search_verifies_both_frozen_source_receipts(self) -> None:
+        plan, binding, _, _ = load_experiment_plan(DEFAULT_BITRATE_SEARCH_PLAN)
+        assert plan.bitrate_search is not None
+        assert plan.thresholds is not None
+        refinement_plan_record = {
+            "path": "docs/qualification/generated-mv-hevc-merge-refinement-v1.json",
+            "sha256": "a2dabc8afc72356e67f40ef9416a087103db3674cb12359fd8632959f5bee5d4",
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            refinement_path = root / "refinement.json"
+            refinement_document = {
+                "schema_version": 1,
+                "experiment_id": plan.bitrate_search.merge_refinement_receipt.evidence_id,
+                "source_git_sha": plan.bitrate_search.merge_refinement_receipt.source_git_sha,
+                "source_tree_dirty": False,
+                "experiment_plan": refinement_plan_record,
+                "corpus_binding": {
+                    "path": binding.relative_path,
+                    "binding_id": binding.binding_id,
+                    "sha256": plan.binding_sha256,
+                },
+                "pre_registered_thresholds": _threshold_record(plan.thresholds),
+                "cells": [{"id": "b020-m065"}, {"id": "b020-m075"}],
+                "acceptance": {
+                    "experiment_complete": True,
+                    "refinement_evidence_ready": True,
+                    "thresholds_pre_registered": True,
+                    "ladder_mapping_selected": False,
+                },
+            }
+            refinement_sha = self._write_frozen_document(refinement_path, refinement_document)
+            policy = replace(
+                plan.bitrate_search,
+                merge_refinement_receipt=replace(
+                    plan.bitrate_search.merge_refinement_receipt,
+                    sha256=refinement_sha,
+                ),
+            )
+
+            collapse_path = root / "collapse.json"
+            collapse_document = {
+                "schema_version": 1,
+                "analysis_id": policy.collapse_receipt.evidence_id,
+                "analysis_source_git_sha": policy.collapse_receipt.source_git_sha,
+                "analysis_source_tree_dirty": False,
+                "analysis_plan": {
+                    "path": policy.collapse_plan.path.relative_to(DEFAULT_BITRATE_SEARCH_PLAN.parents[2]).as_posix(),
+                    "sha256": policy.collapse_plan.sha256,
+                },
+                "source_receipt": {
+                    "schema_version": 1,
+                    "experiment_id": policy.merge_refinement_receipt.evidence_id,
+                    "sha256": refinement_sha,
+                    "source_git_sha": policy.merge_refinement_receipt.source_git_sha,
+                    "file_mode": "0444",
+                },
+                "source_plan": {**refinement_plan_record, "schema_version": 2},
+                "source_corpus_binding": {
+                    "path": binding.relative_path,
+                    "binding_id": binding.binding_id,
+                    "sha256": plan.binding_sha256,
+                    "selected_case_ids": list(binding.selected_case_ids),
+                },
+                "thresholds": _threshold_record(plan.thresholds),
+                "selected_subset": {
+                    "cell_ids": ["b020-m065", "b020-m075"],
+                    "cardinality": 2,
+                    "contains_balanced": True,
+                },
+                "acceptance": {
+                    "analysis_complete": True,
+                    "balanced_included": True,
+                    "selected_chain_valid": True,
+                    "source_plan_verified": True,
+                    "source_receipt_verified": True,
+                    "thresholds_unchanged": True,
+                    "selected_step_count": 2,
+                    "ladder_mapping_selected": False,
+                },
+            }
+            collapse_sha = self._write_frozen_document(collapse_path, collapse_document)
+            policy = replace(
+                policy,
+                collapse_receipt=replace(policy.collapse_receipt, sha256=collapse_sha),
+            )
+
+            _verify_bitrate_search_source_receipts(
+                replace(plan, bitrate_search=policy),
+                binding,
+                refinement_path,
+                collapse_path,
+            )
+
+    def test_bitrate_search_rejects_duplicate_keys_in_frozen_receipt(self) -> None:
+        plan, binding, _, _ = load_experiment_plan(DEFAULT_BITRATE_SEARCH_PLAN)
+        assert plan.bitrate_search is not None
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            receipt = Path(temporary_directory) / "receipt.json"
+            data = b'{"schema_version":1,"schema_version":1}\n'
+            receipt.write_bytes(data)
+            receipt.chmod(0o444)
+            policy = replace(
+                plan.bitrate_search,
+                merge_refinement_receipt=replace(
+                    plan.bitrate_search.merge_refinement_receipt,
+                    sha256=hashlib.sha256(data).hexdigest(),
+                ),
+            )
+
+            with self.assertRaisesRegex(QualificationFailure, "duplicate key"):
+                _verify_bitrate_search_source_receipts(
+                    replace(plan, bitrate_search=policy),
+                    binding,
+                    receipt,
+                    None,
+                )
 
     def test_binding_rejects_changed_source_manifest_identity(self) -> None:
         document = json.loads(
@@ -642,6 +990,33 @@ class GeneratedCalibrationReceiptTests(unittest.TestCase):
                     private_paths=(),
                 )
 
+    def test_resume_rejects_duplicate_json_keys(self) -> None:
+        plan, binding, plan_sha256, binding_sha256 = load_experiment_plan(DEFAULT_BITRATE_SEARCH_PLAN)
+        environment = {"git_head": "d" * 40, "ffmpeg_sha256": "e" * 64}
+        case = CorpusCase(
+            case_id="case-a",
+            tags=("animation",),
+            source={"kind": "synthetic"},
+            eye_width=2,
+            eye_height=2,
+            frame_rate="24",
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output = Path(temporary_directory) / "receipt.json"
+            output.write_text('{"schema_version":1,"schema_version":1}\n', encoding="utf-8")
+
+            with self.assertRaisesRegex(QualificationFailure, "duplicate key"):
+                _load_resume_evidence(
+                    output,
+                    plan=plan,
+                    binding=binding,
+                    plan_sha256=plan_sha256,
+                    binding_sha256=binding_sha256,
+                    environment=environment,
+                    selected_cases=[case],
+                    private_paths=(),
+                )
+
     def test_refinement_resume_rejects_top_level_threshold_tampering(self) -> None:
         plan, binding, plan_sha256, binding_sha256 = load_experiment_plan(DEFAULT_REFINEMENT_PLAN)
         environment = {"git_head": "d" * 40, "ffmpeg_sha256": "e" * 64}
@@ -731,6 +1106,51 @@ class GeneratedCalibrationReceiptTests(unittest.TestCase):
 
 
 class GeneratedCalibrationProductionParityTests(unittest.TestCase):
+    def test_measurement_can_preserve_output_until_evidence_is_persisted(self) -> None:
+        definition = CorpusCase(
+            case_id="case-a",
+            tags=("animation",),
+            source={"kind": "synthetic"},
+            eye_width=2,
+            eye_height=2,
+            frame_rate="24",
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output = root / "output.mov"
+            output.write_bytes(b"encoded")
+            left = root / "left.mov"
+            right = root / "right.mov"
+            left.write_bytes(b"left")
+            right.write_bytes(b"right")
+            split_directory = root / "split"
+            split_directory.mkdir()
+            prepared = PreparedCase(
+                definition=definition,
+                source_path=root / "source.mkv",
+                reference_left=root / "reference-left.mkv",
+                reference_right=root / "reference-right.mkv",
+                duration_seconds=4.0,
+                frame_count=96,
+                source_evidence={"kind": "synthetic"},
+            )
+
+            with (
+                patch("scripts.qualify_mv_hevc_corpus.split_mv_hevc", return_value=(left, right)),
+                patch("scripts.qualify_mv_hevc_corpus.ssim", side_effect=(0.95, 0.96, 0.75, 0.76)),
+            ):
+                _measure_output(
+                    "ffmpeg",
+                    prepared,
+                    output,
+                    split_directory,
+                    target_bitrate_mbps=20,
+                    delete_output=False,
+                )
+
+            self.assertTrue(output.is_file())
+            self.assertFalse(split_directory.exists())
+
     def test_generated_encode_matches_production_rate_control_and_merge_contract(self) -> None:
         definition = CorpusCase(
             case_id="synthetic-animation",
