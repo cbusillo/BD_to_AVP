@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "analysis_id": "generated-mv-hevc-collapse-analysis-v1",
+  "source_receipt": {
+    "schema_version": 1,
+    "experiment_id": "generated-mv-hevc-merge-refinement-v1",
+    "sha256": "e6b4d5a8908352f1667c092e199853f3cfc25256f22d803e56f94b30783dcbdf",
+    "source_git_sha": "1a3b2c3b25351a9f981bf7bd65415bd8f5688f85",
+    "required_file_mode": "0444"
+  },
+  "source_plan": {
+    "path": "docs/qualification/generated-mv-hevc-merge-refinement-v1.json",
+    "sha256": "a2dabc8afc72356e67f40ef9416a087103db3674cb12359fd8632959f5bee5d4",
+    "schema_version": 2
+  },
+  "balanced_required": {
+    "cell_id": "b020-m075",
+    "eye_bitrate_mbps": 20,
+    "merge_quality": 75
+  },
+  "candidate_policy": {
+    "use_only_technically_eligible_cells": true,
+    "require_balanced_cell": true,
+    "boundary_quality_threshold": "pre_registered_thresholds.aggregate_quality_distinguishability",
+    "boundary_storage_threshold": "pre_registered_thresholds.storage_distinguishability_ratio",
+    "every_case_required": true,
+    "non_adjacent_boundaries_allowed": true,
+    "no_new_encodes": true,
+    "ladder_mapping_selected": false
+  },
+  "selection_policy": {
+    "primary": "maximum_cardinality_ordered_subset",
+    "tie_breaks": [
+      "wider_minimum_case_storage_coverage",
+      "larger_minimum_boundary_quality_margin",
+      "larger_minimum_boundary_storage_margin",
+      "lower_first_merge_quality",
+      "lexicographic_cell_ids"
+    ],
+    "target_named_step_count": 7
+  }
+}
