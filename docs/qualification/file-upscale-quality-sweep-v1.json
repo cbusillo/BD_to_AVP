@@ -58,7 +58,11 @@
       }
     },
     "metric_contract": "ffmpeg_ssim_aggregate_and_per_frame_v1",
-    "geometry_contract": "fx_upscale_2x_spatial_output_v1"
+    "geometry_contract": "fx_upscale_2x_spatial_output_v1",
+    "timing_contract": {
+      "frame_rate": "exact_rational_match_v1",
+      "duration_tolerance_frames": 1
+    }
   },
   "decision_policy": {
     "stage": "response_characterization_only",

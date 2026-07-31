@@ -104,17 +104,20 @@ The runner uses the same `fx_upscale_command(input_path, quality)` helper as pro
 canonical quality factor as `quality / 100`, validates 2x spatial output, downsamples each final eye back to source
 dimensions for aggregate and per-frame SSIM, and records cross-eye margins, frame-tail statistics, bytes, effective
 bitrate, base ratio, upscale-only time, projected full-route time, source/base/final hashes, and source/tool/Git
-provenance. Evidence is written atomically after every base and candidate, and work directories are owned and locked
-for safe resume.
+provenance. The checked timing contract requires exact rational frame-rate preservation and allows at most one frame
+of container-duration tolerance; effective bitrate uses the validated output duration. Evidence is written atomically
+after every base and candidate, and work directories are owned and locked for safe resume.
 
 Exit `0` means the complete planned stress subset is structurally decision-ready with valid eye order and monotonic
-output-size response. Exit `1` records valid partial, subset, ambiguous, or non-monotonic exploratory evidence. Fatal
-schema, source, tool, provenance, ownership, privacy, or execution errors exit `2`.
+output-size response. Exit `1` means the complete planned stress subset produced valid but ambiguous or non-monotonic
+exploratory evidence. Fatal schema, source, tool, provenance, ownership, privacy, or execution errors exit `2`.
+Subset or otherwise incomplete resumable evidence exits `3`.
 
 This slice cannot assign public ladder mappings, alter `docs/qualification/video-quality-ladder-v1.json`, choose
 thresholds after seeing results, or claim perceptual 4K or Vision Pro playback quality. Passing evidence only
-characterizes the independent file-upscale response around production `Balanced = 75`; public mappings still require a
-later checked calibration and physical-device validation.
+characterizes the independent file-upscale response around production `Balanced = 75`. SSIM deltas and repeat spread
+remain descriptive in this stage; they are not converted into an undeclared pass/fail threshold. Public mappings still
+require a later checked calibration and physical-device validation.
 
 ## Generated Interaction Sweep
 

@@ -17,6 +17,7 @@ import tomllib
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from fractions import Fraction
 from functools import partial
 from itertools import pairwise
 from pathlib import Path
@@ -65,6 +66,7 @@ DEFAULT_OUTPUT = REPOSITORY_ROOT / "build/qualification/file-upscale-quality-swe
 DEFAULT_WORK_DIRECTORY = REPOSITORY_ROOT / "build/qualification/file-upscale-quality-sweep-v1-work"
 EVIDENCE_SCHEMA_VERSION = 1
 WORK_DIRECTORY_MARKER = ".bd-to-avp-file-upscale-quality-sweep.json"
+PRIVATE_SOURCE_ENV_NAMES = ("BD_TO_AVP_RELEASE_MVC_SOURCE",)
 EXPECTED_CASE_IDS = (
     "production-dark",
     "production-grain-rain",
@@ -138,6 +140,8 @@ class SweepPlan:
     file_upscale_command_contract: str
     metric_contract: str
     geometry_contract: str
+    frame_rate_contract: str
+    duration_tolerance_frames: int
     relative_path: str | None = None
     schema_version: int = 1
     target_id: str = "upscale_quality"
@@ -506,6 +510,19 @@ def parse_sweep_plan(raw: object) -> SweepPlan:
     geometry_contract = _string(toolchain.get("geometry_contract"), "toolchain.geometry_contract")
     if geometry_contract != "fx_upscale_2x_spatial_output_v1":
         raise QualificationFailure("toolchain geometry contract is unsupported.")
+    timing_contract = _mapping(toolchain.get("timing_contract"), "toolchain.timing_contract")
+    frame_rate_contract = _string(
+        timing_contract.get("frame_rate"),
+        "toolchain.timing_contract.frame_rate",
+    )
+    if frame_rate_contract != "exact_rational_match_v1":
+        raise QualificationFailure("toolchain frame-rate contract is unsupported.")
+    duration_tolerance_frames = _integer(
+        timing_contract.get("duration_tolerance_frames"),
+        "toolchain.timing_contract.duration_tolerance_frames",
+        minimum=1,
+        maximum=1,
+    )
 
     decision_policy = _mapping(document.get("decision_policy"), "decision_policy")
     if _string(decision_policy.get("stage"), "decision_policy.stage") != "response_characterization_only":
@@ -544,6 +561,8 @@ def parse_sweep_plan(raw: object) -> SweepPlan:
         file_upscale_command_contract=file_upscale_command_contract,
         metric_contract=metric_contract,
         geometry_contract=geometry_contract,
+        frame_rate_contract=frame_rate_contract,
+        duration_tolerance_frames=duration_tolerance_frames,
         execution_order=execution_order,
     )
 
@@ -589,6 +608,8 @@ def load_sweep_plan(path: Path) -> tuple[SweepPlan, CorpusBinding, str, str]:
             file_upscale_command_contract=parsed.file_upscale_command_contract,
             metric_contract=parsed.metric_contract,
             geometry_contract=parsed.geometry_contract,
+            frame_rate_contract=parsed.frame_rate_contract,
+            duration_tolerance_frames=parsed.duration_tolerance_frames,
             relative_path=relative_path,
             schema_version=parsed.schema_version,
             target_id=parsed.target_id,
@@ -616,6 +637,10 @@ def _toolchain_record(plan: SweepPlan) -> dict[str, object]:
         "bundled_tools": {key: _binding_record(plan.bundled_tools[key]) for key in EXPECTED_TOOL_KEYS},
         "metric_contract": plan.metric_contract,
         "geometry_contract": plan.geometry_contract,
+        "timing_contract": {
+            "frame_rate": plan.frame_rate_contract,
+            "duration_tolerance_frames": plan.duration_tolerance_frames,
+        },
     }
 
 
@@ -632,6 +657,10 @@ def _method_record(plan: SweepPlan) -> dict[str, object]:
         "orders": [list(order) for order in plan.orders],
         "candidate_order": plan.execution_order,
         "quality_metric": "downscaled aggregate and per-frame decoded same-eye SSIM",
+        "timing_validation": {
+            "frame_rate": plan.frame_rate_contract,
+            "duration_tolerance_frames": plan.duration_tolerance_frames,
+        },
         "pairing": "one fresh generated base per case/repeat; all candidates run against exact copies of that base",
         "paired_delta": "candidate minus the same case/repeat q075 output",
         "post_hoc_thresholds_forbidden": True,
@@ -831,6 +860,17 @@ def _private_source_paths(cases: Sequence[CorpusCase]) -> tuple[Path, ...]:
     return tuple(paths)
 
 
+def _configured_private_paths() -> tuple[Path, ...]:
+    paths: set[Path] = set()
+    for environment_name in PRIVATE_SOURCE_ENV_NAMES:
+        configured = os.environ.get(environment_name)
+        if configured:
+            expanded = Path(configured).expanduser()
+            paths.add(expanded)
+            paths.add(expanded.resolve())
+    return tuple(paths)
+
+
 def _candidate_for_quality(plan: SweepPlan, quality: int) -> UpscaleCandidate:
     return next(candidate for candidate in plan.candidates if candidate.quality == quality)
 
@@ -841,12 +881,56 @@ def _candidate_order(plan: SweepPlan, repeat_index: int) -> tuple[UpscaleCandida
     return tuple(_candidate_for_quality(plan, quality) for quality in plan.orders[repeat_index])
 
 
+def _frame_rate(value: object, label: str) -> Fraction:
+    text = _string(value, label)
+    try:
+        rate = Fraction(text)
+    except (ValueError, ZeroDivisionError) as error:
+        raise QualificationFailure(f"{label} is not a valid rational frame rate.") from error
+    if rate <= 0:
+        raise QualificationFailure(f"{label} must be positive.")
+    return rate
+
+
+def _format_duration_seconds(ffprobe: str, path: Path) -> float:
+    completed = run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "json",
+            path,
+        ]
+    )
+    try:
+        document = json.loads(completed.stdout)
+        duration = _number(
+            _mapping(document.get("format"), "ffprobe format").get("duration"),
+            "ffprobe format.duration",
+            positive=True,
+        )
+    except (json.JSONDecodeError, QualificationFailure) as error:
+        raise QualificationFailure(f"Could not read output duration for {path.name}.") from error
+    return duration
+
+
 def _inspect_mv_hevc_output(
-    ffprobe: str, prepared: PreparedCase, output_path: Path, *, geometry_scale: int
+    ffprobe: str,
+    prepared: PreparedCase,
+    plan: SweepPlan,
+    output_path: Path,
+    *,
+    geometry_scale: int,
 ) -> dict[str, object]:
     stream = ffprobe_stream(ffprobe, output_path)
     expected_width = prepared.definition.output_eye_width * geometry_scale
     expected_height = prepared.definition.output_eye_height * geometry_scale
+    expected_frame_rate = _frame_rate(prepared.definition.output_frame_rate, "expected frame rate")
+    observed_frame_rate = _frame_rate(stream.get("avg_frame_rate"), "observed average frame rate")
+    observed_r_frame_rate = _frame_rate(stream.get("r_frame_rate"), "observed real frame rate")
     if stream.get("codec_name") != "hevc" or stream.get("codec_tag_string") != "hvc1":
         raise QualificationFailure("File-upscale output is not an hvc1 HEVC stream.")
     if stream.get("width") != expected_width or stream.get("height") != expected_height:
@@ -856,6 +940,13 @@ def _inspect_mv_hevc_output(
         )
     if stream.get("nb_read_frames") != str(prepared.frame_count):
         raise QualificationFailure("File-upscale output has an unexpected decoded frame count.")
+    if observed_frame_rate != expected_frame_rate or observed_r_frame_rate != expected_frame_rate:
+        raise QualificationFailure("File-upscale output frame rate does not match the checked source timing contract.")
+    observed_duration = _format_duration_seconds(ffprobe, output_path)
+    expected_duration = prepared.frame_count / float(expected_frame_rate)
+    duration_tolerance = plan.duration_tolerance_frames / float(expected_frame_rate)
+    if abs(observed_duration - expected_duration) > duration_tolerance + 1e-6:
+        raise QualificationFailure("File-upscale output duration exceeds the checked one-frame timing tolerance.")
     observed_box_types = sorted(box_types(output_path))
     if not CURRENT_REQUIRED_BOX_TYPES.issubset(set(observed_box_types)):
         raise QualificationFailure("File-upscale output is missing required spatial metadata.")
@@ -865,7 +956,10 @@ def _inspect_mv_hevc_output(
         "width": expected_width,
         "height": expected_height,
         "frame_count": prepared.frame_count,
-        "frame_rate": prepared.definition.output_frame_rate,
+        "frame_rate": str(observed_frame_rate),
+        "r_frame_rate": str(observed_r_frame_rate),
+        "duration_seconds": observed_duration,
+        "duration_tolerance_frames": plan.duration_tolerance_frames,
         "geometry_scale": geometry_scale,
         "observed_box_types": observed_box_types,
     }
@@ -899,6 +993,8 @@ def _measure_downscaled_output(
     prepared: PreparedCase,
     output_path: Path,
     split_directory: Path,
+    *,
+    duration_seconds: float,
 ) -> dict[str, object]:
     left_upscaled, right_upscaled = split_mv_hevc(output_path, split_directory)
     left_downscaled = split_directory / "left-downscaled.mkv"
@@ -914,9 +1010,7 @@ def _measure_downscaled_output(
     frame_summary = summarize_frame_quality(left_frame_scores, right_frame_scores)
     shutil.rmtree(split_directory, ignore_errors=True)
     return {
-        "effective_bitrate_mbps": round(
-            effective_bitrate_mbps(output_path.stat().st_size, prepared.duration_seconds), 6
-        ),
+        "effective_bitrate_mbps": round(effective_bitrate_mbps(output_path.stat().st_size, duration_seconds), 6),
         "left_cross_ssim": left_cross,
         "left_match_ssim": left_match,
         "min_eye_order_margin": min(left_match - left_cross, right_match - right_cross),
@@ -968,7 +1062,7 @@ def _record_base(
             merge_quality=plan.base_merge_quality,
         )
     )
-    structure = _inspect_mv_hevc_output(ffprobe, prepared, base_path, geometry_scale=1)
+    structure = _inspect_mv_hevc_output(ffprobe, prepared, plan, base_path, geometry_scale=1)
     return {
         "repeat_index": repeat_index,
         "generated_eye_bitrate_mbps": plan.base_eye_bitrate_mbps,
@@ -977,7 +1071,10 @@ def _record_base(
         "source_sha256": sha256_file(prepared.source_path),
         "sha256": sha256_file(base_path),
         "bytes": base_path.stat().st_size,
-        "effective_bitrate_mbps": round(effective_bitrate_mbps(base_path.stat().st_size, prepared.duration_seconds), 6),
+        "effective_bitrate_mbps": round(
+            effective_bitrate_mbps(base_path.stat().st_size, float(structure["duration_seconds"])),
+            6,
+        ),
         "elapsed_seconds": round(metrics.elapsed_seconds, 6),
         "user_cpu_seconds": round(metrics.user_cpu_seconds, 6),
         "system_cpu_seconds": round(metrics.system_cpu_seconds, 6),
@@ -992,6 +1089,7 @@ def _record_candidate(
     plan: SweepPlan,
     candidate: UpscaleCandidate,
     repeat_index: int,
+    execution_ordinal: int,
     base_path: Path,
     base_record: Mapping[str, object],
     repeat_directory: Path,
@@ -1008,18 +1106,20 @@ def _record_candidate(
         raise QualificationFailure("Candidate input is not an exact copy of its paired generated base.")
     _, metrics = measure(partial(_run_fx_upscale, plan.fx_upscale_binary.path, candidate_input, candidate.quality))
     shutil.move(_expected_upscaled_output(candidate_input), final_path)
-    structure = _inspect_mv_hevc_output(ffprobe, prepared, final_path, geometry_scale=2)
+    structure = _inspect_mv_hevc_output(ffprobe, prepared, plan, final_path, geometry_scale=2)
     measured = _measure_downscaled_output(
         ffmpeg,
         prepared,
         final_path,
         repeat_directory / f"{candidate.candidate_id}-split",
+        duration_seconds=float(structure["duration_seconds"]),
     )
     final_bytes = final_path.stat().st_size
     base_bytes = int(base_record["bytes"])
     return {
         "id": candidate.candidate_id,
         "repeat_index": repeat_index,
+        "execution_ordinal": execution_ordinal,
         "quality": candidate.quality,
         "quality_factor": f"{candidate.quality}/100",
         "bitrate_scaling_factor": candidate.bitrate_scaling_factor,
@@ -1049,9 +1149,12 @@ def _validate_base_record(base: Mapping[str, object], plan: SweepPlan, repeat_in
         "codec_name",
         "codec_tag_string",
         "effective_bitrate_mbps",
+        "duration_seconds",
+        "duration_tolerance_frames",
         "elapsed_seconds",
         "frame_count",
         "frame_rate",
+        "r_frame_rate",
         "generated_eye_bitrate_mbps",
         "generated_merge_quality",
         "geometry_scale",
@@ -1081,8 +1184,23 @@ def _validate_base_record(base: Mapping[str, object], plan: SweepPlan, repeat_in
         raise QualificationFailure(f"Repeat {repeat_index} generated base is not hvc1 HEVC.")
     for key in ("sha256", "source_sha256"):
         _sha256_identity(base.get(key), f"base.{key}")
-    for key in ("effective_bitrate_mbps", "elapsed_seconds"):
+    for key in ("effective_bitrate_mbps", "duration_seconds", "elapsed_seconds"):
         _number(base.get(key), f"base.{key}", positive=True)
+    expected_bitrate = round(
+        effective_bitrate_mbps(int(base["bytes"]), float(base["duration_seconds"])),
+        6,
+    )
+    if not math.isclose(
+        float(base["effective_bitrate_mbps"]),
+        expected_bitrate,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        raise QualificationFailure(f"Repeat {repeat_index} generated base bitrate contradicts its timing.")
+    if base.get("duration_tolerance_frames") != plan.duration_tolerance_frames:
+        raise QualificationFailure(f"Repeat {repeat_index} generated base timing contract changed.")
+    _frame_rate(base.get("frame_rate"), "base.frame_rate")
+    _frame_rate(base.get("r_frame_rate"), "base.r_frame_rate")
     for key in ("user_cpu_seconds", "system_cpu_seconds"):
         _number(base.get(key), f"base.{key}", nonnegative=True)
     if not isinstance(base.get("observed_box_types"), list) or not CURRENT_REQUIRED_BOX_TYPES.issubset(
@@ -1114,7 +1232,12 @@ def _validate_paired_delta(delta: object, candidate: UpscaleCandidate) -> None:
         _number(document.get(key), f"paired_delta_to_q075.{key}")
 
 
-def _validate_candidate_record(record: Mapping[str, object], candidate: UpscaleCandidate, repeat_index: int) -> None:
+def _validate_candidate_record(
+    record: Mapping[str, object],
+    candidate: UpscaleCandidate,
+    repeat_index: int,
+    execution_ordinal: int,
+) -> None:
     expected_keys = {
         "base_bytes",
         "base_effective_bitrate_mbps",
@@ -1123,12 +1246,16 @@ def _validate_candidate_record(record: Mapping[str, object], candidate: UpscaleC
         "codec_name",
         "codec_tag_string",
         "effective_bitrate_mbps",
+        "duration_seconds",
+        "duration_tolerance_frames",
+        "execution_ordinal",
         "final_bytes",
         "final_sha256",
         "final_to_base_size_ratio",
         "frame_count",
         "frame_quality_sample_count",
         "frame_rate",
+        "r_frame_rate",
         "frame_ssim_standard_deviation",
         "geometry_scale",
         "height",
@@ -1161,6 +1288,7 @@ def _validate_candidate_record(record: Mapping[str, object], candidate: UpscaleC
     if (
         record.get("id") != candidate.candidate_id
         or record.get("repeat_index") != repeat_index
+        or record.get("execution_ordinal") != execution_ordinal
         or record.get("quality") != candidate.quality
         or record.get("quality_factor") != f"{candidate.quality}/100"
         or record.get("bitrate_scaling_factor") != candidate.bitrate_scaling_factor
@@ -1179,11 +1307,16 @@ def _validate_candidate_record(record: Mapping[str, object], candidate: UpscaleC
     for key in (
         "base_effective_bitrate_mbps",
         "effective_bitrate_mbps",
+        "duration_seconds",
         "final_to_base_size_ratio",
         "projected_full_route_elapsed_seconds",
         "upscale_elapsed_seconds",
     ):
         _number(record.get(key), f"candidate.{key}", positive=True)
+    if record.get("duration_tolerance_frames") != 1:
+        raise QualificationFailure(f"Candidate {candidate.candidate_id} timing contract changed.")
+    _frame_rate(record.get("frame_rate"), "candidate.frame_rate")
+    _frame_rate(record.get("r_frame_rate"), "candidate.r_frame_rate")
     for key in ("upscale_user_cpu_seconds", "upscale_system_cpu_seconds", "frame_ssim_standard_deviation"):
         _number(record.get(key), f"candidate.{key}", nonnegative=True)
     ssim_values: dict[str, float] = {}
@@ -1222,6 +1355,56 @@ def _validate_candidate_record(record: Mapping[str, object], candidate: UpscaleC
     _validate_paired_delta(record.get("paired_delta_to_q075"), candidate)
 
 
+def _validate_candidate_against_base(
+    record: Mapping[str, object],
+    base: Mapping[str, object],
+    candidate: UpscaleCandidate,
+) -> None:
+    exact_pairs = (
+        ("base_sha256", "sha256"),
+        ("base_bytes", "bytes"),
+        ("base_effective_bitrate_mbps", "effective_bitrate_mbps"),
+        ("source_sha256", "source_sha256"),
+        ("frame_count", "frame_count"),
+        ("frame_rate", "frame_rate"),
+        ("r_frame_rate", "r_frame_rate"),
+        ("duration_tolerance_frames", "duration_tolerance_frames"),
+    )
+    for candidate_key, base_key in exact_pairs:
+        if record.get(candidate_key) != base.get(base_key):
+            raise QualificationFailure(
+                f"Candidate {candidate.candidate_id} does not match its recorded generated base."
+            )
+    if record.get("input_copy_sha256") != base.get("sha256"):
+        raise QualificationFailure(f"Candidate {candidate.candidate_id} did not consume its recorded base bytes.")
+    if record.get("width") != int(base["width"]) * 2 or record.get("height") != int(base["height"]) * 2:
+        raise QualificationFailure(f"Candidate {candidate.candidate_id} geometry does not match its generated base.")
+    duration_tolerance = int(base["duration_tolerance_frames"]) / float(
+        _frame_rate(base["frame_rate"], "base.frame_rate")
+    )
+    if abs(float(record["duration_seconds"]) - float(base["duration_seconds"])) > duration_tolerance + 1e-6:
+        raise QualificationFailure(f"Candidate {candidate.candidate_id} timing does not match its generated base.")
+    expected_size_ratio = int(record["final_bytes"]) / int(base["bytes"])
+    if not math.isclose(
+        float(record["final_to_base_size_ratio"]),
+        expected_size_ratio,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        raise QualificationFailure(f"Candidate {candidate.candidate_id} size ratio contradicts its generated base.")
+    expected_bitrate = round(
+        effective_bitrate_mbps(int(record["final_bytes"]), float(record["duration_seconds"])),
+        6,
+    )
+    if not math.isclose(
+        float(record["effective_bitrate_mbps"]),
+        expected_bitrate,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        raise QualificationFailure(f"Candidate {candidate.candidate_id} bitrate contradicts its output timing.")
+
+
 def _candidate_record(repeat: Mapping[str, object], candidate_id: str) -> dict[str, object] | None:
     candidates = repeat.get("candidates")
     if not isinstance(candidates, list):
@@ -1232,11 +1415,35 @@ def _candidate_record(repeat: Mapping[str, object], candidate_id: str) -> dict[s
     return None
 
 
-def _candidate_complete(repeat: Mapping[str, object], candidate: UpscaleCandidate, repeat_index: int) -> bool:
+def _validate_candidate_prefix(repeat: Mapping[str, object], plan: SweepPlan, repeat_index: int) -> None:
+    candidates = repeat.get("candidates")
+    if not isinstance(candidates, list):
+        raise QualificationFailure(f"Repeat {repeat_index} candidates must be an array.")
+    observed_ids: list[str] = []
+    for record in candidates:
+        if not isinstance(record, Mapping) or not isinstance(record.get("id"), str):
+            raise QualificationFailure(f"Repeat {repeat_index} contains an invalid candidate record.")
+        observed_ids.append(str(record["id"]))
+    expected_ids = [candidate.candidate_id for candidate in _candidate_order(plan, repeat_index)]
+    if observed_ids != expected_ids[: len(observed_ids)]:
+        raise QualificationFailure(f"Repeat {repeat_index} candidates do not match the checked execution prefix.")
+
+
+def _candidate_complete(
+    repeat: Mapping[str, object],
+    plan: SweepPlan,
+    candidate: UpscaleCandidate,
+    repeat_index: int,
+) -> bool:
     record = _candidate_record(repeat, candidate.candidate_id)
     if record is None:
         return False
-    _validate_candidate_record(record, candidate, repeat_index)
+    base = repeat.get("base")
+    if not isinstance(base, Mapping):
+        raise QualificationFailure("A candidate record exists without its generated base.")
+    execution_ordinal = plan.orders[repeat_index].index(candidate.quality)
+    _validate_candidate_record(record, candidate, repeat_index, execution_ordinal)
+    _validate_candidate_against_base(record, base, candidate)
     return True
 
 
@@ -1245,7 +1452,14 @@ def _repeat_complete(repeat: Mapping[str, object], plan: SweepPlan, repeat_index
     if not isinstance(base, Mapping):
         return False
     _validate_base_record(base, plan, repeat_index)
-    return all(_candidate_complete(repeat, candidate, repeat_index) for candidate in plan.candidates)
+    expected_order = _candidate_order(plan, repeat_index)
+    candidates = repeat.get("candidates")
+    if not isinstance(candidates, list):
+        return False
+    _validate_candidate_prefix(repeat, plan, repeat_index)
+    if len(candidates) != len(expected_order):
+        return False
+    return all(_candidate_complete(repeat, plan, candidate, repeat_index) for candidate in expected_order)
 
 
 def _repeat_record(case: Mapping[str, object], repeat_index: int) -> dict[str, object] | None:
@@ -1374,22 +1588,33 @@ def _refresh_summaries(
                 raise QualificationFailure(
                     f"Case {case_id} repeat {repeat_index} order changed from the checked schedule."
                 )
+            _validate_candidate_prefix(repeat, plan, repeat_index)
+            repeat_base = repeat.get("base")
+            if repeat.get("candidates") and not isinstance(repeat_base, Mapping):
+                raise QualificationFailure(f"Case {case_id} repeat {repeat_index} has candidates without a base.")
             balanced = _candidate_record(repeat, "q075")
             if balanced is not None:
-                _validate_candidate_record(balanced, _candidate_for_quality(plan, 75), repeat_index)
+                balanced_candidate = _candidate_for_quality(plan, 75)
+                balanced_ordinal = plan.orders[repeat_index].index(75)
+                _validate_candidate_record(balanced, balanced_candidate, repeat_index, balanced_ordinal)
+                _validate_candidate_against_base(balanced, _mapping(repeat_base, "repeat.base"), balanced_candidate)
                 for candidate in plan.candidates:
                     record = _candidate_record(repeat, candidate.candidate_id)
                     if record is None:
                         continue
-                    _validate_candidate_record(record, candidate, repeat_index)
+                    execution_ordinal = plan.orders[repeat_index].index(candidate.quality)
+                    _validate_candidate_record(record, candidate, repeat_index, execution_ordinal)
+                    _validate_candidate_against_base(record, _mapping(repeat_base, "repeat.base"), candidate)
                     record["paired_delta_to_q075"] = _paired_delta(record, balanced)
-                    _validate_candidate_record(record, candidate, repeat_index)
+                    _validate_candidate_record(record, candidate, repeat_index, execution_ordinal)
             complete_records: list[Mapping[str, object]] = []
             for candidate in plan.candidates:
                 record = _candidate_record(repeat, candidate.candidate_id)
                 if record is None:
                     continue
-                _validate_candidate_record(record, candidate, repeat_index)
+                execution_ordinal = plan.orders[repeat_index].index(candidate.quality)
+                _validate_candidate_record(record, candidate, repeat_index, execution_ordinal)
+                _validate_candidate_against_base(record, _mapping(repeat_base, "repeat.base"), candidate)
                 candidate_records[candidate.candidate_id].append(record)
                 case_candidate_records[candidate.candidate_id].append(record)
                 complete_records.append(record)
@@ -1410,11 +1635,6 @@ def _refresh_summaries(
                         monotonicity_findings.append({"code": "storage_tie_ambiguous", **base})
                     if higher["final_sha256"] == lower["final_sha256"]:
                         monotonicity_findings.append({"code": "identical_output_ambiguous", **base})
-                    quality_delta = float(higher["min_same_eye_ssim"]) - float(lower["min_same_eye_ssim"])
-                    if quality_delta < -1e-12:
-                        monotonicity_findings.append(
-                            {"code": "quality_reversal_observed", **base, "observed_delta": quality_delta}
-                        )
         summary: dict[str, object] = {"id": case_id, "complete": case_complete}
         if any(case_candidate_records.values()):
             summary["candidates"] = []
@@ -1481,15 +1701,23 @@ def _refresh_summaries(
         if isinstance(record, Mapping)
     )
     storage_reversal = any(finding["code"] == "storage_reversal" for finding in monotonicity_findings)
-    ambiguous_codes = {"storage_tie_ambiguous", "identical_output_ambiguous", "quality_reversal_observed"}
+    ambiguous_codes = {"storage_tie_ambiguous", "identical_output_ambiguous"}
     response_ambiguous = any(finding["code"] in ambiguous_codes for finding in monotonicity_findings)
     size_monotonic_passed = complete and not storage_reversal
     size_decision_ready = size_monotonic_passed and not any(
         finding["code"] == "storage_tie_ambiguous" for finding in monotonicity_findings
     )
     decision_ready = complete and planned_full and eye_order_passed and size_decision_ready and not response_ambiguous
+    previous_acceptance = evidence.get("acceptance")
+    finalized = (
+        isinstance(previous_acceptance, Mapping)
+        and previous_acceptance.get("finalized") is True
+        and complete
+        and planned_full
+    )
     evidence["acceptance"] = {
         "complete": complete,
+        "finalized": finalized,
         "planned_full_stress_subset": planned_full,
         "structural_passed": complete,
         "eye_order_passed": eye_order_passed,
@@ -1549,6 +1777,7 @@ def _new_evidence(
         "monotonicity_findings": [],
         "acceptance": {
             "complete": False,
+            "finalized": False,
             "planned_full_stress_subset": False,
             "structural_passed": False,
             "eye_order_passed": False,
@@ -1607,14 +1836,14 @@ def _validate_resume_cases(
         repeats = case.get("repeats")
         if not isinstance(repeats, list) or len(repeats) > plan.runs_per_candidate:
             raise QualificationFailure(f"Resume evidence case {case_id} repeats are invalid.")
-        observed_repeats: set[int] = set()
+        observed_repeats: list[int] = []
         for repeat in repeats:
             if not isinstance(repeat, Mapping) or type(repeat.get("repeat_index")) is not int:
                 raise QualificationFailure(f"Resume evidence case {case_id} contains an invalid repeat.")
             repeat_index = int(repeat["repeat_index"])
             if not 0 <= repeat_index < plan.runs_per_candidate or repeat_index in observed_repeats:
                 raise QualificationFailure(f"Resume evidence case {case_id} contains an invalid repeat index.")
-            observed_repeats.add(repeat_index)
+            observed_repeats.append(repeat_index)
             if repeat.get("order") != list(plan.orders[repeat_index]):
                 raise QualificationFailure(f"Resume evidence case {case_id} repeat order changed.")
             base = repeat.get("base")
@@ -1623,18 +1852,15 @@ def _validate_resume_cases(
             candidates = repeat.get("candidates")
             if not isinstance(candidates, list) or len(candidates) > len(plan.candidates):
                 raise QualificationFailure(f"Resume evidence case {case_id} repeat candidates are invalid.")
-            observed_candidates: set[str] = set()
-            for candidate_record in candidates:
-                if not isinstance(candidate_record, Mapping) or not isinstance(candidate_record.get("id"), str):
-                    raise QualificationFailure(f"Resume evidence case {case_id} contains an invalid candidate.")
-                candidate_id = str(candidate_record["id"])
-                if candidate_id in observed_candidates:
-                    raise QualificationFailure(f"Resume evidence case {case_id} contains duplicate candidate records.")
-                observed_candidates.add(candidate_id)
-                candidate = next((item for item in plan.candidates if item.candidate_id == candidate_id), None)
-                if candidate is None:
-                    raise QualificationFailure(f"Resume evidence case {case_id} contains an unplanned candidate.")
-                _validate_candidate_record(candidate_record, candidate, repeat_index)
+            _validate_candidate_prefix(repeat, plan, repeat_index)
+            if candidates and not isinstance(base, Mapping):
+                raise QualificationFailure(f"Resume evidence case {case_id} has candidates without a base.")
+            for execution_ordinal, candidate_record in enumerate(candidates):
+                candidate = _candidate_order(plan, repeat_index)[execution_ordinal]
+                _validate_candidate_record(candidate_record, candidate, repeat_index, execution_ordinal)
+                _validate_candidate_against_base(candidate_record, _mapping(base, "repeat.base"), candidate)
+        if observed_repeats != list(range(len(observed_repeats))):
+            raise QualificationFailure(f"Resume evidence case {case_id} repeats do not match the execution prefix.")
     if len(set(observed_case_ids)) != len(observed_case_ids) or not set(observed_case_ids).issubset(case_definitions):
         raise QualificationFailure("Resume evidence case identities do not match the selected experiment cases.")
 
@@ -1690,14 +1916,19 @@ def _load_resume_evidence(
     acceptance = evidence.get("acceptance")
     complete = isinstance(acceptance, Mapping) and acceptance.get("complete") is True
     planned_full = isinstance(acceptance, Mapping) and acceptance.get("planned_full_stress_subset") is True
+    finalized = isinstance(acceptance, Mapping) and acceptance.get("finalized") is True
+    writable = bool(output_path.stat().st_mode & 0o222)
     if complete and planned_full:
         canonical = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
         if raw_evidence != canonical:
             raise QualificationFailure("Completed resume evidence is not canonical JSON.")
-        if output_path.stat().st_mode & 0o222:
-            raise QualificationFailure("Completed resume evidence must be frozen read-only.")
-    elif output_path.stat().st_mode & 0o222 == 0:
-        raise QualificationFailure("Incomplete resume evidence is unexpectedly read-only.")
+        if not writable and not finalized:
+            raise QualificationFailure("Unfinalized complete resume evidence is unexpectedly read-only.")
+    else:
+        if finalized:
+            raise QualificationFailure("Incomplete resume evidence must not be marked finalized.")
+        if not writable:
+            raise QualificationFailure("Incomplete resume evidence is unexpectedly read-only.")
     return evidence
 
 
@@ -1832,8 +2063,7 @@ def _run_quality_sweep_unlocked(
         _atomic_write(output_path, evidence, private_paths)
 
     case_definitions = {case.case_id: case for case in selected_cases}
-    if _completed_resume_is_consistent(evidence, plan, binding, case_definitions):
-        return evidence
+    _completed_resume_is_consistent(evidence, plan, binding, case_definitions)
 
     for definition in selected_cases:
         existing_case = _case_record(evidence, definition.case_id)
@@ -1848,7 +2078,7 @@ def _run_quality_sweep_unlocked(
         try:
             prepared = prepare_case(definition, case_work, ffmpeg=ffmpeg, ffprobe=ffprobe)
             _validate_prepared_source(binding, prepared)
-        except QualificationFailure as error:
+        except (OSError, subprocess.SubprocessError, QualificationFailure, ValueError) as error:
             raise QualificationFailure(redact_private_source_paths(str(error), private_paths)) from None
         if existing_case is None:
             existing_case = _case_record_template(definition, prepared)
@@ -1884,7 +2114,7 @@ def _run_quality_sweep_unlocked(
                 try:
                     base_path.unlink(missing_ok=True)
                     base = _record_base(ffmpeg, ffprobe, prepared, plan, repeat_index, base_path)
-                except QualificationFailure as error:
+                except (OSError, subprocess.SubprocessError, QualificationFailure, ValueError) as error:
                     raise QualificationFailure(redact_private_source_paths(str(error), private_paths)) from None
                 repeat["base"] = base
                 evidence["updated_at"] = datetime.now(UTC).isoformat()
@@ -1908,8 +2138,9 @@ def _run_quality_sweep_unlocked(
             candidates = repeat.get("candidates")
             if not isinstance(candidates, list):
                 raise QualificationFailure(f"Case {definition.case_id} repeat {repeat_index} candidates are invalid.")
-            for candidate in _candidate_order(plan, repeat_index):
-                if _candidate_complete(repeat, candidate, repeat_index):
+            _validate_candidate_prefix(repeat, plan, repeat_index)
+            for execution_ordinal, candidate in enumerate(_candidate_order(plan, repeat_index)):
+                if _candidate_complete(repeat, plan, candidate, repeat_index):
                     continue
                 try:
                     record = _record_candidate(
@@ -1919,14 +2150,14 @@ def _run_quality_sweep_unlocked(
                         plan,
                         candidate,
                         repeat_index,
+                        execution_ordinal,
                         base_path,
                         base,
                         repeat_directory,
                     )
-                except QualificationFailure as error:
+                except (OSError, subprocess.SubprocessError, QualificationFailure, ValueError) as error:
                     raise QualificationFailure(redact_private_source_paths(str(error), private_paths)) from None
                 candidates.append(record)
-                candidates.sort(key=lambda item: EXPECTED_QUALITIES.index(int(item["quality"])))
                 _refresh_summaries(evidence, plan, binding, case_definitions)
                 evidence["updated_at"] = datetime.now(UTC).isoformat()
                 _atomic_write(output_path, evidence, private_paths)
@@ -1953,11 +2184,21 @@ def _run_quality_sweep_unlocked(
     final_environment = _environment_evidence(plan, ffmpeg, ffprobe, source_git_sha)
     if final_environment != environment:
         raise QualificationFailure("File-upscale sweep environment changed before final receipt freeze.")
+    acceptance = _mapping(evidence.get("acceptance"), "acceptance")
+    if (
+        acceptance.get("complete") is True
+        and acceptance.get("planned_full_stress_subset") is True
+        and acceptance.get("finalized") is True
+    ):
+        _freeze_receipt(output_path)
+        return evidence
     evidence["updated_at"] = datetime.now(UTC).isoformat()
     _refresh_summaries(evidence, plan, binding, case_definitions)
-    _atomic_write(output_path, evidence, private_paths)
     acceptance = _mapping(evidence.get("acceptance"), "acceptance")
     if acceptance.get("complete") is True and acceptance.get("planned_full_stress_subset") is True:
+        acceptance["finalized"] = True
+    _atomic_write(output_path, evidence, private_paths)
+    if acceptance.get("finalized") is True:
         _freeze_receipt(output_path)
     return evidence
 
@@ -1984,7 +2225,11 @@ def exit_code_for_evidence(evidence: Mapping[str, object]) -> int:
     acceptance = evidence.get("acceptance")
     if not isinstance(acceptance, Mapping):
         raise QualificationFailure("File-upscale quality sweep acceptance record is missing.")
-    return 0 if acceptance.get("decision_ready") is True else 1
+    if acceptance.get("decision_ready") is True:
+        return 0
+    if acceptance.get("complete") is True and acceptance.get("planned_full_stress_subset") is True:
+        return 1
+    return 3
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -2001,6 +2246,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    private_paths = _configured_private_paths()
     try:
         evidence = run_quality_sweep(
             args.sweep_plan.resolve(),
@@ -2019,7 +2265,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         QualificationFailure,
         ValueError,
     ) as error:
-        print(f"File-upscale quality sweep failed: {error}", file=sys.stderr)
+        message = redact_private_source_paths(str(error), private_paths)
+        print(f"File-upscale quality sweep failed: {message}", file=sys.stderr)
         return 2
 
 

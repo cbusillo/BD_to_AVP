@@ -1,8 +1,13 @@
 import copy
+import contextlib
+import io
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 
+from fractions import Fraction
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,14 +18,18 @@ from scripts.qualify_file_upscale_quality_sweep import (
     EXPECTED_COVERAGE,
     _candidate_order,
     _completed_resume_is_consistent,
+    _configured_private_paths,
     _load_resume_evidence,
     _new_evidence,
     _prepare_owned_work_directory,
     _refresh_summaries,
     _run_fx_upscale,
+    _validate_candidate_against_base,
     _validate_candidate_record,
+    _validate_resume_cases,
     exit_code_for_evidence,
     load_sweep_plan,
+    main,
     parse_corpus_binding,
     parse_sweep_plan,
     quality_factor_string,
@@ -28,6 +37,14 @@ from scripts.qualify_file_upscale_quality_sweep import (
 
 
 HEX = "0123456789abcdef" * 4
+
+
+def _duration_seconds(case) -> float:
+    return 96 / float(Fraction(case.output_frame_rate))
+
+
+def _bitrate_mbps(byte_count: int, duration_seconds: float) -> float:
+    return round((byte_count * 8) / duration_seconds / 1_000_000, 6)
 
 
 def _case_record(case, binding) -> dict[str, object]:
@@ -49,14 +66,18 @@ def _case_record(case, binding) -> dict[str, object]:
 
 
 def _base_record(case, repeat_index: int) -> dict[str, object]:
+    duration_seconds = _duration_seconds(case)
     return {
         "bytes": 1000,
         "codec_name": "hevc",
         "codec_tag_string": "hvc1",
-        "effective_bitrate_mbps": 2.0,
+        "duration_seconds": duration_seconds,
+        "duration_tolerance_frames": 1,
+        "effective_bitrate_mbps": _bitrate_mbps(1000, duration_seconds),
         "elapsed_seconds": 10.0,
         "frame_count": 96,
         "frame_rate": case.output_frame_rate,
+        "r_frame_rate": case.output_frame_rate,
         "generated_eye_bitrate_mbps": 20,
         "generated_merge_quality": 75,
         "geometry_scale": 1,
@@ -76,10 +97,12 @@ def _candidate_record(
     case,
     quality: int,
     repeat_index: int,
+    execution_ordinal: int,
     *,
     final_bytes: int,
     quality_score: float,
 ) -> dict[str, object]:
+    duration_seconds = _duration_seconds(case)
     left_cross = 0.40
     right_cross = 0.41
     left_match = quality_score
@@ -87,18 +110,22 @@ def _candidate_record(
     final_sha = f"{quality:064x}"[-64:]
     return {
         "base_bytes": 1000,
-        "base_effective_bitrate_mbps": 2.0,
+        "base_effective_bitrate_mbps": _bitrate_mbps(1000, duration_seconds),
         "base_sha256": "a" * 64,
         "bitrate_scaling_factor": quality_factor_string(quality),
         "codec_name": "hevc",
         "codec_tag_string": "hvc1",
-        "effective_bitrate_mbps": final_bytes / 500.0,
+        "duration_seconds": duration_seconds,
+        "duration_tolerance_frames": 1,
+        "effective_bitrate_mbps": _bitrate_mbps(final_bytes, duration_seconds),
+        "execution_ordinal": execution_ordinal,
         "final_bytes": final_bytes,
         "final_sha256": final_sha,
         "final_to_base_size_ratio": final_bytes / 1000.0,
         "frame_count": 96,
         "frame_quality_sample_count": 96,
         "frame_rate": case.output_frame_rate,
+        "r_frame_rate": case.output_frame_rate,
         "frame_ssim_standard_deviation": 0.0001,
         "geometry_scale": 2,
         "height": case.output_eye_height * 2,
@@ -152,6 +179,8 @@ class FileUpscaleQualityPlanTests(unittest.TestCase):
         self.assertEqual(plan.balanced_quality, 75)
         self.assertEqual(plan.base_eye_bitrate_mbps, 20)
         self.assertEqual(plan.base_merge_quality, 75)
+        self.assertEqual(plan.frame_rate_contract, "exact_rational_match_v1")
+        self.assertEqual(plan.duration_tolerance_frames, 1)
         self.assertEqual([candidate.quality for candidate in plan.candidates], [65, 75, 85])
         self.assertEqual(plan.orders, ((65, 75, 85), (75, 85, 65), (85, 65, 75)))
         self.assertFalse(self.plan_document["decision_policy"]["ladder_mapping_selected"])
@@ -179,6 +208,11 @@ class FileUpscaleQualityPlanTests(unittest.TestCase):
         changed_order["orders"][0] = [65, 85, 75]
         with self.assertRaisesRegex(QualificationFailure, "checked cyclic"):
             parse_sweep_plan(changed_order)
+
+        changed_timing = copy.deepcopy(self.plan_document)
+        changed_timing["toolchain"]["timing_contract"]["duration_tolerance_frames"] = 2
+        with self.assertRaisesRegex(QualificationFailure, "between 1 and 1"):
+            parse_sweep_plan(changed_timing)
 
     def test_load_rejects_binding_hash_mismatch(self) -> None:
         plan, binding, _, _ = load_sweep_plan(DEFAULT_SWEEP_PLAN)
@@ -228,6 +262,7 @@ class FileUpscaleQualityEvidenceTests(unittest.TestCase):
             case_record = _case_record(case, self.binding)
             max_repeats = self.plan.runs_per_candidate if complete else 1
             for repeat_index in range(max_repeats):
+                scheduled_candidates = _candidate_order(self.plan, repeat_index)
                 repeat = {
                     "repeat_index": repeat_index,
                     "order": list(self.plan.orders[repeat_index]),
@@ -235,12 +270,13 @@ class FileUpscaleQualityEvidenceTests(unittest.TestCase):
                     "candidates": [
                         _candidate_record(
                             case,
-                            quality,
+                            candidate.quality,
                             repeat_index,
-                            final_bytes=bytes_by_quality[quality],
-                            quality_score=scores_by_quality[quality],
+                            execution_ordinal,
+                            final_bytes=bytes_by_quality[candidate.quality],
+                            quality_score=scores_by_quality[candidate.quality],
                         )
-                        for quality in (65, 75, 85)
+                        for execution_ordinal, candidate in enumerate(scheduled_candidates)
                     ],
                 }
                 case_record["repeats"].append(repeat)
@@ -257,15 +293,15 @@ class FileUpscaleQualityEvidenceTests(unittest.TestCase):
         self.assertFalse(evidence["acceptance"]["thresholds_selected"])
         self.assertEqual(evidence["monotonicity_findings"], [])
 
-    def test_subset_and_partial_evidence_exit_one(self) -> None:
+    def test_subset_and_partial_evidence_exit_three(self) -> None:
         subset = self._evidence(self.full_cases[:1])
         self.assertTrue(subset["acceptance"]["complete"])
         self.assertFalse(subset["acceptance"]["planned_full_stress_subset"])
-        self.assertEqual(exit_code_for_evidence(subset), 1)
+        self.assertEqual(exit_code_for_evidence(subset), 3)
 
         partial = self._evidence(self.full_cases[:1], complete=False)
         self.assertFalse(partial["acceptance"]["complete"])
-        self.assertEqual(exit_code_for_evidence(partial), 1)
+        self.assertEqual(exit_code_for_evidence(partial), 3)
 
     def test_storage_reversal_or_ambiguity_exit_one(self) -> None:
         reversal = self._evidence(self.full_cases, bytes_by_quality={65: 650, 75: 750, 85: 740})
@@ -287,11 +323,47 @@ class FileUpscaleQualityEvidenceTests(unittest.TestCase):
 
     def test_candidate_validation_requires_exact_base_copy(self) -> None:
         case = self.full_cases[0]
-        record = _candidate_record(case, 75, 0, final_bytes=750, quality_score=0.962)
+        record = _candidate_record(case, 75, 0, 1, final_bytes=750, quality_score=0.962)
         record["input_copy_sha256"] = "b" * 64
 
         with self.assertRaisesRegex(QualificationFailure, "exact base copy"):
-            _validate_candidate_record(record, self.plan.candidates[1], 0)
+            _validate_candidate_record(record, self.plan.candidates[1], 0, 1)
+
+    def test_candidate_validation_binds_record_to_repeat_base(self) -> None:
+        case = self.full_cases[0]
+        base = _base_record(case, 0)
+        record = _candidate_record(case, 65, 0, 0, final_bytes=650, quality_score=0.961)
+        record["base_sha256"] = "b" * 64
+        record["input_copy_sha256"] = "b" * 64
+
+        _validate_candidate_record(record, self.plan.candidates[0], 0, 0)
+        with self.assertRaisesRegex(QualificationFailure, "recorded generated base"):
+            _validate_candidate_against_base(record, base, self.plan.candidates[0])
+
+    def test_resume_rejects_non_prefix_candidate_order(self) -> None:
+        evidence = self._evidence(self.full_cases[:1], complete=False)
+        repeat = evidence["cases"][0]["repeats"][0]
+        repeat["candidates"] = [repeat["candidates"][2]]
+
+        with self.assertRaisesRegex(QualificationFailure, "execution prefix"):
+            _validate_resume_cases(
+                evidence,
+                self.plan,
+                self.binding,
+                {self.full_cases[0].case_id: self.full_cases[0]},
+            )
+
+    def test_ssim_direction_is_descriptive_without_a_threshold(self) -> None:
+        evidence = self._evidence(
+            self.full_cases,
+            scores_by_quality={65: 0.963, 75: 0.962, 85: 0.961},
+        )
+
+        self.assertEqual(exit_code_for_evidence(evidence), 0)
+        self.assertNotIn(
+            "quality_reversal_observed",
+            {finding["code"] for finding in evidence["monotonicity_findings"]},
+        )
 
     def test_resume_validation_and_completed_consistency(self) -> None:
         evidence = self._evidence(self.full_cases[:1])
@@ -327,6 +399,44 @@ class FileUpscaleQualityEvidenceTests(unittest.TestCase):
                     selected_cases=self.full_cases[:1],
                     private_paths=(),
                 )
+
+    def test_complete_writable_checkpoint_can_resume_to_finalization(self) -> None:
+        evidence = self._evidence(self.full_cases)
+        self.assertFalse(evidence["acceptance"]["finalized"])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "receipt.json"
+            output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            loaded = _load_resume_evidence(
+                output,
+                plan=self.plan,
+                binding=self.binding,
+                plan_sha256=self.plan_sha,
+                binding_sha256=self.binding_sha,
+                environment=self.environment,
+                selected_cases=self.full_cases,
+                private_paths=(),
+            )
+
+            self.assertTrue(loaded["acceptance"]["complete"])
+            self.assertFalse(loaded["acceptance"]["finalized"])
+
+    def test_timeout_diagnostic_redacts_configured_private_source(self) -> None:
+        private_source = "/private/very-sensitive-release-source.mkv"
+        stderr = io.StringIO()
+        timeout = subprocess.TimeoutExpired(["tool", private_source], 30)
+
+        with (
+            patch.dict(os.environ, {"BD_TO_AVP_RELEASE_MVC_SOURCE": private_source}),
+            patch("scripts.qualify_file_upscale_quality_sweep.run_quality_sweep", side_effect=timeout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            self.assertIn(Path(private_source), _configured_private_paths())
+            self.assertEqual(main([]), 2)
+
+        self.assertNotIn(private_source, stderr.getvalue())
+        self.assertIn("<private-source>", stderr.getvalue())
 
     def test_owned_work_directory_marker_is_atomic_and_identity_checked(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
