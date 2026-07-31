@@ -96,6 +96,23 @@ private final class ProbeSeekCompletion: @unchecked Sendable {
     }
 }
 
+private final class ProbeSubtitleCueObserver: NSObject, AVPlayerItemLegibleOutputPushDelegate {
+    let onCues: (CMTime, [NSAttributedString]) -> Void
+
+    init(onCues: @escaping (CMTime, [NSAttributedString]) -> Void) {
+        self.onCues = onCues
+    }
+
+    func legibleOutput(
+        _ output: AVPlayerItemLegibleOutput,
+        didOutputAttributedStrings strings: [NSAttributedString],
+        nativeSampleBuffers: [Any],
+        forItemTime itemTime: CMTime
+    ) {
+        onCues(itemTime, strings)
+    }
+}
+
 @MainActor
 final class PlaybackProbeModel: ObservableObject {
     private struct PendingImportedAsset {
@@ -127,6 +144,9 @@ final class PlaybackProbeModel: ObservableObject {
     @Published private(set) var failure: ProbeFailure?
     @Published private(set) var audioOptions: [ProbeMediaOption] = []
     @Published private(set) var subtitleOptions: [ProbeMediaOption] = []
+    @Published private(set) var subtitleCueEventCount = 0
+    @Published private(set) var firstSubtitleCueTimeSeconds: Double?
+    @Published private(set) var lastSubtitleCueTimeSeconds: Double?
     @Published var selectedAudioID = ""
     @Published var selectedSubtitleID = "off"
     @Published private(set) var validationPhase: PlaybackValidationPhase = .selectMovie
@@ -144,6 +164,9 @@ final class PlaybackProbeModel: ObservableObject {
     let presentationExpectation = PlaybackPresentationExpectation.resolve(
         environment: ProcessInfo.processInfo.environment
     )
+    let subtitleExpectation = PlaybackSubtitleExpectation.resolve(
+        environment: ProcessInfo.processInfo.environment
+    )
 
     private var itemStatusObservation: NSKeyValueObservation?
     private var timeObserver: Any?
@@ -156,6 +179,14 @@ final class PlaybackProbeModel: ObservableObject {
     private var subtitleGroup: AVMediaSelectionGroup?
     private var audioSelectionByID: [String: AVMediaSelectionOption] = [:]
     private var subtitleSelectionByID: [String: AVMediaSelectionOption] = [:]
+    private var subtitleCueOutput: AVPlayerItemLegibleOutput?
+    private var subtitleCueObserver: ProbeSubtitleCueObserver?
+    private var subtitleCueTimes = Set<Int64>()
+    private var subtitleCueTimeByKey: [Int64: Double] = [:]
+    private var subtitleCueWindows: [PlaybackSubtitleCueWindowSummary] = []
+    private var automaticSubtitleEvidenceResult: PlaybackSubtitleEvidenceResult = .notRequired
+    private var initialAudioOptionID: String?
+    private var initialSubtitleOptionID: String?
     private var automatedValidationStarted = false
     private var loadGeneration = 0
     private var validationGeneration = 0
@@ -238,7 +269,48 @@ final class PlaybackProbeModel: ObservableObject {
     }
 
     var canFinishObservations: Bool {
-        !isLoading && validationPhase == .observations && observations.isComplete
+        !isLoading
+            && validationPhase == .observations
+            && observations.isComplete(requiresSubtitleObservation: requiresSubtitleObservation)
+    }
+
+    var canChangeMediaSelection: Bool {
+        validationPhase == .ready || validationPhase == .complete
+    }
+
+    var requiresSubtitleObservation: Bool {
+        subtitleExpectation.isRequired || subtitleOptions.contains(where: { $0.id != "off" })
+    }
+
+    var subtitleExpectationIsRequired: Bool {
+        subtitleExpectation.isRequired
+    }
+
+    var requiredObservationCount: Int {
+        requiresSubtitleObservation ? 4 : 3
+    }
+
+    var subtitleOptionUnderTestName: String? {
+        preferredSubtitleIDForValidation().flatMap { subtitleSelectionByID[$0]?.displayName }
+    }
+
+    var selectedSubtitleOptionName: String {
+        guard
+            let currentItem = player.currentItem,
+            let subtitleGroup,
+            let option = currentItem.currentMediaSelection.selectedMediaOption(in: subtitleGroup)
+        else {
+            return "Off"
+        }
+        return option.displayName
+    }
+
+    var subtitleEvidenceText: String {
+        guard requiresSubtitleObservation else {
+            return "No subtitle choices"
+        }
+        let cueLabel = subtitleCueEventCount == 1 ? "cue event" : "cue events"
+        return "\(selectedSubtitleOptionName) selected · \(subtitleCueEventCount) decoded \(cueLabel)"
     }
 
     var timeSummary: String {
@@ -279,6 +351,9 @@ final class PlaybackProbeModel: ObservableObject {
         loadTask?.cancel()
         fingerprintTask?.cancel()
         validationTask?.cancel()
+        if let subtitleCueOutput, let currentItem = player.currentItem {
+            currentItem.remove(subtitleCueOutput)
+        }
         if let timeObserver {
             player.removeTimeObserver(timeObserver)
         }
@@ -507,7 +582,13 @@ final class PlaybackProbeModel: ObservableObject {
         sustainedPlaybackSeconds = 0
         thermalStateBefore = "not_measured"
         thermalStateAfter = "not_measured"
+        player.pause()
+        removeSubtitleCueObservation()
+        resetSubtitleCueEvidence()
         validationPhase = .running
+        if let currentItem = player.currentItem {
+            configureSubtitleCueObservation(for: currentItem, validationGeneration: generation)
+        }
         currentValidationStepText = "Preparing the playback check…"
         requestSpatialPresentation(true)
 
@@ -530,7 +611,8 @@ final class PlaybackProbeModel: ObservableObject {
 
         let result = PlaybackValidationRules.result(
             checks: validationChecks,
-            observations: observations
+            observations: observations,
+            requiresSubtitleObservation: requiresSubtitleObservation
         )
         validationResult = result
         validationPhase = .complete
@@ -538,8 +620,13 @@ final class PlaybackProbeModel: ObservableObject {
 
         let generatedAt = Date()
         let assessment = decodeAssessment
+        let mediaSelection = mediaSelectionSummary()
+        let subtitleEvidenceResult = PlaybackValidationRules.subtitleEvidenceResult(
+            automaticResult: automaticSubtitleEvidenceResult,
+            visibility: observations.subtitlesAppeared
+        )
         let report = PlaybackValidationReport(
-            schemaVersion: 4,
+            schemaVersion: 5,
             validatorVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development",
             validatorBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development",
             generatedAt: ISO8601DateFormatter().string(from: generatedAt),
@@ -551,6 +638,13 @@ final class PlaybackProbeModel: ObservableObject {
                 durationSeconds: durationSeconds,
                 audioOptionCount: audioOptions.count,
                 subtitleOptionCount: max(0, subtitleOptions.count - 1)
+            ),
+            mediaSelection: mediaSelection,
+            subtitleEvidence: PlaybackSubtitleEvidenceSummary(
+                required: subtitleExpectation.isRequired,
+                expectedCueTimesSeconds: subtitleExpectation.cueTimesSeconds,
+                cueWindows: subtitleCueWindows,
+                result: subtitleEvidenceResult
             ),
             decode: PlaybackDecodeSummary(
                 videoCodec: sourceVideoFormat.codec,
@@ -626,6 +720,11 @@ final class PlaybackProbeModel: ObservableObject {
                 "video_remained_visible": observations.videoRemainedVisible.rawValue,
                 "appeared_three_dimensional": observations.appearedThreeDimensional.rawValue,
                 "eye_order_appeared_correct": observations.eyeOrderAppearedCorrect.rawValue,
+                "subtitles_appeared": requiresSubtitleObservation
+                    ? observations.subtitlesAppeared.rawValue
+                    : "not_applicable",
+                "subtitle_evidence_result": subtitleEvidenceResult.rawValue,
+                "subtitle_cue_event_count": String(subtitleCueEventCount),
             ]
         )
     }
@@ -679,8 +778,17 @@ final class PlaybackProbeModel: ObservableObject {
             return
         }
 
+        selectedAudioID = identifier
         currentItem.select(option, in: audioGroup)
-        emit("audio_selected", values: ["name": option.displayName])
+        let selectedOption = currentItem.currentMediaSelection.selectedMediaOption(in: audioGroup)
+        emit(
+            "audio_selected",
+            values: [
+                "requested": option.displayName,
+                "selected": selectedOption?.displayName ?? "none",
+                "confirmed": String(Self.selectionsMatch(selectedOption, option)),
+            ]
+        )
     }
 
     func selectSubtitle(_ identifier: String) {
@@ -689,8 +797,218 @@ final class PlaybackProbeModel: ObservableObject {
         }
 
         let option = subtitleSelectionByID[identifier]
+        selectedSubtitleID = identifier
         currentItem.select(option, in: subtitleGroup)
-        emit("subtitle_selected", values: ["name": option?.displayName ?? "Off"])
+        let selectedOption = currentItem.currentMediaSelection.selectedMediaOption(in: subtitleGroup)
+        emit(
+            "subtitle_selected",
+            values: [
+                "requested": option?.displayName ?? "Off",
+                "selected": selectedOption?.displayName ?? "Off",
+                "confirmed": String(Self.selectionsMatch(selectedOption, option)),
+            ]
+        )
+    }
+
+    private func preferredSubtitleIDForValidation() -> String? {
+        let subtitleIDs = subtitleOptions.lazy.map(\.id).filter { $0 != "off" }
+        return subtitleIDs.first(where: { identifier in
+            guard let option = subtitleSelectionByID[identifier] else {
+                return false
+            }
+            return !option.hasMediaCharacteristic(.containsOnlyForcedSubtitles)
+        }) ?? subtitleIDs.first
+    }
+
+    private func selectPreferredSubtitleForValidation() {
+        guard let identifier = preferredSubtitleIDForValidation() else {
+            return
+        }
+        player.appliesMediaSelectionCriteriaAutomatically = false
+        selectSubtitle(identifier)
+    }
+
+    private func configureSubtitleCueObservation(for item: AVPlayerItem, validationGeneration: Int) {
+        let output = AVPlayerItemLegibleOutput()
+        output.suppressesPlayerRendering = false
+        let observer = ProbeSubtitleCueObserver { [weak self] itemTime, strings in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                self.recordSubtitleCues(
+                    strings,
+                    at: itemTime,
+                    validationGeneration: validationGeneration
+                )
+            }
+        }
+        output.setDelegate(observer, queue: .main)
+        item.add(output)
+        subtitleCueOutput = output
+        subtitleCueObserver = observer
+    }
+
+    private func removeSubtitleCueObservation() {
+        if let subtitleCueOutput, let currentItem = player.currentItem {
+            currentItem.remove(subtitleCueOutput)
+        }
+        subtitleCueOutput = nil
+        subtitleCueObserver = nil
+    }
+
+    private func recordSubtitleCues(
+        _ strings: [NSAttributedString],
+        at itemTime: CMTime,
+        validationGeneration: Int
+    ) {
+        guard self.validationGeneration == validationGeneration, validationPhase == .running else {
+            return
+        }
+        guard strings.contains(where: { !$0.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            return
+        }
+        let seconds = itemTime.seconds.isFinite ? max(0, itemTime.seconds) : max(0, player.currentTime().seconds)
+        let timeKey = Int64((seconds * 1_000).rounded())
+        guard subtitleCueTimes.insert(timeKey).inserted else {
+            return
+        }
+
+        subtitleCueTimeByKey[timeKey] = seconds
+        subtitleCueEventCount = subtitleCueTimes.count
+        firstSubtitleCueTimeSeconds = firstSubtitleCueTimeSeconds.map { min($0, seconds) } ?? seconds
+        lastSubtitleCueTimeSeconds = lastSubtitleCueTimeSeconds.map { max($0, seconds) } ?? seconds
+        emit(
+            "subtitle_cue_decoded",
+            values: [
+                "item_time_seconds": formatNumber(seconds),
+                "event_count": String(subtitleCueEventCount),
+            ]
+        )
+    }
+
+    private func resetSubtitleCueEvidence() {
+        subtitleCueTimes.removeAll()
+        subtitleCueTimeByKey.removeAll()
+        subtitleCueWindows = []
+        automaticSubtitleEvidenceResult = .notRequired
+        subtitleCueEventCount = 0
+        firstSubtitleCueTimeSeconds = nil
+        lastSubtitleCueTimeSeconds = nil
+    }
+
+    private func mediaSelectionSummary() -> PlaybackMediaSelectionSummary {
+        let currentItem = player.currentItem
+        let requestedAudioOption = audioSelectionByID[selectedAudioID]
+        let requestedSubtitleOption = subtitleSelectionByID[selectedSubtitleID]
+        let selectedAudioOption = audioGroup.flatMap {
+            currentItem?.currentMediaSelection.selectedMediaOption(in: $0)
+        }
+        let selectedSubtitleOption = subtitleGroup.flatMap {
+            currentItem?.currentMediaSelection.selectedMediaOption(in: $0)
+        }
+        let selectedAudioOptionID = selectionID(for: selectedAudioOption, in: audioSelectionByID)
+        let selectedSubtitleOptionID = selectionID(for: selectedSubtitleOption, in: subtitleSelectionByID)
+
+        return PlaybackMediaSelectionSummary(
+            audioOptions: audioOptions.compactMap { option in
+                guard let selection = audioSelectionByID[option.id] else {
+                    return nil
+                }
+                return PlaybackMediaOptionSummary(
+                    id: option.id,
+                    name: selection.displayName,
+                    localeIdentifier: selection.locale?.identifier
+                )
+            },
+            subtitleOptions: subtitleOptions.compactMap { option in
+                guard let selection = subtitleSelectionByID[option.id] else {
+                    return nil
+                }
+                return PlaybackSubtitleOptionSummary(
+                    id: option.id,
+                    name: selection.displayName,
+                    localeIdentifier: selection.locale?.identifier,
+                    containsOnlyForcedSubtitles: selection.hasMediaCharacteristic(.containsOnlyForcedSubtitles)
+                )
+            },
+            initialAudioOption: audioSelectionReference(for: initialAudioOptionID),
+            initialSubtitleOption: subtitleSelectionReference(for: initialSubtitleOptionID),
+            requestedAudioOption: audioSelectionReference(for: selectedAudioID),
+            requestedSubtitleOption: subtitleSelectionReference(for: selectedSubtitleID)
+                ?? PlaybackMediaSelectionReference(
+                    id: "off",
+                    name: "Off",
+                    localeIdentifier: nil,
+                    containsOnlyForcedSubtitles: nil
+                ),
+            selectedAudioOption: audioSelectionReference(for: selectedAudioOptionID),
+            selectedSubtitleOption: subtitleSelectionReference(for: selectedSubtitleOptionID),
+            audioSelectionConfirmed: Self.selectionsMatch(selectedAudioOption, requestedAudioOption),
+            subtitleSelectionConfirmed: Self.selectionsMatch(selectedSubtitleOption, requestedSubtitleOption),
+            subtitleCueEventCount: subtitleCueEventCount,
+            firstSubtitleCueTimeSeconds: firstSubtitleCueTimeSeconds,
+            lastSubtitleCueTimeSeconds: lastSubtitleCueTimeSeconds
+        )
+    }
+
+    private func audioSelectionReference(for identifier: String?) -> PlaybackMediaSelectionReference? {
+        guard let identifier, let option = audioSelectionByID[identifier] else {
+            return nil
+        }
+        return PlaybackMediaSelectionReference(
+            id: identifier,
+            name: option.displayName,
+            localeIdentifier: option.locale?.identifier,
+            containsOnlyForcedSubtitles: nil
+        )
+    }
+
+    private func subtitleSelectionReference(for identifier: String?) -> PlaybackMediaSelectionReference? {
+        guard let identifier else {
+            return nil
+        }
+        if identifier == "off" {
+            return PlaybackMediaSelectionReference(
+                id: identifier,
+                name: "Off",
+                localeIdentifier: nil,
+                containsOnlyForcedSubtitles: nil
+            )
+        }
+        guard let option = subtitleSelectionByID[identifier] else {
+            return nil
+        }
+        return PlaybackMediaSelectionReference(
+            id: identifier,
+            name: option.displayName,
+            localeIdentifier: option.locale?.identifier,
+            containsOnlyForcedSubtitles: option.hasMediaCharacteristic(.containsOnlyForcedSubtitles)
+        )
+    }
+
+    private func selectionID(
+        for selection: AVMediaSelectionOption?,
+        in selectionsByID: [String: AVMediaSelectionOption]
+    ) -> String? {
+        guard let selection else {
+            return nil
+        }
+        return selectionsByID.first(where: { $0.value === selection })?.key
+    }
+
+    private static func selectionsMatch(
+        _ selected: AVMediaSelectionOption?,
+        _ requested: AVMediaSelectionOption?
+    ) -> Bool {
+        switch (selected, requested) {
+        case (nil, nil):
+            return true
+        case let (selected?, requested?):
+            return selected === requested
+        default:
+            return false
+        }
     }
 
     private func loadAsset(
@@ -711,6 +1029,7 @@ final class PlaybackProbeModel: ObservableObject {
         }
 
         isLoading = true
+        player.appliesMediaSelectionCriteriaAutomatically = true
         let asset = AVURLAsset(url: url)
         let item = AVPlayerItem(asset: asset)
 
@@ -775,6 +1094,18 @@ final class PlaybackProbeModel: ObservableObject {
             selectedSubtitleID = preparedMediaSelections.selectedSubtitleID
             audioSelectionByID = preparedMediaSelections.audioSelectionByID
             subtitleSelectionByID = preparedMediaSelections.subtitleSelectionByID
+            initialAudioOptionID = preparedMediaSelections.audioGroup.flatMap {
+                selectionID(
+                    for: item.currentMediaSelection.selectedMediaOption(in: $0),
+                    in: preparedMediaSelections.audioSelectionByID
+                )
+            }
+            initialSubtitleOptionID = preparedMediaSelections.subtitleGroup.flatMap {
+                selectionID(
+                    for: item.currentMediaSelection.selectedMediaOption(in: $0),
+                    in: preparedMediaSelections.subtitleSelectionByID
+                )
+            } ?? "off"
             automatedValidationStarted = false
             resetValidationState(phase: .preparing)
 
@@ -1126,6 +1457,15 @@ final class PlaybackProbeModel: ObservableObject {
             detail: presentationModeDetail(matchesExpectation: presentationMatchesExpectation)
         )
 
+        await runSubtitleEvidenceCheck(generation: generation, item: validationItem)
+        guard isValidationCurrent(generation, item: validationItem) else {
+            return
+        }
+        _ = await seek(to: 0)
+        guard isValidationCurrent(generation, item: validationItem) else {
+            return
+        }
+
         await runSustainedPlaybackCheck(
             generation: generation,
             item: validationItem,
@@ -1221,6 +1561,7 @@ final class PlaybackProbeModel: ObservableObject {
         }
 
         player.pause()
+        removeSubtitleCueObservation()
         isPlaying = false
         currentValidationStepText = "Automatic checks finished."
 
@@ -1240,6 +1581,9 @@ final class PlaybackProbeModel: ObservableObject {
                 "checks_passed": String(automaticChecksPassed),
                 "audio_options": String(audioOptions.count),
                 "subtitle_options": String(max(0, subtitleOptions.count - 1)),
+                "selected_subtitle": selectedSubtitleOptionName,
+                "expected_subtitle_cue_count": String(subtitleExpectation.cueTimesSeconds.count),
+                "subtitle_cue_event_count": String(subtitleCueEventCount),
             ]
         )
 
@@ -1257,6 +1601,154 @@ final class PlaybackProbeModel: ObservableObject {
             return
         }
         validationPhase = .observations
+    }
+
+    private func runSubtitleEvidenceCheck(generation: Int, item: AVPlayerItem) async {
+        player.pause()
+        _ = await seek(to: 0)
+        guard isValidationCurrent(generation, item: item) else {
+            return
+        }
+        resetSubtitleCueEvidence()
+        selectPreferredSubtitleForValidation()
+
+        let discoveredOptionCount = max(0, subtitleOptions.count - 1)
+        let requestedOption = subtitleSelectionByID[selectedSubtitleID]
+        let selectedOption = subtitleGroup.flatMap {
+            item.currentMediaSelection.selectedMediaOption(in: $0)
+        }
+        let selectionConfirmed = Self.selectionsMatch(selectedOption, requestedOption)
+
+        guard subtitleExpectation.isRequired else {
+            automaticSubtitleEvidenceResult = PlaybackValidationRules.automaticSubtitleEvidenceResult(
+                expectation: subtitleExpectation,
+                discoveredOptionCount: discoveredOptionCount,
+                selectionConfirmed: selectionConfirmed,
+                cueWindows: []
+            )
+            let passed = automaticSubtitleEvidenceResult != .selectionFailed
+            updateCheck(
+                .subtitleEvidence,
+                status: passed ? .passed : .failed,
+                detail: passed
+                    ? "No expected subtitle cue schedule was configured; media selection and decoded cues remain diagnostic."
+                    : "The requested subtitle option did not become the selected AVFoundation option."
+            )
+            return
+        }
+
+        currentValidationStepText = "Checking expected subtitle cues…"
+        updateCheck(
+            .subtitleEvidence,
+            status: .running,
+            detail: "Selecting subtitles and visiting each expected cue window."
+        )
+
+        guard discoveredOptionCount > 0, requestedOption != nil else {
+            automaticSubtitleEvidenceResult = .missingOptions
+            updateCheck(
+                .subtitleEvidence,
+                status: .failed,
+                detail: "The movie was expected to contain subtitles, but AVFoundation exposed no selectable subtitle option."
+            )
+            return
+        }
+
+        guard selectionConfirmed else {
+            automaticSubtitleEvidenceResult = .selectionFailed
+            updateCheck(
+                .subtitleEvidence,
+                status: .failed,
+                detail: "The requested subtitle option did not become the selected AVFoundation option."
+            )
+            return
+        }
+
+        for cueTime in subtitleExpectation.cueTimesSeconds {
+            guard isValidationCurrent(generation, item: item) else {
+                return
+            }
+            let allowedTimeError = 0.75
+            let cueKeysBeforeWindow = subtitleCueTimes
+            let seekFinished: Bool
+            let observedCueTime: Double?
+
+            if cueTime <= durationSeconds {
+                let target = max(0, cueTime - min(0.25, cueTime))
+                seekFinished = await seek(to: target)
+                guard isValidationCurrent(generation, item: item) else {
+                    return
+                }
+                if seekFinished {
+                    player.play()
+                    _ = await waitForCondition(maxAttempts: 12) { [weak self] in
+                        self?.matchingSubtitleCueTime(
+                            after: cueKeysBeforeWindow,
+                            expectedTime: cueTime,
+                            allowedTimeError: allowedTimeError
+                        ) != nil
+                    }
+                    player.pause()
+                }
+                observedCueTime = matchingSubtitleCueTime(
+                    after: cueKeysBeforeWindow,
+                    expectedTime: cueTime,
+                    allowedTimeError: allowedTimeError
+                )
+            } else {
+                seekFinished = false
+                observedCueTime = nil
+            }
+
+            let windowPassed = seekFinished && observedCueTime != nil
+            subtitleCueWindows.append(
+                PlaybackSubtitleCueWindowSummary(
+                    expectedTimeSeconds: cueTime,
+                    seekSucceeded: seekFinished,
+                    observedCueTimeSeconds: observedCueTime,
+                    allowedTimeErrorSeconds: allowedTimeError,
+                    passed: windowPassed
+                )
+            )
+            emit(
+                "subtitle_cue_window",
+                values: [
+                    "expected_time_seconds": formatNumber(cueTime),
+                    "seek_finished": String(seekFinished),
+                    "observed_time_seconds": observedCueTime.map(formatNumber) ?? "none",
+                    "passed": String(windowPassed),
+                    "event_count": String(subtitleCueEventCount),
+                ]
+            )
+        }
+
+        automaticSubtitleEvidenceResult = PlaybackValidationRules.automaticSubtitleEvidenceResult(
+            expectation: subtitleExpectation,
+            discoveredOptionCount: discoveredOptionCount,
+            selectionConfirmed: selectionConfirmed,
+            cueWindows: subtitleCueWindows
+        )
+        let expectedCueCount = subtitleExpectation.cueTimesSeconds.count
+        let passed = automaticSubtitleEvidenceResult == .decoded
+        updateCheck(
+            .subtitleEvidence,
+            status: passed ? .passed : .failed,
+            detail: passed
+                ? "AVFoundation delivered an on-time decoded cue in each of \(expectedCueCount) expected subtitle windows."
+                : "One or more of the \(expectedCueCount) expected subtitle windows did not seek successfully or deliver an on-time decoded cue."
+        )
+    }
+
+    private func matchingSubtitleCueTime(
+        after previousKeys: Set<Int64>,
+        expectedTime: Double,
+        allowedTimeError: Double
+    ) -> Double? {
+        subtitleCueTimes
+            .subtracting(previousKeys)
+            .compactMap { subtitleCueTimeByKey[$0] }
+            .filter { abs($0 - expectedTime) <= allowedTimeError }
+            .min(by: { abs($0 - expectedTime) < abs($1 - expectedTime) })
     }
 
     private func runSustainedPlaybackCheck(
@@ -1475,6 +1967,8 @@ final class PlaybackProbeModel: ObservableObject {
     private func resetValidationState(phase: PlaybackValidationPhase) {
         validationGeneration += 1
         validationTask?.cancel()
+        removeSubtitleCueObservation()
+        resetSubtitleCueEvidence()
         validationChecks = PlaybackCheckID.allCases.map { PlaybackCheck(id: $0) }
         observations = PlaybackObservations()
         validationResult = nil
@@ -1678,6 +2172,7 @@ final class PlaybackProbeModel: ObservableObject {
         isLoading = false
         hasLoadedAsset = false
         player.pause()
+        removeSubtitleCueObservation()
         player.replaceCurrentItem(with: nil)
         playerItemStatusText = "Failed"
         renderingStatusText = "Not loaded"
@@ -1704,6 +2199,9 @@ final class PlaybackProbeModel: ObservableObject {
         subtitleGroup = nil
         audioSelectionByID.removeAll()
         subtitleSelectionByID.removeAll()
+        initialAudioOptionID = nil
+        initialSubtitleOptionID = nil
+        resetSubtitleCueEvidence()
         if let currentImportedURL, currentImportedURL != preservedImportedURL {
             removeImportedAsset(currentImportedURL, reason: "failed_movie")
             self.currentImportedURL = nil

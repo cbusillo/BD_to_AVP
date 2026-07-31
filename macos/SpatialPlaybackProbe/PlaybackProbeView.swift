@@ -266,7 +266,32 @@ struct PlaybackProbeView: View {
             VStack(alignment: .leading, spacing: 12) {
                 instructionRow(number: 1, text: "Start the guided check")
                 instructionRow(number: 2, text: "Watch sustained playback and three short seeks")
-                instructionRow(number: 3, text: "Answer three plain-language questions")
+                instructionRow(
+                    number: 3,
+                    text: "Answer \(model.requiredObservationCount) plain-language questions"
+                )
+            }
+
+            if let subtitleName = model.subtitleOptionUnderTestName {
+                Label {
+                    Text("The check will select \(subtitleName), monitor decoded subtitle cues, and ask whether the text appeared.")
+                } icon: {
+                    Image(systemName: "captions.bubble.fill")
+                        .foregroundStyle(.blue)
+                }
+                .font(.callout)
+                .padding(14)
+                .background(.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+            } else if model.subtitleExpectationIsRequired {
+                Label {
+                    Text("This run expects subtitle cues, but the movie currently exposes no selectable subtitle option.")
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
+                .font(.callout)
+                .padding(14)
+                .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
             }
 
             Button {
@@ -311,7 +336,7 @@ struct PlaybackProbeView: View {
             .accessibilityIdentifier("automatic-check-status")
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Three things only you can confirm")
+                Text("\(model.requiredObservationCount) things only you can confirm")
                     .font(.title2.bold())
                 Text("These answers record what you saw. They do not approve a release or publish anything.")
                     .foregroundStyle(.secondary)
@@ -334,6 +359,14 @@ struct PlaybackProbeView: View {
                 detail: "Answer No if foreground and background appeared reversed or the 3D view felt strongly inverted.",
                 keyPath: \.eyeOrderAppearedCorrect
             )
+
+            if model.requiresSubtitleObservation {
+                observationCard(
+                    title: "Did the selected subtitles appear over the video?",
+                    detail: "The app recorded \(model.subtitleEvidenceText). Answer No if subtitle text never appeared during the beginning, middle, or end sections.",
+                    keyPath: \.subtitlesAppeared
+                )
+            }
 
             Button {
                 model.finishGuidedValidation()
@@ -456,6 +489,9 @@ struct PlaybackProbeView: View {
                     title: "Movie fingerprint",
                     value: model.sourceSHA256.isEmpty ? "Not available" : String(model.sourceSHA256.prefix(16))
                 )
+                if model.requiresSubtitleObservation {
+                    statusRow(title: "Subtitle evidence", value: model.subtitleEvidenceText)
+                }
 
                 if !model.audioOptions.isEmpty {
                     Picker("Audio", selection: $model.selectedAudioID) {
@@ -463,6 +499,7 @@ struct PlaybackProbeView: View {
                             Text(option.name).tag(option.id)
                         }
                     }
+                    .disabled(!model.canChangeMediaSelection)
                 }
 
                 if !model.subtitleOptions.isEmpty {
@@ -471,6 +508,7 @@ struct PlaybackProbeView: View {
                             Text(option.name).tag(option.id)
                         }
                     }
+                    .disabled(!model.canChangeMediaSelection)
                 }
             }
             .padding(.top, 12)

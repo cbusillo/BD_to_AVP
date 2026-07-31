@@ -54,6 +54,24 @@ enum PlaybackPresentationExpectation: String, Codable, Equatable {
     }
 }
 
+struct PlaybackSubtitleExpectation: Codable, Equatable {
+    static let environmentKey = "BD_TO_AVP_PROBE_EXPECTED_SUBTITLE_CUE_TIMES"
+
+    let cueTimesSeconds: [Double]
+
+    static func resolve(environment: [String: String]) -> Self {
+        let cueTimes = environment[environmentKey]?
+            .split(separator: ",")
+            .compactMap { Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .filter { $0.isFinite && $0 >= 0 } ?? []
+        return Self(cueTimesSeconds: Array(Set(cueTimes)).sorted())
+    }
+
+    var isRequired: Bool {
+        !cueTimesSeconds.isEmpty
+    }
+}
+
 enum PlaybackVideoCodec: String, Codable, Equatable {
     case av1
     case hevc
@@ -188,6 +206,7 @@ enum PlaybackCheckID: String, Codable, CaseIterable {
     case renderingReady
     case stereoPresentation
     case presentationMode
+    case subtitleEvidence
     case sustainedPlayback
     case beginningSeek
     case middleSeek
@@ -205,6 +224,8 @@ enum PlaybackCheckID: String, Codable, CaseIterable {
             return "Stereoscopic playback is active"
         case .presentationMode:
             return "3D presentation matches the movie type"
+        case .subtitleEvidence:
+            return "Expected subtitle cues decode"
         case .sustainedPlayback:
             return "Sustained playback remains stable"
         case .beginningSeek:
@@ -260,11 +281,13 @@ struct PlaybackObservations: Codable, Equatable {
     var videoRemainedVisible: PlaybackObservationAnswer = .unanswered
     var appearedThreeDimensional: PlaybackObservationAnswer = .unanswered
     var eyeOrderAppearedCorrect: PlaybackObservationAnswer = .unanswered
+    var subtitlesAppeared: PlaybackObservationAnswer = .unanswered
 
-    var isComplete: Bool {
+    func isComplete(requiresSubtitleObservation: Bool) -> Bool {
         videoRemainedVisible != .unanswered
             && appearedThreeDimensional != .unanswered
             && eyeOrderAppearedCorrect != .unanswered
+            && (!requiresSubtitleObservation || subtitlesAppeared != .unanswered)
     }
 }
 
@@ -316,6 +339,68 @@ struct PlaybackSourceSummary: Codable, Equatable {
     let subtitleOptionCount: Int
 }
 
+struct PlaybackMediaOptionSummary: Codable, Equatable {
+    let id: String
+    let name: String
+    let localeIdentifier: String?
+}
+
+struct PlaybackSubtitleOptionSummary: Codable, Equatable {
+    let id: String
+    let name: String
+    let localeIdentifier: String?
+    let containsOnlyForcedSubtitles: Bool
+}
+
+struct PlaybackMediaSelectionReference: Codable, Equatable {
+    let id: String
+    let name: String
+    let localeIdentifier: String?
+    let containsOnlyForcedSubtitles: Bool?
+}
+
+struct PlaybackMediaSelectionSummary: Codable, Equatable {
+    let audioOptions: [PlaybackMediaOptionSummary]
+    let subtitleOptions: [PlaybackSubtitleOptionSummary]
+    let initialAudioOption: PlaybackMediaSelectionReference?
+    let initialSubtitleOption: PlaybackMediaSelectionReference?
+    let requestedAudioOption: PlaybackMediaSelectionReference?
+    let requestedSubtitleOption: PlaybackMediaSelectionReference
+    let selectedAudioOption: PlaybackMediaSelectionReference?
+    let selectedSubtitleOption: PlaybackMediaSelectionReference?
+    let audioSelectionConfirmed: Bool
+    let subtitleSelectionConfirmed: Bool
+    let subtitleCueEventCount: Int
+    let firstSubtitleCueTimeSeconds: Double?
+    let lastSubtitleCueTimeSeconds: Double?
+}
+
+enum PlaybackSubtitleEvidenceResult: String, Codable, Equatable {
+    case notRequired
+    case missingOptions
+    case selectionFailed
+    case insufficientDecodedCues
+    case decoded
+    case notVisible
+    case needsReview
+    case passed
+}
+
+struct PlaybackSubtitleCueWindowSummary: Codable, Equatable {
+    let expectedTimeSeconds: Double
+    let seekSucceeded: Bool
+    let observedCueTimeSeconds: Double?
+    let allowedTimeErrorSeconds: Double
+    let passed: Bool
+}
+
+struct PlaybackSubtitleEvidenceSummary: Codable, Equatable {
+    let required: Bool
+    let expectedCueTimesSeconds: [Double]
+    let cueWindows: [PlaybackSubtitleCueWindowSummary]
+    let result: PlaybackSubtitleEvidenceResult
+}
+
 struct PlaybackDecodeSummary: Codable, Equatable {
     let videoCodec: PlaybackVideoCodec
     let codecTag: String
@@ -347,6 +432,8 @@ struct PlaybackValidationReport: Codable, Equatable {
     let generatedAt: String
     let operatingSystem: String
     let source: PlaybackSourceSummary
+    let mediaSelection: PlaybackMediaSelectionSummary
+    let subtitleEvidence: PlaybackSubtitleEvidenceSummary
     let decode: PlaybackDecodeSummary
     let runtime: PlaybackRuntimeSummary
     let presentation: PlaybackPresentationSummary
@@ -382,12 +469,14 @@ enum PlaybackValidationRules {
 
     static func result(
         checks: [PlaybackCheck],
-        observations: PlaybackObservations
+        observations: PlaybackObservations,
+        requiresSubtitleObservation: Bool = false
     ) -> PlaybackValidationResult {
         if checks.contains(where: { $0.status == .failed })
             || observations.videoRemainedVisible == .no
             || observations.appearedThreeDimensional == .no
             || observations.eyeOrderAppearedCorrect == .no
+            || (requiresSubtitleObservation && observations.subtitlesAppeared == .no)
         {
             return .failed
         }
@@ -396,6 +485,7 @@ enum PlaybackValidationRules {
             || observations.videoRemainedVisible != .yes
             || observations.appearedThreeDimensional != .yes
             || observations.eyeOrderAppearedCorrect != .yes
+            || (requiresSubtitleObservation && observations.subtitlesAppeared != .yes)
         {
             return .needsReview
         }
@@ -417,6 +507,47 @@ enum PlaybackValidationRules {
             && evidence.renderingStayedReady
             && evidence.stereoPresentationStayedActive
             && evidence.expectedPresentationStayedActive
+    }
+
+    static func automaticSubtitleEvidenceResult(
+        expectation: PlaybackSubtitleExpectation,
+        discoveredOptionCount: Int,
+        selectionConfirmed: Bool,
+        cueWindows: [PlaybackSubtitleCueWindowSummary]
+    ) -> PlaybackSubtitleEvidenceResult {
+        if !expectation.isRequired {
+            return discoveredOptionCount > 0 && !selectionConfirmed ? .selectionFailed : .notRequired
+        }
+        guard discoveredOptionCount > 0 else {
+            return .missingOptions
+        }
+        guard selectionConfirmed else {
+            return .selectionFailed
+        }
+        guard
+            cueWindows.count == expectation.cueTimesSeconds.count,
+            cueWindows.allSatisfy(\.passed)
+        else {
+            return .insufficientDecodedCues
+        }
+        return .decoded
+    }
+
+    static func subtitleEvidenceResult(
+        automaticResult: PlaybackSubtitleEvidenceResult,
+        visibility: PlaybackObservationAnswer
+    ) -> PlaybackSubtitleEvidenceResult {
+        guard automaticResult == .decoded else {
+            return automaticResult
+        }
+        switch visibility {
+        case .yes:
+            return .passed
+        case .no:
+            return .notVisible
+        case .unanswered, .unsure:
+            return .needsReview
+        }
     }
 }
 

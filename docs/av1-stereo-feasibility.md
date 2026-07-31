@@ -349,6 +349,18 @@ remains M5-targeted and experimental until an M5 wearer provides decode,
 stereoscopic presentation, eye-order, seek, sustained-playback, and thermal
 evidence.
 
+The M5 run must use BD to AVP Playback Check 0.2.0 build 10 or later. Report
+schema 5 separates subtitle evidence into discovered options, the initial
+automatic option, the explicitly requested non-forced option, the final selected
+option, selection confirmation, decoded cue event timing, and wearer-visible
+text. For the immutable candidate above, the expected prompts appear near the
+beginning, middle, and end. Launch the run with
+`BD_TO_AVP_PROBE_EXPECTED_SUBTITLE_CUE_TIMES=0.5,27,55` so the validator visits
+those exact windows instead of inferring failure from arbitrary playback
+sections. This distinguishes a missing track, forced-only automatic selection,
+failed selection, cue-decoding failure, and decoded cues that RealityKit does
+not visibly render.
+
 ## Result Matrix
 
 | Representation | Tool result | Apple-framework result | Product meaning |

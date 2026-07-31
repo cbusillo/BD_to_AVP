@@ -54,6 +54,19 @@ final class PlaybackValidationTests: XCTestCase {
         XCTAssertTrue(PlaybackPresentationExpectation.spatial.matches(isStereo: true, isSpatial: true))
     }
 
+    func testSubtitleExpectationParsesSortedUniqueCueTimes() {
+        XCTAssertFalse(PlaybackSubtitleExpectation.resolve(environment: [:]).isRequired)
+
+        let expectation = PlaybackSubtitleExpectation.resolve(
+            environment: [
+                PlaybackSubtitleExpectation.environmentKey: "55, 0.5,invalid,27,27,-1",
+            ]
+        )
+
+        XCTAssertTrue(expectation.isRequired)
+        XCTAssertEqual(expectation.cueTimesSeconds, [0.5, 27, 55])
+    }
+
     func testPassingChecksAndObservationsProducePass() {
         let checks = PlaybackCheckID.allCases.map {
             PlaybackCheck(id: $0, status: .passed, detail: "Passed")
@@ -119,9 +132,126 @@ final class PlaybackValidationTests: XCTestCase {
         )
     }
 
+    func testRequiredSubtitleObservationParticipatesInCompletionAndResult() {
+        let checks = PlaybackCheckID.allCases.map {
+            PlaybackCheck(id: $0, status: .passed, detail: "Passed")
+        }
+        var observations = PlaybackObservations(
+            videoRemainedVisible: .yes,
+            appearedThreeDimensional: .yes,
+            eyeOrderAppearedCorrect: .yes
+        )
+
+        XCTAssertFalse(observations.isComplete(requiresSubtitleObservation: true))
+        XCTAssertTrue(observations.isComplete(requiresSubtitleObservation: false))
+        XCTAssertEqual(
+            PlaybackValidationRules.result(
+                checks: checks,
+                observations: observations,
+                requiresSubtitleObservation: true
+            ),
+            .needsReview
+        )
+
+        observations.subtitlesAppeared = .no
+        XCTAssertTrue(observations.isComplete(requiresSubtitleObservation: true))
+        XCTAssertEqual(
+            PlaybackValidationRules.result(
+                checks: checks,
+                observations: observations,
+                requiresSubtitleObservation: true
+            ),
+            .failed
+        )
+
+        observations.subtitlesAppeared = .yes
+        XCTAssertEqual(
+            PlaybackValidationRules.result(
+                checks: checks,
+                observations: observations,
+                requiresSubtitleObservation: true
+            ),
+            .passed
+        )
+    }
+
+    func testSubtitleEvidenceResultSeparatesPipelineFailures() {
+        let expectation = PlaybackSubtitleExpectation(cueTimesSeconds: [0.5, 27, 55])
+        let optionalExpectation = PlaybackSubtitleExpectation(cueTimesSeconds: [])
+        let passingWindows = expectation.cueTimesSeconds.map { cueTime in
+            PlaybackSubtitleCueWindowSummary(
+                expectedTimeSeconds: cueTime,
+                seekSucceeded: true,
+                observedCueTimeSeconds: cueTime,
+                allowedTimeErrorSeconds: 0.75,
+                passed: true
+            )
+        }
+
+        XCTAssertEqual(
+            PlaybackValidationRules.automaticSubtitleEvidenceResult(
+                expectation: optionalExpectation,
+                discoveredOptionCount: 2,
+                selectionConfirmed: false,
+                cueWindows: []
+            ),
+            .selectionFailed
+        )
+        XCTAssertEqual(
+            PlaybackValidationRules.automaticSubtitleEvidenceResult(
+                expectation: expectation,
+                discoveredOptionCount: 0,
+                selectionConfirmed: false,
+                cueWindows: []
+            ),
+            .missingOptions
+        )
+        XCTAssertEqual(
+            PlaybackValidationRules.automaticSubtitleEvidenceResult(
+                expectation: expectation,
+                discoveredOptionCount: 2,
+                selectionConfirmed: false,
+                cueWindows: []
+            ),
+            .selectionFailed
+        )
+        XCTAssertEqual(
+            PlaybackValidationRules.automaticSubtitleEvidenceResult(
+                expectation: expectation,
+                discoveredOptionCount: 2,
+                selectionConfirmed: true,
+                cueWindows: Array(passingWindows.dropLast())
+            ),
+            .insufficientDecodedCues
+        )
+        XCTAssertEqual(
+            PlaybackValidationRules.automaticSubtitleEvidenceResult(
+                expectation: expectation,
+                discoveredOptionCount: 2,
+                selectionConfirmed: true,
+                cueWindows: passingWindows
+            ),
+            .decoded
+        )
+        XCTAssertEqual(
+            PlaybackValidationRules.subtitleEvidenceResult(
+                automaticResult: .decoded,
+                visibility: .no
+            ),
+            .notVisible
+        )
+        XCTAssertEqual(
+            PlaybackValidationRules.subtitleEvidenceResult(
+                automaticResult: .decoded,
+                visibility: .yes
+            ),
+            .passed
+        )
+    }
+
     func testReportContainsFilenameWithoutSourcePath() throws {
         let report = PlaybackValidationReport(
-            schemaVersion: 4,
+            schemaVersion: 5,
             validatorVersion: "0.1.0",
             validatorBuild: "42",
             generatedAt: "2026-07-17T20:00:00Z",
@@ -133,6 +263,95 @@ final class PlaybackValidationTests: XCTestCase {
                 durationSeconds: 24,
                 audioOptionCount: 2,
                 subtitleOptionCount: 1
+            ),
+            mediaSelection: PlaybackMediaSelectionSummary(
+                audioOptions: [
+                    PlaybackMediaOptionSummary(id: "audio-0", name: "English 5.1", localeIdentifier: "en"),
+                    PlaybackMediaOptionSummary(id: "audio-1", name: "French stereo", localeIdentifier: "fr"),
+                ],
+                subtitleOptions: [
+                    PlaybackSubtitleOptionSummary(
+                        id: "subtitle-0",
+                        name: "English",
+                        localeIdentifier: "en",
+                        containsOnlyForcedSubtitles: false
+                    ),
+                    PlaybackSubtitleOptionSummary(
+                        id: "subtitle-1",
+                        name: "English Forced",
+                        localeIdentifier: "en",
+                        containsOnlyForcedSubtitles: true
+                    ),
+                ],
+                initialAudioOption: PlaybackMediaSelectionReference(
+                    id: "audio-0",
+                    name: "English 5.1",
+                    localeIdentifier: "en",
+                    containsOnlyForcedSubtitles: nil
+                ),
+                initialSubtitleOption: PlaybackMediaSelectionReference(
+                    id: "subtitle-1",
+                    name: "English Forced",
+                    localeIdentifier: "en",
+                    containsOnlyForcedSubtitles: true
+                ),
+                requestedAudioOption: PlaybackMediaSelectionReference(
+                    id: "audio-0",
+                    name: "English 5.1",
+                    localeIdentifier: "en",
+                    containsOnlyForcedSubtitles: nil
+                ),
+                requestedSubtitleOption: PlaybackMediaSelectionReference(
+                    id: "subtitle-0",
+                    name: "English",
+                    localeIdentifier: "en",
+                    containsOnlyForcedSubtitles: false
+                ),
+                selectedAudioOption: PlaybackMediaSelectionReference(
+                    id: "audio-0",
+                    name: "English 5.1",
+                    localeIdentifier: "en",
+                    containsOnlyForcedSubtitles: nil
+                ),
+                selectedSubtitleOption: PlaybackMediaSelectionReference(
+                    id: "subtitle-0",
+                    name: "English",
+                    localeIdentifier: "en",
+                    containsOnlyForcedSubtitles: false
+                ),
+                audioSelectionConfirmed: true,
+                subtitleSelectionConfirmed: true,
+                subtitleCueEventCount: 3,
+                firstSubtitleCueTimeSeconds: 0.5,
+                lastSubtitleCueTimeSeconds: 55
+            ),
+            subtitleEvidence: PlaybackSubtitleEvidenceSummary(
+                required: true,
+                expectedCueTimesSeconds: [0.5, 27, 55],
+                cueWindows: [
+                    PlaybackSubtitleCueWindowSummary(
+                        expectedTimeSeconds: 0.5,
+                        seekSucceeded: true,
+                        observedCueTimeSeconds: 0.5,
+                        allowedTimeErrorSeconds: 0.75,
+                        passed: true
+                    ),
+                    PlaybackSubtitleCueWindowSummary(
+                        expectedTimeSeconds: 27,
+                        seekSucceeded: true,
+                        observedCueTimeSeconds: 27,
+                        allowedTimeErrorSeconds: 0.75,
+                        passed: true
+                    ),
+                    PlaybackSubtitleCueWindowSummary(
+                        expectedTimeSeconds: 55,
+                        seekSucceeded: true,
+                        observedCueTimeSeconds: 55,
+                        allowedTimeErrorSeconds: 0.75,
+                        passed: true
+                    ),
+                ],
+                result: .passed
             ),
             decode: PlaybackDecodeSummary(
                 videoCodec: .av1,
@@ -159,7 +378,8 @@ final class PlaybackValidationTests: XCTestCase {
             observations: PlaybackObservations(
                 videoRemainedVisible: .yes,
                 appearedThreeDimensional: .yes,
-                eyeOrderAppearedCorrect: .yes
+                eyeOrderAppearedCorrect: .yes,
+                subtitlesAppeared: .yes
             ),
             result: .passed
         )
@@ -171,12 +391,19 @@ final class PlaybackValidationTests: XCTestCase {
         XCTAssertTrue(reportText.contains(String(repeating: "a", count: 64)))
         XCTAssertTrue(reportText.contains("audioOptionCount"))
         XCTAssertTrue(reportText.contains("subtitleOptionCount"))
+        XCTAssertTrue(reportText.contains("initialSubtitleOption"))
+        XCTAssertTrue(reportText.contains("English Forced"))
+        XCTAssertTrue(reportText.contains("subtitleSelectionConfirmed"))
+        XCTAssertTrue(reportText.contains("subtitleCueEventCount"))
+        XCTAssertTrue(reportText.contains("expectedCueTimesSeconds"))
+        XCTAssertTrue(reportText.contains("subtitle-0"))
         XCTAssertTrue(reportText.contains("spatialVideoMode"))
         XCTAssertTrue(reportText.contains("expectation"))
         XCTAssertTrue(reportText.contains("av01"))
         XCTAssertTrue(reportText.contains("fallback"))
         XCTAssertTrue(reportText.contains("RealityDevice14,1"))
         XCTAssertTrue(reportText.contains("eyeOrderAppearedCorrect"))
+        XCTAssertTrue(reportText.contains("subtitlesAppeared"))
         XCTAssertFalse(reportText.contains("/Users/"))
         XCTAssertFalse(reportText.contains("sourcePath"))
     }
@@ -270,7 +497,7 @@ final class PlaybackValidationTests: XCTestCase {
             videoRemainedVisible: .yes,
             appearedThreeDimensional: .yes
         )
-        XCTAssertFalse(incompleteObservations.isComplete)
+        XCTAssertFalse(incompleteObservations.isComplete(requiresSubtitleObservation: false))
     }
 
     func testSeekRequiresPlaybackAdvanceAndFreshSpatialRendering() {

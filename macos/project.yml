@@ -88,7 +88,7 @@ targets:
     settings:
       base:
         CODE_SIGN_STYLE: Automatic
-        CURRENT_PROJECT_VERSION: 9
+        CURRENT_PROJECT_VERSION: 10
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: SpatialPlaybackProbe/Info.plist
         MARKETING_VERSION: 0.2.0

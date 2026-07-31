@@ -8,7 +8,7 @@ The validator asks the person wearing Apple Vision Pro to do four things:
 
 1. Choose one finished movie.
 2. Select **Run Playback Check**.
-3. Watch sustained playback plus three short seek sections and answer three plain-language questions.
+3. Watch sustained playback plus three short seek sections and answer the plain-language questions, including subtitle visibility when the movie exposes subtitle choices.
 4. Share the generated report when evidence is needed.
 
 Nothing in the app publishes a build, approves a GitHub deployment, merges code, or authorizes a release. A passing report is playback evidence for the named movie and device; it is not a release approval by itself.
@@ -23,13 +23,14 @@ Movies selected through Files are copied into the app's cache so playback can co
 - Actual stereoscopic playback and whether the presentation matches the selected validation expectation.
 - Up to 30 seconds of continuous playback with ready rendering, stereoscopic presentation, and before/after thermal state preserved.
 - Beginning, middle, and end seeks, including preservation of stereoscopic playback and required spatial treatment.
-- Available audio and subtitle choices for manual review under **Technical details**.
+- Available audio and subtitle choices, the initial and requested selections, whether selection succeeded, and decoded subtitle cue events. When subtitles are present, the guided check prefers a non-forced option and otherwise uses the first selectable option.
 
 After the automatic sequence, the validator asks only:
 
 - Did the picture stay visible and free of obvious freezes or corruption?
 - Did the scene look three-dimensional rather than flat?
 - Did the depth direction look correct and comfortable rather than inside-out?
+- When subtitles are present, did the selected subtitle text appear over the video?
 
 **Not sure** is a valid answer and produces **One result needs review** rather than a false pass.
 
@@ -50,11 +51,11 @@ Apple requires spatial metadata to describe the true, constant properties of the
 
 ## Result Meanings
 
-- **Playback check passed**: every automatic check passed and all three visible observations were **Yes**.
+- **Playback check passed**: every automatic check passed and every required visible observation was **Yes**.
 - **One result needs review**: the automatic checks did not fail, but at least one observation was **Not sure** or a check did not reach a final pass state.
 - **Playback check found a problem**: an automatic check failed or any visible observation was **No**.
 
-The app automatically writes a named JSON report plus `Latest-Playback-Report.json` under its Documents directory. **Share JSON Report** sends that file as a `.json` attachment instead of untyped text. The schema-4 report contains the expected presentation, validator version and build, visionOS version, hardware model, filename, full-file SHA-256 fingerprint, file size, duration, media-option counts, selected video codec and sample-entry tag, AV1 and MV-HEVC capability results, independent first-frame decode result, selected decode route, sustained-playback duration, before/after thermal state, actual viewing/spatial/immersive modes, automatic check details, observations, and result. It intentionally omits the source file path. The fingerprint binds release evidence to the exact movie even when an automated device transfer names it `Probe.mov`.
+The app automatically writes a named JSON report plus `Latest-Playback-Report.json` under its Documents directory. **Share JSON Report** sends that file as a `.json` attachment instead of untyped text. The schema-5 report contains the expected presentation, validator version and build, visionOS version, hardware model, filename, full-file SHA-256 fingerprint, file size, duration, media-option details and per-run identifiers, initial/requested/final selections, subtitle cue expectations and decoded cue timing, selected video codec and sample-entry tag, AV1 and MV-HEVC capability results, independent first-frame decode result, selected decode route, sustained-playback duration, before/after thermal state, actual viewing/spatial/immersive modes, automatic check details, observations, and result. It intentionally omits the source file path and subtitle text. The fingerprint binds release evidence to the exact movie even when an automated device transfer names it `Probe.mov`.
 
 ## Build
 
@@ -158,7 +159,17 @@ xcrun devicectl device process launch \
   com.shinycomputers.bd-to-avp.spatial-playback-probe
 ```
 
-Autorun starts the automatic sequence only after the player is ready and the full-file SHA-256 fingerprint is complete. Large movies can remain in the preparing state for several minutes while the cooperative background fingerprint pass runs. It stops at the three human observations; automation does not fabricate visible playback answers. The physical UI test uses the spatial calibration expectation, requires all automatic checks to pass, and verifies that the observation screen is presented.
+For issue #409's immutable 60-second AV1 candidate, require the three known subtitle windows explicitly:
+
+```bash
+xcrun devicectl device process launch \
+  --device <device-id> \
+  --terminate-existing \
+  --environment-variables '{"BD_TO_AVP_PROBE_ASSET":"Probe.mov","BD_TO_AVP_PROBE_AUTORUN":"1","BD_TO_AVP_PROBE_EXPECTED_SUBTITLE_CUE_TIMES":"0.5,27,55"}' \
+  com.shinycomputers.bd-to-avp.spatial-playback-probe
+```
+
+Autorun starts the automatic sequence only after the player is ready and the full-file SHA-256 fingerprint is complete. Large movies can remain in the preparing state for several minutes while the cooperative background fingerprint pass runs. It stops at the required human observations: three for video/depth, plus subtitle visibility when subtitles are discovered or expected. Automation does not fabricate visible playback answers. The physical UI test uses the spatial calibration expectation, requires all automatic checks to pass, and verifies that the observation screen is presented.
 
 After the operator selects **Finish Check**, retrieve the report directly without asking them to save share-sheet text manually:
 
@@ -194,7 +205,9 @@ run must record:
 - wearer confirmation for visible video without corruption, visible depth, and
   correct non-inverted eye order;
 - before/after thermal state plus usable audio and subtitle choices where
-  present.
+  present. Subtitle evidence must record the initial automatic option, the
+  explicitly requested non-forced option, the final selected option, selection
+  confirmation, decoded cue event count, and wearer-visible text.
 
 Until that report exists, AV1 remains an experimental M5-targeted export. M2
 Vision Pro is explicitly unsupported, and MV-HEVC remains the default.
@@ -212,10 +225,11 @@ uv run python scripts/create_spatial_audio_validation_fixtures.py \
 The generator exercises production audio preparation and final muxing. It produces Automatic AAC copy, Automatic AAC fallback, Convert AAC, and PCM cases with English 5.1 audio, French stereo audio, English subtitles, synchronized flashes, and a machine-readable `manifest.json`.
 
 Run **Playback Check** for each fixture. After the guided result, expand **Technical details** to switch audio and subtitle choices using the generated `CHECKLIST.md`.
+Those post-result switches are manual follow-up only; the saved report preserves the selections and cue evidence from the completed guided run.
 
 ## Structured Evidence
 
-Structured events use the `BD_TO_AVP_PLAYBACK_PROBE` prefix. `automated_probe_complete` records the automatic result after sustained playback and all three seeks. `guided_validation_complete` records the final result and the three human observations.
+Structured events use the `BD_TO_AVP_PLAYBACK_PROBE` prefix. `automated_probe_complete` records the automatic result after sustained playback and all three seeks. `subtitle_selected` records requested, selected, and confirmed option state; `subtitle_cue_decoded` records cue timing without copying subtitle text. `guided_validation_complete` records the final result and human observations.
 
 Physical acceptance requires:
 
@@ -223,6 +237,17 @@ Physical acceptance requires:
 - `expected_presentation=stereo` for normal finalized Blu-ray movies, or `expected_presentation=spatial` for the generated calibration fixture.
 - Visible video throughout beginning, middle, and end playback.
 - Comfortable, non-inverted depth.
+- For movies with subtitles, a confirmed non-forced selection, decoded cue
+  events, and wearer confirmation that text appeared.
 - A shared report whose result matches the operator's observations.
+
+For an M5 AV1 run, interpret subtitle evidence in layers:
+
+- no discovered subtitle options means the device did not expose the muxed text track;
+- an unconfirmed requested selection means media selection failed;
+- when `BD_TO_AVP_PROBE_EXPECTED_SUBTITLE_CUE_TIMES` is set, insufficient decoded cue events means the selected track did not deliver legible content across the explicit cue windows;
+- without an expected cue schedule, a zero cue count is diagnostic only and must not be treated as proof of subtitle failure;
+- decoded cue events with a **No** visibility answer isolate the failure to presentation rather than muxing or cue decoding;
+- decoded cue events with a **Yes** visibility answer disprove the claim that the exact asset and validator build cannot show subtitles.
 
 Live playback while the conversion pipeline is still writing a movie remains out of scope. The validator consumes immutable finalized artifacts only.
