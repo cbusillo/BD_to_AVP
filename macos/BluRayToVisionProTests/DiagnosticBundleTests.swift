@@ -24,6 +24,8 @@ final class DiagnosticBundleTests: XCTestCase {
 
         let direct = try encodedSettings(options: ConversionOptions())
         XCTAssertEqual(direct["requested_video_route"] as? String, "direct_mv_hevc")
+        XCTAssertEqual(direct["video_quality_mode"] as? String, "ladder")
+        XCTAssertEqual(direct["video_quality_step"] as? String, "balanced")
         XCTAssertEqual(direct["direct_bitrate_mode"] as? String, "automatic")
         XCTAssertNil(direct["direct_final_bitrate"])
         XCTAssertNil(direct["left_right_bitrate"])
@@ -35,6 +37,8 @@ final class DiagnosticBundleTests: XCTestCase {
         var customDirectOptions = ConversionOptions()
         customDirectOptions.encoding.mvHEVC.directFinalBitrate = BitratePreference(mode: .custom, customMbps: 48)
         let customDirect = try encodedSettings(options: customDirectOptions)
+        XCTAssertEqual(customDirect["video_quality_mode"] as? String, "custom")
+        XCTAssertNil(customDirect["video_quality_step"])
         XCTAssertEqual(customDirect["direct_bitrate_mode"] as? String, "custom")
         XCTAssertEqual(customDirect["direct_final_bitrate"] as? Int, 48)
 
@@ -42,6 +46,8 @@ final class DiagnosticBundleTests: XCTestCase {
         generatedOptions.job.intermediatePolicy = .reusable
         let generated = try encodedSettings(options: generatedOptions)
         XCTAssertEqual(generated["requested_video_route"] as? String, "generated_mv_hevc")
+        XCTAssertEqual(generated["video_quality_mode"] as? String, "ladder")
+        XCTAssertEqual(generated["video_quality_step"] as? String, "balanced")
         XCTAssertEqual(generated["route_requirement"] as? String, "reusable_intermediates_requested")
         XCTAssertEqual(generated["generated_eye_bitrate_mode"] as? String, "automatic")
         XCTAssertEqual(generated["left_right_bitrate"] as? Int, 20)
@@ -55,6 +61,8 @@ final class DiagnosticBundleTests: XCTestCase {
         av1Options.encoding.resolutionOverride = "3840x2160"
         let av1 = try encodedSettings(options: av1Options)
         XCTAssertEqual(av1["requested_video_route"] as? String, "av1")
+        XCTAssertEqual(av1["video_quality_mode"] as? String, "custom")
+        XCTAssertNil(av1["video_quality_step"])
         XCTAssertEqual(av1["upscale_enabled"] as? Bool, false)
         XCTAssertNil(av1["upscale_quality"])
         XCTAssertEqual(av1["resolution_override_set"] as? Bool, false)

@@ -57,12 +57,14 @@ strict deep signature validation.
 
 The app and engine use worker protocol v10. Audio and subtitle language controls
 are independent: built-in and new profile options default to preferred-only
-English audio, while existing version-4 custom choices remain unchanged and
-version-1 through version-3 profiles migrate to all-languages behavior.
-Profile document version 4 also stores explicit MV-HEVC bitrate intent while
-continuing to write the legacy quality, eye-bitrate, and linkage keys for one
-stable rollback window. Legacy eye bitrate 20 migrates to Automatic with 20
-preserved as the inactive custom value; other legacy values migrate to Custom.
+English audio, while existing profile choices remain unchanged and version-1
+through version-3 profiles migrate to all-languages behavior. Profile document
+version 5 stores stable route-relative quality intent separately from retained
+Custom controls while continuing to write concrete compatibility fields.
+Version-1 through version-4 profiles migrate losslessly: exact production
+defaults become `Balanced`, while every other combination remains `Custom`.
+Only checked `Balanced` mappings are currently resolvable; the other stable step
+identifiers fail closed until their route mappings are qualified.
 Protocol v10 projects only the active route controls. Eligible automatic
 MV-HEVC jobs use the packaged direct encoder during stage 4, while reusable
 intermediates, software encoding, upscaling, and restart workflows retain the

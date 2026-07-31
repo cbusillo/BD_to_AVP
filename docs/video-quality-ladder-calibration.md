@@ -16,6 +16,11 @@ defaults at `Balanced`:
 Every other numeric mapping is `needs_calibration`; the manifest rejects values attached to that status. This keeps
 the UI and profile model from shipping guessed mappings.
 
+The native profile schema may persist all seven stable step identifiers before they are exposed. Runtime mapping
+version 1 resolves only the checked `Balanced` defaults across current MV-HEVC targets; unsupported step selections
+fail closed. `Custom` remains a separate mode with independently retained exact route controls, so profile migration
+does not manufacture mappings or discard expert values.
+
 ## Direct Quality Sweep
 
 `docs/qualification/direct-mv-hevc-quality-sweep-coarse-v1.json` defines a seven-point exploratory grid from quality
