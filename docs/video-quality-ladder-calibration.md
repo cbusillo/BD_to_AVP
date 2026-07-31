@@ -209,6 +209,39 @@ privacy, schema, or evidence errors. Even exit `0` keeps `ladder_mapping_selecte
 still require full eight-case confirmation, packaged-app validation, and physical Vision Pro playback before the
 generated route table can freeze.
 
+## Generated Full-Corpus Confirmation
+
+`docs/qualification/generated-mv-hevc-full-corpus-confirmation-v1.json` binds the frozen bitrate-search receipt and
+its checked schema-v3 plan. It does not search or select replacements. The fixed cells are lower bracket `11/65`,
+selected `12/65`, and anchor `20/65`, plus lower bracket `12/75`, selected `13/75`, and anchor `20/75`. Each cell is
+measured three times on all eight direct-corpus cases for exactly `144` encodes. A two-cell cyclic rotation places
+every cell once in the early, middle, and late execution thirds.
+
+The seven quality-gated cases determine confirmation. Each selected cell must pass the unchanged same-tier aggregate,
+frame-tail, temporal, repeatability, eye-order, structure, and per-case size gates. Each lower bracket must reproduce
+an aggregate quality rejection below `-0.0006` on at least one gated case. Selected storage passes only when exact
+integer totals satisfy `100 × selected bytes <= 98 × anchor bytes`; equality passes. The public ITU `MVCDS-2` case is
+required for execution completeness and artifact validity, but its quality metrics and bytes are informational and
+cannot affect confirmation.
+
+After committing the plan and runner in a clean worktree, run:
+
+```bash
+BD_TO_AVP_RELEASE_MVC_SOURCE=/private/source.mkv \
+BD_TO_AVP_ITU_MVC_VECTOR=/private/MVCDS-2.264 \
+uv run python scripts/qualify_generated_mv_hevc_calibration.py \
+  --experiment-plan docs/qualification/generated-mv-hevc-full-corpus-confirmation-v1.json \
+  --source-evidence-receipt /private/generated-mv-hevc-bitrate-search-receipt.json \
+  --output build/qualification/generated-mv-hevc-full-corpus-confirmation-v1.json \
+  --work-directory build/qualification/generated-mv-hevc-full-corpus-confirmation-v1-work
+```
+
+The command rejects `--case-id` subsets. Once all `144` records exist, it freezes the canonical receipt read-only
+whether confirmation passes or fails. Exit `0` requires both fixed tiers to confirm; a completed fail-closed result
+exits `1`, and fatal provenance, source, tool, privacy, schema, or execution errors exit `2`. No result changes the
+fixed cells or sets `ladder_mapping_selected=true`. A passing receipt proceeds to packaged-app validation and then
+physical Vision Pro playback.
+
 ## Validation
 
 Run the structural and production-anchor check with:

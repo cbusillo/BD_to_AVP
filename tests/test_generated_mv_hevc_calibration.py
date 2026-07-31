@@ -15,16 +15,19 @@ from scripts.qualify_generated_mv_hevc_calibration import (
     DEFAULT_EXPERIMENT_PLAN,
     DEFAULT_BITRATE_SEARCH_PLAN,
     DEFAULT_REFINEMENT_PLAN,
+    DEFAULT_FULL_CORPUS_CONFIRMATION_PLAN,
     CorpusBinding,
     ExperimentCell,
     ExperimentPlan,
     _assert_private_values_absent,
     _cell_order,
+    _bitrate_search_record,
     _completed_resume_is_consistent,
     _freeze_receipt,
     _load_resume_evidence,
     load_corpus_binding,
     _new_evidence,
+    _method_record,
     _prepare_owned_work_directory,
     _refresh_summaries,
     _reset_case_directory,
@@ -32,6 +35,7 @@ from scripts.qualify_generated_mv_hevc_calibration import (
     _threshold_record,
     _validate_run_record,
     _verify_bitrate_search_source_receipts,
+    _verify_full_corpus_source_receipt,
     _verify_refinement_source_receipt,
     calibration_lock,
     load_experiment_plan,
@@ -53,6 +57,9 @@ class GeneratedCalibrationPlanTests(unittest.TestCase):
         self.document = json.loads(DEFAULT_EXPERIMENT_PLAN.read_text(encoding="utf-8"))
         self.refinement_document = json.loads(DEFAULT_REFINEMENT_PLAN.read_text(encoding="utf-8"))
         self.bitrate_search_document = json.loads(DEFAULT_BITRATE_SEARCH_PLAN.read_text(encoding="utf-8"))
+        self.full_corpus_confirmation_document = json.loads(
+            DEFAULT_FULL_CORPUS_CONFIRMATION_PLAN.read_text(encoding="utf-8")
+        )
         self.binding_document = json.loads(
             DEFAULT_EXPERIMENT_PLAN.with_name("generated-mv-hevc-corpus-v1.json").read_text(encoding="utf-8")
         )
@@ -210,6 +217,61 @@ class GeneratedCalibrationPlanTests(unittest.TestCase):
                     11 if anchor_id.endswith("065") else 12,
                 ],
             )
+
+    def test_committed_full_corpus_confirmation_plan_is_fixed_and_complete(self) -> None:
+        plan, binding, plan_digest, binding_digest = load_experiment_plan(DEFAULT_FULL_CORPUS_CONFIRMATION_PLAN)
+
+        self.assertEqual(plan.schema_version, 4)
+        self.assertEqual(plan.decision_stage, "fixed_full_corpus_confirmation_only")
+        self.assertEqual(
+            [cell.cell_id for cell in plan.cells],
+            ["b011-m065", "b012-m075", "b012-m065", "b013-m075", "b020-m065", "b020-m075"],
+        )
+        self.assertEqual(len(binding.selected_case_ids), 8)
+        self.assertEqual(len(binding.quality_gated_case_ids), 7)
+        self.assertEqual(binding.informational_case_ids, ("itu-mvcds-2",))
+        self.assertEqual(len(plan_digest), 64)
+        self.assertEqual(len(binding_digest), 64)
+
+    def test_full_corpus_confirmation_rejects_axes_or_changed_fixed_cells(self) -> None:
+        with_axes = copy.deepcopy(self.full_corpus_confirmation_document)
+        with_axes["axes"] = {"eye_bitrate_mbps": [11, 12, 13, 20], "merge_quality": [65, 75]}
+        changed_cell = copy.deepcopy(self.full_corpus_confirmation_document)
+        changed_cell["full_corpus_confirmation"]["tiers"][1]["selected_cell"] = {
+            "cell_id": "b014-m075",
+            "eye_bitrate_mbps": 14,
+        }
+
+        with self.assertRaisesRegex(QualificationFailure, "fixed tier cells rather than axes"):
+            parse_experiment_plan(with_axes)
+        with self.assertRaisesRegex(QualificationFailure, "frozen search result"):
+            parse_experiment_plan(changed_cell)
+
+    def test_full_corpus_binding_rejects_changed_gate_partition(self) -> None:
+        binding_document = json.loads(
+            DEFAULT_FULL_CORPUS_CONFIRMATION_PLAN.with_name("generated-mv-hevc-full-corpus-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        binding_document["quality_gated_case_ids"].append("itu-mvcds-2")
+
+        with self.assertRaisesRegex(QualificationFailure, "gate partitions"):
+            parse_corpus_binding(binding_document)
+
+    def test_full_corpus_confirmation_balances_each_cell_across_execution_thirds(self) -> None:
+        plan, _, _, _ = load_experiment_plan(DEFAULT_FULL_CORPUS_CONFIRMATION_PLAN)
+        orders = [_cell_order(plan, run_index) for run_index in range(plan.runs_per_cell)]
+
+        self.assertEqual(
+            [[cell.cell_id for cell in order] for order in orders],
+            [
+                ["b011-m065", "b012-m075", "b012-m065", "b013-m075", "b020-m065", "b020-m075"],
+                ["b012-m065", "b013-m075", "b020-m065", "b020-m075", "b011-m065", "b012-m075"],
+                ["b020-m065", "b020-m075", "b011-m065", "b012-m075", "b012-m065", "b013-m075"],
+            ],
+        )
+        for cell in plan.cells:
+            self.assertEqual({order.index(cell) // 2 for order in orders}, {0, 1, 2})
 
     def test_plan_and_binding_loaders_reject_duplicate_json_keys(self) -> None:
         build_directory = DEFAULT_EXPERIMENT_PLAN.parents[2] / "build"
@@ -625,6 +687,121 @@ class GeneratedCalibrationSummaryTests(unittest.TestCase):
         self.assertTrue(evidence["acceptance"]["bitrate_search_ready"])
         self.assertFalse(evidence["acceptance"]["ladder_mapping_selected"])
 
+    @staticmethod
+    def _full_corpus_definitions(binding: CorpusBinding) -> dict[str, CorpusCase]:
+        return {
+            case_id: replace(
+                GeneratedCalibrationSummaryTests._definition(case_id),
+                quality_gate=case_id not in binding.informational_case_ids,
+            )
+            for case_id in binding.selected_case_ids
+        }
+
+    @staticmethod
+    def _set_cell_median_bytes(case: dict[str, object], cell_id: str, median_bytes: int) -> None:
+        cell = next(cell for cell in case["cells"] if cell["id"] == cell_id)
+        for run, final_bytes in zip(cell["runs"], (median_bytes - 1, median_bytes, median_bytes + 1), strict=True):
+            run["final_bytes"] = final_bytes
+
+    def test_full_corpus_confirmation_passes_fixed_cells_without_reselection(self) -> None:
+        plan, binding, _, _ = load_experiment_plan(DEFAULT_FULL_CORPUS_CONFIRMATION_PLAN)
+        cases = [
+            self._bitrate_case_record(plan, case_id, frontiers={65: 12, 75: 13})
+            for case_id in binding.selected_case_ids
+        ]
+        evidence: dict[str, object] = {"cases": cases}
+
+        _refresh_summaries(evidence, plan, binding, self._full_corpus_definitions(binding))
+
+        self.assertTrue(evidence["acceptance"]["complete"])
+        self.assertTrue(evidence["acceptance"]["full_corpus_confirmation_ready"])
+        self.assertEqual(evidence["acceptance"]["confirmed_tier_count"], 2)
+        self.assertFalse(evidence["acceptance"]["source_result_reselected"])
+        self.assertEqual(
+            [cell["cell_id"] for cell in evidence["fixed_bitrate_cells"]],
+            ["b012-m065", "b013-m075"],
+        )
+        self.assertTrue(all(cell["confirmation_passed"] for cell in evidence["fixed_bitrate_cells"]))
+
+    def test_full_corpus_confirmation_ignores_informational_metrics_but_requires_runs(self) -> None:
+        plan, binding, _, _ = load_experiment_plan(DEFAULT_FULL_CORPUS_CONFIRMATION_PLAN)
+        cases = [
+            self._bitrate_case_record(plan, case_id, frontiers={65: 12, 75: 13})
+            for case_id in binding.selected_case_ids
+        ]
+        informational = next(case for case in cases if case["id"] == "itu-mvcds-2")
+        for cell in informational["cells"]:
+            for run in cell["runs"]:
+                run["left_match_ssim"] = 0.2
+                run["right_match_ssim"] = 0.2001
+                run["left_cross_ssim"] = 0.1999
+                run["right_cross_ssim"] = 0.2
+                run["min_same_eye_ssim"] = 0.2
+                run["min_eye_order_margin"] = 0.0001
+                run["minimum_frame_same_eye_ssim"] = 0.1
+                run["p05_frame_same_eye_ssim"] = 0.15
+                run["median_frame_same_eye_ssim"] = 0.2
+                run["final_bytes"] = 100_000_000 + int(run["run_index"])
+        evidence: dict[str, object] = {"cases": cases}
+
+        _refresh_summaries(evidence, plan, binding, self._full_corpus_definitions(binding))
+
+        self.assertTrue(evidence["acceptance"]["full_corpus_confirmation_ready"])
+        informational["cells"][0]["runs"].pop()
+        _refresh_summaries(evidence, plan, binding, self._full_corpus_definitions(binding))
+        self.assertFalse(evidence["acceptance"]["complete"])
+        self.assertFalse(evidence["acceptance"]["informational_cases_complete"])
+        self.assertFalse(evidence["acceptance"]["full_corpus_confirmation_ready"])
+
+    def test_full_corpus_confirmation_uses_exact_integer_storage_boundary(self) -> None:
+        plan, binding, _, _ = load_experiment_plan(DEFAULT_FULL_CORPUS_CONFIRMATION_PLAN)
+        definitions = self._full_corpus_definitions(binding)
+
+        def confirmation_cases(selected_bytes: int) -> list[dict[str, object]]:
+            cases = [
+                self._bitrate_case_record(plan, case_id, frontiers={65: 12, 75: 13})
+                for case_id in binding.selected_case_ids
+            ]
+            for case in cases:
+                if case["id"] in binding.quality_gated_case_ids:
+                    self._set_cell_median_bytes(case, "b020-m075", 10_000)
+                    self._set_cell_median_bytes(case, "b013-m075", selected_bytes)
+            return cases
+
+        passing: dict[str, object] = {"cases": confirmation_cases(9_800)}
+        _refresh_summaries(passing, plan, binding, definitions)
+        passing_tier = next(tier for tier in passing["confirmation_tier_evaluations"] if tier["merge_quality"] == 75)
+        passing_selected = next(cell for cell in passing_tier["cell_evaluations"] if cell["role"] == "selected")
+        self.assertEqual(passing_selected["storage_boundary_left"], passing_selected["storage_boundary_right"])
+        self.assertTrue(passing_selected["storage_benefit_passed"])
+
+        failing_cases = confirmation_cases(9_800)
+        first_gated = next(case for case in failing_cases if case["id"] in binding.quality_gated_case_ids)
+        self._set_cell_median_bytes(first_gated, "b013-m075", 9_801)
+        failing: dict[str, object] = {"cases": failing_cases}
+        _refresh_summaries(failing, plan, binding, definitions)
+        failing_tier = next(tier for tier in failing["confirmation_tier_evaluations"] if tier["merge_quality"] == 75)
+        failing_selected = next(cell for cell in failing_tier["cell_evaluations"] if cell["role"] == "selected")
+        self.assertEqual(failing_selected["storage_boundary_left"], failing_selected["storage_boundary_right"] + 100)
+        self.assertFalse(failing_selected["storage_benefit_passed"])
+        self.assertFalse(failing["acceptance"]["full_corpus_confirmation_ready"])
+
+    def test_full_corpus_confirmation_fails_when_lower_bracket_passes_quality(self) -> None:
+        plan, binding, _, _ = load_experiment_plan(DEFAULT_FULL_CORPUS_CONFIRMATION_PLAN)
+        cases = [
+            self._bitrate_case_record(plan, case_id, frontiers={65: 11, 75: 12})
+            for case_id in binding.selected_case_ids
+        ]
+        evidence: dict[str, object] = {"cases": cases}
+
+        _refresh_summaries(evidence, plan, binding, self._full_corpus_definitions(binding))
+
+        self.assertTrue(evidence["acceptance"]["complete"])
+        self.assertFalse(evidence["acceptance"]["full_corpus_confirmation_ready"])
+        self.assertTrue(
+            all(not tier["lower_rejection_confirmed"] for tier in evidence["confirmation_tier_evaluations"])
+        )
+
     def test_bitrate_search_fails_closed_on_non_monotone_frontier(self) -> None:
         plan, _, _, _ = load_experiment_plan(DEFAULT_BITRATE_SEARCH_PLAN)
         binding = self._binding("case-a")
@@ -741,6 +918,24 @@ class GeneratedCalibrationCliTests(unittest.TestCase):
         with patch("scripts.qualify_generated_mv_hevc_calibration.run_calibration", return_value=evidence):
             self.assertEqual(main(self._args()), 0)
 
+    def test_full_corpus_confirmation_returns_one_for_completed_rejection(self) -> None:
+        evidence = {
+            "method": {"decision_stage": "fixed_full_corpus_confirmation_only"},
+            "acceptance": {"complete": True, "full_corpus_confirmation_ready": False},
+        }
+
+        with patch("scripts.qualify_generated_mv_hevc_calibration.run_calibration", return_value=evidence):
+            self.assertEqual(main(self._args()), 1)
+
+    def test_full_corpus_confirmation_returns_zero_only_when_confirmed(self) -> None:
+        evidence = {
+            "method": {"decision_stage": "fixed_full_corpus_confirmation_only"},
+            "acceptance": {"complete": True, "full_corpus_confirmation_ready": True},
+        }
+
+        with patch("scripts.qualify_generated_mv_hevc_calibration.run_calibration", return_value=evidence):
+            self.assertEqual(main(self._args()), 0)
+
 
 class GeneratedCalibrationReceiptTests(unittest.TestCase):
     @staticmethod
@@ -749,6 +944,104 @@ class GeneratedCalibrationReceiptTests(unittest.TestCase):
         path.write_bytes(data)
         path.chmod(0o444)
         return hashlib.sha256(data).hexdigest()
+
+    @staticmethod
+    def _full_corpus_source_receipt() -> tuple[ExperimentPlan, CorpusBinding, dict[str, object]]:
+        plan, binding, _, _ = load_experiment_plan(DEFAULT_FULL_CORPUS_CONFIRMATION_PLAN)
+        policy = plan.full_corpus_confirmation
+        assert policy is not None
+        assert plan.thresholds is not None
+        source_plan, source_binding, _, source_binding_sha256 = load_experiment_plan(policy.source_plan.path)
+        assert source_plan.bitrate_search is not None
+        source_tiers = []
+        selected_cells = []
+        for tier in policy.tiers:
+            source_tiers.append(
+                {
+                    "merge_quality": tier.merge_quality,
+                    "anchor_cell_id": tier.anchor_cell.cell_id,
+                    "core_minimum_cell_id": tier.selected_cell.cell_id,
+                    "selected_cell_id": tier.selected_cell.cell_id,
+                    "minimum_bracketed": True,
+                    "frontier_monotone": True,
+                    "decision_ready": True,
+                    "cell_evaluations": [
+                        {
+                            "cell_id": tier.lower_cell.cell_id,
+                            "candidate_constraints_passed": False,
+                            "case_evaluations": [
+                                {
+                                    "quality_non_inferiority_passed": False,
+                                    "quality_delta": -0.001,
+                                }
+                            ],
+                        },
+                        {
+                            "cell_id": tier.selected_cell.cell_id,
+                            "candidate_constraints_passed": True,
+                            "storage_benefit_passed": True,
+                        },
+                        {
+                            "cell_id": tier.anchor_cell.cell_id,
+                            "candidate_constraints_passed": True,
+                        },
+                    ],
+                }
+            )
+            selected_cells.append(
+                {
+                    "cell_id": tier.selected_cell.cell_id,
+                    "eye_bitrate_mbps": tier.selected_cell.eye_bitrate_mbps,
+                    "merge_quality": tier.merge_quality,
+                    "minimization_adopted": True,
+                }
+            )
+        receipt = {
+            "schema_version": 1,
+            "experiment_id": policy.source_receipt.evidence_id,
+            "source_git_sha": policy.source_receipt.source_git_sha,
+            "source_tree_dirty": False,
+            "experiment_plan": {
+                "path": source_plan.relative_path,
+                "sha256": policy.source_plan.sha256,
+            },
+            "corpus_binding": {
+                "path": source_binding.relative_path,
+                "binding_id": source_binding.binding_id,
+                "sha256": source_binding_sha256,
+            },
+            "manifest": {
+                "path": source_binding.source_manifest_path.relative_to(
+                    DEFAULT_FULL_CORPUS_CONFIRMATION_PLAN.parents[2]
+                ).as_posix(),
+                "corpus_id": source_binding.source_corpus_id,
+                "sha256": source_binding.source_manifest_sha256,
+            },
+            "method": _method_record(source_plan),
+            "pre_registered_thresholds": _threshold_record(plan.thresholds),
+            "bitrate_search": _bitrate_search_record(source_plan.bitrate_search),
+            "selected_case_ids": list(source_binding.selected_case_ids),
+            "cells": [
+                {
+                    "id": cell.cell_id,
+                    "eye_bitrate_mbps": cell.eye_bitrate_mbps,
+                    "merge_quality": cell.merge_quality,
+                }
+                for cell in source_plan.cells
+            ],
+            "acceptance": {
+                "complete": True,
+                "bitrate_search_ready": True,
+                "stress_subset_evidence_ready": True,
+                "full_corpus_confirmation_required": True,
+                "tier_decisions_ready": True,
+                "ladder_mapping_selected": False,
+            },
+            "selected_bitrate_cells": selected_cells,
+            "bitrate_tier_evaluations": source_tiers,
+            "environment": {"git_head": policy.source_receipt.source_git_sha},
+        }
+        return plan, binding, receipt
 
     def test_refinement_requires_pinned_source_receipt(self) -> None:
         plan, _, _, _ = load_experiment_plan(DEFAULT_REFINEMENT_PLAN)
@@ -883,6 +1176,26 @@ class GeneratedCalibrationReceiptTests(unittest.TestCase):
                     receipt,
                     None,
                 )
+
+    def test_full_corpus_confirmation_verifies_fixed_source_brackets(self) -> None:
+        plan, binding, receipt = self._full_corpus_source_receipt()
+
+        with patch(
+            "scripts.qualify_generated_mv_hevc_calibration._read_frozen_evidence",
+            return_value=receipt,
+        ):
+            _verify_full_corpus_source_receipt(plan, binding, Path("source.json"), None)
+
+    def test_full_corpus_confirmation_rejects_source_reselection(self) -> None:
+        plan, binding, receipt = self._full_corpus_source_receipt()
+        receipt["selected_bitrate_cells"][1]["cell_id"] = "b014-m075"
+
+        with patch(
+            "scripts.qualify_generated_mv_hevc_calibration._read_frozen_evidence",
+            return_value=receipt,
+        ):
+            with self.assertRaisesRegex(QualificationFailure, "selected different fixed cells"):
+                _verify_full_corpus_source_receipt(plan, binding, Path("source.json"), None)
 
     def test_binding_rejects_changed_source_manifest_identity(self) -> None:
         document = json.loads(

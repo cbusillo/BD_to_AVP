@@ -1,0 +1,104 @@
+{
+  "schema_version": 2,
+  "binding_id": "generated-mv-hevc-full-corpus-v1",
+  "purpose": "full_corpus_confirmation_all_cases",
+  "source_manifest": {
+    "path": "docs/qualification/direct-mv-hevc-corpus-v1.json",
+    "corpus_id": "direct-mv-hevc-prerelease-v1",
+    "sha256": "d6cfc14cb9f29e14639d40a96516fe14f47a64df850fe0928833b77b077e87b1"
+  },
+  "selected_case_ids": [
+    "production-dark",
+    "production-grain-rain",
+    "production-snow-detail",
+    "production-motion",
+    "production-crop",
+    "production-rate-override",
+    "itu-mvcds-2",
+    "synthetic-animation"
+  ],
+  "quality_gated_case_ids": [
+    "production-dark",
+    "production-grain-rain",
+    "production-snow-detail",
+    "production-motion",
+    "production-crop",
+    "production-rate-override",
+    "synthetic-animation"
+  ],
+  "informational_case_ids": [
+    "itu-mvcds-2"
+  ],
+  "expected_case_sources": {
+    "production-dark": {
+      "kind": "mvc_container",
+      "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+      "requested_duration_seconds": 4.0,
+      "segment_bytes": 21840575,
+      "segment_sha256": "ccdb4c1e52246b2f49909c3485af95792c20990cbc79e9925666ace0acd5cf74",
+      "start_seconds": 300.0
+    },
+    "production-grain-rain": {
+      "kind": "mvc_container",
+      "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+      "requested_duration_seconds": 4.0,
+      "segment_bytes": 25291348,
+      "segment_sha256": "901fa6697d34e949748eba636854f208fc97a3e55ed41d21e1fd91d26d6f2038",
+      "start_seconds": 1200.0
+    },
+    "production-snow-detail": {
+      "kind": "mvc_container",
+      "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+      "requested_duration_seconds": 4.0,
+      "segment_bytes": 19493338,
+      "segment_sha256": "c2e3c1fd3dec3e27e91f49a99d72959b0a918aecfc227015443ff216ae289ba6",
+      "start_seconds": 1800.0
+    },
+    "production-motion": {
+      "kind": "mvc_container",
+      "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+      "requested_duration_seconds": 4.0,
+      "segment_bytes": 20585951,
+      "segment_sha256": "d2b655ce10831f8416f701c259a536c1fed815a53ca03be573f5cbcc61bcd76b",
+      "start_seconds": 4500.0
+    },
+    "production-crop": {
+      "kind": "mvc_container",
+      "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+      "requested_duration_seconds": 4.0,
+      "segment_bytes": 22843976,
+      "segment_sha256": "909a55f191b44fad8931d0c73aa5b1c4484cbd90ecf426d89071bb72a1cad608",
+      "start_seconds": 1500.0
+    },
+    "production-rate-override": {
+      "kind": "mvc_container",
+      "path_env": "BD_TO_AVP_RELEASE_MVC_SOURCE",
+      "requested_duration_seconds": 4.0,
+      "segment_bytes": 22164786,
+      "segment_sha256": "a3558ccbd9336b88e84e2518bcdd1086da9c9a275c8a3096d6abdccf81862980",
+      "start_seconds": 4200.0
+    },
+    "itu-mvcds-2": {
+      "kind": "mvc_annex_b",
+      "path_env": "BD_TO_AVP_ITU_MVC_VECTOR",
+      "segment_bytes": 2401933,
+      "segment_sha256": "44c5f766165e6fe0eadff13b9b9c1c36d9d8482d007de23becabf44915d64235"
+    },
+    "synthetic-animation": {
+      "filter_sha256": "9e444324f690682ea3a106a91f428b943176f6cc80404a258e072e889184cbb8",
+      "kind": "synthetic",
+      "requested_duration_seconds": 4.0
+    }
+  },
+  "required_coverage": [
+    "real_mvc",
+    "motion",
+    "grain",
+    "dark",
+    "animation",
+    "crop",
+    "disparity",
+    "frame_rate_override",
+    "bit_depth_8"
+  ]
+}
