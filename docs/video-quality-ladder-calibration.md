@@ -143,6 +143,33 @@ pre-registered per-case quality and storage thresholds. It exits `1` with a comp
 must be collapsed or escalated to blinded review, when no cell remains technically eligible, or when only a subset
 was run. Fatal identity, source, tool, privacy, or evidence errors exit `2`.
 
+## Generated Collapse Analysis
+
+`docs/qualification/generated-mv-hevc-collapse-analysis-v1.json` binds the completed refinement receipt and its
+source plan by SHA-256. `scripts/qualify_generated_mv_hevc_collapse.py` performs no encoding and cannot modify the
+ladder. It verifies the frozen read-only source receipt, unchanged thresholds, source Git and plan identities,
+successful refinement gates, technically eligible cells, and production `Balanced = 20/75` before analysis.
+
+The analyzer evaluates every ordered boundary between technically eligible cells, including wider non-adjacent
+boundaries, with the same pre-registered every-case quality and storage thresholds. This is a collapse operation over
+existing measurements, not a new threshold search: skipped interior cells are not promoted or reclassified. It then
+selects the maximum-cardinality ordered subset containing `Balanced`. Deterministic ties prefer wider guaranteed
+storage coverage, larger minimum quality and storage margins, a lower first merge quality, then lexicographic cell
+IDs.
+
+Run the checked analysis from a clean commit with:
+
+```bash
+uv run python scripts/qualify_generated_mv_hevc_collapse.py \
+  --source-receipt /private/generated-mv-hevc-merge-refinement-receipt.json \
+  --output build/qualification/generated-mv-hevc-collapse-analysis-v1.json
+```
+
+The output records every evaluated boundary and valid subset but never records the private source path. It exits `0`
+only if seven technically defensible cells survive. It exits `1` with a frozen immutable receipt when fewer survive,
+setting `product_decision_required` and leaving bitrate search and ladder selection false. Fatal provenance, schema,
+privacy, threshold, Balanced, or evidence inconsistencies exit `2`.
+
 ## Validation
 
 Run the structural and production-anchor check with:
