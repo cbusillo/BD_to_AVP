@@ -15,7 +15,7 @@ adapting effective bitrate from 2.00 to 13.74 Mbps, and the exact package fixtur
 - Keep broader noncanonical multichannel AAC policy in #367; this gate changes only the physically proven
   `5.1(side)` case.
 
-Protocol v11 preserves the Automatic direct bitrate object with no numeric sentinel, while adding checked quality
+Protocol v12 preserves the Automatic direct bitrate object with no numeric sentinel, adds exact direct quality, and retains checked quality
 intent and a concrete generated fallback projection. The worker still owns the qualified direct quality policy. Direct
 4K upscaling has its own separately qualified release gate
 in [Direct 4K MV-HEVC prerelease gate](direct-4k-mv-hevc-release-gate.md). Live processed-frame preview remains a

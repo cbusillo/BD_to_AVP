@@ -4,8 +4,8 @@ The route-relative quality ladder is intentionally a calibration contract before
 seven ordered steps are `Space Saver`, `Compact`, `Efficient`, `Balanced`, `Detailed`, `High Detail`, and
 `Maximum Detail`. `Custom` remains separate and preserves exact route controls.
 
-The checked contract is `docs/qualification/video-quality-ladder-v1.json`. It currently records only production
-defaults at `Balanced`:
+The immutable preregistration baseline is `docs/qualification/video-quality-ladder-v1.json`. It records the
+production defaults that were frozen before objective selection:
 
 - direct MV-HEVC quality `0.7`
 - direct MV-HEVC with MetalFX 2x quality `0.6`
@@ -13,15 +13,19 @@ defaults at `Balanced`:
 - file-based upscale quality `75`
 - AV1 CRF `32`, retained as `Custom · CRF` while physical M5 evidence remains pending in #409
 
-Every other numeric mapping is `needs_calibration`; the manifest rejects values attached to that status. This keeps
-the UI and profile model from shipping guessed mappings.
+The objective result is frozen separately in
+`docs/qualification/video-quality-route-table-v2.json` so the preregistered evidence bindings remain reproducible.
+Mapping version 2 supports all seven ordinary-direct and MetalFX-direct positions, generated `Balanced = 20/75`
+only, and file-upscale `Balanced = 75` plus `Detailed = 100`. AV1 remains exact-CRF Custom. Unsupported positions
+are explicit and have no values.
 
-The native profile schema may persist all seven stable step identifiers before they are exposed. Runtime mapping
-version 1 resolves only the checked `Balanced` defaults across current MV-HEVC targets; unsupported step selections
-fail closed. `Custom` remains a separate mode with independently retained exact route controls, so profile migration
-does not manufacture mappings or discard expert values. Worker protocol v11 sends only the requested route controls
-plus a concrete generated fallback when direct capability selection can require one. The worker validates the
-metadata against checked mappings and reports both requested and selected route settings.
+The native profile schema persists all seven stable step identifiers. Runtime mapping version 2 resolves the active
+route only: direct routes expose seven steps, generated exposes only Balanced, and existing-artifact file upscale
+exposes Balanced and Detailed. `Custom` remains separate with independently retained exact route controls, so
+profile migration does not manufacture mappings or discard expert values. Worker protocol v12 sends exact direct
+quality and includes generated fallback only for Balanced or Custom. Non-Balanced direct capability failure stops
+before input instead of aliasing to generated Balanced. The candidate still requires #422 package, representative
+media, runtime, perceptual, physical Vision Pro, and signed-beta qualification before release.
 
 ## Direct Quality Sweep
 
@@ -551,6 +555,17 @@ The normal command exits successfully when the contract is valid, even while cal
 review receipt with the manifest and corpus hashes, source Git state, per-target status counts, blockers, and deferred
 AV1 work. CI runs this mode to prevent contract drift.
 
+Validate the frozen objective candidate and its evidence bindings with:
+
+```bash
+uv run python scripts/validate_video_quality_route_table.py \
+  --output build/qualification/video-quality-route-table-v2-receipt.json
+```
+
+This validator requires the exact mapping-version-2 values, explicit unsupported positions, immutable evidence
+receipt identities, and Balanced-only pre-input fallback. A successful result means the objective route table is
+complete; its status remains `candidate_pending_qualification` until #422 finishes downstream qualification.
+
 Use the completion gate only when evaluating whether the mappings are ready to expose:
 
 ```bash
@@ -559,9 +574,9 @@ uv run python scripts/validate_video_quality_ladder.py \
   --output build/qualification/video-quality-ladder-receipt.json
 ```
 
-`--require-complete` fails until every non-AV1 target has all seven qualified mappings and ladder exposure is enabled.
-AV1 may remain exact-CRF-only; enabling its ladder instead requires all seven qualified mappings and physical anchor
-evidence.
+`--require-complete` remains the historical all-seven preregistration gate and intentionally does not describe the
+evidence-backed partial generated/file-upscale product. Use the version-2 route-table validator for the frozen
+candidate and #422 for release qualification.
 
 ## Evidence Rules
 

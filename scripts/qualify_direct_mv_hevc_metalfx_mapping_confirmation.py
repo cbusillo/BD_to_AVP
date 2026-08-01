@@ -12,7 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from bd_to_avp.modules.video_quality_defaults import AUTOMATIC_DIRECT_UPSCALE_QUALITY
+from bd_to_avp.modules.video_quality_defaults import (
+    AUTOMATIC_DIRECT_UPSCALE_QUALITY,
+    DIRECT_METALFX_2X_QUALITY_BY_STEP,
+    VIDEO_QUALITY_MAPPING_VERSION,
+)
 from bd_to_avp.worker.protocol import JobSpec, PROTOCOL_VERSION, WorkerProtocolError
 from scripts.qualify_direct_mv_hevc import QualificationFailure
 from scripts.qualify_direct_mv_hevc_mapping_confirmation import (
@@ -529,8 +533,13 @@ def _worker_request(step_id: str) -> dict[str, object]:
             "video": {
                 "mode": "mv_hevc",
                 "route_intent": "automatic",
-                "quality_intent": {"mode": "ladder", "step": step_id, "mapping_version": 1},
+                "quality_intent": {
+                    "mode": "ladder",
+                    "step": step_id,
+                    "mapping_version": VIDEO_QUALITY_MAPPING_VERSION,
+                },
                 "direct_bitrate": {"mode": "automatic"},
+                "direct_quality": DIRECT_METALFX_2X_QUALITY_BY_STEP[step_id],
                 "generated_fallback": {
                     "eye_bitrate": {"mode": "automatic"},
                     "merge_quality": 75,
@@ -588,7 +597,7 @@ def verify_worker_fallback_contract(plan: MetalFXConfirmationPlan) -> dict[str, 
             raise QualificationFailure(f"Worker contract aliases unsupported quality step {step_id}.")
     return {
         "protocol_version": PROTOCOL_VERSION,
-        "mapping_version": 1,
+        "mapping_version": VIDEO_QUALITY_MAPPING_VERSION,
         "supported_ladder_step_ids": ["balanced"],
         "generated_values": {
             "eye_bitrate_mbps": generated_values["eye_bitrate_mbps"],

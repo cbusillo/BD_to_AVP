@@ -14,14 +14,16 @@ from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.languages import LanguageCodeError, normalize_language_code
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video_quality_defaults import (
-    AUTOMATIC_GENERATED_MERGE_QUALITY,
-    DEFAULT_UPSCALE_QUALITY,
+    DIRECT_METALFX_2X_QUALITY_BY_STEP,
+    DIRECT_QUALITY_BY_STEP,
+    FILE_UPSCALE_QUALITY_BY_STEP,
+    GENERATED_QUALITY_BY_STEP,
+    VIDEO_QUALITY_MAPPING_VERSION,
 )
 from bd_to_avp.observability import ObservabilityEvent
 from bd_to_avp.runtime import RunContext
 
-PROTOCOL_VERSION = 11
-VIDEO_QUALITY_MAPPING_VERSION = 1
+PROTOCOL_VERSION = 12
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_DETAIL_BYTES = 64 * 1024
@@ -165,6 +167,7 @@ class VideoOptions:
     route_intent: VideoRouteIntent
     quality_intent: VideoQualityIntent | None = None
     direct_bitrate: BitrateOptions | None = None
+    direct_quality: float | None = None
     generated_eye_bitrate: BitrateOptions | None = None
     generated_merge_quality: int | None = None
     generated_fallback: GeneratedFallbackOptions | None = None
@@ -493,17 +496,25 @@ class JobSpec:
                     job_id=job_id,
                 )
             if quality_intent.mode is QualityIntentMode.CUSTOM:
+                if encoding.upscale.quality is None:
+                    raise WorkerProtocolError(
+                        "invalid_encoding_options",
+                        "Custom existing-artifact upscale requires an exact quality value.",
+                        job_id=job_id,
+                    )
                 return
-            if quality_intent.step is not QualityStep.BALANCED:
+            step_id = quality_intent.step.value if quality_intent.step is not None else ""
+            expected_quality = FILE_UPSCALE_QUALITY_BY_STEP.get(step_id)
+            if expected_quality is None:
                 raise WorkerProtocolError(
                     "invalid_encoding_options",
-                    "Only the checked Balanced quality step is available for existing-artifact upscales.",
+                    "The selected quality step is unavailable for existing-artifact file upscale.",
                     job_id=job_id,
                 )
-            if encoding.upscale.quality != DEFAULT_UPSCALE_QUALITY:
+            if encoding.upscale.quality != expected_quality:
                 raise WorkerProtocolError(
                     "invalid_encoding_options",
-                    "Balanced quality intent requires the checked file-upscale quality.",
+                    "Guided quality intent does not match the checked file-upscale quality.",
                     job_id=job_id,
                 )
             return
@@ -524,46 +535,104 @@ class JobSpec:
                 )
             return
         if quality_intent.mode is QualityIntentMode.CUSTOM:
+            if video.route_intent is VideoRouteIntent.AUTOMATIC:
+                direct_bitrate = video.direct_bitrate
+                if direct_bitrate is None or video.generated_fallback is None:
+                    raise WorkerProtocolError(
+                        "invalid_encoding_options",
+                        "Custom automatic MV-HEVC requires direct controls and exact generated fallback settings.",
+                        job_id=job_id,
+                    )
+                if direct_bitrate.mode is BitrateMode.AUTOMATIC and video.direct_quality is None:
+                    raise WorkerProtocolError(
+                        "invalid_encoding_options",
+                        "Custom Automatic direct rate control requires a concrete quality value.",
+                        job_id=job_id,
+                    )
+                if direct_bitrate.mode is BitrateMode.CUSTOM and video.direct_quality is not None:
+                    raise WorkerProtocolError(
+                        "invalid_encoding_options",
+                        "Custom fixed direct bitrate cannot also include direct quality.",
+                        job_id=job_id,
+                    )
+            if encoding.upscale.enabled and encoding.upscale.quality is None:
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    "Custom file-based fallback or generated upscale requires an exact quality value.",
+                    job_id=job_id,
+                )
             return
-        if quality_intent.step is not QualityStep.BALANCED:
-            raise WorkerProtocolError(
-                "invalid_encoding_options",
-                "Only the checked Balanced quality step is available for MV-HEVC routes.",
-                job_id=job_id,
-            )
-        if encoding.upscale.enabled and encoding.upscale.quality != DEFAULT_UPSCALE_QUALITY:
-            raise WorkerProtocolError(
-                "invalid_encoding_options",
-                "Balanced quality intent requires the checked file-upscale quality.",
-                job_id=job_id,
-            )
-
+        step_id = quality_intent.step.value if quality_intent.step is not None else ""
         if video.route_intent is VideoRouteIntent.AUTOMATIC:
+            direct_values = DIRECT_METALFX_2X_QUALITY_BY_STEP if encoding.upscale.enabled else DIRECT_QUALITY_BY_STEP
+            expected_direct_quality = direct_values.get(step_id)
+            if expected_direct_quality is None:
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    "The selected quality step is unavailable for the requested direct MV-HEVC route.",
+                    job_id=job_id,
+                )
             fallback = video.generated_fallback
             if (
                 video.direct_bitrate is None
                 or video.direct_bitrate.mode is not BitrateMode.AUTOMATIC
-                or fallback is None
-                or fallback.eye_bitrate.mode is not BitrateMode.AUTOMATIC
-                or fallback.merge_quality != AUTOMATIC_GENERATED_MERGE_QUALITY
+                or video.direct_quality != expected_direct_quality
             ):
                 raise WorkerProtocolError(
                     "invalid_encoding_options",
-                    "Balanced quality intent does not match its direct and generated fallback controls.",
+                    "Guided quality intent does not match the checked direct quality policy.",
+                    job_id=job_id,
+                )
+            if quality_intent.step is QualityStep.BALANCED:
+                balanced_generated_values = GENERATED_QUALITY_BY_STEP[QualityStep.BALANCED.value]
+                if (
+                    fallback is None
+                    or fallback.eye_bitrate.mode is not BitrateMode.AUTOMATIC
+                    or fallback.merge_quality != balanced_generated_values["merge_quality"]
+                    or (
+                        encoding.upscale.enabled
+                        and encoding.upscale.quality != FILE_UPSCALE_QUALITY_BY_STEP[QualityStep.BALANCED.value]
+                    )
+                ):
+                    raise WorkerProtocolError(
+                        "invalid_encoding_options",
+                        "Balanced quality intent does not match its checked generated fallback controls.",
+                        job_id=job_id,
+                    )
+            elif fallback is not None or (encoding.upscale.enabled and encoding.upscale.quality is not None):
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    "Only Balanced may include automatic generated fallback; "
+                    "other guided steps require direct support.",
                     job_id=job_id,
                 )
             return
         if video.route_intent is VideoRouteIntent.GENERATED:
+            route_generated_values = GENERATED_QUALITY_BY_STEP.get(step_id)
+            if route_generated_values is None:
+                raise WorkerProtocolError(
+                    "invalid_encoding_options",
+                    "The selected quality step is unavailable for generated MV-HEVC.",
+                    job_id=job_id,
+                )
             if (
                 video.generated_eye_bitrate is None
                 or video.generated_eye_bitrate.mode is not BitrateMode.AUTOMATIC
-                or video.generated_merge_quality != AUTOMATIC_GENERATED_MERGE_QUALITY
+                or video.generated_merge_quality != route_generated_values["merge_quality"]
             ):
                 raise WorkerProtocolError(
                     "invalid_encoding_options",
-                    "Balanced quality intent does not match its generated route controls.",
+                    "Guided quality intent does not match its checked generated route controls.",
                     job_id=job_id,
                 )
+            if encoding.upscale.enabled:
+                expected_upscale_quality = FILE_UPSCALE_QUALITY_BY_STEP.get(step_id)
+                if expected_upscale_quality is None or encoding.upscale.quality != expected_upscale_quality:
+                    raise WorkerProtocolError(
+                        "invalid_encoding_options",
+                        "Guided generated upscale does not match a checked file-upscale mapping.",
+                        job_id=job_id,
+                    )
             return
         raise WorkerProtocolError(
             "invalid_encoding_options",
@@ -678,9 +747,14 @@ class JobSpec:
         mode = cls._parse_video_mode(value.get("mode"), job_id)
         route_intent = cls._parse_video_route_intent(value.get("route_intent"), job_id)
         if mode is VideoMode.MV_HEVC and route_intent is VideoRouteIntent.AUTOMATIC:
+            allowed_keys = {"mode", "route_intent", "quality_intent", "direct_bitrate"}
+            if "direct_quality" in value:
+                allowed_keys.add("direct_quality")
+            if "generated_fallback" in value:
+                allowed_keys.add("generated_fallback")
             cls._require_exact_keys(
                 value,
-                {"mode", "route_intent", "quality_intent", "direct_bitrate", "generated_fallback"},
+                allowed_keys,
                 "encoding.video",
                 job_id,
                 error_code="invalid_encoding_options",
@@ -694,9 +768,21 @@ class JobSpec:
                     "encoding.video.direct_bitrate",
                     job_id,
                 ),
-                generated_fallback=cls._parse_generated_fallback(
-                    value.get("generated_fallback"),
+                direct_quality=cls._parse_number(
+                    value,
+                    "direct_quality",
+                    "encoding.video",
                     job_id,
+                    minimum=0.0,
+                    maximum=1.0,
+                    error_code="invalid_encoding_options",
+                )
+                if "direct_quality" in value
+                else None,
+                generated_fallback=(
+                    cls._parse_generated_fallback(value.get("generated_fallback"), job_id)
+                    if "generated_fallback" in value
+                    else None
                 ),
             )
         if mode is VideoMode.MV_HEVC and route_intent is VideoRouteIntent.GENERATED:
@@ -954,23 +1040,30 @@ class JobSpec:
             )
             return UpscaleOptions(enabled=False)
 
+        allowed_keys = {"enabled"}
+        if "quality" in value:
+            allowed_keys.add("quality")
         cls._require_exact_keys(
             value,
-            {"enabled", "quality"},
+            allowed_keys,
             "encoding.upscale",
             job_id,
             error_code="invalid_encoding_options",
         )
         return UpscaleOptions(
             enabled=True,
-            quality=cls._parse_int(
-                value,
-                "quality",
-                "encoding.upscale",
-                job_id,
-                minimum=0,
-                maximum=100,
-                error_code="invalid_encoding_options",
+            quality=(
+                cls._parse_int(
+                    value,
+                    "quality",
+                    "encoding.upscale",
+                    job_id,
+                    minimum=0,
+                    maximum=100,
+                    error_code="invalid_encoding_options",
+                )
+                if "quality" in value
+                else None
             ),
         )
 
@@ -1286,6 +1379,39 @@ class JobSpec:
                 job_id=job_id,
             )
         return field_value
+
+    @staticmethod
+    def _parse_number(
+        value: Mapping[str, Any],
+        key: str,
+        label: str,
+        job_id: str,
+        *,
+        minimum: float,
+        maximum: float,
+        error_code: str | None = None,
+    ) -> float:
+        field_value = value.get(key)
+        if isinstance(field_value, bool) or not isinstance(field_value, (int, float)):
+            raise WorkerProtocolError(
+                error_code or f"invalid_{label}_options",
+                f"{label}.{key} must be a finite number.",
+                job_id=job_id,
+            )
+        numeric_value = float(field_value)
+        if not math.isfinite(numeric_value):
+            raise WorkerProtocolError(
+                error_code or f"invalid_{label}_options",
+                f"{label}.{key} must be a finite number.",
+                job_id=job_id,
+            )
+        if not minimum <= numeric_value <= maximum:
+            raise WorkerProtocolError(
+                error_code or f"invalid_{label}_options",
+                f"{label}.{key} must be between {minimum:g} and {maximum:g}.",
+                job_id=job_id,
+            )
+        return numeric_value
 
     @staticmethod
     def _parse_string(value: Mapping[str, Any], key: str, label: str, job_id: str) -> str:

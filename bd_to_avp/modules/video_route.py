@@ -13,8 +13,6 @@ from bd_to_avp.modules.command import run_process_capture
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video_quality_defaults import (
-    AUTOMATIC_DIRECT_QUALITY,
-    AUTOMATIC_DIRECT_UPSCALE_QUALITY,
     AUTOMATIC_GENERATED_EYE_BITRATE_MBPS,
     AUTOMATIC_GENERATED_MERGE_QUALITY as _AUTOMATIC_GENERATED_MERGE_QUALITY,
 )
@@ -219,12 +217,9 @@ def resolve_video_route(
         raise VideoRoutePreflightError("Automatic MV-HEVC routing requires an active direct rate-control policy.")
 
     direct_upscale_mode = DirectUpscaleMode.METAL_FX if encoding.upscale.enabled else None
-    automatic_quality = (
-        AUTOMATIC_DIRECT_UPSCALE_QUALITY if direct_upscale_mode is not None else AUTOMATIC_DIRECT_QUALITY
-    )
     direct_bitrate_mbps, direct_quality = _resolve_direct_rate_control(
         video.direct_bitrate,
-        automatic_quality=automatic_quality,
+        direct_quality=video.direct_quality,
     )
     requested_settings = VideoRouteSettings(
         route=VideoRouteKind.DIRECT_MV_HEVC,
@@ -243,7 +238,10 @@ def resolve_video_route(
     capability = probe()
     if not capability.supported:
         if video.generated_fallback is None:
-            raise VideoRoutePreflightError("Automatic MV-HEVC fallback requires generated settings.")
+            raise VideoRoutePreflightError(
+                "The selected guided quality step requires direct MV-HEVC support; "
+                "use Balanced or Custom to allow generated fallback."
+            )
         return _generated_route(
             encoding,
             reason="direct_capability_unavailable",
@@ -254,7 +252,10 @@ def resolve_video_route(
         )
     if encoding.upscale.enabled and not capability.metalfx_2x_mv_hevc_supported:
         if video.generated_fallback is None:
-            raise VideoRoutePreflightError("Automatic MV-HEVC fallback requires generated settings.")
+            raise VideoRoutePreflightError(
+                "The selected guided quality step requires direct MetalFX MV-HEVC support; "
+                "use Balanced or Custom to allow generated fallback."
+            )
         return _generated_route(
             encoding,
             reason="direct_capability_unavailable",
@@ -450,10 +451,12 @@ def _resolve_bitrate(bitrate: BitrateOptions, automatic_mbps: int) -> int:
 def _resolve_direct_rate_control(
     bitrate: BitrateOptions,
     *,
-    automatic_quality: float = AUTOMATIC_DIRECT_QUALITY,
+    direct_quality: float | None,
 ) -> tuple[int | None, float | None]:
     if bitrate.mode is BitrateMode.AUTOMATIC:
-        return None, automatic_quality
+        if direct_quality is None:
+            raise VideoRoutePreflightError("Automatic direct rate control requires a concrete quality value.")
+        return None, direct_quality
     if bitrate.mbps is None:
         raise VideoRoutePreflightError("Custom bitrate mode requires an Mbps value.")
     return bitrate.mbps, None

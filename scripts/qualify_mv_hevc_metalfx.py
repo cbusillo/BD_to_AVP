@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from bd_to_avp.modules.video_route import AUTOMATIC_DIRECT_UPSCALE_QUALITY
+from bd_to_avp.modules.video_quality_defaults import AUTOMATIC_DIRECT_UPSCALE_QUALITY
 from scripts import benchmark_mv_hevc_metalfx, build_mv_hevc_encoder_macos
 from scripts.qualify_direct_mv_hevc import (
     CURRENT_REQUIRED_BOX_TYPES,

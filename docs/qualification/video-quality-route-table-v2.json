@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "route_table_id": "route-relative-video-quality-v2",
+  "mapping_version": 2,
+  "status": "candidate_pending_qualification",
+  "qualification_issue": "#422",
+  "steps": [
+    {"id": "space_saver", "ordinal": 1, "label": "Space Saver"},
+    {"id": "compact", "ordinal": 2, "label": "Compact"},
+    {"id": "efficient", "ordinal": 3, "label": "Efficient"},
+    {"id": "balanced", "ordinal": 4, "label": "Balanced"},
+    {"id": "detailed", "ordinal": 5, "label": "Detailed"},
+    {"id": "high_detail", "ordinal": 6, "label": "High Detail"},
+    {"id": "maximum_detail", "ordinal": 7, "label": "Maximum Detail"}
+  ],
+  "custom": {
+    "id": "custom",
+    "mode": "exact_route_controls",
+    "available_for_every_route": true,
+    "retained_independently_from_guided_intent": true
+  },
+  "evidence_receipts": {
+    "ordinary_direct_confirmation": {
+      "kind": "objective_full_corpus_confirmation",
+      "receipt_sha256": "0fa3571bbd2365bf89156391993fe37586872159f83de5903c0d354aba523b09",
+      "required_file_mode": "0444",
+      "source_git_sha": "f44c2f0ecf1e772a00a4b3b623ea1d479ab9def3",
+      "plan": {
+        "path": "docs/qualification/direct-mv-hevc-quality-mapping-confirmation-v1.json",
+        "sha256": "27c81b8d60211f137a239fa0aa4cefc71915aa07bb78823833bec8454bff4806"
+      },
+      "corpus": {
+        "path": "docs/qualification/direct-mv-hevc-corpus-v1.json",
+        "sha256": "d6cfc14cb9f29e14639d40a96516fe14f47a64df850fe0928833b77b077e87b1"
+      }
+    },
+    "metalfx_direct_confirmation": {
+      "kind": "objective_full_corpus_confirmation",
+      "receipt_sha256": "be25f3bb755ecdd40759c6854dc9b49df4c8d5b5293f77ffa787b00d443f5f39",
+      "required_file_mode": "0444",
+      "source_git_sha": "3e41f4ea8aa188b4b2361532fbdbb3f734385c13",
+      "plan": {
+        "path": "docs/qualification/direct-mv-hevc-metalfx-quality-mapping-confirmation-v1.json",
+        "sha256": "e2a55a1ecce2b143b55d9ba189433854cf35f24d20aed0f1b9396e2880dba9e7"
+      },
+      "corpus": {
+        "path": "docs/qualification/direct-mv-hevc-metalfx-corpus-v1.json",
+        "sha256": "7fa8b20fcbe50598758c1bb9cd7776d780d3534e9d63fe820e8e17d23b94826e"
+      }
+    },
+    "generated_full_corpus_confirmation": {
+      "kind": "negative_full_corpus_confirmation",
+      "receipt_sha256": "ccad484f663cee4fc024e0494e1897dfa27c1175d599c09312197efee5ee4e11",
+      "required_file_mode": "0444",
+      "source_git_sha": "45f250e7e85354a66961c3ddbbcff5a2092ae1e8",
+      "plan": {
+        "path": "docs/qualification/generated-mv-hevc-full-corpus-confirmation-v1.json",
+        "sha256": "899a4fec6eae505c1d4b341eb12e528301bf03777125467671f897aae9fb60e3"
+      },
+      "corpus": {
+        "path": "docs/qualification/generated-mv-hevc-full-corpus-v1.json",
+        "sha256": "0f53fd73ea60ccb80f48afc8750c5b8d62e9fdb6cce3017dc09fb78dbc851adc"
+      },
+      "decision": "No lower generated guided candidate passed the pre-registered full-corpus storage gates."
+    },
+    "file_upscale_confirmation": {
+      "kind": "objective_full_corpus_confirmation",
+      "receipt_sha256": "b8105df0ab4ac0495eaf44954060d236e626bf559e4ff4b0e4eae0fb7728c3bc",
+      "required_file_mode": "0444",
+      "source_git_sha": "647b34cd5011f83b83f1f608b69c7255285267be",
+      "plan": {
+        "path": "docs/qualification/file-upscale-quality-mapping-confirmation-v2.json",
+        "sha256": "c831add22aed97b629c53af76b60cd7eccf6654c088a6a73f1b5ba53b4095118"
+      },
+      "corpus": {
+        "path": "docs/qualification/file-upscale-quality-corpus-v2.json",
+        "sha256": "b515d21f4958f263214f674528e4a07f0b6ffa258c891be5533cb23f16103b91"
+      }
+    }
+  },
+  "routes": [
+    {
+      "id": "direct_mv_hevc",
+      "exposure": "candidate_seven_step",
+      "evidence_receipt_id": "ordinary_direct_confirmation",
+      "mappings": [
+        {"step_id": "space_saver", "status": "candidate", "values": {"quality": 0.4}},
+        {"step_id": "compact", "status": "candidate", "values": {"quality": 0.5}},
+        {"step_id": "efficient", "status": "candidate", "values": {"quality": 0.6}},
+        {"step_id": "balanced", "status": "candidate", "values": {"quality": 0.7}},
+        {"step_id": "detailed", "status": "candidate", "values": {"quality": 0.75}},
+        {"step_id": "high_detail", "status": "candidate", "values": {"quality": 0.8}},
+        {"step_id": "maximum_detail", "status": "candidate", "values": {"quality": 0.85}}
+      ]
+    },
+    {
+      "id": "direct_mv_hevc_metalfx_2x",
+      "exposure": "candidate_seven_step",
+      "evidence_receipt_id": "metalfx_direct_confirmation",
+      "mappings": [
+        {"step_id": "space_saver", "status": "candidate", "values": {"quality": 0.3}},
+        {"step_id": "compact", "status": "candidate", "values": {"quality": 0.4}},
+        {"step_id": "efficient", "status": "candidate", "values": {"quality": 0.5}},
+        {"step_id": "balanced", "status": "candidate", "values": {"quality": 0.6}},
+        {"step_id": "detailed", "status": "candidate", "values": {"quality": 0.65}},
+        {"step_id": "high_detail", "status": "candidate", "values": {"quality": 0.7}},
+        {"step_id": "maximum_detail", "status": "candidate", "values": {"quality": 0.75}}
+      ]
+    },
+    {
+      "id": "generated_mv_hevc",
+      "exposure": "candidate_supported_subset",
+      "evidence_receipt_id": "generated_full_corpus_confirmation",
+      "mappings": [
+        {"step_id": "space_saver", "status": "unsupported", "values": null},
+        {"step_id": "compact", "status": "unsupported", "values": null},
+        {"step_id": "efficient", "status": "unsupported", "values": null},
+        {"step_id": "balanced", "status": "candidate", "values": {"eye_bitrate_mbps": 20, "merge_quality": 75}},
+        {"step_id": "detailed", "status": "unsupported", "values": null},
+        {"step_id": "high_detail", "status": "unsupported", "values": null},
+        {"step_id": "maximum_detail", "status": "unsupported", "values": null}
+      ]
+    },
+    {
+      "id": "upscale_quality",
+      "exposure": "candidate_supported_subset",
+      "evidence_receipt_id": "file_upscale_confirmation",
+      "mappings": [
+        {"step_id": "space_saver", "status": "unsupported", "values": null},
+        {"step_id": "compact", "status": "unsupported", "values": null},
+        {"step_id": "efficient", "status": "unsupported", "values": null},
+        {"step_id": "balanced", "status": "candidate", "values": {"quality": 75}},
+        {"step_id": "detailed", "status": "candidate", "values": {"quality": 100}},
+        {"step_id": "high_detail", "status": "unsupported", "values": null},
+        {"step_id": "maximum_detail", "status": "unsupported", "values": null}
+      ]
+    },
+    {
+      "id": "av1_sbs",
+      "exposure": "custom_only",
+      "blocker": "#409",
+      "mappings": [
+        {"step_id": "space_saver", "status": "unsupported", "values": null},
+        {"step_id": "compact", "status": "unsupported", "values": null},
+        {"step_id": "efficient", "status": "unsupported", "values": null},
+        {"step_id": "balanced", "status": "unsupported", "values": null},
+        {"step_id": "detailed", "status": "unsupported", "values": null},
+        {"step_id": "high_detail", "status": "unsupported", "values": null},
+        {"step_id": "maximum_detail", "status": "unsupported", "values": null}
+      ]
+    }
+  ],
+  "fallbacks": [
+    {
+      "from_route_ids": ["direct_mv_hevc", "direct_mv_hevc_metalfx_2x"],
+      "to_route_id": "generated_mv_hevc",
+      "timing": "pre_input",
+      "supported_step_ids": ["balanced"],
+      "generated_values": {"eye_bitrate_mbps": 20, "merge_quality": 75},
+      "file_upscale_values_when_requested": {"quality": 75},
+      "unsupported_step_action": "fail_pre_input_without_alias"
+    }
+  ],
+  "qualification_limits": [
+    "No mapping in this table is release-qualified until #422 passes package, representative-media, runtime, perceptual, physical Vision Pro, and signed-beta gates.",
+    "AV1 remains exact-CRF Custom pending #409.",
+    "Unsupported guided positions are unavailable and must never resolve to Balanced."
+  ]
+}

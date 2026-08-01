@@ -240,7 +240,20 @@ struct VideoRoutePlan: Equatable {
             if let directBitrateMbps {
                 rateControl = "Fixed \(directBitrateMbps) Mbps final"
             } else {
-                rateControl = "Adaptive content quality"
+                let target: VideoQualityTarget = includesUpscale
+                    ? .directMVHEVCMetalFX2x
+                    : .directMVHEVC
+                let step: QualityStep = switch qualitySelection {
+                case let .step(step):
+                    step
+                case .custom:
+                    .balanced
+                }
+                if case let .direct(quality) = VideoQualityCatalog.mapping(for: step, target: target) {
+                    rateControl = "Adaptive quality \(String(format: "%.2f", quality))"
+                } else {
+                    rateControl = "Adaptive content quality"
+                }
             }
             let summary = "\(qualitySelection.title) · \(rateControl)"
             return includesUpscale ? "\(summary) · 2× MetalFX" : summary
@@ -262,7 +275,7 @@ struct VideoRoutePlan: Equatable {
     }
 
     var generatedFallbackSummary: String? {
-        guard kind == .directMVHEVC else {
+        guard kind == .directMVHEVC, allowsGeneratedFallback else {
             return nil
         }
         return generatedSettingsSummary(
@@ -298,9 +311,17 @@ struct VideoRoutePlan: Equatable {
         switch kind {
         case .directMVHEVC:
             if includesUpscale {
-                "The engine confirms stereo MV-HEVC and MetalFX 2× support before reading conversion input. It scales both eyes inside the direct encoder and uses \(generatedFallbackSummary ?? "the generated fallback") if unavailable."
+                if let generatedFallbackSummary {
+                    "The engine confirms stereo MV-HEVC and MetalFX 2× support before reading conversion input. It scales both eyes inside the direct encoder and uses \(generatedFallbackSummary) if unavailable."
+                } else {
+                    "This guided step requires direct stereo MV-HEVC with MetalFX 2× support. If preflight cannot provide it, the job stops before reading conversion input instead of substituting Balanced generated output."
+                }
             } else {
-                "The engine confirms stereo MV-HEVC support before reading conversion input and uses \(generatedFallbackSummary ?? "the generated fallback") if unavailable."
+                if let generatedFallbackSummary {
+                    "The engine confirms stereo MV-HEVC support before reading conversion input and uses \(generatedFallbackSummary) if unavailable."
+                } else {
+                    "This guided step requires direct stereo MV-HEVC support. If preflight cannot provide it, the job stops before reading conversion input instead of substituting Balanced generated output."
+                }
             }
         case .generatedMVHEVC:
             generatedRequirement?.detail ?? "This job creates left- and right-eye movies before assembling MV-HEVC."
@@ -362,6 +383,15 @@ struct VideoRoutePlan: Equatable {
             return customMbps
         }
         return automatic
+    }
+
+    private var allowsGeneratedFallback: Bool {
+        switch qualitySelection {
+        case .custom, .step(.balanced):
+            true
+        case .step:
+            false
+        }
     }
 
     private func generatedSettingsSummary(

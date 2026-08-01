@@ -33,7 +33,7 @@ from scripts.qualify_file_upscale_quality_repeatability_calibration import (
     derive_calibrated_limit,
     derive_repeatability_limits,
     exit_code_for_evidence,
-    load_repeatability_calibration_plan,
+    load_repeatability_calibration_plan as _load_repeatability_calibration_plan,
     main,
     materialized_case_orders,
     parse_repeatability_calibration_plan,
@@ -45,6 +45,10 @@ from tests.test_file_upscale_quality_sweep import (
     _candidate_record as sweep_candidate_record,
     _case_record as sweep_case_record,
 )
+
+
+def load_repeatability_calibration_plan(path: Path):
+    return _load_repeatability_calibration_plan(path, allow_historical_public_contracts=True)
 
 
 def _definitions(binding):

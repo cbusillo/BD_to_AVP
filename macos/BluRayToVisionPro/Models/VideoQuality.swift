@@ -112,7 +112,7 @@ enum VideoQualityRouteValues: Equatable {
 }
 
 enum VideoQualityCatalog {
-    static let mappingVersion = 1
+    static let mappingVersion = 2
     static let defaultDirectCustomBitrateMbps = 40
     static let balancedGeneratedEyeBitrateMbps = 20
     static let balancedGeneratedMergeQuality = 75
@@ -123,21 +123,27 @@ enum VideoQualityCatalog {
         for step: QualityStep,
         target: VideoQualityTarget
     ) -> VideoQualityRouteValues? {
-        guard step == .balanced else {
-            return nil
-        }
         return switch target {
         case .directMVHEVC:
-            .direct(quality: 0.7)
+            .direct(quality: directQuality(for: step))
         case .directMVHEVCMetalFX2x:
-            .direct(quality: 0.6)
+            .direct(quality: directMetalFXQuality(for: step))
         case .generatedMVHEVC:
-            .generated(
-                eyeBitrateMbps: balancedGeneratedEyeBitrateMbps,
-                mergeQuality: balancedGeneratedMergeQuality
-            )
+            step == .balanced
+                ? .generated(
+                    eyeBitrateMbps: balancedGeneratedEyeBitrateMbps,
+                    mergeQuality: balancedGeneratedMergeQuality
+                )
+                : nil
         case .fileUpscale:
-            .upscale(quality: balancedUpscaleQuality)
+            switch step {
+            case .balanced:
+                .upscale(quality: balancedUpscaleQuality)
+            case .detailed:
+                .upscale(quality: 100)
+            default:
+                nil
+            }
         case .av1Stereo:
             nil
         }
@@ -147,15 +153,62 @@ enum VideoQualityCatalog {
         mapping(for: step, target: target) != nil
     }
 
-    static func supportsCompleteMVHEVCIntent(_ step: QualityStep) -> Bool {
+    static func supportsProfileMVHEVCIntent(_ step: QualityStep) -> Bool {
         supports(step, for: .directMVHEVC)
             && supports(step, for: .directMVHEVCMetalFX2x)
-            && supports(step, for: .generatedMVHEVC)
-            && supports(step, for: .fileUpscale)
+    }
+
+    static func supportedSteps(for target: VideoQualityTarget) -> [QualityStep] {
+        QualityStep.allCases.filter { supports($0, for: target) }
+    }
+
+    static func supportedGeneratedSteps(includingFileUpscale: Bool) -> [QualityStep] {
+        QualityStep.allCases.filter { step in
+            supports(step, for: .generatedMVHEVC)
+                && (!includingFileUpscale || supports(step, for: .fileUpscale))
+        }
     }
 
     static var selectableMVHEVCSteps: [QualityStep] {
-        QualityStep.allCases.filter(supportsCompleteMVHEVCIntent)
+        QualityStep.allCases.filter(supportsProfileMVHEVCIntent)
+    }
+
+    private static func directQuality(for step: QualityStep) -> Double {
+        switch step {
+        case .spaceSaver:
+            0.4
+        case .compact:
+            0.5
+        case .efficient:
+            0.6
+        case .balanced:
+            0.7
+        case .detailed:
+            0.75
+        case .highDetail:
+            0.8
+        case .maximumDetail:
+            0.85
+        }
+    }
+
+    private static func directMetalFXQuality(for step: QualityStep) -> Double {
+        switch step {
+        case .spaceSaver:
+            0.3
+        case .compact:
+            0.4
+        case .efficient:
+            0.5
+        case .balanced:
+            0.6
+        case .detailed:
+            0.65
+        case .highDetail:
+            0.7
+        case .maximumDetail:
+            0.75
+        }
     }
 }
 
@@ -275,7 +328,7 @@ enum VideoQualityStateError: LocalizedError, Equatable {
         case .inconsistentMirrors:
             "Video quality intent does not match its concrete compatibility values."
         case let .unsupportedStep(step):
-            "The \(step.title) quality step is not available for every required MV-HEVC route."
+            "The \(step.title) quality step is not available for the active video route."
         }
     }
 }
@@ -295,7 +348,7 @@ extension EncodingOptions {
     }
 
     mutating func selectQualityStep(_ step: QualityStep) throws {
-        guard VideoQualityCatalog.supportsCompleteMVHEVCIntent(step) else {
+        guard VideoQualityCatalog.supportsProfileMVHEVCIntent(step) else {
             throw VideoQualityStateError.unsupportedStep(step)
         }
         guard videoOutputMode == .mvHEVC else {
@@ -341,7 +394,7 @@ extension EncodingOptions {
             throw VideoQualityStateError.invalidCustomValues
         }
         if videoQuality.mode == .ladder,
-           !VideoQualityCatalog.supportsCompleteMVHEVCIntent(videoQuality.lastLadderStep)
+           !VideoQualityCatalog.supportsProfileMVHEVCIntent(videoQuality.lastLadderStep)
         {
             throw VideoQualityStateError.unsupportedStep(videoQuality.lastLadderStep)
         }
@@ -365,7 +418,7 @@ extension EncodingOptions {
             throw VideoQualityStateError.invalidCustomValues
         }
         if videoQuality.mode == .ladder,
-           !VideoQualityCatalog.supportsCompleteMVHEVCIntent(videoQuality.lastLadderStep)
+           !VideoQualityCatalog.supportsProfileMVHEVCIntent(videoQuality.lastLadderStep)
         {
             throw VideoQualityStateError.unsupportedStep(videoQuality.lastLadderStep)
         }
@@ -445,25 +498,39 @@ extension EncodingOptions {
         case .custom:
             return currentCustomVideoQuality == videoQuality.custom
         case .ladder:
-            guard videoOutputMode == .mvHEVC,
-                  case let .generated(_, mergeQuality) = VideoQualityCatalog.mapping(
-                    for: videoQuality.lastLadderStep,
-                    target: .generatedMVHEVC
-                  ),
-                  case let .upscale(quality) = VideoQualityCatalog.mapping(
-                    for: videoQuality.lastLadderStep,
-                    target: .fileUpscale
-                  )
-            else {
+            guard videoOutputMode == .mvHEVC else {
                 return false
+            }
+            let generatedPreference: BitratePreference
+            let generatedMergeQuality: Int
+            if case let .generated(_, mergeQuality) = VideoQualityCatalog.mapping(
+                for: videoQuality.lastLadderStep,
+                target: .generatedMVHEVC
+            ) {
+                generatedPreference = BitratePreference(
+                    mode: .automatic,
+                    customMbps: videoQuality.custom.generatedEyeBitrate.customMbps
+                )
+                generatedMergeQuality = mergeQuality
+            } else {
+                generatedPreference = videoQuality.custom.generatedEyeBitrate
+                generatedMergeQuality = videoQuality.custom.generatedMergeQuality
+            }
+            let resolvedUpscaleQuality: Int
+            if case let .upscale(quality) = VideoQualityCatalog.mapping(
+                for: videoQuality.lastLadderStep,
+                target: .fileUpscale
+            ) {
+                resolvedUpscaleQuality = quality
+            } else {
+                resolvedUpscaleQuality = videoQuality.custom.upscaleQuality
             }
             return mvHEVC.directFinalBitrate.mode == .automatic
                 && mvHEVC.directFinalBitrate.customMbps == videoQuality.custom.directFinalBitrate.customMbps
-                && mvHEVC.generatedEyeBitrate.mode == .automatic
-                && mvHEVC.generatedEyeBitrate.customMbps == videoQuality.custom.generatedEyeBitrate.customMbps
-                && mvHEVC.generatedMergeQuality == mergeQuality
+                && mvHEVC.generatedEyeBitrate == generatedPreference
+                && mvHEVC.generatedMergeQuality == generatedMergeQuality
                 && av1CRF == videoQuality.custom.av1CRF
-                && upscaleQuality == quality
+                && upscaleQuality == resolvedUpscaleQuality
         }
     }
 
@@ -479,26 +546,34 @@ extension EncodingOptions {
         guard videoOutputMode == .mvHEVC else {
             throw VideoQualityStateError.incompatibleOutputMode
         }
-        guard case let .generated(_, mergeQuality) = VideoQualityCatalog.mapping(
-            for: videoQuality.lastLadderStep,
-            target: .generatedMVHEVC
-        ),
-        case let .upscale(quality) = VideoQualityCatalog.mapping(
-            for: videoQuality.lastLadderStep,
-            target: .fileUpscale
-        ) else {
+        guard VideoQualityCatalog.supportsProfileMVHEVCIntent(videoQuality.lastLadderStep) else {
             throw VideoQualityStateError.unsupportedStep(videoQuality.lastLadderStep)
         }
         mvHEVC.directFinalBitrate = BitratePreference(
             mode: .automatic,
             customMbps: videoQuality.custom.directFinalBitrate.customMbps
         )
-        mvHEVC.generatedEyeBitrate = BitratePreference(
-            mode: .automatic,
-            customMbps: videoQuality.custom.generatedEyeBitrate.customMbps
-        )
-        mvHEVC.generatedMergeQuality = mergeQuality
+        if case let .generated(_, mergeQuality) = VideoQualityCatalog.mapping(
+            for: videoQuality.lastLadderStep,
+            target: .generatedMVHEVC
+        ) {
+            mvHEVC.generatedEyeBitrate = BitratePreference(
+                mode: .automatic,
+                customMbps: videoQuality.custom.generatedEyeBitrate.customMbps
+            )
+            mvHEVC.generatedMergeQuality = mergeQuality
+        } else {
+            mvHEVC.generatedEyeBitrate = videoQuality.custom.generatedEyeBitrate
+            mvHEVC.generatedMergeQuality = videoQuality.custom.generatedMergeQuality
+        }
         av1CRF = videoQuality.custom.av1CRF
-        upscaleQuality = quality
+        if case let .upscale(quality) = VideoQualityCatalog.mapping(
+            for: videoQuality.lastLadderStep,
+            target: .fileUpscale
+        ) {
+            upscaleQuality = quality
+        } else {
+            upscaleQuality = videoQuality.custom.upscaleQuality
+        }
     }
 }

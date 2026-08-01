@@ -78,7 +78,7 @@ final class VideoQualityEditorRenderTests: XCTestCase {
             qualityIntent: VideoRouteReport.QualityIntent(
                 mode: "ladder",
                 step: "balanced",
-                mappingVersion: 1
+                mappingVersion: VideoQualityCatalog.mappingVersion
             ),
             requested: VideoRouteReport.RouteSettings(
                 route: "direct_mv_hevc",

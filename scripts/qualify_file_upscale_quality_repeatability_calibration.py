@@ -617,6 +617,8 @@ def parse_repeatability_calibration_plan(raw: object) -> RepeatabilityCalibratio
 
 def load_repeatability_calibration_plan(
     path: Path,
+    *,
+    allow_historical_public_contracts: bool = False,
 ) -> tuple[RepeatabilityCalibrationPlan, CorpusBinding, str, str]:
     resolved_path = path.resolve()
     relative_path = _relative_repository_path(resolved_path, "File-upscale repeatability-calibration plan")
@@ -632,7 +634,10 @@ def load_repeatability_calibration_plan(
         or binding.selected_case_ids != EXPECTED_CASE_IDS
     ):
         raise QualificationFailure("The repeatability-calibration corpus binding does not match its pinned identity.")
-    predecessor, predecessor_binding, predecessor_sha256, _ = load_mapping_selection_plan(parsed.predecessor_plan.path)
+    predecessor, predecessor_binding, predecessor_sha256, _ = load_mapping_selection_plan(
+        parsed.predecessor_plan.path,
+        allow_historical_public_contracts=allow_historical_public_contracts,
+    )
     if (
         predecessor_sha256 != parsed.predecessor_plan.sha256
         or predecessor.schema_version != parsed.predecessor_plan.schema_version
@@ -662,6 +667,7 @@ def load_repeatability_calibration_plan(
         or parsed.maximum_final_to_base_size_ratio != predecessor.maximum_final_to_base_size_ratio
     ):
         raise QualificationFailure("The production tool, public contract, or technical check binding changed.")
+    public_contract_labels = {"video-quality ladder manifest", "VideoQuality.swift"}
     for label, file_binding in (
         ("FFmpeg vendor manifest", parsed.ffmpeg_manifest),
         ("FX Upscale binary", parsed.fx_upscale_binary),
@@ -669,7 +675,10 @@ def load_repeatability_calibration_plan(
         ("VideoQuality.swift", parsed.video_quality_swift),
         *((f"bundled tool {key}", tool) for key, tool in parsed.bundled_tools.items()),
     ):
-        if not file_binding.path.is_file() or sha256_file(file_binding.path) != file_binding.sha256:
+        current_matches = file_binding.path.is_file() and sha256_file(file_binding.path) == file_binding.sha256
+        if not current_matches and not (
+            allow_historical_public_contracts and label in public_contract_labels and file_binding.path.is_file()
+        ):
             raise QualificationFailure(f"{label} does not match its pinned SHA-256 identity.")
     return (
         RepeatabilityCalibrationPlan(**{**parsed.__dict__, "relative_path": relative_path}),

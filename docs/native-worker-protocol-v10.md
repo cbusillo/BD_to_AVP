@@ -1,7 +1,7 @@
 # Native Worker Protocol v10
 
 > This historical protocol is superseded by
-> [Native Worker Protocol v11](native-worker-protocol-v11.md).
+> [Native Worker Protocol v12](native-worker-protocol-v12.md).
 
 Protocol v10 activates deterministic direct MV-HEVC routing. The native app
 projects one route intent and only the video controls that intent can use; the

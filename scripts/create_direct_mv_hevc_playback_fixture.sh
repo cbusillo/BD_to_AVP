@@ -28,7 +28,7 @@ if [[ ! -x "$encoder" ]]; then
 fi
 automatic_quality="$(
 	cd "$repo_root"
-	uv run python -c 'from bd_to_avp.modules.video_route import AUTOMATIC_DIRECT_UPSCALE_QUALITY; print(AUTOMATIC_DIRECT_UPSCALE_QUALITY)'
+	uv run python -c 'from bd_to_avp.modules.video_quality_defaults import AUTOMATIC_DIRECT_UPSCALE_QUALITY; print(AUTOMATIC_DIRECT_UPSCALE_QUALITY)'
 )"
 
 mkdir -p "$(dirname "$output_path")"

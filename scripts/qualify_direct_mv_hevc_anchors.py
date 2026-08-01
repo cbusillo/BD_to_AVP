@@ -27,6 +27,7 @@ from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.config import Stage, config
 from bd_to_avp.modules.process import start_process
 from bd_to_avp.modules.video_mode import VideoMode
+from bd_to_avp.modules.video_quality_defaults import AUTOMATIC_DIRECT_QUALITY
 from bd_to_avp.modules.video_route import (
     DirectMVHEVCCapability,
     ResolvedVideoRoute,
@@ -729,6 +730,7 @@ def build_job(plan: AnchorPlan, source_path: Path, destination_path: Path, candi
             mode=VideoMode.MV_HEVC,
             route_intent=VideoRouteIntent.AUTOMATIC,
             direct_bitrate=BitrateOptions(BitrateMode.AUTOMATIC),
+            direct_quality=AUTOMATIC_DIRECT_QUALITY,
         ),
         upscale=UpscaleOptions(enabled=options.upscale),
         fov=options.fov,

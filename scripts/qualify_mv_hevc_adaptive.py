@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from bd_to_avp.modules.video_route import AUTOMATIC_DIRECT_QUALITY
+from bd_to_avp.modules.video_quality_defaults import AUTOMATIC_DIRECT_QUALITY
 from scripts import build_mv_hevc_encoder_macos
 from scripts.qualify_direct_mv_hevc import QualificationFailure, command_path
 from scripts.qualify_mv_hevc_corpus import (

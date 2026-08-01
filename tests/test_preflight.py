@@ -8,11 +8,11 @@ from bd_to_avp import preflight
 from bd_to_avp.modules.config import Stage
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video_route import (
-    AUTOMATIC_DIRECT_UPSCALE_QUALITY,
     DirectUpscaleMode,
     ResolvedVideoRoute,
     VideoRouteKind,
 )
+from bd_to_avp.modules.video_quality_defaults import AUTOMATIC_DIRECT_UPSCALE_QUALITY
 from bd_to_avp.process_runner import ProcessCancelled
 from bd_to_avp.vendor.pgsrip.ocr import OcrError
 from bd_to_avp.worker.protocol import VideoRouteIntent
