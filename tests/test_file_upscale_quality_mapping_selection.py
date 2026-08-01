@@ -6,10 +6,13 @@ import unittest
 
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
 from scripts.qualify_direct_mv_hevc import QualificationFailure
 from scripts.qualify_file_upscale_quality_mapping_selection import (
+    DEFAULT_CONFIRMATION_PLAN,
     DEFAULT_SELECTION_PLAN,
+    EXPECTED_CALIBRATED_NOISE,
     EXPECTED_CASE_IDS,
     EXPECTED_NOISE,
     EXPECTED_QUALITIES,
@@ -20,23 +23,29 @@ from scripts.qualify_file_upscale_quality_mapping_selection import (
     _cleanup_completed_work_directory,
     _load_resume_evidence,
     _new_evidence,
+    _public_contract_record,
     _read_frozen_source_receipt,
     _refresh_summaries,
     _retained_artifact_entry,
+    _toolchain_record,
     _validate_clean_work_directory,
     assign_provisional_mappings,
     exit_code_for_evidence,
     load_mapping_selection_plan,
+    main as mapping_selection_main,
     materialized_case_orders,
     parse_mapping_corpus_binding,
     parse_mapping_selection_plan,
+    recompute_calibration_noise_maxima,
     recompute_source_noise_maxima,
     select_provisional_subset,
+    verify_source_response,
 )
 from scripts.qualify_mv_hevc_corpus import load_manifest
 from scripts.qualify_mv_hevc_quality_match import sha256_file
 from tests.test_file_upscale_quality_sweep import (
     _base_record as sweep_base_record,
+    _bitrate_mbps as sweep_bitrate_mbps,
     _candidate_record as sweep_candidate_record,
     _case_record as sweep_case_record,
 )
@@ -76,8 +85,164 @@ def _source_noise_receipt() -> dict[str, object]:
     return {"cases": cases}
 
 
-def _definitions(plan: MappingSelectionPlan):
-    _, binding, _, _ = load_mapping_selection_plan(DEFAULT_SELECTION_PLAN)
+def _calibration_source_receipt(
+    plan: MappingSelectionPlan,
+    binding: Any,
+    binding_sha256: str,
+) -> dict[str, object]:
+    cases: list[dict[str, object]] = []
+    for case_index, case_id in enumerate(EXPECTED_CASE_IDS):
+        repeats: list[dict[str, object]] = []
+        for repeat_index in range(5):
+            candidate: dict[str, object] = {"id": "q075", "quality": 75}
+            for field, (_, source_maximum, _, _) in EXPECTED_CALIBRATED_NOISE.items():
+                baseline = 0.5 + case_index * 0.01
+                candidate[field] = (
+                    baseline + source_maximum
+                    if case_id
+                    == {
+                        "min_same_eye_ssim": "production-snow-detail",
+                        "final_to_base_size_ratio": "production-snow-detail",
+                        "minimum_frame_same_eye_ssim": "production-motion",
+                        "p05_frame_same_eye_ssim": "production-snow-detail",
+                        "frame_ssim_standard_deviation": "production-motion",
+                        "maximum_adjacent_frame_ssim_drop": "production-motion",
+                        "min_eye_order_margin": "production-motion",
+                    }[field]
+                    and repeat_index == 4
+                    else baseline
+                )
+            repeats.append({"repeat_index": repeat_index, "order": [75], "candidates": [candidate]})
+        cases.append({"id": case_id, "repeats": repeats})
+
+    recomputed = recompute_calibration_noise_maxima({"cases": cases})
+    maxima = cast(dict[str, dict[str, object]], recomputed["metrics"])
+    limit_by_field = {limit.record_field: limit for limit in plan.noise_limits}
+    previous_limits = {
+        "min_same_eye_ssim": 0.0002,
+        "final_to_base_size_ratio": 0.02,
+        "minimum_frame_same_eye_ssim": 0.0016,
+        "p05_frame_same_eye_ssim": 0.0012,
+        "frame_ssim_standard_deviation": 0.0002,
+        "maximum_adjacent_frame_ssim_drop": 0.001,
+        "min_eye_order_margin": 0.0011,
+    }
+    metrics = {
+        field: {
+            "record_field": field,
+            "source": maxima[field]["source_group"],
+            "previous_limit": previous_limits[field],
+            "observed_maximum": maxima[field]["source_maximum"],
+            "multiplier": 2,
+            "quantum": limit_by_field[field].quantum,
+            "derived_limit": limit_by_field[field].limit,
+        }
+        for field in EXPECTED_CALIBRATED_NOISE
+    }
+    scope = {
+        "calibration_only": True,
+        "selection_forbidden": True,
+        "boundary_evaluation_forbidden": True,
+        "provisional_outputs_forbidden": True,
+        "public_contract_changes_forbidden": True,
+        "later_confirmation_required": True,
+    }
+    derivation = {
+        "source_records": "raw_q075_case_repeat_candidate_records_only",
+        "group_by": ["case_id", "candidate_id"],
+        "within_case_statistic": "maximum_minus_minimum_across_five_repeats",
+        "source_maximum_statistic": "maximum_across_cases",
+        "formula": "max(previous_limit, ceil(2 * source_maximum / quantum) * quantum)",
+        "multiplier": 2,
+        "predecessor_receipt_records_forbidden": True,
+        "summary_fields_as_source_forbidden": True,
+    }
+    return {
+        "schema_version": 4,
+        "experiment_id": "file-upscale-quality-repeatability-calibration-v2",
+        "source_git_sha": "1f988fbf198595d52084eabc3055edd2f1d14221",
+        "source_tree_dirty": False,
+        "experiment_plan": {
+            "path": "docs/qualification/file-upscale-quality-repeatability-calibration-v2.json",
+            "sha256": "c4cf953bd868eadd04f4ed11a7ca4f2211c81f5ee72f375347f5f3d9cf14ecdb",
+        },
+        "corpus_binding": {
+            "path": binding.relative_path,
+            "binding_id": binding.binding_id,
+            "sha256": binding_sha256,
+        },
+        "selected_case_ids": list(binding.selected_case_ids),
+        "candidates": [
+            {
+                "id": "q075",
+                "quality": 75,
+                "quality_factor": "75/100",
+                "bitrate_scaling_factor": "0.75",
+            }
+        ],
+        "public_contract_bindings": _public_contract_record(plan),
+        "toolchain": _toolchain_record(cast(Any, plan)),
+        "method": {
+            "stage": "repeatability_limit_calibration_only",
+            "scope": scope,
+            "derivation": derivation,
+        },
+        "predecessor": {
+            "receipt": {
+                "schema_version": 3,
+                "experiment_id": "file-upscale-quality-mapping-selection-v1",
+                "sha256": "c8e2478913a8c458657f0f7904720d6f76e8761b8ba1922e7c5dda5b916d2cef",
+                "source_git_sha": "b93a9729a2396b3942e679a1a8db34967f9d4467",
+                "file_mode": "0444",
+                "provided_via": "--mapping-selection-receipt",
+            },
+            "plan": {
+                "path": "docs/qualification/file-upscale-quality-mapping-selection-v1.json",
+                "sha256": "3aa76c79adb81e72dd89f9fd548ef73698880eebf6332c149fe401c058d090ee",
+                "schema_version": 1,
+            },
+            "accepted_complete_receipt_verified": True,
+            "records_used_for_calibration": False,
+        },
+        "cases": cases,
+        "repeatability_calibration": {
+            "source_records": "raw_q075_case_repeat_candidate_records_only",
+            "group_by": ["case_id", "candidate_id"],
+            "within_case_statistic": "maximum_minus_minimum_across_five_repeats",
+            "source_maximum_statistic": "maximum_across_cases",
+            "formula": "max(previous_limit, ceil(2 * source_maximum / quantum) * quantum)",
+            "multiplier": 2,
+            "raw_record_count": 35,
+            "case_repeat_ranges": recomputed["case_repeat_ranges"],
+            "metrics": metrics,
+        },
+        "later_confirmation": {
+            "required_before_public_contract_changes": True,
+            "status": "not_performed",
+        },
+        "acceptance": {
+            "complete": True,
+            "finalized": True,
+            "planned_full_quality_gated_corpus": True,
+            "predecessor_verified": True,
+            "expected_record_count": 35,
+            "record_count": 35,
+            "structural_timing_geometry_hash_provenance_passed": True,
+            "eye_order_passed": True,
+            "size_cap_passed": True,
+            "retained_artifacts_complete": True,
+            "derived_limits_complete": True,
+            "calibration_receipt_valid": True,
+            "calibration_only": True,
+            "public_contract_changes_forbidden": True,
+            "later_confirmation_required": True,
+            "passed": True,
+        },
+    }
+
+
+def _definitions(plan: MappingSelectionPlan, selection_plan: Path = DEFAULT_SELECTION_PLAN):
+    _, binding, _, _ = load_mapping_selection_plan(selection_plan)
     manifest = load_manifest(binding.source_manifest_path)
     by_id = {case.case_id: case for case in manifest.cases}
     return binding, {case_id: by_id[case_id] for case_id in EXPECTED_CASE_IDS}
@@ -96,12 +261,13 @@ def _retained_artifact_manifest(plan: MappingSelectionPlan) -> list[dict[str, ob
 
 def _complete_evidence(
     *,
+    selection_plan: Path = DEFAULT_SELECTION_PLAN,
     collapse_q100: bool = False,
     oversize_q045: bool = False,
     storage_tie_q045_q055: bool = False,
 ) -> tuple[MappingSelectionPlan, Any, Any, dict[str, Any]]:
-    plan, binding, plan_sha256, binding_sha256 = load_mapping_selection_plan(DEFAULT_SELECTION_PLAN)
-    _, definitions = _definitions(plan)
+    plan, binding, plan_sha256, binding_sha256 = load_mapping_selection_plan(selection_plan)
+    _, definitions = _definitions(plan, selection_plan)
     evidence = cast(
         dict[str, Any],
         _new_evidence(
@@ -154,6 +320,7 @@ def _complete_evidence(
 class FileUpscaleMappingPlanTests(unittest.TestCase):
     def setUp(self) -> None:
         self.plan_document = json.loads(DEFAULT_SELECTION_PLAN.read_text(encoding="utf-8"))
+        self.confirmation_document = json.loads(DEFAULT_CONFIRMATION_PLAN.read_text(encoding="utf-8"))
         self.corpus_path = DEFAULT_SELECTION_PLAN.with_name("file-upscale-quality-corpus-v2.json")
         self.corpus_document = json.loads(self.corpus_path.read_text(encoding="utf-8"))
 
@@ -238,6 +405,108 @@ class FileUpscaleMappingPlanTests(unittest.TestCase):
         plan, _, _, _ = load_mapping_selection_plan(DEFAULT_SELECTION_PLAN)
         self.assertEqual(sha256_file(plan.ladder_manifest.path), PUBLIC_LADDER_SHA256)
         self.assertEqual(sha256_file(plan.video_quality_swift.path), VIDEO_QUALITY_SWIFT_SHA256)
+
+    def test_v2_plan_binds_exact_calibration_identity_and_thresholds(self) -> None:
+        plan, binding, plan_sha256, _ = load_mapping_selection_plan(DEFAULT_CONFIRMATION_PLAN)
+
+        self.assertEqual(plan_sha256, "c831add22aed97b629c53af76b60cd7eccf6654c088a6a73f1b5ba53b4095118")
+        self.assertEqual(plan.experiment_id, "file-upscale-quality-mapping-confirmation-v2")
+        self.assertEqual(plan.purpose, "objective_provisional_mapping_confirmation_not_public_ladder_mapping")
+        self.assertEqual(plan.source_receipt.schema_version, 4)
+        self.assertEqual(plan.source_receipt.experiment_id, "file-upscale-quality-repeatability-calibration-v2")
+        self.assertEqual(plan.source_receipt.sha256, "6d44f4c23df142d3a819f0aba1b87f9fa688435485f4f1798a103ea94ccbe49e")
+        self.assertEqual(plan.source_receipt.source_git_sha, "1f988fbf198595d52084eabc3055edd2f1d14221")
+        self.assertEqual(plan.source_plan.sha256, "c4cf953bd868eadd04f4ed11a7ca4f2211c81f5ee72f375347f5f3d9cf14ecdb")
+        self.assertEqual(binding.selected_case_ids, EXPECTED_CASE_IDS)
+        self.assertEqual(
+            {limit.key: limit.limit for limit in plan.noise_limits},
+            {key: values[3] for key, values in EXPECTED_CALIBRATED_NOISE.items()},
+        )
+        self.assertEqual(len(_retained_artifact_manifest(plan)), 32)
+        self.assertFalse(self.confirmation_document["decision_policy"]["ladder_mapping_selected"])
+
+    def test_v2_threshold_dispatch_preserves_v1_and_storage_distinction(self) -> None:
+        v1, _, _, _ = load_mapping_selection_plan(DEFAULT_SELECTION_PLAN)
+        v2, _, _, _ = load_mapping_selection_plan(DEFAULT_CONFIRMATION_PLAN)
+        v1_limits = {limit.key: limit.limit for limit in v1.noise_limits}
+        v2_limits = {limit.key: limit.limit for limit in v2.noise_limits}
+
+        self.assertEqual(v1_limits, {key: values[3] for key, values in EXPECTED_NOISE.items()})
+        self.assertEqual(v2_limits, {key: values[3] for key, values in EXPECTED_CALIBRATED_NOISE.items()})
+        self.assertEqual(v1_limits["final_to_base_size_ratio"], 0.02)
+        self.assertEqual(v2_limits["final_to_base_size_ratio"], 0.03)
+        self.assertEqual(v2.minimum_case_median_storage_growth, 0.02)
+        self.assertEqual(v2.minimum_minimum_frame_delta, -0.0054)
+        self.assertEqual(v2.minimum_p05_delta, -0.0019)
+        self.assertEqual(v2.maximum_adjacent_drop_increase, 0.0058)
+        self.assertEqual(v2.real_case_minimum_frame_threshold, 0.0054)
+        self.assertEqual(v2.real_case_p05_threshold, 0.0019)
+
+    def test_v2_source_verifier_accepts_only_calibration_receipt_contract(self) -> None:
+        plan, binding, _, binding_sha256 = load_mapping_selection_plan(DEFAULT_CONFIRMATION_PLAN)
+        receipt = _calibration_source_receipt(plan, binding, binding_sha256)
+
+        with patch(
+            "scripts.qualify_file_upscale_quality_mapping_selection._read_frozen_source_receipt",
+            return_value=receipt,
+        ):
+            verified = cast(dict[str, Any], verify_source_response(plan, Path("calibration-receipt.json")))
+
+        self.assertEqual(verified["receipt"]["schema_version"], 4)
+        self.assertTrue(verified["calibration_scope"]["calibration_only"])
+        self.assertFalse(verified["predecessor_isolation"]["records_used_for_calibration"])
+        self.assertEqual(verified["later_confirmation"]["status"], "not_performed")
+        self.assertEqual(
+            {key: metric["limit"] for key, metric in verified["noise_derivation"]["metrics"].items()},
+            {key: values[3] for key, values in EXPECTED_CALIBRATED_NOISE.items()},
+        )
+
+    def test_v2_source_verifier_rejects_predecessor_outcomes_and_completed_confirmation(self) -> None:
+        plan, binding, _, binding_sha256 = load_mapping_selection_plan(DEFAULT_CONFIRMATION_PLAN)
+        receipt = _calibration_source_receipt(plan, binding, binding_sha256)
+        cast(dict[str, object], receipt["predecessor"])["candidate_outcomes"] = []
+        with patch(
+            "scripts.qualify_file_upscale_quality_mapping_selection._read_frozen_source_receipt",
+            return_value=receipt,
+        ):
+            with self.assertRaisesRegex(QualificationFailure, "invalid shape"):
+                verify_source_response(plan, Path("calibration-receipt.json"))
+
+        receipt = _calibration_source_receipt(plan, binding, binding_sha256)
+        cast(dict[str, object], receipt["predecessor"])["records_used_for_calibration"] = True
+        with patch(
+            "scripts.qualify_file_upscale_quality_mapping_selection._read_frozen_source_receipt",
+            return_value=receipt,
+        ):
+            with self.assertRaisesRegex(QualificationFailure, "predecessor isolation"):
+                verify_source_response(plan, Path("calibration-receipt.json"))
+
+        receipt = _calibration_source_receipt(plan, binding, binding_sha256)
+        cast(dict[str, object], receipt["later_confirmation"])["status"] = "performed"
+        with patch(
+            "scripts.qualify_file_upscale_quality_mapping_selection._read_frozen_source_receipt",
+            return_value=receipt,
+        ):
+            with self.assertRaisesRegex(QualificationFailure, "already performed"):
+                verify_source_response(plan, Path("calibration-receipt.json"))
+
+    def test_v1_new_evidence_receipt_shape_remains_frozen(self) -> None:
+        plan, binding, plan_sha256, binding_sha256 = load_mapping_selection_plan(DEFAULT_SELECTION_PLAN)
+        evidence = _new_evidence(
+            plan,
+            binding,
+            plan_sha256,
+            binding_sha256,
+            {"verified": True},
+            {"git_head": "f" * 40},
+        )
+        evidence.pop("created_at")
+        evidence.pop("updated_at")
+        canonical = json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
+
+        self.assertEqual(
+            hashlib.sha256(canonical).hexdigest(), "87121a354f6fb0a48554beb40f6ce37584439fe7d84cd0f271731eae49019067"
+        )
 
 
 class FileUpscaleMappingAnalysisTests(unittest.TestCase):
@@ -369,6 +638,105 @@ class FileUpscaleMappingAnalysisTests(unittest.TestCase):
             3,
         )
 
+    def test_v2_complete_confirmation_requires_all_seven_and_preserves_exit_contract(self) -> None:
+        _, _, _, evidence = _complete_evidence(selection_plan=DEFAULT_CONFIRMATION_PLAN)
+
+        self.assertEqual(
+            evidence["selected_subset"]["candidate_ids"], [f"q{quality:03d}" for quality in EXPECTED_QUALITIES]
+        )
+        self.assertEqual(len(evidence["boundary_evaluations"]), 21)
+        self.assertTrue(evidence["acceptance"]["all_seven_candidates_selected"])
+        self.assertTrue(evidence["acceptance"]["balanced_technically_eligible"])
+        self.assertTrue(evidence["acceptance"]["objective_decision_ready"])
+        self.assertEqual(exit_code_for_evidence(evidence), 0)
+
+        _, _, _, negative = _complete_evidence(
+            selection_plan=DEFAULT_CONFIRMATION_PLAN,
+            collapse_q100=True,
+        )
+        self.assertTrue(negative["acceptance"]["complete"])
+        self.assertFalse(negative["acceptance"]["objective_decision_ready"])
+        self.assertEqual(exit_code_for_evidence(negative), 1)
+
+        plan, binding, plan_sha256, binding_sha256 = load_mapping_selection_plan(DEFAULT_CONFIRMATION_PLAN)
+        incomplete = _new_evidence(
+            plan,
+            binding,
+            plan_sha256,
+            binding_sha256,
+            {"verified": True},
+            {"git_head": "f" * 40},
+        )
+        self.assertEqual(exit_code_for_evidence(incomplete), 3)
+
+    def test_v2_storage_growth_uses_strict_002_not_repeatability_003(self) -> None:
+        plan, binding, definitions, evidence = _complete_evidence(selection_plan=DEFAULT_CONFIRMATION_PLAN)
+        first_case = cast(dict[str, Any], evidence["cases"][0])
+        for repeat in cast(list[dict[str, Any]], first_case["repeats"]):
+            q055 = next(candidate for candidate in repeat["candidates"] if candidate["id"] == "q055")
+            q055["final_bytes"] = 1834
+            q055["final_to_base_size_ratio"] = 1.834
+            q055["effective_bitrate_mbps"] = sweep_bitrate_mbps(1834, q055["duration_seconds"])
+        _refresh_summaries(evidence, plan, binding, definitions)
+
+        q055_summary = next(summary for summary in evidence["candidate_summaries"] if summary["id"] == "q055")
+        boundary = next(
+            item
+            for item in evidence["boundary_evaluations"]
+            if item["lower_candidate_id"] == "q045" and item["higher_candidate_id"] == "q055"
+        )
+        self.assertTrue(q055_summary["repeatability_passed"])
+        self.assertFalse(boundary["storage_passed"])
+        self.assertGreater(boundary["minimum_repeat_storage_growth_ratio"], 0.0)
+        self.assertLess(boundary["minimum_case_storage_coverage"], 0.02)
+        self.assertEqual(plan.noise_limits[1].limit, 0.03)
+        self.assertEqual(plan.minimum_case_median_storage_growth, 0.02)
+        self.assertEqual(exit_code_for_evidence(evidence), 1)
+
+    def test_v2_cli_preserves_fatal_exit_two(self) -> None:
+        with (
+            patch(
+                "scripts.qualify_file_upscale_quality_mapping_selection._configured_private_paths",
+                return_value=(),
+            ),
+            patch(
+                "scripts.qualify_file_upscale_quality_mapping_selection.run_mapping_selection",
+                side_effect=QualificationFailure("invalid v2 source"),
+            ),
+        ):
+            exit_code = mapping_selection_main(
+                [
+                    "--selection-plan",
+                    str(DEFAULT_CONFIRMATION_PLAN),
+                    "--source-receipt",
+                    "calibration-receipt.json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 2)
+
+    def test_cli_interrupt_returns_resumable_exit_three(self) -> None:
+        with (
+            patch(
+                "scripts.qualify_file_upscale_quality_mapping_selection._configured_private_paths",
+                return_value=(),
+            ),
+            patch(
+                "scripts.qualify_file_upscale_quality_mapping_selection.run_mapping_selection",
+                side_effect=KeyboardInterrupt,
+            ),
+        ):
+            exit_code = mapping_selection_main(
+                [
+                    "--selection-plan",
+                    str(DEFAULT_CONFIRMATION_PLAN),
+                    "--source-receipt",
+                    "calibration-receipt.json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 3)
+
 
 class FileUpscaleMappingResumePrivacyTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -470,91 +838,177 @@ class FileUpscaleMappingResumePrivacyTests(unittest.TestCase):
             safe = _artifact_path(root, "production-dark/repeat-1/q075-upscaled.mov")
             self.assertTrue(str(safe).startswith(str(root.resolve())))
 
-    def test_completed_writable_receipt_is_recovered_to_frozen_mode(self) -> None:
-        plan, binding, definitions, evidence = _complete_evidence()
+            target = root / "target.mov"
+            target.write_bytes(b"must-survive")
+            symlink = root / "production-dark/repeat-1/q075-upscaled.mov"
+            symlink.parent.mkdir(parents=True)
+            symlink.symlink_to(target)
+            with self.assertRaisesRegex(QualificationFailure, "must not use symlinks"):
+                _artifact_path(root, "production-dark/repeat-1/q075-upscaled.mov")
+            self.assertEqual(target.read_bytes(), b"must-survive")
+
+    def test_incomplete_resume_discards_only_expected_unrecorded_crash_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            artifact_directory = root / "artifacts"
-            artifact_directory.mkdir()
-            artifacts = []
-            for case_id in plan.retained_case_ids:
-                case = next(case for case in evidence["cases"] if case["id"] == case_id)
-                repeat = case["repeats"][plan.retained_repeat_index]
-                base = repeat["base"]
-                base_data = case_id.encode().ljust(base["bytes"], b"b")
-                base_sha256 = hashlib.sha256(base_data).hexdigest()
-                base["sha256"] = base_sha256
-                artifacts.append(
-                    {
-                        "artifact_id": f"{case_id}-r1-base",
-                        "case_id": case_id,
-                        "repeat_index": 0,
-                        "kind": "generated_base",
-                        "candidate_id": None,
-                        "path": f"{case_id}/repeat-1/generated-base.mov",
-                        "bytes": len(base_data),
-                        "sha256": base_sha256,
-                    }
-                )
-                for candidate in repeat["candidates"]:
-                    candidate["base_sha256"] = base_sha256
-                    candidate["input_copy_sha256"] = base_sha256
-                    candidate_data = candidate["id"].encode().ljust(candidate["final_bytes"], b"c")
-                    candidate_sha256 = hashlib.sha256(candidate_data).hexdigest()
-                    candidate["final_sha256"] = candidate_sha256
-                    artifacts.append(
-                        {
-                            "artifact_id": f"{case_id}-r1-{candidate['id']}",
-                            "case_id": case_id,
-                            "repeat_index": 0,
-                            "kind": "candidate_output",
-                            "candidate_id": candidate["id"],
-                            "path": f"{case_id}/repeat-1/{candidate['id']}-upscaled.mov",
-                            "bytes": len(candidate_data),
-                            "sha256": candidate_sha256,
-                        }
-                    )
-                    artifact_path = artifact_directory / str(artifacts[-1]["path"])
-                    artifact_path.parent.mkdir(parents=True, exist_ok=True)
-                    artifact_path.write_bytes(candidate_data)
-                base_path = artifact_directory / str(artifacts[-(len(plan.candidates) + 1)]["path"])
-                base_path.parent.mkdir(parents=True, exist_ok=True)
-                base_path.write_bytes(base_data)
-            evidence["retained_artifacts"] = artifacts
-            _refresh_summaries(evidence, plan, binding, definitions)
-            evidence["acceptance"]["finalized"] = True
+            evidence = self._partial_evidence()
             output = root / "receipt.json"
             output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             output.chmod(0o644)
+            artifact_directory = root / "artifacts"
+            expected = artifact_directory / "production-dark/repeat-1/generated-base.mov"
+            expected.parent.mkdir(parents=True)
+            expected.write_bytes(b"crash-window")
 
-            _load_resume_evidence(
+            loaded = _load_resume_evidence(
                 output,
-                plan=plan,
-                binding=binding,
+                plan=self.plan,
+                binding=self.binding,
                 plan_sha256=self.plan_sha256,
                 binding_sha256=self.binding_sha256,
                 source_response=self.source_response,
                 environment=self.environment,
-                definitions=definitions,
+                definitions=self.definitions,
                 private_paths=(),
                 artifact_directory=artifact_directory,
             )
 
-            self.assertEqual(output.stat().st_mode & 0o777, 0o444)
+            self.assertEqual(loaded, evidence)
+            self.assertFalse(expected.exists())
             (artifact_directory / "orphan.mov").write_bytes(b"orphan")
             with self.assertRaisesRegex(QualificationFailure, "unrecorded or missing media"):
                 _load_resume_evidence(
                     output,
-                    plan=plan,
-                    binding=binding,
+                    plan=self.plan,
+                    binding=self.binding,
                     plan_sha256=self.plan_sha256,
                     binding_sha256=self.binding_sha256,
+                    source_response=self.source_response,
+                    environment=self.environment,
+                    definitions=self.definitions,
+                    private_paths=(),
+                    artifact_directory=artifact_directory,
+                )
+
+    def test_incomplete_resume_rejects_expected_symlink_without_deleting_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            evidence = self._partial_evidence()
+            output = root / "receipt.json"
+            output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            output.chmod(0o644)
+            artifact_directory = root / "artifacts"
+            target = artifact_directory / "target.mov"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"must-survive")
+            expected = artifact_directory / "production-dark/repeat-1/generated-base.mov"
+            expected.parent.mkdir(parents=True)
+            expected.symlink_to(target)
+
+            with self.assertRaisesRegex(QualificationFailure, "must not use symlinks"):
+                _load_resume_evidence(
+                    output,
+                    plan=self.plan,
+                    binding=self.binding,
+                    plan_sha256=self.plan_sha256,
+                    binding_sha256=self.binding_sha256,
+                    source_response=self.source_response,
+                    environment=self.environment,
+                    definitions=self.definitions,
+                    private_paths=(),
+                    artifact_directory=artifact_directory,
+                )
+
+            self.assertEqual(target.read_bytes(), b"must-survive")
+            self.assertTrue(expected.is_symlink())
+
+    def test_completed_writable_receipt_is_recovered_to_frozen_mode(self) -> None:
+        for selection_plan in (DEFAULT_SELECTION_PLAN, DEFAULT_CONFIRMATION_PLAN):
+            with self.subTest(selection_plan=selection_plan.name), tempfile.TemporaryDirectory() as temporary:
+                plan, binding, definitions, evidence = _complete_evidence(selection_plan=selection_plan)
+                _, _, plan_sha256, binding_sha256 = load_mapping_selection_plan(selection_plan)
+                root = Path(temporary)
+                artifact_directory = root / "artifacts"
+                artifact_directory.mkdir()
+                artifacts = []
+                for case_id in plan.retained_case_ids:
+                    case = next(case for case in evidence["cases"] if case["id"] == case_id)
+                    repeat = case["repeats"][plan.retained_repeat_index]
+                    base = repeat["base"]
+                    base_data = case_id.encode().ljust(base["bytes"], b"b")
+                    base_sha256 = hashlib.sha256(base_data).hexdigest()
+                    base["sha256"] = base_sha256
+                    artifacts.append(
+                        {
+                            "artifact_id": f"{case_id}-r1-base",
+                            "case_id": case_id,
+                            "repeat_index": 0,
+                            "kind": "generated_base",
+                            "candidate_id": None,
+                            "path": f"{case_id}/repeat-1/generated-base.mov",
+                            "bytes": len(base_data),
+                            "sha256": base_sha256,
+                        }
+                    )
+                    for candidate in repeat["candidates"]:
+                        candidate["base_sha256"] = base_sha256
+                        candidate["input_copy_sha256"] = base_sha256
+                        candidate_data = candidate["id"].encode().ljust(candidate["final_bytes"], b"c")
+                        candidate_sha256 = hashlib.sha256(candidate_data).hexdigest()
+                        candidate["final_sha256"] = candidate_sha256
+                        artifacts.append(
+                            {
+                                "artifact_id": f"{case_id}-r1-{candidate['id']}",
+                                "case_id": case_id,
+                                "repeat_index": 0,
+                                "kind": "candidate_output",
+                                "candidate_id": candidate["id"],
+                                "path": f"{case_id}/repeat-1/{candidate['id']}-upscaled.mov",
+                                "bytes": len(candidate_data),
+                                "sha256": candidate_sha256,
+                            }
+                        )
+                        artifact_path = artifact_directory / str(artifacts[-1]["path"])
+                        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+                        artifact_path.write_bytes(candidate_data)
+                    base_path = artifact_directory / str(artifacts[-(len(plan.candidates) + 1)]["path"])
+                    base_path.parent.mkdir(parents=True, exist_ok=True)
+                    base_path.write_bytes(base_data)
+                evidence["retained_artifacts"] = artifacts
+                _refresh_summaries(evidence, plan, binding, definitions)
+                evidence["acceptance"]["finalized"] = True
+                output = root / "receipt.json"
+                output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                output.chmod(0o644)
+
+                _load_resume_evidence(
+                    output,
+                    plan=plan,
+                    binding=binding,
+                    plan_sha256=plan_sha256,
+                    binding_sha256=binding_sha256,
                     source_response=self.source_response,
                     environment=self.environment,
                     definitions=definitions,
                     private_paths=(),
                     artifact_directory=artifact_directory,
                 )
+
+                self.assertEqual(len(artifacts), 32)
+                self.assertEqual(output.stat().st_mode & 0o777, 0o444)
+                (artifact_directory / "orphan.mov").write_bytes(b"orphan")
+                with self.assertRaisesRegex(QualificationFailure, "unrecorded or missing media"):
+                    _load_resume_evidence(
+                        output,
+                        plan=plan,
+                        binding=binding,
+                        plan_sha256=plan_sha256,
+                        binding_sha256=binding_sha256,
+                        source_response=self.source_response,
+                        environment=self.environment,
+                        definitions=definitions,
+                        private_paths=(),
+                        artifact_directory=artifact_directory,
+                    )
 
     def test_orphan_work_entry_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
