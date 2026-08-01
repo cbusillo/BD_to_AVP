@@ -20,6 +20,7 @@ from scripts.qualify_file_upscale_quality_sweep import (
     _completed_resume_is_consistent,
     _configured_private_paths,
     _format_duration_seconds,
+    _inspect_mv_hevc_output,
     _load_resume_evidence,
     _new_evidence,
     _prepare_owned_work_directory,
@@ -35,6 +36,7 @@ from scripts.qualify_file_upscale_quality_sweep import (
     parse_sweep_plan,
     quality_factor_string,
 )
+from scripts.qualify_mv_hevc_corpus import PreparedCase
 
 
 HEX = "0123456789abcdef" * 4
@@ -68,6 +70,7 @@ def _case_record(case, binding) -> dict[str, object]:
 
 def _base_record(case, repeat_index: int) -> dict[str, object]:
     duration_seconds = _duration_seconds(case)
+    frame_count = 96
     return {
         "bytes": 1000,
         "codec_name": "hevc",
@@ -76,9 +79,11 @@ def _base_record(case, repeat_index: int) -> dict[str, object]:
         "duration_tolerance_frames": 1,
         "effective_bitrate_mbps": _bitrate_mbps(1000, duration_seconds),
         "elapsed_seconds": 10.0,
-        "frame_count": 96,
-        "frame_rate": case.output_frame_rate,
+        "frame_count": frame_count,
+        "avg_frame_rate": case.output_frame_rate,
         "r_frame_rate": case.output_frame_rate,
+        "stream_duration_ts": frame_count * Fraction(case.output_frame_rate).denominator,
+        "stream_time_base": f"1/{Fraction(case.output_frame_rate).numerator}",
         "generated_eye_bitrate_mbps": 20,
         "generated_merge_quality": 75,
         "geometry_scale": 1,
@@ -104,6 +109,7 @@ def _candidate_record(
     quality_score: float,
 ) -> dict[str, object]:
     duration_seconds = _duration_seconds(case)
+    frame_count = 96
     left_cross = 0.40
     right_cross = 0.41
     left_match = quality_score
@@ -123,10 +129,12 @@ def _candidate_record(
         "final_bytes": final_bytes,
         "final_sha256": final_sha,
         "final_to_base_size_ratio": final_bytes / 1000.0,
-        "frame_count": 96,
+        "frame_count": frame_count,
         "frame_quality_sample_count": 96,
-        "frame_rate": case.output_frame_rate,
+        "avg_frame_rate": case.output_frame_rate,
         "r_frame_rate": case.output_frame_rate,
+        "stream_duration_ts": frame_count * Fraction(case.output_frame_rate).denominator,
+        "stream_time_base": f"1/{Fraction(case.output_frame_rate).numerator}",
         "frame_ssim_standard_deviation": 0.0001,
         "geometry_scale": 2,
         "height": case.output_eye_height * 2,
@@ -180,7 +188,7 @@ class FileUpscaleQualityPlanTests(unittest.TestCase):
         self.assertEqual(plan.balanced_quality, 75)
         self.assertEqual(plan.base_eye_bitrate_mbps, 20)
         self.assertEqual(plan.base_merge_quality, 75)
-        self.assertEqual(plan.frame_rate_contract, "exact_rational_match_v1")
+        self.assertEqual(plan.frame_rate_contract, "ffprobe_r_frame_rate_frame_count_duration_v2")
         self.assertEqual(plan.duration_tolerance_frames, 1)
         self.assertEqual([candidate.quality for candidate in plan.candidates], [65, 75, 85])
         self.assertEqual(plan.orders, ((65, 75, 85), (75, 85, 65), (85, 65, 75)))
@@ -341,6 +349,28 @@ class FileUpscaleQualityEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(QualificationFailure, "recorded generated base"):
             _validate_candidate_against_base(record, base, self.plan.candidates[0])
 
+    def test_candidate_accepts_a_different_consistent_average_rate(self) -> None:
+        case = self.full_cases[0]
+        base = _base_record(case, 0)
+        record = _candidate_record(case, 65, 0, 0, final_bytes=650, quality_score=0.961)
+        record["avg_frame_rate"] = "28800/1201"
+        record["stream_time_base"] = "1/600"
+        record["stream_duration_ts"] = 2402
+        record["duration_seconds"] = 2402 / 600
+        record["effective_bitrate_mbps"] = _bitrate_mbps(record["final_bytes"], record["duration_seconds"])
+
+        _validate_candidate_record(record, self.plan.candidates[0], 0, 0)
+        _validate_candidate_against_base(record, base, self.plan.candidates[0])
+
+    def test_candidate_rejects_average_rate_inconsistent_with_stream_timing(self) -> None:
+        case = self.full_cases[0]
+        base = _base_record(case, 0)
+        record = _candidate_record(case, 65, 0, 0, final_bytes=650, quality_score=0.961)
+        record["avg_frame_rate"] = "25"
+
+        with self.assertRaisesRegex(QualificationFailure, "average frame rate contradicts"):
+            _validate_candidate_against_base(record, base, self.plan.candidates[0])
+
     def test_resume_rejects_non_prefix_candidate_order(self) -> None:
         evidence = self._evidence(self.full_cases[:1], complete=False)
         repeat = evidence["cases"][0]["repeats"][0]
@@ -368,12 +398,12 @@ class FileUpscaleQualityEvidenceTests(unittest.TestCase):
         timing_tampered = self._evidence(self.full_cases[:1])
         for repeat in timing_tampered["cases"][0]["repeats"]:
             base = repeat["base"]
-            base["frame_rate"] = "25"
+            base["avg_frame_rate"] = "25"
             base["r_frame_rate"] = "25"
             base["duration_seconds"] = 123.0
             base["effective_bitrate_mbps"] = _bitrate_mbps(base["bytes"], 123.0)
             for record in repeat["candidates"]:
-                record["frame_rate"] = "25"
+                record["avg_frame_rate"] = "25"
                 record["r_frame_rate"] = "25"
                 record["duration_seconds"] = 123.0
                 record["base_effective_bitrate_mbps"] = base["effective_bitrate_mbps"]
@@ -540,6 +570,50 @@ class FileUpscaleQualityEvidenceTests(unittest.TestCase):
 
         with patch("scripts.qualify_file_upscale_quality_sweep.run", return_value=completed):
             self.assertEqual(_format_duration_seconds("ffprobe", Path("movie.mov")), 4.0)
+
+    def test_inspection_accepts_quantized_average_rate_from_integer_stream_timing(self) -> None:
+        case = self.full_cases[0]
+        prepared = PreparedCase(
+            definition=case,
+            source_path=Path("source.mkv"),
+            reference_left=Path("left.mkv"),
+            reference_right=Path("right.mkv"),
+            duration_seconds=109 / float(Fraction("24000/1001")),
+            frame_count=109,
+            source_evidence={},
+        )
+        stream = {
+            "codec_name": "hevc",
+            "codec_tag_string": "hvc1",
+            "width": case.output_eye_width,
+            "height": case.output_eye_height,
+            "avg_frame_rate": "8175/341",
+            "r_frame_rate": "24000/1001",
+            "time_base": "1/600",
+            "duration_ts": 2728,
+            "nb_read_frames": "109",
+        }
+
+        with (
+            patch("scripts.qualify_file_upscale_quality_sweep._ffprobe_output_stream", return_value=stream),
+            patch("scripts.qualify_file_upscale_quality_sweep._format_duration_seconds", return_value=4.546667),
+            patch(
+                "scripts.qualify_file_upscale_quality_sweep.box_types",
+                return_value=set(CURRENT_REQUIRED_BOX_TYPES),
+            ),
+        ):
+            structure = _inspect_mv_hevc_output(
+                "ffprobe",
+                prepared,
+                self.plan,
+                Path("generated-base.mov"),
+                geometry_scale=1,
+            )
+
+        self.assertEqual(structure["avg_frame_rate"], "8175/341")
+        self.assertEqual(structure["r_frame_rate"], "24000/1001")
+        self.assertEqual(structure["stream_time_base"], "1/600")
+        self.assertEqual(structure["stream_duration_ts"], 2728)
 
 
 if __name__ == "__main__":

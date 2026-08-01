@@ -104,8 +104,10 @@ The runner uses the same `fx_upscale_command(input_path, quality)` helper as pro
 canonical quality factor as `quality / 100`, validates 2x spatial output, downsamples each final eye back to source
 dimensions for aggregate and per-frame SSIM, and records cross-eye margins, frame-tail statistics, bytes, effective
 bitrate, base ratio, upscale-only time, projected full-route time, source/base/final hashes, and source/tool/Git
-provenance. The checked timing contract requires exact rational frame-rate preservation and allows at most one frame
-of container-duration tolerance; effective bitrate uses the validated output duration. Evidence is written atomically
+provenance. The checked timing contract requires the pinned FFprobe `r_frame_rate` signature and decoded frame count to
+match the source, checks integer stream duration within one source frame, and records the independently derived average
+frame rate without requiring it to textually equal the nominal rate. Effective bitrate uses the validated container
+duration. Evidence is written atomically
 after every base and candidate, and work directories are owned and locked for safe resume.
 
 Exit `0` means the complete planned stress subset is structurally decision-ready with valid eye order and monotonic
