@@ -102,10 +102,10 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertNil(state.progress)
     }
 
-    func testSharedV11ProgressFixtureDecodes() throws {
+    func testSharedV12ProgressFixtureDecodes() throws {
         let event = try JSONDecoder().decode(
             WorkerEvent.self,
-            from: sharedFixtureData(named: "native_worker_stage_started_progress_v11.json")
+            from: sharedFixtureData(named: "native_worker_stage_started_progress_v12.json")
         )
 
         XCTAssertEqual(event.payload.progress, WorkerProgress(currentStage: 1, totalStages: 2, stageFraction: nil))
@@ -130,7 +130,7 @@ final class WorkerLifecycleTests: XCTestCase {
     func testStructuredAudioFallbackWarningExposesCodecsAndActualAction() throws {
         let event = try JSONDecoder().decode(
             WorkerEvent.self,
-            from: sharedFixtureData(named: "native_worker_audio_fallback_warning_v11.json")
+            from: sharedFixtureData(named: "native_worker_audio_fallback_warning_v12.json")
         )
 
         XCTAssertEqual(event.payload.warningCode, "audio_automatic_fallback_to_aac")
@@ -151,7 +151,7 @@ final class WorkerLifecycleTests: XCTestCase {
     func testStructuredAudioLanguageFallbackWarningRemainsVisibleAndActionable() throws {
         let event = try JSONDecoder().decode(
             WorkerEvent.self,
-            from: sharedFixtureData(named: "native_worker_audio_language_fallback_warning_v11.json")
+            from: sharedFixtureData(named: "native_worker_audio_language_fallback_warning_v12.json")
         )
 
         XCTAssertEqual(event.payload.warningCode, "audio_language_fallback")
@@ -371,10 +371,10 @@ final class WorkerLifecycleTests: XCTestCase {
         }
     }
 
-    func testDecodesAndAppliesSharedV11ConversionCompletionFixture() throws {
+    func testDecodesAndAppliesSharedV12ConversionCompletionFixture() throws {
         let completed = try JSONDecoder().decode(
             WorkerEvent.self,
-            from: sharedFixtureData(named: "native_worker_conversion_completed_v11.json")
+            from: sharedFixtureData(named: "native_worker_conversion_completed_v12.json")
         )
         let fixtureJobID = try XCTUnwrap(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
         var state = WorkerLifecycleState()
@@ -393,7 +393,10 @@ final class WorkerLifecycleTests: XCTestCase {
         XCTAssertEqual(state.conversionResult?.videoRoute?.quality, 0.7)
         XCTAssertEqual(state.conversionResult?.videoRoute?.qualityIntent?.mode, "ladder")
         XCTAssertEqual(state.conversionResult?.videoRoute?.qualityIntent?.step, "balanced")
-        XCTAssertEqual(state.conversionResult?.videoRoute?.qualityIntent?.mappingVersion, 1)
+        XCTAssertEqual(
+            state.conversionResult?.videoRoute?.qualityIntent?.mappingVersion,
+            VideoQualityCatalog.mappingVersion
+        )
         XCTAssertEqual(state.conversionResult?.videoRoute?.requested?.route, "direct_mv_hevc")
         XCTAssertEqual(state.conversionResult?.videoRoute?.requested?.quality, 0.7)
         XCTAssertNil(state.conversionResult?.videoRoute?.bitrateMbps)

@@ -31,14 +31,18 @@ final class VideoQualityTests: XCTestCase {
         XCTAssertTrue(QualityStep.allCases.allSatisfy { !$0.detail.isEmpty })
     }
 
-    func testCatalogPublishesOnlyCheckedBalancedMappings() {
+    func testCatalogPublishesFrozenRouteSpecificMappings() {
         XCTAssertEqual(
-            VideoQualityCatalog.mapping(for: .balanced, target: .directMVHEVC),
-            .direct(quality: 0.7)
+            QualityStep.allCases.compactMap {
+                VideoQualityCatalog.mapping(for: $0, target: .directMVHEVC)
+            },
+            [0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85].map { .direct(quality: $0) }
         )
         XCTAssertEqual(
-            VideoQualityCatalog.mapping(for: .balanced, target: .directMVHEVCMetalFX2x),
-            .direct(quality: 0.6)
+            QualityStep.allCases.compactMap {
+                VideoQualityCatalog.mapping(for: $0, target: .directMVHEVCMetalFX2x)
+            },
+            [0.3, 0.4, 0.5, 0.6, 0.65, 0.7, 0.75].map { .direct(quality: $0) }
         )
         XCTAssertEqual(
             VideoQualityCatalog.mapping(for: .balanced, target: .generatedMVHEVC),
@@ -48,9 +52,58 @@ final class VideoQualityTests: XCTestCase {
             VideoQualityCatalog.mapping(for: .balanced, target: .fileUpscale),
             .upscale(quality: 75)
         )
+        XCTAssertEqual(
+            VideoQualityCatalog.mapping(for: .detailed, target: .fileUpscale),
+            .upscale(quality: 100)
+        )
         XCTAssertNil(VideoQualityCatalog.mapping(for: .balanced, target: .av1Stereo))
-        XCTAssertNil(VideoQualityCatalog.mapping(for: .detailed, target: .directMVHEVC))
-        XCTAssertEqual(VideoQualityCatalog.selectableMVHEVCSteps, [.balanced])
+        XCTAssertNil(VideoQualityCatalog.mapping(for: .detailed, target: .generatedMVHEVC))
+        XCTAssertNil(VideoQualityCatalog.mapping(for: .highDetail, target: .fileUpscale))
+        XCTAssertEqual(VideoQualityCatalog.selectableMVHEVCSteps, QualityStep.allCases)
+        XCTAssertEqual(VideoQualityCatalog.supportedSteps(for: .generatedMVHEVC), [.balanced])
+        XCTAssertEqual(VideoQualityCatalog.supportedSteps(for: .fileUpscale), [.balanced, .detailed])
+    }
+
+    func testCatalogMatchesCanonicalRouteTableContract() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let data = try Data(
+            contentsOf: repositoryRoot.appendingPathComponent(
+                "docs/qualification/video-quality-route-table-v2.json"
+            )
+        )
+        let document = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual(document["mapping_version"] as? Int, VideoQualityCatalog.mappingVersion)
+        let routes = try XCTUnwrap(document["routes"] as? [[String: Any]])
+
+        for target in VideoQualityTarget.allCases {
+            let route = try XCTUnwrap(
+                routes.first { $0["id"] as? String == target.rawValue }
+            )
+            let mappings = try XCTUnwrap(route["mappings"] as? [[String: Any]])
+            for step in QualityStep.allCases {
+                let entry = try XCTUnwrap(
+                    mappings.first { $0["step_id"] as? String == step.rawValue }
+                )
+                let values = entry["values"] as? [String: Any]
+                switch VideoQualityCatalog.mapping(for: step, target: target) {
+                case let .direct(quality):
+                    XCTAssertEqual((values?["quality"] as? NSNumber)?.doubleValue, quality)
+                case let .generated(eyeBitrateMbps, mergeQuality):
+                    XCTAssertEqual((values?["eye_bitrate_mbps"] as? NSNumber)?.intValue, eyeBitrateMbps)
+                    XCTAssertEqual((values?["merge_quality"] as? NSNumber)?.intValue, mergeQuality)
+                case let .upscale(quality):
+                    XCTAssertEqual((values?["quality"] as? NSNumber)?.intValue, quality)
+                case nil:
+                    XCTAssertEqual(entry["status"] as? String, "unsupported")
+                    XCTAssertNil(values)
+                }
+            }
+        }
     }
 
     func testDefaultOptionsUseBalancedIntentAndRetainIndependentCustomValues() {
@@ -101,14 +154,16 @@ final class VideoQualityTests: XCTestCase {
         XCTAssertEqual(options.upscaleQuality, custom.upscaleQuality)
     }
 
-    func testUnsupportedKnownStepFailsClosed() {
-        for step in QualityStep.allCases where step != .balanced {
+    func testEveryFrozenDirectStepCanBeSelectedWithoutLosingCustomValues() throws {
+        for step in QualityStep.allCases {
             var options = EncodingOptions()
+            let retained = options.videoQuality.custom
 
-            XCTAssertThrowsError(try options.selectQualityStep(step)) { error in
-                XCTAssertEqual(error as? VideoQualityStateError, .unsupportedStep(step))
-            }
-            XCTAssertEqual(options.videoQuality.selectedStep, .balanced)
+            try options.selectQualityStep(step)
+
+            XCTAssertEqual(options.videoQuality.selectedStep, step)
+            XCTAssertEqual(options.videoQuality.custom, retained)
+            XCTAssertEqual(options.mvHEVC.directFinalBitrate.mode, .automatic)
         }
     }
 
@@ -169,15 +224,17 @@ final class VideoQualityTests: XCTestCase {
         XCTAssertEqual(options.upscaleQuality, 75)
     }
 
-    func testInvalidExplicitIntentDowngradesToCurrentCustomValues() {
-        let unsupported = VideoQualityIntent(
+    func testExplicitSupportedIntentRemainsLadderAndAV1DowngradesToCustom() {
+        let detailed = VideoQualityIntent(
             mode: .ladder,
             lastLadderStep: .detailed,
             custom: .defaults
         )
-        let unsupportedOptions = EncodingOptions(videoQuality: unsupported)
-        XCTAssertEqual(unsupportedOptions.videoQuality.mode, .custom)
-        XCTAssertEqual(unsupportedOptions.videoOutputMode, .mvHEVC)
+        let detailedOptions = EncodingOptions(videoQuality: detailed)
+        XCTAssertEqual(detailedOptions.videoQuality.mode, .ladder)
+        XCTAssertEqual(detailedOptions.videoQuality.selectedStep, .detailed)
+        XCTAssertEqual(detailedOptions.upscaleQuality, 100)
+        XCTAssertEqual(detailedOptions.videoOutputMode, .mvHEVC)
 
         let av1Options = EncodingOptions(
             videoOutputMode: .av1Stereo,

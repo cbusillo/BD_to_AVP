@@ -25,7 +25,7 @@ DEFAULT_APP_PATHS = [
 APP_RESOURCE_APP_PATH = Path("Contents/Resources/app")
 APP_BIN_PATH = APP_RESOURCE_APP_PATH / "bd_to_avp" / "bin"
 WORKER_EXECUTABLE_NAME = "BluRayToVisionProEngine"
-EXPECTED_WORKER_PROTOCOL_VERSION = 11
+EXPECTED_WORKER_PROTOCOL_VERSION = 12
 PREVIEW_PRESENTATION_SMOKE_ARGUMENT = "--preview-presentation-smoke"
 WORKER_CANCELLATION_SMOKE_ARGUMENT = "--worker-cancellation-smoke"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 20
@@ -541,7 +541,7 @@ def cancel_worker(_signum, _frame):
     child.wait()
     marker.write_text("reaped", encoding="utf-8")
     print(json.dumps({
-        "protocol_version": 11,
+        "protocol_version": 12,
         "type": "job.cancelled",
         "job_id": job_id,
         "sequence": 1,
@@ -551,7 +551,7 @@ def cancel_worker(_signum, _frame):
 
 signal.signal(signal.SIGTERM, cancel_worker)
 print(json.dumps({
-    "protocol_version": 11,
+    "protocol_version": 12,
     "type": "worker.ready",
     "job_id": job_id,
     "sequence": 0,

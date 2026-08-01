@@ -334,7 +334,7 @@ class PackagedAacRequestTests(unittest.TestCase):
 
         request = _build_request(case, Path("/tmp/source.mkv"), Path("/tmp/output"), "job")
 
-        self.assertEqual(request["protocol_version"], 11)
+        self.assertEqual(request["protocol_version"], PROTOCOL_VERSION)
         self.assertEqual(
             request["encoding"]["audio"],
             {"mode": "automatic", "bitrate": 384, "preferred_language": "eng"},

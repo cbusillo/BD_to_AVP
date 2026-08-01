@@ -8,8 +8,6 @@ from unittest.mock import Mock, patch
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video_route import (
-    AUTOMATIC_DIRECT_QUALITY,
-    AUTOMATIC_DIRECT_UPSCALE_QUALITY,
     AUTOMATIC_GENERATED_EYE_BITRATE_MBPS,
     DirectUpscaleMode,
     DirectMVHEVCCapability,
@@ -18,7 +16,12 @@ from bd_to_avp.modules.video_route import (
     probe_direct_mv_hevc_capability,
     resolve_video_route,
 )
-from bd_to_avp.modules.video_quality_defaults import AUTOMATIC_GENERATED_MERGE_QUALITY
+from bd_to_avp.modules.video_quality_defaults import (
+    AUTOMATIC_DIRECT_QUALITY,
+    AUTOMATIC_DIRECT_UPSCALE_QUALITY,
+    AUTOMATIC_GENERATED_MERGE_QUALITY,
+    VIDEO_QUALITY_MAPPING_VERSION,
+)
 from bd_to_avp.process_runner import ProcessExecutionError, ProcessOutputSnapshot
 from bd_to_avp.worker.protocol import (
     AudioOptions,
@@ -42,10 +45,13 @@ def mv_hevc_encoding(
     *,
     intent: VideoRouteIntent = VideoRouteIntent.AUTOMATIC,
     direct_bitrate: BitrateOptions | None = None,
+    direct_quality: float | None = None,
     generated_eye_bitrate: BitrateOptions | None = None,
     generated_merge_quality: int | None = None,
     fallback_eye_bitrate: BitrateOptions | None = None,
     fallback_merge_quality: int = 75,
+    include_generated_fallback: bool = True,
+    quality_step: QualityStep = QualityStep.BALANCED,
     upscale: bool = False,
     fov: int = 90,
     resolution: str = "",
@@ -53,8 +59,10 @@ def mv_hevc_encoding(
 ) -> EncodingOptions:
     if intent is VideoRouteIntent.AUTOMATIC and direct_bitrate is None:
         direct_bitrate = BitrateOptions(BitrateMode.AUTOMATIC)
+    if intent is VideoRouteIntent.AUTOMATIC and direct_bitrate.mode is BitrateMode.AUTOMATIC and direct_quality is None:
+        direct_quality = AUTOMATIC_DIRECT_UPSCALE_QUALITY if upscale else AUTOMATIC_DIRECT_QUALITY
     generated_fallback = None
-    if intent is VideoRouteIntent.AUTOMATIC:
+    if intent is VideoRouteIntent.AUTOMATIC and include_generated_fallback:
         generated_fallback = GeneratedFallbackOptions(
             eye_bitrate=fallback_eye_bitrate or BitrateOptions(BitrateMode.AUTOMATIC),
             merge_quality=fallback_merge_quality,
@@ -78,8 +86,8 @@ def mv_hevc_encoding(
     else:
         quality_intent = VideoQualityIntent(
             mode=QualityIntentMode.LADDER,
-            step=QualityStep.BALANCED,
-            mapping_version=1,
+            step=quality_step,
+            mapping_version=VIDEO_QUALITY_MAPPING_VERSION,
         )
     return EncodingOptions(
         audio=AudioOptions(AudioMode.AUTOMATIC, 384, "eng"),
@@ -88,6 +96,7 @@ def mv_hevc_encoding(
             route_intent=intent,
             quality_intent=quality_intent,
             direct_bitrate=direct_bitrate,
+            direct_quality=direct_quality,
             generated_eye_bitrate=generated_eye_bitrate,
             generated_merge_quality=generated_merge_quality,
             generated_fallback=generated_fallback,
@@ -156,12 +165,71 @@ class VideoRouteResolverTests(unittest.TestCase):
         self.assertEqual(route.report()["reason"], "direct_eligible")
         self.assertEqual(
             route.report()["quality_intent"],
-            {"mode": "ladder", "step": "balanced", "mapping_version": 1},
+            {
+                "mode": "ladder",
+                "step": "balanced",
+                "mapping_version": VIDEO_QUALITY_MAPPING_VERSION,
+            },
         )
         self.assertEqual(
             route.report()["requested"],
             {"route": "direct_mv_hevc", "rate_control": "quality", "quality": 0.7},
         )
+
+    def test_selects_non_balanced_direct_with_exact_checked_quality(self) -> None:
+        route = resolve_video_route(
+            mv_hevc_encoding(
+                quality_step=QualityStep.MAXIMUM_DETAIL,
+                direct_quality=0.85,
+                include_generated_fallback=False,
+            ),
+            job_options(),
+            capability_probe=lambda: DirectMVHEVCCapability(True, "direct_capability_supported"),
+        )
+
+        self.assertEqual(route.selected, VideoRouteKind.DIRECT_MV_HEVC)
+        self.assertEqual(route.direct_quality, 0.85)
+        self.assertEqual(route.report()["quality_intent"]["step"], "maximum_detail")
+
+    def test_non_balanced_direct_fails_before_input_when_capability_is_unavailable(self) -> None:
+        with self.assertRaisesRegex(VideoRoutePreflightError, "requires direct MV-HEVC support"):
+            resolve_video_route(
+                mv_hevc_encoding(
+                    quality_step=QualityStep.DETAILED,
+                    direct_quality=0.75,
+                    include_generated_fallback=False,
+                ),
+                job_options(),
+                capability_probe=lambda: DirectMVHEVCCapability(False, "stereo_mv_hevc_encode_unavailable"),
+            )
+
+    def test_non_balanced_metalfx_fails_before_input_when_capability_is_unavailable(self) -> None:
+        with self.assertRaisesRegex(VideoRoutePreflightError, "requires direct MetalFX MV-HEVC support"):
+            resolve_video_route(
+                mv_hevc_encoding(
+                    quality_step=QualityStep.DETAILED,
+                    direct_quality=0.65,
+                    include_generated_fallback=False,
+                    upscale=True,
+                ),
+                job_options(),
+                capability_probe=lambda: DirectMVHEVCCapability(
+                    True,
+                    "direct_capability_supported",
+                    metalfx_2x_mv_hevc_supported=False,
+                ),
+            )
+
+    def test_non_balanced_direct_cannot_alias_through_generated_job_constraint(self) -> None:
+        with self.assertRaisesRegex(VideoRoutePreflightError, "requires active generated settings"):
+            resolve_video_route(
+                mv_hevc_encoding(
+                    quality_step=QualityStep.DETAILED,
+                    direct_quality=0.75,
+                    include_generated_fallback=False,
+                ),
+                job_options(keep_files=True),
+            )
 
     def test_selects_direct_custom_bitrate(self) -> None:
         route = resolve_video_route(

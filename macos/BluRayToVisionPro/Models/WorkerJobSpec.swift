@@ -1,7 +1,7 @@
 import Foundation
 
 struct WorkerJobSpec: Encodable, Equatable {
-    static let protocolVersion = 11
+    static let protocolVersion = 12
 
     struct Source: Encodable, Equatable {
         enum Kind: String, Encodable {
@@ -162,7 +162,7 @@ struct WorkerJobSpec: Encodable, Equatable {
                     case .ladder:
                         guard let step,
                               mappingVersion == VideoQualityCatalog.mappingVersion,
-                              VideoQualityCatalog.supportsCompleteMVHEVCIntent(step)
+                              VideoQualityCatalog.supportsProfileMVHEVCIntent(step)
                         else {
                             throw EncodingError.invalidValue(
                                 self,
@@ -223,11 +223,14 @@ struct WorkerJobSpec: Encodable, Equatable {
             let routeIntent: RouteIntent
             let qualityIntent: QualityIntent?
             let directBitrate: Bitrate?
+            let directQuality: Double?
             let generatedEyeBitrate: Bitrate?
             let generatedMergeQuality: Int?
             let generatedFallback: GeneratedFallback?
             let av1CRF: Int?
-            let existingArtifactUpscaleQuality: Int?
+            let activeQualityTarget: VideoQualityTarget?
+            let includesUpscale: Bool
+            let activeUpscaleQuality: Int?
             let qualityStateError: VideoQualityStateError?
 
             func encode(to encoder: Encoder) throws {
@@ -237,6 +240,7 @@ struct WorkerJobSpec: Encodable, Equatable {
                 try container.encode(routeIntent, forKey: .routeIntent)
                 try container.encodeIfPresent(qualityIntent, forKey: .qualityIntent)
                 try container.encodeIfPresent(directBitrate, forKey: .directBitrate)
+                try container.encodeIfPresent(directQuality, forKey: .directQuality)
                 try container.encodeIfPresent(generatedEyeBitrate, forKey: .generatedEyeBitrate)
                 try container.encodeIfPresent(generatedMergeQuality, forKey: .generatedMergeQuality)
                 try container.encodeIfPresent(generatedFallback, forKey: .generatedFallback)
@@ -258,32 +262,46 @@ struct WorkerJobSpec: Encodable, Equatable {
                 case (.mvHEVC, .automatic):
                     isValid = qualityIntent != nil
                         && directBitrate != nil
+                        && (directBitrate?.mode == .automatic ? directQuality != nil : directQuality == nil)
                         && generatedEyeBitrate == nil
                         && generatedMergeQuality == nil
-                        && generatedFallback != nil
                         && av1CRF == nil
+                        && activeQualityTarget == (includesUpscale ? .directMVHEVCMetalFX2x : .directMVHEVC)
                 case (.mvHEVC, .generated):
                     isValid = qualityIntent != nil
                         && directBitrate == nil
+                        && directQuality == nil
                         && generatedEyeBitrate != nil
                         && generatedMergeQuality != nil
                         && generatedFallback == nil
                         && av1CRF == nil
+                        && activeQualityTarget == .generatedMVHEVC
                 case (.av1Stereo, .encode):
                     isValid = qualityIntent?.mode == .custom
                         && directBitrate == nil
+                        && directQuality == nil
                         && generatedEyeBitrate == nil
                         && generatedMergeQuality == nil
                         && generatedFallback == nil
                         && av1CRF != nil
+                        && activeQualityTarget == nil
+                        && !includesUpscale
+                        && activeUpscaleQuality == nil
                 case (_, .existingArtifact):
                     isValid = directBitrate == nil
+                        && directQuality == nil
                         && generatedEyeBitrate == nil
                         && generatedMergeQuality == nil
                         && generatedFallback == nil
                         && av1CRF == nil
-                        && ((qualityIntent == nil && existingArtifactUpscaleQuality == nil)
-                            || (qualityIntent != nil && existingArtifactUpscaleQuality != nil))
+                        && ((qualityIntent == nil
+                                && activeQualityTarget == nil
+                                && !includesUpscale
+                                && activeUpscaleQuality == nil)
+                            || (qualityIntent != nil
+                                && activeQualityTarget == .fileUpscale
+                                && includesUpscale
+                                && activeUpscaleQuality != nil))
                 default:
                     isValid = false
                 }
@@ -297,32 +315,91 @@ struct WorkerJobSpec: Encodable, Equatable {
                     )
                 }
 
-                guard qualityIntent?.mode != .ladder
-                    || ladderControlsMatchBalanced
-                else {
+                guard qualityIntent?.mode != .custom || customControlsAreComplete else {
                     throw EncodingError.invalidValue(
                         self,
                         EncodingError.Context(
                             codingPath: codingPath,
-                            debugDescription: "Guided Balanced quality intent does not match its concrete route controls."
+                            debugDescription: "Custom quality intent is missing active concrete route controls."
+                        )
+                    )
+                }
+                guard qualityIntent?.mode != .ladder || ladderControlsMatchRoute else {
+                    throw EncodingError.invalidValue(
+                        self,
+                        EncodingError.Context(
+                            codingPath: codingPath,
+                            debugDescription: "Guided quality intent does not match the checked active-route mapping."
                         )
                     )
                 }
             }
 
-            private var ladderControlsMatchBalanced: Bool {
+            private var customControlsAreComplete: Bool {
                 switch routeIntent {
                 case .automatic:
-                    directBitrate?.mode == .automatic
-                        && generatedFallback?.eyeBitrate.mode == .automatic
-                        && generatedFallback?.mergeQuality == VideoQualityCatalog.balancedGeneratedMergeQuality
+                    generatedFallback != nil && (!includesUpscale || activeUpscaleQuality != nil)
                 case .generated:
-                    generatedEyeBitrate?.mode == .automatic
-                        && generatedMergeQuality == VideoQualityCatalog.balancedGeneratedMergeQuality
+                    !includesUpscale || activeUpscaleQuality != nil
                 case .existingArtifact:
-                    existingArtifactUpscaleQuality == VideoQualityCatalog.balancedUpscaleQuality
+                    activeUpscaleQuality != nil
                 case .encode:
-                    false
+                    true
+                }
+            }
+
+            private var ladderControlsMatchRoute: Bool {
+                guard let step = qualityIntent?.step,
+                      let target = activeQualityTarget,
+                      let mapping = VideoQualityCatalog.mapping(for: step, target: target)
+                else {
+                    return false
+                }
+                switch (routeIntent, mapping) {
+                case let (.automatic, .direct(quality)):
+                    guard directBitrate?.mode == .automatic,
+                          directQuality == quality
+                    else {
+                        return false
+                    }
+                    if step == .balanced {
+                        guard case let .generated(eyeBitrateMbps, mergeQuality) = VideoQualityCatalog.mapping(
+                            for: step,
+                            target: .generatedMVHEVC
+                        ) else {
+                            return false
+                        }
+                        let fallbackMatches = generatedFallback?.eyeBitrate.mode == .automatic
+                            && generatedFallback?.eyeBitrate.mbps == nil
+                            && eyeBitrateMbps == VideoQualityCatalog.balancedGeneratedEyeBitrateMbps
+                            && generatedFallback?.mergeQuality == mergeQuality
+                        let upscaleMatches = !includesUpscale
+                            || activeUpscaleQuality == VideoQualityCatalog.balancedUpscaleQuality
+                        return fallbackMatches && upscaleMatches
+                    }
+                    return generatedFallback == nil && activeUpscaleQuality == nil
+                case let (.generated, .generated(eyeBitrateMbps, mergeQuality)):
+                    let generatedMatches = generatedEyeBitrate?.mode == .automatic
+                        && generatedEyeBitrate?.mbps == nil
+                        && eyeBitrateMbps == VideoQualityCatalog.balancedGeneratedEyeBitrateMbps
+                        && generatedMergeQuality == mergeQuality
+                    guard generatedMatches else {
+                        return false
+                    }
+                    if includesUpscale {
+                        guard case let .upscale(quality) = VideoQualityCatalog.mapping(
+                            for: step,
+                            target: .fileUpscale
+                        ) else {
+                            return false
+                        }
+                        return activeUpscaleQuality == quality
+                    }
+                    return activeUpscaleQuality == nil
+                case let (.existingArtifact, .upscale(quality)):
+                    return activeUpscaleQuality == quality
+                case (.encode, _), (.automatic, _), (.generated, _), (.existingArtifact, _):
+                    return false
                 }
             }
 
@@ -331,6 +408,7 @@ struct WorkerJobSpec: Encodable, Equatable {
                 case routeIntent = "route_intent"
                 case qualityIntent = "quality_intent"
                 case directBitrate = "direct_bitrate"
+                case directQuality = "direct_quality"
                 case generatedEyeBitrate = "generated_eye_bitrate"
                 case generatedMergeQuality = "generated_merge_quality"
                 case generatedFallback = "generated_fallback"
@@ -345,16 +423,7 @@ struct WorkerJobSpec: Encodable, Equatable {
             func encode(to encoder: Encoder) throws {
                 var container = encoder.container(keyedBy: CodingKeys.self)
                 try container.encode(enabled, forKey: .enabled)
-                if enabled {
-                    guard let quality else {
-                        throw EncodingError.invalidValue(
-                            self,
-                            EncodingError.Context(
-                                codingPath: encoder.codingPath,
-                                debugDescription: "Enabled upscale mode requires a quality value."
-                            )
-                        )
-                    }
+                if enabled, let quality {
                     try container.encode(quality, forKey: .quality)
                 }
             }
@@ -542,7 +611,7 @@ struct WorkerJobSpec: Encodable, Equatable {
             && options.videoOutputMode == .mvHEVC
             && options.upscaleEnabled
         let resolvedOptions: EncodingOptions
-        let qualityStateError: VideoQualityStateError?
+        let normalizationError: VideoQualityStateError?
         do {
             if requestedRoute.kind == .existingArtifact {
                 resolvedOptions = usesExistingArtifactUpscale
@@ -551,18 +620,29 @@ struct WorkerJobSpec: Encodable, Equatable {
             } else {
                 resolvedOptions = try options.normalizedQualityState()
             }
-            qualityStateError = nil
+            normalizationError = nil
         } catch let error as VideoQualityStateError {
             resolvedOptions = options
-            qualityStateError = error
+            normalizationError = error
         } catch {
             resolvedOptions = options
-            qualityStateError = .inconsistentMirrors
+            normalizationError = .inconsistentMirrors
         }
         let isAV1Stereo = resolvedOptions.videoOutputMode == .av1Stereo
         let activeUpscaleEnabled = !isAV1Stereo
             && (usesExistingArtifactUpscale
                 || (requestedRoute.kind != .existingArtifact && resolvedOptions.upscaleEnabled))
+        let qualityStateError = normalizationError
+            ?? routeQualityStateError(
+                for: resolvedOptions,
+                route: requestedRoute,
+                activeUpscaleEnabled: activeUpscaleEnabled
+            )
+        let activeUpscaleQuality = resolvedActiveUpscaleQuality(
+            for: resolvedOptions,
+            route: requestedRoute,
+            activeUpscaleEnabled: activeUpscaleEnabled
+        )
         return Encoding(
             audio: Encoding.Audio(
                 mode: audioMode(from: resolvedOptions.audioHandling),
@@ -571,15 +651,14 @@ struct WorkerJobSpec: Encodable, Equatable {
             ),
             video: videoOptions(
                 from: resolvedOptions,
-                job: job,
-                routeStartStage: routeStartStage,
-                routeKeepFiles: routeKeepFiles,
-                allowsExistingArtifact: allowsExistingArtifact,
+                route: requestedRoute,
+                activeUpscaleEnabled: activeUpscaleEnabled,
+                activeUpscaleQuality: activeUpscaleQuality,
                 qualityStateError: qualityStateError
             ),
             upscale: Encoding.Upscale(
                 enabled: activeUpscaleEnabled,
-                quality: activeUpscaleEnabled ? resolvedOptions.upscaleQuality : nil
+                quality: activeUpscaleQuality
             ),
             fieldOfView: resolvedOptions.fieldOfView,
             frameRate: resolvedOptions.frameRateOverride,
@@ -618,22 +697,11 @@ struct WorkerJobSpec: Encodable, Equatable {
 
     private static func videoOptions(
         from options: EncodingOptions,
-        job: Job,
-        routeStartStage: Int?,
-        routeKeepFiles: Bool?,
-        allowsExistingArtifact: Bool,
+        route: VideoRoutePlan,
+        activeUpscaleEnabled: Bool,
+        activeUpscaleQuality: Int?,
         qualityStateError: VideoQualityStateError?
     ) -> Encoding.Video {
-        let requestedStartStage = routeStartStage ?? job.startStage
-        let keepsReusableArtifacts = routeKeepFiles ?? job.keepFiles
-        let route = VideoRoutePlan(
-            encoding: options,
-            startStage: requestedStartStage,
-            keepsReusableArtifacts: keepsReusableArtifacts,
-            softwareEncoder: job.softwareEncoder,
-            allowsExistingArtifact: allowsExistingArtifact
-        )
-
         switch route.kind {
         case .av1Stereo:
             return Encoding.Video(
@@ -641,63 +709,175 @@ struct WorkerJobSpec: Encodable, Equatable {
                 routeIntent: .encode,
                 qualityIntent: Encoding.Video.QualityIntent(options.videoQuality),
                 directBitrate: nil,
+                directQuality: nil,
                 generatedEyeBitrate: nil,
                 generatedMergeQuality: nil,
                 generatedFallback: nil,
                 av1CRF: options.av1CRF,
-                existingArtifactUpscaleQuality: nil,
+                activeQualityTarget: nil,
+                includesUpscale: false,
+                activeUpscaleQuality: nil,
                 qualityStateError: qualityStateError
             )
         case .existingArtifact:
-            let activeUpscaleQuality = requestedStartStage == ConversionStage.upscaleVideo.rawValue
-                && options.videoOutputMode == .mvHEVC
-                && options.upscaleEnabled
-                ? options.upscaleQuality
-                : nil
             return Encoding.Video(
                 mode: options.videoOutputMode,
                 routeIntent: .existingArtifact,
-                qualityIntent: activeUpscaleQuality == nil
+                qualityIntent: !activeUpscaleEnabled
                     ? nil
                     : Encoding.Video.QualityIntent(options.videoQuality),
                 directBitrate: nil,
+                directQuality: nil,
                 generatedEyeBitrate: nil,
                 generatedMergeQuality: nil,
                 generatedFallback: nil,
                 av1CRF: nil,
-                existingArtifactUpscaleQuality: activeUpscaleQuality,
+                activeQualityTarget: activeUpscaleEnabled ? .fileUpscale : nil,
+                includesUpscale: activeUpscaleEnabled,
+                activeUpscaleQuality: activeUpscaleQuality,
                 qualityStateError: qualityStateError
             )
         case .generatedMVHEVC:
+            let generatedEyeBitrate: Encoding.Bitrate
+            let generatedMergeQuality: Int
+            switch options.videoQuality.mode {
+            case .custom:
+                generatedEyeBitrate = bitrate(from: options.mvHEVC.generatedEyeBitrate)
+                generatedMergeQuality = options.mvHEVC.generatedMergeQuality
+            case .ladder:
+                if case let .generated(_, mergeQuality) = VideoQualityCatalog.mapping(
+                    for: options.videoQuality.lastLadderStep,
+                    target: .generatedMVHEVC
+                ) {
+                    generatedEyeBitrate = Encoding.Bitrate(mode: .automatic, mbps: nil)
+                    generatedMergeQuality = mergeQuality
+                } else {
+                    generatedEyeBitrate = bitrate(from: options.mvHEVC.generatedEyeBitrate)
+                    generatedMergeQuality = options.mvHEVC.generatedMergeQuality
+                }
+            }
             return Encoding.Video(
                 mode: .mvHEVC,
                 routeIntent: .generated,
                 qualityIntent: Encoding.Video.QualityIntent(options.videoQuality),
                 directBitrate: nil,
-                generatedEyeBitrate: bitrate(from: options.mvHEVC.generatedEyeBitrate),
-                generatedMergeQuality: options.mvHEVC.generatedMergeQuality,
+                directQuality: nil,
+                generatedEyeBitrate: generatedEyeBitrate,
+                generatedMergeQuality: generatedMergeQuality,
                 generatedFallback: nil,
                 av1CRF: nil,
-                existingArtifactUpscaleQuality: nil,
+                activeQualityTarget: .generatedMVHEVC,
+                includesUpscale: activeUpscaleEnabled,
+                activeUpscaleQuality: activeUpscaleQuality,
                 qualityStateError: qualityStateError
             )
         case .directMVHEVC:
+            let directTarget: VideoQualityTarget = activeUpscaleEnabled
+                ? .directMVHEVCMetalFX2x
+                : .directMVHEVC
+            let directBitrate: Encoding.Bitrate
+            let directQuality: Double?
+            let generatedFallback: Encoding.Video.GeneratedFallback?
+            switch options.videoQuality.mode {
+            case .custom:
+                directBitrate = bitrate(from: options.mvHEVC.directFinalBitrate)
+                if options.mvHEVC.directFinalBitrate.mode == .automatic,
+                   case let .direct(quality) = VideoQualityCatalog.mapping(for: .balanced, target: directTarget)
+                {
+                    directQuality = quality
+                } else {
+                    directQuality = nil
+                }
+                generatedFallback = Encoding.Video.GeneratedFallback(
+                    eyeBitrate: bitrate(from: options.mvHEVC.generatedEyeBitrate),
+                    mergeQuality: options.mvHEVC.generatedMergeQuality
+                )
+            case .ladder:
+                directBitrate = Encoding.Bitrate(mode: .automatic, mbps: nil)
+                if case let .direct(quality) = VideoQualityCatalog.mapping(
+                    for: options.videoQuality.lastLadderStep,
+                    target: directTarget
+                ) {
+                    directQuality = quality
+                } else {
+                    directQuality = nil
+                }
+                if case let .generated(_, mergeQuality) = VideoQualityCatalog.mapping(
+                    for: options.videoQuality.lastLadderStep,
+                    target: .generatedMVHEVC
+                ) {
+                    generatedFallback = Encoding.Video.GeneratedFallback(
+                        eyeBitrate: Encoding.Bitrate(mode: .automatic, mbps: nil),
+                        mergeQuality: mergeQuality
+                    )
+                } else {
+                    generatedFallback = nil
+                }
+            }
             return Encoding.Video(
                 mode: .mvHEVC,
                 routeIntent: .automatic,
                 qualityIntent: Encoding.Video.QualityIntent(options.videoQuality),
-                directBitrate: bitrate(from: options.mvHEVC.directFinalBitrate),
+                directBitrate: directBitrate,
+                directQuality: directQuality,
                 generatedEyeBitrate: nil,
                 generatedMergeQuality: nil,
-                generatedFallback: Encoding.Video.GeneratedFallback(
-                    eyeBitrate: bitrate(from: options.mvHEVC.generatedEyeBitrate),
-                    mergeQuality: options.mvHEVC.generatedMergeQuality
-                ),
+                generatedFallback: generatedFallback,
                 av1CRF: nil,
-                existingArtifactUpscaleQuality: nil,
+                activeQualityTarget: directTarget,
+                includesUpscale: activeUpscaleEnabled,
+                activeUpscaleQuality: activeUpscaleQuality,
                 qualityStateError: qualityStateError
             )
         }
+    }
+
+    private static func routeQualityStateError(
+        for options: EncodingOptions,
+        route: VideoRoutePlan,
+        activeUpscaleEnabled: Bool
+    ) -> VideoQualityStateError? {
+        guard options.videoQuality.mode == .ladder else {
+            return nil
+        }
+        let step = options.videoQuality.lastLadderStep
+        let supported: Bool
+        switch route.kind {
+        case .directMVHEVC:
+            supported = VideoQualityCatalog.supports(
+                step,
+                for: activeUpscaleEnabled ? .directMVHEVCMetalFX2x : .directMVHEVC
+            )
+        case .generatedMVHEVC:
+            supported = VideoQualityCatalog.supports(step, for: .generatedMVHEVC)
+                && (!activeUpscaleEnabled || VideoQualityCatalog.supports(step, for: .fileUpscale))
+        case .existingArtifact:
+            supported = !activeUpscaleEnabled || VideoQualityCatalog.supports(step, for: .fileUpscale)
+        case .av1Stereo:
+            supported = false
+        }
+        return supported ? nil : .unsupportedStep(step)
+    }
+
+    private static func resolvedActiveUpscaleQuality(
+        for options: EncodingOptions,
+        route: VideoRoutePlan,
+        activeUpscaleEnabled: Bool
+    ) -> Int? {
+        guard activeUpscaleEnabled else {
+            return nil
+        }
+        if options.videoQuality.mode == .custom {
+            return options.upscaleQuality
+        }
+        let step = options.videoQuality.lastLadderStep
+        if route.kind == .directMVHEVC, step != .balanced {
+            return nil
+        }
+        guard case let .upscale(quality) = VideoQualityCatalog.mapping(for: step, target: .fileUpscale) else {
+            return nil
+        }
+        return quality
     }
 
     private static func bitrate(from preference: BitratePreference) -> Encoding.Bitrate {

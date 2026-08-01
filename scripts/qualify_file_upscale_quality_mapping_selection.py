@@ -1416,7 +1416,11 @@ def _validate_v2_source_plan(plan: MappingSelectionPlan, binding: CorpusBinding)
         raise QualificationFailure("The v2 source calibration-only scope changed.")
 
 
-def load_mapping_selection_plan(path: Path) -> tuple[MappingSelectionPlan, CorpusBinding, str, str]:
+def load_mapping_selection_plan(
+    path: Path,
+    *,
+    allow_historical_public_contracts: bool = False,
+) -> tuple[MappingSelectionPlan, CorpusBinding, str, str]:
     resolved_path = path.resolve()
     relative_path = _relative_repository_path(resolved_path, "File-upscale mapping-selection plan")
     try:
@@ -1444,6 +1448,7 @@ def load_mapping_selection_plan(path: Path) -> tuple[MappingSelectionPlan, Corpu
         _validate_v2_source_plan(parsed, binding)
     else:
         raise QualificationFailure("The mapping-selection plan contract is unsupported.")
+    public_contract_labels = {"video-quality ladder manifest", "VideoQuality.swift"}
     for label, file_binding in (
         ("FFmpeg vendor manifest", parsed.ffmpeg_manifest),
         ("FX Upscale binary", parsed.fx_upscale_binary),
@@ -1451,7 +1456,10 @@ def load_mapping_selection_plan(path: Path) -> tuple[MappingSelectionPlan, Corpu
         ("VideoQuality.swift", parsed.video_quality_swift),
         *((f"bundled tool {key}", tool) for key, tool in parsed.bundled_tools.items()),
     ):
-        if not file_binding.path.is_file() or sha256_file(file_binding.path) != file_binding.sha256:
+        current_matches = file_binding.path.is_file() and sha256_file(file_binding.path) == file_binding.sha256
+        if not current_matches and not (
+            allow_historical_public_contracts and label in public_contract_labels and file_binding.path.is_file()
+        ):
             raise QualificationFailure(f"{label} does not match its pinned SHA-256 identity.")
     _validate_public_ladder(parsed.ladder_manifest.path)
     return (

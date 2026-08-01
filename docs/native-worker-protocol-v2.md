@@ -1,7 +1,7 @@
 # Native Worker Protocol v2
 
 > Historical contract. The native app and bundled worker now use
-> [Native Worker Protocol v11](native-worker-protocol-v11.md).
+> [Native Worker Protocol v12](native-worker-protocol-v12.md).
 
 The native macOS app communicates with its bundled Python engine over a bounded
 JSON Lines (JSONL) protocol. Version 2 makes the source kind explicit and adds

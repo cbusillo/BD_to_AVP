@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from bd_to_avp.modules.video_route import AUTOMATIC_DIRECT_QUALITY
+from bd_to_avp.modules.video_quality_defaults import AUTOMATIC_DIRECT_QUALITY
 from scripts.verify_packaged_mv_hevc_routes import (
     METALFX_UNAVAILABLE_HELPER_SOURCE,
     PROTOCOL_VERSION,
@@ -72,7 +72,7 @@ class PackagedRequestTests(unittest.TestCase):
             job_id="full-job",
         )
 
-        self.assertEqual(request["protocol_version"], 11)
+        self.assertEqual(request["protocol_version"], PROTOCOL_VERSION)
         self.assertEqual(request["operation"], "convert_source")
         self.assertEqual(request["encoding"]["video"]["route_intent"], "automatic")
         self.assertEqual(request["encoding"]["video"]["quality_intent"], {"mode": "custom"})

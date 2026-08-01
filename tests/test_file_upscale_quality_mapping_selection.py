@@ -31,7 +31,7 @@ from scripts.qualify_file_upscale_quality_mapping_selection import (
     _validate_clean_work_directory,
     assign_provisional_mappings,
     exit_code_for_evidence,
-    load_mapping_selection_plan,
+    load_mapping_selection_plan as _load_mapping_selection_plan,
     main as mapping_selection_main,
     materialized_case_orders,
     parse_mapping_corpus_binding,
@@ -53,6 +53,10 @@ from tests.test_file_upscale_quality_sweep import (
 
 PUBLIC_LADDER_SHA256 = "04620e59e5380c88d3d5152f78712402675f31db6f1253c1d93224af585111dc"
 VIDEO_QUALITY_SWIFT_SHA256 = "6f204564261d859590086ca41e9a27ac9f69bc0feb225137cf0abc4a98082dfa"
+
+
+def load_mapping_selection_plan(path: Path):
+    return _load_mapping_selection_plan(path, allow_historical_public_contracts=True)
 
 
 def _source_noise_receipt() -> dict[str, object]:
@@ -401,10 +405,18 @@ class FileUpscaleMappingPlanTests(unittest.TestCase):
             )
             self.assertEqual(limit.limit, EXPECTED_NOISE[limit.key][3])
 
-    def test_public_manifest_and_swift_bindings_remain_unchanged(self) -> None:
+    def test_historical_public_bindings_remain_pinned_after_route_table_v2(self) -> None:
         plan, _, _, _ = load_mapping_selection_plan(DEFAULT_SELECTION_PLAN)
         self.assertEqual(sha256_file(plan.ladder_manifest.path), PUBLIC_LADDER_SHA256)
-        self.assertEqual(sha256_file(plan.video_quality_swift.path), VIDEO_QUALITY_SWIFT_SHA256)
+        self.assertEqual(plan.video_quality_swift.sha256, VIDEO_QUALITY_SWIFT_SHA256)
+        self.assertNotEqual(sha256_file(plan.video_quality_swift.path), VIDEO_QUALITY_SWIFT_SHA256)
+        route_table = json.loads(
+            (DEFAULT_SELECTION_PLAN.parents[2] / "docs/qualification/video-quality-route-table-v2.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(route_table["mapping_version"], 2)
+        self.assertEqual(route_table["status"], "candidate_pending_qualification")
 
     def test_v2_plan_binds_exact_calibration_identity_and_thresholds(self) -> None:
         plan, binding, plan_sha256, _ = load_mapping_selection_plan(DEFAULT_CONFIRMATION_PLAN)

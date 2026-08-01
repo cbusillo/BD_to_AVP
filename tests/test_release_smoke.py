@@ -368,7 +368,10 @@ def make_fake_app(
             "event_types = ['worker.ready', 'job.started', 'stage.started', 'job.completed']",
             "for sequence, event_type in enumerate(event_types):",
             "    payload = {'worker_version': version, 'process_group_id': 1} if event_type == 'worker.ready' else {}",
-            "    event = {'protocol_version': 11, 'type': event_type, 'job_id': job_id}",
+            (
+                f"    event = {{'protocol_version': {smoke_release_app.EXPECTED_WORKER_PROTOCOL_VERSION}, "
+                "'type': event_type, 'job_id': job_id}"
+            ),
             "    event.update(sequence=sequence, payload=payload)",
             "    print(json.dumps(event))",
         ],

@@ -11,11 +11,11 @@ from bd_to_avp.modules.config import is_direct_pipeline_source_reused, Stage
 from bd_to_avp.modules.disc import MKVCreationError
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video_route import (
-    AUTOMATIC_DIRECT_UPSCALE_QUALITY,
     DirectUpscaleMode,
     ResolvedVideoRoute,
     VideoRouteKind,
 )
+from bd_to_avp.modules.video_quality_defaults import AUTOMATIC_DIRECT_UPSCALE_QUALITY
 from bd_to_avp.modules.file import (
     move_file_to_output_root_folder,
     prepare_output_folder_for_source,

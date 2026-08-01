@@ -284,7 +284,24 @@ struct VideoQualityEditor: View {
         guard options.videoOutputMode == .mvHEVC else {
             return []
         }
-        return Set(VideoQualityCatalog.selectableMVHEVCSteps)
+        let steps: [QualityStep]
+        switch routePlan.kind {
+        case .directMVHEVC:
+            steps = VideoQualityCatalog.supportedSteps(
+                for: routePlan.includesUpscale ? .directMVHEVCMetalFX2x : .directMVHEVC
+            )
+        case .generatedMVHEVC:
+            steps = VideoQualityCatalog.supportedGeneratedSteps(
+                includingFileUpscale: routePlan.includesUpscale
+            )
+        case .existingArtifact:
+            steps = routePlan.includesUpscale
+                ? VideoQualityCatalog.supportedSteps(for: .fileUpscale)
+                : []
+        case .av1Stereo:
+            steps = []
+        }
+        return Set(steps)
     }
 
     private var expertStateDetail: String {
@@ -528,7 +545,11 @@ private struct QualitySelectionControl: View {
                     .accessibilityValue(stepAccessibilityValue(step, available: true))
                     .accessibilityHint("Uses the checked route mappings.")
                 } else {
-                    QualityStepCell(step: step, selected: false, available: false)
+                    QualityStepCell(
+                        step: step,
+                        selected: selection == .step(step),
+                        available: false
+                    )
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(step.title)
                         .accessibilityValue(stepAccessibilityValue(step, available: false))
@@ -586,7 +607,9 @@ private struct QualitySelectionControl: View {
     private var selectionDetail: String {
         switch selection {
         case let .step(step):
-            step.detail
+            availableSteps.contains(step)
+                ? step.detail
+                : "\(step.detail) This step is unavailable for the active route; choose another step or Custom."
         case .custom:
             "Exact direct, generated, AV1, and upscale values are retained independently from the guided ladder."
         }
@@ -598,8 +621,8 @@ private struct QualitySelectionControl: View {
 
     private var unavailableHint: String {
         outputMode == .av1Stereo
-            ? "AV1 uses Custom CRF and does not have calibrated guided steps."
-            : "This mapping has not been calibrated and cannot be selected."
+            ? "AV1 uses Custom CRF and does not have guided steps."
+            : "This guided step is not supported by the active video route."
     }
 
     private func stepAccessibilityValue(_ step: QualityStep, available: Bool) -> String {
@@ -612,7 +635,7 @@ private struct QualitySelectionControl: View {
     }
 
     private func menuTitle(_ step: QualityStep) -> String {
-        availableSteps.contains(step) ? step.title : "\(step.title) — Not calibrated"
+        availableSteps.contains(step) ? step.title : "\(step.title) — Unavailable"
     }
 }
 
@@ -638,7 +661,7 @@ private struct QualityStepCell: View {
                 .lineLimit(2)
                 .frame(height: 32, alignment: .top)
 
-            Text(available ? "Available" : "Not calibrated")
+            Text(available ? "Available" : "Unavailable")
                 .font(.caption2)
                 .foregroundStyle(available ? Color.secondary : Color.secondary.opacity(0.75))
         }

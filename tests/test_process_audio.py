@@ -12,11 +12,11 @@ from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.modules.video import GeneratedMVHEVCArtifactError
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video_route import (
-    AUTOMATIC_DIRECT_UPSCALE_QUALITY,
     DirectUpscaleMode,
     ResolvedVideoRoute,
     VideoRouteKind,
 )
+from bd_to_avp.modules.video_quality_defaults import AUTOMATIC_DIRECT_UPSCALE_QUALITY
 from bd_to_avp.observability import ObservabilityEmitter
 from bd_to_avp.runtime import ObservabilityStream, RunContext
 from bd_to_avp.worker.protocol import VideoRouteIntent
