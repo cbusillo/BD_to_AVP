@@ -66,6 +66,36 @@ Exit `0` means the selected cells completed and passed eye-order checks; a subse
 remaining explicitly non-qualifying. A complete corpus exits `1` when monotonicity or repeat-noise warnings require
 review, and fatal tool, source, ownership, or evidence errors exit `2`.
 
+### Ordinary direct mapping confirmation
+
+`docs/qualification/direct-mv-hevc-quality-mapping-confirmation-v1.json` preregisters the fresh ordinary-direct
+confirmation. Its raw sweep uses qualities `0.40`, `0.50`, `0.60`, `0.70`, `0.75`, `0.80`, and `0.85`; the step
+assignments are fixed before execution, and production `Balanced` remains exactly `0.70`. The two earlier exploratory
+sweeps and the automated full-length low/Balanced/high anchor receipt are exact frozen provenance only. Their records
+cannot satisfy the fresh confirmation.
+
+Run the complete confirmation from a clean committed macOS arm64 worktree:
+
+```bash
+BD_TO_AVP_RELEASE_MVC_SOURCE=/private/source.mkv \
+uv run python scripts/qualify_direct_mv_hevc_mapping_confirmation.py \
+  --coarse-receipt /private/direct-quality-coarse-receipt.json \
+  --upper-receipt /private/direct-quality-upper-receipt.json \
+  --anchor-receipt /private/direct-full-length-anchor-receipt.json \
+  --output build/qualification/direct-mv-hevc-quality-mapping-confirmation-v1.json \
+  --work-directory build/qualification/direct-mv-hevc-quality-mapping-confirmation-v1-work
+```
+
+Use `--resume` with every path unchanged after interruption. The runner reuses the existing direct sweep encoder,
+records all 147 fresh output SHA-256 identities, recomputes raw summaries, evaluates the six preregistered adjacent
+boundaries, and freezes a completed canonical receipt at mode `0444`. Exit `0` requires all seven candidates and all
+six boundaries; a complete fail-closed result exits `1`, an interrupted checkpoint exits `3`, and invalid inputs or
+execution failures exit `2`.
+
+The result is ordinary-direct objective evidence only. It cannot update the public ladder until MetalFX direct,
+generated-fallback parity, package, perceptual, long-form runtime, physical Vision Pro, and signed-beta checks finish.
+Unsupported positions remain unavailable rather than aliased.
+
 ## File Upscale Quality Sweep
 
 `docs/qualification/file-upscale-quality-corpus-v1.json` binds a five-case stress subset to the existing direct

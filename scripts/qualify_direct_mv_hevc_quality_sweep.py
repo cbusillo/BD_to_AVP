@@ -13,6 +13,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -550,9 +551,17 @@ def _candidate_id_for_quality(plan: SweepPlan, quality: float) -> str:
 
 
 def _atomic_write(path: Path, evidence: Mapping[str, object]) -> None:
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    temporary_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary_path.replace(path)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as temporary_file:
+            os.fchmod(temporary_file.fileno(), 0o644)
+            temporary_file.write(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def _prepare_owned_work_directory(work_directory: Path, plan: SweepPlan, plan_sha256: str) -> Path:
