@@ -55,6 +55,7 @@ def worker_result(
         0,
         job_id="job",
         payload={"code": event_code, "video_route": route},
+        event_type="warning" if event_code == "video_route_fallback" else "log",
     )
     return WorkerResult(
         operation=operation,
@@ -414,6 +415,7 @@ class PackagedRouteParityTests(unittest.TestCase):
                     1,
                     job_id="job",
                     payload={"code": "video_route_fallback", "video_route": route},
+                    event_type="warning",
                 ),
             ),
             preview=None,

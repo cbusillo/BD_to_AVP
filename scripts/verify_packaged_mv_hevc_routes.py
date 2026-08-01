@@ -402,6 +402,7 @@ def run_worker(
 
 
 def _validate_route_event(result: WorkerResult, event_code: str) -> None:
+    expected_event_type = "warning" if event_code == "video_route_fallback" else "log"
     route_events: list[tuple[object, Mapping[str, object]]] = []
     for event in result.events:
         payload = event.get("payload")
@@ -409,7 +410,7 @@ def _validate_route_event(result: WorkerResult, event_code: str) -> None:
             route_events.append((event.get("type"), payload))
     if (
         len(route_events) != 1
-        or route_events[0][0] != "log"
+        or route_events[0][0] != expected_event_type
         or route_events[0][1].get("code") != event_code
         or route_events[0][1].get("video_route") != result.route
     ):
