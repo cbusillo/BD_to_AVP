@@ -22,7 +22,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from bd_to_avp.modules.video_quality_defaults import AUTOMATIC_DIRECT_QUALITY
+from bd_to_avp.modules.video_quality_defaults import AUTOMATIC_DIRECT_QUALITY, AUTOMATIC_DIRECT_UPSCALE_QUALITY
 from scripts import build_mv_hevc_encoder_macos
 from scripts.qualify_direct_mv_hevc import QualificationFailure, command_path, measure
 from scripts.qualify_mv_hevc_corpus import (
@@ -65,6 +65,9 @@ class SweepPlan:
     runs_per_candidate: int
     candidates: tuple[SweepCandidate, ...]
     relative_path: str | None = None
+    target_id: str = "direct_mv_hevc"
+    upscale_mode: str | None = None
+    comparison_scale: tuple[int, int] | None = None
 
 
 def _mapping(value: object, label: str) -> Mapping[str, object]:
@@ -105,8 +108,9 @@ def parse_sweep_plan(raw: object) -> SweepPlan:
     if document.get("schema_version") != 1:
         raise QualificationFailure("sweep plan schema_version must be 1.")
     sweep_id = _string(document.get("sweep_id"), "sweep_id")
-    if document.get("target_id") != "direct_mv_hevc":
-        raise QualificationFailure("sweep plan target_id must be 'direct_mv_hevc'.")
+    target_id = _string(document.get("target_id"), "target_id")
+    if target_id not in {"direct_mv_hevc", "direct_mv_hevc_metalfx_2x"}:
+        raise QualificationFailure("sweep plan target_id is unsupported.")
     if document.get("purpose") != "exploratory_candidates_not_ladder_mappings":
         raise QualificationFailure("sweep plan must remain exploratory rather than assigning ladder steps.")
 
@@ -119,10 +123,31 @@ def parse_sweep_plan(raw: object) -> SweepPlan:
 
     balanced = _mapping(document.get("balanced"), "balanced")
     balanced_quality = _quality(balanced.get("quality"), "balanced.quality")
-    if balanced_quality != AUTOMATIC_DIRECT_QUALITY:
-        raise QualificationFailure("sweep Balanced quality must match the production direct default exactly.")
-    if balanced.get("source") != "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_DIRECT_QUALITY":
-        raise QualificationFailure("sweep Balanced source must identify the production direct default.")
+    expected_balanced = AUTOMATIC_DIRECT_QUALITY if target_id == "direct_mv_hevc" else AUTOMATIC_DIRECT_UPSCALE_QUALITY
+    expected_balanced_source = (
+        "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_DIRECT_QUALITY"
+        if target_id == "direct_mv_hevc"
+        else "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_DIRECT_UPSCALE_QUALITY"
+    )
+    if balanced_quality != expected_balanced:
+        raise QualificationFailure("sweep Balanced quality must match the target's production default exactly.")
+    if balanced.get("source") != expected_balanced_source:
+        raise QualificationFailure("sweep Balanced source must identify the target's production default.")
+
+    upscale_mode: str | None = None
+    comparison_scale: tuple[int, int] | None = None
+    measurement = document.get("measurement")
+    if target_id == "direct_mv_hevc":
+        if measurement is not None:
+            raise QualificationFailure("ordinary direct sweep plans must not define MetalFX measurement settings.")
+    else:
+        settings = _mapping(measurement, "measurement")
+        if settings.get("upscale_mode") != "metalfx":
+            raise QualificationFailure("MetalFX sweep measurement must use upscale_mode 'metalfx'.")
+        if settings.get("comparison") != "downscale_output_to_source":
+            raise QualificationFailure("MetalFX sweep comparison must downscale output to source dimensions.")
+        upscale_mode = "metalfx"
+        comparison_scale = (1920, 1080)
 
     runs_per_candidate = document.get("runs_per_candidate")
     if type(runs_per_candidate) is not int or not 1 <= runs_per_candidate <= MAX_RUNS:
@@ -158,6 +183,9 @@ def parse_sweep_plan(raw: object) -> SweepPlan:
         balanced_quality=balanced_quality,
         runs_per_candidate=runs_per_candidate,
         candidates=tuple(candidates),
+        target_id=target_id,
+        upscale_mode=upscale_mode,
+        comparison_scale=comparison_scale,
     )
 
 
@@ -181,6 +209,9 @@ def load_sweep_plan(path: Path) -> tuple[SweepPlan, str]:
         runs_per_candidate=parsed.runs_per_candidate,
         candidates=parsed.candidates,
         relative_path=relative_path,
+        target_id=parsed.target_id,
+        upscale_mode=parsed.upscale_mode,
+        comparison_scale=parsed.comparison_scale,
     )
     if not plan.corpus_path.is_file():
         raise QualificationFailure("The sweep corpus manifest is unavailable.")
@@ -289,7 +320,13 @@ def _finite_number(value: object, label: str, *, positive: bool = False, nonnega
     return numeric
 
 
-def _validate_run_record(run: Mapping[str, object], candidate: SweepCandidate, run_index: int) -> None:
+def _validate_run_record(
+    run: Mapping[str, object],
+    candidate: SweepCandidate,
+    run_index: int,
+    *,
+    expected_output_eye_dimensions: tuple[int, int] | None = None,
+) -> None:
     expected_keys = {
         "effective_bitrate_mbps",
         "final_bytes",
@@ -306,6 +343,8 @@ def _validate_run_record(run: Mapping[str, object], candidate: SweepCandidate, r
         "user_cpu_seconds",
         "system_cpu_seconds",
     }
+    if expected_output_eye_dimensions is not None:
+        expected_keys.update({"output_eye_width", "output_eye_height"})
     if set(run) != expected_keys:
         raise QualificationFailure(f"Candidate {candidate.candidate_id} run {run_index} has an invalid record shape.")
     if run.get("run_index") != run_index or run.get("target_quality") != candidate.quality:
@@ -336,6 +375,11 @@ def _validate_run_record(run: Mapping[str, object], candidate: SweepCandidate, r
     _finite_number(run.get("elapsed_seconds"), "elapsed_seconds", positive=True)
     _finite_number(run.get("user_cpu_seconds"), "user_cpu_seconds", nonnegative=True)
     _finite_number(run.get("system_cpu_seconds"), "system_cpu_seconds", nonnegative=True)
+    if expected_output_eye_dimensions is not None:
+        if (run.get("output_eye_width"), run.get("output_eye_height")) != expected_output_eye_dimensions:
+            raise QualificationFailure(
+                f"Candidate {candidate.candidate_id} run {run_index} output-eye dimensions changed."
+            )
     digest = run.get("sha256")
     if (
         not isinstance(digest, str)
@@ -345,11 +389,22 @@ def _validate_run_record(run: Mapping[str, object], candidate: SweepCandidate, r
         raise QualificationFailure(f"Candidate {candidate.candidate_id} run {run_index} has an invalid SHA-256.")
 
 
-def _run_complete(candidate_record: Mapping[str, object], candidate: SweepCandidate, run_index: int) -> bool:
+def _run_complete(
+    candidate_record: Mapping[str, object],
+    candidate: SweepCandidate,
+    run_index: int,
+    *,
+    expected_output_eye_dimensions: tuple[int, int] | None = None,
+) -> bool:
     run = _run_for_index(candidate_record, run_index)
     if run is None:
         return False
-    _validate_run_record(run, candidate, run_index)
+    _validate_run_record(
+        run,
+        candidate,
+        run_index,
+        expected_output_eye_dimensions=expected_output_eye_dimensions,
+    )
     return True
 
 
@@ -681,6 +736,9 @@ def _new_evidence(
         "method": {
             "runs_per_candidate": plan.runs_per_candidate,
             "balanced_quality": plan.balanced_quality,
+            "target_id": plan.target_id,
+            "upscale_mode": plan.upscale_mode,
+            "comparison": "downscale_output_to_source" if plan.comparison_scale is not None else "native_dimensions",
             "candidate_order": "ascending_even_runs_descending_odd_runs",
             "quality_metric": "minimum decoded same-eye SSIM",
             "aggregation": {
@@ -781,7 +839,14 @@ def _validate_resume_cases(evidence: Mapping[str, object], plan: SweepPlan, sele
                 raise QualificationFailure(f"Resumable candidate {candidate.candidate_id} has an invalid run index.")
             for run in runs:
                 assert isinstance(run, Mapping)
-                _validate_run_record(run, candidate, int(run["run_index"]))
+                _validate_run_record(
+                    run,
+                    candidate,
+                    int(run["run_index"]),
+                    expected_output_eye_dimensions=(3840, 2160)
+                    if plan.target_id == "direct_mv_hevc_metalfx_2x"
+                    else None,
+                )
 
 
 def _case_complete(case: Mapping[str, object], plan: SweepPlan) -> bool:
@@ -791,7 +856,13 @@ def _case_complete(case: Mapping[str, object], plan: SweepPlan) -> bool:
     for expected in plan.candidates:
         candidate = _candidate_record(case, expected.candidate_id)
         if candidate is None or any(
-            not _run_complete(candidate, expected, run_index) for run_index in range(plan.runs_per_candidate)
+            not _run_complete(
+                candidate,
+                expected,
+                run_index,
+                expected_output_eye_dimensions=(3840, 2160) if plan.target_id == "direct_mv_hevc_metalfx_2x" else None,
+            )
+            for run_index in range(plan.runs_per_candidate)
         ):
             return False
     return True
@@ -857,6 +928,10 @@ def run_quality_sweep(
         selected_cases = gated_cases
     if not selected_cases:
         raise QualificationFailure("At least one quality-gated corpus case is required.")
+    if plan.target_id == "direct_mv_hevc_metalfx_2x" and any(
+        case.output_eye_width != 1920 or case.output_eye_height != 1080 for case in selected_cases
+    ):
+        raise QualificationFailure("MetalFX 2x quality sweeps require 1920x1080 input per eye for every case.")
 
     ffmpeg = command_path("ffmpeg")
     ffprobe = command_path("ffprobe")
@@ -938,7 +1013,14 @@ def run_quality_sweep(
                 candidate_record = _candidate_record(existing_case, candidate.candidate_id)
                 if candidate_record is None:
                     raise QualificationFailure(f"Candidate {candidate.candidate_id} is missing from sweep evidence.")
-                if _run_complete(candidate_record, candidate, run_index):
+                if _run_complete(
+                    candidate_record,
+                    candidate,
+                    run_index,
+                    expected_output_eye_dimensions=(3840, 2160)
+                    if plan.target_id == "direct_mv_hevc_metalfx_2x"
+                    else None,
+                ):
                     continue
                 output = case_work / f"{candidate.candidate_id}-run-{run_index + 1}.mov"
                 _, metrics = measure(
@@ -949,6 +1031,7 @@ def run_quality_sweep(
                         prepared,
                         output,
                         quality=candidate.quality,
+                        upscale_mode=plan.upscale_mode,
                     )
                 )
                 measured = _measure_output(
@@ -957,6 +1040,11 @@ def run_quality_sweep(
                     output,
                     case_work / f"{candidate.candidate_id}-run-{run_index + 1}-split",
                     target_bitrate_mbps=None,
+                    comparison_scale=plan.comparison_scale,
+                    ffprobe=ffprobe if plan.target_id == "direct_mv_hevc_metalfx_2x" else None,
+                    expected_output_eye_dimensions=(3840, 2160)
+                    if plan.target_id == "direct_mv_hevc_metalfx_2x"
+                    else None,
                 )
                 measured.pop("target_bitrate_mbps", None)
                 measured.update(

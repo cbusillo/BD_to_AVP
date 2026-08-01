@@ -96,6 +96,47 @@ The result is ordinary-direct objective evidence only. It cannot update the publ
 generated-fallback parity, package, perceptual, long-form runtime, physical Vision Pro, and signed-beta checks finish.
 Unsupported positions remain unavailable rather than aliased.
 
+### Direct MetalFX 2x mapping confirmation
+
+`docs/qualification/direct-mv-hevc-metalfx-quality-mapping-confirmation-v1.json` preregisters an independent
+MetalFX 2x confirmation rather than transforming the ordinary-direct values. Its fixed candidate grid preserves the
+ordinary ladder's relative spacing around the production MetalFX anchor: `0.30`, `0.40`, `0.50`, `0.60`, `0.65`,
+`0.70`, and `0.75`, with `Balanced = 0.60`. The checked corpus uses five matched production MVC scenes plus 1080p
+animation and crop/disparity controls. Every case is exactly 1920×1080 per eye because the production MetalFX helper
+rejects any other input geometry.
+
+The raw sweep encodes 7 cases × 7 candidates × 3 repeats through `--upscale-mode metalfx`, validates the 4K MV-HEVC
+output, and downsamples each decoded 4K eye to its 1080p reference before SSIM. It reuses the ordinary-direct
+repeatability, size-cap, adjacent-boundary, and collapse policy, but all candidate measurements are fresh MetalFX
+outputs. Synthetic controls require a downscaled same-eye versus cross-eye margin of at least `0.05`; candidate
+aliases, interpolation, post-outcome thresholds, and public mapping changes remain forbidden.
+
+Before running, copy the three exact source receipts named in the plan to a private immutable evidence directory and
+set them to mode `0444`: the ordinary-direct confirmation, the matched-source repeated Balanced real-MVC quality
+receipt, and the packaged full/preview route receipt. Those receipts prove matched-source quality and the existing
+pre-input generated route. The runner separately exercises the bound current worker protocol: a Balanced payload must
+parse with generated Automatic + merge `75` and file-upscale quality `75`, while all six non-Balanced ladder payloads
+must be rejected. Automatic direct MetalFX quality `0.60` may therefore use only the checked Balanced fallback;
+non-Balanced fallback remains unavailable instead of being silently aliased, and `Custom` retains exact route controls.
+
+Run the complete confirmation from a clean committed macOS arm64 worktree:
+
+```bash
+BD_TO_AVP_RELEASE_MVC_SOURCE=/private/source.mkv \
+uv run python scripts/qualify_direct_mv_hevc_metalfx_mapping_confirmation.py \
+  --ordinary-direct-receipt /private/frozen/direct-confirmation.json \
+  --balanced-quality-receipt /private/frozen/balanced-real-mvc-quality.json \
+  --balanced-routes-receipt /private/frozen/balanced-packaged-routes.json \
+  --output build/qualification/direct-mv-hevc-metalfx-quality-mapping-confirmation-v1.json \
+  --work-directory build/qualification/direct-mv-hevc-metalfx-quality-mapping-confirmation-v1-work
+```
+
+Use `--resume` with every path unchanged after interruption. A complete receipt is canonical JSON frozen at mode
+`0444`. Exit `0` requires all seven MetalFX candidates, all six boundaries, and the Balanced-only fallback policy;
+complete negative evidence exits `1`, interruption exits `3`, and contract/provenance/execution failure exits `2`.
+Even exit `0` remains provisional: #422 still owns package parity for the final table, perceptual and long-form checks,
+physical Vision Pro validation, and signed-beta qualification.
+
 ## File Upscale Quality Sweep
 
 `docs/qualification/file-upscale-quality-corpus-v1.json` binds a five-case stress subset to the existing direct

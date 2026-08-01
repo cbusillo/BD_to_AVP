@@ -47,6 +47,26 @@ class DirectQualitySweepPlanTests(unittest.TestCase):
         self.assertEqual([candidate.quality for candidate in plan.candidates], [0.7, 0.75, 0.8, 0.82, 0.85])
         self.assertEqual(len(digest), 64)
 
+    def test_metalfx_confirmation_plan_uses_checked_2x_measurement(self) -> None:
+        path = DEFAULT_SWEEP_PLAN.with_name("direct-mv-hevc-metalfx-quality-sweep-confirmation-v1.json")
+        document = json.loads(path.read_text(encoding="utf-8"))
+
+        plan = parse_sweep_plan(document)
+
+        self.assertEqual(plan.target_id, "direct_mv_hevc_metalfx_2x")
+        self.assertEqual(plan.balanced_quality, 0.6)
+        self.assertEqual(plan.upscale_mode, "metalfx")
+        self.assertEqual(plan.comparison_scale, (1920, 1080))
+        self.assertEqual([candidate.quality for candidate in plan.candidates], [0.3, 0.4, 0.5, 0.6, 0.65, 0.7, 0.75])
+
+    def test_metalfx_plan_rejects_native_dimension_comparison(self) -> None:
+        path = DEFAULT_SWEEP_PLAN.with_name("direct-mv-hevc-metalfx-quality-sweep-confirmation-v1.json")
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["measurement"]["comparison"] = "native_dimensions"
+
+        with self.assertRaisesRegex(QualificationFailure, "downscale output"):
+            parse_sweep_plan(document)
+
     def test_rejects_plan_without_balanced_candidate(self) -> None:
         document = copy.deepcopy(self.document)
         document["candidates"] = [candidate for candidate in document["candidates"] if candidate["quality"] != 0.7]

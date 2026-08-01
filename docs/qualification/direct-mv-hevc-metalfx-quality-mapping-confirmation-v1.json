@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "experiment_id": "direct-mv-hevc-metalfx-quality-mapping-confirmation-v1",
+  "target_id": "direct_mv_hevc_metalfx_2x",
+  "raw_sweep_plan": {
+    "path": "docs/qualification/direct-mv-hevc-metalfx-quality-sweep-confirmation-v1.json",
+    "sha256": "c5eaa213a8db4aa58a4588f7f151c6d97f588fc647cae92f34d4eac36d4f7af3",
+    "sweep_id": "direct-mv-hevc-metalfx-quality-confirmation-v1"
+  },
+  "source_receipts": {
+    "ordinary_direct_confirmation": {
+      "path_argument": "--ordinary-direct-receipt",
+      "sha256": "0fa3571bbd2365bf89156391993fe37586872159f83de5903c0d354aba523b09",
+      "required_file_mode": "0444",
+      "identity": {
+        "schema_version": 1,
+        "experiment_id": "direct-mv-hevc-quality-mapping-confirmation-v1",
+        "source_git_sha": "f44c2f0ecf1e772a00a4b3b623ea1d479ab9def3"
+      },
+      "records_used_for_metalfx_mapping_confirmation": false,
+      "records_used_for_fallback_policy_confirmation": false
+    },
+    "balanced_real_mvc_quality": {
+      "path_argument": "--balanced-quality-receipt",
+      "sha256": "ac0dd829b06d6d6dd214a5ffd1a8389eb93f79ab75197bc9730789ee7463565a",
+      "required_file_mode": "0444",
+      "identity": {
+        "schema_version": 1,
+        "source_sha256": "da31e6ae9749897ca199f4a37a781b2be9a2d82076885efea4d0c156673bbcec",
+        "package_app_tree_sha256": "7294f205d9d95d53f72d7fa30d977b2551c6d6ab8c0bdeddc444c354060fc801"
+      },
+      "records_used_for_metalfx_mapping_confirmation": false,
+      "records_used_for_fallback_policy_confirmation": true
+    },
+    "balanced_packaged_routes": {
+      "path_argument": "--balanced-routes-receipt",
+      "sha256": "e182cc91b890f3177a00ad32db0c8e1039d314c79976f0ab2c56f631f4862f6e",
+      "required_file_mode": "0444",
+      "identity": {
+        "schema_version": 3,
+        "source_sha256": "da31e6ae9749897ca199f4a37a781b2be9a2d82076885efea4d0c156673bbcec",
+        "package_app_tree_sha256": "7294f205d9d95d53f72d7fa30d977b2551c6d6ab8c0bdeddc444c354060fc801"
+      },
+      "records_used_for_metalfx_mapping_confirmation": false,
+      "records_used_for_fallback_policy_confirmation": true
+    }
+  },
+  "corpus": {
+    "path": "docs/qualification/direct-mv-hevc-metalfx-corpus-v1.json",
+    "corpus_id": "direct-mv-hevc-metalfx-2x-prerelease-v1",
+    "sha256": "7fa8b20fcbe50598758c1bb9cd7776d780d3534e9d63fe820e8e17d23b94826e",
+    "case_ids": [
+      "production-dark",
+      "production-grain-rain",
+      "production-snow-detail",
+      "production-motion",
+      "production-rate-override",
+      "synthetic-animation",
+      "synthetic-crop"
+    ]
+  },
+  "public_contract_bindings": {
+    "ladder_manifest": {
+      "path": "docs/qualification/video-quality-ladder-v1.json",
+      "sha256": "04620e59e5380c88d3d5152f78712402675f31db6f1253c1d93224af585111dc"
+    },
+    "video_quality_catalog": {
+      "path": "macos/BluRayToVisionPro/Models/VideoQuality.swift",
+      "sha256": "6f204564261d859590086ca41e9a27ac9f69bc0feb225137cf0abc4a98082dfa"
+    },
+    "worker_quality_contract": {
+      "path": "bd_to_avp/worker/protocol.py",
+      "sha256": "259602f32178b9c83b43db833832be81aab2fecced9466ab1a2d74570c2d3bfe"
+    },
+    "route_resolution": {
+      "path": "bd_to_avp/modules/video_route.py",
+      "sha256": "8c3aceb21799e531025e7f68617daf20446c46d97531b23d2190db97a9da8c13"
+    }
+  },
+  "candidates": [
+    {"step_id": "space_saver", "candidate_id": "q030", "quality": 0.3},
+    {"step_id": "compact", "candidate_id": "q040", "quality": 0.4},
+    {"step_id": "efficient", "candidate_id": "q050", "quality": 0.5},
+    {"step_id": "balanced", "candidate_id": "q060", "quality": 0.6},
+    {"step_id": "detailed", "candidate_id": "q065", "quality": 0.65},
+    {"step_id": "high_detail", "candidate_id": "q070", "quality": 0.7},
+    {"step_id": "maximum_detail", "candidate_id": "q075", "quality": 0.75}
+  ],
+  "technical_eligibility": {
+    "maximum_repeat_ssim_spread": 0.0002,
+    "maximum_repeat_size_ratio_spread": 0.02,
+    "maximum_q075_to_q060_size_ratio": 4.9,
+    "threshold_source": "ordinary direct confirmation policy plus repeated production MetalFX Balanced evidence"
+  },
+  "adjacent_boundary_policy": {
+    "minimum_case_median_storage_growth_ratio": 0.005,
+    "minimum_case_median_ssim_delta": -0.0002,
+    "minimum_corpus_median_ssim_improvement": 0.0001,
+    "real_case_ssim_threshold": 0.0001,
+    "minimum_real_case_clear_count": 2,
+    "sensitive_case_ids": ["production-grain-rain", "production-snow-detail"],
+    "minimum_sensitive_case_clear_count": 1,
+    "strict_paired_storage_growth_required": true,
+    "failed_boundary_action": "collapse",
+    "aliases_forbidden": true
+  },
+  "fallback_policy": {
+    "supported_ladder_step_ids": ["balanced"],
+    "balanced_generated_values": {"eye_bitrate_mbps": 20, "merge_quality": 75},
+    "balanced_file_upscale_quality": 75,
+    "maximum_generated_quality_loss_vs_direct": 0.002,
+    "matched_source_sha256": "da31e6ae9749897ca199f4a37a781b2be9a2d82076885efea4d0c156673bbcec",
+    "required_route_reason": "direct_capability_unavailable",
+    "required_fallback_reason": "metalfx_2x_mv_hevc_unavailable",
+    "required_fallback_timing": "pre_input",
+    "unsupported_step_action": "unavailable_not_balanced_alias",
+    "custom_action": "preserve_exact_route_controls",
+    "worker_contract_validation": "balanced_payload_parses_and_non_balanced_steps_reject",
+    "aliases_forbidden": true
+  },
+  "selection_policy": {
+    "primary": "fixed_contiguous_subset_containing_q060",
+    "all_seven_required_for_positive_confirmation": true,
+    "candidate_step_assignments_fixed_before_run": true,
+    "missing_slots": "unsupported"
+  },
+  "artifact_policy": {
+    "fresh_output_sha256_recorded_for_every_run": true,
+    "fresh_outputs_ephemeral": true,
+    "retained_full_length_anchor_artifacts": []
+  },
+  "decision_policy": {
+    "public_mapping_changes_forbidden": true,
+    "metalfx_objective_confirmation_only": true,
+    "fallback_policy_confirmation_included": true,
+    "package_parity_performed": false,
+    "perceptual_review_performed": false,
+    "long_form_runtime_performed": false,
+    "vision_pro_validation_performed": false,
+    "signed_beta_performed": false
+  }
+}

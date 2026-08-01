@@ -1,6 +1,7 @@
 import copy
 import json
 import sys
+import tempfile
 import unittest
 
 from pathlib import Path
@@ -81,8 +82,90 @@ class CorpusManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(QualificationFailure, "falls outside"):
             parse_manifest(document)
 
+    def test_metalfx_manifest_keeps_every_case_at_supported_input_size(self) -> None:
+        path = MANIFEST_PATH.with_name("direct-mv-hevc-metalfx-corpus-v1.json")
+
+        manifest = parse_manifest(json.loads(path.read_text(encoding="utf-8")))
+
+        self.assertEqual(len(manifest.cases), 7)
+        self.assertTrue(all((case.output_eye_width, case.output_eye_height) == (1920, 1080) for case in manifest.cases))
+        self.assertTrue(
+            all(case.minimum_eye_order_margin == 0.05 for case in manifest.cases if "synthetic_control" in case.tags)
+        )
+        covered_tags = {tag for case in manifest.cases for tag in case.tags}
+        self.assertTrue(set(manifest.required_coverage).issubset(covered_tags))
+
 
 class CorpusPolicyTests(unittest.TestCase):
+    def test_direct_encoder_passes_and_validates_metalfx_mode(self) -> None:
+        prepared = PreparedCase(
+            definition=CorpusCase(
+                case_id="metalfx",
+                tags=("real_mvc",),
+                source={"kind": "synthetic"},
+                eye_width=1920,
+                eye_height=1080,
+                frame_rate="24",
+            ),
+            source_path=Path("source.mkv"),
+            reference_left=Path("left.mov"),
+            reference_right=Path("right.mov"),
+            duration_seconds=2,
+            frame_count=48,
+            source_evidence={"kind": "synthetic"},
+        )
+        summary = json.dumps(
+            {"schema_version": 1, "rate_control": "quality", "quality": 0.6, "upscale_mode": "metalfx"}
+        )
+        with patch.object(corpus, "_run_pipeline", return_value=summary) as pipeline:
+            corpus._encode_direct(
+                "ffmpeg",
+                Path("encoder"),
+                prepared,
+                Path("output.mov"),
+                quality=0.6,
+                upscale_mode="metalfx",
+            )
+
+        consumer = pipeline.call_args.args[1]
+        self.assertEqual(consumer[consumer.index("--upscale-mode") + 1], "metalfx")
+
+    def test_scaled_measurement_rejects_non_4k_metalfx_eye(self) -> None:
+        prepared = PreparedCase(
+            definition=CorpusCase(
+                case_id="metalfx",
+                tags=("real_mvc",),
+                source={"kind": "synthetic"},
+                eye_width=1920,
+                eye_height=1080,
+                frame_rate="24",
+            ),
+            source_path=Path("source.mkv"),
+            reference_left=Path("left-reference.mov"),
+            reference_right=Path("right-reference.mov"),
+            duration_seconds=2,
+            frame_count=48,
+            source_evidence={"kind": "synthetic"},
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output = Path(temporary_directory) / "output.mov"
+            output.write_bytes(b"movie")
+            with (
+                patch.object(corpus, "split_mv_hevc", return_value=(Path("left.mov"), Path("right.mov"))),
+                patch.object(corpus, "ffprobe_stream", return_value={"width": 1920, "height": 1080}),
+                self.assertRaisesRegex(QualificationFailure, "3840x2160"),
+            ):
+                corpus._measure_output(
+                    "ffmpeg",
+                    prepared,
+                    output,
+                    Path("split"),
+                    target_bitrate_mbps=None,
+                    comparison_scale=(1920, 1080),
+                    ffprobe="ffprobe",
+                    expected_output_eye_dimensions=(3840, 2160),
+                )
+
     def test_derived_policy_uses_worst_case_with_headroom(self) -> None:
         self.assertEqual(derive_policy_bitrate([1.0, 4.0, 7.5], headroom_fraction=0.10), 9)
 

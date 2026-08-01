@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "sweep_id": "direct-mv-hevc-metalfx-quality-confirmation-v1",
+  "target_id": "direct_mv_hevc_metalfx_2x",
+  "purpose": "exploratory_candidates_not_ladder_mappings",
+  "corpus": {
+    "path": "docs/qualification/direct-mv-hevc-metalfx-corpus-v1.json",
+    "corpus_id": "direct-mv-hevc-metalfx-2x-prerelease-v1",
+    "sha256": "7fa8b20fcbe50598758c1bb9cd7776d780d3534e9d63fe820e8e17d23b94826e"
+  },
+  "balanced": {
+    "quality": 0.6,
+    "source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_DIRECT_UPSCALE_QUALITY"
+  },
+  "measurement": {
+    "upscale_mode": "metalfx",
+    "comparison": "downscale_output_to_source"
+  },
+  "runs_per_candidate": 3,
+  "candidates": [
+    {"id": "q030", "quality": 0.3},
+    {"id": "q040", "quality": 0.4},
+    {"id": "q050", "quality": 0.5},
+    {"id": "q060", "quality": 0.6},
+    {"id": "q065", "quality": 0.65},
+    {"id": "q070", "quality": 0.7},
+    {"id": "q075", "quality": 0.75}
+  ]
+}

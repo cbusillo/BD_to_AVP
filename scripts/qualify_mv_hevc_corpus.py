@@ -28,6 +28,7 @@ from scripts.qualify_direct_mv_hevc import (
     SPATIAL_MEDIA_TOOL,
     QualificationFailure,
     command_path,
+    ffprobe_stream,
     kill_and_reap,
     run,
     split_mv_hevc,
@@ -793,12 +794,14 @@ def _encode_direct(
     *,
     bitrate_mbps: float | None = None,
     quality: float | None = None,
+    upscale_mode: str | None = None,
 ) -> None:
     if (bitrate_mbps is None) == (quality is None):
         raise ValueError("Direct qualification requires exactly one rate-control setting.")
     rate_control_arguments = (
         ["--quality", str(quality)] if quality is not None else ["--bitrate-mbps", str(bitrate_mbps)]
     )
+    upscale_arguments = ["--upscale-mode", upscale_mode] if upscale_mode is not None else []
     summary = _run_pipeline(
         [
             ffmpeg,
@@ -818,6 +821,7 @@ def _encode_direct(
             "--output",
             output_path,
             *rate_control_arguments,
+            *upscale_arguments,
             "--fov",
             "90",
             "--disparity-adjustment",
@@ -841,6 +845,53 @@ def _encode_direct(
             raise QualificationFailure("Direct encoder reported an unexpected quality setting.")
     elif payload.get("bitrate_mbps") != bitrate_mbps or "quality" in payload:
         raise QualificationFailure("Direct encoder reported an unexpected bitrate setting.")
+    if upscale_mode is None:
+        if "upscale_mode" in payload:
+            raise QualificationFailure("Direct encoder unexpectedly reported an upscale mode.")
+    elif payload.get("upscale_mode") != upscale_mode:
+        raise QualificationFailure("Direct encoder reported an unexpected upscale mode.")
+
+
+def _scaled_ssim(
+    ffmpeg: str,
+    candidate: Path,
+    reference: Path,
+    *,
+    width: int,
+    height: int,
+) -> float:
+    process = subprocess.run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "info",
+            "-i",
+            candidate,
+            "-i",
+            reference,
+            "-lavfi",
+            (
+                f"[0:v]scale={width}:{height}:flags=lanczos,format=yuv420p,"
+                "setpts=PTS-STARTPTS[candidate];"
+                "[1:v]format=yuv420p,setpts=PTS-STARTPTS[reference];"
+                "[candidate][reference]ssim"
+            ),
+            "-f",
+            "null",
+            "-",
+        ],
+        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        timeout=COMMAND_TIMEOUT_SECONDS,
+    )
+    if process.returncode != 0:
+        raise QualificationFailure(f"Scaled SSIM comparison failed:\n{process.stderr.strip()}")
+    matches = SSIM_PATTERN.findall(process.stderr)
+    if not matches:
+        raise QualificationFailure("Scaled SSIM comparison did not report an aggregate score.")
+    return float(matches[-1])
 
 
 def _ssim_with_frame_scores(ffmpeg: str, candidate: Path, reference: Path) -> tuple[float, list[float]]:
@@ -912,16 +963,64 @@ def _measure_output(
     target_bitrate_mbps: float | None,
     include_frame_metrics: bool = False,
     delete_output: bool = True,
+    comparison_scale: tuple[int, int] | None = None,
+    ffprobe: str | None = None,
+    expected_output_eye_dimensions: tuple[int, int] | None = None,
 ) -> dict[str, object]:
     left, right = split_mv_hevc(output_path, split_directory)
+    if expected_output_eye_dimensions is not None:
+        if ffprobe is None:
+            raise QualificationFailure("Output-eye dimension validation requires ffprobe.")
+        expected_width, expected_height = expected_output_eye_dimensions
+        for eye in (left, right):
+            stream = ffprobe_stream(ffprobe, eye)
+            if (stream.get("width"), stream.get("height")) != (expected_width, expected_height):
+                raise QualificationFailure(
+                    f"Decoded output eye has unexpected dimensions; expected {expected_width}x{expected_height}."
+                )
+    if include_frame_metrics and comparison_scale is not None:
+        raise QualificationFailure("Scaled output comparison does not support per-frame metrics.")
     if include_frame_metrics:
         left_match, left_frame_scores = _ssim_with_frame_scores(ffmpeg, left, prepared.reference_left)
         right_match, right_frame_scores = _ssim_with_frame_scores(ffmpeg, right, prepared.reference_right)
+    elif comparison_scale is not None:
+        comparison_width, comparison_height = comparison_scale
+        left_match = _scaled_ssim(
+            ffmpeg,
+            left,
+            prepared.reference_left,
+            width=comparison_width,
+            height=comparison_height,
+        )
+        right_match = _scaled_ssim(
+            ffmpeg,
+            right,
+            prepared.reference_right,
+            width=comparison_width,
+            height=comparison_height,
+        )
     else:
         left_match = ssim(ffmpeg, left, prepared.reference_left)
         right_match = ssim(ffmpeg, right, prepared.reference_right)
-    left_cross = ssim(ffmpeg, left, prepared.reference_right)
-    right_cross = ssim(ffmpeg, right, prepared.reference_left)
+    if comparison_scale is not None:
+        comparison_width, comparison_height = comparison_scale
+        left_cross = _scaled_ssim(
+            ffmpeg,
+            left,
+            prepared.reference_right,
+            width=comparison_width,
+            height=comparison_height,
+        )
+        right_cross = _scaled_ssim(
+            ffmpeg,
+            right,
+            prepared.reference_left,
+            width=comparison_width,
+            height=comparison_height,
+        )
+    else:
+        left_cross = ssim(ffmpeg, left, prepared.reference_right)
+        right_cross = ssim(ffmpeg, right, prepared.reference_left)
     final_bytes = output_path.stat().st_size
     record: dict[str, object] = {
         "effective_bitrate_mbps": round(effective_bitrate_mbps(final_bytes, prepared.duration_seconds), 6),
@@ -938,6 +1037,9 @@ def _measure_output(
         "sha256": sha256_file(output_path),
         "target_bitrate_mbps": target_bitrate_mbps,
     }
+    if expected_output_eye_dimensions is not None:
+        record["output_eye_width"] = expected_output_eye_dimensions[0]
+        record["output_eye_height"] = expected_output_eye_dimensions[1]
     if include_frame_metrics:
         record.update(summarize_frame_quality(left_frame_scores, right_frame_scores))
     shutil.rmtree(split_directory, ignore_errors=True)
