@@ -77,6 +77,7 @@ from scripts.qualify_mv_hevc_quality_match import sha256_file
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SELECTION_PLAN = REPOSITORY_ROOT / "docs/qualification/file-upscale-quality-mapping-selection-v1.json"
+DEFAULT_CONFIRMATION_PLAN = REPOSITORY_ROOT / "docs/qualification/file-upscale-quality-mapping-confirmation-v2.json"
 DEFAULT_SOURCE_RECEIPT = REPOSITORY_ROOT / "build/qualification/file-upscale-quality-sweep-v1.json"
 DEFAULT_OUTPUT = REPOSITORY_ROOT / "build/qualification/file-upscale-quality-mapping-selection-v1.json"
 DEFAULT_WORK_DIRECTORY = REPOSITORY_ROOT / "build/qualification/file-upscale-quality-mapping-selection-v1-work"
@@ -84,6 +85,24 @@ DEFAULT_ARTIFACT_DIRECTORY = REPOSITORY_ROOT / "build/qualification/file-upscale
 EVIDENCE_SCHEMA_VERSION = 3
 WORK_DIRECTORY_MARKER = ".bd-to-avp-file-upscale-quality-mapping-selection.json"
 ARTIFACT_DIRECTORY_MARKER = ".bd-to-avp-file-upscale-quality-mapping-selection-artifacts.json"
+V1_EXPERIMENT_ID = "file-upscale-quality-mapping-selection-v1"
+V1_PURPOSE = "objective_provisional_mapping_selection_not_public_ladder_mapping"
+V1_DESIGN = "fixed_integer_quality_grid_45_55_65_75_85_95_100_v1"
+V1_DECISION_STAGE = "objective_provisional_mapping_selection_only"
+V2_EXPERIMENT_ID = "file-upscale-quality-mapping-confirmation-v2"
+V2_PURPOSE = "objective_provisional_mapping_confirmation_not_public_ladder_mapping"
+V2_DESIGN = "fixed_integer_quality_grid_45_55_65_75_85_95_100_confirmation_v2"
+V2_DECISION_STAGE = "objective_provisional_mapping_confirmation_only"
+V2_CONFIRMATION_PLAN_SHA256 = "c831add22aed97b629c53af76b60cd7eccf6654c088a6a73f1b5ba53b4095118"
+V2_SOURCE_EXPERIMENT_ID = "file-upscale-quality-repeatability-calibration-v2"
+V2_SOURCE_RECEIPT_SHA256 = "6d44f4c23df142d3a819f0aba1b87f9fa688435485f4f1798a103ea94ccbe49e"
+V2_SOURCE_GIT_SHA = "1f988fbf198595d52084eabc3055edd2f1d14221"
+V2_SOURCE_PLAN_PATH = REPOSITORY_ROOT / "docs/qualification/file-upscale-quality-repeatability-calibration-v2.json"
+V2_SOURCE_PLAN_SHA256 = "c4cf953bd868eadd04f4ed11a7ca4f2211c81f5ee72f375347f5f3d9cf14ecdb"
+V2_PREDECESSOR_EXPERIMENT_ID = "file-upscale-quality-mapping-selection-v1"
+V2_PREDECESSOR_RECEIPT_SHA256 = "c8e2478913a8c458657f0f7904720d6f76e8761b8ba1922e7c5dda5b916d2cef"
+V2_PREDECESSOR_SOURCE_GIT_SHA = "b93a9729a2396b3942e679a1a8db34967f9d4467"
+V2_PREDECESSOR_PLAN_SHA256 = "3aa76c79adb81e72dd89f9fd548ef73698880eebf6332c149fe401c058d090ee"
 EXPECTED_CASE_IDS = (
     "production-dark",
     "production-grain-rain",
@@ -190,6 +209,63 @@ EXPECTED_NOISE = {
         0.0011,
     ),
 }
+EXPECTED_CALIBRATED_NOISE = {
+    "min_same_eye_ssim": ("min_same_eye_ssim", 0.00007699999999999374, 0.0001, 0.0002),
+    "final_to_base_size_ratio": (
+        "final_to_base_size_ratio",
+        0.014467748802706737,
+        0.01,
+        0.03,
+    ),
+    "minimum_frame_same_eye_ssim": (
+        "minimum_frame_same_eye_ssim",
+        0.0026720000000000077,
+        0.0001,
+        0.0054,
+    ),
+    "p05_frame_same_eye_ssim": (
+        "p05_frame_same_eye_ssim",
+        0.0009209999999999496,
+        0.0001,
+        0.0019,
+    ),
+    "frame_ssim_standard_deviation": (
+        "frame_ssim_standard_deviation",
+        0.00008787075701880039,
+        0.0001,
+        0.0002,
+    ),
+    "maximum_adjacent_frame_ssim_drop": (
+        "maximum_adjacent_frame_ssim_drop",
+        0.002871000000000068,
+        0.0001,
+        0.0058,
+    ),
+    "min_eye_order_margin": (
+        "min_eye_order_margin",
+        0.00019099999999994122,
+        0.0001,
+        0.0011,
+    ),
+}
+V2_PREVIOUS_LIMITS = {
+    "min_same_eye_ssim": 0.0002,
+    "final_to_base_size_ratio": 0.02,
+    "minimum_frame_same_eye_ssim": 0.0016,
+    "p05_frame_same_eye_ssim": 0.0012,
+    "frame_ssim_standard_deviation": 0.0002,
+    "maximum_adjacent_frame_ssim_drop": 0.001,
+    "min_eye_order_margin": 0.0011,
+}
+V2_SOURCE_CASES = {
+    "min_same_eye_ssim": "production-snow-detail",
+    "final_to_base_size_ratio": "production-snow-detail",
+    "minimum_frame_same_eye_ssim": "production-motion",
+    "p05_frame_same_eye_ssim": "production-snow-detail",
+    "frame_ssim_standard_deviation": "production-motion",
+    "maximum_adjacent_frame_ssim_drop": "production-motion",
+    "min_eye_order_margin": "production-motion",
+}
 
 
 @dataclass(frozen=True)
@@ -222,6 +298,40 @@ class CaseSchedule:
     case_id: str
     case_index: int
     orders: tuple[tuple[int, ...], ...]
+
+
+@dataclass(frozen=True)
+class MappingSelectionContract:
+    experiment_id: str
+    purpose: str
+    design: str
+    decision_stage: str
+    source_kind: str
+    non_inferiority_values: tuple[float, float, float, float, float, float]
+    real_case_minimum_frame_threshold: float
+    real_case_p05_threshold: float
+
+
+V1_SELECTION_CONTRACT = MappingSelectionContract(
+    experiment_id=V1_EXPERIMENT_ID,
+    purpose=V1_PURPOSE,
+    design=V1_DESIGN,
+    decision_stage=V1_DECISION_STAGE,
+    source_kind="response_sweep_v1",
+    non_inferiority_values=(-0.0002, -0.0016, -0.0012, 0.0002, 0.001, 0.0011),
+    real_case_minimum_frame_threshold=0.0016,
+    real_case_p05_threshold=0.0012,
+)
+V2_CONFIRMATION_CONTRACT = MappingSelectionContract(
+    experiment_id=V2_EXPERIMENT_ID,
+    purpose=V2_PURPOSE,
+    design=V2_DESIGN,
+    decision_stage=V2_DECISION_STAGE,
+    source_kind="repeatability_calibration_v2",
+    non_inferiority_values=(-0.0002, -0.0054, -0.0019, 0.0002, 0.0058, 0.0011),
+    real_case_minimum_frame_threshold=0.0054,
+    real_case_p05_threshold=0.0019,
+)
 
 
 @dataclass(frozen=True)
@@ -330,6 +440,14 @@ def _derived_limit(source_maximum: float, quantum: float) -> float:
     source = Decimal(str(source_maximum))
     step = Decimal(str(quantum))
     return float(((Decimal(2) * source / step).to_integral_value(rounding=ROUND_CEILING)) * step)
+
+
+def _derived_calibrated_limit(previous_limit: float, source_maximum: float, quantum: float) -> float:
+    previous = Decimal(str(previous_limit))
+    source = Decimal(str(source_maximum))
+    step = Decimal(str(quantum))
+    observed_limit = ((Decimal(2) * source / step).to_integral_value(rounding=ROUND_CEILING)) * step
+    return float(max(previous, observed_limit))
 
 
 def parse_mapping_corpus_binding(raw: object) -> CorpusBinding:
@@ -442,7 +560,7 @@ def load_mapping_corpus_binding(path: Path) -> tuple[CorpusBinding, str]:
     )
 
 
-def _parse_source_response(
+def _parse_source_response_v1(
     document: Mapping[str, object],
 ) -> tuple[SourceReceiptBinding, SourcePlanBinding, tuple[NoiseLimit, ...]]:
     response = _exact_keys(document.get("source_response"), ("receipt", "plan", "noise_derivation"), "source_response")
@@ -541,12 +659,125 @@ def _parse_source_response(
     return source_receipt, source_plan, tuple(noise_limits)
 
 
+def _parse_source_response_v2(
+    document: Mapping[str, object],
+) -> tuple[SourceReceiptBinding, SourcePlanBinding, tuple[NoiseLimit, ...]]:
+    response = _exact_keys(document.get("source_response"), ("receipt", "plan", "noise_derivation"), "source_response")
+    receipt = _exact_keys(
+        response.get("receipt"),
+        ("schema_version", "experiment_id", "sha256", "source_git_sha", "required_file_mode"),
+        "source_response.receipt",
+    )
+    source_receipt = SourceReceiptBinding(
+        schema_version=_integer(
+            receipt.get("schema_version"), "source_response.receipt.schema_version", minimum=4, maximum=4
+        ),
+        experiment_id=_string(receipt.get("experiment_id"), "source_response.receipt.experiment_id"),
+        sha256=_sha256_identity(receipt.get("sha256"), "source_response.receipt.sha256"),
+        source_git_sha=_git_sha_identity(receipt.get("source_git_sha"), "source_response.receipt.source_git_sha"),
+        required_file_mode=_file_mode(receipt.get("required_file_mode"), "source_response.receipt.required_file_mode"),
+    )
+    if source_receipt.experiment_id != V2_SOURCE_EXPERIMENT_ID:
+        raise QualificationFailure("The v2 source calibration experiment identity is unsupported.")
+    if source_receipt.sha256 != V2_SOURCE_RECEIPT_SHA256:
+        raise QualificationFailure("The v2 source calibration receipt SHA-256 changed from the preregistration.")
+    if source_receipt.source_git_sha != V2_SOURCE_GIT_SHA:
+        raise QualificationFailure("The v2 source calibration Git identity changed from the preregistration.")
+
+    raw_source_plan = _exact_keys(
+        response.get("plan"),
+        ("path", "sha256", "schema_version"),
+        "source_response.plan",
+    )
+    source_plan = SourcePlanBinding(
+        path=_repository_path(
+            _string(raw_source_plan.get("path"), "source_response.plan.path"),
+            "Source response plan",
+        ),
+        sha256=_sha256_identity(raw_source_plan.get("sha256"), "source_response.plan.sha256"),
+        schema_version=_integer(
+            raw_source_plan.get("schema_version"), "source_response.plan.schema_version", minimum=1, maximum=1
+        ),
+    )
+    if source_plan.path != V2_SOURCE_PLAN_PATH or source_plan.sha256 != V2_SOURCE_PLAN_SHA256:
+        raise QualificationFailure("The v2 source calibration plan identity changed from the preregistration.")
+
+    derivation = _exact_keys(
+        response.get("noise_derivation"),
+        (
+            "source_records",
+            "group_by",
+            "within_group_statistic",
+            "source_maximum_statistic",
+            "forbidden_source_field",
+            "formula",
+            "multiplier",
+            "metrics",
+        ),
+        "source_response.noise_derivation",
+    )
+    expected_derivation = {
+        "source_records": "raw_q075_case_repeat_candidate_records_only",
+        "group_by": ["case_id", "candidate_id"],
+        "within_group_statistic": "maximum_minus_minimum_across_five_repeats",
+        "source_maximum_statistic": "maximum_across_cases",
+        "forbidden_source_field": "predecessor_receipt.cases[*].repeats[*].candidates[*]",
+        "formula": "max(previous_limit, ceil(multiplier * source_maximum / quantum) * quantum)",
+        "multiplier": 2,
+    }
+    for key, expected in expected_derivation.items():
+        if derivation.get(key) != expected:
+            raise QualificationFailure(f"source_response.noise_derivation.{key} changed from the v2 checked contract.")
+    metrics = _mapping(derivation.get("metrics"), "source_response.noise_derivation.metrics")
+    if set(metrics) != set(EXPECTED_CALIBRATED_NOISE):
+        raise QualificationFailure("The calibrated source-noise metric set changed from the checked contract.")
+    noise_limits: list[NoiseLimit] = []
+    for key in REPEATABILITY_FIELDS:
+        record_field, source_maximum, quantum, limit = EXPECTED_CALIBRATED_NOISE[key]
+        metric = _exact_keys(
+            metrics.get(key),
+            ("record_field", "source_maximum", "quantum", "limit"),
+            f"source_response.noise_derivation.metrics.{key}",
+        )
+        parsed = NoiseLimit(
+            key=key,
+            record_field=_string(metric.get("record_field"), f"noise metric {key}.record_field"),
+            source_maximum=_number(metric.get("source_maximum"), f"noise metric {key}.source_maximum"),
+            quantum=_number(metric.get("quantum"), f"noise metric {key}.quantum", positive=True),
+            limit=_number(metric.get("limit"), f"noise metric {key}.limit", positive=True),
+        )
+        if parsed.record_field != record_field or not math.isclose(
+            parsed.source_maximum, source_maximum, rel_tol=0.0, abs_tol=1e-18
+        ):
+            raise QualificationFailure(f"The preregistered calibrated source maximum for {key} changed.")
+        if parsed.quantum != quantum or parsed.limit != limit:
+            raise QualificationFailure(f"The preregistered calibrated quantum or limit for {key} changed.")
+        if _derived_calibrated_limit(V2_PREVIOUS_LIMITS[key], parsed.source_maximum, parsed.quantum) != parsed.limit:
+            raise QualificationFailure(f"The preregistered calibrated derivation for {key} is inconsistent.")
+        noise_limits.append(parsed)
+    return source_receipt, source_plan, tuple(noise_limits)
+
+
+def _parse_source_response(
+    document: Mapping[str, object],
+    contract: MappingSelectionContract,
+) -> tuple[SourceReceiptBinding, SourcePlanBinding, tuple[NoiseLimit, ...]]:
+    if contract.source_kind == "response_sweep_v1":
+        return _parse_source_response_v1(document)
+    if contract.source_kind == "repeatability_calibration_v2":
+        return _parse_source_response_v2(document)
+    raise QualificationFailure("The mapping-selection source-response contract is unsupported.")
+
+
 def _require_boolean(document: Mapping[str, object], key: str, expected: bool, label: str) -> None:
     if document.get(key) is not expected:
         raise QualificationFailure(f"{label}.{key} must be {str(expected).lower()}.")
 
 
-def parse_mapping_selection_plan(raw: object) -> MappingSelectionPlan:
+def _parse_mapping_selection_plan_contract(
+    raw: object,
+    contract: MappingSelectionContract,
+) -> MappingSelectionPlan:
     document = _exact_keys(
         raw,
         (
@@ -574,19 +805,19 @@ def parse_mapping_selection_plan(raw: object) -> MappingSelectionPlan:
     )
     schema_version = _integer(document.get("schema_version"), "schema_version", minimum=1, maximum=1)
     experiment_id = _string(document.get("experiment_id"), "experiment_id")
-    if experiment_id != "file-upscale-quality-mapping-selection-v1":
+    if experiment_id != contract.experiment_id:
         raise QualificationFailure("file-upscale mapping-selection experiment_id is unsupported.")
     target_id = _string(document.get("target_id"), "target_id")
     if target_id != "upscale_quality":
         raise QualificationFailure("file-upscale mapping-selection target_id must be upscale_quality.")
     purpose = _string(document.get("purpose"), "purpose")
-    if purpose != "objective_provisional_mapping_selection_not_public_ladder_mapping":
+    if purpose != contract.purpose:
         raise QualificationFailure("file-upscale mapping-selection purpose is unsupported.")
     design = _string(document.get("design"), "design")
-    if design != "fixed_integer_quality_grid_45_55_65_75_85_95_100_v1":
+    if design != contract.design:
         raise QualificationFailure("file-upscale mapping-selection design is unsupported.")
 
-    source_receipt, source_plan, noise_limits = _parse_source_response(document)
+    source_receipt, source_plan, noise_limits = _parse_source_response(document, contract)
 
     corpus_binding = _exact_keys(
         document.get("corpus_binding"),
@@ -882,7 +1113,7 @@ def parse_mapping_selection_plan(raw: object) -> MappingSelectionPlan:
         _number(non_inferiority.get("maximum_adjacent_drop_increase"), "maximum_adjacent_drop_increase"),
         _number(non_inferiority.get("maximum_eye_order_margin_loss"), "maximum_eye_order_margin_loss"),
     )
-    if non_inferiority_values != (-0.0002, -0.0016, -0.0012, 0.0002, 0.001, 0.0011):
+    if non_inferiority_values != contract.non_inferiority_values:
         raise QualificationFailure("The quality non-inferiority thresholds changed.")
 
     distinction = _exact_keys(
@@ -930,8 +1161,8 @@ def parse_mapping_selection_plan(raw: object) -> MappingSelectionPlan:
     if (
         minimum_corpus_median_aggregate_improvement != 0.0002
         or real_case_aggregate_threshold != 0.0002
-        or real_case_minimum_frame_threshold != 0.0016
-        or real_case_p05_threshold != 0.0012
+        or real_case_minimum_frame_threshold != contract.real_case_minimum_frame_threshold
+        or real_case_p05_threshold != contract.real_case_p05_threshold
         or required_sensitive_case_ids != ("production-grain-rain", "production-snow-detail")
     ):
         raise QualificationFailure("The objective-distinction contract changed.")
@@ -1004,7 +1235,7 @@ def parse_mapping_selection_plan(raw: object) -> MappingSelectionPlan:
         "decision_policy",
     )
     decision_stage = _string(decision.get("stage"), "decision_policy.stage")
-    if decision_stage != "objective_provisional_mapping_selection_only":
+    if decision_stage != contract.decision_stage:
         raise QualificationFailure("The mapping-selection decision stage changed.")
     for key in ("post_hoc_thresholds_forbidden", "public_mapping_changes_forbidden"):
         _require_boolean(decision, key, True, "decision_policy")
@@ -1071,6 +1302,24 @@ def parse_mapping_selection_plan(raw: object) -> MappingSelectionPlan:
     )
 
 
+def _parse_mapping_selection_plan_v1(raw: object) -> MappingSelectionPlan:
+    return _parse_mapping_selection_plan_contract(raw, V1_SELECTION_CONTRACT)
+
+
+def _parse_mapping_selection_plan_v2(raw: object) -> MappingSelectionPlan:
+    return _parse_mapping_selection_plan_contract(raw, V2_CONFIRMATION_CONTRACT)
+
+
+def parse_mapping_selection_plan(raw: object) -> MappingSelectionPlan:
+    document = _mapping(raw, "file-upscale mapping-selection plan")
+    identity = (document.get("experiment_id"), document.get("purpose"))
+    if identity == (V1_EXPERIMENT_ID, V1_PURPOSE):
+        return _parse_mapping_selection_plan_v1(document)
+    if identity == (V2_EXPERIMENT_ID, V2_PURPOSE):
+        return _parse_mapping_selection_plan_v2(document)
+    raise QualificationFailure("The file-upscale mapping-selection experiment ID and purpose are unsupported.")
+
+
 def _validate_public_ladder(path: Path) -> None:
     try:
         document = _loads_json_bytes(path.read_bytes(), "video-quality ladder manifest")
@@ -1108,6 +1357,65 @@ def _validate_public_ladder(path: Path) -> None:
             raise QualificationFailure("A public upscale-quality mapping was selected before this objective stage.")
 
 
+def _validate_v2_source_plan(plan: MappingSelectionPlan, binding: CorpusBinding) -> None:
+    if plan.source_plan.path != V2_SOURCE_PLAN_PATH or plan.source_plan.sha256 != V2_SOURCE_PLAN_SHA256:
+        raise QualificationFailure("The v2 source calibration plan binding is inconsistent.")
+    try:
+        data = plan.source_plan.path.read_bytes()
+    except OSError as error:
+        raise QualificationFailure("Could not read the bound v2 source calibration plan.") from error
+    if hashlib.sha256(data).hexdigest() != V2_SOURCE_PLAN_SHA256:
+        raise QualificationFailure("The bound v2 source calibration plan does not match its pinned SHA-256 identity.")
+    document = _loads_json_bytes(data, "v2 source calibration plan")
+    if (
+        document.get("schema_version") != plan.source_plan.schema_version
+        or document.get("experiment_id") != V2_SOURCE_EXPERIMENT_ID
+        or document.get("target_id") != "upscale_quality"
+        or document.get("purpose") != "calibrate_q075_repeatability_limits_only_not_mapping_selection"
+    ):
+        raise QualificationFailure("The bound v2 source calibration plan identity is inconsistent.")
+    source_binding = _mapping(document.get("corpus_binding"), "v2 source calibration corpus_binding")
+    if (
+        source_binding.get("path") != binding.relative_path
+        or source_binding.get("binding_id") != binding.binding_id
+        or source_binding.get("sha256") != plan.binding_sha256
+        or source_binding.get("selected_case_ids") != list(binding.selected_case_ids)
+    ):
+        raise QualificationFailure("The v2 source calibration corpus binding is inconsistent.")
+    predecessor = _mapping(document.get("predecessor"), "v2 source calibration predecessor")
+    predecessor_receipt = _mapping(predecessor.get("receipt"), "v2 source calibration predecessor receipt")
+    predecessor_plan = _mapping(predecessor.get("plan"), "v2 source calibration predecessor plan")
+    if (
+        predecessor_receipt.get("schema_version") != 3
+        or predecessor_receipt.get("experiment_id") != V2_PREDECESSOR_EXPERIMENT_ID
+        or predecessor_receipt.get("sha256") != V2_PREDECESSOR_RECEIPT_SHA256
+        or predecessor_receipt.get("source_git_sha") != V2_PREDECESSOR_SOURCE_GIT_SHA
+        or predecessor_receipt.get("required_file_mode") != "0444"
+        or predecessor_plan.get("path") != "docs/qualification/file-upscale-quality-mapping-selection-v1.json"
+        or predecessor_plan.get("sha256") != V2_PREDECESSOR_PLAN_SHA256
+        or predecessor_plan.get("schema_version") != 1
+    ):
+        raise QualificationFailure("The v2 source calibration predecessor binding is inconsistent.")
+    derivation = _mapping(document.get("derivation"), "v2 source calibration derivation")
+    if (
+        derivation.get("source_records") != "raw_q075_case_repeat_candidate_records_only"
+        or derivation.get("predecessor_receipt_records_forbidden") is not True
+        or derivation.get("summary_fields_as_source_forbidden") is not True
+    ):
+        raise QualificationFailure("The v2 source calibration derivation does not isolate raw q075 records.")
+    scope = _mapping(document.get("scope"), "v2 source calibration scope")
+    expected_scope = {
+        "calibration_only": True,
+        "selection_forbidden": True,
+        "boundary_evaluation_forbidden": True,
+        "provisional_outputs_forbidden": True,
+        "public_contract_changes_forbidden": True,
+        "later_confirmation_required": True,
+    }
+    if scope != expected_scope:
+        raise QualificationFailure("The v2 source calibration-only scope changed.")
+
+
 def load_mapping_selection_plan(path: Path) -> tuple[MappingSelectionPlan, CorpusBinding, str, str]:
     resolved_path = path.resolve()
     relative_path = _relative_repository_path(resolved_path, "File-upscale mapping-selection plan")
@@ -1119,13 +1427,23 @@ def load_mapping_selection_plan(path: Path) -> tuple[MappingSelectionPlan, Corpu
     binding, binding_sha256 = load_mapping_corpus_binding(parsed.binding_path)
     if binding_sha256 != parsed.binding_sha256 or binding.binding_id != parsed.binding_id:
         raise QualificationFailure("The mapping-selection corpus binding does not match its pinned identity.")
-    source_sweep, _, source_plan_sha256, _ = load_sweep_plan(parsed.source_plan.path)
-    if (
-        source_plan_sha256 != parsed.source_plan.sha256
-        or source_sweep.schema_version != parsed.source_plan.schema_version
-        or source_sweep.experiment_id != parsed.source_receipt.experiment_id
-    ):
-        raise QualificationFailure("The bound response-characterization plan identity is inconsistent.")
+    plan_sha256 = sha256_file(resolved_path)
+    if parsed.experiment_id == V1_EXPERIMENT_ID:
+        source_sweep, _, source_plan_sha256, _ = load_sweep_plan(parsed.source_plan.path)
+        if (
+            source_plan_sha256 != parsed.source_plan.sha256
+            or source_sweep.schema_version != parsed.source_plan.schema_version
+            or source_sweep.experiment_id != parsed.source_receipt.experiment_id
+        ):
+            raise QualificationFailure("The bound response-characterization plan identity is inconsistent.")
+    elif parsed.experiment_id == V2_EXPERIMENT_ID:
+        if relative_path != "docs/qualification/file-upscale-quality-mapping-confirmation-v2.json":
+            raise QualificationFailure("The v2 confirmation must use its exact repository plan path.")
+        if plan_sha256 != V2_CONFIRMATION_PLAN_SHA256:
+            raise QualificationFailure("The v2 confirmation plan changed from its preregistered SHA-256 identity.")
+        _validate_v2_source_plan(parsed, binding)
+    else:
+        raise QualificationFailure("The mapping-selection plan contract is unsupported.")
     for label, file_binding in (
         ("FFmpeg vendor manifest", parsed.ffmpeg_manifest),
         ("FX Upscale binary", parsed.fx_upscale_binary),
@@ -1144,7 +1462,7 @@ def load_mapping_selection_plan(path: Path) -> tuple[MappingSelectionPlan, Corpu
             }
         ),
         binding,
-        sha256_file(resolved_path),
+        plan_sha256,
         binding_sha256,
     )
 
@@ -1213,6 +1531,73 @@ def recompute_source_noise_maxima(receipt: Mapping[str, object]) -> dict[str, di
     return maxima
 
 
+def recompute_calibration_noise_maxima(receipt: Mapping[str, object]) -> dict[str, object]:
+    cases = _array(receipt.get("cases"), "source calibration cases")
+    if (
+        tuple(
+            _string(_mapping(case, "source calibration case").get("id"), "source calibration case.id") for case in cases
+        )
+        != EXPECTED_CASE_IDS
+    ):
+        raise QualificationFailure("The source calibration raw case set or order changed.")
+    values_by_case: dict[str, dict[str, list[float]]] = {}
+    case_repeat_ranges: list[dict[str, object]] = []
+    for raw_case in cases:
+        case = _mapping(raw_case, "source calibration case")
+        case_id = _string(case.get("id"), "source calibration case.id")
+        repeats = _array(case.get("repeats"), f"source calibration case {case_id} repeats")
+        if len(repeats) != 5:
+            raise QualificationFailure(f"Source calibration case {case_id} must contain exactly five repeats.")
+        values: dict[str, list[float]] = {field: [] for field in REPEATABILITY_FIELDS}
+        for expected_index, raw_repeat in enumerate(repeats):
+            repeat = _mapping(raw_repeat, f"source calibration case {case_id} repeat")
+            if repeat.get("repeat_index") != expected_index or repeat.get("order") != [75]:
+                raise QualificationFailure(f"Source calibration case {case_id} repeat schedule changed.")
+            candidates = _array(repeat.get("candidates"), f"source calibration case {case_id} candidates")
+            if len(candidates) != 1:
+                raise QualificationFailure(f"Source calibration case {case_id} must contain q075 only.")
+            candidate = _mapping(candidates[0], f"source calibration case {case_id} q075")
+            if candidate.get("id") != "q075" or candidate.get("quality") != 75:
+                raise QualificationFailure(f"Source calibration case {case_id} candidate is not q075.")
+            for field in REPEATABILITY_FIELDS:
+                values[field].append(_number(candidate.get(field), f"source calibration q075.{field}"))
+        values_by_case[case_id] = values
+        case_repeat_ranges.append(
+            {
+                "case_id": case_id,
+                "candidate_id": "q075",
+                "repeat_count": 5,
+                "ranges": {field: max(field_values) - min(field_values) for field, field_values in values.items()},
+            }
+        )
+
+    maxima: dict[str, dict[str, object]] = {}
+    for field in REPEATABILITY_FIELDS:
+        ranked = sorted(
+            (
+                (
+                    max(values_by_case[case_id][field]) - min(values_by_case[case_id][field]),
+                    case_index,
+                    case_id,
+                )
+                for case_index, case_id in enumerate(EXPECTED_CASE_IDS)
+            ),
+            key=lambda item: (-item[0], item[1]),
+        )
+        source_maximum, _, case_id = ranked[0]
+        maxima[field] = {
+            "record_field": field,
+            "source_maximum": source_maximum,
+            "source_group": {"case_id": case_id, "candidate_id": "q075"},
+            "group_count": len(ranked),
+        }
+    return {
+        "raw_record_count": len(EXPECTED_CASE_IDS) * 5,
+        "case_repeat_ranges": case_repeat_ranges,
+        "metrics": maxima,
+    }
+
+
 def _read_frozen_source_receipt(path: Path, binding: SourceReceiptBinding) -> Mapping[str, object]:
     resolved = path.resolve()
     if path.is_symlink():
@@ -1236,7 +1621,7 @@ def _read_frozen_source_receipt(path: Path, binding: SourceReceiptBinding) -> Ma
     return receipt
 
 
-def verify_source_response(
+def _verify_source_response_v1(
     plan: MappingSelectionPlan,
     source_receipt_path: Path,
 ) -> dict[str, object]:
@@ -1333,6 +1718,286 @@ def verify_source_response(
     }
 
 
+def _verify_source_response_v2(
+    plan: MappingSelectionPlan,
+    source_receipt_path: Path,
+) -> dict[str, object]:
+    receipt = _read_frozen_source_receipt(source_receipt_path, plan.source_receipt)
+    binding, binding_sha256 = load_mapping_corpus_binding(plan.binding_path)
+    _validate_v2_source_plan(plan, binding)
+    if (
+        receipt.get("schema_version") != plan.source_receipt.schema_version
+        or receipt.get("experiment_id") != plan.source_receipt.experiment_id
+        or receipt.get("source_git_sha") != plan.source_receipt.source_git_sha
+        or receipt.get("source_tree_dirty") is not False
+    ):
+        raise QualificationFailure("The v2 source calibration receipt identity is inconsistent.")
+    expected_plan_record = {
+        "path": _relative_repository_path(plan.source_plan.path, "V2 source calibration plan"),
+        "sha256": plan.source_plan.sha256,
+    }
+    if receipt.get("experiment_plan") != expected_plan_record:
+        raise QualificationFailure("The v2 source receipt does not bind the checked calibration plan.")
+    expected_binding_record = {
+        "path": binding.relative_path,
+        "binding_id": binding.binding_id,
+        "sha256": binding_sha256,
+    }
+    if receipt.get("corpus_binding") != expected_binding_record:
+        raise QualificationFailure("The v2 source calibration receipt corpus binding is inconsistent.")
+    if receipt.get("selected_case_ids") != list(binding.selected_case_ids):
+        raise QualificationFailure("The v2 source calibration selected case set changed.")
+    expected_candidates = [_candidate_plan_record(UpscaleCandidate(candidate_id="q075", quality=75))]
+    if receipt.get("candidates") != expected_candidates:
+        raise QualificationFailure("The v2 source calibration candidate set must contain q075 only.")
+    if receipt.get("public_contract_bindings") != _public_contract_record(plan):
+        raise QualificationFailure("The v2 source calibration public contract bindings changed.")
+    if receipt.get("toolchain") != _toolchain_record(cast(Any, plan)):
+        raise QualificationFailure("The v2 source calibration toolchain binding changed.")
+
+    acceptance = _exact_keys(
+        receipt.get("acceptance"),
+        (
+            "complete",
+            "finalized",
+            "planned_full_quality_gated_corpus",
+            "predecessor_verified",
+            "expected_record_count",
+            "record_count",
+            "structural_timing_geometry_hash_provenance_passed",
+            "eye_order_passed",
+            "size_cap_passed",
+            "retained_artifacts_complete",
+            "derived_limits_complete",
+            "calibration_receipt_valid",
+            "calibration_only",
+            "public_contract_changes_forbidden",
+            "later_confirmation_required",
+            "passed",
+        ),
+        "v2 source calibration acceptance",
+    )
+    expected_acceptance = {
+        "complete": True,
+        "finalized": True,
+        "planned_full_quality_gated_corpus": True,
+        "predecessor_verified": True,
+        "expected_record_count": 35,
+        "record_count": 35,
+        "structural_timing_geometry_hash_provenance_passed": True,
+        "eye_order_passed": True,
+        "size_cap_passed": True,
+        "retained_artifacts_complete": True,
+        "derived_limits_complete": True,
+        "calibration_receipt_valid": True,
+        "calibration_only": True,
+        "public_contract_changes_forbidden": True,
+        "later_confirmation_required": True,
+        "passed": True,
+    }
+    if acceptance != expected_acceptance:
+        raise QualificationFailure("The v2 source calibration acceptance record is inconsistent.")
+
+    method = _mapping(receipt.get("method"), "v2 source calibration method")
+    if method.get("stage") != "repeatability_limit_calibration_only":
+        raise QualificationFailure("The v2 source receipt is not a calibration-only stage.")
+    scope = _mapping(method.get("scope"), "v2 source calibration method scope")
+    expected_scope = {
+        "calibration_only": True,
+        "selection_forbidden": True,
+        "boundary_evaluation_forbidden": True,
+        "provisional_outputs_forbidden": True,
+        "public_contract_changes_forbidden": True,
+        "later_confirmation_required": True,
+    }
+    if scope != expected_scope:
+        raise QualificationFailure("The v2 source receipt calibration-only scope changed.")
+    derivation = _mapping(method.get("derivation"), "v2 source calibration method derivation")
+    expected_method_derivation = {
+        "source_records": "raw_q075_case_repeat_candidate_records_only",
+        "group_by": ["case_id", "candidate_id"],
+        "within_case_statistic": "maximum_minus_minimum_across_five_repeats",
+        "source_maximum_statistic": "maximum_across_cases",
+        "formula": "max(previous_limit, ceil(2 * source_maximum / quantum) * quantum)",
+        "multiplier": 2,
+        "predecessor_receipt_records_forbidden": True,
+        "summary_fields_as_source_forbidden": True,
+    }
+    if derivation != expected_method_derivation:
+        raise QualificationFailure("The v2 source receipt derivation contract changed.")
+
+    predecessor = _exact_keys(
+        receipt.get("predecessor"),
+        ("receipt", "plan", "accepted_complete_receipt_verified", "records_used_for_calibration"),
+        "v2 source calibration predecessor",
+    )
+    predecessor_receipt = _exact_keys(
+        predecessor.get("receipt"),
+        ("schema_version", "experiment_id", "sha256", "source_git_sha", "file_mode", "provided_via"),
+        "v2 source calibration predecessor receipt",
+    )
+    predecessor_plan = _exact_keys(
+        predecessor.get("plan"),
+        ("path", "sha256", "schema_version"),
+        "v2 source calibration predecessor plan",
+    )
+    expected_predecessor_receipt = {
+        "schema_version": 3,
+        "experiment_id": V2_PREDECESSOR_EXPERIMENT_ID,
+        "sha256": V2_PREDECESSOR_RECEIPT_SHA256,
+        "source_git_sha": V2_PREDECESSOR_SOURCE_GIT_SHA,
+        "file_mode": "0444",
+        "provided_via": "--mapping-selection-receipt",
+    }
+    expected_predecessor_plan = {
+        "path": "docs/qualification/file-upscale-quality-mapping-selection-v1.json",
+        "sha256": V2_PREDECESSOR_PLAN_SHA256,
+        "schema_version": 1,
+    }
+    if (
+        predecessor_receipt != expected_predecessor_receipt
+        or predecessor_plan != expected_predecessor_plan
+        or predecessor.get("accepted_complete_receipt_verified") is not True
+        or predecessor.get("records_used_for_calibration") is not False
+    ):
+        raise QualificationFailure("The v2 source calibration predecessor isolation is inconsistent.")
+
+    later_confirmation = _exact_keys(
+        receipt.get("later_confirmation"),
+        ("required_before_public_contract_changes", "status"),
+        "v2 source calibration later_confirmation",
+    )
+    if later_confirmation != {"required_before_public_contract_changes": True, "status": "not_performed"}:
+        raise QualificationFailure("The v2 source calibration later confirmation was already performed or changed.")
+
+    recomputed = recompute_calibration_noise_maxima(receipt)
+    calibration = _exact_keys(
+        receipt.get("repeatability_calibration"),
+        (
+            "source_records",
+            "group_by",
+            "within_case_statistic",
+            "source_maximum_statistic",
+            "formula",
+            "multiplier",
+            "raw_record_count",
+            "case_repeat_ranges",
+            "metrics",
+        ),
+        "v2 source repeatability_calibration",
+    )
+    expected_calibration_metadata = {
+        "source_records": "raw_q075_case_repeat_candidate_records_only",
+        "group_by": ["case_id", "candidate_id"],
+        "within_case_statistic": "maximum_minus_minimum_across_five_repeats",
+        "source_maximum_statistic": "maximum_across_cases",
+        "formula": "max(previous_limit, ceil(2 * source_maximum / quantum) * quantum)",
+        "multiplier": 2,
+        "raw_record_count": 35,
+    }
+    for key, expected in expected_calibration_metadata.items():
+        if calibration.get(key) != expected:
+            raise QualificationFailure(f"The v2 source calibration field {key} is inconsistent.")
+    if calibration.get("case_repeat_ranges") != recomputed["case_repeat_ranges"]:
+        raise QualificationFailure("The v2 source calibration case-repeat ranges do not match the raw q075 records.")
+    calibration_metrics = _mapping(calibration.get("metrics"), "v2 source calibration metrics")
+    recomputed_metrics = _mapping(recomputed.get("metrics"), "recomputed v2 source calibration metrics")
+    if set(calibration_metrics) != set(REPEATABILITY_FIELDS):
+        raise QualificationFailure("The v2 source calibration metric set changed.")
+    verification: dict[str, object] = {}
+    limit_by_field = {limit.record_field: limit for limit in plan.noise_limits}
+    for field in REPEATABILITY_FIELDS:
+        limit = limit_by_field[field]
+        metric = _exact_keys(
+            calibration_metrics.get(field),
+            (
+                "record_field",
+                "source",
+                "previous_limit",
+                "observed_maximum",
+                "multiplier",
+                "quantum",
+                "derived_limit",
+            ),
+            f"v2 source calibration metrics.{field}",
+        )
+        observed = _mapping(recomputed_metrics.get(field), f"recomputed v2 source calibration {field}")
+        observed_maximum = _number(observed.get("source_maximum"), f"recomputed {field} source maximum")
+        source_group = dict(_mapping(observed.get("source_group"), f"recomputed {field} source group"))
+        if not math.isclose(observed_maximum, limit.source_maximum, rel_tol=0.0, abs_tol=1e-15):
+            raise QualificationFailure(f"The raw v2 calibration maximum for {field} changed from the preregistration.")
+        if source_group != {"case_id": V2_SOURCE_CASES[field], "candidate_id": "q075"}:
+            raise QualificationFailure(f"The raw v2 calibration source case for {field} changed.")
+        if (
+            metric.get("record_field") != field
+            or metric.get("source") != source_group
+            or not math.isclose(
+                _number(metric.get("observed_maximum"), f"v2 source calibration {field}.observed_maximum"),
+                observed_maximum,
+                rel_tol=0.0,
+                abs_tol=1e-15,
+            )
+            or metric.get("previous_limit") != V2_PREVIOUS_LIMITS[field]
+            or metric.get("multiplier") != 2
+            or metric.get("quantum") != limit.quantum
+            or metric.get("derived_limit") != limit.limit
+            or _derived_calibrated_limit(V2_PREVIOUS_LIMITS[field], observed_maximum, limit.quantum) != limit.limit
+        ):
+            raise QualificationFailure(f"The v2 source calibration metric {field} is inconsistent.")
+        verification[field] = {
+            "record_field": field,
+            "observed_source_maximum": observed_maximum,
+            "source_group": source_group,
+            "group_count": observed.get("group_count"),
+            "previous_limit": V2_PREVIOUS_LIMITS[field],
+            "multiplier": 2,
+            "quantum": limit.quantum,
+            "limit": limit.limit,
+            "verified": True,
+        }
+    return {
+        "receipt": {
+            "schema_version": plan.source_receipt.schema_version,
+            "experiment_id": plan.source_receipt.experiment_id,
+            "sha256": plan.source_receipt.sha256,
+            "source_git_sha": plan.source_receipt.source_git_sha,
+            "file_mode": "0444",
+        },
+        "plan": {
+            "path": expected_plan_record["path"],
+            "sha256": plan.source_plan.sha256,
+            "schema_version": plan.source_plan.schema_version,
+        },
+        "noise_derivation": {
+            "source_records": "raw_q075_case_repeat_candidate_records_only",
+            "group_by": ["case_id", "candidate_id"],
+            "within_group_statistic": "maximum_minus_minimum_across_five_repeats",
+            "source_maximum_statistic": "maximum_across_cases",
+            "forbidden_source_field": "predecessor_receipt.cases[*].repeats[*].candidates[*]",
+            "formula": "max(previous_limit, ceil(multiplier * source_maximum / quantum) * quantum)",
+            "metrics": verification,
+        },
+        "calibration_scope": dict(scope),
+        "predecessor_isolation": {
+            "accepted_complete_receipt_verified": True,
+            "records_used_for_calibration": False,
+        },
+        "later_confirmation": dict(later_confirmation),
+    }
+
+
+def verify_source_response(
+    plan: MappingSelectionPlan,
+    source_receipt_path: Path,
+) -> dict[str, object]:
+    identity = (plan.experiment_id, plan.purpose)
+    if identity == (V1_EXPERIMENT_ID, V1_PURPOSE):
+        return _verify_source_response_v1(plan, source_receipt_path)
+    if identity == (V2_EXPERIMENT_ID, V2_PURPOSE):
+        return _verify_source_response_v2(plan, source_receipt_path)
+    raise QualificationFailure("The mapping-selection source verifier contract is unsupported.")
+
+
 def _prepare_owned_directory(
     directory: Path,
     marker_name: str,
@@ -1391,13 +2056,16 @@ def _artifact_path(artifact_directory: Path, relative_path: str) -> Path:
     relative = Path(relative_path)
     if relative.is_absolute() or ".." in relative.parts or not relative.parts:
         raise QualificationFailure("Retained artifact path is unsafe.")
-    destination = (artifact_directory / relative).resolve()
+    lexical_path = artifact_directory
+    for part in relative.parts:
+        lexical_path /= part
+        if lexical_path.is_symlink():
+            raise QualificationFailure("Retained artifact path must not use symlinks.")
+    destination = lexical_path.resolve()
     try:
         destination.relative_to(artifact_directory.resolve())
     except ValueError as error:
         raise QualificationFailure("Retained artifact path escapes its owned directory.") from error
-    if destination.is_symlink():
-        raise QualificationFailure("Retained artifact path must not be a symlink.")
     return destination
 
 
@@ -1519,6 +2187,53 @@ def _validate_retained_artifacts(
     }
     if observed_paths != expected_paths:
         raise QualificationFailure("The retained artifact directory contains unrecorded or missing media.")
+
+
+def _discard_unrecorded_expected_artifacts(
+    evidence: Mapping[str, object],
+    plan: MappingSelectionPlan,
+    artifact_directory: Path,
+) -> None:
+    artifact_root = artifact_directory.resolve()
+    artifacts = _array(evidence.get("retained_artifacts"), "retained_artifacts")
+    recorded_paths = {
+        _string(_mapping(artifact, "retained artifact").get("path"), "retained artifact.path") for artifact in artifacts
+    }
+    for case_id in plan.retained_case_ids:
+        case = _case_record(evidence, case_id)
+        repeat = _repeat_record(case, plan.retained_repeat_index) if case is not None else None
+        expected: list[tuple[str, bool]] = [
+            (
+                f"{case_id}/repeat-{plan.retained_repeat_index + 1}/generated-base.mov",
+                repeat is not None and isinstance(repeat.get("base"), Mapping),
+            )
+        ]
+        expected.extend(
+            (
+                f"{case_id}/repeat-{plan.retained_repeat_index + 1}/{candidate.candidate_id}-upscaled.mov",
+                repeat is not None and _candidate_record(repeat, candidate.candidate_id) is not None,
+            )
+            for candidate in plan.candidates
+        )
+        for relative_path, raw_recorded in expected:
+            if raw_recorded or relative_path in recorded_paths:
+                continue
+            relative = Path(relative_path)
+            lexical_path = artifact_directory
+            for part in relative.parts:
+                lexical_path /= part
+                if lexical_path.is_symlink():
+                    raise QualificationFailure("An unrecorded retained-artifact crash path must not use symlinks.")
+            path = artifact_root.joinpath(*relative.parts)
+            if not path.exists():
+                continue
+            if not path.is_file():
+                raise QualificationFailure("An unrecorded retained-artifact crash remnant is not a regular file.")
+            path.unlink()
+            parent = path.parent
+            while parent != artifact_root and not any(parent.iterdir()):
+                parent.rmdir()
+                parent = parent.parent
 
 
 def _validate_clean_work_directory(work_directory: Path) -> None:
@@ -2679,10 +3394,12 @@ def _load_resume_evidence(
         case = _mapping(raw_case, "mapping-selection resume case")
         case_id = _string(case.get("id"), "mapping-selection resume case.id")
         _validate_case_record(case, plan, binding, definitions[case_id])
-    _validate_retained_artifacts(evidence, plan, artifact_directory)
-    _assert_private_values_absent(evidence, private_paths)
     acceptance = _mapping(evidence.get("acceptance"), "mapping-selection resume acceptance")
     complete = acceptance.get("complete") is True
+    if not complete:
+        _discard_unrecorded_expected_artifacts(evidence, plan, artifact_directory)
+    _validate_retained_artifacts(evidence, plan, artifact_directory)
+    _assert_private_values_absent(evidence, private_paths)
     finalized = acceptance.get("finalized") is True
     if complete and not _completed_resume_is_consistent(evidence, plan, binding, definitions):
         raise QualificationFailure("Completed resume evidence contradicts its raw records.")
@@ -3071,6 +3788,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             resume=args.resume,
         )
         return exit_code_for_evidence(evidence)
+    except KeyboardInterrupt:
+        print("File-upscale mapping selection interrupted; resume the saved checkpoint.", file=sys.stderr)
+        return 3
     except (
         AssertionError,
         KeyError,

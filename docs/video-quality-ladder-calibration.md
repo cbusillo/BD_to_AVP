@@ -235,6 +235,56 @@ requires a complete, finalized, structurally valid calibration receipt with all 
 artifacts. Incomplete resumable evidence exits `3`; contract, provenance, privacy, ownership, media, or execution
 failures exit `2`.
 
+## File Upscale Objective Mapping Confirmation v2
+
+`docs/qualification/file-upscale-quality-mapping-confirmation-v2.json` is the separate confirmation plan that consumes
+the accepted repeatability-calibration receipt without consuming candidate outcomes from that receipt's predecessor
+mapping-selection run. It binds calibration schema `4`, experiment
+`file-upscale-quality-repeatability-calibration-v2`, receipt SHA-256
+`6d44f4c23df142d3a819f0aba1b87f9fa688435485f4f1798a103ea94ccbe49e`, source Git SHA
+`1f988fbf198595d52084eabc3055edd2f1d14221`, and mode `0444`. It also binds
+`docs/qualification/file-upscale-quality-repeatability-calibration-v2.json` at schema `1` and SHA-256
+`c4cf953bd868eadd04f4ed11a7ca4f2211c81f5ee72f375347f5f3d9cf14ecdb`. The engine verifies the calibration's
+accepted and finalized calibration-only scope, raw-q075 derivation, predecessor-record isolation, exact derived
+metrics, and `later_confirmation.status = not_performed` before starting confirmation work.
+
+Run the confirmation from a clean committed macOS arm64 worktree with the frozen calibration receipt supplied through
+the generic checked-source option:
+
+```bash
+BD_TO_AVP_RELEASE_MVC_SOURCE="$SOURCE_MVC" \
+uv run python scripts/qualify_file_upscale_quality_mapping_selection.py \
+  --selection-plan docs/qualification/file-upscale-quality-mapping-confirmation-v2.json \
+  --source-receipt build/qualification/file-upscale-quality-repeatability-calibration-v2.json \
+  --output build/qualification/file-upscale-quality-mapping-confirmation-v2.json \
+  --work-directory build/qualification/file-upscale-quality-mapping-confirmation-v2-work \
+  --artifact-directory build/qualification/file-upscale-quality-mapping-confirmation-v2-artifacts
+```
+
+The confirmation keeps corpus-v2, qualities `[45,55,65,75,85,95,100]`, q075 as `Balanced`, the `20` Mbps-per-eye
+plus merge-quality-`75` generated base, three fresh paired repeats, the checked materialized schedules, exact copied
+bases, pinned tools and public contracts, all-pair boundary evaluation, deterministic selection/tie-breaks, and
+unsupported missing slots. It retains exactly 32 relative-path, hash-bound MOVs: one generated base plus all seven
+candidate outputs for repeat index `0` of dark, grain-rain, snow-detail, and motion.
+
+The calibrated technical repeatability limits are separate from boundary distinction policy:
+
+- technical within-case repeat ranges are at most `0.0002` aggregate SSIM, `0.03` final/base size ratio, `0.0054`
+  minimum-frame SSIM, `0.0019` P05 SSIM, `0.0002` frame-SSIM standard deviation, `0.0058` maximum adjacent-frame
+  SSIM drop, and `0.0011` eye-order margin;
+- paired storage still must increase strictly in every repeat, and every case's median paired growth must remain at
+  least `0.02`; the calibrated `0.03` size-repeatability limit does not replace this storage boundary;
+- quality non-inferiority remains aggregate `-0.0002`, minimum-frame `-0.0054`, P05 `-0.0019`, frame-standard-
+  deviation increase `0.0002`, adjacent-drop increase `0.0058`, and eye-margin loss `0.0011`;
+- objective distinction requires corpus-median aggregate improvement `0.0002`, two real cases, real-case aggregate
+  `0.0002`, minimum-frame `0.0054`, or P05 `0.0019`, with grain-rain and snow-detail as the sensitive cases and at
+  least one of them clearing a distinction threshold.
+
+Exit `0` requires complete evidence, q075 technical eligibility, all 21 pairwise boundaries, and all seven candidates
+selected. A complete negative confirmation exits `1`; incomplete resumable evidence exits `3`; fatal contract,
+provenance, privacy, ownership, media, or execution failures exit `2`. The confirmation records provisional objective
+results only and cannot change public mappings.
+
 ## Generated Interaction Sweep
 
 `docs/qualification/generated-mv-hevc-corpus-v1.json` binds a four-case stress subset to the existing direct
