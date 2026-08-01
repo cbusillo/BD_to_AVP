@@ -33,7 +33,6 @@ from scripts.qualify_direct_mv_hevc import (
     CURRENT_REQUIRED_BOX_TYPES,
     QualificationFailure,
     box_types,
-    ffprobe_stream,
     measure,
     run,
     split_mv_hevc,
@@ -64,7 +63,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SWEEP_PLAN = REPOSITORY_ROOT / "docs/qualification/file-upscale-quality-sweep-v1.json"
 DEFAULT_OUTPUT = REPOSITORY_ROOT / "build/qualification/file-upscale-quality-sweep-v1.json"
 DEFAULT_WORK_DIRECTORY = REPOSITORY_ROOT / "build/qualification/file-upscale-quality-sweep-v1-work"
-EVIDENCE_SCHEMA_VERSION = 1
+EVIDENCE_SCHEMA_VERSION = 2
 WORK_DIRECTORY_MARKER = ".bd-to-avp-file-upscale-quality-sweep.json"
 PRIVATE_SOURCE_ENV_NAMES = ("BD_TO_AVP_RELEASE_MVC_SOURCE",)
 EXPECTED_CASE_IDS = (
@@ -515,7 +514,7 @@ def parse_sweep_plan(raw: object) -> SweepPlan:
         timing_contract.get("frame_rate"),
         "toolchain.timing_contract.frame_rate",
     )
-    if frame_rate_contract != "exact_rational_match_v1":
+    if frame_rate_contract != "ffprobe_r_frame_rate_frame_count_duration_v2":
         raise QualificationFailure("toolchain frame-rate contract is unsupported.")
     duration_tolerance_frames = _integer(
         timing_contract.get("duration_tolerance_frames"),
@@ -901,6 +900,48 @@ def _frame_rate(value: object, label: str) -> Fraction:
     return rate
 
 
+def _stream_time_base(value: object, label: str) -> Fraction:
+    text = _string(value, label)
+    try:
+        time_base = Fraction(text)
+    except (ValueError, ZeroDivisionError) as error:
+        raise QualificationFailure(f"{label} is not a valid rational time base.") from error
+    if time_base <= 0:
+        raise QualificationFailure(f"{label} must be positive.")
+    return time_base
+
+
+def _validate_timing_record(
+    record: Mapping[str, object],
+    *,
+    expected_frame_rate: Fraction,
+    expected_frame_count: int,
+    duration_tolerance_frames: int,
+    label: str,
+) -> None:
+    if record.get("frame_count") != expected_frame_count:
+        raise QualificationFailure(f"{label} has an unexpected decoded frame count.")
+    observed_average_frame_rate = _frame_rate(record.get("avg_frame_rate"), f"{label} average frame rate")
+    observed_r_frame_rate = _frame_rate(record.get("r_frame_rate"), f"{label} r_frame_rate")
+    if observed_r_frame_rate != expected_frame_rate:
+        raise QualificationFailure(f"{label} r_frame_rate does not match the checked source timing contract.")
+    stream_time_base = _stream_time_base(record.get("stream_time_base"), f"{label} stream time base")
+    stream_duration_ts = record.get("stream_duration_ts")
+    if type(stream_duration_ts) is not int or stream_duration_ts <= 0:
+        raise QualificationFailure(f"{label} stream duration timestamp must be a positive integer.")
+    stream_duration = stream_duration_ts * stream_time_base
+    expected_duration = Fraction(expected_frame_count, 1) / expected_frame_rate
+    duration_tolerance = Fraction(duration_tolerance_frames, 1) / expected_frame_rate
+    if abs(stream_duration - expected_duration) > duration_tolerance:
+        raise QualificationFailure(f"{label} duration exceeds the checked one-frame timing tolerance.")
+    average_duration = Fraction(expected_frame_count, 1) / observed_average_frame_rate
+    if abs(average_duration - stream_duration) > stream_time_base:
+        raise QualificationFailure(f"{label} average frame rate contradicts its integer stream timing.")
+    format_duration = Fraction(str(_number(record.get("duration_seconds"), f"{label} duration", positive=True)))
+    if abs(format_duration - stream_duration) > stream_time_base:
+        raise QualificationFailure(f"{label} container duration contradicts its integer stream timing.")
+
+
 def _format_duration_seconds(ffprobe: str, path: Path) -> float:
     completed = run(
         [
@@ -923,6 +964,35 @@ def _format_duration_seconds(ffprobe: str, path: Path) -> float:
     return duration
 
 
+def _ffprobe_output_stream(ffprobe: str, path: Path) -> dict[str, object]:
+    completed = run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-count_frames",
+            "-show_entries",
+            (
+                "stream=codec_name,codec_tag_string,width,height,avg_frame_rate,r_frame_rate,time_base,duration_ts,"
+                "nb_read_frames"
+            ),
+            "-of",
+            "json",
+            path,
+        ]
+    )
+    try:
+        document = json.loads(completed.stdout)
+        streams = document.get("streams")
+    except json.JSONDecodeError as error:
+        raise QualificationFailure(f"Could not inspect output stream for {path.name}.") from error
+    if not isinstance(streams, list) or len(streams) != 1 or not isinstance(streams[0], dict):
+        raise QualificationFailure(f"Expected one video stream in {path.name}.")
+    return streams[0]
+
+
 def _inspect_mv_hevc_output(
     ffprobe: str,
     prepared: PreparedCase,
@@ -931,12 +1001,16 @@ def _inspect_mv_hevc_output(
     *,
     geometry_scale: int,
 ) -> dict[str, object]:
-    stream = ffprobe_stream(ffprobe, output_path)
+    stream = _ffprobe_output_stream(ffprobe, output_path)
     expected_width = prepared.definition.output_eye_width * geometry_scale
     expected_height = prepared.definition.output_eye_height * geometry_scale
     expected_frame_rate = _frame_rate(prepared.definition.output_frame_rate, "expected frame rate")
-    observed_frame_rate = _frame_rate(stream.get("avg_frame_rate"), "observed average frame rate")
+    observed_average_frame_rate = _frame_rate(stream.get("avg_frame_rate"), "observed average frame rate")
     observed_r_frame_rate = _frame_rate(stream.get("r_frame_rate"), "observed real frame rate")
+    observed_stream_time_base = _stream_time_base(stream.get("time_base"), "observed stream time base")
+    observed_stream_duration_ts = stream.get("duration_ts")
+    if type(observed_stream_duration_ts) is not int or observed_stream_duration_ts <= 0:
+        raise QualificationFailure("File-upscale output stream duration timestamp must be a positive integer.")
     if stream.get("codec_name") != "hevc" or stream.get("codec_tag_string") != "hvc1":
         raise QualificationFailure("File-upscale output is not an hvc1 HEVC stream.")
     if stream.get("width") != expected_width or stream.get("height") != expected_height:
@@ -944,15 +1018,24 @@ def _inspect_mv_hevc_output(
             f"File-upscale output has {stream.get('width')}x{stream.get('height')}; "
             f"expected {expected_width}x{expected_height}."
         )
-    if stream.get("nb_read_frames") != str(prepared.frame_count):
-        raise QualificationFailure("File-upscale output has an unexpected decoded frame count.")
-    if observed_frame_rate != expected_frame_rate or observed_r_frame_rate != expected_frame_rate:
-        raise QualificationFailure("File-upscale output frame rate does not match the checked source timing contract.")
     observed_duration = _format_duration_seconds(ffprobe, output_path)
-    expected_duration = prepared.frame_count / float(expected_frame_rate)
-    duration_tolerance = plan.duration_tolerance_frames / float(expected_frame_rate)
-    if abs(observed_duration - expected_duration) > duration_tolerance + 1e-6:
-        raise QualificationFailure("File-upscale output duration exceeds the checked one-frame timing tolerance.")
+    timing_record: dict[str, object] = {
+        "frame_count": prepared.frame_count,
+        "avg_frame_rate": str(observed_average_frame_rate),
+        "r_frame_rate": str(observed_r_frame_rate),
+        "stream_time_base": str(observed_stream_time_base),
+        "stream_duration_ts": observed_stream_duration_ts,
+        "duration_seconds": observed_duration,
+    }
+    if stream.get("nb_read_frames") != str(prepared.frame_count):
+        timing_record["frame_count"] = stream.get("nb_read_frames")
+    _validate_timing_record(
+        timing_record,
+        expected_frame_rate=expected_frame_rate,
+        expected_frame_count=prepared.frame_count,
+        duration_tolerance_frames=plan.duration_tolerance_frames,
+        label="File-upscale output",
+    )
     observed_box_types = sorted(box_types(output_path))
     if not CURRENT_REQUIRED_BOX_TYPES.issubset(set(observed_box_types)):
         raise QualificationFailure("File-upscale output is missing required spatial metadata.")
@@ -962,8 +1045,10 @@ def _inspect_mv_hevc_output(
         "width": expected_width,
         "height": expected_height,
         "frame_count": prepared.frame_count,
-        "frame_rate": str(observed_frame_rate),
+        "avg_frame_rate": str(observed_average_frame_rate),
         "r_frame_rate": str(observed_r_frame_rate),
+        "stream_time_base": str(observed_stream_time_base),
+        "stream_duration_ts": observed_stream_duration_ts,
         "duration_seconds": observed_duration,
         "duration_tolerance_frames": plan.duration_tolerance_frames,
         "geometry_scale": geometry_scale,
@@ -1159,8 +1244,10 @@ def _validate_base_record(base: Mapping[str, object], plan: SweepPlan, repeat_in
         "duration_tolerance_frames",
         "elapsed_seconds",
         "frame_count",
-        "frame_rate",
+        "avg_frame_rate",
         "r_frame_rate",
+        "stream_duration_ts",
+        "stream_time_base",
         "generated_eye_bitrate_mbps",
         "generated_merge_quality",
         "geometry_scale",
@@ -1206,8 +1293,11 @@ def _validate_base_record(base: Mapping[str, object], plan: SweepPlan, repeat_in
         raise QualificationFailure(f"Repeat {repeat_index} generated base bitrate contradicts its timing.")
     if base.get("duration_tolerance_frames") != plan.duration_tolerance_frames:
         raise QualificationFailure(f"Repeat {repeat_index} generated base timing contract changed.")
-    _frame_rate(base.get("frame_rate"), "base.frame_rate")
+    _frame_rate(base.get("avg_frame_rate"), "base.avg_frame_rate")
     _frame_rate(base.get("r_frame_rate"), "base.r_frame_rate")
+    _stream_time_base(base.get("stream_time_base"), "base.stream_time_base")
+    if type(base.get("stream_duration_ts")) is not int or int(base["stream_duration_ts"]) <= 0:
+        raise QualificationFailure(f"Repeat {repeat_index} generated base stream duration timestamp must be positive.")
     for key in ("user_cpu_seconds", "system_cpu_seconds"):
         _number(base.get(key), f"base.{key}", nonnegative=True)
     if not isinstance(base.get("observed_box_types"), list) or not CURRENT_REQUIRED_BOX_TYPES.issubset(
@@ -1228,14 +1318,15 @@ def _validate_base_against_case(
         or base.get("frame_count") != prepared.get("frame_count")
         or base.get("width") != definition.output_eye_width
         or base.get("height") != definition.output_eye_height
-        or _frame_rate(base.get("frame_rate"), "base.frame_rate") != expected_frame_rate
-        or _frame_rate(base.get("r_frame_rate"), "base.r_frame_rate") != expected_frame_rate
     ):
         raise QualificationFailure(f"Repeat base does not match prepared case {definition.case_id}.")
-    expected_duration = int(base["frame_count"]) / float(expected_frame_rate)
-    duration_tolerance = int(base["duration_tolerance_frames"]) / float(expected_frame_rate)
-    if abs(float(base["duration_seconds"]) - expected_duration) > duration_tolerance + 1e-6:
-        raise QualificationFailure(f"Repeat base timing does not match prepared case {definition.case_id}.")
+    _validate_timing_record(
+        base,
+        expected_frame_rate=expected_frame_rate,
+        expected_frame_count=int(base["frame_count"]),
+        duration_tolerance_frames=int(base["duration_tolerance_frames"]),
+        label=f"Repeat base for prepared case {definition.case_id}",
+    )
 
 
 def _validate_paired_delta(delta: object, candidate: UpscaleCandidate) -> None:
@@ -1283,8 +1374,10 @@ def _validate_candidate_record(
         "final_to_base_size_ratio",
         "frame_count",
         "frame_quality_sample_count",
-        "frame_rate",
+        "avg_frame_rate",
         "r_frame_rate",
+        "stream_duration_ts",
+        "stream_time_base",
         "frame_ssim_standard_deviation",
         "geometry_scale",
         "height",
@@ -1348,8 +1441,11 @@ def _validate_candidate_record(
         _number(record.get(key), f"candidate.{key}", positive=True)
     if record.get("duration_tolerance_frames") != 1:
         raise QualificationFailure(f"Candidate {candidate.candidate_id} timing contract changed.")
-    _frame_rate(record.get("frame_rate"), "candidate.frame_rate")
+    _frame_rate(record.get("avg_frame_rate"), "candidate.avg_frame_rate")
     _frame_rate(record.get("r_frame_rate"), "candidate.r_frame_rate")
+    _stream_time_base(record.get("stream_time_base"), "candidate.stream_time_base")
+    if type(record.get("stream_duration_ts")) is not int or int(record["stream_duration_ts"]) <= 0:
+        raise QualificationFailure(f"Candidate {candidate.candidate_id} stream duration timestamp must be positive.")
     for key in ("upscale_user_cpu_seconds", "upscale_system_cpu_seconds", "frame_ssim_standard_deviation"):
         _number(record.get(key), f"candidate.{key}", nonnegative=True)
     ssim_values: dict[str, float] = {}
@@ -1399,7 +1495,6 @@ def _validate_candidate_against_base(
         ("base_effective_bitrate_mbps", "effective_bitrate_mbps"),
         ("source_sha256", "source_sha256"),
         ("frame_count", "frame_count"),
-        ("frame_rate", "frame_rate"),
         ("r_frame_rate", "r_frame_rate"),
         ("duration_tolerance_frames", "duration_tolerance_frames"),
     )
@@ -1412,9 +1507,15 @@ def _validate_candidate_against_base(
         raise QualificationFailure(f"Candidate {candidate.candidate_id} did not consume its recorded base bytes.")
     if record.get("width") != int(base["width"]) * 2 or record.get("height") != int(base["height"]) * 2:
         raise QualificationFailure(f"Candidate {candidate.candidate_id} geometry does not match its generated base.")
-    duration_tolerance = int(base["duration_tolerance_frames"]) / float(
-        _frame_rate(base["frame_rate"], "base.frame_rate")
+    expected_frame_rate = _frame_rate(base["r_frame_rate"], "base.r_frame_rate")
+    _validate_timing_record(
+        record,
+        expected_frame_rate=expected_frame_rate,
+        expected_frame_count=int(base["frame_count"]),
+        duration_tolerance_frames=int(base["duration_tolerance_frames"]),
+        label=f"Candidate {candidate.candidate_id}",
     )
+    duration_tolerance = int(base["duration_tolerance_frames"]) / float(expected_frame_rate)
     if abs(float(record["duration_seconds"]) - float(base["duration_seconds"])) > duration_tolerance + 1e-6:
         raise QualificationFailure(f"Candidate {candidate.candidate_id} timing does not match its generated base.")
     expected_size_ratio = int(record["final_bytes"]) / int(base["bytes"])
