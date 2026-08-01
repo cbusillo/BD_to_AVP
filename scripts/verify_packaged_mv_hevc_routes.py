@@ -46,6 +46,7 @@ MAX_EVIDENCE_BYTES = 256 * 1024
 WORKER_TIMEOUT_SECONDS = 30 * 60
 MEDIA_DURATION_TOLERANCE_SECONDS = 0.5
 PREVIEW_DURATION_SECONDS = 60
+PREVIEW_ALIGNMENT_TOLERANCE_SECONDS = 1.0
 
 
 class PackagedRouteFailure(RuntimeError):
@@ -183,9 +184,27 @@ def build_worker_request(
     parent_job_id: str | None = None,
     preview_duration_seconds: int = 60,
     upscale_enabled: bool = False,
+    video_options: Mapping[str, object] | None = None,
+    upscale_options: Mapping[str, object] | None = None,
+    start_stage: int = 1,
+    keep_files: bool = False,
 ) -> dict[str, object]:
     if operation not in {"convert_source", "preview_source"}:
         raise ValueError(f"Unsupported worker operation: {operation}")
+    default_video_options: dict[str, object] = {
+        "mode": "mv_hevc",
+        "route_intent": "automatic",
+        "quality_intent": {"mode": "custom"},
+        "direct_bitrate": {"mode": "automatic"},
+        "direct_quality": (AUTOMATIC_DIRECT_UPSCALE_QUALITY if upscale_enabled else AUTOMATIC_DIRECT_QUALITY),
+        "generated_fallback": {
+            "eye_bitrate": {"mode": "automatic"},
+            "merge_quality": 75,
+        },
+    }
+    default_upscale_options: dict[str, object] = (
+        {"enabled": True, "quality": 80} if upscale_enabled else {"enabled": False}
+    )
     request: dict[str, object] = {
         "protocol_version": PROTOCOL_VERSION,
         "type": "job.start",
@@ -195,18 +214,8 @@ def build_worker_request(
         "destination": {"path": destination_path.as_posix()},
         "encoding": {
             "audio": {"mode": "automatic", "bitrate": 384, "preferred_language": "eng"},
-            "video": {
-                "mode": "mv_hevc",
-                "route_intent": "automatic",
-                "quality_intent": {"mode": "custom"},
-                "direct_bitrate": {"mode": "automatic"},
-                "direct_quality": (AUTOMATIC_DIRECT_UPSCALE_QUALITY if upscale_enabled else AUTOMATIC_DIRECT_QUALITY),
-                "generated_fallback": {
-                    "eye_bitrate": {"mode": "automatic"},
-                    "merge_quality": 75,
-                },
-            },
-            "upscale": {"enabled": True, "quality": 80} if upscale_enabled else {"enabled": False},
+            "video": dict(video_options) if video_options is not None else default_video_options,
+            "upscale": dict(upscale_options) if upscale_options is not None else default_upscale_options,
             "fov": 90,
             "frame_rate": "",
             "resolution": "",
@@ -215,8 +224,8 @@ def build_worker_request(
             "subtitles": {"mode": "preferred_plus_others", "preferred_language": "eng"},
         },
         "job": {
-            "start_stage": 1,
-            "keep_files": False,
+            "start_stage": start_stage,
+            "keep_files": keep_files,
             "overwrite": True,
             "remove_original": False,
             "continue_on_error": False,
@@ -392,6 +401,30 @@ def run_worker(
     return WorkerResult(operation, route, resolved_output, events, preview)
 
 
+def _validate_route_event(result: WorkerResult, event_code: str) -> None:
+    route_events: list[tuple[object, Mapping[str, object]]] = []
+    for event in result.events:
+        payload = event.get("payload")
+        if isinstance(payload, Mapping) and payload.get("code") in {"video_route_selected", "video_route_fallback"}:
+            route_events.append((event.get("type"), payload))
+    if (
+        len(route_events) != 1
+        or route_events[0][0] != "log"
+        or route_events[0][1].get("code") != event_code
+        or route_events[0][1].get("video_route") != result.route
+    ):
+        raise PackagedRouteFailure(f"Worker did not emit one truthful {event_code} event.")
+
+
+def validate_route_report(result: WorkerResult, expected_route: Mapping[str, object]) -> None:
+    if dict(result.route) != dict(expected_route):
+        expected = json.dumps(dict(expected_route), sort_keys=True)
+        observed = json.dumps(dict(result.route), sort_keys=True)
+        raise PackagedRouteFailure(f"Resolved route report mismatch: expected {expected}; observed {observed}.")
+    event_code = "video_route_fallback" if expected_route.get("fallback_reason") is not None else "video_route_selected"
+    _validate_route_event(result, event_code)
+
+
 def validate_route_pair(
     full: WorkerResult,
     preview: WorkerResult,
@@ -399,6 +432,7 @@ def validate_route_pair(
     expected_selected: str,
     expected_fallback_reason: str | None,
     expected_upscale_mode: str | None = None,
+    expected_route: Mapping[str, object] | None = None,
 ) -> None:
     if full.route != preview.route:
         raise PackagedRouteFailure("Full conversion and finalized preview resolved different video routes.")
@@ -408,6 +442,10 @@ def validate_route_pair(
         raise PackagedRouteFailure("Resolved route reported an unexpected fallback reason.")
     if full.route.get("upscale_mode") != expected_upscale_mode:
         raise PackagedRouteFailure("Resolved route reported an unexpected direct upscale mode.")
+    if expected_route is not None:
+        validate_route_report(full, expected_route)
+        validate_route_report(preview, expected_route)
+        return
     if expected_fallback_reason is None:
         expected_quality = (
             AUTOMATIC_DIRECT_UPSCALE_QUALITY if expected_upscale_mode is not None else AUTOMATIC_DIRECT_QUALITY
@@ -433,13 +471,7 @@ def validate_route_pair(
             raise PackagedRouteFailure("Generated fallback unexpectedly reported direct rate control.")
     event_code = "video_route_selected" if expected_fallback_reason is None else "video_route_fallback"
     for worker_result in (full, preview):
-        route_payloads: list[Mapping[str, object]] = []
-        for event in worker_result.events:
-            payload = event.get("payload")
-            if isinstance(payload, Mapping) and payload.get("code") == event_code:
-                route_payloads.append(payload)
-        if len(route_payloads) != 1 or route_payloads[0].get("video_route") != worker_result.route:
-            raise PackagedRouteFailure(f"Worker did not emit one truthful {event_code} event.")
+        _validate_route_event(worker_result, event_code)
 
 
 def stage_names(result: WorkerResult) -> tuple[str, ...]:
@@ -570,21 +602,42 @@ def _source_media_contract(app: AppBundle, path: Path) -> dict[str, object]:
     return {"duration_seconds": _media_duration(probe), "streams": streams}
 
 
-def _preview_duration(result: WorkerResult, source_duration_seconds: float) -> float:
+def _preview_duration(
+    result: WorkerResult,
+    source_duration_seconds: float,
+    requested_duration_seconds: int = PREVIEW_DURATION_SECONDS,
+) -> float:
     preview = result.preview
     if not isinstance(preview, Mapping) or preview.get("position") != "middle":
         raise PackagedRouteFailure("Packaged preview omitted its middle-position timing contract.")
     duration_seconds = _float_field(preview, "duration_seconds")
     reported_source_duration = _float_field(preview, "source_duration_seconds")
     start_seconds = _float_field(preview, "start_seconds")
-    expected_duration = min(PREVIEW_DURATION_SECONDS, source_duration_seconds)
-    expected_start = max(0.0, (source_duration_seconds - duration_seconds) / 2)
+    if (
+        not math.isfinite(source_duration_seconds)
+        or not math.isfinite(duration_seconds)
+        or not math.isfinite(reported_source_duration)
+        or not math.isfinite(start_seconds)
+        or source_duration_seconds <= 0
+        or duration_seconds <= 0
+        or start_seconds < 0
+    ):
+        raise PackagedRouteFailure("Packaged preview reported invalid timing values.")
+    requested_duration = min(requested_duration_seconds, source_duration_seconds)
+    requested_start = max(0.0, (source_duration_seconds - requested_duration) / 2)
+    requested_end = requested_start + requested_duration
     if abs(reported_source_duration - source_duration_seconds) > MEDIA_DURATION_TOLERANCE_SECONDS:
         raise PackagedRouteFailure("Packaged preview reported the wrong source duration.")
-    if abs(duration_seconds - expected_duration) > MEDIA_DURATION_TOLERANCE_SECONDS:
-        raise PackagedRouteFailure("Packaged preview duration differed from the requested range.")
-    if abs(start_seconds - expected_start) > MEDIA_DURATION_TOLERANCE_SECONDS:
-        raise PackagedRouteFailure("Packaged preview did not use the requested middle position.")
+    if start_seconds > requested_start + 0.25:
+        raise PackagedRouteFailure("Packaged preview started after the requested middle range.")
+    if start_seconds + PREVIEW_ALIGNMENT_TOLERANCE_SECONDS < requested_start:
+        raise PackagedRouteFailure("Packaged preview started too early for keyframe alignment.")
+    if duration_seconds + 0.25 < requested_end - start_seconds:
+        raise PackagedRouteFailure("Packaged preview did not cover the requested middle range.")
+    if start_seconds + duration_seconds > requested_end + PREVIEW_ALIGNMENT_TOLERANCE_SECONDS:
+        raise PackagedRouteFailure("Packaged preview exceeded the bounded alignment allowance.")
+    if start_seconds + duration_seconds > source_duration_seconds + MEDIA_DURATION_TOLERANCE_SECONDS:
+        raise PackagedRouteFailure("Packaged preview extended beyond the representative source.")
     return duration_seconds
 
 
@@ -740,11 +793,18 @@ def _route_evidence(result: WorkerResult, artifact: Mapping[str, object]) -> dic
     if result.preview is not None:
         evidence["preview"] = {
             "duration_seconds": result.preview.get("duration_seconds"),
+            "parent_job_id": result.preview.get("parent_job_id"),
             "position": result.preview.get("position"),
             "source_duration_seconds": result.preview.get("source_duration_seconds"),
             "start_seconds": result.preview.get("start_seconds"),
         }
     return evidence
+
+
+def _validate_preview_parent(result: WorkerResult, expected_parent_job_id: str) -> None:
+    preview = result.preview
+    if not isinstance(preview, Mapping) or preview.get("parent_job_id") != expected_parent_job_id:
+        raise PackagedRouteFailure("Packaged preview reported the wrong parent job id.")
 
 
 def run_verified_route_pair(
@@ -762,6 +822,11 @@ def run_verified_route_pair(
     required_box_types: set[str],
     required_stages: set[str],
     forbidden_stages: set[str],
+    video_options: Mapping[str, object] | None = None,
+    upscale_options: Mapping[str, object] | None = None,
+    expected_route: Mapping[str, object] | None = None,
+    preview_duration_seconds: int = PREVIEW_DURATION_SECONDS,
+    full_keep_files: bool = False,
 ) -> tuple[WorkerResult, WorkerResult, dict[str, object], dict[str, object]]:
     full_id = str(uuid.uuid4())
     preview_id = str(uuid.uuid4())
@@ -774,6 +839,9 @@ def run_verified_route_pair(
                 root / f"{name}-full",
                 job_id=full_id,
                 upscale_enabled=upscale_enabled,
+                video_options=video_options,
+                upscale_options=upscale_options,
+                keep_files=full_keep_files,
             ),
             home_directory=root / f"{name}-full-home",
         )
@@ -788,22 +856,31 @@ def run_verified_route_pair(
                 root / f"{name}-preview",
                 job_id=preview_id,
                 parent_job_id=full_id,
+                preview_duration_seconds=preview_duration_seconds,
                 upscale_enabled=upscale_enabled,
+                video_options=video_options,
+                upscale_options=upscale_options,
             ),
             home_directory=root / f"{name}-preview-home",
         )
     except PackagedRouteFailure as error:
         raise PackagedRouteFailure(f"{name} preview route failed: {error}") from error
+    _validate_preview_parent(preview, full_id)
     validate_route_pair(
         full,
         preview,
         expected_selected=expected_selected,
         expected_fallback_reason=expected_fallback_reason,
         expected_upscale_mode=expected_upscale_mode,
+        expected_route=expected_route,
     )
     for result in (full, preview):
         validate_stage_contract(result, required=required_stages, forbidden=forbidden_stages)
-    preview_duration_seconds = _preview_duration(preview, source_duration_seconds)
+    actual_preview_duration_seconds = _preview_duration(
+        preview,
+        source_duration_seconds,
+        requested_duration_seconds=preview_duration_seconds,
+    )
     full_artifact = _probe_artifact(
         app,
         full.output_path,
@@ -815,7 +892,7 @@ def run_verified_route_pair(
         app,
         preview.output_path,
         required_box_types,
-        expected_duration_seconds=preview_duration_seconds,
+        expected_duration_seconds=actual_preview_duration_seconds,
         expected_video_dimensions=expected_video_dimensions,
     )
     return full, preview, full_artifact, preview_artifact
