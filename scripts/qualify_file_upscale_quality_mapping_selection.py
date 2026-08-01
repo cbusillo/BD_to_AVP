@@ -1740,7 +1740,7 @@ def _validate_case_record(
             repeat.get("repeat_index"),
             f"resume evidence case {case_id} repeat_index",
             minimum=0,
-            maximum=2,
+            maximum=plan.runs_per_candidate - 1,
         )
         observed_repeat_indices.append(repeat_index)
         if repeat.get("order") != list(_schedule_for_case(plan, case_id).orders[repeat_index]):

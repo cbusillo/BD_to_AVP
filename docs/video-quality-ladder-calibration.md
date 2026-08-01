@@ -188,6 +188,53 @@ Perceptual/blinded review, long-form runtime, packaged-app parity, and Vision Pr
 checks. They are not performed by this objective stage and do not block its exit `0`; later public ladder exposure must
 bind those separate receipts and still pass the normal completion gate.
 
+## File Upscale Repeatability Calibration v2
+
+`docs/qualification/file-upscale-quality-repeatability-calibration-v2.json` is a calibration-only response to the
+completed mapping-selection receipt. It binds that schema-3 receipt at mode `0444`, exact SHA-256
+`c8e2478913a8c458657f0f7904720d6f76e8761b8ba1922e7c5dda5b916d2cef`, and source Git SHA
+`b93a9729a2396b3942e679a1a8db34967f9d4467`. It also binds the mapping-selection plan SHA-256
+`3aa76c79adb81e72dd89f9fd548ef73698880eebf6332c149fe401c058d090ee`, its frozen repeatability limits and
+quanta, corpus-v2 and all seven quality-gated cases in manifest order, and the unchanged production tools, public
+ladder, and `VideoQuality.swift` bytes. The predecessor receipt must be supplied through the required
+`--mapping-selection-receipt` CLI path; its raw records are never a calibration-threshold source.
+
+The v2 run measures production `Balanced` q075 only. Every case receives five fresh generated bases at `20` Mbps per
+eye plus merge quality `75`, and q075 receives one exact hash-verified copy of each paired base. The complete
+seven-case/five-repeat/one-candidate schedule is materialized in the plan, and runtime shuffling is forbidden. The
+runner preserves the mapping-selection structure, timing, 2x geometry, hash provenance, eye-order, `4.10` size-cap,
+and raw metric-record checks.
+
+Run the checked calibration from a clean committed macOS arm64 worktree with the accepted predecessor receipt
+available at the supplied relative path:
+
+```bash
+BD_TO_AVP_RELEASE_MVC_SOURCE="$SOURCE_MVC" \
+uv run python scripts/qualify_file_upscale_quality_repeatability_calibration.py \
+  --mapping-selection-receipt build/qualification/file-upscale-quality-mapping-selection-v1.json \
+  --output build/qualification/file-upscale-quality-repeatability-calibration-v2.json \
+  --work-directory build/qualification/file-upscale-quality-repeatability-calibration-v2-work \
+  --artifact-directory build/qualification/file-upscale-quality-repeatability-calibration-v2-artifacts
+```
+
+Use `--resume` with the same five paths after interruption. Checkpoints are canonical JSON written atomically under
+single-writer and ownership markers. An incomplete receipt remains writable and resumable; a complete canonical
+receipt is finalized at mode `0444`, including recovery when a crash occurs between the final write and freeze.
+Completed work state is removed, unexpected work entries are rejected, and the artifact directory must contain
+exactly eight hash-bound relative-path MOVs: the repeat-index-0 generated base and q075 output for dark, grain-rain,
+snow-detail, and motion. Missing or orphan media is fatal.
+
+For each frozen repeatability field, derivation reads only the 35 raw q075 candidate records. It computes each case's
+five-repeat range, selects the maximum range across cases, and records the source case and q075 candidate. The new
+limit is `max(previous_limit, ceil(2 * observed_maximum / quantum) * quantum)`, with the previous limit, observed
+maximum, multiplier, quantum, and derived limit preserved in the receipt.
+
+This stage performs no candidate selection, boundary evaluation, provisional mapping, or public contract change.
+Its derived limits must be pinned by a separate later confirmation plan before any public ladder decision. Exit `0`
+requires a complete, finalized, structurally valid calibration receipt with all derived limits and eight retained
+artifacts. Incomplete resumable evidence exits `3`; contract, provenance, privacy, ownership, media, or execution
+failures exit `2`.
+
 ## Generated Interaction Sweep
 
 `docs/qualification/generated-mv-hevc-corpus-v1.json` binds a four-case stress subset to the existing direct

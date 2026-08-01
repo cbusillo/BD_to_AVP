@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "experiment_id": "file-upscale-quality-repeatability-calibration-v2",
+  "target_id": "upscale_quality",
+  "purpose": "calibrate_q075_repeatability_limits_only_not_mapping_selection",
+  "design": "q075_five_repeat_full_quality_gated_corpus_v2",
+  "predecessor": {
+    "receipt": {
+      "schema_version": 3,
+      "experiment_id": "file-upscale-quality-mapping-selection-v1",
+      "sha256": "c8e2478913a8c458657f0f7904720d6f76e8761b8ba1922e7c5dda5b916d2cef",
+      "source_git_sha": "b93a9729a2396b3942e679a1a8db34967f9d4467",
+      "required_file_mode": "0444",
+      "required_cli_argument": "--mapping-selection-receipt"
+    },
+    "plan": {
+      "path": "docs/qualification/file-upscale-quality-mapping-selection-v1.json",
+      "sha256": "3aa76c79adb81e72dd89f9fd548ef73698880eebf6332c149fe401c058d090ee",
+      "schema_version": 1
+    },
+    "previous_repeatability": {
+      "source": "source_response.noise_derivation.metrics",
+      "metrics": {
+        "min_same_eye_ssim": {
+          "record_field": "min_same_eye_ssim",
+          "quantum": 0.0001,
+          "previous_limit": 0.0002
+        },
+        "final_to_base_size_ratio": {
+          "record_field": "final_to_base_size_ratio",
+          "quantum": 0.01,
+          "previous_limit": 0.02
+        },
+        "minimum_frame_same_eye_ssim": {
+          "record_field": "minimum_frame_same_eye_ssim",
+          "quantum": 0.0001,
+          "previous_limit": 0.0016
+        },
+        "p05_frame_same_eye_ssim": {
+          "record_field": "p05_frame_same_eye_ssim",
+          "quantum": 0.0001,
+          "previous_limit": 0.0012
+        },
+        "frame_ssim_standard_deviation": {
+          "record_field": "frame_ssim_standard_deviation",
+          "quantum": 0.0001,
+          "previous_limit": 0.0002
+        },
+        "maximum_adjacent_frame_ssim_drop": {
+          "record_field": "maximum_adjacent_frame_ssim_drop",
+          "quantum": 0.0001,
+          "previous_limit": 0.001
+        },
+        "min_eye_order_margin": {
+          "record_field": "min_eye_order_margin",
+          "quantum": 0.0001,
+          "previous_limit": 0.0011
+        }
+      }
+    }
+  },
+  "corpus_binding": {
+    "path": "docs/qualification/file-upscale-quality-corpus-v2.json",
+    "binding_id": "file-upscale-quality-corpus-v2",
+    "sha256": "b515d21f4958f263214f674528e4a07f0b6ffa258c891be5533cb23f16103b91",
+    "selected_case_ids": [
+      "production-dark",
+      "production-grain-rain",
+      "production-snow-detail",
+      "production-motion",
+      "production-crop",
+      "production-rate-override",
+      "synthetic-animation"
+    ]
+  },
+  "public_contract_bindings": {
+    "ladder_manifest": {
+      "path": "docs/qualification/video-quality-ladder-v1.json",
+      "sha256": "04620e59e5380c88d3d5152f78712402675f31db6f1253c1d93224af585111dc"
+    },
+    "video_quality_swift": {
+      "path": "macos/BluRayToVisionPro/Models/VideoQuality.swift",
+      "sha256": "6f204564261d859590086ca41e9a27ac9f69bc0feb225137cf0abc4a98082dfa"
+    }
+  },
+  "balanced": {
+    "candidate_id": "q075",
+    "quality": 75,
+    "quality_source": "bd_to_avp.modules.video_quality_defaults.DEFAULT_UPSCALE_QUALITY"
+  },
+  "generated_base": {
+    "contract": "production_generated_mv_hevc_v1",
+    "eye_bitrate_mbps": 20,
+    "eye_bitrate_source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_GENERATED_EYE_BITRATE_MBPS",
+    "merge_quality": 75,
+    "merge_quality_source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_GENERATED_MERGE_QUALITY",
+    "fresh_base_per_case_repeat": true,
+    "exact_copy_per_candidate": true
+  },
+  "runs_per_candidate": 5,
+  "execution_order": {
+    "contract": "materialized_manifest_order_q075_five_repeat_v2",
+    "runtime_shuffle_forbidden": true,
+    "case_orders": [
+      {
+        "case_id": "production-dark",
+        "case_index": 0,
+        "orders": [[75], [75], [75], [75], [75]]
+      },
+      {
+        "case_id": "production-grain-rain",
+        "case_index": 1,
+        "orders": [[75], [75], [75], [75], [75]]
+      },
+      {
+        "case_id": "production-snow-detail",
+        "case_index": 2,
+        "orders": [[75], [75], [75], [75], [75]]
+      },
+      {
+        "case_id": "production-motion",
+        "case_index": 3,
+        "orders": [[75], [75], [75], [75], [75]]
+      },
+      {
+        "case_id": "production-crop",
+        "case_index": 4,
+        "orders": [[75], [75], [75], [75], [75]]
+      },
+      {
+        "case_id": "production-rate-override",
+        "case_index": 5,
+        "orders": [[75], [75], [75], [75], [75]]
+      },
+      {
+        "case_id": "synthetic-animation",
+        "case_index": 6,
+        "orders": [[75], [75], [75], [75], [75]]
+      }
+    ]
+  },
+  "toolchain": {
+    "ffmpeg_manifest": {
+      "path": "vendor/ffmpeg-macos-arm64.toml",
+      "sha256": "a8afa883b2128ee925276953193aa179acdb1378873960286082debb20ae1fb5"
+    },
+    "fx_upscale_binary": {
+      "path": "bd_to_avp/bin/fx-upscale",
+      "sha256": "80ba011745c105a23db74bcd7d4d0bbbe26084cf2d65911b0347c2c530baa022"
+    },
+    "bundled_tools": {
+      "edge264_test": {
+        "path": "bd_to_avp/bin/edge264_test",
+        "sha256": "20538cc8f6c89973fe645b1ad51b30d40529f20cce3a43e53c8d77ccfcb1f6e6"
+      },
+      "mp4box": {
+        "path": "bd_to_avp/bin/MP4Box",
+        "sha256": "61ddca2713e5de02798820e9e295edc959d09a8b15a30dcacc3d9c14df627a6a"
+      },
+      "spatial_media_tool": {
+        "path": "bd_to_avp/bin/spatial-media-kit-tool",
+        "sha256": "97e42c6b04f32b27edd486a33b74d5cd23973a2875d066baa15d0de8397359f9"
+      }
+    },
+    "generated_encoder_contract": "production_generated_mv_hevc_v1",
+    "file_upscale_command_contract": "bd_to_avp.modules.video.fx_upscale_command_v1",
+    "metric_contract": "ffmpeg_ssim_aggregate_and_per_frame_v1",
+    "geometry_contract": "fx_upscale_2x_spatial_output_v1",
+    "timing_contract": {
+      "frame_rate": "ffprobe_r_frame_rate_frame_count_duration_v2",
+      "duration_tolerance_frames": 1
+    }
+  },
+  "technical_eligibility": {
+    "all_planned_records_required": true,
+    "structure_timing_geometry_eye_order_hash_provenance_required": true,
+    "maximum_final_to_base_size_ratio": 4.10,
+    "repeatability_metric_fields": [
+      "min_same_eye_ssim",
+      "final_to_base_size_ratio",
+      "minimum_frame_same_eye_ssim",
+      "p05_frame_same_eye_ssim",
+      "frame_ssim_standard_deviation",
+      "maximum_adjacent_frame_ssim_drop",
+      "min_eye_order_margin"
+    ]
+  },
+  "derivation": {
+    "source_records": "raw_q075_case_repeat_candidate_records_only",
+    "group_by": ["case_id", "candidate_id"],
+    "within_case_statistic": "maximum_minus_minimum_across_five_repeats",
+    "source_maximum_statistic": "maximum_across_cases",
+    "formula": "max(previous_limit, ceil(2 * source_maximum / quantum) * quantum)",
+    "multiplier": 2,
+    "predecessor_receipt_records_forbidden": true,
+    "summary_fields_as_source_forbidden": true
+  },
+  "artifact_retention": {
+    "repeat_index": 0,
+    "case_ids": [
+      "production-dark",
+      "production-grain-rain",
+      "production-snow-detail",
+      "production-motion"
+    ],
+    "retain_generated_base": true,
+    "retain_q075_output": true,
+    "record_relative_paths_only": true,
+    "exact_mov_count": 8
+  },
+  "scope": {
+    "calibration_only": true,
+    "selection_forbidden": true,
+    "boundary_evaluation_forbidden": true,
+    "provisional_outputs_forbidden": true,
+    "public_contract_changes_forbidden": true,
+    "later_confirmation_required": true
+  }
+}
