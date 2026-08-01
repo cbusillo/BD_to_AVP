@@ -121,6 +121,73 @@ characterizes the independent file-upscale response around production `Balanced 
 remain descriptive in this stage; they are not converted into an undeclared pass/fail threshold. Public mappings still
 require a later checked calibration and physical-device validation.
 
+## File Upscale Objective Mapping Selection
+
+`docs/qualification/file-upscale-quality-corpus-v2.json` selects exactly the seven quality-gated cases from the direct
+MV-HEVC corpus in manifest order. It excludes informational `itu-mvcds-2`, reuses the checked v1 source identities,
+and adds the pinned four-second snow-detail and motion segments. The objective stage is bound to the immutable v1
+response receipt SHA-256 `d62f038afa796f7404bd47dabc6f84cfa47ba6e221b32a501ebc4314714c9bb6`, its source
+Git SHA and response-plan SHA, the corpus-v2 SHA, the unchanged public ladder and `VideoQuality.swift` bytes, and the
+same pinned production tools.
+
+`docs/qualification/file-upscale-quality-mapping-selection-v1.json` preregisters integer qualities
+`[45,55,65,75,85,95,100]`; q75 remains the non-substitutable production `Balanced` anchor and q100 uses canonical
+bitrate factor `1`. Each case runs three fresh production-parity bases at `20` Mbps per eye plus merge quality `75`.
+All seven candidates receive exact copies of their paired base. The plan materializes every per-case/per-repeat order
+from the three checked permutations and rotations; the runner never shuffles at runtime.
+
+Run the complete objective stage from a clean committed worktree with the frozen response receipt available at mode
+`0444`:
+
+```bash
+BD_TO_AVP_RELEASE_MVC_SOURCE=/private/source.mkv \
+uv run python scripts/qualify_file_upscale_quality_mapping_selection.py \
+  --source-receipt build/qualification/file-upscale-quality-sweep-v1.json \
+  --output build/qualification/file-upscale-quality-mapping-selection-v1.json \
+  --work-directory build/qualification/file-upscale-quality-mapping-selection-v1-work \
+  --artifact-directory build/qualification/file-upscale-quality-mapping-selection-v1-artifacts
+```
+
+Use `--resume` with all four paths unchanged after an interruption. Completed receipts are canonical JSON frozen to
+`0444`, including complete objective failures. The owned artifact directory preserves the generated base and all seven
+candidate outputs for preregistered repeat 1 of dark, grain-rain, snow-detail, and motion. Receipt artifact paths are
+relative and include byte counts and SHA-256 identities; private source paths are forbidden. Other candidate outputs
+are deleted after their measurements are durably recorded.
+
+The runner recomputes source-noise maxima only from raw v1 records grouped by `(case_id,candidate_id)`. It explicitly
+forbids the defective frozen aggregate `candidate_summaries[*].repeat_ssim_spread` field and verifies every checked
+limit with `ceil(2 * source_maximum / quantum) * quantum`. New summaries expose per-case repeat ranges, each
+candidate's maximum within-case repeat range, and cross-case median ranges; they do not emit a misleading aggregate
+`repeat_ssim_spread`. The old immutable response receipt is not rewritten.
+
+A candidate is technically eligible only when all 21 planned records pass structure, timing, 2x geometry, eye order,
+exact-copy and hash provenance, every preregistered repeatability limit, and
+`final_to_base_size_ratio <= 4.10`. Every lower/higher pair is evaluated, including non-adjacent pairs:
+
+- storage must increase strictly in every paired repeat, and every case's median paired growth must be at least `0.02`;
+- per-case median paired quality deltas must keep aggregate SSIM at least `-0.0002`, minimum-frame SSIM at least
+  `-0.0016`, P05 SSIM at least `-0.0012`, frame-SSIM standard-deviation increase at most `0.0002`, adjacent-drop
+  increase at most `0.0010`, and eye-order-margin loss at most `0.0011`;
+- objective distinction requires corpus-median aggregate improvement of at least `0.0002` and at least two real cases
+  clearing the aggregate or tail threshold, including grain-rain or snow-detail.
+
+Failed boundaries collapse without threshold changes, interpolation, aliases, or post-outcome candidates. The
+analyzer selects the deterministic maximum-cardinality ordered subset containing q75, then tie-breaks by minimum-case
+storage coverage, objective-quality margin, storage margin, end-to-end storage coverage, lower first quality, and
+candidate IDs. Surviving values are assigned outward from q75 to `Efficient`, `Compact`, and `Space Saver`, then
+`Detailed`, `High Detail`, and `Maximum Detail`. Missing slots remain explicitly `unsupported`; no value is duplicated.
+
+Exit `0` means the complete, structurally valid objective evidence selects all seven provisional candidates and is
+decision-ready for this bounded stage. Exit `1` means complete immutable evidence collapsed a boundary, produced a
+sparse or ambiguous selection, or otherwise lacked sufficient objective distinction. Fatal contract, provenance,
+privacy, tool, or source errors exit `2`; incomplete resumable evidence exits `3`. Even exit `0` keeps
+`public_mapping_changes_forbidden=true` and `ladder_mapping_selected=false` and does not edit the public ladder or
+`VideoQuality.swift`.
+
+Perceptual/blinded review, long-form runtime, packaged-app parity, and Vision Pro playback remain explicit downstream
+checks. They are not performed by this objective stage and do not block its exit `0`; later public ladder exposure must
+bind those separate receipts and still pass the normal completion gate.
+
 ## Generated Interaction Sweep
 
 `docs/qualification/generated-mv-hevc-corpus-v1.json` binds a four-case stress subset to the existing direct

@@ -1,0 +1,294 @@
+{
+  "schema_version": 1,
+  "experiment_id": "file-upscale-quality-mapping-selection-v1",
+  "target_id": "upscale_quality",
+  "purpose": "objective_provisional_mapping_selection_not_public_ladder_mapping",
+  "design": "fixed_integer_quality_grid_45_55_65_75_85_95_100_v1",
+  "source_response": {
+    "receipt": {
+      "schema_version": 2,
+      "experiment_id": "file-upscale-quality-sweep-v1",
+      "sha256": "d62f038afa796f7404bd47dabc6f84cfa47ba6e221b32a501ebc4314714c9bb6",
+      "source_git_sha": "a96e6a0e21fc21e47dad6c9fec186725ef6166a3",
+      "required_file_mode": "0444"
+    },
+    "plan": {
+      "path": "docs/qualification/file-upscale-quality-sweep-v1.json",
+      "sha256": "978323dccf106a1933c0e4809861d2278c882dfa5459e514e84eae4f1aa844f5",
+      "schema_version": 1
+    },
+    "noise_derivation": {
+      "source_records": "raw_case_repeat_candidate_records_only",
+      "group_by": ["case_id", "candidate_id"],
+      "within_group_statistic": "maximum_minus_minimum_across_three_repeats",
+      "source_maximum_statistic": "maximum_across_groups",
+      "forbidden_source_field": "candidate_summaries[*].repeat_ssim_spread",
+      "formula": "ceil(multiplier * source_maximum / quantum) * quantum",
+      "multiplier": 2,
+      "metrics": {
+        "min_same_eye_ssim": {
+          "record_field": "min_same_eye_ssim",
+          "source_maximum": 0.000081,
+          "quantum": 0.0001,
+          "limit": 0.0002
+        },
+        "final_to_base_size_ratio": {
+          "record_field": "final_to_base_size_ratio",
+          "source_maximum": 0.00797990891104794,
+          "quantum": 0.01,
+          "limit": 0.02
+        },
+        "minimum_frame_same_eye_ssim": {
+          "record_field": "minimum_frame_same_eye_ssim",
+          "source_maximum": 0.000778000000000056,
+          "quantum": 0.0001,
+          "limit": 0.0016
+        },
+        "p05_frame_same_eye_ssim": {
+          "record_field": "p05_frame_same_eye_ssim",
+          "source_maximum": 0.000556000000000001,
+          "quantum": 0.0001,
+          "limit": 0.0012
+        },
+        "frame_ssim_standard_deviation": {
+          "record_field": "frame_ssim_standard_deviation",
+          "source_maximum": 0.0000506638525244697,
+          "quantum": 0.0001,
+          "limit": 0.0002
+        },
+        "maximum_adjacent_frame_ssim_drop": {
+          "record_field": "maximum_adjacent_frame_ssim_drop",
+          "source_maximum": 0.000496000000000052,
+          "quantum": 0.0001,
+          "limit": 0.001
+        },
+        "min_eye_order_margin": {
+          "record_field": "min_eye_order_margin",
+          "source_maximum": 0.000516999999999879,
+          "quantum": 0.0001,
+          "limit": 0.0011
+        }
+      }
+    }
+  },
+  "corpus_binding": {
+    "path": "docs/qualification/file-upscale-quality-corpus-v2.json",
+    "binding_id": "file-upscale-quality-corpus-v2",
+    "sha256": "b515d21f4958f263214f674528e4a07f0b6ffa258c891be5533cb23f16103b91"
+  },
+  "public_contract_bindings": {
+    "ladder_manifest": {
+      "path": "docs/qualification/video-quality-ladder-v1.json",
+      "sha256": "04620e59e5380c88d3d5152f78712402675f31db6f1253c1d93224af585111dc"
+    },
+    "video_quality_swift": {
+      "path": "macos/BluRayToVisionPro/Models/VideoQuality.swift",
+      "sha256": "6f204564261d859590086ca41e9a27ac9f69bc0feb225137cf0abc4a98082dfa"
+    }
+  },
+  "balanced": {
+    "candidate_id": "q075",
+    "quality": 75,
+    "quality_source": "bd_to_avp.modules.video_quality_defaults.DEFAULT_UPSCALE_QUALITY"
+  },
+  "generated_base": {
+    "eye_bitrate_mbps": 20,
+    "eye_bitrate_source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_GENERATED_EYE_BITRATE_MBPS",
+    "merge_quality": 75,
+    "merge_quality_source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_GENERATED_MERGE_QUALITY",
+    "contract": "production_generated_mv_hevc_v1"
+  },
+  "runs_per_candidate": 3,
+  "execution_order": {
+    "contract": "materialized_cross_case_rotations_v1",
+    "runtime_shuffle_forbidden": true,
+    "base_permutations": [
+      [45, 55, 65, 75, 85, 95, 100],
+      [100, 95, 85, 75, 65, 55, 45],
+      [45, 100, 55, 95, 65, 85, 75]
+    ],
+    "repeat_rotation_offsets": [0, 2, 4],
+    "case_orders": [
+      {
+        "case_id": "production-dark",
+        "case_index": 0,
+        "orders": [
+          [45, 55, 65, 75, 85, 95, 100],
+          [85, 75, 65, 55, 45, 100, 95],
+          [65, 85, 75, 45, 100, 55, 95]
+        ]
+      },
+      {
+        "case_id": "production-grain-rain",
+        "case_index": 1,
+        "orders": [
+          [55, 65, 75, 85, 95, 100, 45],
+          [75, 65, 55, 45, 100, 95, 85],
+          [85, 75, 45, 100, 55, 95, 65]
+        ]
+      },
+      {
+        "case_id": "production-snow-detail",
+        "case_index": 2,
+        "orders": [
+          [65, 75, 85, 95, 100, 45, 55],
+          [65, 55, 45, 100, 95, 85, 75],
+          [75, 45, 100, 55, 95, 65, 85]
+        ]
+      },
+      {
+        "case_id": "production-motion",
+        "case_index": 3,
+        "orders": [
+          [75, 85, 95, 100, 45, 55, 65],
+          [55, 45, 100, 95, 85, 75, 65],
+          [45, 100, 55, 95, 65, 85, 75]
+        ]
+      },
+      {
+        "case_id": "production-crop",
+        "case_index": 4,
+        "orders": [
+          [85, 95, 100, 45, 55, 65, 75],
+          [45, 100, 95, 85, 75, 65, 55],
+          [100, 55, 95, 65, 85, 75, 45]
+        ]
+      },
+      {
+        "case_id": "production-rate-override",
+        "case_index": 5,
+        "orders": [
+          [95, 100, 45, 55, 65, 75, 85],
+          [100, 95, 85, 75, 65, 55, 45],
+          [55, 95, 65, 85, 75, 45, 100]
+        ]
+      },
+      {
+        "case_id": "synthetic-animation",
+        "case_index": 6,
+        "orders": [
+          [100, 45, 55, 65, 75, 85, 95],
+          [95, 85, 75, 65, 55, 45, 100],
+          [95, 65, 85, 75, 45, 100, 55]
+        ]
+      }
+    ]
+  },
+  "candidates": [
+    {"id": "q045", "quality": 45},
+    {"id": "q055", "quality": 55},
+    {"id": "q065", "quality": 65},
+    {"id": "q075", "quality": 75},
+    {"id": "q085", "quality": 85},
+    {"id": "q095", "quality": 95},
+    {"id": "q100", "quality": 100}
+  ],
+  "toolchain": {
+    "ffmpeg_manifest": {
+      "path": "vendor/ffmpeg-macos-arm64.toml",
+      "sha256": "a8afa883b2128ee925276953193aa179acdb1378873960286082debb20ae1fb5"
+    },
+    "generated_encoder_contract": "production_generated_mv_hevc_v1",
+    "file_upscale_command_contract": "bd_to_avp.modules.video.fx_upscale_command_v1",
+    "fx_upscale_binary": {
+      "path": "bd_to_avp/bin/fx-upscale",
+      "sha256": "80ba011745c105a23db74bcd7d4d0bbbe26084cf2d65911b0347c2c530baa022"
+    },
+    "bundled_tools": {
+      "edge264_test": {
+        "path": "bd_to_avp/bin/edge264_test",
+        "sha256": "20538cc8f6c89973fe645b1ad51b30d40529f20cce3a43e53c8d77ccfcb1f6e6"
+      },
+      "mp4box": {
+        "path": "bd_to_avp/bin/MP4Box",
+        "sha256": "61ddca2713e5de02798820e9e295edc959d09a8b15a30dcacc3d9c14df627a6a"
+      },
+      "spatial_media_tool": {
+        "path": "bd_to_avp/bin/spatial-media-kit-tool",
+        "sha256": "97e42c6b04f32b27edd486a33b74d5cd23973a2875d066baa15d0de8397359f9"
+      }
+    },
+    "metric_contract": "ffmpeg_ssim_aggregate_and_per_frame_v1",
+    "geometry_contract": "fx_upscale_2x_spatial_output_v1",
+    "timing_contract": {
+      "frame_rate": "ffprobe_r_frame_rate_frame_count_duration_v2",
+      "duration_tolerance_frames": 1
+    }
+  },
+  "technical_eligibility": {
+    "all_planned_records_required": true,
+    "structure_timing_geometry_eye_order_hash_provenance_required": true,
+    "repeatability_limits_source": "source_response.noise_derivation.metrics",
+    "maximum_final_to_base_size_ratio": 4.10
+  },
+  "boundary_policy": {
+    "evaluate_every_ordered_lower_higher_pair": true,
+    "storage": {
+      "strict_increase_in_every_paired_repeat": true,
+      "minimum_case_median_paired_growth_ratio": 0.02
+    },
+    "quality_non_inferiority": {
+      "minimum_aggregate_delta": -0.0002,
+      "minimum_minimum_frame_delta": -0.0016,
+      "minimum_p05_delta": -0.0012,
+      "maximum_frame_standard_deviation_increase": 0.0002,
+      "maximum_adjacent_drop_increase": 0.001,
+      "maximum_eye_order_margin_loss": 0.0011
+    },
+    "objective_distinction": {
+      "minimum_corpus_median_aggregate_improvement": 0.0002,
+      "real_case_clear_count": 2,
+      "real_case_aggregate_threshold": 0.0002,
+      "real_case_minimum_frame_threshold": 0.0016,
+      "real_case_p05_threshold": 0.0012,
+      "required_sensitive_case_ids": ["production-grain-rain", "production-snow-detail"],
+      "required_sensitive_case_clear_count": 1
+    },
+    "failed_boundary_action": "collapse",
+    "threshold_changes_forbidden": true,
+    "interpolation_forbidden": true,
+    "aliases_forbidden": true,
+    "post_hoc_candidates_forbidden": true
+  },
+  "selection_policy": {
+    "primary": "maximum_cardinality_ordered_subset_containing_q075",
+    "tie_breaks": [
+      "wider_minimum_case_storage_coverage",
+      "larger_minimum_objective_quality_margin",
+      "larger_minimum_storage_margin",
+      "wider_end_to_end_storage_coverage",
+      "lower_first_quality",
+      "lexicographic_candidate_ids"
+    ],
+    "slot_assignment": {
+      "balanced": "q075",
+      "lower_outward": ["efficient", "compact", "space_saver"],
+      "higher_outward": ["detailed", "high_detail", "maximum_detail"]
+    },
+    "missing_slots": "unsupported",
+    "target_named_step_count": 7
+  },
+  "artifact_retention": {
+    "repeat_index": 0,
+    "case_ids": [
+      "production-dark",
+      "production-grain-rain",
+      "production-snow-detail",
+      "production-motion"
+    ],
+    "retain_generated_base": true,
+    "retain_all_candidate_outputs": true,
+    "record_relative_paths_only": true
+  },
+  "decision_policy": {
+    "stage": "objective_provisional_mapping_selection_only",
+    "post_hoc_thresholds_forbidden": true,
+    "public_mapping_changes_forbidden": true,
+    "ladder_mapping_selected": false,
+    "perceptual_review_performed": false,
+    "long_form_runtime_performed": false,
+    "package_parity_performed": false,
+    "vision_pro_validation_performed": false,
+    "downstream_checks_block_objective_stage": false
+  }
+}
