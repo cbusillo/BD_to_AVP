@@ -17,10 +17,12 @@ from scripts.verify_packaged_mv_hevc_routes import (
     _preview_duration,
     _terminate_worker_process,
     _terminal_result,
+    _validate_preview_parent,
     _validate_stream_contract,
     build_worker_request,
     parse_worker_events,
     validate_qualification_paths,
+    validate_route_report,
     validate_stage_contract,
     validate_route_pair,
     verify_packaged_routes,
@@ -53,6 +55,7 @@ def worker_result(
         0,
         job_id="job",
         payload={"code": event_code, "video_route": route},
+        event_type="warning" if event_code == "video_route_fallback" else "log",
     )
     return WorkerResult(
         operation=operation,
@@ -64,7 +67,7 @@ def worker_result(
 
 
 class PackagedRequestTests(unittest.TestCase):
-    def test_full_request_uses_protocol_v11_automatic_direct_intent(self) -> None:
+    def test_full_request_uses_protocol_v12_automatic_direct_intent(self) -> None:
         request = build_worker_request(
             "convert_source",
             Path("/tmp/source.mkv"),
@@ -120,9 +123,34 @@ class PackagedRequestTests(unittest.TestCase):
         self.assertEqual(request["encoding"]["resolution"], "")
         self.assertFalse(request["encoding"]["crop_black_bars"])
 
+    def test_request_accepts_exact_guided_restart_options(self) -> None:
+        video_options = {
+            "mode": "mv_hevc",
+            "route_intent": "existing_artifact",
+            "quality_intent": {"mode": "ladder", "step": "detailed", "mapping_version": 2},
+        }
+        upscale_options = {"enabled": True, "quality": 100}
+
+        request = build_worker_request(
+            "convert_source",
+            Path("/tmp/source.mkv"),
+            Path("/tmp/output"),
+            job_id="restart-job",
+            upscale_enabled=True,
+            video_options=video_options,
+            upscale_options=upscale_options,
+            start_stage=6,
+            keep_files=True,
+        )
+
+        self.assertEqual(request["encoding"]["video"], video_options)
+        self.assertEqual(request["encoding"]["upscale"], upscale_options)
+        self.assertEqual(request["job"]["start_stage"], 6)
+        self.assertTrue(request["job"]["keep_files"])
+
 
 class PackagedEventTests(unittest.TestCase):
-    def test_event_parser_requires_contiguous_protocol_v11_stream(self) -> None:
+    def test_event_parser_requires_contiguous_protocol_v12_stream(self) -> None:
         stdout = "\n".join(
             json.dumps(item)
             for item in (
@@ -190,6 +218,68 @@ class PackagedMediaContractTests(unittest.TestCase):
         )
 
         self.assertAlmostEqual(_preview_duration(result, 65.649), 60.435)
+
+    def test_preview_timing_accepts_short_qualification_range(self) -> None:
+        result = WorkerResult(
+            operation="preview_source",
+            route={},
+            output_path=Path("preview.mov"),
+            events=(),
+            preview={
+                "duration_seconds": 12.72,
+                "position": "middle",
+                "source_duration_seconds": 65.649,
+                "start_seconds": 26.193,
+            },
+        )
+
+        self.assertAlmostEqual(_preview_duration(result, 65.649, requested_duration_seconds=12), 12.72)
+
+    def test_preview_timing_rejects_unbounded_full_source(self) -> None:
+        result = WorkerResult(
+            operation="preview_source",
+            route={},
+            output_path=Path("preview.mov"),
+            events=(),
+            preview={
+                "duration_seconds": 65.649,
+                "position": "middle",
+                "source_duration_seconds": 65.649,
+                "start_seconds": 0,
+            },
+        )
+
+        with self.assertRaisesRegex(PackagedRouteFailure, "started too early|bounded alignment"):
+            _preview_duration(result, 65.649, requested_duration_seconds=12)
+
+    def test_preview_timing_rejects_non_finite_values(self) -> None:
+        result = WorkerResult(
+            operation="preview_source",
+            route={},
+            output_path=Path("preview.mov"),
+            events=(),
+            preview={
+                "duration_seconds": float("nan"),
+                "position": "middle",
+                "source_duration_seconds": 65.649,
+                "start_seconds": 26.193,
+            },
+        )
+
+        with self.assertRaisesRegex(PackagedRouteFailure, "invalid timing"):
+            _preview_duration(result, 65.649, requested_duration_seconds=12)
+
+    def test_preview_parent_must_match_full_job(self) -> None:
+        result = WorkerResult(
+            operation="preview_source",
+            route={},
+            output_path=Path("preview.mov"),
+            events=(),
+            preview={"parent_job_id": "other-job"},
+        )
+
+        with self.assertRaisesRegex(PackagedRouteFailure, "parent job"):
+            _validate_preview_parent(result, "full-job")
 
     def test_stream_contract_rejects_missing_subtitles(self) -> None:
         streams = (
@@ -286,6 +376,73 @@ class PackagedMediaContractTests(unittest.TestCase):
 
 
 class PackagedRouteParityTests(unittest.TestCase):
+    def test_exact_route_report_requires_matching_event_and_fields(self) -> None:
+        route = {
+            "intent": "automatic",
+            "selected": "direct_mv_hevc",
+            "reason": "direct_eligible",
+            "quality_intent": {"mode": "ladder", "step": "detailed", "mapping_version": 2},
+            "requested": {"route": "direct_mv_hevc", "rate_control": "quality", "quality": 0.75},
+            "rate_control": "quality",
+            "quality": 0.75,
+        }
+        result = worker_result(route, operation="convert_source", event_code="video_route_selected")
+
+        validate_route_report(result, route)
+
+        with self.assertRaisesRegex(PackagedRouteFailure, "route report mismatch"):
+            validate_route_report(result, {**route, "quality": 0.7})
+
+    def test_exact_route_report_rejects_contradictory_route_events(self) -> None:
+        route = {
+            "intent": "automatic",
+            "selected": "direct_mv_hevc",
+            "reason": "direct_eligible",
+            "rate_control": "quality",
+            "quality": 0.7,
+        }
+        result = WorkerResult(
+            operation="convert_source",
+            route=route,
+            output_path=Path("/tmp/output.mov"),
+            events=(
+                event(
+                    0,
+                    job_id="job",
+                    payload={"code": "video_route_selected", "video_route": route},
+                ),
+                event(
+                    1,
+                    job_id="job",
+                    payload={"code": "video_route_fallback", "video_route": route},
+                    event_type="warning",
+                ),
+            ),
+            preview=None,
+        )
+
+        with self.assertRaisesRegex(PackagedRouteFailure, "one truthful"):
+            validate_route_report(result, route)
+
+    def test_exact_route_report_rejects_missing_route_event(self) -> None:
+        route = {
+            "intent": "automatic",
+            "selected": "direct_mv_hevc",
+            "reason": "direct_eligible",
+            "rate_control": "quality",
+            "quality": 0.7,
+        }
+        result = WorkerResult(
+            operation="convert_source",
+            route=route,
+            output_path=Path("/tmp/output.mov"),
+            events=(),
+            preview=None,
+        )
+
+        with self.assertRaisesRegex(PackagedRouteFailure, "one truthful"):
+            validate_route_report(result, route)
+
     def test_direct_full_and_preview_require_identical_route(self) -> None:
         route = {
             "intent": "automatic",
