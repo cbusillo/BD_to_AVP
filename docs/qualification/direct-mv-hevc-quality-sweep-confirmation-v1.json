@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "sweep_id": "direct-mv-hevc-quality-confirmation-v1",
+  "target_id": "direct_mv_hevc",
+  "purpose": "exploratory_candidates_not_ladder_mappings",
+  "corpus": {
+    "path": "docs/qualification/direct-mv-hevc-corpus-v1.json",
+    "corpus_id": "direct-mv-hevc-prerelease-v1",
+    "sha256": "d6cfc14cb9f29e14639d40a96516fe14f47a64df850fe0928833b77b077e87b1"
+  },
+  "balanced": {
+    "quality": 0.7,
+    "source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_DIRECT_QUALITY"
+  },
+  "runs_per_candidate": 3,
+  "candidates": [
+    {
+      "id": "q040",
+      "quality": 0.4
+    },
+    {
+      "id": "q050",
+      "quality": 0.5
+    },
+    {
+      "id": "q060",
+      "quality": 0.6
+    },
+    {
+      "id": "q070",
+      "quality": 0.7
+    },
+    {
+      "id": "q075",
+      "quality": 0.75
+    },
+    {
+      "id": "q080",
+      "quality": 0.8
+    },
+    {
+      "id": "q085",
+      "quality": 0.85
+    }
+  ]
+}

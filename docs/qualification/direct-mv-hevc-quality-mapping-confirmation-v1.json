@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "experiment_id": "direct-mv-hevc-quality-mapping-confirmation-v1",
+  "target_id": "direct_mv_hevc",
+  "purpose": "fresh_objective_confirmation_not_public_mapping",
+  "raw_sweep_plan": {
+    "path": "docs/qualification/direct-mv-hevc-quality-sweep-confirmation-v1.json",
+    "sha256": "ccd9b26a977eb83adde559f74c6960d1b100cfa4c8bfb9fce7b1d69ddda0a730",
+    "sweep_id": "direct-mv-hevc-quality-confirmation-v1"
+  },
+  "source_receipts": {
+    "coarse": {
+      "path_argument": "--coarse-receipt",
+      "sha256": "0a0cba80f4d4300f2da5ac40c8f6bdf1292f4d7e5b03baa8b3ec1eae80804d96",
+      "required_file_mode": "0444",
+      "identity": {
+        "schema_version": 1,
+        "sweep_id": "direct-mv-hevc-quality-coarse-v1",
+        "plan_path": "docs/qualification/direct-mv-hevc-quality-sweep-coarse-v1.json",
+        "plan_sha256": "23950118851e7f10a8fbd79322c2640b01383e6438285b49743b742347007f47"
+      },
+      "records_used_for_confirmation": false
+    },
+    "upper": {
+      "path_argument": "--upper-receipt",
+      "sha256": "af9df7f73f768b4fa69efc190c82a51f344e8cdaf6725b1b33ebc5d674936219",
+      "required_file_mode": "0444",
+      "identity": {
+        "schema_version": 1,
+        "sweep_id": "direct-mv-hevc-quality-upper-v1",
+        "plan_path": "docs/qualification/direct-mv-hevc-quality-sweep-upper-v1.json",
+        "plan_sha256": "6e634dcad20230c7a5ef758cd08c28c4f71d39529b6e8a26d3768025d3473a53"
+      },
+      "records_used_for_confirmation": false
+    },
+    "automated_full_length_anchor": {
+      "path_argument": "--anchor-receipt",
+      "sha256": "baeeb7f0a3af052e735548bf855d4b0d8e1f336f6ecdd0ec5a7d7b8230d55020",
+      "required_file_mode": "0444",
+      "identity": {
+        "schema_version": 1,
+        "qualification_id": "direct-mv-hevc-full-length-anchors-v1",
+        "plan_path": "docs/qualification/direct-mv-hevc-anchor-plan-v1.json",
+        "plan_sha256": "f971f1440a2efcb175edc80267915adf9273057e085a8a5af9fb5d777b81bc44"
+      },
+      "records_used_for_confirmation": false
+    }
+  },
+  "corpus": {
+    "path": "docs/qualification/direct-mv-hevc-corpus-v1.json",
+    "corpus_id": "direct-mv-hevc-prerelease-v1",
+    "sha256": "d6cfc14cb9f29e14639d40a96516fe14f47a64df850fe0928833b77b077e87b1",
+    "selected_case_ids": [
+      "production-dark",
+      "production-grain-rain",
+      "production-snow-detail",
+      "production-motion",
+      "production-crop",
+      "production-rate-override",
+      "synthetic-animation"
+    ]
+  },
+  "public_contract_bindings": {
+    "ladder_manifest": {
+      "path": "docs/qualification/video-quality-ladder-v1.json",
+      "sha256": "04620e59e5380c88d3d5152f78712402675f31db6f1253c1d93224af585111dc"
+    },
+    "video_quality_swift": {
+      "path": "macos/BluRayToVisionPro/Models/VideoQuality.swift",
+      "sha256": "6f204564261d859590086ca41e9a27ac9f69bc0feb225137cf0abc4a98082dfa"
+    }
+  },
+  "balanced": {
+    "candidate_id": "q070",
+    "quality": 0.7,
+    "source": "bd_to_avp.modules.video_quality_defaults.AUTOMATIC_DIRECT_QUALITY"
+  },
+  "runs_per_candidate": 3,
+  "candidates": [
+    {"step_id": "space_saver", "id": "q040", "quality": 0.4},
+    {"step_id": "compact", "id": "q050", "quality": 0.5},
+    {"step_id": "efficient", "id": "q060", "quality": 0.6},
+    {"step_id": "balanced", "id": "q070", "quality": 0.7},
+    {"step_id": "detailed", "id": "q075", "quality": 0.75},
+    {"step_id": "high_detail", "id": "q080", "quality": 0.8},
+    {"step_id": "maximum_detail", "id": "q085", "quality": 0.85}
+  ],
+  "technical_eligibility": {
+    "all_147_raw_records_required": true,
+    "maximum_repeat_ssim_spread": 0.0002,
+    "maximum_repeat_size_ratio_spread": 0.02,
+    "maximum_q085_to_q070_size_ratio": 4.9,
+    "eye_order_case_minimums_required": true
+  },
+  "adjacent_boundary_policy": {
+    "required_boundary_count": 6,
+    "strict_storage_increase_in_every_paired_repeat": true,
+    "minimum_case_median_storage_growth_ratio": 0.005,
+    "minimum_case_median_ssim_delta": -0.0002,
+    "minimum_corpus_median_ssim_improvement": 0.0001,
+    "real_case_ssim_threshold": 0.0001,
+    "minimum_real_case_clear_count": 2,
+    "sensitive_case_ids": ["production-grain-rain", "production-snow-detail"],
+    "minimum_sensitive_case_clear_count": 1,
+    "failed_boundary_action": "collapse",
+    "threshold_changes_forbidden": true,
+    "interpolation_forbidden": true,
+    "aliases_forbidden": true,
+    "post_hoc_candidates_forbidden": true
+  },
+  "selection_policy": {
+    "primary": "fixed_contiguous_subset_containing_q070",
+    "all_seven_required_for_positive_confirmation": true,
+    "candidate_step_assignments_fixed_before_run": true,
+    "missing_slots": "unsupported"
+  },
+  "artifact_policy": {
+    "fresh_output_sha256_recorded_for_every_run": true,
+    "fresh_outputs_ephemeral": true,
+    "retained_full_length_anchor_artifacts_bound_from_source_receipt": ["q040", "q070", "q085"]
+  },
+  "decision_policy": {
+    "public_mapping_changes_forbidden": true,
+    "ordinary_direct_objective_confirmation_only": true,
+    "metalfx_direct_performed": false,
+    "generated_fallback_parity_performed": false,
+    "package_parity_performed": false,
+    "perceptual_review_performed": false,
+    "long_form_runtime_performed": false,
+    "vision_pro_validation_performed": false,
+    "signed_beta_performed": false
+  }
+}
