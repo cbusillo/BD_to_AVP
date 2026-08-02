@@ -94,12 +94,13 @@ document it as an external dependency with preflight behavior.
   the production name and bundle identifier on a pinned GitHub-hosted macOS 26
   toolchain, then verifies the exact DMG again in a separate macOS 26 job.
 - Beta 4 (`v0.3.0-beta.4`, internal version `0.3.0b4`, build `149`) through
-  Beta 8 (`v0.3.0-beta.8`, internal version `0.3.0b8`, build `153`) are
-  published and immutable. Beta 9 (`v0.3.0-beta.9`, internal version
+  Beta 8 (`v0.3.0-beta.8`, internal version `0.3.0b8`, build `153`) and Beta 10
+  (`v0.3.0-beta.10`, internal version `0.3.0b10`, build `155`) are published and
+  immutable. Beta 9 (`v0.3.0-beta.9`, internal version
   `0.3.0b9`, build `154`) failed after production signing but before DMG
   creation and is permanently burned without publication. The next prepared
-  production-identity field build is Beta 10 (`v0.3.0-beta.10`, internal
-  version `0.3.0b10`, build `155`). It remains unpublished until exact-SHA
+  production-identity field build is Beta 11 (`v0.3.0-beta.11`, internal
+  version `0.3.0b11`, build `156`). It remains unpublished until exact-SHA
   signing and public verification complete. Beta 3 build `148` remains the
   manual-download seed and immutable appcast history below the later Beta
   releases.

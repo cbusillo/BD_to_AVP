@@ -4,24 +4,24 @@ The normative production identity, version mapping, update routes, history
 boundary, and publication policy are defined in
 [Production Release Routes](release-routes.md).
 
-The repository carries published, immutable Beta 3 through Beta 8 history at
-internal versions `0.3.0b3` through `0.3.0b8`, builds `148` through `153`.
-Failed, unpublished Beta 9 (`0.3.0b9`, build `154`) and the earlier
-`0.3.0rc1` build `147` attempt are permanently burned. The prepared replacement
-target is Beta 10 at `0.3.0b10`, build `155`. The
+The repository carries published, immutable Beta 3 through Beta 10 history at
+internal versions `0.3.0b3` through `0.3.0b10`, builds `148` through `155`
+except burned build `154`. Failed, unpublished Beta 9 (`0.3.0b9`, build `154`)
+and the earlier `0.3.0rc1` build `147` attempt are permanently burned. The next
+prepared target is Beta 11 at `0.3.0b11`, build `156`. The
 [Beta 8 cut packet](0.3.0-beta.8-cut-packet.md) records immutable publication
 history, [the Beta 9 cut packet](0.3.0-beta.9-cut-packet.md) records the failed
-unpublished attempt, and the reviewed
-[Beta 10 cut packet](0.3.0-beta.10-cut-packet.md) records replacement metadata
-only and does not assert that a Beta 10 public artifact exists.
+unpublished attempt, [the Beta 10 cut packet](0.3.0-beta.10-cut-packet.md)
+records immutable publication history, and the reviewed
+[Beta 11 cut packet](0.3.0-beta.11-cut-packet.md) records pending metadata only.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
 entrypoints, Beta 3 bootstrap contract, and one-time metadata recovery are
-implemented and regression-covered. Issue #392 and the July 29, 2026
-authorization to continue the beta release after the failed Beta 9 attempt
-authorize the reviewed Beta 10 metadata preparation and exact-SHA dispatch;
-run-bound signing approval remains a separate authorization boundary.
+implemented and regression-covered. Issues #392 and #422 own the shared Beta 11
+qualification. They authorize metadata preparation and review; exact-SHA
+dispatch remains a deliberate later decision, and run-bound signing approval
+remains a separate authorization boundary.
 
 ## Release Preparation
 
@@ -37,9 +37,9 @@ uv run python -m scripts.release prepare \
 The internal version, public version, tag/title, DMG name, release stage,
 Sparkle channel, and publication effects are derived independently by
 `scripts/release.py metadata` from the mapping in `release-routes.md`. For
-example, internal `0.3.0b10` maps to public `0.3.0-beta.10`, tag/title
-`v0.3.0-beta.10`, and DMG
-`3D-Blu-ray-to-Vision-Pro-0.3.0-beta.10.dmg`. The numeric
+example, internal `0.3.0b11` maps to public `0.3.0-beta.11`, tag/title
+`v0.3.0-beta.11`, and DMG
+`3D-Blu-ray-to-Vision-Pro-0.3.0-beta.11.dmg`. The numeric
 `CFBundleVersion` must increase for every production-identity build across all
 routes, including failed unpublished attempts. The command stages a refreshed
 `uv.lock`, validates the staged metadata, and updates `pyproject.toml`,
@@ -80,13 +80,15 @@ or from a stale main commit.
 
 ## Release Orchestration
 
-> **Beta 10 is authorized but not yet published.** Issue #392 and the July 29,
-> 2026 authorization to continue the beta release authorize guarded
-> `v0.3.0-beta.10` dispatch, and the repository contains no
-> freeze entry for that exact tag. Dispatch only from the exact protected `main`
-> commit containing the reviewed Beta 10 metadata, keep `main` fixed while the
-> workflow is nonterminal, and do not describe Beta 10 as public until signing,
-> notarization, appcast publication, and route verification complete.
+> **Beta 10 is published and immutable; Beta 11 is prepared but not yet
+> published.** Beta 10 was published on July 29, 2026 from protected-main SHA
+> `50b874a4ad681762f3aa94e02926b8a82f0aa221` by guarded Prerelease run
+> `30445073119`. It must not be rebuilt. Issues #392 and #422 authorize Beta 11
+> metadata preparation and review, not unattended dispatch. Dispatch Beta 11
+> only after its pre-registered matrix merges green and a temporary `main`
+> merge hold is active. Keep `main` fixed while the workflow is nonterminal,
+> and do not describe Beta 11 as public until signing, notarization, appcast
+> publication, and route verification complete.
 
 Dispatch `Stable` from `main` only for reviewed committed Stable metadata, or
 dispatch `Prerelease` only for reviewed committed Alpha, Beta, or RC metadata,

@@ -115,10 +115,11 @@ older Stable and RC installations cannot discover it, while an installed Beta
 3 exposes all four routes. Beta 4 (`0.3.0b4`, build `149`) through Beta 8
 (`0.3.0b8`, build `153`) are published and immutable. Beta 9 (`0.3.0b9`, build
 `154`) failed after production signing and is burned without a public appcast
-item. Beta 10 (`0.3.0b10`, build `155`) is the next prepared target for the
-guarded exact-SHA Prerelease workflow. Its future cumulative item must sit above
-Beta 8 through Beta 3, skip burned build `154`, and remain visible only to Beta
-and Alpha until a later newer Stable supersedes it.
+item. Beta 10 (`0.3.0b10`, build `155`) is published and immutable. Beta 11
+(`0.3.0b11`, build `156`) is the next prepared target for the guarded exact-SHA
+Prerelease workflow. Its future cumulative item must sit above Beta 10, Beta 8
+through Beta 3, skip burned build `154`, and remain visible only to Beta and
+Alpha until a later newer Stable supersedes it.
 
 ## Release Workflow
 
@@ -170,21 +171,27 @@ behavior and engine architecture rather than release branding.
 
 ## Remaining Field Evidence
 
-Beta 3 through Beta 8 publication is complete, signed installed-app diagnostics
+Beta 3 through Beta 10 publication is complete, signed installed-app diagnostics
 qualification is complete, and #382's signed AAC/package/physical Vision Pro
 matrix passed on the exact Beta 8 artifact. Beta 8 exposed a packaged GUI
 preview crash after its worker completed the preview route; PRs #404 and #405
 fixed the missing AVKit link and added an installed-player presentation smoke.
-Beta 10 exact-artifact qualification must prove that:
+The exact Beta 10 artifact passed that release smoke and real preview
+presentation, but its GUI cancellation run left destination-backed preview
+residue. PR #416 fixed that cleanup behavior after Beta 10. The route-aware
+quality system also landed after Beta 10 and requires protocol v12. Beta 11
+exact-artifact qualification must prove that:
 
-- Beta 8 updates forward to Beta 10 on Beta and Alpha without changing the saved
+- Beta 10 updates forward to Beta 11 on Beta and Alpha without changing the saved
   route;
 - Stable and RC continue to exclude every Beta item;
 - the downloaded notarized DMG passes signature, staple, Gatekeeper, startup,
   bundled-helper, and worker-capability checks; and
-- packaged GUI preview presentation, ordinary/direct-4K full conversion,
-  visible fallback, capacity, cleanup, and final output satisfy #392 without
-  treating unsigned evidence as release proof; and
+- the installed app exposes the frozen route-relative quality behavior through
+  protocol v12 without changing reversible Custom values; and
+- packaged GUI preview presentation, visible fallback, capacity, cleanup,
+  final output, overwrite, and cancellation satisfy the pre-registered shared
+  #392/#422 matrix without treating unsigned evidence as release proof; and
 - the release package smoke executes the real installed player guard before
   publication. Physical M5 Vision Pro AV1 evidence remains separately tracked
   by #409 and is not inferred from publication.

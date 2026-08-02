@@ -1,0 +1,244 @@
+{
+  "schema_version": 1,
+  "qualification_id": "beta11-shared-signed-qualification-v1",
+  "status": "preregistered_pending_exact_candidate",
+  "issues": ["#392", "#422"],
+  "field_closure_issue": "#386",
+  "candidate": {
+    "package_version": "0.3.0b11",
+    "public_version": "0.3.0-beta.11",
+    "build_version": "156",
+    "release_tag": "v0.3.0-beta.11",
+    "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.11.dmg",
+    "workflow": "Prerelease",
+    "worker_protocol_version": 12,
+    "route_table_id": "route-relative-video-quality-v2",
+    "mapping_version": 2,
+    "route_table_sha256": "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214",
+    "source_git_sha": null,
+    "dmg_sha256": null,
+    "signed_app_tree_sha256": null,
+    "release_run_id": null,
+    "release_id": null,
+    "appcast_sha256": null
+  },
+  "immutable_history": {
+    "beta10": {
+      "release_tag": "v0.3.0-beta.10",
+      "package_version": "0.3.0b10",
+      "build_version": "155",
+      "source_git_sha": "50b874a4ad681762f3aa94e02926b8a82f0aa221",
+      "release_run_id": 30445073119,
+      "published_at": "2026-07-29T14:39:20Z",
+      "dmg_sha256": "6fed922114e152be4f2e95ad7ee597465ae8d550539e7566ed05a64d8176d91c",
+      "signed_app_tree_sha256": "d89840da944b3a4519d68e84549ac7a69a9b2ffc5d2ec5717eabf6f0382151b0",
+      "must_not_rebuild": true
+    },
+    "burned_builds": [147, 154]
+  },
+  "registered_sources": {
+    "field_iso": {
+      "sha256": "2a178054943d20ecc71fe75d815b8d2b2cc30630f85a9564a981474e68cf5261",
+      "size_bytes": 20027338752,
+      "title_recorded": false,
+      "path_recorded": false
+    },
+    "representative_real_mvc_segment": {
+      "sha256": "da31e6ae9749897ca199f4a37a781b2be9a2d82076885efea4d0c156673bbcec",
+      "size_bytes": 354460821,
+      "duration_seconds": 65.649,
+      "title_recorded": false,
+      "path_recorded": false
+    }
+  },
+  "prior_evidence": [
+    {
+      "id": "route_table_v2",
+      "artifact_sha256": "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214",
+      "scope": "frozen route-specific mappings"
+    },
+    {
+      "id": "packaged_route_qualification",
+      "receipt_sha256": "4ef78445e872e581f36e895b96a0a7ad1f08e48de23705fafa26c22673f2ab94",
+      "scope": "32 packaged protocol-v12 worker executions and full/preview parity"
+    },
+    {
+      "id": "physical_quality_anchors",
+      "receipt_sha256": "5741c7d24c3effcb1155810a22d18d7c3dba20c926a9d646cbeca3b649fcb059",
+      "scope": "ordinary direct and MetalFX low/Balanced/high Vision Pro anchors"
+    },
+    {
+      "id": "full_length_quality_reconciliation",
+      "receipt_sha256": "51de5ed49e08c84c23641e7424085490306ed17ebcb4a2ed01b4bd124076021d",
+      "scope": "registered-source Space Saver/Balanced/Maximum Detail runtime, output, and wearer evidence"
+    }
+  ],
+  "execution_policy": {
+    "main_must_remain_fixed_while_nonterminal": true,
+    "watch_command": "uv run python -m scripts.github_release_run watch",
+    "generic_run_waiter_is_sufficient": false,
+    "approval_required_exit_code": 20,
+    "macos_signing_requires_fresh_explicit_run_bound_authorization": true,
+    "approval_command": "uv run python -m scripts.github_release_run approve",
+    "release_stage": "beta",
+    "rc_claim_forbidden": true,
+    "field_qualification_timing": "post_publication_exact_artifact",
+    "failed_field_qualification_response": "leave_the_published_beta_immutable_and_advance_to_a_new_version_and_build"
+  },
+  "matrix": [
+    {
+      "id": "release-workflow-identity",
+      "phase": "workflow",
+      "source": "workflow-generated fixtures",
+      "requirements": [
+        "exact protected-main SHA remains current through terminal completion",
+        "signed and notarized app and DMG pass staple, Gatekeeper, startup, bundled-tool, and protocol-v12 worker checks",
+        "release package smoke passes fresh-profile preview presentation and worker cancellation cleanup",
+        "GitHub release, DMG, SHA256SUMS, appcast item, and Pages snapshot bind the same version, build, tag, and source SHA"
+      ]
+    },
+    {
+      "id": "updater-route-beta10-to-beta11",
+      "phase": "installed_candidate",
+      "source": "immutable Beta 10 installation",
+      "requirements": [
+        "Beta and Alpha routes offer Beta 11 build 156",
+        "Stable and RC routes exclude Beta 11",
+        "the saved update route remains unchanged after installation",
+        "burned build 154 is never offered"
+      ]
+    },
+    {
+      "id": "fresh-profile-quality-ui",
+      "phase": "installed_candidate",
+      "source": "fresh application profile",
+      "requirements": [
+        "Balanced is the default guided intent",
+        "ordinary direct and direct MetalFX expose seven checked steps plus Custom",
+        "generated MV-HEVC exposes only Balanced 20 Mbps per eye plus merge 75 and Custom",
+        "file upscale exposes Balanced 75 and Detailed 100",
+        "AV1 remains exact-CRF Custom",
+        "changing an expert value selects Custom and guided-to-Custom round trips preserve exact values"
+      ]
+    },
+    {
+      "id": "signed-packaged-route-parity",
+      "phase": "installed_candidate",
+      "source": "representative_real_mvc_segment",
+      "requirements": [
+        "run the existing packaged route qualification harness against the app copied from the exact signed DMG",
+        "all 32 protocol-v12 worker executions pass for seven ordinary-direct steps, seven direct MetalFX steps, generated Balanced, and file-upscale Balanced and Detailed",
+        "full and preview requests resolve identical concrete values and unsupported guided positions fail closed",
+        "the immutable receipt binds the signed app tree, route table, harness files, source hash, and every output hash"
+      ]
+    },
+    {
+      "id": "gui-preview-low-local-ample-destination",
+      "phase": "installed_candidate",
+      "source": "field_iso",
+      "requirements": [
+        "local free space is below source size while the selected destination workspace is sufficient",
+        "GUI preview completes and presents playable media",
+        "the output passes Apple media validation",
+        "the hidden preview workspace is removed after success"
+      ]
+    },
+    {
+      "id": "gui-preview-cancel-cleanup",
+      "phase": "installed_candidate",
+      "source": "field_iso",
+      "requirements": [
+        "cancel after the destination-backed preview workspace exists",
+        "the worker reports one cancelled terminal event and exits",
+        "the app remains responsive",
+        "the hidden preview workspace is removed without manual operator cleanup",
+        "an immediate retry succeeds"
+      ]
+    },
+    {
+      "id": "gui-preview-failure-cleanup",
+      "phase": "installed_candidate",
+      "source": "field_iso",
+      "requirements": [
+        "a controlled failure occurs after destination workspace creation",
+        "the GUI presents the typed public-safe failure",
+        "the hidden preview workspace is removed without manual operator cleanup",
+        "an immediate retry succeeds"
+      ]
+    },
+    {
+      "id": "capacity-known-low",
+      "phase": "installed_candidate",
+      "source": "field_iso",
+      "requirements": [
+        "a trustworthy insufficient selected-destination reading blocks before worker launch",
+        "the GUI and public diagnostic identify known insufficient capacity without exposing paths or titles"
+      ]
+    },
+    {
+      "id": "capacity-unknown-and-conflicting",
+      "phase": "installed_candidate",
+      "source": "field_iso",
+      "requirements": [
+        "unknown and conflicting selected-destination readings warn and continue",
+        "the GUI names the selected destination volume generically",
+        "the public diagnostic records state, sufficiency, provenance, rounded bounds, and unknown reason without private paths"
+      ]
+    },
+    {
+      "id": "network-generated-final-output",
+      "phase": "installed_candidate",
+      "source": "field_iso",
+      "requirements": [
+        "generated Balanced completes to a mounted network destination with upscale disabled and enabled",
+        "outputs pass dimensions, duration, MV-HEVC and spatial-box checks, beginning/middle/end seeks, Apple media validation, and audio/subtitle preservation"
+      ]
+    },
+    {
+      "id": "overwrite-and-conversion-cancel",
+      "phase": "installed_candidate",
+      "source": "field_iso",
+      "requirements": [
+        "an existing final output fails closed without overwrite",
+        "explicit overwrite replaces only the intended output",
+        "cancellation leaves no partial final output or owned temporary workspace",
+        "an immediate retry succeeds"
+      ]
+    },
+    {
+      "id": "public-diagnostics-and-field-closure",
+      "phase": "installed_candidate",
+      "source": "all field cases",
+      "requirements": [
+        "diagnostics retain typed route, capacity, cleanup, and failure evidence while excluding source paths, titles, device identifiers, and credentials",
+        "issue #386 receives a concise public-safe resolution stating that the downstream artifact failure no longer recurs and that the signed preview cleanup fix passed"
+      ]
+    }
+  ],
+  "not_repeated": [
+    "objective route calibration",
+    "physical low/Balanced/high quality anchors",
+    "registered-source full-length runtime and wearer comparison",
+    "completed AAC layout and physical surround/lip-sync matrix",
+    "physical M5 Vision Pro AV1 qualification tracked by #409"
+  ],
+  "acceptance": {
+    "required_case_ids": [
+      "release-workflow-identity",
+      "updater-route-beta10-to-beta11",
+      "fresh-profile-quality-ui",
+      "signed-packaged-route-parity",
+      "gui-preview-low-local-ample-destination",
+      "gui-preview-cancel-cleanup",
+      "gui-preview-failure-cleanup",
+      "capacity-known-low",
+      "capacity-unknown-and-conflicting",
+      "network-generated-final-output",
+      "overwrite-and-conversion-cancel",
+      "public-diagnostics-and-field-closure"
+    ],
+    "second_full_length_title_required": false,
+    "signed_beta_complete": false,
+    "passed": false
+  }
+}
