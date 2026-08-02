@@ -156,35 +156,90 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         self.assertEqual(apps["bd-to-avp"]["min_os_version"], "14.0")
 
-    def test_repository_is_prepared_and_authorized_for_beta10(self) -> None:
+    def test_repository_is_prepared_for_beta11(self) -> None:
         metadata = release.load_release_metadata()
 
-        self.assertEqual(metadata.package_version, "0.3.0b10")
-        self.assertEqual(metadata.public_version, "0.3.0-beta.10")
-        self.assertEqual(metadata.build_version, "155")
-        self.assertEqual(metadata.release_tag, "v0.3.0-beta.10")
-        self.assertEqual(metadata.release_name, "v0.3.0-beta.10")
-        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.10.dmg")
+        self.assertEqual(metadata.package_version, "0.3.0b11")
+        self.assertEqual(metadata.public_version, "0.3.0-beta.11")
+        self.assertEqual(metadata.build_version, "156")
+        self.assertEqual(metadata.release_tag, "v0.3.0-beta.11")
+        self.assertEqual(metadata.release_name, "v0.3.0-beta.11")
+        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.11.dmg")
         self.assertEqual(metadata.channel, "beta")
         self.assertTrue(metadata.prerelease)
         self.assertFalse(metadata.make_latest)
         self.assertFalse(metadata.publish_pypi)
 
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
-        self.assertNotIn("v0.3.0-beta.10", freeze_policy["frozen_release_tags"])
+        self.assertNotIn("v0.3.0-beta.11", freeze_policy["frozen_release_tags"])
 
-        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.10-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.0b10`", cut_packet)
-        self.assertIn("Build `155`", cut_packet)
-        for pull_request in (404, 405, 406, 410, 411, 413):
+        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.11-cut-packet.md").read_text(encoding="utf-8")
+        self.assertIn("`0.3.0b11`", cut_packet)
+        self.assertIn("Build `156`", cut_packet)
+        for pull_request in (416, 424, 448, 449):
             self.assertIn(f"#{pull_request}", cut_packet)
         self.assertIn("Privacy rules version `4`", cut_packet)
-        self.assertIn("Issue #392", cut_packet)
-        self.assertIn("July 29, 2026 authorization to continue", cut_packet)
-        self.assertIn("does not pre-authorize", cut_packet)
-        self.assertIn("that approval", cut_packet)
-        self.assertIn("last exact public artifact is immutable Beta 8", cut_packet)
-        self.assertIn("The exact Beta 10 artifact remains pending", cut_packet)
+        self.assertIn("#392", cut_packet)
+        self.assertIn("#422", cut_packet)
+        self.assertIn("Prepared metadata; publication pending", cut_packet)
+        self.assertIn("last exact public artifact is immutable Beta 10", cut_packet)
+        self.assertIn("fresh explicit run-bound authorization", cut_packet)
+
+        qualification = json.loads(
+            (REPO_ROOT / "docs" / "qualification" / "beta11-shared-signed-qualification-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(qualification["candidate"]["package_version"], "0.3.0b11")
+        self.assertEqual(qualification["candidate"]["build_version"], "156")
+        self.assertEqual(qualification["candidate"]["worker_protocol_version"], 12)
+        self.assertEqual(qualification["candidate"]["mapping_version"], 2)
+        self.assertEqual(
+            qualification["candidate"]["route_table_sha256"],
+            "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214",
+        )
+        expected_case_ids = {
+            "release-workflow-identity",
+            "updater-route-beta10-to-beta11",
+            "fresh-profile-quality-ui",
+            "signed-packaged-route-parity",
+            "gui-preview-low-local-ample-destination",
+            "gui-preview-cancel-cleanup",
+            "gui-preview-failure-cleanup",
+            "capacity-known-low",
+            "capacity-unknown-and-conflicting",
+            "network-generated-final-output",
+            "overwrite-and-conversion-cancel",
+            "public-diagnostics-and-field-closure",
+        }
+        self.assertEqual({case["id"] for case in qualification["matrix"]}, expected_case_ids)
+        self.assertEqual(set(qualification["acceptance"]["required_case_ids"]), expected_case_ids)
+        for field in (
+            "source_git_sha",
+            "dmg_sha256",
+            "signed_app_tree_sha256",
+            "release_run_id",
+            "release_id",
+            "appcast_sha256",
+        ):
+            self.assertIsNone(qualification["candidate"][field])
+        self.assertTrue(
+            qualification["execution_policy"]["macos_signing_requires_fresh_explicit_run_bound_authorization"]
+        )
+        self.assertEqual(qualification["execution_policy"]["approval_required_exit_code"], 20)
+        self.assertFalse(qualification["acceptance"]["signed_beta_complete"])
+        self.assertFalse(qualification["acceptance"]["passed"])
+
+    def test_beta10_cut_packet_records_immutable_published_identity(self) -> None:
+        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.10-cut-packet.md").read_text(encoding="utf-8")
+
+        self.assertIn("Published and immutable", cut_packet)
+        self.assertIn("`30445073119`", cut_packet)
+        self.assertIn("`50b874a4ad681762f3aa94e02926b8a82f0aa221`", cut_packet)
+        self.assertIn("`6fed922114e152be4f2e95ad7ee597465ae8d550539e7566ed05a64d8176d91c`", cut_packet)
+        self.assertIn("`d89840da944b3a4519d68e84549ac7a69a9b2ffc5d2ec5717eabf6f0382151b0`", cut_packet)
+        self.assertIn("must not be rebuilt", cut_packet)
+        self.assertNotIn("The exact Beta 10 artifact remains pending", cut_packet)
 
     def test_beta9_cut_packet_records_failed_burned_identity(self) -> None:
         cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.9-cut-packet.md").read_text(encoding="utf-8")

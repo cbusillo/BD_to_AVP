@@ -69,8 +69,8 @@ Each new appcast item embeds the digest-bound draft release body as Markdown, so
 Sparkle uses its adaptive native text view without loading GitHub page chrome or
 making a second release-note request. A full-release link remains available for
 downloads and extended context, and historical external-link items remain valid.
-The live feed now carries cumulative production history through Beta 8 build
-`153`. Failed Beta 9 build `154` never entered the feed; prepared Beta 10
+The live feed now carries cumulative production history through Beta 10 build
+`155`. Failed Beta 9 build `154` never entered the feed; prepared Beta 11
 metadata does not alter it before guarded publication.
 See [release-process.md](release-process.md) for the operator sequence.
 
@@ -267,10 +267,10 @@ select Beta or Alpha for future prereleases. Retired `v0.3.0-beta.1` and
 `v0.3.0-beta.2` Preview identities remain separate, immutable, and unable to
 Sparkle-upgrade into Beta 3.
 
-Published `v0.3.0-beta.8` (`0.3.0b8`, build `153`) is the immutable head of the
-current cumulative feed above Beta 7 through Beta 3. Failed Beta 9 build `154`
-is burned and omitted from public history. The next prepared item is
-`v0.3.0-beta.10` (`0.3.0b10`, build `155`). Publication must append Beta 10
+Published `v0.3.0-beta.10` (`0.3.0b10`, build `155`) is the immutable head of
+the current cumulative feed above Beta 8 through Beta 3. Failed Beta 9 build
+`154` is burned and omitted from public history. The next prepared item is
+`v0.3.0-beta.11` (`0.3.0b11`, build `156`). Publication must append Beta 11
 above the existing Betas, remain excluded from Stable and RC, and be eligible
 to Beta and Alpha. The exact-SHA Prerelease workflow, signing approval,
 notarization, and public verification remain separate fail-closed boundaries.

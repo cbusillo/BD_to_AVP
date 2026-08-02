@@ -96,7 +96,7 @@ Expected result:
   explicitly, captures app stdout/stderr, and reports process plus log-tail
   evidence if the bounded receipt wait expires.
 - `Info.plist` supplies the package version, and the packaged worker reports the
-  same version through a protocol-v11 inspection request.
+  same version through a protocol-v12 inspection request.
 - The packaged Apple Vision OCR smoke runs through the bundled worker entrypoint
   with a sanitized `PATH`.
 - The native host cancels a fixture worker that owns a stubborn child in a
@@ -288,29 +288,33 @@ Beta without pretending the current Stable or RC client can discover it.
    apps remain separate and cannot Sparkle-update into the production app. Do
    not reopen them to edit the shared profile library after Beta 3 installation.
 
-### Beta 10 Authorization Smoke
+### Beta 11 Preparation Smoke
 
-Run these checks after the Beta 10 metadata preparation lands and before workflow
-dispatch. They prove the committed target and authorization boundary, not a
-signed or published app.
+Run these checks after the Beta 11 metadata preparation lands and before
+workflow dispatch. They prove the committed target and authorization boundary,
+not a signed or published app.
 
 1. Run `uv run python -m scripts.release validate` and confirm internal
-   `0.3.0b10`, public `0.3.0-beta.10`, build `155`, Beta channel, prerelease,
+   `0.3.0b11`, public `0.3.0-beta.11`, build `156`, Beta channel, prerelease,
    non-Latest, and no PyPI publication.
 2. Run the Prerelease metadata policy with the committed target and confirm the
-   Beta 10 freeze is absent while all route, identity, and existing-release
+   Beta 11 freeze is absent while all route, identity, and existing-release
    guards remain active before packaging or signing.
-3. Validate a cumulative appcast fixture ordered Beta 10 build `155`, Beta 8
-   build `153`, Beta 7 build `152`, Beta 6 build `151`, Beta 5 build `150`, Beta
-   4 build `149`, Beta 3 build `148`, then Stable build `146`, RC5 build `145`,
-   and RC4 build `144`; burned Beta 9 build `154` must be absent, Stable and RC
-   must exclude every Beta item, and Beta and Alpha must admit them.
-4. Confirm the live repository has no Beta 9 or Beta 10 tag, release, draft, or
-   asset and the public appcast still ends at Beta 8 build `153`.
+3. Validate a cumulative appcast fixture ordered Beta 11 build `156`, Beta 10
+   build `155`, Beta 8 build `153`, Beta 7 build `152`, Beta 6 build `151`, Beta
+   5 build `150`, Beta 4 build `149`, Beta 3 build `148`, then Stable build
+   `146`, RC5 build `145`, and RC4 build `144`; burned Beta 9 build `154` must
+   be absent, Stable and RC must exclude every Beta item, and Beta and Alpha
+   must admit them.
+4. Confirm immutable Beta 10 targets protected-main SHA
+   `50b874a4ad681762f3aa94e02926b8a82f0aa221`, then confirm the live repository
+   has no Beta 11 tag, release, draft, asset, or appcast item.
 5. Continue only through the exact-SHA Prerelease workflow. Signed-app,
-   update-route, installed-player presentation, capacity, cleanup, and final-
-   output qualification remain incomplete until the guarded workflow and exact-
-   artifact checks finish. Physical M5 Vision Pro AV1 evidence stays in #409.
+   update-route, installed quality UI, capacity, cleanup, and final-output
+   qualification remain incomplete until the guarded workflow and exact-
+   artifact checks in
+   `docs/qualification/beta11-shared-signed-qualification-v1.json` finish.
+   Physical M5 Vision Pro AV1 evidence stays in #409.
 
 ## Follow-Up Routing
 

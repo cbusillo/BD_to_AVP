@@ -61,11 +61,12 @@ and RC exclude it. Existing Stable or RC selections remain in place until you
 explicitly choose another route. Choosing Stable later does not downgrade the
 installed Beta 3 app—it waits for a newer eligible Stable build.
 
-Beta 4 (`0.3.0b4`, build `149`) through Beta 8 (`0.3.0b8`, build `153`) are
-published and immutable. Beta 9 (`0.3.0b9`, build `154`) failed after production
-signing but before DMG creation and is permanently burned without publication.
-Beta 10 metadata (`0.3.0b10`, build `155`) is prepared for the guarded
-Prerelease workflow. There is no Beta 10 tag, DMG, release, or updater item
+Beta 4 (`0.3.0b4`, build `149`) through Beta 8 (`0.3.0b8`, build `153`) and Beta
+10 (`0.3.0b10`, build `155`) are published and immutable. Beta 9 (`0.3.0b9`,
+build `154`) failed after production signing but before DMG creation and is
+permanently burned without publication.
+Beta 11 metadata (`0.3.0b11`, build `156`) is prepared for the guarded
+Prerelease workflow. There is no Beta 11 tag, DMG, release, or updater item
 until exact-SHA signing, publication, and public verification complete.
 
 See [Distribution Policy](docs/distribution-policy.md) for the current GUI
