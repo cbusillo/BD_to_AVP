@@ -18,6 +18,7 @@ from bd_to_avp.modules.languages import (
 )
 from bd_to_avp.observability import ObservabilityContext
 from bd_to_avp.presentation import cli_message
+from bd_to_avp.process_runner import ProcessCancelled
 from bd_to_avp.runtime import RunContext
 
 
@@ -114,7 +115,25 @@ def extract_subtitle_to_srt(
                 report_subtitle_warning(message, warning_handler)
                 return None
 
-            pgsrip.rip(mkv_file, sub_options)
+            try:
+                ripped_track_count = pgsrip.rip(mkv_file, sub_options)
+            except ProcessCancelled:
+                raise
+            except Exception as error:
+                cleanup_existing_subtitle_files(output_path)
+                report_subtitle_warning(
+                    f"PGS subtitle extraction failed; continuing without subtitles. ({error})",
+                    warning_handler,
+                )
+                return None
+
+            if ripped_track_count == 0:
+                cleanup_existing_subtitle_files(output_path)
+                report_subtitle_warning(
+                    "PGS subtitle extraction did not produce usable subtitle files; continuing without subtitles.",
+                    warning_handler,
+                )
+                return None
 
             for srt_file in output_path.glob("*.srt"):
                 if srt_file.stat().st_size == 0:
