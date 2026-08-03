@@ -11,6 +11,8 @@ def normalize_name(name: str) -> str:
 
 def file_exists_normalized(target_path: Path) -> bool:
     target_dir = target_path.parent
+    if not target_dir.is_dir():
+        return False
     normalized_target_name = normalize_name(target_path.name)
     for item in target_dir.iterdir():
         if normalize_name(item.name) == normalized_target_name:
@@ -61,6 +63,10 @@ def output_folder_contains_source(output_path: Path) -> bool:
     )
 
 
+def is_initial_conversion_stage() -> bool:
+    return config.start_stage is next(iter(Stage))
+
+
 def remove_output_folder_if_safe(output_path: Path, *, raise_if_unsafe: bool = False) -> bool:
     if output_folder_contains_source(output_path):
         message = f"Refusing to clear folder containing source media: {config.source_path}"
@@ -74,7 +80,7 @@ def remove_output_folder_if_safe(output_path: Path, *, raise_if_unsafe: bool = F
 
 def prepare_output_folder_for_source(disc_name: str) -> Path:
     output_path = config.output_root_path / disc_name
-    if config.start_stage == next(iter(Stage)):
+    if is_initial_conversion_stage():
         remove_output_folder_if_safe(output_path, raise_if_unsafe=True)
     output_path.mkdir(parents=True, exist_ok=True)
     return output_path
