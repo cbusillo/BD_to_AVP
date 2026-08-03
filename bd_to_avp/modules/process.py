@@ -105,7 +105,7 @@ def cleanup_cancelled_conversion_workspace(workspace: CancelledConversionWorkspa
 
 def cleanup_cancelled_conversion(function: Callable[P, Path]) -> Callable[P, Path]:
     @wraps(function)
-    def wrapped(*args: object, **kwargs: object) -> Path:
+    def wrapped(*args: P.args, **kwargs: P.kwargs) -> Path:
         token = _cancelled_conversion_workspace.set(None)
         try:
             return function(*args, **kwargs)
