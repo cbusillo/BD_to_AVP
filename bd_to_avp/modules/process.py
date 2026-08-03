@@ -1,8 +1,11 @@
 import os
 import subprocess
+from contextvars import ContextVar
+from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from threading import Event
-from typing import Protocol
+from typing import Callable, ParamSpec, Protocol
 
 from wakepy.modes import keep
 
@@ -13,6 +16,7 @@ from bd_to_avp.modules.container import create_muxed_file, create_mvc_and_audio
 from bd_to_avp.modules.disc import create_mkv_file, get_disc_and_mvc_video_info, MKVCreationError
 from bd_to_avp.modules.file import (
     file_exists_normalized,
+    is_initial_conversion_stage,
     move_file_to_output_root_folder,
     path_is_relative_to,
     prepare_output_folder_for_source,
@@ -44,6 +48,21 @@ class ProcessingCancelled(Exception):
     pass
 
 
+@dataclass(frozen=True)
+class CancelledConversionWorkspace:
+    output_folder: Path
+    temporary_folder: Path
+    output_folder_owned: bool
+    temporary_folder_owned: bool
+
+
+_cancelled_conversion_workspace: ContextVar[CancelledConversionWorkspace | None] = ContextVar(
+    "cancelled_conversion_workspace",
+    default=None,
+)
+P = ParamSpec("P")
+
+
 class BatchProcessingError(Exception):
     def __init__(self, source_path: Path, error: Exception, batch_sources: tuple[Path, ...]) -> None:
         super().__init__(str(error))
@@ -67,6 +86,38 @@ class ActivityReporter(Protocol):
 
     def warning(self, message: str, *, stage: str | None = None, **fields: object) -> None:
         raise NotImplementedError
+
+
+def cleanup_cancelled_conversion_workspace(workspace: CancelledConversionWorkspace) -> None:
+    if config.keep_files:
+        return
+    for path, owned in (
+        (workspace.output_folder, workspace.output_folder_owned),
+        (workspace.temporary_folder, workspace.temporary_folder_owned),
+    ):
+        if not owned:
+            continue
+        try:
+            remove_output_folder_if_safe(path)
+        except OSError:
+            continue
+
+
+def cleanup_cancelled_conversion(function: Callable[P, Path]) -> Callable[P, Path]:
+    @wraps(function)
+    def wrapped(*args: P.args, **kwargs: P.kwargs) -> Path:
+        token = _cancelled_conversion_workspace.set(None)
+        try:
+            return function(*args, **kwargs)
+        except (ProcessingCancelled, ProcessCancelled):
+            workspace = _cancelled_conversion_workspace.get()
+            if workspace is not None:
+                cleanup_cancelled_conversion_workspace(workspace)
+            raise
+        finally:
+            _cancelled_conversion_workspace.reset(token)
+
+    return wrapped
 
 
 def raise_if_cancelled(cancellation_event: Event | None) -> None:
@@ -241,6 +292,7 @@ def process(
     return final_output_path
 
 
+@cleanup_cancelled_conversion
 def process_each(
     cancellation_event: Event | None = None,
     activity: ActivityReporter | None = None,
@@ -291,11 +343,22 @@ def process_each(
     raise_if_cancelled(cancellation_event)
     if activity:
         activity.log("Source metadata loaded", stage="inspect_source", name=disc_info.name)
-    output_folder = prepare_output_folder_for_source(disc_info.name)
+    completed_path = config.output_root_path / f"{disc_info.name}{config.final_file_tag}.mov"
+    if not config.overwrite and file_exists_normalized(completed_path):
+        raise FileExistsError(f"Output file already exists for {disc_info.name}. Use --overwrite to replace.")
 
     tmp_folder = config.output_root_path / "temp_files"
-
+    temporary_folder_owned = not tmp_folder.exists()
+    output_folder = prepare_output_folder_for_source(disc_info.name)
     tmp_folder.mkdir(parents=True, exist_ok=True)
+    _cancelled_conversion_workspace.set(
+        CancelledConversionWorkspace(
+            output_folder=output_folder,
+            temporary_folder=tmp_folder,
+            output_folder_owned=is_initial_conversion_stage(),
+            temporary_folder_owned=temporary_folder_owned,
+        )
+    )
     os.environ["TMPDIR"] = tmp_folder.as_posix()
     if not tmp_folder.exists():
         raise RuntimeError(f"Failed to create temporary folder: {tmp_folder}")
@@ -303,10 +366,6 @@ def process_each(
     cli_message(f"Using temporary folder: {os.environ['TMPDIR']}", run_context=run_context)
     if activity:
         activity.log("Temporary workspace ready", stage="inspect_source", path=os.environ["TMPDIR"])
-
-    completed_path = config.output_root_path / f"{disc_info.name}{config.final_file_tag}.mov"
-    if not config.overwrite and file_exists_normalized(completed_path):
-        raise FileExistsError(f"Output file already exists for {disc_info.name}. Use --overwrite to replace.")
 
     raise_if_cancelled(cancellation_event)
     if activity and config.start_stage.value <= Stage.CREATE_MKV.value:

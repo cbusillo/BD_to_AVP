@@ -17,6 +17,7 @@ from bd_to_avp.modules.video_route import (
 )
 from bd_to_avp.modules.video_quality_defaults import AUTOMATIC_DIRECT_UPSCALE_QUALITY
 from bd_to_avp.modules.file import (
+    file_exists_normalized,
     move_file_to_output_root_folder,
     prepare_output_folder_for_source,
     remove_output_folder_if_safe,
@@ -27,6 +28,152 @@ from bd_to_avp.worker.protocol import VideoRouteIntent
 
 
 class ProcessPreflightTests(unittest.TestCase):
+    def test_file_exists_normalized_returns_false_for_missing_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.assertFalse(file_exists_normalized(Path(temp_dir) / "missing" / "Movie_AVP.mov"))
+
+    def test_existing_output_aborts_before_workspace_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_root.mkdir()
+            output_folder = output_root / "Movie"
+            output_folder.mkdir()
+            sentinel = output_folder / "resume.mkv"
+            sentinel.write_bytes(b"resume")
+            (output_root / "Movie_AVP.mov").write_bytes(b"final")
+            disc_info = Mock(name="disc_info")
+            disc_info.name = "Movie"
+
+            with (
+                patch.object(process.config, "output_root_path", output_root),
+                patch.object(process.config, "source_path", Path(temp_dir) / "source.iso"),
+                patch.object(process.config, "start_stage", Stage.CREATE_MKV),
+                patch.object(process.config, "overwrite", False),
+                patch.object(process.preflight, "verify_runtime_ready"),
+                patch.object(process, "get_disc_and_mvc_video_info", return_value=disc_info),
+                self.assertRaisesRegex(FileExistsError, "already exists"),
+            ):
+                process.process_each()
+
+            self.assertEqual(sentinel.read_bytes(), b"resume")
+            self.assertFalse((output_root / "temp_files").exists())
+
+    def test_cancelled_conversion_cleans_owned_workspaces(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_folder = output_root / "Movie"
+            temporary_folder = output_root / "temp_files"
+            output_folder.mkdir(parents=True)
+            temporary_folder.mkdir()
+            (output_folder / "intermediate.mov").write_bytes(b"intermediate")
+            (temporary_folder / "scratch.tmp").write_bytes(b"scratch")
+            workspace = process.CancelledConversionWorkspace(
+                output_folder=output_folder,
+                temporary_folder=temporary_folder,
+                output_folder_owned=True,
+                temporary_folder_owned=True,
+            )
+
+            @process.cleanup_cancelled_conversion
+            def cancelled_conversion() -> Path:
+                process._cancelled_conversion_workspace.set(workspace)
+                raise process.ProcessingCancelled("cancelled")
+
+            with (
+                patch.object(process.config, "keep_files", False),
+                patch.object(process.config, "source_path", Path(temp_dir) / "source.iso"),
+                self.assertRaises(process.ProcessingCancelled),
+            ):
+                cancelled_conversion()
+
+            self.assertFalse(output_folder.exists())
+            self.assertFalse(temporary_folder.exists())
+
+    def test_cancelled_conversion_preserves_unowned_workspaces(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_folder = output_root / "Movie"
+            temporary_folder = output_root / "temp_files"
+            output_folder.mkdir(parents=True)
+            temporary_folder.mkdir()
+            workspace = process.CancelledConversionWorkspace(
+                output_folder=output_folder,
+                temporary_folder=temporary_folder,
+                output_folder_owned=False,
+                temporary_folder_owned=False,
+            )
+
+            @process.cleanup_cancelled_conversion
+            def cancelled_conversion() -> Path:
+                process._cancelled_conversion_workspace.set(workspace)
+                raise process.ProcessingCancelled("cancelled")
+
+            with (
+                patch.object(process.config, "keep_files", False),
+                self.assertRaises(process.ProcessingCancelled),
+            ):
+                cancelled_conversion()
+
+            self.assertTrue(output_folder.exists())
+            self.assertTrue(temporary_folder.exists())
+
+    def test_resumed_cancellation_preserves_existing_workspaces(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_folder = output_root / "Movie"
+            temporary_folder = output_root / "temp_files"
+            output_folder.mkdir(parents=True)
+            temporary_folder.mkdir()
+            output_sentinel = output_folder / "resume.mkv"
+            temporary_sentinel = temporary_folder / "existing.tmp"
+            output_sentinel.write_bytes(b"resume")
+            temporary_sentinel.write_bytes(b"existing")
+            disc_info = Mock(name="disc_info")
+            disc_info.name = "Movie"
+
+            with (
+                patch.object(process.config, "output_root_path", output_root),
+                patch.object(process.config, "source_path", Path(temp_dir) / "source.iso"),
+                patch.object(process.config, "start_stage", Stage.EXTRACT_MVC_AND_AUDIO),
+                patch.object(process.config, "overwrite", False),
+                patch.object(process.preflight, "verify_runtime_ready"),
+                patch.object(process, "get_disc_and_mvc_video_info", return_value=disc_info),
+                patch.object(process, "create_mkv_file", side_effect=process.ProcessCancelled("cancelled")),
+                self.assertRaises(process.ProcessCancelled),
+            ):
+                process.process_each()
+
+            self.assertEqual(output_sentinel.read_bytes(), b"resume")
+            self.assertEqual(temporary_sentinel.read_bytes(), b"existing")
+
+    def test_cancelled_conversion_preserves_workspaces_when_keep_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_folder = output_root / "Movie"
+            temporary_folder = output_root / "temp_files"
+            output_folder.mkdir(parents=True)
+            temporary_folder.mkdir()
+            workspace = process.CancelledConversionWorkspace(
+                output_folder=output_folder,
+                temporary_folder=temporary_folder,
+                output_folder_owned=True,
+                temporary_folder_owned=True,
+            )
+
+            @process.cleanup_cancelled_conversion
+            def cancelled_conversion() -> Path:
+                process._cancelled_conversion_workspace.set(workspace)
+                raise process.ProcessingCancelled("cancelled")
+
+            with (
+                patch.object(process.config, "keep_files", True),
+                self.assertRaises(process.ProcessingCancelled),
+            ):
+                cancelled_conversion()
+
+            self.assertTrue(output_folder.exists())
+            self.assertTrue(temporary_folder.exists())
+
     def test_direct_route_uses_stage_four_and_omits_stage_five(self) -> None:
         route = ResolvedVideoRoute(
             intent=VideoRouteIntent.AUTOMATIC,
