@@ -6,12 +6,12 @@ closed when it cannot satisfy this contract.
 
 The application preference model, release metadata/history parser, appcast
 tooling, reusable release engine, and guarded operator entrypoints implement
-this four-route contract. Beta 3 through Beta 10 are published and immutable at
-builds `148` through `155`, excluding permanently burned builds `147` and
-`154`. Failed Beta 9 (`0.3.0b9`, build `154`) was never published. The next
-prepared target is Beta 11 at `0.3.0b11` build `156`. Issues #392 and #422 own
-the shared exact-signed-candidate qualification; run-bound signing approval
-remains a separate authorization boundary.
+this four-route contract. Beta 3 through Beta 8, Beta 10, and Beta 11 are
+published and immutable at builds `148` through `156`, excluding permanently
+burned builds `147` and `154`. Failed Beta 9 (`0.3.0b9`, build `154`) was never
+published. The next prepared target is Beta 12 at `0.3.0b12` build `157`.
+Issues #392 and #422 own the shared exact-signed-candidate qualification;
+run-bound signing approval remains a separate authorization boundary.
 
 ## Production Identity
 
@@ -241,25 +241,25 @@ burned Beta 9 build `154` absent. Stable and RC exclude all Beta items; Beta and
 Alpha admit them. Historical metadata and release evidence are in
 [the Beta 10 cut packet](0.3.0-beta.10-cut-packet.md).
 
-## Beta 11 Prepared Target
+## Beta 12 Prepared Target
 
-The repository is prepared for review of the guarded `v0.3.0-beta.11`
+The repository is prepared for review of the guarded `v0.3.0-beta.12`
 Prerelease workflow:
 
-- internal version `0.3.0b11`;
-- public tag and title `v0.3.0-beta.11`;
-- global build `156`;
+- internal version `0.3.0b12`;
+- public tag and title `v0.3.0-beta.12`;
+- global build `157`;
 - Sparkle channel `beta`;
 - GitHub prerelease, never Latest, PyPI, or Homebrew; and
 - the same production product, bundle, feed, key, signing team, and diagnostics
-  endpoint as Beta 10.
+  endpoint as Beta 11.
 
-Publication must place Beta 11 above immutable Beta 10 build `155`, Beta 8
-build `153`, Beta 7 build `152`, Beta 6 build `151`, Beta 5 build `150`, Beta 4
-build `149`, Beta 3 build `148`, Stable build `146`, RC5 build `145`, and RC4
-build `144`, with burned build `154` absent. Stable and RC exclude all Beta
-items; Beta and Alpha admit them, allowing an installed Beta 10 to update
-forward to Beta 11 without changing the saved route.
+Publication must place Beta 12 above immutable Beta 11 build `156`, Beta 10
+build `155`, Beta 8 build `153`, Beta 7 build `152`, Beta 6 build `151`, Beta 5
+build `150`, Beta 4 build `149`, Beta 3 build `148`, Stable build `146`, RC5
+build `145`, and RC4 build `144`, with burned build `154` absent. Stable and RC
+exclude all Beta items; Beta and Alpha admit them, allowing an installed Beta 11
+to update forward to Beta 12 without changing the saved route.
 
 Issues #392 and #422 authorize metadata preparation and review of this shared
 candidate. The repository has no freeze entry for this exact tag; that absence
@@ -267,7 +267,7 @@ allows workflow preflight but does not assert that a tag, draft, DMG, release,
 or appcast item exists. Dispatch remains a deliberate later decision under a
 fixed-`main` merge hold. The reviewed metadata, release-note seed, and
 qualification boundary are in
-[the Beta 11 cut packet](0.3.0-beta.11-cut-packet.md).
+[the Beta 12 cut packet](0.3.0-beta.12-cut-packet.md).
 
 ## Historical Boundaries
 

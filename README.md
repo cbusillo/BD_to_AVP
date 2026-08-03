@@ -65,9 +65,10 @@ Beta 4 (`0.3.0b4`, build `149`) through Beta 8 (`0.3.0b8`, build `153`) and Beta
 10 (`0.3.0b10`, build `155`) are published and immutable. Beta 9 (`0.3.0b9`,
 build `154`) failed after production signing but before DMG creation and is
 permanently burned without publication.
-Beta 11 metadata (`0.3.0b11`, build `156`) is prepared for the guarded
-Prerelease workflow. There is no Beta 11 tag, DMG, release, or updater item
-until exact-SHA signing, publication, and public verification complete.
+Beta 11 (`0.3.0b11`, build `156`) is published and immutable. Beta 12 metadata
+(`0.3.0b12`, build `157`) is prepared for the guarded Prerelease workflow.
+There is no Beta 12 tag, DMG, release, or updater item until exact-SHA signing,
+publication, and public verification complete.
 
 See [Distribution Policy](docs/distribution-policy.md) for the current GUI
 release artifact and dependency policy.

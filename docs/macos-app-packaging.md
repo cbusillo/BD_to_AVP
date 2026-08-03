@@ -115,9 +115,10 @@ older Stable and RC installations cannot discover it, while an installed Beta
 3 exposes all four routes. Beta 4 (`0.3.0b4`, build `149`) through Beta 8
 (`0.3.0b8`, build `153`) are published and immutable. Beta 9 (`0.3.0b9`, build
 `154`) failed after production signing and is burned without a public appcast
-item. Beta 10 (`0.3.0b10`, build `155`) is published and immutable. Beta 11
-(`0.3.0b11`, build `156`) is the next prepared target for the guarded exact-SHA
-Prerelease workflow. Its future cumulative item must sit above Beta 10, Beta 8
+  item. Beta 10 (`0.3.0b10`, build `155`) and Beta 11 (`0.3.0b11`, build `156`)
+  are published and immutable. Beta 12 (`0.3.0b12`, build `157`) is the next
+  prepared target for the guarded exact-SHA Prerelease workflow. Its future
+  cumulative item must sit above Beta 11, Beta 10, Beta 8
 through Beta 3, skip burned build `154`, and remain visible only to Beta and
 Alpha until a later newer Stable supersedes it.
 
@@ -179,10 +180,10 @@ fixed the missing AVKit link and added an installed-player presentation smoke.
 The exact Beta 10 artifact passed that release smoke and real preview
 presentation, but its GUI cancellation run left destination-backed preview
 residue. PR #416 fixed that cleanup behavior after Beta 10. The route-aware
-quality system also landed after Beta 10 and requires protocol v12. Beta 11
+quality system also landed after Beta 10 and requires protocol v12. Beta 12
 exact-artifact qualification must prove that:
 
-- Beta 10 updates forward to Beta 11 on Beta and Alpha without changing the saved
+- Beta 11 updates forward to Beta 12 on Beta and Alpha without changing the saved
   route;
 - Stable and RC continue to exclude every Beta item;
 - the downloaded notarized DMG passes signature, staple, Gatekeeper, startup,

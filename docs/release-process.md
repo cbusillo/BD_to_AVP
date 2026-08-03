@@ -4,16 +4,17 @@ The normative production identity, version mapping, update routes, history
 boundary, and publication policy are defined in
 [Production Release Routes](release-routes.md).
 
-The repository carries published, immutable Beta 3 through Beta 10 history at
-internal versions `0.3.0b3` through `0.3.0b10`, builds `148` through `155`
-except burned build `154`. Failed, unpublished Beta 9 (`0.3.0b9`, build `154`)
-and the earlier `0.3.0rc1` build `147` attempt are permanently burned. The next
-prepared target is Beta 11 at `0.3.0b11`, build `156`. The
+The repository carries published, immutable Beta 3 through Beta 8, Beta 10, and
+Beta 11 history at builds `148` through `156` except burned build `154`. Failed,
+unpublished Beta 9 (`0.3.0b9`, build `154`) and the earlier `0.3.0rc1` build
+`147` attempt are permanently burned. The next prepared target is Beta 12 at
+`0.3.0b12`, build `157`. The
 [Beta 8 cut packet](0.3.0-beta.8-cut-packet.md) records immutable publication
 history, [the Beta 9 cut packet](0.3.0-beta.9-cut-packet.md) records the failed
 unpublished attempt, [the Beta 10 cut packet](0.3.0-beta.10-cut-packet.md)
-records immutable publication history, and the reviewed
-[Beta 11 cut packet](0.3.0-beta.11-cut-packet.md) records pending metadata only.
+records immutable publication history, [the Beta 11 cut packet](0.3.0-beta.11-cut-packet.md)
+records historical preparation, and [the Beta 12 cut packet](0.3.0-beta.12-cut-packet.md)
+records current pending metadata.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
