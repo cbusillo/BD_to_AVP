@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bd_to_avp.modules import sub
+from bd_to_avp.process_runner import ProcessCancelled
 from bd_to_avp.vendor.pgsrip.media_path import MediaPath
 from bd_to_avp.vendor.pgsrip.mkv import MkvTrack
 from bd_to_avp.modules.sub import (
@@ -356,6 +357,51 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
             self.assertFalse((output_folder / "movie.mkv").exists())
             rip.assert_called_once()
             mark_forced.assert_called_once_with([], None)
+
+    def test_unreadable_pgs_tracks_warn_and_remove_partial_subtitles(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
+            patch.object(sub.config, "skip_subtitles", False),
+            patch("bd_to_avp.modules.sub.Mkv") as mkv_class,
+            patch("bd_to_avp.modules.sub.get_selected_subtitle_tracks", return_value=[]),
+        ):
+            output_path = Path(temp_dir)
+            source_mkv = output_path / "movie.mkv"
+            source_mkv.write_bytes(b"mkv")
+            partial_srt = output_path / "movie.en.srt"
+            warnings: list[str] = []
+            mkv_class.side_effect = lambda path, **_kwargs: type("MkvStub", (), {"media_path": Path(path)})()
+
+            def produce_no_usable_subtitles(_mkv_file, _options):
+                partial_srt.write_text("partial", encoding="utf-8")
+                return 0
+
+            with patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=produce_no_usable_subtitles):
+                extract_subtitle_to_srt(source_mkv, output_path, warnings.append)
+
+            self.assertFalse(partial_srt.exists())
+            self.assertEqual(
+                warnings,
+                ["PGS subtitle extraction did not produce usable subtitle files; continuing without subtitles."],
+            )
+
+    def test_subtitle_extraction_preserves_cancellation(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
+            patch.object(sub.config, "skip_subtitles", False),
+            patch("bd_to_avp.modules.sub.Mkv") as mkv_class,
+            patch("bd_to_avp.modules.sub.get_selected_subtitle_tracks", return_value=[]),
+            patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=ProcessCancelled("cancelled")),
+        ):
+            output_path = Path(temp_dir)
+            source_mkv = output_path / "movie.mkv"
+            source_mkv.write_bytes(b"mkv")
+            mkv_class.side_effect = lambda path, **_kwargs: type("MkvStub", (), {"media_path": Path(path)})()
+
+            with self.assertRaisesRegex(ProcessCancelled, "cancelled"):
+                extract_subtitle_to_srt(source_mkv, output_path)
 
     def test_subtitle_source_alias_uses_absolute_target_for_relative_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
