@@ -156,33 +156,33 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         self.assertEqual(apps["bd-to-avp"]["min_os_version"], "14.0")
 
-    def test_repository_is_prepared_for_beta11(self) -> None:
+    def test_repository_is_prepared_for_beta12(self) -> None:
         metadata = release.load_release_metadata()
 
-        self.assertEqual(metadata.package_version, "0.3.0b11")
-        self.assertEqual(metadata.public_version, "0.3.0-beta.11")
-        self.assertEqual(metadata.build_version, "156")
-        self.assertEqual(metadata.release_tag, "v0.3.0-beta.11")
-        self.assertEqual(metadata.release_name, "v0.3.0-beta.11")
-        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.11.dmg")
+        self.assertEqual(metadata.package_version, "0.3.0b12")
+        self.assertEqual(metadata.public_version, "0.3.0-beta.12")
+        self.assertEqual(metadata.build_version, "157")
+        self.assertEqual(metadata.release_tag, "v0.3.0-beta.12")
+        self.assertEqual(metadata.release_name, "v0.3.0-beta.12")
+        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.12.dmg")
         self.assertEqual(metadata.channel, "beta")
         self.assertTrue(metadata.prerelease)
         self.assertFalse(metadata.make_latest)
         self.assertFalse(metadata.publish_pypi)
 
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
-        self.assertNotIn("v0.3.0-beta.11", freeze_policy["frozen_release_tags"])
+        self.assertNotIn("v0.3.0-beta.12", freeze_policy["frozen_release_tags"])
 
-        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.11-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.0b11`", cut_packet)
-        self.assertIn("Build `156`", cut_packet)
-        for pull_request in (416, 424, 448, 449):
+        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.12-cut-packet.md").read_text(encoding="utf-8")
+        self.assertIn("`0.3.0b12`", cut_packet)
+        self.assertIn("Build `157`", cut_packet)
+        for pull_request in (452,):
             self.assertIn(f"#{pull_request}", cut_packet)
         self.assertIn("Privacy rules version `4`", cut_packet)
         self.assertIn("#392", cut_packet)
         self.assertIn("#422", cut_packet)
         self.assertIn("Prepared metadata; publication pending", cut_packet)
-        self.assertIn("last exact public artifact is immutable Beta 10", cut_packet)
+        self.assertIn("last exact public artifact is immutable Beta 11", cut_packet)
         self.assertIn("fresh explicit run-bound authorization", cut_packet)
 
         qualification = json.loads(

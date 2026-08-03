@@ -98,10 +98,11 @@ document it as an external dependency with preflight behavior.
   (`v0.3.0-beta.10`, internal version `0.3.0b10`, build `155`) are published and
   immutable. Beta 9 (`v0.3.0-beta.9`, internal version
   `0.3.0b9`, build `154`) failed after production signing but before DMG
-  creation and is permanently burned without publication. The next prepared
-  production-identity field build is Beta 11 (`v0.3.0-beta.11`, internal
-  version `0.3.0b11`, build `156`). It remains unpublished until exact-SHA
-  signing and public verification complete. Beta 3 build `148` remains the
+  creation and is permanently burned without publication. Beta 11
+  (`v0.3.0-beta.11`, internal version `0.3.0b11`, build `156`) is published and
+  immutable. The next prepared production-identity field build is Beta 12
+  (`v0.3.0-beta.12`, internal version `0.3.0b12`, build `157`). It remains
+  unpublished until exact-SHA signing and public verification complete. Beta 3 build `148` remains the
   manual-download seed and immutable appcast history below the later Beta
   releases.
 - Stable, RC, Beta, and Alpha are routes for the same product, bundle identifier,
