@@ -2,18 +2,27 @@
 
 ## Introduction
 
-This tool processes 3D video content from Blu-ray discs, ISO images, MKV files, or mts files, creating a final video
-file compatible with the Apple Vision Pro. It uses FFmpeg, MakeMKV, and a bundled native MVC decoder helper for video
-extraction, audio transcoding, and video stream merging to convert from Mpeg 4 MVC 3D video to MV-HEVC 3D video. The
-tool also injects 360° metadata
-into the video file for spatial media playback. You have the option of AI upscaling the video to 4K resolution and AI
-OCR of subtitles. MV-HEVC remains the default native Apple spatial output; an opt-in software AV1 mode produces a
-full-resolution side-by-side stereo MOV for storage-conscious and custom-playback workflows.
+BD-to-AVP is a macOS app for turning your 3D Blu-ray movies into spatial videos
+you can watch on Apple Vision Pro. Give it a supported 3D Blu-ray disc, disc
+image, or existing video file, choose where the finished video should go, and
+the app prepares a spatial version while preserving the movie's stereoscopic
+depth. For physical discs, MakeMKV is still required to read and extract the
+title; existing MKV, MTS, and M2TS files do not need that extra step.
+
+Most people should use the default MV-HEVC output, Apple's native spatial-video
+format. You can also choose optional 4K AI upscaling and subtitle processing,
+but both add time and temporary-storage needs. An experimental AV1 export
+targets M5 Apple Vision Pro and custom-player workflows; M2 Apple Vision Pro is
+unsupported, and physical M5 stereo qualification remains pending.
+
+Behind the scenes, the app uses FFmpeg, MakeMKV, and a bundled native MVC
+decoder helper for video extraction, audio transcoding, and video stream
+merging to convert MPEG-4 MVC 3D video to MV-HEVC 3D video. It also injects
+360° metadata for spatial media playback.
 
 The default MV-HEVC videos play directly in the Files or
 [Screenlit](https://apps.apple.com/us/app/screenlit/id6499478407) app on the AVP.
-AV1 stereo playback depends on the device generation and player; see the
-feasibility record before choosing it for headset delivery.
+See the feasibility record before choosing experimental AV1 output.
 
 ## Screenshots
 
