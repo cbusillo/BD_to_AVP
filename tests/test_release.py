@@ -156,42 +156,39 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         self.assertEqual(apps["bd-to-avp"]["min_os_version"], "14.0")
 
-    def test_repository_is_prepared_for_beta12(self) -> None:
+    def test_repository_is_prepared_for_rc1(self) -> None:
         metadata = release.load_release_metadata()
 
-        self.assertEqual(metadata.package_version, "0.3.0b12")
-        self.assertEqual(metadata.public_version, "0.3.0-beta.12")
-        self.assertEqual(metadata.build_version, "157")
-        self.assertEqual(metadata.release_tag, "v0.3.0-beta.12")
-        self.assertEqual(metadata.release_name, "v0.3.0-beta.12")
-        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-beta.12.dmg")
-        self.assertEqual(metadata.channel, "beta")
+        self.assertEqual(metadata.package_version, "0.3.0rc1")
+        self.assertEqual(metadata.public_version, "0.3.0-rc.1")
+        self.assertEqual(metadata.build_version, "158")
+        self.assertEqual(metadata.release_tag, "v0.3.0-rc.1")
+        self.assertEqual(metadata.release_name, "v0.3.0-rc.1")
+        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.1.dmg")
+        self.assertEqual(metadata.channel, "rc")
         self.assertTrue(metadata.prerelease)
         self.assertFalse(metadata.make_latest)
         self.assertFalse(metadata.publish_pypi)
 
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
-        self.assertNotIn("v0.3.0-beta.12", freeze_policy["frozen_release_tags"])
+        self.assertNotIn("v0.3.0-rc.1", freeze_policy["frozen_release_tags"])
 
-        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.12-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.0b12`", cut_packet)
-        self.assertIn("Build `157`", cut_packet)
-        for pull_request in (452,):
+        cut_packet = (REPO_ROOT / "docs" / "0.3.0-rc.1-cut-packet.md").read_text(encoding="utf-8")
+        self.assertIn("`0.3.0rc1`", cut_packet)
+        self.assertIn("Build `158`", cut_packet)
+        for pull_request in (452, 459):
             self.assertIn(f"#{pull_request}", cut_packet)
-        self.assertIn("Privacy rules version `4`", cut_packet)
-        self.assertIn("#392", cut_packet)
-        self.assertIn("#422", cut_packet)
+        self.assertIn("Privacy rules version `5`", cut_packet)
+        self.assertIn("#460", cut_packet)
         self.assertIn("Prepared metadata; publication pending", cut_packet)
         self.assertIn("last exact public artifact is immutable Beta 11", cut_packet)
         self.assertIn("fresh explicit run-bound authorization", cut_packet)
 
         qualification = json.loads(
-            (REPO_ROOT / "docs" / "qualification" / "beta11-shared-signed-qualification-v1.json").read_text(
-                encoding="utf-8"
-            )
+            (REPO_ROOT / "docs" / "qualification" / "rc1-signed-qualification-v1.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(qualification["candidate"]["package_version"], "0.3.0b11")
-        self.assertEqual(qualification["candidate"]["build_version"], "156")
+        self.assertEqual(qualification["candidate"]["package_version"], "0.3.0rc1")
+        self.assertEqual(qualification["candidate"]["build_version"], "158")
         self.assertEqual(qualification["candidate"]["worker_protocol_version"], 12)
         self.assertEqual(qualification["candidate"]["mapping_version"], 2)
         self.assertEqual(
@@ -200,7 +197,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         expected_case_ids = {
             "release-workflow-identity",
-            "updater-route-beta10-to-beta11",
+            "updater-route-beta11-to-rc1",
+            "native-sparkle-notes-rc1",
             "fresh-profile-quality-ui",
             "signed-packaged-route-parity",
             "gui-preview-low-local-ample-destination",
@@ -210,6 +208,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             "capacity-unknown-and-conflicting",
             "network-generated-final-output",
             "overwrite-and-conversion-cancel",
+            "malformed-pgs-recovery",
             "public-diagnostics-and-field-closure",
         }
         self.assertEqual({case["id"] for case in qualification["matrix"]}, expected_case_ids)
@@ -227,8 +226,35 @@ class ReleaseMetadataTests(unittest.TestCase):
             qualification["execution_policy"]["macos_signing_requires_fresh_explicit_run_bound_authorization"]
         )
         self.assertEqual(qualification["execution_policy"]["approval_required_exit_code"], 20)
+        self.assertFalse(qualification["acceptance"]["signed_rc_complete"])
+        self.assertFalse(qualification["acceptance"]["passed"])
+
+    def test_beta11_qualification_remains_historical_receipt(self) -> None:
+        qualification = json.loads(
+            (REPO_ROOT / "docs" / "qualification" / "beta11-shared-signed-qualification-v1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        self.assertEqual(qualification["candidate"]["package_version"], "0.3.0b11")
+        self.assertEqual(qualification["candidate"]["build_version"], "156")
+        self.assertEqual(qualification["candidate"]["worker_protocol_version"], 12)
+        self.assertEqual(qualification["candidate"]["mapping_version"], 2)
+        self.assertEqual(
+            qualification["candidate"]["route_table_sha256"],
+            "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214",
+        )
         self.assertFalse(qualification["acceptance"]["signed_beta_complete"])
         self.assertFalse(qualification["acceptance"]["passed"])
+
+    def test_beta12_cut_packet_records_abandoned_metadata(self) -> None:
+        cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.12-cut-packet.md").read_text(encoding="utf-8")
+
+        self.assertIn("Abandoned metadata; never dispatched or published", cut_packet)
+        self.assertIn("`0.3.0b12`", cut_packet)
+        self.assertIn("Build `157`", cut_packet)
+        self.assertIn("No tag, draft, release", cut_packet)
+        self.assertIn("DMG, or appcast item was created", cut_packet)
 
     def test_beta10_cut_packet_records_immutable_published_identity(self) -> None:
         cut_packet = (REPO_ROOT / "docs" / "0.3.0-beta.10-cut-packet.md").read_text(encoding="utf-8")
