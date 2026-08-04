@@ -250,6 +250,9 @@ class NativeAppPackagingTests(unittest.TestCase):
 
         self.assertIn("Convert a 3D Blu-ray Disc", source_view)
         self.assertIn("Import MTS or M2TS transport stream", source_view)
+        self.assertIn('Label("Save current settings as new profile", systemImage: "plus.square.on.square")', setup_view)
+        self.assertIn('.accessibilityLabel("Save current settings as new profile")', setup_view)
+        self.assertNotIn('Button("Save Current Settings as New Profile…", action: saveAsNewProfile)', setup_view)
         self.assertIn(".disabled(outputControlsLocked)", source_view)
         self.assertIn("state.phase.isRunning || state.phase == .decisionRequired", source_view)
         self.assertLess(
