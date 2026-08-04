@@ -602,6 +602,40 @@ struct JobOptions: Codable, Equatable {
     }
 }
 
+struct ProfileJobDefaults: Codable, Equatable {
+    var startStage = ConversionStage.createMKV
+    var intermediatePolicy = IntermediatePolicy.automatic
+    var overwriteExisting = false
+    var removeOriginalAfterSuccess = false
+    var continueOnError = false
+    var softwareEncoder = false
+    var outputCommands = false
+}
+
+extension JobOptions {
+    var profileDefaults: ProfileJobDefaults {
+        ProfileJobDefaults(
+            startStage: startStage,
+            intermediatePolicy: intermediatePolicy,
+            overwriteExisting: overwriteExisting,
+            removeOriginalAfterSuccess: removeOriginalAfterSuccess,
+            continueOnError: continueOnError,
+            softwareEncoder: softwareEncoder,
+            outputCommands: outputCommands
+        )
+    }
+
+    mutating func applyProfileDefaults(_ defaults: ProfileJobDefaults) {
+        startStage = defaults.startStage
+        intermediatePolicy = defaults.intermediatePolicy
+        overwriteExisting = defaults.overwriteExisting
+        removeOriginalAfterSuccess = defaults.removeOriginalAfterSuccess
+        continueOnError = defaults.continueOnError
+        softwareEncoder = defaults.softwareEncoder
+        outputCommands = defaults.outputCommands
+    }
+}
+
 struct ConversionOptions: Codable, Equatable {
     var encoding = EncodingOptions()
     var job = JobOptions()

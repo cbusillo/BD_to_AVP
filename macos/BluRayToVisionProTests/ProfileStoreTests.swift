@@ -54,6 +54,70 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testCustomProfilePersistsFilesAndRecoveryDefaults() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        let identifier = UUID(uuidString: "6C02DFB0-2B6A-4F6D-9335-3703487FB9D7")!
+        let jobDefaults = ProfileJobDefaults(
+            startStage: .extractMVCAndAudio,
+            intermediatePolicy: .reusable,
+            overwriteExisting: true,
+            removeOriginalAfterSuccess: true,
+            continueOnError: true,
+            softwareEncoder: true,
+            outputCommands: true
+        )
+        let store = ProfileStore(fileURL: fileURL, idGenerator: { identifier })
+
+        let profileID = try store.createProfile(
+            name: "Recovery",
+            options: EncodingOptions(),
+            jobDefaults: jobDefaults
+        )
+        let restoredProfile = ProfileStore(fileURL: fileURL).profile(withID: profileID)
+
+        XCTAssertEqual(restoredProfile.jobDefaults, jobDefaults)
+    }
+
+    func testApplyingProfileJobDefaultsPreservesGlobalPreferences() {
+        var job = JobOptions(keepAwake: false, playSound: false)
+        job.applyProfileDefaults(
+            ProfileJobDefaults(
+                intermediatePolicy: .reusable,
+                overwriteExisting: true,
+                softwareEncoder: true
+            )
+        )
+
+        XCTAssertEqual(job.intermediatePolicy, .reusable)
+        XCTAssertTrue(job.overwriteExisting)
+        XCTAssertTrue(job.softwareEncoder)
+        XCTAssertFalse(job.keepAwake)
+        XCTAssertFalse(job.playSound)
+    }
+
+    @MainActor
+    func testUpdatingProfileWithoutJobDefaultsPreservesSavedFilesAndRecoveryDefaults() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        let identifier = UUID(uuidString: "9B58E388-CB38-46ED-ADE4-F690F6A40D81")!
+        let jobDefaults = ProfileJobDefaults(overwriteExisting: true, continueOnError: true)
+        let store = ProfileStore(fileURL: fileURL, idGenerator: { identifier })
+        let profileID = try store.createProfile(
+            name: "Preserve Recovery",
+            options: EncodingOptions(),
+            jobDefaults: jobDefaults
+        )
+
+        try store.updateProfile(profileID, name: "Renamed Recovery", options: EncodingOptions())
+
+        XCTAssertEqual(store.profile(withID: profileID).jobDefaults, jobDefaults)
+        XCTAssertEqual(ProfileStore(fileURL: fileURL).profile(withID: profileID).jobDefaults, jobDefaults)
+    }
+
+    @MainActor
     func testLegacyVersionFourEyeBitratesMigrateToExplicitIntent() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }

@@ -45,9 +45,13 @@ struct ContentView: View {
         self.capabilities = capabilities
 
         let profile = profileStore.profile(withID: settings.selectedProfileID)
+        var initialJobOptions = Self.jobOptions(from: settings)
+        if let jobDefaults = profile.jobDefaults {
+            initialJobOptions.applyProfileDefaults(jobDefaults)
+        }
         let initialOptions = ConversionOptions(
             encoding: profile.options,
-            job: Self.jobOptions(from: settings)
+            job: initialJobOptions
         )
 
         _selectedProfileID = State(initialValue: profile.id)
@@ -190,7 +194,12 @@ struct ContentView: View {
         }
         .onChange(of: defaultJobOptions) { _, newValue in
             if viewModel.source == nil, !viewModel.hasActiveWork {
-                options.job = newValue
+                if selectedProfile.jobDefaults == nil {
+                    options.job = newValue
+                } else {
+                    options.job.keepAwake = newValue.keepAwake
+                    options.job.playSound = newValue.playSound
+                }
             }
         }
         .onChange(of: viewModel.state.conversionResult) { _, result in
@@ -244,11 +253,13 @@ struct ContentView: View {
             guard let previousProfile = previousProfiles.first(where: { $0.id == selectedProfileID }),
                   let currentProfile = currentProfiles.first(where: { $0.id == selectedProfileID }),
                   !viewModel.hasActiveWork,
-                  options.encoding == previousProfile.options
+                  options.encoding == previousProfile.options,
+                  options.job.profileDefaults == profileJobDefaults(for: previousProfile)
             else {
                 return
             }
             options.encoding = currentProfile.options
+            options.job.applyProfileDefaults(profileJobDefaults(for: currentProfile))
         }
         .sheet(isPresented: $isShowingSaveProfile) {
             SaveProfileSheet(name: $newProfileName) {
@@ -487,6 +498,7 @@ struct ContentView: View {
 
     private var profileModified: Bool {
         options.encoding != selectedProfile.options
+            || options.job.profileDefaults != profileJobDefaults(for: selectedProfile)
     }
 
     private var defaultJobOptions: JobOptions {
@@ -805,6 +817,12 @@ struct ContentView: View {
 
     private func resetProfile() {
         options.encoding = selectedProfile.options
+        options.job = defaultJobOptions
+        options.job.applyProfileDefaults(profileJobDefaults(for: selectedProfile))
+    }
+
+    private func profileJobDefaults(for profile: EncodingProfile) -> ProfileJobDefaults {
+        profile.jobDefaults ?? defaultJobOptions.profileDefaults
     }
 
     private static func jobOptions(from settings: AppSettings) -> JobOptions {
@@ -824,7 +842,8 @@ struct ContentView: View {
             try profileStore.updateProfile(
                 selectedProfile.id,
                 name: selectedProfile.name,
-                options: options.encoding
+                options: options.encoding,
+                jobDefaults: options.job.profileDefaults
             )
         } catch {
             profileErrorMessage = error.localizedDescription
@@ -840,7 +859,8 @@ struct ContentView: View {
         do {
             let identifier = try profileStore.createProfile(
                 name: newProfileName,
-                options: options.encoding
+                options: options.encoding,
+                jobDefaults: options.job.profileDefaults
             )
             selectedProfileID = identifier
             isShowingSaveProfile = false
@@ -980,7 +1000,7 @@ private struct SaveProfileSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Save New Profile")
                     .font(.title2.weight(.semibold))
-                Text("Video, audio, subtitle, and stereo-correction settings will be saved. Job and safety choices stay with the current conversion.")
+                Text("Video, audio, subtitle, pipeline, recovery, and output-file settings will be saved. Sound and awake preferences stay global.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

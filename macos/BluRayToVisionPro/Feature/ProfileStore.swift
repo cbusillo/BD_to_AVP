@@ -51,13 +51,18 @@ final class ProfileStore: ObservableObject {
         return profile(withID: migratedIdentifier).id
     }
 
-    func createProfile(name: String, options: EncodingOptions) throws -> String {
+    func createProfile(
+        name: String,
+        options: EncodingOptions,
+        jobDefaults: ProfileJobDefaults? = nil
+    ) throws -> String {
         let normalizedName = try validatedName(name)
         let normalizedOptions = try normalizedQualityOptions(options)
         let profile = EncodingProfile(
             id: "custom.\(idGenerator().uuidString.lowercased())",
             name: normalizedName,
             options: normalizedOptions,
+            jobDefaults: jobDefaults,
             kind: .custom,
             systemImage: "slider.horizontal.3"
         )
@@ -72,7 +77,8 @@ final class ProfileStore: ObservableObject {
         let source = profile(withID: identifier)
         return try createProfile(
             name: suggestedDuplicateName(for: source.name),
-            options: source.options
+            options: source.options,
+            jobDefaults: source.jobDefaults
         )
     }
 
@@ -81,6 +87,18 @@ final class ProfileStore: ObservableObject {
         name: String,
         options: EncodingOptions
     ) throws {
+        guard let profile = customProfiles.first(where: { $0.id == identifier }) else {
+            throw ProfileStoreError.builtInProfileIsReadOnly
+        }
+        try updateProfile(identifier, name: name, options: options, jobDefaults: profile.jobDefaults)
+    }
+
+    func updateProfile(
+        _ identifier: String,
+        name: String,
+        options: EncodingOptions,
+        jobDefaults: ProfileJobDefaults?
+    ) throws {
         guard let index = customProfiles.firstIndex(where: { $0.id == identifier }) else {
             throw ProfileStoreError.builtInProfileIsReadOnly
         }
@@ -88,6 +106,7 @@ final class ProfileStore: ObservableObject {
         var updatedProfiles = customProfiles
         updatedProfiles[index].name = normalizedName
         updatedProfiles[index].options = try normalizedQualityOptions(options)
+        updatedProfiles[index].jobDefaults = jobDefaults
         try persist(updatedProfiles)
         customProfiles = updatedProfiles
     }
@@ -234,6 +253,7 @@ final class ProfileStore: ObservableObject {
                 id: identifier,
                 name: normalizedName,
                 options: storedProfile.options,
+                jobDefaults: storedProfile.jobDefaults,
                 kind: .custom,
                 systemImage: "slider.horizontal.3"
             )
@@ -252,7 +272,12 @@ final class ProfileStore: ObservableObject {
             else {
                 throw ProfileStoreError.invalidDocument
             }
-            return StoredProfile(id: identifier, name: profile.name, options: profile.options)
+            return StoredProfile(
+                id: identifier,
+                name: profile.name,
+                options: profile.options,
+                jobDefaults: profile.jobDefaults
+            )
         }
         let document = ProfileDocument(version: ProfileDocument.currentVersion, profiles: storedProfiles)
         let encoder = JSONEncoder()
@@ -329,6 +354,19 @@ private struct StoredProfile: Codable {
     let id: UUID
     let name: String
     let options: EncodingOptions
+    let jobDefaults: ProfileJobDefaults?
+
+    init(
+        id: UUID,
+        name: String,
+        options: EncodingOptions,
+        jobDefaults: ProfileJobDefaults? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.options = options
+        self.jobDefaults = jobDefaults
+    }
 }
 
 private struct LegacyProfileDocumentV3: Decodable {
