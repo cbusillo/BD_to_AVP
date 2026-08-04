@@ -185,9 +185,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("fresh explicit run-bound authorization", cut_packet)
 
         qualification = json.loads(
-            (REPO_ROOT / "docs" / "qualification" / "rc1-signed-qualification-v1.json").read_text(
-                encoding="utf-8"
-            )
+            (REPO_ROOT / "docs" / "qualification" / "rc1-signed-qualification-v1.json").read_text(encoding="utf-8")
         )
         self.assertEqual(qualification["candidate"]["package_version"], "0.3.0rc1")
         self.assertEqual(qualification["candidate"]["build_version"], "158")
