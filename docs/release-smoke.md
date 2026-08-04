@@ -288,32 +288,33 @@ Beta without pretending the current Stable or RC client can discover it.
    apps remain separate and cannot Sparkle-update into the production app. Do
    not reopen them to edit the shared profile library after Beta 3 installation.
 
-### RC 1 Preparation Smoke
+### RC 2 Preparation Smoke
 
-Run these checks after the RC 1 metadata preparation lands and before
+Run these checks after the RC 2 metadata preparation lands and before
 workflow dispatch. They prove the committed target and authorization boundary,
 not a signed or published app.
 
 1. Run `uv run python -m scripts.release validate` and confirm internal
-   `0.3.0rc1`, public `0.3.0-rc.1`, build `158`, RC channel, prerelease,
+   `0.3.0rc2`, public `0.3.0-rc.2`, build `159`, RC channel, prerelease,
    non-Latest, and no PyPI publication.
 2. Run the Prerelease metadata policy with the committed target and confirm the
-   RC 1 freeze is absent while all route, identity, and existing-release
+   RC 2 freeze is absent while all route, identity, and existing-release
    guards remain active before packaging or signing.
-3. Validate a cumulative appcast fixture ordered RC 1 build `158`, Beta 11
+3. Validate a cumulative appcast fixture ordered RC 2 build `159`, RC 1 build
+   `158`, Beta 11
    build `156`, Beta 10 build `155`, Beta 8 build `153`, Beta 7 build `152`, Beta 6 build `151`, Beta
    5 build `150`, Beta 4 build `149`, Beta 3 build `148`, then Stable build
    `146`, RC5 build `145`, and RC4 build `144`; burned builds `147` and `154`
    must be absent, Stable must exclude the RC, and RC, Beta, and Alpha must
    admit it.
 4. Confirm immutable Beta 11 targets its published release identity, then confirm
-   the live repository has no RC 1 tag, release, draft, asset, or appcast item.
+   the live repository has no RC 2 tag, release, draft, asset, or appcast item.
 5. Continue only through the exact-SHA Prerelease workflow. Signed-app,
    update-route, installed quality UI, capacity, cleanup, and final-output
    qualification remain incomplete until the guarded workflow and exact-
    artifact checks in
-   `docs/qualification/rc1-signed-qualification-v1.json` and the
-   RC 1 field receipts finish.
+   `docs/qualification/rc2-signed-qualification-v1.json` and the
+   RC 2 field receipts finish.
    Physical M5 Vision Pro AV1 evidence stays in #409.
 
 ## Follow-Up Routing

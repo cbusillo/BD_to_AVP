@@ -117,11 +117,12 @@ older Stable and RC installations cannot discover it, while an installed Beta
 `154`) failed after production signing and is burned without a public appcast
   item. Beta 10 (`0.3.0b10`, build `155`) and Beta 11 (`0.3.0b11`, build `156`)
   are published and immutable. Abandoned Beta 12 metadata build `157` has no
-  public artifact. RC 1 (`0.3.0rc1`, build `158`) is the next prepared target
-  for the guarded exact-SHA Prerelease workflow. Its future cumulative item must
-  sit above Beta 11, Beta 10, Beta 8 through Beta 3, skip builds `147`, `154`,
-  and `157`, remain excluded from Stable, and be visible to RC, Beta, and Alpha
-  until a later newer Stable supersedes it.
+  public artifact. RC 1 (`0.3.0rc1`, build `158`) is published and immutable.
+  RC 2 (`0.3.0rc2`, build `159`) is the next prepared target for the guarded
+  exact-SHA Prerelease workflow. Its future cumulative item must sit above RC 1,
+  Beta 11, Beta 10, Beta 8 through Beta 3, skip builds `147`, `154`, and `157`,
+  remain excluded from Stable, and be visible to RC, Beta, and Alpha until a
+  later newer Stable supersedes it.
 
 ## Release Workflow
 
@@ -181,19 +182,20 @@ fixed the missing AVKit link and added an installed-player presentation smoke.
 The exact Beta 10 artifact passed that release smoke and real preview
 presentation, but its GUI cancellation run left destination-backed preview
 residue. PR #416 fixed that cleanup behavior after Beta 10. The route-aware
-quality system also landed after Beta 10 and requires protocol v12. RC 1
+quality system also landed after Beta 10 and requires protocol v12. RC 2
 exact-artifact qualification must prove that:
 
-- Beta 11 updates forward to RC 1 on RC, Beta, and Alpha without changing the
+- RC 1 updates forward to RC 2 on RC, Beta, and Alpha without changing the
   saved route;
-- Stable excludes RC 1;
+- Stable excludes RC 2;
 - the downloaded notarized DMG passes signature, staple, Gatekeeper, startup,
   bundled-helper, and worker-capability checks; and
 - the installed app exposes the frozen route-relative quality behavior through
   protocol v12 without changing reversible Custom values; and
 - packaged GUI preview presentation, visible fallback, capacity, cleanup,
   generated-network final output, overwrite, cancellation, and malformed-PGS
-  recovery satisfy the pre-registered RC 1 matrix for #460 without treating
+  recovery and profile Files & Recovery persistence satisfy the pre-registered
+  RC 2 matrix for #458 and #462 without treating
   unsigned evidence as release proof; and
 - the release package smoke executes the real installed player guard before
   publication. Physical M5 Vision Pro AV1 evidence remains separately tracked

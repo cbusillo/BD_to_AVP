@@ -156,39 +156,40 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         self.assertEqual(apps["bd-to-avp"]["min_os_version"], "14.0")
 
-    def test_repository_is_prepared_for_rc1(self) -> None:
+    def test_repository_is_prepared_for_rc2(self) -> None:
         metadata = release.load_release_metadata()
 
-        self.assertEqual(metadata.package_version, "0.3.0rc1")
-        self.assertEqual(metadata.public_version, "0.3.0-rc.1")
-        self.assertEqual(metadata.build_version, "158")
-        self.assertEqual(metadata.release_tag, "v0.3.0-rc.1")
-        self.assertEqual(metadata.release_name, "v0.3.0-rc.1")
-        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.1.dmg")
+        self.assertEqual(metadata.package_version, "0.3.0rc2")
+        self.assertEqual(metadata.public_version, "0.3.0-rc.2")
+        self.assertEqual(metadata.build_version, "159")
+        self.assertEqual(metadata.release_tag, "v0.3.0-rc.2")
+        self.assertEqual(metadata.release_name, "v0.3.0-rc.2")
+        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.2.dmg")
         self.assertEqual(metadata.channel, "rc")
         self.assertTrue(metadata.prerelease)
         self.assertFalse(metadata.make_latest)
         self.assertFalse(metadata.publish_pypi)
 
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
-        self.assertNotIn("v0.3.0-rc.1", freeze_policy["frozen_release_tags"])
+        self.assertNotIn("v0.3.0-rc.2", freeze_policy["frozen_release_tags"])
 
-        cut_packet = (REPO_ROOT / "docs" / "0.3.0-rc.1-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.0rc1`", cut_packet)
-        self.assertIn("Build `158`", cut_packet)
-        for pull_request in (452, 459):
+        cut_packet = (REPO_ROOT / "docs" / "0.3.0-rc.2-cut-packet.md").read_text(encoding="utf-8")
+        self.assertIn("`0.3.0rc2`", cut_packet)
+        self.assertIn("Build `159`", cut_packet)
+        for pull_request in (463, 464):
             self.assertIn(f"#{pull_request}", cut_packet)
         self.assertIn("Privacy rules version `5`", cut_packet)
-        self.assertIn("#460", cut_packet)
+        self.assertIn("#458", cut_packet)
+        self.assertIn("#462", cut_packet)
         self.assertIn("Prepared metadata; publication pending", cut_packet)
-        self.assertIn("last exact public artifact is immutable Beta 11", cut_packet)
+        self.assertIn("last exact public artifact is immutable RC 1", cut_packet)
         self.assertIn("fresh explicit run-bound authorization", cut_packet)
 
         qualification = json.loads(
-            (REPO_ROOT / "docs" / "qualification" / "rc1-signed-qualification-v1.json").read_text(encoding="utf-8")
+            (REPO_ROOT / "docs" / "qualification" / "rc2-signed-qualification-v1.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(qualification["candidate"]["package_version"], "0.3.0rc1")
-        self.assertEqual(qualification["candidate"]["build_version"], "158")
+        self.assertEqual(qualification["candidate"]["package_version"], "0.3.0rc2")
+        self.assertEqual(qualification["candidate"]["build_version"], "159")
         self.assertEqual(qualification["candidate"]["worker_protocol_version"], 12)
         self.assertEqual(qualification["candidate"]["mapping_version"], 2)
         self.assertEqual(
@@ -197,8 +198,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         expected_case_ids = {
             "release-workflow-identity",
-            "updater-route-beta11-to-rc1",
-            "native-sparkle-notes-rc1",
+            "updater-route-rc1-to-rc2",
+            "native-sparkle-notes-rc2",
             "fresh-profile-quality-ui",
             "signed-packaged-route-parity",
             "gui-preview-low-local-ample-destination",
@@ -209,6 +210,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             "network-generated-final-output",
             "overwrite-and-conversion-cancel",
             "malformed-pgs-recovery",
+            "profile-files-and-recovery",
             "public-diagnostics-and-field-closure",
         }
         self.assertEqual({case["id"] for case in qualification["matrix"]}, expected_case_ids)
@@ -228,6 +230,23 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(qualification["execution_policy"]["approval_required_exit_code"], 20)
         self.assertFalse(qualification["acceptance"]["signed_rc_complete"])
         self.assertFalse(qualification["acceptance"]["passed"])
+
+    def test_rc1_records_immutable_published_identity(self) -> None:
+        cut_packet = (REPO_ROOT / "docs" / "0.3.0-rc.1-cut-packet.md").read_text(encoding="utf-8")
+        qualification = json.loads(
+            (REPO_ROOT / "docs" / "qualification" / "rc1-signed-qualification-v1.json").read_text(encoding="utf-8")
+        )
+
+        self.assertIn("Published and immutable", cut_packet)
+        self.assertIn("`30865530971`", cut_packet)
+        self.assertIn("`96146ac1b5f747dd78440761ad16e73d591fec4b`", cut_packet)
+        self.assertIn("`0d8aab0e63a4097aa7cc1c7df511dc0582aa767c7dbe81c75971815af3df162c`", cut_packet)
+        self.assertIn("`a88b258708a049e960fcb4f8985b5eb7eab50f539a882a2402b947187ba2e70b`", cut_packet)
+        self.assertIn("must not be rebuilt", cut_packet)
+        self.assertEqual(qualification["status"], "published_partial_exact_artifact")
+        self.assertEqual(qualification["candidate"]["release_id"], 364562591)
+        self.assertEqual(qualification["candidate"]["release_run_id"], 30865530971)
+        self.assertTrue(qualification["immutable_publication"]["must_not_rebuild"])
 
     def test_beta11_qualification_remains_historical_receipt(self) -> None:
         qualification = json.loads(
