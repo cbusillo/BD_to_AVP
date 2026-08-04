@@ -60,8 +60,25 @@ struct EncodingProfile: Identifiable, Equatable {
     let id: String
     var name: String
     var options: EncodingOptions
+    var jobDefaults: ProfileJobDefaults? = nil
     let kind: Kind
     let systemImage: String
+
+    init(
+        id: String,
+        name: String,
+        options: EncodingOptions,
+        jobDefaults: ProfileJobDefaults? = nil,
+        kind: Kind,
+        systemImage: String
+    ) {
+        self.id = id
+        self.name = name
+        self.options = options
+        self.jobDefaults = jobDefaults
+        self.kind = kind
+        self.systemImage = systemImage
+    }
 
     var isBuiltIn: Bool { kind == .builtIn }
     var isCustom: Bool { kind == .custom }
