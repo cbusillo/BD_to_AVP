@@ -1,39 +1,48 @@
 {
   "schema_version": 1,
-  "qualification_id": "rc1-signed-qualification-v1",
-  "status": "published_partial_exact_artifact",
-  "issues": ["#460", "#457", "#458"],
+  "qualification_id": "rc2-signed-qualification-v1",
+  "status": "preregistered_pending_exact_candidate",
+  "issues": ["#458", "#462"],
   "candidate": {
-    "package_version": "0.3.0rc1",
-    "public_version": "0.3.0-rc.1",
-    "build_version": "158",
-    "release_tag": "v0.3.0-rc.1",
-    "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.1.dmg",
+    "package_version": "0.3.0rc2",
+    "public_version": "0.3.0-rc.2",
+    "build_version": "159",
+    "release_tag": "v0.3.0-rc.2",
+    "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.2.dmg",
     "workflow": "Prerelease",
     "worker_protocol_version": 12,
     "route_table_id": "route-relative-video-quality-v2",
     "mapping_version": 2,
     "route_table_sha256": "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214",
-    "source_git_sha": "96146ac1b5f747dd78440761ad16e73d591fec4b",
-    "dmg_sha256": "0d8aab0e63a4097aa7cc1c7df511dc0582aa767c7dbe81c75971815af3df162c",
-    "signed_app_tree_sha256": "a88b258708a049e960fcb4f8985b5eb7eab50f539a882a2402b947187ba2e70b",
-    "release_run_id": 30865530971,
-    "release_id": 364562591,
-    "appcast_sha256": "e7f39c81f98b4febd3117845f53f6cb444af7b57d9e87fd130411136c4d60cee"
-  },
-  "immutable_publication": {
-    "published_at": "2026-08-04T00:50:32Z",
-    "dmg_size_bytes": 409204018,
-    "must_not_rebuild": true,
-    "receipt": "rc1-signed-field-qualification-progress-v1",
-    "result": "partial"
+    "source_git_sha": null,
+    "dmg_sha256": null,
+    "signed_app_tree_sha256": null,
+    "release_run_id": null,
+    "release_id": null,
+    "appcast_sha256": null
   },
   "prior_evidence": [
     {
-      "id": "beta11-shared-signed-qualification-v1",
-      "scope": "immutable prior quality, media, and signed-package inputs only"
+      "id": "rc1-signed-qualification-v1",
+      "scope": "immutable release identity and partial signed-artifact inputs only"
     }
   ],
+  "immutable_history": {
+    "rc1": {
+      "release_tag": "v0.3.0-rc.1",
+      "package_version": "0.3.0rc1",
+      "build_version": "158",
+      "source_git_sha": "96146ac1b5f747dd78440761ad16e73d591fec4b",
+      "release_run_id": 30865530971,
+      "release_id": 364562591,
+      "published_at": "2026-08-04T00:50:32Z",
+      "dmg_sha256": "0d8aab0e63a4097aa7cc1c7df511dc0582aa767c7dbe81c75971815af3df162c",
+      "signed_app_tree_sha256": "a88b258708a049e960fcb4f8985b5eb7eab50f539a882a2402b947187ba2e70b",
+      "appcast_sha256": "e7f39c81f98b4febd3117845f53f6cb444af7b57d9e87fd130411136c4d60cee",
+      "must_not_rebuild": true
+    },
+    "burned_builds": [147, 154]
+  },
   "execution_policy": {
     "main_must_remain_fixed_while_nonterminal": true,
     "watch_command": "uv run python -m scripts.github_release_run watch",
@@ -46,8 +55,8 @@
   },
   "matrix": [
     {"id": "release-workflow-identity", "phase": "workflow"},
-    {"id": "updater-route-beta11-to-rc1", "phase": "installed_candidate"},
-    {"id": "native-sparkle-notes-rc1", "phase": "installed_candidate"},
+    {"id": "updater-route-rc1-to-rc2", "phase": "installed_candidate"},
+    {"id": "native-sparkle-notes-rc2", "phase": "installed_candidate"},
     {"id": "fresh-profile-quality-ui", "phase": "installed_candidate"},
     {"id": "signed-packaged-route-parity", "phase": "signed_artifact"},
     {"id": "gui-preview-low-local-ample-destination", "phase": "signed_artifact"},
@@ -58,13 +67,14 @@
     {"id": "network-generated-final-output", "phase": "signed_artifact"},
     {"id": "overwrite-and-conversion-cancel", "phase": "signed_artifact"},
     {"id": "malformed-pgs-recovery", "phase": "signed_artifact"},
+    {"id": "profile-files-and-recovery", "phase": "signed_artifact"},
     {"id": "public-diagnostics-and-field-closure", "phase": "post_publication"}
   ],
   "acceptance": {
     "required_case_ids": [
       "release-workflow-identity",
-      "updater-route-beta11-to-rc1",
-      "native-sparkle-notes-rc1",
+      "updater-route-rc1-to-rc2",
+      "native-sparkle-notes-rc2",
       "fresh-profile-quality-ui",
       "signed-packaged-route-parity",
       "gui-preview-low-local-ample-destination",
@@ -75,6 +85,7 @@
       "network-generated-final-output",
       "overwrite-and-conversion-cancel",
       "malformed-pgs-recovery",
+      "profile-files-and-recovery",
       "public-diagnostics-and-field-closure"
     ],
     "signed_rc_complete": false,

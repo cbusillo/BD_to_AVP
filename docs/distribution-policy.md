@@ -100,8 +100,9 @@ document it as an external dependency with preflight behavior.
   `0.3.0b9`, build `154`) failed after production signing but before DMG
   creation and is permanently burned without publication. Beta 11
   (`v0.3.0-beta.11`, internal version `0.3.0b11`, build `156`) is published and
-  immutable. The next prepared production-identity field build is RC 1
-  (`v0.3.0-rc.1`, internal version `0.3.0rc1`, build `158`). It remains
+  immutable. RC 1 (`v0.3.0-rc.1`, internal version `0.3.0rc1`, build `158`) is
+  published and immutable. The next prepared production-identity field build is
+  RC 2 (`v0.3.0-rc.2`, internal version `0.3.0rc2`, build `159`). It remains
   unpublished until exact-SHA signing and public verification complete. Beta 3 build `148` remains the
   manual-download seed and immutable appcast history below the later Beta
   releases.
