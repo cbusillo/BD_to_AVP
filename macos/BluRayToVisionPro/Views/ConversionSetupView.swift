@@ -46,11 +46,19 @@ struct ConversionSetupView: View {
                         .background(Color.orange.opacity(0.12), in: Capsule())
                 }
 
+                Button(action: saveAsNewProfile) {
+                    Label("Save current settings as new profile", systemImage: "plus.square.on.square")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .help("Save current settings as a new profile")
+                .accessibilityLabel("Save current settings as new profile")
+                .disabled(isLocked)
+
                 Menu {
                     if selectedProfile.isCustom, profileModified {
                         Button("Save Changes to \(selectedProfile.name)", action: saveSelectedProfile)
                     }
-                    Button("Save Current Settings as New Profile…", action: saveAsNewProfile)
                     if profileModified {
                         Divider()
                         Button("Reset to \(selectedProfile.name)", action: resetProfile)
