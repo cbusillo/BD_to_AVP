@@ -386,6 +386,31 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
                 ["PGS subtitle extraction did not produce usable subtitle files; continuing without subtitles."],
             )
 
+    def test_pgs_extraction_exception_warns_and_removes_partial_subtitles(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
+            patch.object(sub.config, "skip_subtitles", False),
+            patch("bd_to_avp.modules.sub.Mkv") as mkv_class,
+            patch("bd_to_avp.modules.sub.get_selected_subtitle_tracks", return_value=[]),
+        ):
+            output_path = Path(temp_dir)
+            source_mkv = output_path / "movie.mkv"
+            source_mkv.write_bytes(b"mkv")
+            partial_srt = output_path / "movie.en.srt"
+            partial_srt.write_text("partial", encoding="utf-8")
+            warnings: list[str] = []
+            mkv_class.side_effect = lambda path, **_kwargs: type("MkvStub", (), {"media_path": Path(path)})()
+
+            with patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=ValueError("malformed PGS stream")):
+                extract_subtitle_to_srt(source_mkv, output_path, warnings.append)
+
+            self.assertFalse(partial_srt.exists())
+            self.assertEqual(
+                warnings,
+                ["PGS subtitle extraction failed; continuing without subtitles. (malformed PGS stream)"],
+            )
+
     def test_subtitle_extraction_preserves_cancellation(self) -> None:
         with (
             tempfile.TemporaryDirectory() as temp_dir,
