@@ -262,6 +262,58 @@ class MkvToolPathTests(unittest.TestCase):
         self.assertEqual(artifact.role, "subtitle_payload")
         self.assertEqual(artifact.path, Path(temp_dir) / "track-3.sup")
 
+    def test_malformed_pgs_track_without_dimensions_is_not_selected(self) -> None:
+        metadata = {
+            "streams": [
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "hdmv_pgs_subtitle",
+                    "width": 0,
+                    "height": 0,
+                    "disposition": {},
+                    "tags": {"language": "eng"},
+                },
+                {
+                    "index": 4,
+                    "codec_type": "subtitle",
+                    "codec_name": "hdmv_pgs_subtitle",
+                    "width": 1920,
+                    "height": 1080,
+                    "disposition": {},
+                    "tags": {"language": "eng"},
+                },
+            ]
+        }
+
+        with patch("bd_to_avp.vendor.pgsrip.mkv.run_ffprobe", return_value=metadata):
+            movie = mkv.Mkv("movie.mkv")
+
+        selected = list(movie.get_selected_pgs_tracks(mkv.Options(overwrite=True, one_per_lang=False)))
+
+        self.assertEqual([track.id for track, _, _ in selected], [4])
+
+    def test_pgs_track_with_incomplete_dimensions_remains_selected(self) -> None:
+        metadata = {
+            "streams": [
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "hdmv_pgs_subtitle",
+                    "width": 1920,
+                    "disposition": {},
+                    "tags": {"language": "eng"},
+                }
+            ]
+        }
+
+        with patch("bd_to_avp.vendor.pgsrip.mkv.run_ffprobe", return_value=metadata):
+            movie = mkv.Mkv("movie.mkv")
+
+        selected = list(movie.get_selected_pgs_tracks(mkv.Options(overwrite=True, one_per_lang=False)))
+
+        self.assertEqual([track.id for track, _, _ in selected], [3])
+
 
 if __name__ == "__main__":
     unittest.main()

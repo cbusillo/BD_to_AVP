@@ -117,6 +117,17 @@ class MkvTrack:
         language = tags.get("language") or tags.get("LANGUAGE") or "und"
         language_ietf = tags.get("language_ietf") or tags.get("language-ietf") or language
         stream_type = "subtitles" if stream.get("codec_type") == "subtitle" else stream.get("codec_type", "")
+        properties = {
+            "enabled_track": not bool(disposition.get("disabled", 0)),
+            "forced_track": bool(disposition.get("forced", 0)),
+            "default_track": bool(disposition.get("default", 0)),
+            "language": language,
+            "language_ietf": language_ietf,
+            "track_name": tags.get("title") or tags.get("handler_name"),
+        }
+        if "width" in stream or "height" in stream:
+            properties["width"] = stream.get("width")
+            properties["height"] = stream.get("height")
         return cls(
             {
                 "id": stream["index"],
@@ -124,14 +135,7 @@ class MkvTrack:
                 "codec": "HDMV PGS"
                 if stream.get("codec_name") == "hdmv_pgs_subtitle"
                 else stream.get("codec_name", ""),
-                "properties": {
-                    "enabled_track": not bool(disposition.get("disabled", 0)),
-                    "forced_track": bool(disposition.get("forced", 0)),
-                    "default_track": bool(disposition.get("default", 0)),
-                    "language": language,
-                    "language_ietf": language_ietf,
-                    "track_name": tags.get("title") or tags.get("handler_name"),
-                },
+                "properties": properties,
             }
         )
 
@@ -154,6 +158,16 @@ class MkvTrack:
     @property
     def forced(self):
         return bool(self.properties.get("forced_track", False))
+
+    @property
+    def has_decodable_pgs_dimensions(self) -> bool:
+        if self.type != "subtitles" or self.codec != "HDMV PGS":
+            return True
+        width = self.properties.get("width")
+        height = self.properties.get("height")
+        if width is None or height is None:
+            return True
+        return isinstance(width, int) and width > 0 and isinstance(height, int) and height > 0
 
     def __repr__(self):
         return f"<{self.__class__.__name__} [{self!s}]>"
@@ -203,6 +217,9 @@ class Mkv(Media):
         tracks.sort(key=lambda x: (x.forced, x.id))
         selected_languages: typing.Dict[str, int] = {}
         for t in tracks:
+            if not t.has_decodable_pgs_dimensions:
+                logger.warning("Skipping malformed PGS track without dimensions: %s", t)
+                continue
             language = t.language
             if options.languages and language not in options.languages:
                 logger.debug("Filtering out track %s:%s in %s", t.id, language, self)
