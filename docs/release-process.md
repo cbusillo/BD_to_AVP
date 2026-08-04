@@ -6,22 +6,23 @@ boundary, and publication policy are defined in
 
 The repository carries published, immutable Beta 3 through Beta 8, Beta 10, and
 Beta 11 history at builds `148` through `156` except burned build `154`. Failed,
-unpublished Beta 9 (`0.3.0b9`, build `154`) and the earlier `0.3.0rc1` build
-`147` attempt are permanently burned. The next prepared target is Beta 12 at
-`0.3.0b12`, build `157`. The
+unpublished Beta 9 (`0.3.0b9`, build `154`) and the earlier RC candidate build
+`147` are permanently burned. The first current RC candidate re-nominates
+`0.3.0rc1` at globally newer build `158`. The
 [Beta 8 cut packet](0.3.0-beta.8-cut-packet.md) records immutable publication
 history, [the Beta 9 cut packet](0.3.0-beta.9-cut-packet.md) records the failed
 unpublished attempt, [the Beta 10 cut packet](0.3.0-beta.10-cut-packet.md)
 records immutable publication history, [the Beta 11 cut packet](0.3.0-beta.11-cut-packet.md)
-records historical preparation, and [the Beta 12 cut packet](0.3.0-beta.12-cut-packet.md)
+records historical preparation, [the Beta 12 cut packet](0.3.0-beta.12-cut-packet.md)
+records abandoned Beta metadata, and [the RC 1 cut packet](0.3.0-rc.1-cut-packet.md)
 records current pending metadata.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
 entrypoints, Beta 3 bootstrap contract, and one-time metadata recovery are
-implemented and regression-covered. Issues #392 and #422 own the shared Beta 11
-qualification. They authorize metadata preparation and review; exact-SHA
-dispatch remains a deliberate later decision, and run-bound signing approval
+implemented and regression-covered. Issue #460 owns RC 1 qualification. It
+authorizes metadata preparation and review; exact-SHA dispatch remains a
+deliberate later decision, and run-bound signing approval
 remains a separate authorization boundary.
 
 ## Release Preparation
@@ -81,14 +82,12 @@ or from a stale main commit.
 
 ## Release Orchestration
 
-> **Beta 10 is published and immutable; Beta 11 is prepared but not yet
-> published.** Beta 10 was published on July 29, 2026 from protected-main SHA
-> `50b874a4ad681762f3aa94e02926b8a82f0aa221` by guarded Prerelease run
-> `30445073119`. It must not be rebuilt. Issues #392 and #422 authorize Beta 11
-> metadata preparation and review, not unattended dispatch. Dispatch Beta 11
+> **Beta 11 is published and immutable; RC 1 is prepared but not yet
+> published.** Beta 11 remains the last public artifact. Issue #460 authorizes
+> RC 1 metadata preparation and review, not unattended dispatch. Dispatch RC 1
 > only after its pre-registered matrix merges green and a temporary `main`
 > merge hold is active. Keep `main` fixed while the workflow is nonterminal,
-> and do not describe Beta 11 as public until signing, notarization, appcast
+> and do not describe RC 1 as public until signing, notarization, appcast
 > publication, and route verification complete.
 
 Dispatch `Stable` from `main` only for reviewed committed Stable metadata, or

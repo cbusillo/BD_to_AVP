@@ -8,10 +8,11 @@ The application preference model, release metadata/history parser, appcast
 tooling, reusable release engine, and guarded operator entrypoints implement
 this four-route contract. Beta 3 through Beta 8, Beta 10, and Beta 11 are
 published and immutable at builds `148` through `156`, excluding permanently
-burned builds `147` and `154`. Failed Beta 9 (`0.3.0b9`, build `154`) was never
-published. The next prepared target is Beta 12 at `0.3.0b12` build `157`.
-Issues #392 and #422 own the shared exact-signed-candidate qualification;
-run-bound signing approval remains a separate authorization boundary.
+burned builds `147`, `154`, and abandoned metadata build `157`. Failed Beta 9
+(`0.3.0b9`, build `154`) was never published. The next prepared target is RC 1
+at `0.3.0rc1` build `158`. Issue
+#460 owns its exact-signed-candidate qualification; run-bound signing approval
+remains a separate authorization boundary.
 
 ## Production Identity
 
@@ -241,33 +242,37 @@ burned Beta 9 build `154` absent. Stable and RC exclude all Beta items; Beta and
 Alpha admit them. Historical metadata and release evidence are in
 [the Beta 10 cut packet](0.3.0-beta.10-cut-packet.md).
 
-## Beta 12 Prepared Target
+## RC 1 Prepared Target
 
-The repository is prepared for review of the guarded `v0.3.0-beta.12`
+The repository is prepared for review of the guarded `v0.3.0-rc.1`
 Prerelease workflow:
 
-- internal version `0.3.0b12`;
-- public tag and title `v0.3.0-beta.12`;
-- global build `157`;
-- Sparkle channel `beta`;
+- internal version `0.3.0rc1`;
+- public tag and title `v0.3.0-rc.1`;
+- global build `158`;
+- Sparkle channel `rc`;
 - GitHub prerelease, never Latest, PyPI, or Homebrew; and
 - the same production product, bundle, feed, key, signing team, and diagnostics
   endpoint as Beta 11.
 
-Publication must place Beta 12 above immutable Beta 11 build `156`, Beta 10
-build `155`, Beta 8 build `153`, Beta 7 build `152`, Beta 6 build `151`, Beta 5
-build `150`, Beta 4 build `149`, Beta 3 build `148`, Stable build `146`, RC5
-build `145`, and RC4 build `144`, with burned build `154` absent. Stable and RC
-exclude all Beta items; Beta and Alpha admit them, allowing an installed Beta 11
-to update forward to Beta 12 without changing the saved route.
+RC 1 deliberately re-nominates the never-published `0.3.0rc1` version string
+from burned build `147` at a newer build. If RC 1 is published, the Beta 3
+recovery receipt's historical absence assertion for that tag is superseded; its
+immutable Beta 3 recovery evidence and build-`147` exclusion remain unchanged.
 
-Issues #392 and #422 authorize metadata preparation and review of this shared
-candidate. The repository has no freeze entry for this exact tag; that absence
-allows workflow preflight but does not assert that a tag, draft, DMG, release,
-or appcast item exists. Dispatch remains a deliberate later decision under a
-fixed-`main` merge hold. The reviewed metadata, release-note seed, and
-qualification boundary are in
-[the Beta 12 cut packet](0.3.0-beta.12-cut-packet.md).
+Publication must place RC 1 above immutable Beta 11 build `156`, Beta 10 build
+`155`, Beta 8 build `153`, Beta 7 build `152`, Beta 6 build `151`, Beta 5 build
+`150`, Beta 4 build `149`, Beta 3 build `148`, Stable build `146`, RC5 build
+`145`, and RC4 build `144`, with burned builds `147` and `154` absent. Stable
+continues to exclude the RC; RC, Beta, and Alpha admit it, allowing an installed
+RC-route client to update forward without changing its saved route.
+
+Issue #460 authorizes metadata preparation and review of this candidate. The
+repository has no freeze entry for this exact tag; that absence allows workflow
+preflight but does not assert that a tag, draft, DMG, release, or appcast item
+exists. Dispatch requires an explicit RC-creation decision under a fixed-`main`
+merge hold. The reviewed metadata, release-note seed, and qualification boundary
+are in [the RC 1 cut packet](0.3.0-rc.1-cut-packet.md).
 
 ## Historical Boundaries
 
