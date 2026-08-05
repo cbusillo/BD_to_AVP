@@ -48,12 +48,11 @@ class PgsReader:
     def read_segments(cls, data: bytes, media_path: MediaPath):
         offset = 0
         while offset < len(data):
-            remaining = data[offset:]
-            if remaining[:2] != b"PG":
+            if data[offset : offset + 2] != b"PG":
                 logger.warning("%s Ignoring invalid PGS segment data at offset %d", media_path, offset)
                 break
 
-            if len(remaining) < 13:
+            if len(data) - offset < 13:
                 logger.warning("%s Ignoring truncated PGS segment header at offset %d", media_path, offset)
                 break
 
