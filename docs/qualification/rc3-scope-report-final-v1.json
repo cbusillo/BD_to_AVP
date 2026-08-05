@@ -1,8 +1,6 @@
 {
   "as_of": "2026-08-05",
-  "blocking_retests": [
-    "native-sparkle-release-notes"
-  ],
+  "blocking_retests": [],
   "candidate_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95",
   "cases": [
     {
@@ -38,13 +36,13 @@
       "blocking_phase": "release_candidate",
       "case_id": "native-sparkle-release-notes",
       "evidence": {
-        "receipt_id": null,
-        "reference": null,
-        "source_sha": null
+        "receipt_id": "rc3-native-sparkle-release-notes-v1",
+        "reference": "docs/qualification/rc3-targeted-qualification-v1.json",
+        "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95"
       },
       "invalidating_paths": [],
-      "reason": "The candidate migration explicitly requires fresh targeted evidence.",
-      "status": "retest",
+      "reason": "Accepted evidence is bound to the exact candidate SHA.",
+      "status": "covered",
       "tier": 2
     },
     {
@@ -217,15 +215,15 @@
     }
   ],
   "first_candidate_of_cycle": false,
-  "passed": false,
+  "passed": true,
   "policy_id": "release-qualification-policy-v1",
   "qualification_id": "rc3-signed-qualification-v1",
   "release_stage": "rc",
   "schema_version": 1,
   "summary": {
     "carry": 3,
-    "covered": 10,
+    "covered": 11,
     "external": 1,
-    "retest": 1
+    "retest": 0
   }
 }
