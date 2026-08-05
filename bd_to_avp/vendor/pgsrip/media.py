@@ -84,8 +84,12 @@ class PgsSubtitleItem:
                 if ods.width is not None and ods.height is not None:
                     declared_pixels += ods.width * ods.height
 
+            if declared_pixels == 0:
+                logger.warning("Skipping display set without declared image dimensions")
+                return None
+
             try:
-                image = PgsImage(img_data, palettes, max_pixels=declared_pixels or None)
+                image = PgsImage(img_data, palettes, max_pixels=declared_pixels)
                 _ = image.data  # trigger decode now so malformed data raises here
                 return image
             except Exception as exc:

@@ -1,3 +1,4 @@
+import inspect
 import unittest
 from pathlib import Path
 from typing import Any, cast
@@ -138,12 +139,17 @@ class PgsImageRenderTests(unittest.TestCase):
 
 
 class PgsReaderTests(unittest.TestCase):
-    def test_reads_many_segments_without_tail_slicing(self) -> None:
+    def test_reads_many_segments_correctly(self) -> None:
         data = b"".join(_pgs_segment_bytes(b"") for _ in range(20_000))
 
         segments = list(PgsReader.read_segments(data, MediaPath("many.sup")))
 
         self.assertEqual(len(segments), 20_000)
+
+    def test_reader_does_not_slice_the_remaining_buffer(self) -> None:
+        source = inspect.getsource(PgsReader.read_segments)
+
+        self.assertNotIn("data[offset:]", source)
 
     def test_skips_unknown_segment_and_continues(self) -> None:
         data = _pgs_segment_bytes(b"") + _raw_pgs_segment_bytes(0x99, b"") + _pgs_segment_bytes(b"")
@@ -293,6 +299,7 @@ class PgsMalformedItemIsolationTests(unittest.TestCase):
         ds = Mock()
         ds.pcs.presentation_timestamp = 1000
         ds.pcs.is_start.return_value = is_start
+        ds.is_start.side_effect = ds.pcs.is_start
         ds.pds_segments = [pds]
         ds.ods_segments = [ods]
         ds.wds.num_windows = 1
@@ -316,6 +323,7 @@ class PgsMalformedItemIsolationTests(unittest.TestCase):
         ds = Mock()
         ds.pcs.presentation_timestamp = 5000
         ds.pcs.is_start.return_value = True
+        ds.is_start.side_effect = ds.pcs.is_start
         ds.pds_segments = [pds]
         ds.ods_segments = [ods]
         ds.wds.num_windows = 1
@@ -336,6 +344,13 @@ class PgsMalformedItemIsolationTests(unittest.TestCase):
         self.assertIsNotNone(result)
         # Accessing .data must not raise
         _ = result.data
+
+    def test_generate_image_skips_display_set_without_declared_dimensions(self) -> None:
+        display_set = self._make_good_display_set()
+        display_set.ods_segments[0].width = None
+        display_set.ods_segments[0].height = None
+
+        self.assertIsNone(PgsSubtitleItem.generate_image([display_set]))
 
     def test_create_items_skips_malformed_item_and_keeps_good_ones(self) -> None:
         """create_items produces items only for display sets whose image decoded OK.
