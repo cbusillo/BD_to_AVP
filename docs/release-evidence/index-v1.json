@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "releases": [
+    {
+      "tag": "v0.3.0-rc.3",
+      "release_id": 365399671,
+      "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95",
+      "workflow_run_id": 30990186667,
+      "published_at": "2026-08-05T09:06:41Z",
+      "receipt": "docs/release-evidence/v0.3.0-rc.3/release-receipt.json",
+      "receipt_file_sha256": "e2cd5c52b5e177048783a8ca2d8f6d8ba7580be8f933702a42072928839f2c3d",
+      "receipt_origin": "post_publication_generated_from_verified_public_facts",
+      "publication_record": "docs/release-evidence/v0.3.0-rc.3/publication-record.json"
+    }
+  ]
+}

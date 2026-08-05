@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "qualification_id": "rc3-signed-qualification-v1",
-  "status": "preregistered_pending_exact_candidate",
+  "status": "published_immutable_targeted_qualification_failed",
   "issues": ["#458"],
   "qualification_policy": {
     "id": "release-qualification-policy-v1",
@@ -19,12 +19,23 @@
     "route_table_id": "route-relative-video-quality-v2",
     "mapping_version": 2,
     "route_table_sha256": "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214",
-    "source_git_sha": null,
-    "dmg_sha256": null,
-    "signed_app_tree_sha256": null,
-    "release_run_id": null,
-    "release_id": null,
-    "appcast_sha256": null
+    "source_git_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95",
+    "dmg_sha256": "e1d936cc3231aea4f9d87fde1fd9e7792c1189254fc85bfc10fea382ffce690f",
+    "signed_app_tree_sha256": "30a7256feb4fb1dee78de70eefeec6a5e69db0e7355e7fd2aaf46efaa71f0d37",
+    "release_run_id": 30990186667,
+    "release_id": 365399671,
+    "appcast_sha256": "6404424910172cfccc9f23472e8748eda7bfba5b1f07d373e69cdb9b0679e9ed"
+  },
+  "immutable_publication": {
+    "published_at": "2026-08-05T09:06:41Z",
+    "dmg_size_bytes": 409418547,
+    "must_not_rebuild": true,
+    "receipt": "docs/release-evidence/v0.3.0-rc.3/release-receipt.json",
+    "targeted_qualification": "docs/qualification/rc3-targeted-qualification-v1.json",
+    "result": "published_artifact_qualification_failed",
+    "blocking_case_ids": [
+      "native-sparkle-notes-rc3"
+    ]
   },
   "prior_evidence": [
     {
@@ -63,21 +74,21 @@
     "field_qualification_timing": "post_publication_exact_artifact"
   },
   "matrix": [
-    {"id": "release-workflow-identity", "policy_case_id": "release-workflow-identity", "phase": "workflow", "migration": "release_run_receipt"},
-    {"id": "updater-route-rc2-to-rc3", "policy_case_id": "sparkle-update-route", "phase": "installed_candidate", "migration": "fresh_retest"},
-    {"id": "native-sparkle-notes-rc3", "policy_case_id": "native-sparkle-release-notes", "phase": "installed_candidate", "migration": "fresh_retest"},
-    {"id": "profile-save-action-accessibility", "policy_case_id": "profile-save-action-accessibility", "phase": "installed_candidate", "migration": "fresh_retest"},
-    {"id": "signed-packaged-route-parity", "policy_case_id": "signed-packaged-route-parity", "phase": "signed_artifact", "migration": "release_run_receipt"},
-    {"id": "gui-preview-low-local-ample-destination", "policy_case_id": "gui-preview-low-local-ample-destination", "phase": "signed_artifact", "migration": "scope_evaluated"},
-    {"id": "gui-preview-cancel-cleanup", "policy_case_id": "gui-preview-cancel-cleanup", "phase": "signed_artifact", "migration": "scope_evaluated"},
-    {"id": "gui-preview-failure-cleanup", "policy_case_id": "gui-preview-failure-cleanup", "phase": "signed_artifact", "migration": "scope_evaluated"},
-    {"id": "capacity-known-low", "policy_case_id": "capacity-known-low", "phase": "signed_artifact", "migration": "scope_evaluated"},
-    {"id": "capacity-unknown-and-conflicting", "policy_case_id": "capacity-unknown-and-conflicting", "phase": "signed_artifact", "migration": "scope_evaluated"},
-    {"id": "network-generated-final-output", "policy_case_id": "network-generated-final-output", "phase": "signed_artifact", "migration": "scope_evaluated"},
-    {"id": "overwrite-and-conversion-cancel", "policy_case_id": "overwrite-and-conversion-cancel", "phase": "signed_artifact", "migration": "scope_evaluated"},
-    {"id": "malformed-pgs-parser-recovery", "policy_case_id": "malformed-pgs-parser-recovery", "phase": "signed_artifact", "migration": "fresh_retest"},
-    {"id": "subtitle-partial-output-diagnostics", "policy_case_id": "subtitle-partial-output-diagnostics", "phase": "signed_artifact", "migration": "fresh_retest"},
-    {"id": "public-diagnostics-and-field-closure", "policy_case_id": "public-diagnostics-and-field-closure", "phase": "post_publication", "migration": "external_nonblocking"}
+    {"id": "release-workflow-identity", "policy_case_id": "release-workflow-identity", "phase": "workflow", "migration": "release_run_receipt", "result": "passed", "evidence": "docs/release-evidence/v0.3.0-rc.3/release-receipt.json"},
+    {"id": "updater-route-rc2-to-rc3", "policy_case_id": "sparkle-update-route", "phase": "installed_candidate", "migration": "fresh_retest", "result": "passed", "evidence": "docs/qualification/rc3-targeted-qualification-v1.json"},
+    {"id": "native-sparkle-notes-rc3", "policy_case_id": "native-sparkle-release-notes", "phase": "installed_candidate", "migration": "fresh_retest", "result": "failed", "evidence": "docs/qualification/rc3-targeted-qualification-v1.json"},
+    {"id": "profile-save-action-accessibility", "policy_case_id": "profile-save-action-accessibility", "phase": "installed_candidate", "migration": "fresh_retest", "result": "passed", "evidence": "docs/qualification/rc3-targeted-qualification-v1.json"},
+    {"id": "signed-packaged-route-parity", "policy_case_id": "signed-packaged-route-parity", "phase": "signed_artifact", "migration": "release_run_receipt", "result": "passed", "evidence": "docs/release-evidence/v0.3.0-rc.3/release-receipt.json"},
+    {"id": "gui-preview-low-local-ample-destination", "policy_case_id": "gui-preview-low-local-ample-destination", "phase": "signed_artifact", "migration": "scope_evaluated", "result": "carried", "evidence": "docs/qualification/prior-signed-functional-evidence-v1.json"},
+    {"id": "gui-preview-cancel-cleanup", "policy_case_id": "gui-preview-cancel-cleanup", "phase": "signed_artifact", "migration": "scope_evaluated", "result": "passed", "evidence": "docs/qualification/rc3-targeted-qualification-v1.json"},
+    {"id": "gui-preview-failure-cleanup", "policy_case_id": "gui-preview-failure-cleanup", "phase": "signed_artifact", "migration": "scope_evaluated", "result": "passed", "evidence": "docs/qualification/rc3-targeted-qualification-v1.json"},
+    {"id": "capacity-known-low", "policy_case_id": "capacity-known-low", "phase": "signed_artifact", "migration": "scope_evaluated", "result": "carried", "evidence": "docs/qualification/prior-signed-functional-evidence-v1.json"},
+    {"id": "capacity-unknown-and-conflicting", "policy_case_id": "capacity-unknown-and-conflicting", "phase": "signed_artifact", "migration": "scope_evaluated", "result": "carried", "evidence": "docs/qualification/prior-signed-functional-evidence-v1.json"},
+    {"id": "network-generated-final-output", "policy_case_id": "network-generated-final-output", "phase": "signed_artifact", "migration": "scope_evaluated", "result": "passed", "evidence": "docs/qualification/rc3-targeted-qualification-v1.json"},
+    {"id": "overwrite-and-conversion-cancel", "policy_case_id": "overwrite-and-conversion-cancel", "phase": "signed_artifact", "migration": "scope_evaluated", "result": "passed", "evidence": "docs/qualification/rc3-targeted-qualification-v1.json"},
+    {"id": "malformed-pgs-parser-recovery", "policy_case_id": "malformed-pgs-parser-recovery", "phase": "signed_artifact", "migration": "fresh_retest", "result": "passed", "evidence": "docs/qualification/rc3-targeted-qualification-v1.json"},
+    {"id": "subtitle-partial-output-diagnostics", "policy_case_id": "subtitle-partial-output-diagnostics", "phase": "signed_artifact", "migration": "fresh_retest", "result": "passed", "evidence": "docs/qualification/rc3-targeted-qualification-v1.json"},
+    {"id": "public-diagnostics-and-field-closure", "policy_case_id": "public-diagnostics-and-field-closure", "phase": "post_publication", "migration": "external_nonblocking", "result": "passed_nonblocking", "evidence": "docs/qualification/rc3-targeted-qualification-v1.json"}
   ],
   "acceptance": {
     "required_case_ids": [
@@ -114,6 +125,11 @@
       "public-diagnostics-and-field-closure"
     ],
     "nonblocking_case_ids": ["public-diagnostics-and-field-closure"],
+    "passed_case_count": 11,
+    "carried_case_count": 3,
+    "failed_case_count": 1,
+    "blocking_case_ids": ["native-sparkle-notes-rc3"],
+    "field_case_open": false,
     "signed_rc_complete": false,
     "passed": false
   }

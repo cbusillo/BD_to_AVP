@@ -288,11 +288,11 @@ Beta without pretending the current Stable or RC client can discover it.
    apps remain separate and cannot Sparkle-update into the production app. Do
    not reopen them to edit the shared profile library after Beta 3 installation.
 
-### RC 3 Preparation Smoke
+### Historical RC 3 Preparation Smoke
 
-Run these checks after the RC 3 metadata preparation lands and before
-workflow dispatch. They prove the committed target and authorization boundary,
-not a signed or published app.
+These checks ran after RC 3 metadata preparation and before workflow dispatch.
+They prove the committed target and authorization boundary, not the later signed
+or published app.
 
 1. Run `uv run python -m scripts.release validate` and confirm internal
    `0.3.0rc3`, public `0.3.0-rc.3`, build `160`, RC channel, prerelease,
@@ -308,14 +308,13 @@ not a signed or published app.
    must be absent, Stable must exclude the RC, and RC, Beta, and Alpha must
    admit it.
 4. Confirm immutable RC 2 targets its published release identity, then confirm
-   the live repository has no RC 3 tag, release, draft, asset, or appcast item.
-5. Continue only through the exact-SHA Prerelease workflow. Signed-app and
-   update-route checks; carried preview, capacity, cleanup, generated-output,
-   overwrite, and cancellation cases; and the new malformed-PGS,
-   subtitle-diagnostics, and accessibility cases remain incomplete until the
-   guarded workflow and exact-artifact checks in
-   `docs/qualification/rc3-signed-qualification-v1.json` and the RC 3 field
-   receipts finish.
+   the live repository had no RC 3 tag, release, draft, asset, or appcast item
+   before dispatch.
+5. Continue only through the exact-SHA Prerelease workflow. The later
+   exact-artifact result is recorded in
+   `docs/qualification/rc3-signed-qualification-v1.json`: all functional and
+   field checks passed or carried, while the immutable native notes retained
+   one missing issue-link defect.
    Physical M5 Vision Pro AV1 evidence stays in #409.
 
 ## Follow-Up Routing

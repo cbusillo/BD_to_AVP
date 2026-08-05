@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "release_tag": "v0.3.0-rc.3",
+  "release_id": 365399671,
+  "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95",
+  "workflow_run_id": 30990186667,
+  "workflow_conclusion": "success",
+  "published_at": "2026-08-05T09:06:41Z",
+  "receipt_file_sha256": "e2cd5c52b5e177048783a8ca2d8f6d8ba7580be8f933702a42072928839f2c3d",
+  "receipt_origin": "post_publication_generated_from_verified_public_facts",
+  "immutable_release_receipt_asset": false,
+  "receipt_asset_id": null,
+  "live_pages": {
+    "state": "verified",
+    "sha256": "6404424910172cfccc9f23472e8748eda7bfba5b1f07d373e69cdb9b0679e9ed",
+    "url": "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
+  },
+  "note": "Receipt automation merged after RC3 publication; the checked receipt is a deterministic backfill and was not attached to the immutable release."
+}

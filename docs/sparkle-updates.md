@@ -69,10 +69,10 @@ Each new appcast item embeds the digest-bound draft release body as Markdown, so
 Sparkle uses its adaptive native text view without loading GitHub page chrome or
 making a second release-note request. A full-release link remains available for
 downloads and extended context, and historical external-link items remain valid.
-The live feed carries cumulative production history through RC 2 build `159`.
+The live feed carries cumulative production history through RC 3 build `160`.
 Failed Beta 9 build `154` and abandoned Beta 12 metadata build `157` never
-entered the feed; prepared RC 3 metadata does not alter it before guarded
-publication.
+entered the feed. RC 3 is an immutable `rc`-channel item and remains excluded
+from Stable.
 See [release-process.md](release-process.md) for the operator sequence.
 
 Stable `0.2.143` remains compatible with macOS 14. The production SwiftUI line
@@ -271,13 +271,12 @@ Sparkle-upgrade into Beta 3.
 Published `v0.3.0-beta.11` (`0.3.0b11`, build `156`) is the immutable head of
 the Beta lineage above Beta 10 and Beta 8 through Beta 3. Failed Beta 9
 build `154` and abandoned Beta 12 metadata build `157` are omitted from public
-history. Published `v0.3.0-rc.1` (`0.3.0rc1`, build `158`) and
-`v0.3.0-rc.2` (`0.3.0rc2`, build `159`) are immutable; RC 2 is the current
-head. The next prepared item is `v0.3.0-rc.3` (`0.3.0rc3`, build `160`).
-Publication must append RC 3 above the existing history, exclude it from Stable,
-and admit it on RC, Beta, and Alpha. The exact-SHA Prerelease workflow, signing
-approval, notarization, and public verification remain separate fail-closed
-boundaries.
+history. Published `v0.3.0-rc.1` (`0.3.0rc1`, build `158`),
+`v0.3.0-rc.2` (`0.3.0rc2`, build `159`), and `v0.3.0-rc.3`
+(`0.3.0rc3`, build `160`) are immutable; RC 3 is the current head. RC 3 is
+excluded from Stable and admitted on RC, Beta, and Alpha. Its updater path
+passed, but targeted qualification retains one presentation defect because the
+embedded native notes contain no issue link.
 
 ## Runtime Integration and UX
 

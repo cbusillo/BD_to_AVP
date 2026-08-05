@@ -180,9 +180,10 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertIn(f"#{pull_request}", cut_packet)
         self.assertIn("Privacy rules version `5`", cut_packet)
         self.assertIn("#458", cut_packet)
-        self.assertIn("Prepared metadata; publication pending", cut_packet)
-        self.assertIn("last exact public artifact is immutable RC 2", cut_packet)
-        self.assertIn("fresh explicit run-bound authorization", cut_packet)
+        self.assertIn("Published and immutable", cut_packet)
+        self.assertIn("30990186667", cut_packet)
+        self.assertIn("native updater notes", cut_packet)
+        self.assertIn("post-publication backfill", cut_packet)
 
         qualification = json.loads(
             (REPO_ROOT / "docs" / "qualification" / "rc3-signed-qualification-v1.json").read_text(encoding="utf-8")
@@ -242,21 +243,52 @@ class ReleaseMetadataTests(unittest.TestCase):
             {case["migration"] for case in qualification["matrix"]},
             {"release_run_receipt", "fresh_retest", "scope_evaluated", "external_nonblocking"},
         )
-        for field in (
-            "source_git_sha",
-            "dmg_sha256",
-            "signed_app_tree_sha256",
-            "release_run_id",
-            "release_id",
-            "appcast_sha256",
-        ):
-            self.assertIsNone(qualification["candidate"][field])
+        self.assertEqual(
+            qualification["candidate"]["source_git_sha"],
+            "0b06582a83a45bb38d851e62ccf38cd148c7bb95",
+        )
+        self.assertEqual(
+            qualification["candidate"]["dmg_sha256"],
+            "e1d936cc3231aea4f9d87fde1fd9e7792c1189254fc85bfc10fea382ffce690f",
+        )
+        self.assertEqual(
+            qualification["candidate"]["signed_app_tree_sha256"],
+            "30a7256feb4fb1dee78de70eefeec6a5e69db0e7355e7fd2aaf46efaa71f0d37",
+        )
+        self.assertEqual(qualification["candidate"]["release_run_id"], 30990186667)
+        self.assertEqual(qualification["candidate"]["release_id"], 365399671)
+        self.assertEqual(
+            qualification["candidate"]["appcast_sha256"],
+            "6404424910172cfccc9f23472e8748eda7bfba5b1f07d373e69cdb9b0679e9ed",
+        )
+        self.assertEqual(
+            qualification["status"],
+            "published_immutable_targeted_qualification_failed",
+        )
+        self.assertEqual(qualification["acceptance"]["blocking_case_ids"], ["native-sparkle-notes-rc3"])
+        self.assertFalse(qualification["acceptance"]["field_case_open"])
         self.assertTrue(
             qualification["execution_policy"]["macos_signing_requires_fresh_explicit_run_bound_authorization"]
         )
         self.assertEqual(qualification["execution_policy"]["approval_required_exit_code"], 20)
         self.assertFalse(qualification["acceptance"]["signed_rc_complete"])
         self.assertFalse(qualification["acceptance"]["passed"])
+
+        targeted = json.loads(
+            (REPO_ROOT / "docs" / "qualification" / "rc3-targeted-qualification-v1.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(targeted["result"], "failed_native_notes_issue_link_missing")
+        self.assertEqual(targeted["acceptance"]["blocking_case_ids"], ["native-sparkle-notes-rc3"])
+        self.assertFalse(targeted["acceptance"]["field_case_open"])
+
+        publication = json.loads(
+            (REPO_ROOT / "docs" / "release-evidence" / "v0.3.0-rc.3" / "publication-record.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(publication["receipt_origin"], "post_publication_generated_from_verified_public_facts")
+        self.assertFalse(publication["immutable_release_receipt_asset"])
+        self.assertIsNone(publication["receipt_asset_id"])
 
         sparkle_qualification = json.loads(
             (REPO_ROOT / "docs" / "qualification" / "rc1-to-rc2-sparkle-qualification-v2.json").read_text(
