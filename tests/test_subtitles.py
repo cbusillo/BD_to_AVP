@@ -2,10 +2,20 @@ import tempfile
 import unittest
 from contextlib import chdir
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from bd_to_avp.modules import sub
+from bd_to_avp.observability import (
+    ObservabilityContext,
+    ObservabilityEmitter,
+    ObservabilityEvent,
+    ObservabilityPrivacy,
+    ObservabilitySeverity,
+    ObservabilityStage,
+)
 from bd_to_avp.process_runner import ProcessCancelled
+from bd_to_avp.runtime import ObservabilityStream, RunContext
 from bd_to_avp.vendor.pgsrip.media_path import MediaPath
 from bd_to_avp.vendor.pgsrip.mkv import MkvTrack
 from bd_to_avp.modules.sub import (
@@ -17,6 +27,29 @@ from bd_to_avp.modules.sub import (
     subtitle_rip_options,
     subtitle_language_alpha2,
 )
+
+
+class RecordingSink:
+    def __init__(self) -> None:
+        self.events: list[ObservabilityEvent] = []
+
+    def emit(self, event: ObservabilityEvent) -> None:
+        self.events.append(event)
+
+
+def make_run_context() -> tuple[RunContext, RecordingSink]:
+    sink = RecordingSink()
+    stream = ObservabilityStream(ObservabilityEmitter.APP, sink)
+    return RunContext(observability=stream), sink
+
+
+def subtitle_terminal_events(sink: RecordingSink) -> list[ObservabilityEvent]:
+    terminal_kinds = {
+        "subtitle.extract.completed",
+        "subtitle.extract.failed",
+        "subtitle.extract.cancelled",
+    }
+    return [event for event in sink.events if event.kind in terminal_kinds]
 
 
 class ForcedSubtitleNamingTests(unittest.TestCase):
@@ -331,7 +364,17 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
             patch.object(sub.config, "skip_subtitles", False),
             patch.object(sub.config, "continue_on_error", False),
             patch("bd_to_avp.modules.sub.Mkv") as mkv_class,
-            patch("bd_to_avp.modules.sub.get_selected_subtitle_tracks", return_value=[]),
+            patch(
+                "bd_to_avp.modules.sub.get_selected_subtitle_tracks",
+                return_value=[
+                    {
+                        "index": 3,
+                        "language": "eng",
+                        "forced": 0,
+                        "srt_path": Path(temp_dir) / "output" / "movie.en.srt",
+                    }
+                ],
+            ),
             patch("bd_to_avp.modules.sub.mark_forced_srt_files") as mark_forced,
         ):
             temp_path = Path(temp_dir)
@@ -344,6 +387,7 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
 
             def write_srt(mkv_file, _options):
                 Path(str(mkv_file.media_path)).with_suffix(".en.srt").write_text("subtitle", encoding="utf-8")
+                return 1
 
             with patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=write_srt) as rip:
                 mkv_class.side_effect = lambda path, **_kwargs: type("MkvStub", (), {"media_path": Path(path)})()
@@ -356,15 +400,29 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
             self.assertFalse((source_folder / "movie.en.srt").exists())
             self.assertFalse((output_folder / "movie.mkv").exists())
             rip.assert_called_once()
-            mark_forced.assert_called_once_with([], None)
+            selected_tracks = mark_forced.call_args.args[0]
+            self.assertEqual(len(selected_tracks), 1)
+            self.assertEqual(selected_tracks[0]["index"], 3)
+            mark_forced.assert_called_once_with(selected_tracks, None)
 
     def test_unreadable_pgs_tracks_warn_and_remove_partial_subtitles(self) -> None:
+        run_context, sink = make_run_context()
         with (
             tempfile.TemporaryDirectory() as temp_dir,
             patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
             patch.object(sub.config, "skip_subtitles", False),
             patch("bd_to_avp.modules.sub.Mkv") as mkv_class,
-            patch("bd_to_avp.modules.sub.get_selected_subtitle_tracks", return_value=[]),
+            patch(
+                "bd_to_avp.modules.sub.get_selected_subtitle_tracks",
+                return_value=[
+                    {
+                        "index": 3,
+                        "language": "eng",
+                        "forced": 0,
+                        "srt_path": Path(temp_dir) / "movie.en.srt",
+                    }
+                ],
+            ),
         ):
             output_path = Path(temp_dir)
             source_mkv = output_path / "movie.mkv"
@@ -378,21 +436,37 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
                 return 0
 
             with patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=produce_no_usable_subtitles):
-                extract_subtitle_to_srt(source_mkv, output_path, warnings.append)
+                extract_subtitle_to_srt(source_mkv, output_path, warnings.append, run_context=run_context)
 
             self.assertFalse(partial_srt.exists())
             self.assertEqual(
                 warnings,
                 ["PGS subtitle extraction did not produce usable subtitle files; continuing without subtitles."],
             )
+            self.assertEqual(len(subtitle_terminal_events(sink)), 1)
+            failed = subtitle_terminal_events(sink)[0]
+            self.assertIsNotNone(failed.data.failure)
+            assert failed.data.failure is not None
+            self.assertEqual(failed.data.failure.code, "subtitle_rip_no_output")
 
     def test_pgs_extraction_exception_warns_and_removes_partial_subtitles(self) -> None:
+        run_context, sink = make_run_context()
         with (
             tempfile.TemporaryDirectory() as temp_dir,
             patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
             patch.object(sub.config, "skip_subtitles", False),
             patch("bd_to_avp.modules.sub.Mkv") as mkv_class,
-            patch("bd_to_avp.modules.sub.get_selected_subtitle_tracks", return_value=[]),
+            patch(
+                "bd_to_avp.modules.sub.get_selected_subtitle_tracks",
+                return_value=[
+                    {
+                        "index": 3,
+                        "language": "eng",
+                        "forced": 0,
+                        "srt_path": Path(temp_dir) / "movie.en.srt",
+                    }
+                ],
+            ),
         ):
             output_path = Path(temp_dir)
             source_mkv = output_path / "movie.mkv"
@@ -403,15 +477,22 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
             mkv_class.side_effect = lambda path, **_kwargs: type("MkvStub", (), {"media_path": Path(path)})()
 
             with patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=ValueError("malformed PGS stream")):
-                extract_subtitle_to_srt(source_mkv, output_path, warnings.append)
+                extract_subtitle_to_srt(source_mkv, output_path, warnings.append, run_context=run_context)
 
             self.assertFalse(partial_srt.exists())
             self.assertEqual(
                 warnings,
                 ["PGS subtitle extraction failed; continuing without subtitles. (malformed PGS stream)"],
             )
+            self.assertEqual(len(subtitle_terminal_events(sink)), 1)
+            failed = subtitle_terminal_events(sink)[0]
+            self.assertIsNotNone(failed.data.failure)
+            assert failed.data.failure is not None
+            self.assertEqual(failed.data.failure.code, "subtitle_rip_failed")
+            self.assertNotIn("malformed PGS stream", failed.to_json_line())
 
     def test_subtitle_extraction_preserves_cancellation(self) -> None:
+        run_context, sink = make_run_context()
         with (
             tempfile.TemporaryDirectory() as temp_dir,
             patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
@@ -426,7 +507,18 @@ class SubtitleStreamDetectionTests(unittest.TestCase):
             mkv_class.side_effect = lambda path, **_kwargs: type("MkvStub", (), {"media_path": Path(path)})()
 
             with self.assertRaisesRegex(ProcessCancelled, "cancelled"):
-                extract_subtitle_to_srt(source_mkv, output_path)
+                extract_subtitle_to_srt(source_mkv, output_path, run_context=run_context)
+
+        cancelled = [event for event in sink.events if event.kind == "subtitle.extract.cancelled"]
+        self.assertEqual(len(cancelled), 1)
+        self.assertIsNotNone(cancelled[0].data.cancellation)
+        assert cancelled[0].data.cancellation is not None
+        self.assertIsNone(cancelled[0].data.cancellation.forced)
+        self.assertIsNotNone(cancelled[0].data.progress)
+        assert cancelled[0].data.progress is not None
+        self.assertEqual(cancelled[0].data.progress.completed_units, 0.0)
+        self.assertIsNone(cancelled[0].data.progress.total_units)
+        self.assertEqual(len(subtitle_terminal_events(sink)), 1)
 
     def test_subtitle_source_alias_uses_absolute_target_for_relative_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -629,6 +721,290 @@ class SelectedSubtitleTrackTests(unittest.TestCase):
         pgs.media_path = media_path.translate(language=sub.Language("eng"), number=1)
 
         self.assertEqual(Path(str(pgs.srt_path)), Path("Movie-1.en.srt"))
+
+
+class SubtitleObservabilityTests(unittest.TestCase):
+    def test_keyboard_interrupt_closes_started_event_as_cancelled(self) -> None:
+        run_context, sink = make_run_context()
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
+            patch.object(sub.config, "skip_subtitles", False),
+            patch("bd_to_avp.modules.sub.Mkv"),
+            patch(
+                "bd_to_avp.modules.sub.get_selected_subtitle_tracks",
+                return_value=[{"index": 3, "language": "eng", "forced": 0, "srt_path": Path(temp_dir) / "m.en.srt"}],
+            ),
+            patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=KeyboardInterrupt),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                extract_subtitle_to_srt(Path(temp_dir) / "movie.mkv", run_context=run_context)
+
+        terminal = subtitle_terminal_events(sink)
+        self.assertEqual(len(terminal), 1)
+        self.assertEqual(terminal[0].kind, "subtitle.extract.cancelled")
+
+    def test_started_event_emitted_before_rip(self) -> None:
+        run_context, sink = make_run_context()
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
+            patch.object(sub.config, "skip_subtitles", False),
+            patch.object(sub.config, "continue_on_error", True),
+            patch("bd_to_avp.modules.sub.Mkv"),
+            patch(
+                "bd_to_avp.modules.sub.get_selected_subtitle_tracks",
+                return_value=[{"index": 3, "language": "eng", "forced": 0, "srt_path": Path(temp_dir) / "m.en.srt"}],
+            ),
+            patch("bd_to_avp.modules.sub.pgsrip.rip", return_value=0),
+            patch("bd_to_avp.modules.sub.mark_forced_srt_files"),
+        ):
+            extract_subtitle_to_srt(Path(temp_dir) / "movie.mkv", run_context=run_context)
+
+        kinds = [e.kind for e in sink.events]
+        self.assertIn("subtitle.extract.started", kinds)
+        started = next(e for e in sink.events if e.kind == "subtitle.extract.started")
+        self.assertIsNotNone(started.data.progress)
+        assert started.data.progress is not None
+        self.assertEqual(started.data.progress.total_units, 1.0)
+        self.assertEqual(started.data.progress.unit, "tracks")
+
+    def test_completed_event_emitted_after_successful_rip(self) -> None:
+        run_context, sink = make_run_context()
+        observability_context = ObservabilityContext(stage=ObservabilityStage("extract_subtitles"))
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
+            patch.object(sub.config, "skip_subtitles", False),
+            patch.object(sub.config, "continue_on_error", True),
+            patch("bd_to_avp.modules.sub.Mkv"),
+            patch(
+                "bd_to_avp.modules.sub.get_selected_subtitle_tracks",
+                return_value=[{"index": 3, "language": "eng", "forced": 0, "srt_path": Path(temp_dir) / "m.en.srt"}],
+            ),
+            patch("bd_to_avp.modules.sub.mark_forced_srt_files"),
+        ):
+            output_path = Path(temp_dir)
+            srt_file = output_path / "movie.en.srt"
+
+            def write_srt(*_args: Any) -> int:
+                srt_file.write_text("subtitle data", encoding="utf-8")
+                return 1
+
+            with patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=write_srt):
+                extract_subtitle_to_srt(
+                    output_path / "private-title.mkv",
+                    output_path,
+                    run_context=run_context,
+                    observability_context=observability_context,
+                )
+
+        kinds = [e.kind for e in sink.events]
+        self.assertIn("subtitle.extract.completed", kinds)
+        completed = next(e for e in sink.events if e.kind == "subtitle.extract.completed")
+        self.assertIsNotNone(completed.data.progress)
+        assert completed.data.progress is not None
+        self.assertEqual(completed.data.progress.completed_units, 1.0)
+        self.assertEqual(completed.data.progress.total_units, 1.0)
+        self.assertEqual(len(subtitle_terminal_events(sink)), 1)
+        self.assertEqual(completed.context, observability_context)
+        self.assertTrue(all(event.privacy is ObservabilityPrivacy.PUBLIC for event in sink.events))
+        serialized_events = "\n".join(event.to_json_line() for event in sink.events)
+        self.assertNotIn(temp_dir, serialized_events)
+        self.assertNotIn("private-title", serialized_events)
+
+    def test_partial_warning_emitted_when_empty_srts_produced(self) -> None:
+        run_context, sink = make_run_context()
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
+            patch.object(sub.config, "skip_subtitles", False),
+            patch.object(sub.config, "continue_on_error", True),
+            patch("bd_to_avp.modules.sub.Mkv"),
+            patch(
+                "bd_to_avp.modules.sub.get_selected_subtitle_tracks",
+                return_value=[
+                    {"index": 3, "language": "eng", "forced": 0, "srt_path": Path(temp_dir) / "m.en.srt"},
+                    {"index": 4, "language": "eng", "forced": 0, "srt_path": Path(temp_dir) / "m-1.en.srt"},
+                ],
+            ),
+            patch("bd_to_avp.modules.sub.mark_forced_srt_files"),
+        ):
+            output_path = Path(temp_dir)
+            good_srt = output_path / "movie.en.srt"
+            empty_srt = output_path / "movie-1.en.srt"
+
+            def write_srts(*_args: Any) -> int:
+                good_srt.write_text("subtitle data", encoding="utf-8")
+                empty_srt.write_bytes(b"")
+                return 2
+
+            with patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=write_srts):
+                extract_subtitle_to_srt(output_path / "movie.mkv", output_path, run_context=run_context)
+
+        warning_events = [e for e in sink.events if e.kind == "subtitle.extract.partial_output"]
+        self.assertEqual(len(warning_events), 1)
+        warning = warning_events[0]
+        self.assertEqual(warning.severity, ObservabilitySeverity.WARNING)
+        self.assertIsNotNone(warning.data.message)
+        assert warning.data.message is not None
+        self.assertIn("1 of 2", warning.data.message.value)
+        self.assertIsNotNone(warning.data.progress)
+        assert warning.data.progress is not None
+        self.assertEqual(warning.data.progress.completed_units, 1.0)
+        self.assertEqual(warning.data.progress.total_units, 2.0)
+
+    def test_partial_warning_emitted_when_ripper_skips_a_selected_track(self) -> None:
+        run_context, sink = make_run_context()
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
+            patch.object(sub.config, "skip_subtitles", False),
+            patch.object(sub.config, "continue_on_error", True),
+            patch("bd_to_avp.modules.sub.Mkv"),
+            patch(
+                "bd_to_avp.modules.sub.get_selected_subtitle_tracks",
+                return_value=[
+                    {"index": 3, "language": "eng", "forced": 0, "srt_path": Path(temp_dir) / "m.en.srt"},
+                    {"index": 4, "language": "eng", "forced": 0, "srt_path": Path(temp_dir) / "m-1.en.srt"},
+                ],
+            ),
+            patch("bd_to_avp.modules.sub.mark_forced_srt_files"),
+        ):
+            output_path = Path(temp_dir)
+
+            def write_one_srt(*_args: Any) -> int:
+                (output_path / "movie.en.srt").write_text("subtitle data", encoding="utf-8")
+                return 1
+
+            with patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=write_one_srt):
+                extract_subtitle_to_srt(output_path / "movie.mkv", output_path, run_context=run_context)
+
+        warning = next(event for event in sink.events if event.kind == "subtitle.extract.partial_output")
+        self.assertEqual(warning.severity, ObservabilitySeverity.WARNING)
+        self.assertIsNotNone(warning.data.progress)
+        assert warning.data.progress is not None
+        self.assertEqual(warning.data.progress.completed_units, 1.0)
+        self.assertEqual(warning.data.progress.total_units, 2.0)
+
+    def test_empty_output_emits_failure_before_strict_error(self) -> None:
+        run_context, sink = make_run_context()
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
+            patch.object(sub.config, "skip_subtitles", False),
+            patch.object(sub.config, "continue_on_error", False),
+            patch("bd_to_avp.modules.sub.Mkv"),
+            patch(
+                "bd_to_avp.modules.sub.get_selected_subtitle_tracks",
+                return_value=[{"index": 3, "language": "eng", "forced": 0, "srt_path": Path(temp_dir) / "m.en.srt"}],
+            ),
+        ):
+            output_path = Path(temp_dir)
+
+            def write_empty_srt(*_args: Any) -> int:
+                (output_path / "movie.en.srt").write_bytes(b"")
+                return 1
+
+            with (
+                patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=write_empty_srt),
+                self.assertRaises(sub.SRTCreationError),
+            ):
+                extract_subtitle_to_srt(output_path / "movie.mkv", output_path, run_context=run_context)
+
+        self.assertEqual(len(subtitle_terminal_events(sink)), 1)
+        failed = subtitle_terminal_events(sink)[0]
+        self.assertIsNotNone(failed.data.failure)
+        assert failed.data.failure is not None
+        self.assertEqual(failed.data.failure.code, "subtitle_empty_output")
+
+    def test_postprocess_error_closes_started_event_with_failure(self) -> None:
+        run_context, sink = make_run_context()
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
+            patch.object(sub.config, "skip_subtitles", False),
+            patch.object(sub.config, "continue_on_error", True),
+            patch("bd_to_avp.modules.sub.Mkv"),
+            patch(
+                "bd_to_avp.modules.sub.get_selected_subtitle_tracks",
+                return_value=[{"index": 3, "language": "eng", "forced": 1, "srt_path": Path(temp_dir) / "m.en.srt"}],
+            ),
+            patch("bd_to_avp.modules.sub.mark_forced_srt_files", side_effect=OSError("rename failed")),
+        ):
+            output_path = Path(temp_dir)
+
+            def write_srt(*_args: Any) -> int:
+                (output_path / "movie.en.srt").write_text("subtitle data", encoding="utf-8")
+                return 1
+
+            with (
+                patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=write_srt),
+                self.assertRaisesRegex(OSError, "rename failed"),
+            ):
+                extract_subtitle_to_srt(output_path / "movie.mkv", output_path, run_context=run_context)
+
+        self.assertEqual(len(subtitle_terminal_events(sink)), 1)
+        failed = subtitle_terminal_events(sink)[0]
+        self.assertIsNotNone(failed.data.failure)
+        assert failed.data.failure is not None
+        self.assertEqual(failed.data.failure.code, "subtitle_postprocess_failed")
+        self.assertIsNotNone(failed.data.progress)
+        assert failed.data.progress is not None
+        self.assertEqual(failed.data.progress.completed_units, 1.0)
+        self.assertNotIn("rename failed", failed.to_json_line())
+
+    def test_no_partial_warning_when_all_tracks_succeed(self) -> None:
+        run_context, sink = make_run_context()
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
+            patch.object(sub.config, "skip_subtitles", False),
+            patch.object(sub.config, "continue_on_error", True),
+            patch("bd_to_avp.modules.sub.Mkv"),
+            patch(
+                "bd_to_avp.modules.sub.get_selected_subtitle_tracks",
+                return_value=[{"index": 3, "language": "eng", "forced": 0, "srt_path": Path(temp_dir) / "m.en.srt"}],
+            ),
+            patch("bd_to_avp.modules.sub.mark_forced_srt_files"),
+        ):
+            output_path = Path(temp_dir)
+            srt_file = output_path / "movie.en.srt"
+
+            def write_srt(*_args: Any) -> int:
+                srt_file.write_text("subtitle data", encoding="utf-8")
+                return 1
+
+            with patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=write_srt):
+                extract_subtitle_to_srt(output_path / "movie.mkv", output_path, run_context=run_context)
+
+        warning_events = [e for e in sink.events if e.kind == "subtitle.extract.partial_output"]
+        self.assertEqual(len(warning_events), 0)
+
+    def test_no_events_emitted_without_run_context(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("bd_to_avp.modules.sub.get_languages_in_mkv", return_value=[{"index": 3, "language": "eng"}]),
+            patch.object(sub.config, "skip_subtitles", False),
+            patch.object(sub.config, "continue_on_error", True),
+            patch("bd_to_avp.modules.sub.Mkv"),
+            patch(
+                "bd_to_avp.modules.sub.get_selected_subtitle_tracks",
+                return_value=[{"index": 3, "language": "eng", "forced": 0, "srt_path": Path(temp_dir) / "m.en.srt"}],
+            ),
+            patch("bd_to_avp.modules.sub.mark_forced_srt_files"),
+            patch.object(RunContext, "emit") as emit,
+        ):
+            output_path = Path(temp_dir)
+
+            def write_srt(*_args: Any) -> int:
+                (output_path / "movie.en.srt").write_text("subtitle data", encoding="utf-8")
+                return 1
+
+            with patch("bd_to_avp.modules.sub.pgsrip.rip", side_effect=write_srt):
+                extract_subtitle_to_srt(output_path / "movie.mkv", output_path, run_context=None)
+
+        emit.assert_not_called()
 
 
 def make_track(track_id: int, *, enabled: bool, forced: bool, language: str = "eng") -> MkvTrack:
