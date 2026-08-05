@@ -220,7 +220,14 @@ The workflow performs these ordered boundaries:
    and repeat the exact digest, size, notarization, Gatekeeper, bundle-version,
    embedded-release-note, appcast-item, and exact-main-commit GitHub provenance
    checks.
-8. Publish the verified draft only if it still targets the current `main` HEAD.
+8. Build a deterministic public-safe `release-receipt.json` from those verified
+   outputs. The receipt binds the route, workflow run and attempt, protected
+   source SHA, versions, release ID, release asset IDs/sizes/digests, signed app
+   tree, appcast, verification outcomes, and Tier 1 case references. Upload it
+   to the draft, re-download it by asset ID, and verify its content and file
+   digests before publication. The receipt deliberately excludes credentials,
+   approval context, private paths, and diagnostic identifiers.
+9. Publish the verified draft only if it still targets the current `main` HEAD.
    The release body is hashed again immediately before and after publication so
    edits cannot silently diverge from the updater notes. The reusable engine
    returns Stable Python distributions only as an immutable workflow artifact
@@ -228,15 +235,23 @@ The workflow performs these ordered boundaries:
    and other prerelease routes return no Python artifact. Stable releases then
    publish that verified artifact through PyPI Trusted Publishing with PEP 740
    attestations; Alpha, Beta, and RC releases never publish to PyPI.
-9. Deploy the durable `appcast.xml` release asset to GitHub Pages. A deployment
+10. Deploy the durable `appcast.xml` release asset to GitHub Pages. A deployment
    failure can be retried without rebuilding, retagging, or re-signing.
-10. After the complete reusable engine succeeds, the Stable operator
+11. After the complete reusable engine succeeds, the Stable operator
     revalidates the current protected-main SHA, operator/engine policy evidence,
     GitHub artifact digest, and every distribution checksum, then publishes
     through the pinned PyPI Trusted Publisher with PEP 740 attestations. The publisher remains in
     `briefcase.yml` and the `pypi` environment so its existing OIDC identity does
     not change.
-11. The separate `cbusillo/homebrew-tap` repository checks the latest stable
+12. After either operator workflow completes successfully, the secret-free
+   `Release Evidence` workflow revalidates the completed workflow identity,
+   immutable release, receipt asset, and live Pages appcast. It copies the exact
+   receipt into `docs/release-evidence/<tag>/`, writes the publication record and
+   release ledger, updates the matching qualification and cut packet, and opens
+   or updates `automation/release-evidence-<tag>`. Branch protection, CI, review,
+   and normal merge policy remain in force. A reconciliation failure does not
+   rebuild, replace, or invalidate the correctly published release.
+13. The separate `cbusillo/homebrew-tap` repository checks the latest stable
    GitHub Release on a schedule and by manual dispatch. Homebrew opens a formula
    update pull request when the version changes; tap CI must pass formula audit,
    source installation, command tests, and linkage checks before merge.

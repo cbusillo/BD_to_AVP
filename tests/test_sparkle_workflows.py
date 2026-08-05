@@ -739,7 +739,7 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("--verify-distribution", str(jobs["verify-draft"]))
         self.assertEqual(
             set(jobs["publish-release"]["needs"]),
-            {"build-python", "create-draft", "prepare", "package", "verify-draft"},
+            {"build-python", "create-draft", "prepare", "package", "verify-draft", "build-receipt"},
         )
         self.assertIn("needs.create-draft.result == 'success'", jobs["publish-release"]["if"])
         self.assertIn("needs.build-python.result == 'success'", jobs["publish-release"]["if"])
@@ -751,6 +751,8 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("make_latest: $make_latest", str(jobs["publish-release"]))
         self.assertIn("prerelease: $prerelease", str(jobs["publish-release"]))
         self.assertIn("Published release title does not match", str(jobs["publish-release"]))
+        self.assertIn("release-receipt.json", str(jobs["build-receipt"]))
+        self.assertIn("needs.build-receipt.result == 'success'", jobs["publish-release"]["if"])
         publish_script = jobs["publish-release"]["steps"][0]["run"]
         payload_index = publish_script.index("}' > publish-release.json")
         freshness_index = publish_script.index(
@@ -770,6 +772,45 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertNotIn('gh release edit "$RELEASE_TAG"', str(workflow))
         self.assertIn("Draft release did not become visible through the API", str(workflow))
         self.assertIn('[ "$TOTAL_ASSET_COUNT" = "3" ]', str(jobs["verify-draft"]))
+        self.assertIn('[ "$TOTAL_ASSET_COUNT" != "4" ]', str(jobs["publish-release"]))
+
+    def test_release_receipt_is_verified_before_publication(self) -> None:
+        workflow = load_release_engine()
+        jobs = workflow["jobs"]
+        receipt = jobs["build-receipt"]
+
+        self.assertEqual(
+            set(receipt["needs"]),
+            {"policy", "prepare", "package", "create-draft", "publish-appcast", "verify-draft"},
+        )
+        self.assertEqual(receipt["permissions"], {"contents": "write"})
+        self.assertNotIn("environment", receipt)
+        self.assertNotIn("secrets.", str(receipt))
+        self.assertIn("python -m scripts.release_receipt build", str(receipt))
+        self.assertIn("python -m scripts.release_receipt validate", str(receipt))
+        self.assertIn("Existing immutable release receipt differs", str(receipt))
+        self.assertIn("GitHub receipt asset digest differs", str(receipt))
+        self.assertIn("receipt_file_sha256", receipt["outputs"])
+        self.assertIn("signed_app_tree_sha256", jobs["package"]["outputs"])
+
+    def test_post_release_evidence_workflow_is_secret_free_and_idempotent(self) -> None:
+        workflow = load_workflow("release-evidence.yml")
+        jobs = workflow["jobs"]
+        prepare = jobs["validate-and-prepare"]
+        create_pr = jobs["create-pr"]
+
+        self.assertEqual(set(workflow["on"]["workflow_run"]["workflows"]), {"Stable", "Prerelease"})
+        self.assertEqual(prepare["permissions"], {"actions": "read", "contents": "read"})
+        self.assertEqual(create_pr["permissions"], {"contents": "write", "pull-requests": "write"})
+        self.assertNotIn("environment", prepare)
+        self.assertNotIn("environment", create_pr)
+        self.assertNotIn("secrets.", str(workflow))
+        self.assertIn("python -m scripts.release_evidence", str(prepare))
+        self.assertIn("release-receipt.json", str(prepare))
+        self.assertIn(".immutable == true", str(prepare))
+        self.assertIn("Preserve an existing idempotent evidence branch", str(prepare))
+        self.assertIn("automation/release-evidence-", str(create_pr))
+        self.assertIn("peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1", str(create_pr))
 
     def test_release_notes_are_frozen_embedded_and_reverified(self) -> None:
         workflow = load_release_engine()
