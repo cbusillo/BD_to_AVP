@@ -46,22 +46,31 @@ class Palette(typing.NamedTuple):
 class PgsReader:
     @classmethod
     def read_segments(cls, data: bytes, media_path: MediaPath):
-        count = 0
-        b = data
-        while b:
-            if b[:2] != b"PG":
-                logger.warning("%s Ignoring invalid PGS segment data: %s", media_path, b)
+        offset = 0
+        while offset < len(data):
+            remaining = data[offset:]
+            if remaining[:2] != b"PG":
+                logger.warning("%s Ignoring invalid PGS segment data at offset %d", media_path, offset)
                 break
 
-            if len(b) < 13:
-                logger.warning("%s Ignoring invalid PGS segment data with less than 13 bytes: %s", media_path, b)
+            if len(remaining) < 13:
+                logger.warning("%s Ignoring truncated PGS segment header at offset %d", media_path, offset)
                 break
 
-            segment_type = SEGMENT_TYPE[SegmentType(b[10])]
-            size = 13 + from_hex(b[11:13])
-            yield segment_type(b[:size])
-            count += size
-            b = b[size:]
+            size = 13 + from_hex(data[offset + 11 : offset + 13])
+            if offset + size > len(data):
+                logger.warning("%s Ignoring truncated PGS segment at offset %d", media_path, offset)
+                break
+
+            try:
+                segment_type = SEGMENT_TYPE[SegmentType(data[offset + 10])]
+            except ValueError:
+                logger.warning("%s Ignoring unknown PGS segment type at offset %d", media_path, offset)
+                offset += size
+                continue
+
+            yield segment_type(data[offset : offset + size])
+            offset += size
 
     @classmethod
     def decode(cls, data: bytes, media_path: MediaPath):

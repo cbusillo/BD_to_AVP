@@ -11,7 +11,7 @@ from bd_to_avp.vendor.pgsrip.media_path import MediaPath
 from bd_to_avp.vendor.pgsrip.media import PgsSubtitleItem
 from bd_to_avp.vendor.pgsrip.mkv import Mkv, MkvTrack
 from bd_to_avp.vendor.pgsrip.options import Options
-from bd_to_avp.vendor.pgsrip.pgs import Palette, PgsImage, WindowDefinitionSegment
+from bd_to_avp.vendor.pgsrip.pgs import Palette, PgsImage, PgsReader, WindowDefinitionSegment
 from bd_to_avp.vendor.pgsrip.ripper import PgsToSrtRipper
 from bd_to_avp.vendor.pgsrip.utils import from_hex, to_time
 
@@ -108,6 +108,27 @@ class PgsImageRenderTests(unittest.TestCase):
         self.assertEqual(PgsImage.get_color(palettes[2], binary=True), [126])
 
 
+class PgsReaderTests(unittest.TestCase):
+    def test_reads_many_segments_without_tail_slicing(self) -> None:
+        data = b"".join(_pgs_segment_bytes(b"") for _ in range(20_000))
+
+        segments = list(PgsReader.read_segments(data, MediaPath("many.sup")))
+
+        self.assertEqual(len(segments), 20_000)
+
+    def test_skips_unknown_segment_and_continues(self) -> None:
+        data = _pgs_segment_bytes(b"") + _raw_pgs_segment_bytes(0x99, b"") + _pgs_segment_bytes(b"")
+
+        segments = list(PgsReader.read_segments(data, MediaPath("unknown.sup")))
+
+        self.assertEqual(len(segments), 2)
+
+    def test_truncated_segment_is_ignored(self) -> None:
+        data = _raw_pgs_segment_bytes(0x17, b"payload", declared_size=20)
+
+        self.assertEqual(list(PgsReader.read_segments(data, MediaPath("truncated.sup"))), [])
+
+
 class PgsRipperEmptyTrackTests(unittest.TestCase):
     def test_empty_subtitle_items_do_not_crash_ripper_initialization(self) -> None:
         pgs = Mock()
@@ -197,8 +218,12 @@ def _display_set(num_windows: int, x_offset: int | None, y_offset: int | None) -
 
 
 def _pgs_segment_bytes(data: bytes) -> bytes:
-    size = len(data).to_bytes(2, byteorder="big")
-    return b"PG" + b"\x00" * 8 + b"\x17" + size + data
+    return _raw_pgs_segment_bytes(0x17, data)
+
+
+def _raw_pgs_segment_bytes(segment_type: int, data: bytes, declared_size: int | None = None) -> bytes:
+    size = (len(data) if declared_size is None else declared_size).to_bytes(2, byteorder="big")
+    return b"PG" + b"\x00" * 8 + bytes([segment_type]) + size + data
 
 
 if __name__ == "__main__":
