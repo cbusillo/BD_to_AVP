@@ -67,6 +67,11 @@ smokes, attestation, and draft assets have been verified. It is uploaded while
 the release is still a draft, re-downloaded by asset ID, and digest-verified
 before publication.
 
+RC 3 is the one historical transition exception: it was published before the
+receipt automation merged. Its checked receipt was generated afterward from
+verified public facts and is explicitly marked as a post-publication backfill;
+the immutable RC 3 release does not contain a receipt asset.
+
 The receipt's `receipt_sha256` is the SHA-256 of canonical compact JSON with the
 `receipt_sha256` field omitted. The checked evidence index separately records
 the SHA-256 of the exact formatted receipt file downloaded from GitHub. This

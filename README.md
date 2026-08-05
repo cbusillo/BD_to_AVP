@@ -74,10 +74,13 @@ Beta 4 (`0.3.0b4`, build `149`) through Beta 8 (`0.3.0b8`, build `153`) and Beta
 10 (`0.3.0b10`, build `155`) are published and immutable. Beta 9 (`0.3.0b9`,
 build `154`) failed after production signing but before DMG creation and is
 permanently burned without publication.
-RC 1 (`0.3.0rc1`, build `158`) and RC 2 (`0.3.0rc2`, build `159`) are
-published and immutable. RC 3 metadata (`0.3.0rc3`, build `160`) is prepared
-for the guarded Prerelease workflow; it has no tag, DMG, release, or updater
-item until exact-SHA signing, publication, and public verification complete.
+RC 1 (`0.3.0rc1`, build `158`), RC 2 (`0.3.0rc2`, build `159`), and RC 3
+(`0.3.0rc3`, build `160`) are published and immutable. RC 3 passed its updater,
+accessibility, subtitle-recovery, diagnostics, network-output, cleanup, and
+reporter field checks; its targeted qualification retains one native
+release-note check whose issue category is explicitly not applicable because
+the immutable source notes contain no issue URL. All links present in those
+notes passed, so RC 3's signed qualification is complete.
 
 See [Distribution Policy](docs/distribution-policy.md) for the current GUI
 release artifact and dependency policy.

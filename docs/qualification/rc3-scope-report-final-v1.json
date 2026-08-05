@@ -1,0 +1,229 @@
+{
+  "as_of": "2026-08-05",
+  "blocking_retests": [],
+  "candidate_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95",
+  "cases": [
+    {
+      "blocking": true,
+      "blocking_phase": "publication",
+      "case_id": "release-workflow-identity",
+      "evidence": {
+        "receipt_id": "v0.3.0-rc.3-release-workflow-identity",
+        "reference": "docs/release-evidence/v0.3.0-rc.3/release-receipt.json",
+        "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95"
+      },
+      "invalidating_paths": [],
+      "reason": "Accepted evidence is bound to the exact candidate SHA.",
+      "status": "covered",
+      "tier": 1
+    },
+    {
+      "blocking": true,
+      "blocking_phase": "release_candidate",
+      "case_id": "sparkle-update-route",
+      "evidence": {
+        "receipt_id": "rc3-sparkle-update-route-v1",
+        "reference": "docs/qualification/rc3-targeted-qualification-v1.json",
+        "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95"
+      },
+      "invalidating_paths": [],
+      "reason": "Accepted evidence is bound to the exact candidate SHA.",
+      "status": "covered",
+      "tier": 2
+    },
+    {
+      "blocking": true,
+      "blocking_phase": "release_candidate",
+      "case_id": "native-sparkle-release-notes",
+      "evidence": {
+        "receipt_id": "rc3-native-sparkle-release-notes-v1",
+        "reference": "docs/qualification/rc3-targeted-qualification-v1.json",
+        "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95"
+      },
+      "invalidating_paths": [],
+      "reason": "Accepted evidence is bound to the exact candidate SHA.",
+      "status": "covered",
+      "tier": 2
+    },
+    {
+      "blocking": true,
+      "blocking_phase": "release_candidate",
+      "case_id": "profile-save-action-accessibility",
+      "evidence": {
+        "receipt_id": "rc3-profile-save-action-accessibility-v1",
+        "reference": "docs/qualification/rc3-targeted-qualification-v1.json",
+        "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95"
+      },
+      "invalidating_paths": [],
+      "reason": "Accepted evidence is bound to the exact candidate SHA.",
+      "status": "covered",
+      "tier": 2
+    },
+    {
+      "blocking": true,
+      "blocking_phase": "publication",
+      "case_id": "signed-packaged-route-parity",
+      "evidence": {
+        "receipt_id": "v0.3.0-rc.3-signed-packaged-route-parity",
+        "reference": "docs/release-evidence/v0.3.0-rc.3/release-receipt.json",
+        "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95"
+      },
+      "invalidating_paths": [],
+      "reason": "Accepted evidence is bound to the exact candidate SHA.",
+      "status": "covered",
+      "tier": 1
+    },
+    {
+      "blocking": true,
+      "blocking_phase": "release_candidate",
+      "case_id": "gui-preview-low-local-ample-destination",
+      "evidence": {
+        "receipt_id": "beta11-preview-low-local-ample-destination-v4",
+        "reference": "docs/qualification/prior-signed-functional-evidence-v1.json",
+        "source_sha": "34d76ffc8fab845136d2558a64ac031f4d511d6a"
+      },
+      "invalidating_paths": [],
+      "reason": "Accepted prior evidence remains valid because no mapped paths changed.",
+      "status": "carry",
+      "tier": 2
+    },
+    {
+      "blocking": true,
+      "blocking_phase": "release_candidate",
+      "case_id": "gui-preview-cancel-cleanup",
+      "evidence": {
+        "receipt_id": "rc3-gui-preview-cancel-cleanup-v1",
+        "reference": "docs/qualification/rc3-targeted-qualification-v1.json",
+        "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95"
+      },
+      "invalidating_paths": [],
+      "reason": "Accepted evidence is bound to the exact candidate SHA.",
+      "status": "covered",
+      "tier": 2
+    },
+    {
+      "blocking": true,
+      "blocking_phase": "release_candidate",
+      "case_id": "gui-preview-failure-cleanup",
+      "evidence": {
+        "receipt_id": "rc3-gui-preview-failure-cleanup-v1",
+        "reference": "docs/qualification/rc3-targeted-qualification-v1.json",
+        "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95"
+      },
+      "invalidating_paths": [],
+      "reason": "Accepted evidence is bound to the exact candidate SHA.",
+      "status": "covered",
+      "tier": 2
+    },
+    {
+      "blocking": true,
+      "blocking_phase": "release_candidate",
+      "case_id": "capacity-known-low",
+      "evidence": {
+        "receipt_id": "beta11-capacity-known-low-v4",
+        "reference": "docs/qualification/prior-signed-functional-evidence-v1.json",
+        "source_sha": "34d76ffc8fab845136d2558a64ac031f4d511d6a"
+      },
+      "invalidating_paths": [],
+      "reason": "Accepted prior evidence remains valid because no mapped paths changed.",
+      "status": "carry",
+      "tier": 2
+    },
+    {
+      "blocking": true,
+      "blocking_phase": "release_candidate",
+      "case_id": "capacity-unknown-and-conflicting",
+      "evidence": {
+        "receipt_id": "beta11-capacity-unknown-and-conflicting-v4",
+        "reference": "docs/qualification/prior-signed-functional-evidence-v1.json",
+        "source_sha": "34d76ffc8fab845136d2558a64ac031f4d511d6a"
+      },
+      "invalidating_paths": [],
+      "reason": "Accepted prior evidence remains valid because no mapped paths changed.",
+      "status": "carry",
+      "tier": 2
+    },
+    {
+      "blocking": true,
+      "blocking_phase": "release_candidate",
+      "case_id": "network-generated-final-output",
+      "evidence": {
+        "receipt_id": "rc3-network-generated-final-output-v1",
+        "reference": "docs/qualification/rc3-targeted-qualification-v1.json",
+        "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95"
+      },
+      "invalidating_paths": [],
+      "reason": "Accepted evidence is bound to the exact candidate SHA.",
+      "status": "covered",
+      "tier": 2
+    },
+    {
+      "blocking": true,
+      "blocking_phase": "release_candidate",
+      "case_id": "overwrite-and-conversion-cancel",
+      "evidence": {
+        "receipt_id": "rc3-overwrite-and-conversion-cancel-v1",
+        "reference": "docs/qualification/rc3-targeted-qualification-v1.json",
+        "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95"
+      },
+      "invalidating_paths": [],
+      "reason": "Accepted evidence is bound to the exact candidate SHA.",
+      "status": "covered",
+      "tier": 2
+    },
+    {
+      "blocking": true,
+      "blocking_phase": "release_candidate",
+      "case_id": "malformed-pgs-parser-recovery",
+      "evidence": {
+        "receipt_id": "rc3-malformed-pgs-parser-recovery-v1",
+        "reference": "docs/qualification/rc3-targeted-qualification-v1.json",
+        "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95"
+      },
+      "invalidating_paths": [],
+      "reason": "Accepted evidence is bound to the exact candidate SHA.",
+      "status": "covered",
+      "tier": 2
+    },
+    {
+      "blocking": true,
+      "blocking_phase": "release_candidate",
+      "case_id": "subtitle-partial-output-diagnostics",
+      "evidence": {
+        "receipt_id": "rc3-subtitle-partial-output-diagnostics-v1",
+        "reference": "docs/qualification/rc3-targeted-qualification-v1.json",
+        "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95"
+      },
+      "invalidating_paths": [],
+      "reason": "Accepted evidence is bound to the exact candidate SHA.",
+      "status": "covered",
+      "tier": 2
+    },
+    {
+      "blocking": false,
+      "blocking_phase": "none",
+      "case_id": "public-diagnostics-and-field-closure",
+      "evidence": {
+        "receipt_id": "rc3-public-diagnostics-and-field-closure-v1",
+        "reference": "docs/qualification/rc3-targeted-qualification-v1.json",
+        "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95"
+      },
+      "invalidating_paths": [],
+      "reason": "Post-publication field evidence cannot block publication.",
+      "status": "external",
+      "tier": 4
+    }
+  ],
+  "first_candidate_of_cycle": false,
+  "passed": true,
+  "policy_id": "release-qualification-policy-v1",
+  "qualification_id": "rc3-signed-qualification-v1",
+  "release_stage": "rc",
+  "schema_version": 1,
+  "summary": {
+    "carry": 3,
+    "covered": 11,
+    "external": 1,
+    "retest": 0
+  }
+}

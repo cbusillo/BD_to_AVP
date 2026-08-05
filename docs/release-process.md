@@ -7,8 +7,8 @@ boundary, and publication policy are defined in
 The repository carries published, immutable Beta 3 through Beta 8, Beta 10, and
 Beta 11 history at builds `148` through `156` except burned build `154`. Failed,
 unpublished Beta 9 (`0.3.0b9`, build `154`) and the earlier RC candidate build
-`147` are permanently burned. RC 1 and RC 2 are published at builds `158` and
-`159`; the current prepared candidate is RC 3 at build `160`. The
+`147` are permanently burned. RC 1, RC 2, and RC 3 are published at builds
+`158`, `159`, and `160`. The
 [Beta 8 cut packet](0.3.0-beta.8-cut-packet.md) records immutable publication
 history, [the Beta 9 cut packet](0.3.0-beta.9-cut-packet.md) records the failed
 unpublished attempt, [the Beta 10 cut packet](0.3.0-beta.10-cut-packet.md)
@@ -17,14 +17,17 @@ records historical preparation, [the Beta 12 cut packet](0.3.0-beta.12-cut-packe
 records abandoned Beta metadata, [the RC 1 cut packet](0.3.0-rc.1-cut-packet.md)
 records immutable publication, [the RC 2 cut packet](0.3.0-rc.2-cut-packet.md)
 records immutable publication, and [the RC 3 cut packet](0.3.0-rc.3-cut-packet.md)
-records current pending metadata.
+records immutable publication plus its targeted qualification result.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
 entrypoints, Beta 3 bootstrap contract, and one-time metadata recovery are
-implemented and regression-covered. Issue #458 owns RC 3's exact-artifact
-subtitle retest. Metadata preparation and review do not authorize dispatch;
-run-bound signing approval remains a separate verified boundary.
+implemented and regression-covered. RC 3's exact-artifact subtitle field case
+passed and issue #458 is closed. Targeted qualification is complete: every link
+present in the immutable native updater notes passed, while the absent issue-link
+category is explicitly not applicable rather than failed. Metadata
+preparation and review do not authorize dispatch; run-bound signing approval
+remains a separate verified boundary.
 
 ## Release Preparation
 
@@ -83,11 +86,11 @@ or from a stale main commit.
 
 ## Release Orchestration
 
-> **RC 2 is published and immutable; RC 3 is prepared but not yet published.**
-> Dispatch RC 3 only after its pre-registered metadata and qualification matrix
-> merge green and a temporary `main` merge hold is active. Keep `main` fixed
-> while the workflow is nonterminal, and do not describe RC 3 as public until
-> signing, notarization, appcast publication, and route verification complete.
+> **RC 3 is published and immutable.** Guarded Prerelease run `30990186667`
+> published build `160` from source SHA
+> `0b06582a83a45bb38d851e62ccf38cd148c7bb95`. Do not rebuild, retag, re-sign,
+> replace, or describe the artifact as fully qualified: the checked targeted
+> receipt retains one blocking native-release-note link defect.
 
 Dispatch `Stable` from `main` only for reviewed committed Stable metadata, or
 dispatch `Prerelease` only for reviewed committed Alpha, Beta, or RC metadata,

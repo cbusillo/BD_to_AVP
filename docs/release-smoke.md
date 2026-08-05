@@ -240,8 +240,13 @@ This is the installed-app acceptance smoke for the route contract in
    length, and `sparkle:edSignature` match the immutable release artifact and
    digest-bound notes.
 5. Confirm the update UI begins at the offered summary, contains no GitHub page
-   chrome, adapts to light and dark appearance, and opens issue, PR, comparison,
-   and full-release links in the default browser.
+   chrome, and adapts to light and dark appearance. Derive expected issue, PR,
+   and comparison links from the immutable release notes and the full-release
+   link from the matching appcast item. Require every expected link to appear
+   exactly once per source occurrence as an accessible external link and open
+   the exact URL in the default browser. A category absent from the immutable
+   source is not applicable; missing, altered, inaccessible, duplicated, or
+   incorrectly routed links that are present in the source fail qualification.
 6. Block GitHub Release page access after the appcast is fetched and confirm the
    embedded notes remain useful rather than becoming blank or an error page.
 7. Install an eligible update, relaunch, and confirm product identity, internal
@@ -288,11 +293,11 @@ Beta without pretending the current Stable or RC client can discover it.
    apps remain separate and cannot Sparkle-update into the production app. Do
    not reopen them to edit the shared profile library after Beta 3 installation.
 
-### RC 3 Preparation Smoke
+### Historical RC 3 Preparation Smoke
 
-Run these checks after the RC 3 metadata preparation lands and before
-workflow dispatch. They prove the committed target and authorization boundary,
-not a signed or published app.
+These checks ran after RC 3 metadata preparation and before workflow dispatch.
+They prove the committed target and authorization boundary, not the later signed
+or published app.
 
 1. Run `uv run python -m scripts.release validate` and confirm internal
    `0.3.0rc3`, public `0.3.0-rc.3`, build `160`, RC channel, prerelease,
@@ -308,14 +313,14 @@ not a signed or published app.
    must be absent, Stable must exclude the RC, and RC, Beta, and Alpha must
    admit it.
 4. Confirm immutable RC 2 targets its published release identity, then confirm
-   the live repository has no RC 3 tag, release, draft, asset, or appcast item.
-5. Continue only through the exact-SHA Prerelease workflow. Signed-app and
-   update-route checks; carried preview, capacity, cleanup, generated-output,
-   overwrite, and cancellation cases; and the new malformed-PGS,
-   subtitle-diagnostics, and accessibility cases remain incomplete until the
-   guarded workflow and exact-artifact checks in
-   `docs/qualification/rc3-signed-qualification-v1.json` and the RC 3 field
-   receipts finish.
+   the live repository had no RC 3 tag, release, draft, asset, or appcast item
+   before dispatch.
+5. Continue only through the exact-SHA Prerelease workflow. The later
+   exact-artifact result is recorded in
+   `docs/qualification/rc3-signed-qualification-v1.json`: all functional and
+   field checks passed or carried. Content-aware link qualification found zero
+   expected and zero observed issue links because the immutable RC3 notes contain
+   no issue URL; PR, comparison, and full-release checks passed.
    Physical M5 Vision Pro AV1 evidence stays in #409.
 
 ## Follow-Up Routing
