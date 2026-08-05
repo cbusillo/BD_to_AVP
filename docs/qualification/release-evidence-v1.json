@@ -3,7 +3,7 @@
   "receipts": [
     {
       "case_id": "release-workflow-identity",
-      "receipt_id": "v0.3.0-rc.3-release-receipt",
+      "receipt_id": "v0.3.0-rc.3-release-workflow-identity",
       "source": "release_run_receipt",
       "status": "accepted",
       "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95",
@@ -15,7 +15,7 @@
     },
     {
       "case_id": "signed-packaged-route-parity",
-      "receipt_id": "v0.3.0-rc.3-release-receipt",
+      "receipt_id": "v0.3.0-rc.3-signed-packaged-route-parity",
       "source": "release_run_receipt",
       "status": "accepted",
       "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95",
@@ -27,7 +27,7 @@
     },
     {
       "case_id": "gui-preview-low-local-ample-destination",
-      "receipt_id": "beta11-preview-capacity-cleanup-v4",
+      "receipt_id": "beta11-preview-low-local-ample-destination-v4",
       "source": "signed_artifact_receipt",
       "status": "accepted",
       "source_sha": "34d76ffc8fab845136d2558a64ac031f4d511d6a",
@@ -37,7 +37,7 @@
     },
     {
       "case_id": "gui-preview-cancel-cleanup",
-      "receipt_id": "beta11-preview-capacity-cleanup-v4",
+      "receipt_id": "beta11-preview-cancel-cleanup-v4",
       "source": "signed_artifact_receipt",
       "status": "accepted",
       "source_sha": "34d76ffc8fab845136d2558a64ac031f4d511d6a",
@@ -47,7 +47,7 @@
     },
     {
       "case_id": "gui-preview-failure-cleanup",
-      "receipt_id": "beta11-preview-capacity-cleanup-v4",
+      "receipt_id": "beta11-preview-failure-cleanup-v4",
       "source": "signed_artifact_receipt",
       "status": "accepted",
       "source_sha": "34d76ffc8fab845136d2558a64ac031f4d511d6a",
@@ -57,7 +57,7 @@
     },
     {
       "case_id": "capacity-known-low",
-      "receipt_id": "beta11-preview-capacity-cleanup-v4",
+      "receipt_id": "beta11-capacity-known-low-v4",
       "source": "signed_artifact_receipt",
       "status": "accepted",
       "source_sha": "34d76ffc8fab845136d2558a64ac031f4d511d6a",
@@ -67,7 +67,7 @@
     },
     {
       "case_id": "capacity-unknown-and-conflicting",
-      "receipt_id": "beta11-preview-capacity-cleanup-v4",
+      "receipt_id": "beta11-capacity-unknown-and-conflicting-v4",
       "source": "signed_artifact_receipt",
       "status": "accepted",
       "source_sha": "34d76ffc8fab845136d2558a64ac031f4d511d6a",
@@ -77,7 +77,7 @@
     },
     {
       "case_id": "network-generated-final-output",
-      "receipt_id": "beta12-signed-field-qualification-v1",
+      "receipt_id": "beta12-network-generated-final-output-v1",
       "source": "signed_artifact_receipt",
       "status": "accepted",
       "source_sha": "f2f5e55d1ee85091bd0ba25fd8f023a987272726",
@@ -87,7 +87,7 @@
     },
     {
       "case_id": "overwrite-and-conversion-cancel",
-      "receipt_id": "beta12-signed-field-qualification-v1",
+      "receipt_id": "beta12-overwrite-and-conversion-cancel-v1",
       "source": "signed_artifact_receipt",
       "status": "accepted",
       "source_sha": "f2f5e55d1ee85091bd0ba25fd8f023a987272726",
