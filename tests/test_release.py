@@ -213,7 +213,35 @@ class ReleaseMetadataTests(unittest.TestCase):
             "public-diagnostics-and-field-closure",
         }
         self.assertEqual({case["id"] for case in qualification["matrix"]}, expected_case_ids)
-        self.assertEqual(set(qualification["acceptance"]["required_case_ids"]), expected_case_ids)
+        self.assertEqual(
+            set(qualification["acceptance"]["required_case_ids"]),
+            {
+                "release-workflow-identity",
+                "sparkle-update-route",
+                "native-sparkle-release-notes",
+                "profile-save-action-accessibility",
+                "signed-packaged-route-parity",
+                "gui-preview-low-local-ample-destination",
+                "gui-preview-cancel-cleanup",
+                "gui-preview-failure-cleanup",
+                "capacity-known-low",
+                "capacity-unknown-and-conflicting",
+                "network-generated-final-output",
+                "overwrite-and-conversion-cancel",
+                "malformed-pgs-parser-recovery",
+                "subtitle-partial-output-diagnostics",
+            },
+        )
+        self.assertEqual(set(qualification["acceptance"]["preregistered_matrix_case_ids"]), expected_case_ids)
+        self.assertEqual(
+            qualification["acceptance"]["nonblocking_case_ids"],
+            ["public-diagnostics-and-field-closure"],
+        )
+        self.assertEqual(qualification["qualification_policy"]["id"], "release-qualification-policy-v1")
+        self.assertEqual(
+            {case["migration"] for case in qualification["matrix"]},
+            {"release_run_receipt", "fresh_retest", "scope_evaluated", "external_nonblocking"},
+        )
         for field in (
             "source_git_sha",
             "dmg_sha256",
