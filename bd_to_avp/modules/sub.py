@@ -232,7 +232,6 @@ def extract_subtitle_to_srt(
                     severity=ObservabilitySeverity.WARNING if failed_track_count else ObservabilitySeverity.INFO,
                     context=observability_context,
                 )
-                terminal_event_emitted = True
             except ProcessCancelled:
                 if not terminal_event_emitted:
                     emit_subtitle_progress(
