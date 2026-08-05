@@ -46,22 +46,30 @@ class Palette(typing.NamedTuple):
 class PgsReader:
     @classmethod
     def read_segments(cls, data: bytes, media_path: MediaPath):
-        count = 0
-        b = data
-        while b:
-            if b[:2] != b"PG":
-                logger.warning("%s Ignoring invalid PGS segment data: %s", media_path, b)
+        offset = 0
+        while offset < len(data):
+            if data[offset : offset + 2] != b"PG":
+                logger.warning("%s Ignoring invalid PGS segment data at offset %d", media_path, offset)
                 break
 
-            if len(b) < 13:
-                logger.warning("%s Ignoring invalid PGS segment data with less than 13 bytes: %s", media_path, b)
+            if len(data) - offset < 13:
+                logger.warning("%s Ignoring truncated PGS segment header at offset %d", media_path, offset)
                 break
 
-            segment_type = SEGMENT_TYPE[SegmentType(b[10])]
-            size = 13 + from_hex(b[11:13])
-            yield segment_type(b[:size])
-            count += size
-            b = b[size:]
+            size = 13 + from_hex(data[offset + 11 : offset + 13])
+            if offset + size > len(data):
+                logger.warning("%s Ignoring truncated PGS segment at offset %d", media_path, offset)
+                break
+
+            try:
+                segment_type = SEGMENT_TYPE[SegmentType(data[offset + 10])]
+            except ValueError:
+                logger.warning("%s Ignoring unknown PGS segment type at offset %d", media_path, offset)
+                offset += size
+                continue
+
+            yield segment_type(data[offset : offset + size])
+            offset += size
 
     @classmethod
     def decode(cls, data: bytes, media_path: MediaPath):
@@ -76,19 +84,40 @@ class PgsReader:
 
 
 class PgsImage:
-    def __init__(self, data: bytes, palettes: typing.List[Palette]):
+    def __init__(
+        self,
+        data: bytes,
+        palettes: typing.List[Palette],
+        width: typing.Optional[int] = None,
+        height: typing.Optional[int] = None,
+        max_pixels: typing.Optional[int] = None,
+    ):
         self.rle_data = data
         self.palettes = palettes
+        self.declared_width = width
+        self.declared_height = height
+        self.max_pixels = max_pixels
         self._data: typing.Optional[ndarray] = None
 
     @property
     def data(self):
         if self._data is None:
-            self._data = self.decode_rle_image(self.rle_data, self.palettes)
+            max_pixels = self.max_pixels or (
+                self.declared_width * self.declared_height
+                if self.declared_width is not None and self.declared_height is not None
+                else None
+            )
+            self._data = self.decode_rle_image(self.rle_data, self.palettes, max_pixels=max_pixels)
         return self._data
 
     @classmethod
-    def decode_rle_image(cls, data: bytes, palettes: typing.List[Palette], binary=True):
+    def decode_rle_image(
+        cls,
+        data: bytes,
+        palettes: typing.List[Palette],
+        binary: bool = True,
+        max_pixels: typing.Optional[int] = None,
+    ):
         image_array: typing.List[int] = []
         alpha_array: typing.List[int] = []
         dimension = 1 if binary else 3
@@ -98,6 +127,13 @@ class PgsImage:
             length, color, count = cls.decode_rle_position(data, i)
             if not length and cols < 2:
                 cols = len(image_array) // dimension
+            if max_pixels is not None:
+                current_pixels = len(image_array) // dimension
+                if current_pixels + length > max_pixels:
+                    raise ValueError(
+                        f"RLE data expands beyond declared {max_pixels} pixels "
+                        f"(already decoded {current_pixels}, run length {length})"
+                    )
             palette = palettes[color]
             image_color = cls.get_color(palette, binary)
             image_array.extend(image_color * length)
