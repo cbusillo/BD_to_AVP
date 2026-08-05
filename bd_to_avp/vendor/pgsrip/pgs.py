@@ -85,19 +85,38 @@ class PgsReader:
 
 
 class PgsImage:
-    def __init__(self, data: bytes, palettes: typing.List[Palette]):
+    def __init__(
+        self,
+        data: bytes,
+        palettes: typing.List[Palette],
+        width: typing.Optional[int] = None,
+        height: typing.Optional[int] = None,
+    ):
         self.rle_data = data
         self.palettes = palettes
+        self.declared_width = width
+        self.declared_height = height
         self._data: typing.Optional[ndarray] = None
 
     @property
     def data(self):
         if self._data is None:
-            self._data = self.decode_rle_image(self.rle_data, self.palettes)
+            max_pixels = (
+                self.declared_width * self.declared_height
+                if self.declared_width is not None and self.declared_height is not None
+                else None
+            )
+            self._data = self.decode_rle_image(self.rle_data, self.palettes, max_pixels=max_pixels)
         return self._data
 
     @classmethod
-    def decode_rle_image(cls, data: bytes, palettes: typing.List[Palette], binary=True):
+    def decode_rle_image(
+        cls,
+        data: bytes,
+        palettes: typing.List[Palette],
+        binary: bool = True,
+        max_pixels: typing.Optional[int] = None,
+    ):
         image_array: typing.List[int] = []
         alpha_array: typing.List[int] = []
         dimension = 1 if binary else 3
@@ -107,6 +126,13 @@ class PgsImage:
             length, color, count = cls.decode_rle_position(data, i)
             if not length and cols < 2:
                 cols = len(image_array) // dimension
+            if max_pixels is not None:
+                current_pixels = len(image_array) // dimension
+                if current_pixels + length > max_pixels:
+                    raise ValueError(
+                        f"RLE data expands beyond declared {max_pixels} pixels "
+                        f"(already decoded {current_pixels}, run length {length})"
+                    )
             palette = palettes[color]
             image_color = cls.get_color(palette, binary)
             image_array.extend(image_color * length)

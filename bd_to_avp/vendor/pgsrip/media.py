@@ -42,14 +42,24 @@ class PgsSubtitleItem:
         candidates: typing.List[PgsSubtitleItem] = []
         for ds in display_sets:
             if current_sets and ds.is_start():
-                candidates.append(PgsSubtitleItem(index, media_path, current_sets))
+                try:
+                    candidates.append(PgsSubtitleItem(index, media_path, current_sets))
+                except Exception as exc:
+                    logger.warning(
+                        "Skipping malformed display item %d for %s: %s", index, media_path, exc
+                    )
                 current_sets = []
                 index += 1
 
             current_sets.append(ds)
 
         if current_sets:
-            candidates.append(PgsSubtitleItem(index, media_path, current_sets))
+            try:
+                candidates.append(PgsSubtitleItem(index, media_path, current_sets))
+            except Exception as exc:
+                logger.warning(
+                    "Skipping malformed display item %d for %s: %s", index, media_path, exc
+                )
 
         results = []
         for item, next_item in pairwise(candidates):
@@ -68,10 +78,21 @@ class PgsSubtitleItem:
             for pds in ds.pds_segments:
                 palettes += pds.palettes
             img_data = b''
+            ods_width: typing.Optional[int] = None
+            ods_height: typing.Optional[int] = None
             for ods in ds.ods_segments:
                 img_data += ods.img_data
+                if ods_width is None and ods.width is not None:
+                    ods_width = ods.width
+                    ods_height = ods.height
 
-            return PgsImage(img_data, palettes)
+            try:
+                image = PgsImage(img_data, palettes, width=ods_width, height=ods_height)
+                _ = image.data  # trigger decode now so malformed data raises here
+                return image
+            except Exception as exc:
+                logger.warning("Skipping display set with malformed image data: %s", exc)
+                return None
 
         return None
 
