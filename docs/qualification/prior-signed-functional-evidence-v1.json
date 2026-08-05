@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "qualification_id": "prior-signed-functional-evidence-v1",
+  "recorded_at": "2026-08-05T20:45:00Z",
+  "privacy": {
+    "private_media_identifiers_recorded": false,
+    "private_paths_recorded": false,
+    "private_hostnames_recorded": false,
+    "diagnostic_tokens_recorded": false
+  },
+  "sources": [
+    {
+      "id": "beta11-signed-qualification-progress-v4",
+      "release_tag": "v0.3.0-beta.11",
+      "build": "156",
+      "source_sha": "34d76ffc8fab845136d2558a64ac031f4d511d6a",
+      "accepted_at": "2026-08-03T14:37:52Z",
+      "sha256": "cffa60112a70989c1bbe0d7db3e445fb27217d75181e4c22e31dfb2d3bf929b3"
+    },
+    {
+      "id": "beta12-signed-field-qualification-v1",
+      "release_tag": "v0.3.0-beta.12",
+      "build": "157",
+      "source_sha": "f2f5e55d1ee85091bd0ba25fd8f023a987272726",
+      "accepted_at": "2026-08-03T17:09:08Z",
+      "sha256": "8554e8723adb160ecd450af51873eb8460a94614ec902ec840cf9142b58d8ad7"
+    },
+    {
+      "id": "beta12-shared-signed-qualification-progress-v1",
+      "release_tag": "v0.3.0-beta.12",
+      "build": "157",
+      "source_sha": "f2f5e55d1ee85091bd0ba25fd8f023a987272726",
+      "accepted_at": "2026-08-03T17:46:58Z",
+      "sha256": "ecb4ac2766e2fb7856e303fdd97d8f429c5c3a0d28f07f60f029a7f21e1bf426"
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "gui-preview-low-local-ample-destination",
+      "source_id": "beta11-signed-qualification-progress-v4",
+      "status": "passed"
+    },
+    {
+      "case_id": "gui-preview-cancel-cleanup",
+      "source_id": "beta11-signed-qualification-progress-v4",
+      "status": "passed"
+    },
+    {
+      "case_id": "gui-preview-failure-cleanup",
+      "source_id": "beta11-signed-qualification-progress-v4",
+      "status": "passed"
+    },
+    {
+      "case_id": "capacity-known-low",
+      "source_id": "beta11-signed-qualification-progress-v4",
+      "status": "passed"
+    },
+    {
+      "case_id": "capacity-unknown-and-conflicting",
+      "source_id": "beta11-signed-qualification-progress-v4",
+      "status": "passed"
+    },
+    {
+      "case_id": "network-generated-final-output",
+      "source_id": "beta12-signed-field-qualification-v1",
+      "status": "passed"
+    },
+    {
+      "case_id": "overwrite-and-conversion-cancel",
+      "source_id": "beta12-signed-field-qualification-v1",
+      "status": "passed"
+    }
+  ],
+  "result": "accepted_public_safe_summary"
+}
