@@ -1,0 +1,228 @@
+{
+  "schema_version": 1,
+  "qualification_id": "rc3-targeted-qualification-v1",
+  "qualified_at": "2026-08-05T21:15:26Z",
+  "candidate": {
+    "release_tag": "v0.3.0-rc.3",
+    "package_version": "0.3.0rc3",
+    "public_version": "0.3.0-rc.3",
+    "build": "160",
+    "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95",
+    "release_run_id": 30990186667,
+    "release_id": 365399671,
+    "dmg_sha256": "e1d936cc3231aea4f9d87fde1fd9e7792c1189254fc85bfc10fea382ffce690f",
+    "signed_app_tree_sha256": "30a7256feb4fb1dee78de70eefeec6a5e69db0e7355e7fd2aaf46efaa71f0d37",
+    "appcast_sha256": "6404424910172cfccc9f23472e8748eda7bfba5b1f07d373e69cdb9b0679e9ed"
+  },
+  "environment": {
+    "architecture": "arm64",
+    "operating_system": "macOS 27",
+    "private_hostname_recorded": false,
+    "private_paths_recorded": false
+  },
+  "scope_report": {
+    "reference": "docs/qualification/rc3-scope-report-v1.json",
+    "initial_summary": {
+      "covered": 2,
+      "carry": 3,
+      "retest": 9,
+      "external": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "release-workflow-identity",
+      "result": "passed",
+      "evidence": "Deterministic receipt binds the successful guarded Prerelease run, immutable release, exact source SHA, and public asset identities."
+    },
+    {
+      "id": "updater-route-rc2-to-rc3",
+      "result": "passed",
+      "observations": {
+        "rc3_offered_on_rc_route": true,
+        "enclosure_length": 409418547,
+        "enclosure_signature": "7W2voZDd7qyzLLIWNYPgWzUeM40hgvB2yMUHfnVadyvbn9iVEETvUpTVTMZzyINNNTbbwdnBxLgnlXsSDBMoCQ==",
+        "install_and_relaunch": true,
+        "post_update_version": "0.3.0rc3",
+        "post_update_build": "160",
+        "bundle_identifier": "com.shinycomputers.bd-to-avp",
+        "post_update_app_tree_matches_release": true,
+        "preferences_survived": true,
+        "profile_tree_survived_byte_for_byte": true
+      }
+    },
+    {
+      "id": "native-sparkle-notes-rc3",
+      "result": "failed",
+      "observations": {
+        "summary_first": true,
+        "embedded_notes_useful_without_release_page": true,
+        "github_chrome_absent": true,
+        "native_typography": true,
+        "light_appearance": "passed",
+        "dark_appearance": "passed",
+        "accessibility_link_counts": {
+          "issue": 0,
+          "pull_request": 4,
+          "comparison": 1,
+          "full_release": 1
+        },
+        "failure": "The immutable RC3 notes expose PR, comparison, and full-release links, but no issue link is present in the native accessibility tree."
+      },
+      "evidence": {
+        "light_cropped_screenshot_sha256": "3323250b7aa3e14bbb00a924a79833cf5776b134f80bcfb2fbd1640987715a71",
+        "dark_cropped_screenshot_sha256": "3590e3d2eef05797b7147907c69559369afba860a87d861af88f9ef0dbcafcd0"
+      }
+    },
+    {
+      "id": "profile-save-action-accessibility",
+      "result": "passed",
+      "observations": {
+        "role": "AXButton",
+        "label": "Save current settings as new profile",
+        "hint": "Save current settings as a new profile",
+        "enabled": true,
+        "action": "AXPress",
+        "saved_profile_document_version": 5,
+        "saved_profile_count": 1,
+        "successful_action_outcome": true
+      },
+      "saved_profile_sha256": "1da819b4e55ca28a4758d683f18f1f6fe1d589e727f89f0665358015a824f9d5"
+    },
+    {
+      "id": "signed-packaged-route-parity",
+      "result": "passed",
+      "evidence": "The exact updated signed app matched the release app-tree digest and the maintained packaged worker, cancellation, preview-presentation, OCR, tool, and startup smoke passed."
+    },
+    {
+      "id": "gui-preview-low-local-ample-destination",
+      "result": "carried",
+      "receipt_id": "beta11-preview-low-local-ample-destination-v4",
+      "invalidation_result": "clean"
+    },
+    {
+      "id": "gui-preview-cancel-cleanup",
+      "result": "passed",
+      "evidence": "Exact signed-app packaged cancellation smoke removed the destination-scoped preview workspace; packaged-code and native cancellation tests also passed."
+    },
+    {
+      "id": "gui-preview-failure-cleanup",
+      "result": "passed",
+      "evidence": "Exact packaged-code failure/cleanup tests and the candidate-native test suite passed, including preview failure and cleanup ownership coverage."
+    },
+    {
+      "id": "capacity-known-low",
+      "result": "carried",
+      "receipt_id": "beta11-capacity-known-low-v4",
+      "invalidation_result": "clean"
+    },
+    {
+      "id": "capacity-unknown-and-conflicting",
+      "result": "carried",
+      "receipt_id": "beta11-capacity-unknown-and-conflicting-v4",
+      "invalidation_result": "clean"
+    },
+    {
+      "id": "network-generated-final-output",
+      "result": "passed",
+      "observations": {
+        "upscale_disabled_terminal": "job.completed",
+        "upscale_enabled_terminal": "job.completed",
+        "apple_media_validation": true,
+        "beginning_middle_end_decode": true,
+        "spatial_container_markers": true,
+        "network_destination": true
+      },
+      "evidence": {
+        "upscale_disabled_summary_sha256": "434e68d003960c7be7a8eb14534148de46ca8f253a4339bd0b9f8faf4d91e2e7",
+        "upscale_enabled_summary_sha256": "463de37784210d2ef68e06455a2c9be1ff1900df2dea41cc6f735947243c3015"
+      }
+    },
+    {
+      "id": "overwrite-and-conversion-cancel",
+      "result": "passed",
+      "observations": {
+        "existing_output_terminal": "job.failed",
+        "existing_output_preserved_byte_for_byte": true,
+        "cancellation_terminal": "job.cancelled",
+        "cancellation_stage": "upscale_video",
+        "partial_final_output_absent": true,
+        "owned_temporary_output_absent": true
+      },
+      "evidence": {
+        "overwrite_summary_sha256": "ebb55bac14c785ab1c85fc0380deb35931e2a38407db1730764a0f65a8d72563",
+        "cancellation_summary_sha256": "e36214dd75023b9907b4a6265b06330dc7511fe02faa28d3c7f5da96a3176170"
+      }
+    },
+    {
+      "id": "malformed-pgs-parser-recovery",
+      "result": "passed",
+      "observations": {
+        "exact_packaged_code_test_count": 74,
+        "truncated_segments_bounded": true,
+        "declared_pixel_bounds_enforced": true,
+        "malformed_item_isolated_from_valid_peer": true,
+        "partial_subtitle_output_removed": true,
+        "worker_terminal_protocol_covered": true,
+        "hang_or_timeout": false
+      }
+    },
+    {
+      "id": "subtitle-partial-output-diagnostics",
+      "result": "passed",
+      "observations": {
+        "successful_outcome_distinguished": true,
+        "partial_outcome_distinguished": true,
+        "failed_outcome_distinguished": true,
+        "cancelled_outcome_distinguished": true,
+        "aggregate_track_counts_recorded": true,
+        "stage_recorded": true,
+        "private_media_data_recorded": false
+      }
+    },
+    {
+      "id": "public-diagnostics-and-field-closure",
+      "result": "passed",
+      "issue": "#458",
+      "observation": "The reporter confirmed the previously failing source succeeds on RC3 with subtitles enabled; the issue was closed on 2026-08-05."
+    }
+  ],
+  "validation": {
+    "exact_signed_app_smoke": "passed",
+    "exact_packaged_python_tests": {
+      "passed": 141,
+      "failed": 0
+    },
+    "native_tests": {
+      "passed": 355,
+      "failed": 0
+    },
+    "state_restoration": {
+      "preferences_restored_byte_for_byte": true,
+      "profiles_restored_byte_for_byte": true,
+      "test_app_removed": true,
+      "test_app_closed": true,
+      "appearance_restored": true
+    }
+  },
+  "privacy": {
+    "screenshots_cropped": true,
+    "private_full_screen_captures_retained": false,
+    "private_media_titles_recorded": false,
+    "source_paths_recorded": false,
+    "output_paths_recorded": false,
+    "diagnostic_tokens_recorded": false
+  },
+  "acceptance": {
+    "passed_case_count": 11,
+    "carried_case_count": 3,
+    "failed_case_count": 1,
+    "blocking_case_ids": [
+      "native-sparkle-notes-rc3"
+    ],
+    "field_case_open": false,
+    "signed_rc_complete": false,
+    "passed": false
+  },
+  "result": "failed_native_notes_issue_link_missing"
+}
