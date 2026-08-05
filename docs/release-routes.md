@@ -9,9 +9,10 @@ tooling, reusable release engine, and guarded operator entrypoints implement
 this four-route contract. Beta 3 through Beta 8, Beta 10, and Beta 11 are
 published and immutable at builds `148` through `156`, excluding permanently
 burned builds `147`, `154`, and abandoned metadata build `157`. Failed Beta 9
-(`0.3.0b9`, build `154`) was never published. RC 1 (`0.3.0rc1`, build `158`) is
-published and immutable. The next prepared target is RC 2 at `0.3.0rc2` build
-`159`; issues #458 and #462 own its exact-signed-candidate qualification.
+(`0.3.0b9`, build `154`) was never published. RC 1 (`0.3.0rc1`, build `158`)
+and RC 2 (`0.3.0rc2`, build `159`) are published and immutable. The next
+prepared target is RC 3 at `0.3.0rc3` build `160`; issue #458 owns its
+exact-signed-candidate subtitle qualification.
 Run-bound signing approval
 remains a separate authorization boundary.
 
@@ -243,38 +244,60 @@ burned Beta 9 build `154` absent. Stable and RC exclude all Beta items; Beta and
 Alpha admit them. Historical metadata and release evidence are in
 [the Beta 10 cut packet](0.3.0-beta.10-cut-packet.md).
 
-## RC 2 Prepared Target
+## RC 2 Published History
 
-The repository is prepared for review of the guarded `v0.3.0-rc.2`
-Prerelease workflow:
+Published `v0.3.0-rc.2` is immutable production history:
 
 - internal version `0.3.0rc2`;
 - public tag and title `v0.3.0-rc.2`;
 - global build `159`;
+- protected-main commit `cd56f02bab8589f527af6e45fe94b2ffcce473dc`;
+- guarded Prerelease run `30944931796`;
 - Sparkle channel `rc`;
 - GitHub prerelease, never Latest, PyPI, or Homebrew; and
-- the same production product, bundle, feed, key, signing team, and diagnostics
-  endpoint as Beta 11.
+- DMG SHA-256
+  `e39e81b99cf9c7bd272095d7a3f96de378e0a251334e9a4c5a83c54b8f4c1d45`.
 
 RC 1 deliberately re-nominated the never-published `0.3.0rc1` version string
 from burned build `147` at a newer build. Its publication superseded the Beta 3
 recovery receipt's historical absence assertion for that tag; the immutable Beta
 3 recovery evidence and build-`147` exclusion remain unchanged.
 
-Publication must place RC 2 above immutable RC 1 build `158`, Beta 11 build
-`156`, Beta 10 build
+The cumulative appcast places RC 2 above immutable RC 1 build `158`, Beta 11
+build `156`, Beta 10 build
 `155`, Beta 8 build `153`, Beta 7 build `152`, Beta 6 build `151`, Beta 5 build
 `150`, Beta 4 build `149`, Beta 3 build `148`, Stable build `146`, RC5 build
 `145`, and RC4 build `144`, with burned builds `147` and `154` absent. Stable
 continues to exclude the RC; RC, Beta, and Alpha admit it, allowing an installed
 RC-route client to update forward without changing its saved route.
 
-Issues #458 and #462 authorize metadata preparation and review of this candidate. The
-repository has no freeze entry for this exact tag; that absence allows workflow
-preflight but does not assert that a tag, draft, DMG, release, or appcast item
-exists. Dispatch requires an explicit RC-creation decision under a fixed-`main`
-merge hold. The reviewed metadata, release-note seed, and qualification boundary
-are in [the RC 2 cut packet](0.3.0-rc.2-cut-packet.md).
+The immutable metadata and publication receipt are in
+[the RC 2 cut packet](0.3.0-rc.2-cut-packet.md).
+
+## RC 3 Prepared Target
+
+The repository is prepared for review of the guarded `v0.3.0-rc.3`
+Prerelease workflow:
+
+- internal version `0.3.0rc3`;
+- public tag and title `v0.3.0-rc.3`;
+- global build `160`;
+- Sparkle channel `rc`;
+- GitHub prerelease, never Latest, PyPI, or Homebrew; and
+- the same production product, bundle, feed, key, signing team, and diagnostics
+  endpoint as RC 2.
+
+Publication must place RC 3 above immutable RC 2 build `159` and all earlier
+history, with burned builds `147` and `154` and abandoned build `157` absent.
+Stable continues to exclude the RC; RC, Beta, and Alpha admit it.
+
+Issue #458 owns exact-artifact qualification of the new malformed-PGS recovery
+and subtitle diagnostics. The repository has no freeze entry for this exact
+tag; that absence allows workflow preflight but does not assert that a tag,
+draft, DMG, release, or appcast item exists. Dispatch requires explicit release
+authorization under a fixed-`main` merge hold. The reviewed metadata,
+release-note seed, and qualification boundary are in
+[the RC 3 cut packet](0.3.0-rc.3-cut-packet.md).
 
 ## Historical Boundaries
 

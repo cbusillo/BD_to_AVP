@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "qualification_id": "rc1-to-rc2-sparkle-qualification-v2",
+  "status": "passed_exact_signed_artifacts",
+  "qualified_at": "2026-08-05T06:29:58Z",
+  "candidate": {
+    "from": {
+      "package_version": "0.3.0rc1",
+      "build_version": "158",
+      "source_git_sha": "96146ac1b5f747dd78440761ad16e73d591fec4b",
+      "dmg_sha256": "0d8aab0e63a4097aa7cc1c7df511dc0582aa767c7dbe81c75971815af3df162c"
+    },
+    "to": {
+      "package_version": "0.3.0rc2",
+      "build_version": "159",
+      "source_git_sha": "cd56f02bab8589f527af6e45fe94b2ffcce473dc",
+      "release_run_id": 30944931796,
+      "release_id": 365132159,
+      "dmg_sha256": "e39e81b99cf9c7bd272095d7a3f96de378e0a251334e9a4c5a83c54b8f4c1d45",
+      "appcast_sha256": "7f2e13e4057e3fb2337eb2348bdb04affde3b088b188fd2b828bf5a3bf74c603"
+    }
+  },
+  "observations": {
+    "stable_channel_excluded_rc2": true,
+    "rc_channel_offered_rc2": true,
+    "summary_first_initial_scroll": true,
+    "inline_markdown_notes": true,
+    "github_site_chrome_absent": true,
+    "native_light_appearance": "passed",
+    "native_dark_appearance": "passed",
+    "external_pr_and_release_links": "opened_in_browser",
+    "updater_remained_open_after_external_links": true,
+    "install_and_relaunch": "passed",
+    "post_update_bundle_version": "0.3.0rc2",
+    "post_update_bundle_build": "159",
+    "post_update_signature_and_gatekeeper": "passed"
+  },
+  "evidence": {
+    "private_receipt_sha256": "33f2da1d65795cae8ec9fb7655c84546a0baefb71d518a60ab1540eb3396cdb6",
+    "dark_cropped_screenshot_sha256": "8bbb13205c211f9048a8f3a1c65952f9fd7468496bd3c00d5786c415fbeaaeab",
+    "light_cropped_screenshot_sha256": "493063db629c50e2952af16356365037f7b1b34b8659e35dbe64a101e98f7dd9",
+    "privacy": "public-safe hashes only; private paths and host identity omitted"
+  },
+  "result": "passed"
+}

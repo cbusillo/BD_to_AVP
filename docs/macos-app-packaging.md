@@ -117,10 +117,11 @@ older Stable and RC installations cannot discover it, while an installed Beta
 `154`) failed after production signing and is burned without a public appcast
   item. Beta 10 (`0.3.0b10`, build `155`) and Beta 11 (`0.3.0b11`, build `156`)
   are published and immutable. Abandoned Beta 12 metadata build `157` has no
-  public artifact. RC 1 (`0.3.0rc1`, build `158`) is published and immutable.
-  RC 2 (`0.3.0rc2`, build `159`) is the next prepared target for the guarded
-  exact-SHA Prerelease workflow. Its future cumulative item must sit above RC 1,
-  Beta 11, Beta 10, Beta 8 through Beta 3, skip builds `147`, `154`, and `157`,
+  public artifact. RC 1 (`0.3.0rc1`, build `158`) and RC 2 (`0.3.0rc2`, build
+  `159`) are published and immutable. RC 3 (`0.3.0rc3`, build `160`) is the next
+  prepared target for the guarded exact-SHA Prerelease workflow. Its future
+  cumulative item must sit above RC 2, RC 1, Beta 11, Beta 10, Beta 8 through
+  Beta 3, skip builds `147`, `154`, and `157`,
   remain excluded from Stable, and be visible to RC, Beta, and Alpha until a
   later newer Stable supersedes it.
 
@@ -183,20 +184,22 @@ The exact Beta 10 artifact passed that release smoke and real preview
 presentation, but its GUI cancellation run left destination-backed preview
 residue. PR #416 fixed that cleanup behavior after Beta 10. The route-aware
 quality system also landed after Beta 10 and requires protocol v12. RC 2
-exact-artifact qualification must prove that:
+qualified the production updater route and signed package, while its real-source
+#458 retest exposed a broader malformed-PGS class. RC 3 exact-artifact
+qualification must prove that:
 
-- RC 1 updates forward to RC 2 on RC, Beta, and Alpha without changing the
+- RC 2 updates forward to RC 3 on RC, Beta, and Alpha without changing the
   saved route;
-- Stable excludes RC 2;
+- Stable excludes RC 3;
 - the downloaded notarized DMG passes signature, staple, Gatekeeper, startup,
   bundled-helper, and worker-capability checks; and
 - the installed app exposes the frozen route-relative quality behavior through
   protocol v12 without changing reversible Custom values; and
-- packaged GUI preview presentation, visible fallback, capacity, cleanup,
-  generated-network final output, overwrite, cancellation, and malformed-PGS
-  recovery and profile Files & Recovery persistence satisfy the pre-registered
-  RC 2 matrix for #458 and #462 without treating
-  unsigned evidence as release proof; and
+- packaged GUI preview, capacity, cleanup, generated-network final output,
+  overwrite, and cancellation carry-forward cases plus malformed-PGS parser
+  recovery, aggregate subtitle diagnostics, and profile-save accessibility
+  satisfy the pre-registered RC 3 matrix for #458 without treating unsigned
+  evidence as release proof; and
 - the release package smoke executes the real installed player guard before
   publication. Physical M5 Vision Pro AV1 evidence remains separately tracked
   by #409 and is not inferred from publication.

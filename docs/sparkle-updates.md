@@ -69,9 +69,9 @@ Each new appcast item embeds the digest-bound draft release body as Markdown, so
 Sparkle uses its adaptive native text view without loading GitHub page chrome or
 making a second release-note request. A full-release link remains available for
 downloads and extended context, and historical external-link items remain valid.
-The live feed carries cumulative production history through RC 1 build `158`.
+The live feed carries cumulative production history through RC 2 build `159`.
 Failed Beta 9 build `154` and abandoned Beta 12 metadata build `157` never
-entered the feed; prepared RC 2 metadata does not alter it before guarded
+entered the feed; prepared RC 3 metadata does not alter it before guarded
 publication.
 See [release-process.md](release-process.md) for the operator sequence.
 
@@ -269,11 +269,12 @@ select Beta or Alpha for future prereleases. Retired `v0.3.0-beta.1` and
 Sparkle-upgrade into Beta 3.
 
 Published `v0.3.0-beta.11` (`0.3.0b11`, build `156`) is the immutable head of
-the current cumulative feed above Beta 10, Beta 8 through Beta 3. Failed Beta 9
+the Beta lineage above Beta 10 and Beta 8 through Beta 3. Failed Beta 9
 build `154` and abandoned Beta 12 metadata build `157` are omitted from public
-history. Published `v0.3.0-rc.1` (`0.3.0rc1`, build `158`) is the current head.
-The next prepared item is `v0.3.0-rc.2` (`0.3.0rc2`, build `159`). Publication
-must append RC 2 above the existing history, exclude it from Stable,
+history. Published `v0.3.0-rc.1` (`0.3.0rc1`, build `158`) and
+`v0.3.0-rc.2` (`0.3.0rc2`, build `159`) are immutable; RC 2 is the current
+head. The next prepared item is `v0.3.0-rc.3` (`0.3.0rc3`, build `160`).
+Publication must append RC 3 above the existing history, exclude it from Stable,
 and admit it on RC, Beta, and Alpha. The exact-SHA Prerelease workflow, signing
 approval, notarization, and public verification remain separate fail-closed
 boundaries.

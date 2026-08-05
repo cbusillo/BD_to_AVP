@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "qualification_id": "rc2-signed-qualification-v1",
-  "status": "preregistered_pending_exact_candidate",
+  "status": "published_partial_exact_artifact",
   "issues": ["#458", "#462"],
   "candidate": {
     "package_version": "0.3.0rc2",
@@ -14,12 +14,32 @@
     "route_table_id": "route-relative-video-quality-v2",
     "mapping_version": 2,
     "route_table_sha256": "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214",
-    "source_git_sha": null,
-    "dmg_sha256": null,
-    "signed_app_tree_sha256": null,
-    "release_run_id": null,
-    "release_id": null,
-    "appcast_sha256": null
+    "source_git_sha": "cd56f02bab8589f527af6e45fe94b2ffcce473dc",
+    "dmg_sha256": "e39e81b99cf9c7bd272095d7a3f96de378e0a251334e9a4c5a83c54b8f4c1d45",
+    "signed_app_tree_sha256": "961b5e3bb0c2aba4b5ce474a0f0a559b80a037712df1f743427f2bf2b9cc48b6",
+    "release_run_id": 30944931796,
+    "release_id": 365132159,
+    "appcast_sha256": "7f2e13e4057e3fb2337eb2348bdb04affde3b088b188fd2b828bf5a3bf74c603"
+  },
+  "immutable_publication": {
+    "published_at": "2026-08-04T20:28:42Z",
+    "dmg_size_bytes": 409258291,
+    "must_not_rebuild": true,
+    "receipt": "rc2-signed-qualification-progress-v1",
+    "result": "partial_followup_required",
+    "outstanding_case_ids": [
+      "gui-preview-low-local-ample-destination",
+      "gui-preview-cancel-cleanup",
+      "gui-preview-failure-cleanup",
+      "capacity-known-low",
+      "capacity-unknown-and-conflicting",
+      "network-generated-final-output",
+      "overwrite-and-conversion-cancel"
+    ],
+    "failed_case_ids": [
+      "malformed-pgs-recovery",
+      "public-diagnostics-and-field-closure"
+    ]
   },
   "prior_evidence": [
     {
