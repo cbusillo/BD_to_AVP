@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "policy_id": "release-qualification-policy-v1",
+  "result_states": ["covered", "carry", "retest", "external"],
+  "tiers": {
+    "0": {
+      "name": "per_commit",
+      "owner": "ci",
+      "blocking_phase": "commit"
+    },
+    "1": {
+      "name": "per_published_artifact",
+      "owner": "guarded_release_engine",
+      "blocking_phase": "publication"
+    },
+    "2": {
+      "name": "change_scoped",
+      "owner": "qualification",
+      "blocking_phase": "release_candidate"
+    },
+    "3": {
+      "name": "periodic_or_hardware",
+      "owner": "qualification",
+      "blocking_phase": "milestone",
+      "default_cadence": {
+        "first_rc_or_stable_candidate": true,
+        "max_age_days": 90
+      },
+      "hardware_receipt_required": true
+    },
+    "4": {
+      "name": "post_publication_observation",
+      "owner": "field_observation",
+      "blocking_phase": "none"
+    }
+  },
+  "contracts": {
+    "release-engine": [
+      ".github/workflows/briefcase.yml",
+      ".github/workflows/prerelease.yml",
+      ".github/workflows/release-engine.yml",
+      ".github/workflows/sparkle-pages.yml",
+      "scripts/artifact_identity.py",
+      "scripts/briefcase_macos_signing.py",
+      "scripts/github_release_run.py",
+      "scripts/macos_release.py",
+      "scripts/release.py",
+      "scripts/release_workflow_policy.py",
+      "scripts/smoke_release_app.py",
+      "scripts/sparkle_appcast.py",
+      "scripts/sparkle_bundle.py"
+    ],
+    "sparkle-update": [
+      ".github/workflows/manage-sparkle-pages.yml",
+      ".github/workflows/sparkle-pages.yml",
+      "macos/BluRayToVisionPro/Feature/SparkleUpdateBackend.swift",
+      "macos/BluRayToVisionPro/Feature/UpdateController.swift",
+      "scripts/sparkle_appcast.py",
+      "scripts/sparkle_bundle.py",
+      "scripts/sparkle_macos.py"
+    ],
+    "packaged-worker": [
+      "bd_to_avp/worker/**",
+      "macos/BluRayToVisionPro/Worker/**",
+      "scripts/briefcase_app.py",
+      "scripts/native_app.py",
+      "scripts/smoke_release_app.py",
+      "scripts/verify_app_tools.py"
+    ],
+    "profile-storage": [
+      "macos/BluRayToVisionPro/Feature/ProfileStore.swift",
+      "macos/BluRayToVisionPro/Views/EncodingOptionsEditor.swift",
+      "macos/BluRayToVisionProTests/ProfileStoreTests.swift"
+    ],
+    "preview-lifecycle": [
+      "bd_to_avp/modules/preview.py",
+      "bd_to_avp/modules/preview_range.py",
+      "bd_to_avp/worker/ownership.py",
+      "macos/BluRayToVisionPro/Feature/PreviewViewModel.swift",
+      "macos/BluRayToVisionPro/Models/PreviewWorkflow.swift",
+      "macos/BluRayToVisionPro/Views/PreviewSheet.swift"
+    ],
+    "storage-capacity": [
+      "bd_to_avp/modules/storage_capacity.py",
+      "bd_to_avp/preflight.py",
+      "macos/BluRayToVisionPro/Models/StorageCapacity.swift",
+      "macos/BluRayToVisionPro/Views/DestinationPicker.swift"
+    ],
+    "conversion-ownership": [
+      "bd_to_avp/modules/file.py",
+      "bd_to_avp/modules/process.py",
+      "bd_to_avp/process_runner.py",
+      "bd_to_avp/worker/operations.py",
+      "bd_to_avp/worker/ownership.py",
+      "macos/BluRayToVisionPro/Feature/ConversionViewModel.swift",
+      "macos/BluRayToVisionPro/Models/ConversionWorkflow.swift",
+      "macos/BluRayToVisionPro/Worker/WorkerProcessClient.swift"
+    ],
+    "subtitle-recovery": [
+      "bd_to_avp/modules/sub.py",
+      "bd_to_avp/vendor/pgsrip/**",
+      "bd_to_avp/worker/diagnostics.py",
+      "bd_to_avp/worker/operations.py"
+    ],
+    "support-diagnostics": [
+      "bd_to_avp/observability.py",
+      "bd_to_avp/presentation.py",
+      "bd_to_avp/worker/diagnostics.py",
+      "macos/BluRayToVisionPro/Diagnostics/**",
+      "macos/BluRayToVisionPro/Models/ObservabilityEvent.swift",
+      "scripts/support_diagnostics.py"
+    ]
+  },
+  "cases": [
+    {
+      "id": "release-workflow-identity",
+      "tier": 1,
+      "blocking_phase": "publication",
+      "invalidates_on": {"paths": [], "contracts": ["release-engine"]},
+      "allowed_evidence_sources": ["release_run_receipt"],
+      "carry_forward": {"allowed": false, "requires_prior_accepted_receipt": false, "requires_clean_invalidation": false}
+    },
+    {
+      "id": "sparkle-update-route",
+      "tier": 2,
+      "blocking_phase": "release_candidate",
+      "invalidates_on": {"paths": ["docs/release-routes.md", "pyproject.toml"], "contracts": ["sparkle-update"]},
+      "allowed_evidence_sources": ["signed_artifact_receipt"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "native-sparkle-release-notes",
+      "tier": 2,
+      "blocking_phase": "release_candidate",
+      "invalidates_on": {"paths": ["docs/release-notes/**", "docs/*-cut-packet.md"], "contracts": ["sparkle-update"]},
+      "allowed_evidence_sources": ["signed_artifact_receipt"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "profile-save-action-accessibility",
+      "tier": 2,
+      "blocking_phase": "release_candidate",
+      "invalidates_on": {"paths": ["macos/BluRayToVisionPro/Views/**"], "contracts": ["profile-storage"]},
+      "allowed_evidence_sources": ["signed_artifact_receipt"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "signed-packaged-route-parity",
+      "tier": 1,
+      "blocking_phase": "publication",
+      "invalidates_on": {"paths": ["bd_to_avp/modules/video*.py", "docs/qualification/video-quality-*.json"], "contracts": ["release-engine", "packaged-worker"]},
+      "allowed_evidence_sources": ["release_run_receipt"],
+      "carry_forward": {"allowed": false, "requires_prior_accepted_receipt": false, "requires_clean_invalidation": false}
+    },
+    {
+      "id": "gui-preview-low-local-ample-destination",
+      "tier": 2,
+      "blocking_phase": "release_candidate",
+      "invalidates_on": {"paths": [], "contracts": ["preview-lifecycle", "storage-capacity"]},
+      "allowed_evidence_sources": ["signed_artifact_receipt"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "gui-preview-cancel-cleanup",
+      "tier": 2,
+      "blocking_phase": "release_candidate",
+      "invalidates_on": {"paths": [], "contracts": ["preview-lifecycle", "conversion-ownership"]},
+      "allowed_evidence_sources": ["signed_artifact_receipt"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "gui-preview-failure-cleanup",
+      "tier": 2,
+      "blocking_phase": "release_candidate",
+      "invalidates_on": {"paths": [], "contracts": ["preview-lifecycle", "conversion-ownership"]},
+      "allowed_evidence_sources": ["signed_artifact_receipt"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "capacity-known-low",
+      "tier": 2,
+      "blocking_phase": "release_candidate",
+      "invalidates_on": {"paths": [], "contracts": ["storage-capacity", "support-diagnostics"]},
+      "allowed_evidence_sources": ["signed_artifact_receipt"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "capacity-unknown-and-conflicting",
+      "tier": 2,
+      "blocking_phase": "release_candidate",
+      "invalidates_on": {"paths": [], "contracts": ["storage-capacity", "support-diagnostics"]},
+      "allowed_evidence_sources": ["signed_artifact_receipt"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "network-generated-final-output",
+      "tier": 2,
+      "blocking_phase": "release_candidate",
+      "invalidates_on": {"paths": ["bd_to_avp/modules/container.py", "bd_to_avp/modules/video*.py"], "contracts": ["conversion-ownership", "storage-capacity"]},
+      "allowed_evidence_sources": ["signed_artifact_receipt"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "overwrite-and-conversion-cancel",
+      "tier": 2,
+      "blocking_phase": "release_candidate",
+      "invalidates_on": {"paths": [], "contracts": ["conversion-ownership"]},
+      "allowed_evidence_sources": ["signed_artifact_receipt"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "malformed-pgs-parser-recovery",
+      "tier": 2,
+      "blocking_phase": "release_candidate",
+      "invalidates_on": {"paths": [], "contracts": ["subtitle-recovery"]},
+      "allowed_evidence_sources": ["signed_artifact_receipt"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "subtitle-partial-output-diagnostics",
+      "tier": 2,
+      "blocking_phase": "release_candidate",
+      "invalidates_on": {"paths": [], "contracts": ["subtitle-recovery", "support-diagnostics"]},
+      "allowed_evidence_sources": ["signed_artifact_receipt"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "public-diagnostics-and-field-closure",
+      "tier": 4,
+      "blocking_phase": "none",
+      "invalidates_on": {"paths": [], "contracts": ["support-diagnostics"]},
+      "allowed_evidence_sources": ["field_observation"],
+      "carry_forward": {"allowed": false, "requires_prior_accepted_receipt": false, "requires_clean_invalidation": false}
+    }
+  ]
+}

@@ -3,6 +3,11 @@
   "qualification_id": "rc3-signed-qualification-v1",
   "status": "preregistered_pending_exact_candidate",
   "issues": ["#458"],
+  "qualification_policy": {
+    "id": "release-qualification-policy-v1",
+    "path": "docs/qualification/release-qualification-policy-v1.json",
+    "scope_command": "uv run python -m scripts.qualify_release_scope --qualification docs/qualification/rc3-signed-qualification-v1.json --candidate-sha <full-sha> --evidence <checked-evidence.json> --release-stage rc --require-evidence"
+  },
   "candidate": {
     "package_version": "0.3.0rc3",
     "public_version": "0.3.0-rc.3",
@@ -58,24 +63,40 @@
     "field_qualification_timing": "post_publication_exact_artifact"
   },
   "matrix": [
-    {"id": "release-workflow-identity", "phase": "workflow"},
-    {"id": "updater-route-rc2-to-rc3", "phase": "installed_candidate"},
-    {"id": "native-sparkle-notes-rc3", "phase": "installed_candidate"},
-    {"id": "profile-save-action-accessibility", "phase": "installed_candidate"},
-    {"id": "signed-packaged-route-parity", "phase": "signed_artifact"},
-    {"id": "gui-preview-low-local-ample-destination", "phase": "signed_artifact"},
-    {"id": "gui-preview-cancel-cleanup", "phase": "signed_artifact"},
-    {"id": "gui-preview-failure-cleanup", "phase": "signed_artifact"},
-    {"id": "capacity-known-low", "phase": "signed_artifact"},
-    {"id": "capacity-unknown-and-conflicting", "phase": "signed_artifact"},
-    {"id": "network-generated-final-output", "phase": "signed_artifact"},
-    {"id": "overwrite-and-conversion-cancel", "phase": "signed_artifact"},
-    {"id": "malformed-pgs-parser-recovery", "phase": "signed_artifact"},
-    {"id": "subtitle-partial-output-diagnostics", "phase": "signed_artifact"},
-    {"id": "public-diagnostics-and-field-closure", "phase": "post_publication"}
+    {"id": "release-workflow-identity", "policy_case_id": "release-workflow-identity", "phase": "workflow", "migration": "release_run_receipt"},
+    {"id": "updater-route-rc2-to-rc3", "policy_case_id": "sparkle-update-route", "phase": "installed_candidate", "migration": "fresh_retest"},
+    {"id": "native-sparkle-notes-rc3", "policy_case_id": "native-sparkle-release-notes", "phase": "installed_candidate", "migration": "fresh_retest"},
+    {"id": "profile-save-action-accessibility", "policy_case_id": "profile-save-action-accessibility", "phase": "installed_candidate", "migration": "fresh_retest"},
+    {"id": "signed-packaged-route-parity", "policy_case_id": "signed-packaged-route-parity", "phase": "signed_artifact", "migration": "release_run_receipt"},
+    {"id": "gui-preview-low-local-ample-destination", "policy_case_id": "gui-preview-low-local-ample-destination", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "gui-preview-cancel-cleanup", "policy_case_id": "gui-preview-cancel-cleanup", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "gui-preview-failure-cleanup", "policy_case_id": "gui-preview-failure-cleanup", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "capacity-known-low", "policy_case_id": "capacity-known-low", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "capacity-unknown-and-conflicting", "policy_case_id": "capacity-unknown-and-conflicting", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "network-generated-final-output", "policy_case_id": "network-generated-final-output", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "overwrite-and-conversion-cancel", "policy_case_id": "overwrite-and-conversion-cancel", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "malformed-pgs-parser-recovery", "policy_case_id": "malformed-pgs-parser-recovery", "phase": "signed_artifact", "migration": "fresh_retest"},
+    {"id": "subtitle-partial-output-diagnostics", "policy_case_id": "subtitle-partial-output-diagnostics", "phase": "signed_artifact", "migration": "fresh_retest"},
+    {"id": "public-diagnostics-and-field-closure", "policy_case_id": "public-diagnostics-and-field-closure", "phase": "post_publication", "migration": "external_nonblocking"}
   ],
   "acceptance": {
     "required_case_ids": [
+      "release-workflow-identity",
+      "sparkle-update-route",
+      "native-sparkle-release-notes",
+      "profile-save-action-accessibility",
+      "signed-packaged-route-parity",
+      "gui-preview-low-local-ample-destination",
+      "gui-preview-cancel-cleanup",
+      "gui-preview-failure-cleanup",
+      "capacity-known-low",
+      "capacity-unknown-and-conflicting",
+      "network-generated-final-output",
+      "overwrite-and-conversion-cancel",
+      "malformed-pgs-parser-recovery",
+      "subtitle-partial-output-diagnostics"
+    ],
+    "preregistered_matrix_case_ids": [
       "release-workflow-identity",
       "updater-route-rc2-to-rc3",
       "native-sparkle-notes-rc3",
@@ -92,6 +113,7 @@
       "subtitle-partial-output-diagnostics",
       "public-diagnostics-and-field-closure"
     ],
+    "nonblocking_case_ids": ["public-diagnostics-and-field-closure"],
     "signed_rc_complete": false,
     "passed": false
   }
