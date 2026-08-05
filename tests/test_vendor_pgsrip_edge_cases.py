@@ -19,7 +19,6 @@ from bd_to_avp.vendor.pgsrip.utils import from_hex, to_time
 # ---------------------------------------------------------------------------
 # Helpers for building minimal RLE-encoded PGS image data
 # ---------------------------------------------------------------------------
-
 def _rle_single_pixel(color_index: int) -> bytes:
     """Encode a single pixel with the given palette index (non-zero color)."""
     return bytes([color_index])
