@@ -240,7 +240,7 @@ class PgsRleBoundsTests(unittest.TestCase):
         return palettes
 
     def test_rle_within_declared_bounds_decodes_successfully(self) -> None:
-        """Valid 2×2 image (4 pixels) must decode without error."""
+        """Valid 2x2 image (4 pixels) must decode without error."""
         palettes = self._make_palettes()
         # 2 pixels on row 1, end-of-line, 2 pixels on row 2, end-of-line
         rle = _rle_run(2, 1) + _rle_end_of_line() + _rle_run(2, 1) + _rle_end_of_line()
@@ -249,7 +249,7 @@ class PgsRleBoundsTests(unittest.TestCase):
         self.assertEqual(data.shape, (2, 2))
 
     def test_rle_exceeding_declared_bounds_raises_value_error(self) -> None:
-        """ODS declares 2×2 (4 pixels) but RLE expands to 5+ — must raise ValueError."""
+        """ODS declares 2x2 (4 pixels) but RLE expands to 5+ and must raise ValueError."""
         palettes = self._make_palettes()
         # 5 pixels on one row, then end-of-line
         rle = _rle_run(5, 1) + _rle_end_of_line()
@@ -315,7 +315,7 @@ class PgsMalformedItemIsolationTests(unittest.TestCase):
         pds.palettes = palettes
 
         ods = Mock()
-        # Declares 2×2 (4 pixels) but RLE encodes 20 pixels — will raise ValueError
+        # Declares 2x2 (4 pixels) but RLE encodes 20 pixels and raises ValueError.
         ods.img_data = _rle_run(20, 1) + _rle_end_of_line()
         ods.width = 2
         ods.height = 2
