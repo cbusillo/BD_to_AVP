@@ -78,16 +78,14 @@ class PgsSubtitleItem:
             for pds in ds.pds_segments:
                 palettes += pds.palettes
             img_data = b''
-            ods_width: typing.Optional[int] = None
-            ods_height: typing.Optional[int] = None
+            declared_pixels = 0
             for ods in ds.ods_segments:
                 img_data += ods.img_data
-                if ods_width is None and ods.width is not None:
-                    ods_width = ods.width
-                    ods_height = ods.height
+                if ods.width is not None and ods.height is not None:
+                    declared_pixels += ods.width * ods.height
 
             try:
-                image = PgsImage(img_data, palettes, width=ods_width, height=ods_height)
+                image = PgsImage(img_data, palettes, max_pixels=declared_pixels or None)
                 _ = image.data  # trigger decode now so malformed data raises here
                 return image
             except Exception as exc:

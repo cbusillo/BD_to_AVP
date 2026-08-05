@@ -91,17 +91,19 @@ class PgsImage:
         palettes: typing.List[Palette],
         width: typing.Optional[int] = None,
         height: typing.Optional[int] = None,
+        max_pixels: typing.Optional[int] = None,
     ):
         self.rle_data = data
         self.palettes = palettes
         self.declared_width = width
         self.declared_height = height
+        self.max_pixels = max_pixels
         self._data: typing.Optional[ndarray] = None
 
     @property
     def data(self):
         if self._data is None:
-            max_pixels = (
+            max_pixels = self.max_pixels or (
                 self.declared_width * self.declared_height
                 if self.declared_width is not None and self.declared_height is not None
                 else None
