@@ -16,7 +16,16 @@ from bd_to_avp.modules.languages import (
     normalize_language_code,
     normalize_source_language,
 )
-from bd_to_avp.observability import ObservabilityContext
+from bd_to_avp.observability import (
+    ObservabilityCancellation,
+    ObservabilityContext,
+    ObservabilityData,
+    ObservabilityFailure,
+    ObservabilityPrivacy,
+    ObservabilityProgress,
+    ObservabilitySeverity,
+    ObservabilityText,
+)
 from bd_to_avp.presentation import cli_message
 from bd_to_avp.process_runner import ProcessCancelled
 from bd_to_avp.runtime import RunContext
@@ -115,38 +124,187 @@ def extract_subtitle_to_srt(
                 report_subtitle_warning(message, warning_handler)
                 return None
 
+            selected_count = len(selected_subtitle_tracks)
+            successful_track_count = 0
+            terminal_event_emitted = False
+            emit_subtitle_progress(
+                run_context,
+                "subtitle.extract.started",
+                completed=0,
+                total=selected_count,
+                context=observability_context,
+            )
+
             try:
-                ripped_track_count = pgsrip.rip(mkv_file, sub_options)
+                try:
+                    ripped_track_count = pgsrip.rip(mkv_file, sub_options)
+                except ProcessCancelled:
+                    raise
+                except Exception as error:
+                    cleanup_existing_subtitle_files(output_path)
+                    emit_subtitle_progress(
+                        run_context,
+                        "subtitle.extract.failed",
+                        completed=0,
+                        total=selected_count,
+                        severity=ObservabilitySeverity.WARNING,
+                        message="Subtitle extraction failed before producing usable output.",
+                        failure_code="subtitle_rip_failed",
+                        context=observability_context,
+                    )
+                    terminal_event_emitted = True
+                    report_subtitle_warning(
+                        f"PGS subtitle extraction failed; continuing without subtitles. ({error})",
+                        warning_handler,
+                    )
+                    return None
+
+                if ripped_track_count == 0:
+                    cleanup_existing_subtitle_files(output_path)
+                    emit_subtitle_progress(
+                        run_context,
+                        "subtitle.extract.failed",
+                        completed=0,
+                        total=selected_count,
+                        severity=ObservabilitySeverity.WARNING,
+                        message="Subtitle extraction produced no usable output.",
+                        failure_code="subtitle_rip_no_output",
+                        context=observability_context,
+                    )
+                    terminal_event_emitted = True
+                    report_subtitle_warning(
+                        "PGS subtitle extraction did not produce usable subtitle files; continuing without subtitles.",
+                        warning_handler,
+                    )
+                    return None
+
+                empty_count = 0
+                for srt_file in output_path.glob("*.srt"):
+                    if srt_file.stat().st_size == 0:
+                        srt_file.unlink()
+                        empty_count += 1
+
+                successful_track_count = max(0, min(selected_count, ripped_track_count - empty_count))
+                failed_track_count = selected_count - successful_track_count
+                if successful_track_count == 0:
+                    cleanup_existing_subtitle_files(output_path)
+                    emit_subtitle_progress(
+                        run_context,
+                        "subtitle.extract.failed",
+                        completed=0,
+                        total=selected_count,
+                        severity=ObservabilitySeverity.WARNING,
+                        message="Subtitle extraction produced no usable output.",
+                        failure_code="subtitle_empty_output",
+                        context=observability_context,
+                    )
+                    terminal_event_emitted = True
+                    if not config.continue_on_error:
+                        raise SRTCreationError("No SRT subtitle files with data created.")
+                    report_subtitle_warning(
+                        "PGS subtitle extraction did not produce usable subtitle files; continuing without subtitles.",
+                        warning_handler,
+                    )
+                    return None
+
+                if failed_track_count:
+                    message = (
+                        "Subtitles extracted with partial loss: "
+                        f"{failed_track_count} of {selected_count} subtitle tracks produced no usable output."
+                    )
+                    report_subtitle_warning(message, warning_handler)
+                    emit_subtitle_progress(
+                        run_context,
+                        "subtitle.extract.partial_output",
+                        completed=successful_track_count,
+                        total=selected_count,
+                        severity=ObservabilitySeverity.WARNING,
+                        message=message,
+                        context=observability_context,
+                    )
+
+                mark_forced_srt_files(selected_subtitle_tracks, warning_handler)
+                emit_subtitle_progress(
+                    run_context,
+                    "subtitle.extract.completed",
+                    completed=successful_track_count,
+                    total=selected_count,
+                    severity=ObservabilitySeverity.WARNING if failed_track_count else ObservabilitySeverity.INFO,
+                    context=observability_context,
+                )
             except ProcessCancelled:
+                if not terminal_event_emitted:
+                    emit_subtitle_progress(
+                        run_context,
+                        "subtitle.extract.cancelled",
+                        completed=successful_track_count,
+                        total=selected_count,
+                        cancelled=True,
+                        context=observability_context,
+                    )
                 raise
-            except Exception as error:
-                cleanup_existing_subtitle_files(output_path)
-                report_subtitle_warning(
-                    f"PGS subtitle extraction failed; continuing without subtitles. ({error})",
-                    warning_handler,
-                )
-                return None
-
-            if ripped_track_count == 0:
-                cleanup_existing_subtitle_files(output_path)
-                report_subtitle_warning(
-                    "PGS subtitle extraction did not produce usable subtitle files; continuing without subtitles.",
-                    warning_handler,
-                )
-                return None
-
-            for srt_file in output_path.glob("*.srt"):
-                if srt_file.stat().st_size == 0:
-                    srt_file.unlink()
-
-            if not any(output_path.glob("*.srt")) and not config.continue_on_error:
-                raise SRTCreationError("No SRT subtitle files with data created.")
-
-            mark_forced_srt_files(selected_subtitle_tracks, warning_handler)
+            except KeyboardInterrupt:
+                if not terminal_event_emitted:
+                    emit_subtitle_progress(
+                        run_context,
+                        "subtitle.extract.cancelled",
+                        completed=successful_track_count,
+                        total=selected_count,
+                        cancelled=True,
+                        context=observability_context,
+                    )
+                raise
+            except Exception:
+                if not terminal_event_emitted:
+                    emit_subtitle_progress(
+                        run_context,
+                        "subtitle.extract.failed",
+                        completed=successful_track_count,
+                        total=selected_count,
+                        severity=ObservabilitySeverity.WARNING,
+                        message="Subtitle extraction failed while finalizing output.",
+                        failure_code="subtitle_postprocess_failed",
+                        context=observability_context,
+                    )
+                raise
     finally:
         if spinner is not None and spinner_thread is not None:
             spinner.stop(spinner_update_func)
             spinner_thread.join()
+
+
+def emit_subtitle_progress(
+    run_context: RunContext | None,
+    kind: str,
+    *,
+    completed: int,
+    total: int,
+    severity: ObservabilitySeverity = ObservabilitySeverity.INFO,
+    message: str | None = None,
+    failure_code: str | None = None,
+    cancelled: bool = False,
+    context: ObservabilityContext | None = None,
+) -> None:
+    if run_context is None:
+        return
+    run_context.emit(
+        kind,
+        severity=severity,
+        privacy=ObservabilityPrivacy.PUBLIC,
+        context=context,
+        data=ObservabilityData(
+            message=(
+                ObservabilityText.bounded(message, privacy=ObservabilityPrivacy.PUBLIC) if message is not None else None
+            ),
+            failure=ObservabilityFailure(code=failure_code) if failure_code is not None else None,
+            cancellation=ObservabilityCancellation(requested=True) if cancelled else None,
+            progress=ObservabilityProgress(
+                completed_units=float(completed),
+                total_units=float(total) if total > 0 else None,
+                unit="tracks",
+            ),
+        ),
+    )
 
 
 @contextmanager
