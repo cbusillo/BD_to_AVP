@@ -119,6 +119,12 @@ name: Signed release engine
       release_sha:
         description: Validated protected-main release commit
         value: ${{ jobs.policy.outputs.release_sha }}
+      release_receipt_asset_id:
+        description: Immutable GitHub Release asset ID for the public-safe release receipt
+        value: ${{ jobs.build-receipt.outputs.receipt_asset_id }}
+      release_receipt_sha256:
+        description: SHA-256 of the exact uploaded release receipt file
+        value: ${{ jobs.build-receipt.outputs.receipt_file_sha256 }}
 
 permissions:
   actions: read
@@ -542,6 +548,7 @@ jobs:
       dmg_name: ${{ steps.package_artifact.outputs.dmg_name }}
       dmg_sha256: ${{ steps.package_artifact.outputs.dmg_sha256 }}
       dmg_size: ${{ steps.package_artifact.outputs.dmg_size }}
+      signed_app_tree_sha256: ${{ steps.package_artifact.outputs.signed_app_tree_sha256 }}
     steps:
       - name: Checkout validated main commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -960,11 +967,14 @@ jobs:
           fi
           DMG_SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
           DMG_SIZE=$(stat -f %z "$DMG_PATH")
+          SIGNED_APP_TREE_SHA256=$(uv run python -c \
+            'from pathlib import Path; from scripts.artifact_identity import app_tree_sha256; print(app_tree_sha256(Path("macos/build/package/3D Blu-ray to Vision Pro.app")))')
           printf '%s  %s\n' "$DMG_SHA256" "$DMG_NAME" > dist/SHA256SUMS
           {
             echo "dmg_name=$DMG_NAME"
             echo "dmg_sha256=$DMG_SHA256"
             echo "dmg_size=$DMG_SIZE"
+            echo "signed_app_tree_sha256=$SIGNED_APP_TREE_SHA256"
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload log on failure
@@ -1654,6 +1664,12 @@ jobs:
     permissions:
       attestations: read
       contents: write
+    outputs:
+      appcast_asset_id: ${{ steps.verify_assets.outputs.appcast_asset_id }}
+      checksum_asset_id: ${{ steps.verify_assets.outputs.checksum_asset_id }}
+      checksum_sha256: ${{ steps.verify_assets.outputs.checksum_sha256 }}
+      checksum_size: ${{ steps.verify_assets.outputs.checksum_size }}
+      dmg_asset_id: ${{ steps.verify_assets.outputs.dmg_asset_id }}
     steps:
       - name: Checkout protected verification tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -1729,6 +1745,7 @@ jobs:
           esac
 
       - name: Re-download and verify every release boundary
+        id: verify_assets
         env:
           BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: ${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}
           EXPECTED_APPCAST_SHA256: ${{ needs.publish-appcast.outputs.appcast_sha256 }}
@@ -1863,6 +1880,171 @@ jobs:
             --length "$ASSET_SIZE" \
             --release-notes-file verified-assets/release-notes.md \
             --full-release-notes-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+          {
+            echo "dmg_asset_id=$DMG_ASSET_ID"
+            echo "checksum_asset_id=$CHECKSUM_ASSET_ID"
+            echo "checksum_sha256=$(shasum -a 256 verified-assets/SHA256SUMS | awk '{print $1}')"
+            echo "checksum_size=$(stat -f %z verified-assets/SHA256SUMS)"
+            echo "appcast_asset_id=$APPCAST_ASSET_ID"
+          } >> "$GITHUB_OUTPUT"
+
+  build-receipt:
+    name: Build and verify immutable release receipt
+    needs:
+      - policy
+      - prepare
+      - package
+      - create-draft
+      - publish-appcast
+      - verify-draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      receipt_asset_id: ${{ steps.receipt.outputs.receipt_asset_id }}
+      receipt_file_sha256: ${{ steps.receipt.outputs.receipt_file_sha256 }}
+      receipt_sha256: ${{ steps.receipt.outputs.receipt_sha256 }}
+    steps:
+      - name: Checkout protected receipt tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Build, upload, and re-download receipt
+        id: receipt
+        env:
+          APPCAST_ASSET_ID: ${{ needs.verify-draft.outputs.appcast_asset_id }}
+          APPCAST_SHA256: ${{ needs.publish-appcast.outputs.appcast_sha256 }}
+          APPCAST_SIZE: ${{ needs.publish-appcast.outputs.appcast_size }}
+          BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
+          CHECKSUM_ASSET_ID: ${{ needs.verify-draft.outputs.checksum_asset_id }}
+          CHECKSUM_SHA256: ${{ needs.verify-draft.outputs.checksum_sha256 }}
+          CHECKSUM_SIZE: ${{ needs.verify-draft.outputs.checksum_size }}
+          DMG_ASSET_ID: ${{ needs.verify-draft.outputs.dmg_asset_id }}
+          DMG_NAME: ${{ needs.package.outputs.dmg_name }}
+          DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
+          DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
+          GH_TOKEN: ${{ github.token }}
+          MAKE_LATEST: ${{ needs.prepare.outputs.make_latest }}
+          PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          PUBLIC_VERSION: ${{ needs.prepare.outputs.public_version }}
+          RELEASE_ACTOR: ${{ github.actor }}
+          RELEASE_CREATED_AT: ${{ needs.create-draft.outputs.release_created_at }}
+          RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
+          RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
+          RELEASE_ROUTE: ${{ needs.policy.outputs.release_route }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          SIGNED_APP_TREE_SHA256: ${{ needs.package.outputs.signed_app_tree_sha256 }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg release_route "$RELEASE_ROUTE" \
+            --arg source_sha "$GITHUB_SHA" \
+            --arg workflow_actor "$RELEASE_ACTOR" \
+            --argjson workflow_run_id "$GITHUB_RUN_ID" \
+            --argjson workflow_run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg package_version "$PACKAGE_VERSION" \
+            --arg public_version "$PUBLIC_VERSION" \
+            --arg build_version "$BUILD_VERSION" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg release_name "$RELEASE_NAME" \
+            --argjson release_id "$RELEASE_ID" \
+            --arg release_created_at "$RELEASE_CREATED_AT" \
+            --argjson prerelease "$PRERELEASE" \
+            --argjson make_latest "$MAKE_LATEST" \
+            --arg signed_app_tree_sha256 "$SIGNED_APP_TREE_SHA256" \
+            --arg dmg_name "$DMG_NAME" \
+            --arg dmg_sha256 "$DMG_SHA256" \
+            --argjson dmg_size "$DMG_SIZE" \
+            --argjson dmg_asset_id "$DMG_ASSET_ID" \
+            --arg checksum_sha256 "$CHECKSUM_SHA256" \
+            --argjson checksum_size "$CHECKSUM_SIZE" \
+            --argjson checksum_asset_id "$CHECKSUM_ASSET_ID" \
+            --arg appcast_sha256 "$APPCAST_SHA256" \
+            --argjson appcast_size "$APPCAST_SIZE" \
+            --argjson appcast_asset_id "$APPCAST_ASSET_ID" \
+            '{
+              release_route: $release_route,
+              source_sha: $source_sha,
+              workflow_actor: $workflow_actor,
+              workflow_run_id: $workflow_run_id,
+              workflow_run_attempt: $workflow_run_attempt,
+              package_version: $package_version,
+              public_version: $public_version,
+              build_version: $build_version,
+              release_tag: $release_tag,
+              release_name: $release_name,
+              release_id: $release_id,
+              release_created_at: $release_created_at,
+              prerelease: $prerelease,
+              make_latest: $make_latest,
+              signed_app_tree_sha256: $signed_app_tree_sha256,
+              artifacts: [
+                {kind: "dmg", name: $dmg_name, sha256: $dmg_sha256, size_bytes: $dmg_size, asset_id: $dmg_asset_id},
+                {kind: "checksum", name: "SHA256SUMS", sha256: $checksum_sha256, size_bytes: $checksum_size, asset_id: $checksum_asset_id},
+                {kind: "appcast", name: "appcast.xml", sha256: $appcast_sha256, size_bytes: $appcast_size, asset_id: $appcast_asset_id}
+              ]
+            }' > release-receipt-facts.json
+          python -m scripts.release_receipt build \
+            --facts release-receipt-facts.json \
+            --output release-receipt.json
+          RECEIPT_FILE_SHA256=$(sha256sum release-receipt.json | awk '{print $1}')
+          RECEIPT_SHA256=$(jq -r .receipt_sha256 release-receipt.json)
+
+          RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+          if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "true" ]; then
+            echo "Release must remain a draft while the receipt is attached." >&2
+            exit 1
+          fi
+          RECEIPT_COUNT=$(jq '[.assets[] | select(.name == "release-receipt.json")] | length' <<< "$RELEASE_JSON")
+          case "$RECEIPT_COUNT" in
+            0)
+              UPLOADED_RECEIPT=$(gh api --method POST \
+                "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=release-receipt.json" \
+                -H "Content-Type: application/json" \
+                --input release-receipt.json)
+              RECEIPT_ASSET_ID=$(jq -r .id <<< "$UPLOADED_RECEIPT")
+              ;;
+            1)
+              RECEIPT_ASSET_ID=$(jq -r '.assets[] | select(.name == "release-receipt.json") | .id' <<< "$RELEASE_JSON")
+              gh api "repos/$GITHUB_REPOSITORY/releases/assets/$RECEIPT_ASSET_ID" \
+                -H "Accept: application/octet-stream" > existing-release-receipt.json
+              if ! cmp --silent release-receipt.json existing-release-receipt.json; then
+                echo "Existing immutable release receipt differs from the verified receipt." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Draft release contains duplicate release receipts." >&2
+              exit 1
+              ;;
+          esac
+
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$RECEIPT_ASSET_ID" \
+            -H "Accept: application/octet-stream" > downloaded-release-receipt.json
+          if ! cmp --silent release-receipt.json downloaded-release-receipt.json; then
+            echo "Re-downloaded release receipt differs from the verified local receipt." >&2
+            exit 1
+          fi
+          python -m scripts.release_receipt validate --receipt downloaded-release-receipt.json
+          RECEIPT_ASSET_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/assets/$RECEIPT_ASSET_ID")
+          if [ "$(jq -r .digest <<< "$RECEIPT_ASSET_JSON")" != "sha256:$RECEIPT_FILE_SHA256" ]; then
+            echo "GitHub receipt asset digest differs from the verified local receipt." >&2
+            exit 1
+          fi
+          {
+            echo "receipt_asset_id=$RECEIPT_ASSET_ID"
+            echo "receipt_file_sha256=$RECEIPT_FILE_SHA256"
+            echo "receipt_sha256=$RECEIPT_SHA256"
+          } >> "$GITHUB_OUTPUT"
 
   publish-release:
     name: Publish verified GitHub Release
@@ -1872,12 +2054,14 @@ jobs:
       - prepare
       - package
       - verify-draft
+      - build-receipt
     if: >-
       !cancelled() &&
       needs.create-draft.result == 'success' &&
       needs.prepare.result == 'success' &&
       needs.package.result == 'success' &&
       needs.verify-draft.result == 'success' &&
+      needs.build-receipt.result == 'success' &&
       (
         needs.prepare.outputs.publish_pypi != 'true' ||
         needs.build-python.result == 'success'
@@ -1897,6 +2081,8 @@ jobs:
           RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
           RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          EXPECTED_RECEIPT_ASSET_ID: ${{ needs.build-receipt.outputs.receipt_asset_id }}
+          EXPECTED_RECEIPT_FILE_SHA256: ${{ needs.build-receipt.outputs.receipt_file_sha256 }}
         run: |
           set -euo pipefail
           case "$PRERELEASE:$MAKE_LATEST" in
@@ -1922,6 +2108,23 @@ jobs:
           }
           RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
           verify_release_notes_body "$RELEASE_JSON"
+          RECEIPT_COUNT=$(jq '[.assets[] | select(.name == "release-receipt.json")] | length' <<< "$RELEASE_JSON")
+          TOTAL_ASSET_COUNT=$(jq '.assets | length' <<< "$RELEASE_JSON")
+          if [ "$RECEIPT_COUNT" != "1" ] || [ "$TOTAL_ASSET_COUNT" != "4" ]; then
+            echo "Verified release must contain exactly the DMG, checksum, appcast, and receipt assets." >&2
+            exit 1
+          fi
+          RECEIPT_ASSET_ID=$(jq -r '.assets[] | select(.name == "release-receipt.json") | .id' <<< "$RELEASE_JSON")
+          if [ "$RECEIPT_ASSET_ID" != "$EXPECTED_RECEIPT_ASSET_ID" ]; then
+            echo "Release receipt asset identity changed before publication." >&2
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$RECEIPT_ASSET_ID" \
+            -H "Accept: application/octet-stream" > release-receipt.json
+          if [ "$(sha256sum release-receipt.json | awk '{print $1}')" != "$EXPECTED_RECEIPT_FILE_SHA256" ]; then
+            echo "Release receipt digest changed before publication." >&2
+            exit 1
+          fi
           if [ "$(jq -r .target_commitish <<< "$RELEASE_JSON")" != "$GITHUB_SHA" ]; then
             echo "Release target no longer matches github.sha." >&2
             exit 1
@@ -1949,10 +2152,19 @@ jobs:
             verify_release_notes_body "$RELEASE_JSON"
           fi
 
-          if [ "$(jq -r .draft <<< "$RELEASE_JSON")" != "false" ]; then
-            echo "Release publication did not complete." >&2
-            exit 1
-          fi
+          for attempt in {1..12}; do
+            RELEASE_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")
+            if [ "$(jq -r .draft <<< "$RELEASE_JSON")" = "false" ] \
+              && [ "$(jq -r .immutable <<< "$RELEASE_JSON")" = "true" ]; then
+              break
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "Published release did not become immutable." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          verify_release_notes_body "$RELEASE_JSON"
           if [ "$(jq -r .prerelease <<< "$RELEASE_JSON")" != "$PRERELEASE" ]; then
             echo "Published release channel does not match the committed version." >&2
             exit 1

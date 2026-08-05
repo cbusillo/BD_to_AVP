@@ -57,3 +57,26 @@ direct invalidation patterns or referenced contracts. RC3 migration overrides
 keep its Sparkle, accessibility, PGS, and subtitle-diagnostic checks fresh.
 Tier 1 invalidation mappings document release-engine ownership only; Tier 1
 always requires a new exact-candidate receipt and never carries.
+
+## Release Engine Receipts
+
+Every successful guarded Stable or Prerelease publication includes a
+`release-receipt.json` GitHub Release asset. The engine builds it only after the
+DMG, checksum, appcast, signatures, notarization, Gatekeeper checks, package
+smokes, attestation, and draft assets have been verified. It is uploaded while
+the release is still a draft, re-downloaded by asset ID, and digest-verified
+before publication.
+
+The receipt's `receipt_sha256` is the SHA-256 of canonical compact JSON with the
+`receipt_sha256` field omitted. The checked evidence index separately records
+the SHA-256 of the exact formatted receipt file downloaded from GitHub. This
+avoids a self-referential file hash while preserving deterministic semantic and
+byte-for-byte identities.
+
+After the operator workflow completes, `.github/workflows/release-evidence.yml`
+validates the successful `workflow_dispatch` run, approved actor, protected
+source SHA, immutable release fields, asset IDs and sizes, receipt digest, and
+live Pages appcast. It then opens or updates one task-branch PR containing the
+receipt, publication record, release ledger, qualification fields, and cut
+packet status. The workflow has no signing, notarization, Sparkle private-key,
+PyPI, or deployment secrets.
