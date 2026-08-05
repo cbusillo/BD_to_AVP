@@ -274,9 +274,10 @@ build `154` and abandoned Beta 12 metadata build `157` are omitted from public
 history. Published `v0.3.0-rc.1` (`0.3.0rc1`, build `158`),
 `v0.3.0-rc.2` (`0.3.0rc2`, build `159`), and `v0.3.0-rc.3`
 (`0.3.0rc3`, build `160`) are immutable; RC 3 is the current head. RC 3 is
-excluded from Stable and admitted on RC, Beta, and Alpha. Its updater path
-passed, but targeted qualification retains one presentation defect because the
-embedded native notes contain no issue link.
+excluded from Stable and admitted on RC, Beta, and Alpha. Its updater path and
+content-aware native release-note link qualification passed. The immutable notes
+contain no issue URL, so that category is explicitly not applicable; every PR,
+comparison, and full-release link present in the source notes opened externally.
 
 ## Runtime Integration and UX
 

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "qualification_id": "rc3-targeted-qualification-v1",
-  "qualified_at": "2026-08-05T21:15:26Z",
+  "qualified_at": "2026-08-05T22:05:25Z",
   "candidate": {
     "release_tag": "v0.3.0-rc.3",
     "package_version": "0.3.0rc3",
@@ -53,7 +53,7 @@
     },
     {
       "id": "native-sparkle-notes-rc3",
-      "result": "failed",
+      "result": "passed",
       "observations": {
         "summary_first": true,
         "embedded_notes_useful_without_release_page": true,
@@ -61,13 +61,24 @@
         "native_typography": true,
         "light_appearance": "passed",
         "dark_appearance": "passed",
-        "accessibility_link_counts": {
-          "issue": 0,
-          "pull_request": 4,
-          "comparison": 1,
-          "full_release": 1
-        },
-        "failure": "The immutable RC3 notes expose PR, comparison, and full-release links, but no issue link is present in the native accessibility tree."
+        "content_aware_link_qualification": {
+          "reference": "docs/qualification/rc3-native-release-notes-links-v1.json",
+          "sha256": "a68c51e09f5a234222057e24e8849cc967feca7e383acad7c251375ab0dcf5b6",
+          "expected_issue_links": 0,
+          "observed_issue_links": 0,
+          "issue_result": "not_applicable",
+          "issue_reason": "The immutable RC3 notes contain no issue URL.",
+          "expected_pull_request_links": 4,
+          "observed_pull_request_links": 4,
+          "expected_comparison_links": 1,
+          "observed_comparison_links": 1,
+          "expected_full_release_links": 1,
+          "observed_full_release_links": 1,
+          "all_expected_links_accessible": true,
+          "all_expected_links_external": true,
+          "all_expected_links_opened_exact_url": true,
+          "decision": "Source-bound applicability; not a waiver or reinterpretation of the immutable artifact."
+        }
       },
       "evidence": {
         "light_cropped_screenshot_sha256": "3323250b7aa3e14bbb00a924a79833cf5776b134f80bcfb2fbd1640987715a71",
@@ -214,15 +225,13 @@
     "diagnostic_tokens_recorded": false
   },
   "acceptance": {
-    "passed_case_count": 11,
+    "passed_case_count": 12,
     "carried_case_count": 3,
-    "failed_case_count": 1,
-    "blocking_case_ids": [
-      "native-sparkle-notes-rc3"
-    ],
+    "failed_case_count": 0,
+    "blocking_case_ids": [],
     "field_case_open": false,
-    "signed_rc_complete": false,
-    "passed": false
+    "signed_rc_complete": true,
+    "passed": true
   },
-  "result": "failed_native_notes_issue_link_missing"
+  "result": "passed"
 }

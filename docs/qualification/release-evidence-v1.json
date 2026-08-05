@@ -176,6 +176,16 @@
       "sha256": "d5547949a370bcb6d5484a59027f0a14961614a71b2e1df3f5bd2dcb3b7291ce"
     },
     {
+      "case_id": "native-sparkle-release-notes",
+      "receipt_id": "rc3-native-sparkle-release-notes-v1",
+      "source": "signed_artifact_receipt",
+      "status": "accepted",
+      "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95",
+      "accepted_at": "2026-08-05T22:05:25Z",
+      "reference": "docs/qualification/rc3-targeted-qualification-v1.json",
+      "sha256": "ff2f99da15a58b424ebdbb036581873f836b2be696e951cf74647db8682b6709"
+    },
+    {
       "case_id": "public-diagnostics-and-field-closure",
       "receipt_id": "rc3-public-diagnostics-and-field-closure-v1",
       "source": "field_observation",

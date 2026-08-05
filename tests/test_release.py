@@ -182,7 +182,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("#458", cut_packet)
         self.assertIn("Published and immutable", cut_packet)
         self.assertIn("30990186667", cut_packet)
-        self.assertIn("native updater notes", cut_packet)
+        self.assertIn("Content-aware targeted qualification", cut_packet)
         self.assertIn("post-publication backfill", cut_packet)
 
         qualification = json.loads(
@@ -263,23 +263,28 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         self.assertEqual(
             qualification["status"],
-            "published_immutable_targeted_qualification_failed",
+            "published_immutable_qualified",
         )
-        self.assertEqual(qualification["acceptance"]["blocking_case_ids"], ["native-sparkle-notes-rc3"])
+        self.assertEqual(qualification["acceptance"]["blocking_case_ids"], [])
         self.assertFalse(qualification["acceptance"]["field_case_open"])
         self.assertTrue(
             qualification["execution_policy"]["macos_signing_requires_fresh_explicit_run_bound_authorization"]
         )
         self.assertEqual(qualification["execution_policy"]["approval_required_exit_code"], 20)
-        self.assertFalse(qualification["acceptance"]["signed_rc_complete"])
-        self.assertFalse(qualification["acceptance"]["passed"])
+        self.assertTrue(qualification["acceptance"]["signed_rc_complete"])
+        self.assertTrue(qualification["acceptance"]["passed"])
 
         targeted = json.loads(
             (REPO_ROOT / "docs" / "qualification" / "rc3-targeted-qualification-v1.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(targeted["result"], "failed_native_notes_issue_link_missing")
-        self.assertEqual(targeted["acceptance"]["blocking_case_ids"], ["native-sparkle-notes-rc3"])
+        self.assertEqual(targeted["result"], "passed")
+        self.assertEqual(targeted["acceptance"]["blocking_case_ids"], [])
         self.assertFalse(targeted["acceptance"]["field_case_open"])
+        notes_case = next(case for case in targeted["cases"] if case["id"] == "native-sparkle-notes-rc3")
+        self.assertEqual(notes_case["result"], "passed")
+        self.assertEqual(
+            notes_case["observations"]["content_aware_link_qualification"]["issue_result"], "not_applicable"
+        )
 
         publication = json.loads(
             (REPO_ROOT / "docs" / "release-evidence" / "v0.3.0-rc.3" / "publication-record.json").read_text(

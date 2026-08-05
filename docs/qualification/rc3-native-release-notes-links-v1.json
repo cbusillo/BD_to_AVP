@@ -1,0 +1,134 @@
+{
+  "categories": {
+    "comparison": {
+      "expected": 1,
+      "observed": 1,
+      "result": "passed"
+    },
+    "full_release": {
+      "expected": 1,
+      "observed": 1,
+      "result": "passed"
+    },
+    "issue": {
+      "expected": 0,
+      "observed": 0,
+      "reason": "The immutable RC3 notes contain no issue URL.",
+      "result": "not_applicable"
+    },
+    "other": {
+      "expected": 0,
+      "observed": 0,
+      "reason": "The immutable source notes contain no other URL.",
+      "result": "not_applicable"
+    },
+    "pull_request": {
+      "expected": 4,
+      "observed": 4,
+      "result": "passed"
+    }
+  },
+  "expected_links": [
+    {
+      "category": "pull_request",
+      "source": "release_notes",
+      "url": "https://github.com/cbusillo/BD_to_AVP/pull/466"
+    },
+    {
+      "category": "pull_request",
+      "source": "release_notes",
+      "url": "https://github.com/cbusillo/BD_to_AVP/pull/467"
+    },
+    {
+      "category": "pull_request",
+      "source": "release_notes",
+      "url": "https://github.com/cbusillo/BD_to_AVP/pull/468"
+    },
+    {
+      "category": "pull_request",
+      "source": "release_notes",
+      "url": "https://github.com/cbusillo/BD_to_AVP/pull/469"
+    },
+    {
+      "category": "comparison",
+      "source": "release_notes",
+      "url": "https://github.com/cbusillo/BD_to_AVP/compare/v0.3.0-rc.2...v0.3.0-rc.3"
+    },
+    {
+      "category": "full_release",
+      "source": "appcast_full_release_link",
+      "url": "https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.3.0-rc.3"
+    }
+  ],
+  "failures": [],
+  "inputs": {
+    "appcast": "docs/release-evidence/v0.3.0-rc.3/appcast.xml.base64",
+    "appcast_sha256": "6404424910172cfccc9f23472e8748eda7bfba5b1f07d373e69cdb9b0679e9ed",
+    "appcast_snapshot_sha256": "434c05a7c3a5fba29ddcb756fe78f978776b9a1a8eb2eca2a590cc2b6a04bdf9",
+    "observations": ".code/rc3-link-observations.json",
+    "observations_sha256": "b8a799cee9a828700487896d3f148486dc391280dd899bc4204e271397fef3f0",
+    "release_notes": "docs/release-evidence/v0.3.0-rc.3/release-notes.md",
+    "release_notes_sha256": "140e457ae718f1391bae01c4f767e09c732c5c33bfe73b222bf7ab4ab0f1fe16"
+  },
+  "observed_links": [
+    {
+      "accessible": true,
+      "activated": true,
+      "category": "pull_request",
+      "opened_url": "https://github.com/cbusillo/BD_to_AVP/pull/466",
+      "role": "AXLink",
+      "route": "external",
+      "url": "https://github.com/cbusillo/BD_to_AVP/pull/466"
+    },
+    {
+      "accessible": true,
+      "activated": true,
+      "category": "pull_request",
+      "opened_url": "https://github.com/cbusillo/BD_to_AVP/pull/467",
+      "role": "AXLink",
+      "route": "external",
+      "url": "https://github.com/cbusillo/BD_to_AVP/pull/467"
+    },
+    {
+      "accessible": true,
+      "activated": true,
+      "category": "pull_request",
+      "opened_url": "https://github.com/cbusillo/BD_to_AVP/pull/468",
+      "role": "AXLink",
+      "route": "external",
+      "url": "https://github.com/cbusillo/BD_to_AVP/pull/468"
+    },
+    {
+      "accessible": true,
+      "activated": true,
+      "category": "pull_request",
+      "opened_url": "https://github.com/cbusillo/BD_to_AVP/pull/469",
+      "role": "AXLink",
+      "route": "external",
+      "url": "https://github.com/cbusillo/BD_to_AVP/pull/469"
+    },
+    {
+      "accessible": true,
+      "activated": true,
+      "category": "comparison",
+      "opened_url": "https://github.com/cbusillo/BD_to_AVP/compare/v0.3.0-rc.2...v0.3.0-rc.3",
+      "role": "AXLink",
+      "route": "external",
+      "url": "https://github.com/cbusillo/BD_to_AVP/compare/v0.3.0-rc.2...v0.3.0-rc.3"
+    },
+    {
+      "accessible": true,
+      "activated": true,
+      "category": "full_release",
+      "opened_url": "https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.3.0-rc.3",
+      "role": "AXLink",
+      "route": "external",
+      "url": "https://github.com/cbusillo/BD_to_AVP/releases/tag/v0.3.0-rc.3"
+    }
+  ],
+  "passed": true,
+  "qualification_type": "native_sparkle_release_notes_links",
+  "release_tag": "v0.3.0-rc.3",
+  "schema_version": 1,
+  "short_version": "0.3.0rc3"
+}

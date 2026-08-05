@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "qualification_id": "rc3-signed-qualification-v1",
-  "status": "published_immutable_targeted_qualification_failed",
+  "status": "published_immutable_qualified",
   "issues": ["#458"],
   "qualification_policy": {
     "id": "release-qualification-policy-v1",
@@ -32,10 +32,8 @@
     "must_not_rebuild": true,
     "receipt": "docs/release-evidence/v0.3.0-rc.3/release-receipt.json",
     "targeted_qualification": "docs/qualification/rc3-targeted-qualification-v1.json",
-    "result": "published_artifact_qualification_failed",
-    "blocking_case_ids": [
-      "native-sparkle-notes-rc3"
-    ]
+    "result": "published_artifact_qualified",
+    "blocking_case_ids": []
   },
   "prior_evidence": [
     {
@@ -76,7 +74,7 @@
   "matrix": [
     {"id": "release-workflow-identity", "policy_case_id": "release-workflow-identity", "phase": "workflow", "migration": "release_run_receipt", "result": "passed", "evidence": "docs/release-evidence/v0.3.0-rc.3/release-receipt.json"},
     {"id": "updater-route-rc2-to-rc3", "policy_case_id": "sparkle-update-route", "phase": "installed_candidate", "migration": "fresh_retest", "result": "passed", "evidence": "docs/qualification/rc3-targeted-qualification-v1.json"},
-    {"id": "native-sparkle-notes-rc3", "policy_case_id": "native-sparkle-release-notes", "phase": "installed_candidate", "migration": "fresh_retest", "result": "failed", "evidence": "docs/qualification/rc3-targeted-qualification-v1.json"},
+    {"id": "native-sparkle-notes-rc3", "policy_case_id": "native-sparkle-release-notes", "phase": "installed_candidate", "migration": "fresh_retest", "result": "passed", "evidence": "docs/qualification/rc3-targeted-qualification-v1.json"},
     {"id": "profile-save-action-accessibility", "policy_case_id": "profile-save-action-accessibility", "phase": "installed_candidate", "migration": "fresh_retest", "result": "passed", "evidence": "docs/qualification/rc3-targeted-qualification-v1.json"},
     {"id": "signed-packaged-route-parity", "policy_case_id": "signed-packaged-route-parity", "phase": "signed_artifact", "migration": "release_run_receipt", "result": "passed", "evidence": "docs/release-evidence/v0.3.0-rc.3/release-receipt.json"},
     {"id": "gui-preview-low-local-ample-destination", "policy_case_id": "gui-preview-low-local-ample-destination", "phase": "signed_artifact", "migration": "scope_evaluated", "result": "carried", "evidence": "docs/qualification/prior-signed-functional-evidence-v1.json"},
@@ -125,12 +123,12 @@
       "public-diagnostics-and-field-closure"
     ],
     "nonblocking_case_ids": ["public-diagnostics-and-field-closure"],
-    "passed_case_count": 11,
+    "passed_case_count": 12,
     "carried_case_count": 3,
-    "failed_case_count": 1,
-    "blocking_case_ids": ["native-sparkle-notes-rc3"],
+    "failed_case_count": 0,
+    "blocking_case_ids": [],
     "field_case_open": false,
-    "signed_rc_complete": false,
-    "passed": false
+    "signed_rc_complete": true,
+    "passed": true
   }
 }

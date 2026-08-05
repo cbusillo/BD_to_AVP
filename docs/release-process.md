@@ -23,8 +23,9 @@ The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
 entrypoints, Beta 3 bootstrap contract, and one-time metadata recovery are
 implemented and regression-covered. RC 3's exact-artifact subtitle field case
-passed and issue #458 is closed. Targeted qualification remains incomplete only
-because the immutable native updater notes contain no issue link. Metadata
+passed and issue #458 is closed. Targeted qualification is complete: every link
+present in the immutable native updater notes passed, while the absent issue-link
+category is explicitly not applicable rather than failed. Metadata
 preparation and review do not authorize dispatch; run-bound signing approval
 remains a separate verified boundary.
 
