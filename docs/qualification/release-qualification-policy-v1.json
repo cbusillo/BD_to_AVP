@@ -283,7 +283,15 @@
       "cadence": {"first_rc": true, "stable_candidate": true},
       "evidence_expiry": {"basis": "completed_at", "max_age_days": 90},
       "invalidates_on": {
-        "paths": ["macos/BluRayToVisionProUITests/**"],
+        "paths": [
+          "docs/tier3-clean-machine.md",
+          "macos/BluRayToVisionPro/Views/ContentView.swift",
+          "macos/BluRayToVisionPro/Views/ConversionSetupView.swift",
+          "macos/BluRayToVisionPro/Views/SettingsView.swift",
+          "macos/BluRayToVisionProUITests/**",
+          "macos/project.yml",
+          "scripts/tier3_clean_machine.py"
+        ],
         "contracts": ["sparkle-update", "profile-storage", "preview-lifecycle", "support-diagnostics", "tier3-evidence"]
       },
       "allowed_evidence_sources": ["tier3_automation_receipt"],

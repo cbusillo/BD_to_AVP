@@ -135,6 +135,7 @@ struct ContentView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .accessibilityIdentifier("main-window-content")
         .toolbar { toolbarContent }
         .animation(.easeInOut(duration: 0.18), value: isShowingActivity)
         .dropDestination(for: URL.self, action: acceptDrop) { targeted in
@@ -378,6 +379,7 @@ struct ContentView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(statusAccessibilityLabel)
+            .accessibilityIdentifier("main-status")
 
             if viewModel.hasActiveWorker {
                 WorkerProgressGauge(progress: viewModel.state.progress, width: 64)
@@ -409,6 +411,7 @@ struct ContentView: View {
                 .help(diagnosticActionHelp)
                 .accessibilityLabel(diagnosticActionTitle.replacingOccurrences(of: "…", with: ""))
                 .accessibilityHint("Captures diagnostics without stopping the current conversion")
+                .accessibilityIdentifier("diagnostics-action")
             }
 
             Button {
@@ -1007,6 +1010,7 @@ private struct SaveProfileSheet: View {
 
             TextField("Profile name", text: $name)
                 .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("save-profile-name-field")
 
             HStack {
                 Spacer()
@@ -1014,11 +1018,13 @@ private struct SaveProfileSheet: View {
                     dismiss()
                 }
                 .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("save-profile-cancel")
 
                 Button("Save", action: save)
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("save-profile-confirm")
             }
         }
         .padding(24)

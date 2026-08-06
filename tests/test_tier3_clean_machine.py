@@ -24,6 +24,7 @@ from scripts.tier3_clean_machine import (
     MacOSOperations,
     QualificationConfig,
     QualificationOperations,
+    RELEASES_URL,
     ReleaseArtifact,
     UpdateInteraction,
     file_sha256,
@@ -106,6 +107,106 @@ class FakeOperations(QualificationOperations):
         shutil.copytree(self.candidate_source, app_path, symlinks=True)
         self.running = True
         return UpdateInteraction(clicked_button="Install and Relaunch")
+
+    def collect_ui_evidence(
+        self,
+        *,
+        repo: Path,
+        phase: str,
+        app_path: Path,
+        synthetic_home: Path,
+        output_directory: Path,
+        release_notes_url: str,
+    ) -> None:
+        del repo, app_path, synthetic_home
+        output_directory.mkdir(parents=True, exist_ok=True)
+        if phase == "updater":
+            (output_directory / "updater-ui.json").write_text(
+                json.dumps(
+                    {
+                        "install_action": "Install and Relaunch",
+                        "release_notes_url": release_notes_url,
+                        "release_notes_url_observed": True,
+                        "schema_version": 1,
+                        "status": "passed",
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return
+        if phase != "candidate":
+            raise AssertionError(f"unexpected UI phase: {phase}")
+        (output_directory / "candidate-ui.json").write_text(
+            json.dumps(
+                {
+                    "main_window_ready": True,
+                    "profile_document_version": 5,
+                    "profile_save_accessible": True,
+                    "profile_save_succeeded": True,
+                    "profiles_after": 1,
+                    "release_page_url": RELEASES_URL,
+                    "release_page_url_observed": True,
+                    "schema_version": 1,
+                    "status": "passed",
+                    "updater_controls_accessible": True,
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        records = [
+            {
+                "actions": [],
+                "enabled": True,
+                "help": "",
+                "identifier": "main-status",
+                "label": "Status: Ready",
+                "role": "AXStaticText",
+            },
+            {
+                "actions": ["AXPress"],
+                "enabled": True,
+                "help": "Opens a form to name and save these settings as a reusable profile",
+                "identifier": "save-profile-action",
+                "label": "Save current settings as new profile",
+                "role": "AXButton",
+            },
+            {
+                "actions": ["AXPress"],
+                "enabled": True,
+                "help": "",
+                "identifier": "update-action",
+                "label": "Check for Updates…",
+                "role": "AXButton",
+            },
+            {
+                "actions": ["AXPress"],
+                "enabled": True,
+                "help": "",
+                "identifier": "update-route-picker",
+                "label": "Update route",
+                "role": "AXPopUpButton",
+            },
+            {
+                "actions": ["AXPress"],
+                "enabled": True,
+                "help": "",
+                "identifier": "all-releases-link",
+                "label": "View All Releases…",
+                "role": "AXLink",
+                "url": RELEASES_URL,
+            },
+        ]
+        (output_directory / "accessibility-tree.json").write_text(
+            json.dumps({"elements": records, "schema_version": 1}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        screenshot = b"\x89PNG\r\n\x1a\n" + (b"x" * 64)
+        (output_directory / "screenshot-light.png").write_bytes(screenshot)
+        (output_directory / "screenshot-dark.png").write_bytes(screenshot)
 
     def app_running(self) -> bool:
         return self.running
@@ -294,6 +395,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             route="rc",
             environment_class="restorable-location",
             output_receipt=root / "tier3-receipt.json",
+            ui_output_receipt=root / "tier3-ui-receipt.json",
             evidence_directory=root / "evidence",
         )
         operations = FakeOperations(
@@ -319,14 +421,29 @@ class Tier3CleanMachineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             config, operations = self.fixture(root)
-            receipt = run_qualification(config, operations)
+            receipts = run_qualification(config, operations)
 
             self.assertFalse(config.qualification_root.exists())
             self.assertTrue(config.output_receipt.exists())
-            self.assertEqual(len(list(config.evidence_directory.glob("*.json"))), 5)
-            self.assertEqual(receipt["result"]["status"], "passed")
-            self.assertEqual(receipt["cleanup"]["status"], "disposed")
-            self.assertEqual(receipt["release_identity"]["source_sha"], CANDIDATE_SHA)
+            self.assertTrue(config.ui_output_receipt.exists())
+            self.assertEqual(
+                {path.name for path in config.evidence_directory.iterdir()},
+                {
+                    "accessibility-tree.json",
+                    "cleanup.json",
+                    "install-log.json",
+                    "package-smoke.json",
+                    "profile-snapshot.json",
+                    "screenshot-dark.png",
+                    "screenshot-light.png",
+                    "sparkle-update.json",
+                    "ui-result.json",
+                },
+            )
+            for receipt in receipts.values():
+                self.assertEqual(receipt["result"]["status"], "passed")
+                self.assertEqual(receipt["cleanup"]["status"], "disposed")
+                self.assertEqual(receipt["release_identity"]["source_sha"], CANDIDATE_SHA)
             self.assertFalse(operations.app_running())
 
     def test_run_cleans_workspace_after_update_failure(self) -> None:
@@ -341,6 +458,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             self.assertFalse(config.qualification_root.exists())
             self.assertFalse(operations.app_running())
             self.assertFalse(config.output_receipt.exists())
+            self.assertFalse(config.ui_output_receipt.exists())
             self.assertFalse(config.evidence_directory.exists())
 
     def test_preflight_rejects_wrong_macos_major(self) -> None:
