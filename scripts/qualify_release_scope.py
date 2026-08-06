@@ -19,6 +19,7 @@ from scripts.release_receipt import (
     ReleaseReceiptError,
     load_validated_artifact_receipt,
 )
+from scripts.tier3_receipt import Tier3ReceiptError, load_validated_receipt_bytes
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,24 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 RESULT_STATES = ("covered", "carry", "retest", "external")
 WORKFLOW_PHASES = ("preparation", "artifact")
+TIER3_EXECUTION_MODES = {"automated", "operator_assisted"}
+TIER3_ENVIRONMENT_IDENTITY_FIELDS = {
+    "environment_class",
+    "architecture",
+    "macos_version",
+    "macos_build",
+}
+TIER3_FORBIDDEN_IDENTITY_FIELDS = {
+    "disc",
+    "hostname",
+    "media",
+    "path",
+    "serial",
+    "title",
+    "token",
+    "username",
+    "volume",
+}
 
 
 class QualificationScopeError(RuntimeError):
@@ -154,15 +173,102 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Mapping[str, Any]:
             )
         if tier == 3:
             cadence = _mapping(case.get("cadence"), f"qualification case {case_id!r} cadence")
-            max_age_days = cadence.get("max_age_days")
-            if not isinstance(max_age_days, int) or isinstance(max_age_days, bool) or max_age_days <= 0:
-                raise QualificationScopeError(f"Tier 3 qualification case {case_id!r} requires positive max_age_days.")
-            if not isinstance(cadence.get("first_rc_or_stable_candidate"), bool):
+            if set(cadence) != {"first_rc", "stable_candidate"}:
                 raise QualificationScopeError(
-                    f"Tier 3 qualification case {case_id!r} requires boolean first_rc_or_stable_candidate."
+                    f"Tier 3 qualification case {case_id!r} cadence must declare first_rc and stable_candidate."
                 )
-            if not _strings(cadence.get("hardware"), f"Tier 3 qualification case {case_id!r} hardware"):
-                raise QualificationScopeError(f"Tier 3 qualification case {case_id!r} requires hardware metadata.")
+            if not isinstance(cadence.get("first_rc"), bool) or not isinstance(cadence.get("stable_candidate"), bool):
+                raise QualificationScopeError(f"Tier 3 qualification case {case_id!r} cadence values must be boolean.")
+            expiry = _mapping(case.get("evidence_expiry"), f"qualification case {case_id!r} evidence_expiry")
+            if set(expiry) != {"basis", "max_age_days"} or expiry.get("basis") != "completed_at":
+                raise QualificationScopeError(
+                    f"Tier 3 qualification case {case_id!r} expiry must be based on completed_at."
+                )
+            max_age_days = expiry.get("max_age_days")
+            if not isinstance(max_age_days, int) or isinstance(max_age_days, bool) or max_age_days <= 0:
+                raise QualificationScopeError(
+                    f"Tier 3 qualification case {case_id!r} requires positive evidence expiry max_age_days."
+                )
+            lane = case.get("automation_lane")
+            if not isinstance(lane, str) or not lane:
+                raise QualificationScopeError(f"Tier 3 qualification case {case_id!r} requires automation_lane.")
+            execution_mode = case.get("execution_mode")
+            if execution_mode not in TIER3_EXECUTION_MODES:
+                raise QualificationScopeError(
+                    f"Tier 3 qualification case {case_id!r} execution_mode must be automated or operator_assisted."
+                )
+            expected_source = {
+                "automated": "tier3_automation_receipt",
+                "operator_assisted": "tier3_operator_receipt",
+            }[cast(str, execution_mode)]
+            if evidence_sources != (expected_source,):
+                raise QualificationScopeError(
+                    f"Tier 3 qualification case {case_id!r} must use {expected_source!r} evidence."
+                )
+            environment = _mapping(case.get("environment"), f"qualification case {case_id!r} environment")
+            if set(environment) != {"classes", "architectures", "macos_major_versions", "identity_fields"}:
+                raise QualificationScopeError(
+                    f"Tier 3 qualification case {case_id!r} environment metadata is incomplete."
+                )
+            if not _strings(environment.get("classes"), f"Tier 3 qualification case {case_id!r} environment classes"):
+                raise QualificationScopeError(f"Tier 3 qualification case {case_id!r} requires environment classes.")
+            if not _strings(
+                environment.get("architectures"),
+                f"Tier 3 qualification case {case_id!r} environment architectures",
+            ):
+                raise QualificationScopeError(
+                    f"Tier 3 qualification case {case_id!r} requires environment architectures."
+                )
+            major_versions = _sequence(
+                environment.get("macos_major_versions"),
+                f"Tier 3 qualification case {case_id!r} macOS major versions",
+            )
+            if not major_versions or any(
+                not isinstance(version, int) or isinstance(version, bool) or version <= 0 for version in major_versions
+            ):
+                raise QualificationScopeError(
+                    f"Tier 3 qualification case {case_id!r} requires positive macOS major versions."
+                )
+            if (
+                set(
+                    _strings(
+                        environment.get("identity_fields"),
+                        f"Tier 3 qualification case {case_id!r} environment identity fields",
+                    )
+                )
+                != TIER3_ENVIRONMENT_IDENTITY_FIELDS
+            ):
+                raise QualificationScopeError(
+                    f"Tier 3 qualification case {case_id!r} must use the public-safe environment identity fields."
+                )
+            hardware = _mapping(case.get("hardware"), f"qualification case {case_id!r} hardware")
+            if set(hardware) != {"required", "classes", "identity_fields"} or not isinstance(
+                hardware.get("required"), bool
+            ):
+                raise QualificationScopeError(f"Tier 3 qualification case {case_id!r} hardware metadata is incomplete.")
+            hardware_classes = _strings(
+                hardware.get("classes"),
+                f"Tier 3 qualification case {case_id!r} hardware classes",
+            )
+            hardware_fields = _strings(
+                hardware.get("identity_fields"),
+                f"Tier 3 qualification case {case_id!r} hardware identity fields",
+            )
+            if cast(bool, hardware["required"]) != bool(hardware_classes and hardware_fields):
+                raise QualificationScopeError(
+                    f"Tier 3 qualification case {case_id!r} required hardware needs classes and identity fields."
+                )
+            for field in hardware_fields:
+                if any(forbidden in field.lower() for forbidden in TIER3_FORBIDDEN_IDENTITY_FIELDS):
+                    raise QualificationScopeError(
+                        f"Tier 3 qualification case {case_id!r} hardware field {field!r} is not public-safe."
+                    )
+            for field in ("required_assertions", "allowed_evidence_kinds", "allowed_cleanup_results"):
+                values = _strings(case.get(field), f"Tier 3 qualification case {case_id!r} {field}")
+                if not values or len(values) != len(set(values)):
+                    raise QualificationScopeError(
+                        f"Tier 3 qualification case {case_id!r} {field} must contain unique values."
+                    )
     return policy
 
 
@@ -310,6 +416,7 @@ def _parse_accepted_at(value: object, case_id: str) -> datetime:
 def _validated_receipts(
     evidence: Mapping[str, Any],
     cases_by_id: Mapping[str, Mapping[str, Any]],
+    policy_id: str,
     reference_content: ReferenceContent,
     as_of: date,
 ) -> dict[str, list[Mapping[str, Any]]]:
@@ -351,15 +458,6 @@ def _validated_receipts(
             run_id = receipt.get("release_run_id")
             if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
                 raise QualificationScopeError(f"Tier 1 case {case_id!r} requires a positive release_run_id.")
-        if tier == 3:
-            cadence = _mapping(case["cadence"], f"case {case_id!r} cadence")
-            required_hardware = set(_strings(cadence["hardware"], f"case {case_id!r} hardware"))
-            receipt_hardware = set(_strings(receipt.get("hardware"), f"evidence for {case_id!r} hardware"))
-            if not required_hardware.issubset(receipt_hardware):
-                raise QualificationScopeError(
-                    f"Evidence for {case_id!r} does not cover required hardware: "
-                    f"{sorted(required_hardware - receipt_hardware)!r}."
-                )
         reference = receipt.get("reference")
         digest = receipt.get("sha256")
         if (
@@ -372,14 +470,47 @@ def _validated_receipts(
         if not isinstance(digest, str) or SHA256_PATTERN.fullmatch(digest) is None:
             raise QualificationScopeError(f"Evidence for {case_id!r} requires a lowercase SHA-256 digest.")
         try:
-            actual_digest = hashlib.sha256(reference_content(reference)).hexdigest()
+            reference_bytes = reference_content(reference)
+            actual_digest = hashlib.sha256(reference_bytes).hexdigest()
         except OSError as error:
             raise QualificationScopeError(f"Unable to read evidence reference {reference!r}: {error}") from error
         if actual_digest != digest:
             raise QualificationScopeError(
                 f"Evidence reference {reference!r} does not match its recorded SHA-256 digest."
             )
-        receipts[case_id].append(receipt)
+        validated_receipt = dict(receipt)
+        if tier == 3:
+            try:
+                tier3_receipt = load_validated_receipt_bytes(
+                    reference_bytes,
+                    policy_id=policy_id,
+                    case=case,
+                    reference_content=reference_content,
+                )
+            except Tier3ReceiptError as error:
+                raise QualificationScopeError(f"Tier 3 evidence for {case_id!r} is invalid: {error}") from error
+            result = _mapping(tier3_receipt.get("result"), f"Tier 3 evidence for {case_id!r} result")
+            if result.get("status") != "passed":
+                raise QualificationScopeError(f"Accepted Tier 3 evidence for {case_id!r} must have passed.")
+            release_identity = _mapping(
+                tier3_receipt.get("release_identity"),
+                f"Tier 3 evidence for {case_id!r} release identity",
+            )
+            if release_identity.get("source_sha") != source_sha:
+                raise QualificationScopeError(
+                    f"Tier 3 evidence for {case_id!r} source_sha does not match its release receipt."
+                )
+            timestamps = _mapping(
+                tier3_receipt.get("timestamps"),
+                f"Tier 3 evidence for {case_id!r} timestamps",
+            )
+            completed_at = _parse_accepted_at(timestamps.get("completed_at"), case_id)
+            if accepted_at < completed_at:
+                raise QualificationScopeError(
+                    f"Tier 3 evidence for {case_id!r} cannot be accepted before it completed."
+                )
+            validated_receipt["_tier3_receipt"] = tier3_receipt
+        receipts[case_id].append(validated_receipt)
     for case_receipts in receipts.values():
         case_receipts.sort(
             key=lambda receipt: (
@@ -405,11 +536,25 @@ def _matching_paths(changed_paths: set[str], patterns: Sequence[str]) -> list[st
 def _receipt_summary(receipt: Mapping[str, Any] | None) -> dict[str, Any]:
     if receipt is None:
         return {"receipt_id": None, "reference": None, "source_sha": None}
-    return {
+    summary = {
         "receipt_id": receipt["receipt_id"],
         "reference": receipt["reference"],
         "source_sha": receipt["source_sha"],
     }
+    tier3_receipt = receipt.get("_tier3_receipt")
+    if isinstance(tier3_receipt, Mapping):
+        cadence = _mapping(tier3_receipt.get("cadence"), "Tier 3 receipt cadence")
+        environment = _mapping(tier3_receipt.get("environment"), "Tier 3 receipt environment")
+        hardware = _mapping(tier3_receipt.get("hardware"), "Tier 3 receipt hardware")
+        summary.update(
+            {
+                "expires_on": cadence["expires_on"],
+                "environment_class": environment["environment_class"],
+                "hardware_class": hardware["class"],
+                "tier3_receipt_sha256": tier3_receipt["receipt_sha256"],
+            }
+        )
+    return summary
 
 
 def _artifact_receipt_summary(receipt: Mapping[str, Any], path: Path) -> dict[str, Any]:
@@ -420,10 +565,36 @@ def _artifact_receipt_summary(receipt: Mapping[str, Any], path: Path) -> dict[st
     }
 
 
+def _tier3_expiry(receipt: Mapping[str, Any], case_id: str) -> date:
+    tier3_receipt = _mapping(receipt.get("_tier3_receipt"), f"Tier 3 evidence for {case_id!r}")
+    cadence = _mapping(tier3_receipt.get("cadence"), f"Tier 3 evidence for {case_id!r} cadence")
+    expires_on = cadence.get("expires_on")
+    if not isinstance(expires_on, str):
+        raise QualificationScopeError(f"Tier 3 evidence for {case_id!r} requires expires_on.")
+    try:
+        return date.fromisoformat(expires_on)
+    except ValueError as error:
+        raise QualificationScopeError(f"Tier 3 evidence for {case_id!r} has invalid expires_on.") from error
+
+
+def _tier3_milestone_trigger(
+    case: Mapping[str, Any],
+    *,
+    release_stage: str,
+    first_candidate_of_cycle: bool,
+) -> str | None:
+    cadence = _mapping(case["cadence"], f"case {case['id']!r} cadence")
+    if release_stage == "stable" and cadence.get("stable_candidate") is True:
+        return "stable_candidate"
+    if release_stage == "rc" and first_candidate_of_cycle and cadence.get("first_rc") is True:
+        return "first_rc"
+    return None
+
+
 def _evidence_requirement(
     case: Mapping[str, Any],
     *,
-    status: str,
+    required: bool,
     applicable: bool,
     deferred: bool,
 ) -> dict[str, Any]:
@@ -438,7 +609,6 @@ def _evidence_requirement(
         binding = "exact_candidate_or_valid_carry_forward"
     else:
         binding = "post_publication_observation"
-    required = status == "retest"
     action: str | None = None
     if required:
         timing = "before the artifact phase" if deferred else "before this phase can pass"
@@ -484,6 +654,7 @@ def classify_release_scope(
     receipt_map = _validated_receipts(
         evidence,
         cases_by_id,
+        cast(str, policy["policy_id"]),
         reference_content or git_checked_reference_content(repo),
         as_of,
     )
@@ -534,29 +705,62 @@ def classify_release_scope(
         reason: str
         invalidating_paths: list[str] = []
         selected_receipt: Mapping[str, Any] | None = exact or prior
+        trigger = "policy"
+        tier3_milestone = (
+            _tier3_milestone_trigger(
+                case,
+                release_stage=release_stage,
+                first_candidate_of_cycle=first_candidate_of_cycle,
+            )
+            if tier == 3
+            else None
+        )
+        tier3_applicable = tier != 3 or tier3_milestone is not None
 
         if tier == 0:
             status, reason = "covered", "Owned by the automatic per-commit quality gate."
+            trigger = "per_commit"
         elif tier == 4:
             status, reason = "external", "Post-publication field evidence cannot block publication."
+            trigger = "post_publication"
         elif tier == 1 and case_id in artifact_tier1_cases:
             status, reason = "covered", "Validated evidence is bound to the exact artifact workflow run and release."
             selected_receipt = None
+            trigger = "exact_artifact"
         elif exact is not None:
-            status, reason = "covered", "Accepted evidence is bound to the exact candidate SHA."
+            if tier == 3 and as_of > _tier3_expiry(exact, case_id):
+                status, reason = "retest", "Tier 3 evidence exceeded its declared expiry."
+                trigger = "expired"
+                tier3_applicable = True
+            else:
+                status, reason = "covered", "Accepted evidence is bound to the exact candidate SHA."
+                trigger = tier3_milestone or "exact_candidate"
         elif tier == 1:
             status, reason = "retest", "The guarded release engine has no accepted receipt for the exact candidate SHA."
             selected_receipt = None
+            trigger = "missing_exact_artifact"
         elif fresh_retest.get(case_id, False):
             status, reason = "retest", "The candidate migration explicitly requires fresh targeted evidence."
             selected_receipt = None
+            trigger = "explicit_retest"
+            tier3_applicable = True
         elif prior is None:
-            status, reason = "retest", "No accepted prior evidence receipt is available for carry-forward."
+            selected_receipt = None
+            if tier == 3 and tier3_milestone is None:
+                status = "retest"
+                reason = "Tier 3 evidence is not due for this release stage and has no prior receipt to carry."
+                trigger = "not_due"
+                tier3_applicable = False
+            else:
+                status, reason = "retest", "No accepted prior evidence receipt is available for carry-forward."
+                trigger = tier3_milestone or "missing_prior_evidence"
+                tier3_applicable = True
         else:
             carry = _mapping(case["carry_forward"], f"case {case_id!r} carry_forward")
             if not carry["allowed"]:
                 status, reason = "retest", "The policy does not allow this evidence to carry forward."
                 selected_receipt = None
+                trigger = "carry_disallowed"
             else:
                 patterns = _case_patterns(case, contracts)
                 invalidating_paths = _matching_paths(
@@ -565,28 +769,32 @@ def classify_release_scope(
                 )
                 if invalidating_paths:
                     status, reason = "retest", "Candidate changes invalidate the accepted prior evidence."
+                    trigger = "invalidated"
+                    tier3_applicable = True
                 elif tier == 3:
-                    cadence = _mapping(case["cadence"], f"case {case_id!r} cadence")
-                    accepted_date = _parse_accepted_at(prior["accepted_at"], case_id).date()
-                    age_days = (as_of - accepted_date).days
-                    due_for_milestone = bool(cadence.get("first_rc_or_stable_candidate")) and (
-                        release_stage == "stable" or (release_stage == "rc" and first_candidate_of_cycle)
-                    )
-                    if due_for_milestone:
+                    if tier3_milestone is not None:
                         status, reason = "retest", "Tier 3 evidence is due for this release milestone."
-                    elif age_days > cast(int, cadence["max_age_days"]):
-                        status, reason = "retest", "Tier 3 evidence exceeded its maximum age."
+                        trigger = tier3_milestone
+                        tier3_applicable = True
+                    elif as_of > _tier3_expiry(prior, case_id):
+                        status, reason = "retest", "Tier 3 evidence exceeded its declared expiry."
+                        trigger = "expired"
+                        tier3_applicable = True
                     else:
                         status, reason = (
                             "carry",
                             "Tier 3 evidence remains within cadence and no invalidating paths changed.",
                         )
+                        trigger = "cadence_valid"
+                        tier3_applicable = False
                 else:
                     status, reason = "carry", "Accepted prior evidence remains valid because no mapped paths changed."
+                    trigger = "clean_invalidation"
 
         blocking_phase = cast(str, case["blocking_phase"])
         deferred = workflow_phase == "preparation" and blocking_phase == "publication"
-        applicable = blocking_phase != "none" and not deferred
+        applicable = blocking_phase != "none" and not deferred and tier3_applicable
+        evidence_required = status == "retest" and (tier != 3 or tier3_applicable)
         evidence_summary = (
             artifact_receipt_evidence
             if tier == 1 and case_id in artifact_tier1_cases and artifact_receipt_evidence is not None
@@ -600,13 +808,14 @@ def classify_release_scope(
             "blocking": blocking_phase != "none",
             "applicable": applicable,
             "deferred": deferred,
+            "trigger": trigger,
             "reason": reason,
             "invalidating_paths": invalidating_paths,
             "evidence": evidence_summary,
-            "evidence_required": status == "retest",
+            "evidence_required": evidence_required,
             "evidence_requirement": _evidence_requirement(
                 case,
-                status=status,
+                required=evidence_required,
                 applicable=applicable,
                 deferred=deferred,
             ),

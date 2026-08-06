@@ -21,12 +21,7 @@
     "3": {
       "name": "periodic_or_hardware",
       "owner": "qualification",
-      "blocking_phase": "milestone",
-      "default_cadence": {
-        "first_rc_or_stable_candidate": true,
-        "max_age_days": 90
-      },
-      "hardware_receipt_required": true
+      "blocking_phase": "milestone"
     },
     "4": {
       "name": "post_publication_observation",
@@ -109,6 +104,17 @@
       "macos/BluRayToVisionPro/Diagnostics/**",
       "macos/BluRayToVisionPro/Models/ObservabilityEvent.swift",
       "scripts/support_diagnostics.py"
+    ],
+    "tier3-evidence": [
+      "docs/qualification/release-qualification-policy-v1.json",
+      "scripts/qualify_release_scope.py",
+      "scripts/tier3_receipt.py"
+    ],
+    "vision-pro-playback": [
+      "docs/visionos-playback-validator.md",
+      "macos/SpatialPlaybackProbe/**",
+      "macos/SpatialPlaybackProbeTests/**",
+      "macos/SpatialPlaybackProbeUITests/**"
     ]
   },
   "cases": [
@@ -222,6 +228,171 @@
       "blocking_phase": "release_candidate",
       "invalidates_on": {"paths": [], "contracts": ["subtitle-recovery", "support-diagnostics"]},
       "allowed_evidence_sources": ["signed_artifact_receipt"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "clean-machine-signed-update",
+      "tier": 3,
+      "blocking_phase": "milestone",
+      "automation_lane": "clean-machine-updater",
+      "execution_mode": "automated",
+      "environment": {
+        "classes": ["resettable-vm", "disposable-user", "restorable-location"],
+        "architectures": ["arm64"],
+        "macos_major_versions": [26],
+        "identity_fields": ["environment_class", "architecture", "macos_version", "macos_build"]
+      },
+      "hardware": {"required": false, "classes": [], "identity_fields": []},
+      "cadence": {"first_rc": true, "stable_candidate": true},
+      "evidence_expiry": {"basis": "completed_at", "max_age_days": 30},
+      "invalidates_on": {
+        "paths": ["docs/release-routes.md", "pyproject.toml"],
+        "contracts": ["release-engine", "sparkle-update", "packaged-worker", "profile-storage", "tier3-evidence"]
+      },
+      "allowed_evidence_sources": ["tier3_automation_receipt"],
+      "required_assertions": [
+        "preconditions-proven",
+        "exact-app-installed",
+        "package-smoke-passed",
+        "sparkle-relaunch-passed",
+        "final-identity-matched",
+        "profile-preserved"
+      ],
+      "allowed_evidence_kinds": ["install-log", "package-smoke", "sparkle-update", "profile-snapshot", "cleanup"],
+      "allowed_cleanup_results": ["disposed", "restored"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "installed-ui-accessibility",
+      "tier": 3,
+      "blocking_phase": "milestone",
+      "automation_lane": "installed-ui-accessibility",
+      "execution_mode": "automated",
+      "environment": {
+        "classes": ["resettable-vm", "disposable-user", "restorable-location"],
+        "architectures": ["arm64"],
+        "macos_major_versions": [26],
+        "identity_fields": ["environment_class", "architecture", "macos_version", "macos_build"]
+      },
+      "hardware": {"required": false, "classes": [], "identity_fields": []},
+      "cadence": {"first_rc": true, "stable_candidate": true},
+      "evidence_expiry": {"basis": "completed_at", "max_age_days": 90},
+      "invalidates_on": {
+        "paths": ["macos/BluRayToVisionProUITests/**"],
+        "contracts": ["sparkle-update", "profile-storage", "preview-lifecycle", "support-diagnostics", "tier3-evidence"]
+      },
+      "allowed_evidence_sources": ["tier3_automation_receipt"],
+      "required_assertions": [
+        "main-window-ready",
+        "profile-save-accessible",
+        "profile-save-succeeded",
+        "updater-controls-accessible",
+        "release-note-links-bound"
+      ],
+      "allowed_evidence_kinds": ["accessibility-tree", "ui-result", "screenshot-light", "screenshot-dark"],
+      "allowed_cleanup_results": ["disposed", "restored"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "usb-bluray-makemkv",
+      "tier": 3,
+      "blocking_phase": "milestone",
+      "automation_lane": "operator-physical-drive",
+      "execution_mode": "operator_assisted",
+      "environment": {
+        "classes": ["dedicated-hardware", "restorable-location"],
+        "architectures": ["arm64"],
+        "macos_major_versions": [26],
+        "identity_fields": ["environment_class", "architecture", "macos_version", "macos_build"]
+      },
+      "hardware": {
+        "required": true,
+        "classes": ["usb-bluray-drive"],
+        "identity_fields": ["vendor_id", "product_id", "transport", "makemkv_version"]
+      },
+      "cadence": {"first_rc": true, "stable_candidate": true},
+      "evidence_expiry": {"basis": "completed_at", "max_age_days": 90},
+      "invalidates_on": {
+        "paths": ["bd_to_avp/modules/disc.py", "bd_to_avp/modules/config.py", "bd_to_avp/preflight.py"],
+        "contracts": ["packaged-worker", "conversion-ownership", "tier3-evidence"]
+      },
+      "allowed_evidence_sources": ["tier3_operator_receipt"],
+      "required_assertions": [
+        "drive-discovered",
+        "makemkv-path-verified",
+        "cancellation-recovered",
+        "drive-ejected"
+      ],
+      "allowed_evidence_kinds": ["device-probe", "makemkv-probe", "ejection-result", "cleanup"],
+      "allowed_cleanup_results": ["recovered", "not-applicable"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "protected-real-media-conversion",
+      "tier": 3,
+      "blocking_phase": "milestone",
+      "automation_lane": "operator-real-media",
+      "execution_mode": "operator_assisted",
+      "environment": {
+        "classes": ["dedicated-hardware", "restorable-location"],
+        "architectures": ["arm64"],
+        "macos_major_versions": [26],
+        "identity_fields": ["environment_class", "architecture", "macos_version", "macos_build"]
+      },
+      "hardware": {
+        "required": true,
+        "classes": ["usb-bluray-drive"],
+        "identity_fields": ["vendor_id", "product_id", "transport", "makemkv_version"]
+      },
+      "cadence": {"first_rc": false, "stable_candidate": true},
+      "evidence_expiry": {"basis": "completed_at", "max_age_days": 180},
+      "invalidates_on": {
+        "paths": ["bd_to_avp/modules/disc.py", "bd_to_avp/modules/config.py", "bd_to_avp/modules/video*.py"],
+        "contracts": ["packaged-worker", "conversion-ownership", "subtitle-recovery", "storage-capacity", "tier3-evidence"]
+      },
+      "allowed_evidence_sources": ["tier3_operator_receipt"],
+      "required_assertions": [
+        "protected-source-opened",
+        "conversion-completed",
+        "output-verified",
+        "recovery-clean"
+      ],
+      "allowed_evidence_kinds": ["conversion-result", "diagnostic-summary", "cleanup"],
+      "allowed_cleanup_results": ["recovered", "restored"],
+      "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
+    },
+    {
+      "id": "vision-pro-physical-playback",
+      "tier": 3,
+      "blocking_phase": "milestone",
+      "automation_lane": "operator-vision-pro",
+      "execution_mode": "operator_assisted",
+      "environment": {
+        "classes": ["dedicated-hardware", "restorable-location"],
+        "architectures": ["arm64"],
+        "macos_major_versions": [26],
+        "identity_fields": ["environment_class", "architecture", "macos_version", "macos_build"]
+      },
+      "hardware": {
+        "required": true,
+        "classes": ["vision-pro"],
+        "identity_fields": ["model_family", "chip_family", "visionos_major"]
+      },
+      "cadence": {"first_rc": false, "stable_candidate": true},
+      "evidence_expiry": {"basis": "completed_at", "max_age_days": 180},
+      "invalidates_on": {
+        "paths": ["scripts/add_spatial_video_metadata.py", "scripts/verify_apple_media.py"],
+        "contracts": ["vision-pro-playback", "packaged-worker", "tier3-evidence"]
+      },
+      "allowed_evidence_sources": ["tier3_operator_receipt"],
+      "required_assertions": [
+        "artifact-transferred",
+        "stereo-playback-started",
+        "spatial-presentation-verified",
+        "playback-completed"
+      ],
+      "allowed_evidence_kinds": ["device-probe", "playback-result"],
+      "allowed_cleanup_results": ["not-applicable", "recovered"],
       "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
     },
     {

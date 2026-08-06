@@ -26,6 +26,8 @@ from scripts.release_receipt import (
     receipt_sha256,
     write_receipt,
 )
+from scripts.tier3_receipt import build_receipt as build_tier3_receipt
+from scripts.tier3_receipt import receipt_sha256 as tier3_receipt_sha256
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -81,6 +83,9 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         workflow_phase: str = "preparation",
         artifact_receipt_path: Path | None = None,
         artifact_receipt_expectation: ArtifactReceiptExpectation | None = None,
+        release_stage: str = "rc",
+        first_candidate_of_cycle: bool = False,
+        as_of: date = date(2026, 8, 5),
     ) -> dict[str, Any]:
         return classify_release_scope(
             self.policy,
@@ -90,10 +95,12 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
             repo=root,
             reference_content=lambda reference: (root / reference).read_bytes(),
             fresh_retest=fresh,
+            release_stage=release_stage,
+            first_candidate_of_cycle=first_candidate_of_cycle,
             workflow_phase=workflow_phase,
             artifact_receipt_path=artifact_receipt_path,
             artifact_receipt_expectation=artifact_receipt_expectation,
-            as_of=date(2026, 8, 5),
+            as_of=as_of,
         )
 
     def artifact_receipt(
@@ -164,6 +171,124 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         )
         return receipt_path, expectation
 
+    def tier3_evidence(
+        self,
+        root: Path,
+        case_id: str,
+        *,
+        source_sha: str = PRIOR_SHA,
+        completed_at: str = "2026-08-01T00:00:00Z",
+        accepted_at: str = "2026-08-01T00:10:00Z",
+    ) -> dict[str, Any]:
+        case = next(case for case in self.policy["cases"] if case["id"] == case_id)
+        release_facts: dict[str, object] = {
+            "release_route": "prerelease",
+            "source_sha": source_sha,
+            "workflow_actor": "shiny-code-bot",
+            "workflow_run_id": 12345,
+            "workflow_run_attempt": 1,
+            "package_version": "0.3.0rc3",
+            "public_version": "0.3.0-rc.3",
+            "build_version": "160",
+            "release_tag": "v0.3.0-rc.3",
+            "release_name": "v0.3.0-rc.3",
+            "release_id": 67890,
+            "release_created_at": "2026-06-01T00:00:00Z",
+            "prerelease": True,
+            "make_latest": False,
+            "signed_app_tree_sha256": APP_TREE_SHA256,
+            "artifacts": [
+                {
+                    "kind": "dmg",
+                    "name": "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.3.dmg",
+                    "sha256": DMG_SHA256,
+                    "size_bytes": 1000,
+                    "asset_id": 1,
+                },
+                {
+                    "kind": "checksum",
+                    "name": "SHA256SUMS",
+                    "sha256": CHECKSUM_SHA256,
+                    "size_bytes": 100,
+                    "asset_id": 2,
+                },
+                {
+                    "kind": "appcast",
+                    "name": "appcast.xml",
+                    "sha256": APPCAST_SHA256,
+                    "size_bytes": 500,
+                    "asset_id": 3,
+                },
+            ],
+        }
+        release_reference = Path("docs") / "release-evidence" / case_id / "release-receipt.json"
+        release_path = root / release_reference
+        release_path.parent.mkdir(parents=True, exist_ok=True)
+        release_receipt = build_receipt(release_facts)
+        write_receipt(release_receipt, release_path)
+
+        identity_values = {
+            "vendor_id": "05e3",
+            "product_id": "0749",
+            "transport": "usb",
+            "makemkv_version": "1.18.1",
+            "model_family": "vision-pro",
+            "chip_family": "m2",
+            "visionos_major": "26",
+        }
+        hardware = case["hardware"]
+        hardware_receipt = (
+            {
+                "class": hardware["classes"][0],
+                "identity": {field: identity_values[field] for field in hardware["identity_fields"]},
+            }
+            if hardware["required"]
+            else {"class": "none", "identity": {}}
+        )
+        tier3_facts = {
+            "assertions": {assertion_id: "passed" for assertion_id in case["required_assertions"]},
+            "cleanup": {"status": case["allowed_cleanup_results"][0], "evidence_sha256": "1" * 64},
+            "completed_at": completed_at,
+            "environment": {
+                "environment_class": case["environment"]["classes"][0],
+                "architecture": "arm64",
+                "macos_version": "26.0",
+                "macos_build": "25A123",
+            },
+            "evidence": [{"kind": case["allowed_evidence_kinds"][0], "sha256": "2" * 64}],
+            "evidence_source": case["allowed_evidence_sources"][0],
+            "hardware": hardware_receipt,
+            "release_receipt_file_sha256": file_sha256(release_path),
+            "release_receipt_reference": release_reference.as_posix(),
+            "result": {"status": "passed", "reason_code": "all_assertions_passed"},
+            "started_at": completed_at,
+        }
+        tier3_receipt = build_tier3_receipt(
+            tier3_facts,
+            policy_id=self.policy["policy_id"],
+            case=case,
+            release_receipt=release_receipt,
+        )
+        reference = Path("docs") / "qualification" / f"{case_id}-tier3.json"
+        receipt_path = root / reference
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.write_text(json.dumps(tier3_receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return {
+            "schema_version": 1,
+            "receipts": [
+                {
+                    "case_id": case_id,
+                    "receipt_id": f"{case_id}-receipt-v1",
+                    "source": case["allowed_evidence_sources"][0],
+                    "status": "accepted",
+                    "source_sha": source_sha,
+                    "accepted_at": accepted_at,
+                    "reference": reference.as_posix(),
+                    "sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+                }
+            ],
+        }
+
     def result_for(self, report: dict[str, Any], case_id: str) -> dict[str, Any]:
         return next(case for case in report["cases"] if case["case_id"] == case_id)
 
@@ -177,7 +302,8 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         mapped_case_ids = {case["policy_case_id"] for case in qualification["matrix"]}
 
         self.assertEqual(qualification_id, "rc3-signed-qualification-v1")
-        self.assertEqual(mapped_case_ids, policy_case_ids)
+        self.assertTrue(mapped_case_ids.issubset(policy_case_ids))
+        self.assertTrue({case["id"] for case in self.policy["cases"] if case["tier"] == 3}.isdisjoint(mapped_case_ids))
         self.assertTrue(overrides["sparkle-update-route"])
         self.assertTrue(overrides["profile-save-action-accessibility"])
         self.assertFalse(overrides["gui-preview-cancel-cleanup"])
@@ -377,212 +503,127 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                     artifact_receipt_expectation=expectation,
                 )
 
-    def test_periodic_evidence_expires_and_first_rc_forces_retest(self) -> None:
-        policy = json.loads(json.dumps(self.policy))
-        policy["cases"].append(
-            {
-                "id": "real-drive-qualification",
-                "tier": 3,
-                "blocking_phase": "milestone",
-                "invalidates_on": {"paths": ["bd_to_avp/modules/disc.py"], "contracts": []},
-                "allowed_evidence_sources": ["hardware_qualification_receipt"],
-                "carry_forward": {
-                    "allowed": True,
-                    "requires_prior_accepted_receipt": True,
-                    "requires_clean_invalidation": True,
-                },
-                "cadence": {
-                    "first_rc_or_stable_candidate": True,
-                    "max_age_days": 30,
-                    "hardware": ["usb_bluray_drive"],
-                },
-            }
-        )
+    def test_first_rc_forces_only_declared_tier3_cases_to_retest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            evidence = self.evidence(
+            clean_evidence = self.tier3_evidence(root, "clean-machine-signed-update")
+            clean_report = self.classify(
+                clean_evidence,
                 root,
-                "real-drive-qualification",
-                source="hardware_qualification_receipt",
-                accepted_at="2026-06-01T00:00:00Z",
-            )
-            evidence["receipts"][0]["hardware"] = ["usb_bluray_drive"]
-            report = classify_release_scope(
-                policy,
-                evidence,
-                candidate_sha=CANDIDATE_SHA,
-                changed_paths=lambda _base, _candidate: set(),
-                repo=root,
-                reference_content=lambda reference: (root / reference).read_bytes(),
                 release_stage="rc",
                 first_candidate_of_cycle=True,
-                workflow_phase="preparation",
-                as_of=date(2026, 8, 5),
+            )
+            empty_report = self.classify(
+                {"schema_version": 1, "receipts": []},
+                root,
+                release_stage="rc",
+                first_candidate_of_cycle=True,
             )
 
-        result = self.result_for(report, "real-drive-qualification")
-        self.assertEqual(result["status"], "retest")
-        self.assertIn("release milestone", result["reason"])
+        clean_result = self.result_for(clean_report, "clean-machine-signed-update")
+        real_media_result = self.result_for(empty_report, "protected-real-media-conversion")
+        self.assertEqual(clean_result["status"], "retest")
+        self.assertEqual(clean_result["trigger"], "first_rc")
+        self.assertTrue(clean_result["applicable"])
+        self.assertEqual(real_media_result["trigger"], "not_due")
+        self.assertFalse(real_media_result["applicable"])
+        self.assertFalse(real_media_result["evidence_required"])
 
     def test_periodic_evidence_expires_outside_milestone(self) -> None:
-        policy = json.loads(json.dumps(self.policy))
-        policy["cases"].append(
-            {
-                "id": "clean-machine-installation",
-                "tier": 3,
-                "blocking_phase": "milestone",
-                "invalidates_on": {"paths": ["scripts/macos_release.py"], "contracts": []},
-                "allowed_evidence_sources": ["hardware_qualification_receipt"],
-                "carry_forward": {
-                    "allowed": True,
-                    "requires_prior_accepted_receipt": True,
-                    "requires_clean_invalidation": True,
-                },
-                "cadence": {
-                    "first_rc_or_stable_candidate": True,
-                    "max_age_days": 30,
-                    "hardware": ["disposable_macos_vm"],
-                },
-            }
-        )
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            evidence = self.evidence(
+            evidence = self.tier3_evidence(
                 root,
-                "clean-machine-installation",
-                source="hardware_qualification_receipt",
-                accepted_at="2026-06-01T00:00:00Z",
+                "clean-machine-signed-update",
+                completed_at="2026-06-01T00:00:00Z",
+                accepted_at="2026-06-01T00:10:00Z",
             )
-            evidence["receipts"][0]["hardware"] = ["disposable_macos_vm"]
-            report = classify_release_scope(
-                policy,
+            report = self.classify(
                 evidence,
-                candidate_sha=CANDIDATE_SHA,
-                changed_paths=lambda _base, _candidate: set(),
-                repo=root,
-                reference_content=lambda reference: (root / reference).read_bytes(),
+                root,
                 release_stage="beta",
-                first_candidate_of_cycle=False,
-                workflow_phase="preparation",
                 as_of=date(2026, 8, 5),
             )
 
-        result = self.result_for(report, "clean-machine-installation")
+        result = self.result_for(report, "clean-machine-signed-update")
         self.assertEqual(result["status"], "retest")
-        self.assertIn("maximum age", result["reason"])
+        self.assertEqual(result["trigger"], "expired")
+        self.assertTrue(result["applicable"])
 
-    def test_periodic_evidence_carries_with_matching_hardware_inside_cadence(self) -> None:
-        policy = json.loads(json.dumps(self.policy))
-        policy["cases"].append(
-            {
-                "id": "clean-machine-installation",
-                "tier": 3,
-                "blocking_phase": "milestone",
-                "invalidates_on": {"paths": ["scripts/macos_release.py"], "contracts": []},
-                "allowed_evidence_sources": ["hardware_qualification_receipt"],
-                "carry_forward": {
-                    "allowed": True,
-                    "requires_prior_accepted_receipt": True,
-                    "requires_clean_invalidation": True,
-                },
-                "cadence": {
-                    "first_rc_or_stable_candidate": True,
-                    "max_age_days": 30,
-                    "hardware": ["disposable_macos_vm"],
-                },
-            }
-        )
+    def test_exact_candidate_tier3_evidence_still_expires(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            evidence = self.evidence(
+            evidence = self.tier3_evidence(
                 root,
-                "clean-machine-installation",
-                source="hardware_qualification_receipt",
-                accepted_at="2026-08-01T00:00:00Z",
+                "clean-machine-signed-update",
+                source_sha=CANDIDATE_SHA,
+                completed_at="2026-06-01T00:00:00Z",
+                accepted_at="2026-06-01T00:10:00Z",
             )
-            evidence["receipts"][0]["hardware"] = ["disposable_macos_vm"]
-            report = classify_release_scope(
-                policy,
+            report = self.classify(
                 evidence,
-                candidate_sha=CANDIDATE_SHA,
-                changed_paths=lambda _base, _candidate: set(),
-                repo=root,
-                reference_content=lambda reference: (root / reference).read_bytes(),
+                root,
                 release_stage="beta",
-                first_candidate_of_cycle=False,
-                workflow_phase="preparation",
                 as_of=date(2026, 8, 5),
             )
 
-        self.assertEqual(self.result_for(report, "clean-machine-installation")["status"], "carry")
+        result = self.result_for(report, "clean-machine-signed-update")
+        self.assertEqual(result["status"], "retest")
+        self.assertEqual(result["trigger"], "expired")
+        self.assertTrue(result["applicable"])
 
-    def test_periodic_evidence_requires_matching_hardware(self) -> None:
-        policy = json.loads(json.dumps(self.policy))
-        policy["cases"].append(
-            {
-                "id": "real-drive-qualification",
-                "tier": 3,
-                "blocking_phase": "milestone",
-                "invalidates_on": {"paths": ["bd_to_avp/modules/disc.py"], "contracts": []},
-                "allowed_evidence_sources": ["hardware_qualification_receipt"],
-                "carry_forward": {
-                    "allowed": True,
-                    "requires_prior_accepted_receipt": True,
-                    "requires_clean_invalidation": True,
-                },
-                "cadence": {
-                    "first_rc_or_stable_candidate": True,
-                    "max_age_days": 30,
-                    "hardware": ["usb_bluray_drive"],
-                },
-            }
-        )
+    def test_periodic_evidence_carries_inside_cadence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            evidence = self.evidence(
+            evidence = self.tier3_evidence(root, "clean-machine-signed-update")
+            report = self.classify(evidence, root, release_stage="beta")
+
+        result = self.result_for(report, "clean-machine-signed-update")
+        self.assertEqual(result["status"], "carry")
+        self.assertEqual(result["trigger"], "cadence_valid")
+        self.assertFalse(result["applicable"])
+        self.assertEqual(result["evidence"]["environment_class"], "resettable-vm")
+
+    def test_tier3_invalidation_triggers_outside_milestone(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            evidence = self.tier3_evidence(root, "clean-machine-signed-update")
+            report = self.classify(
+                evidence,
                 root,
-                "real-drive-qualification",
-                source="hardware_qualification_receipt",
+                changed={"scripts/sparkle_bundle.py"},
+                release_stage="beta",
             )
-            evidence["receipts"][0]["hardware"] = ["disposable_macos_vm"]
 
-            with self.assertRaises(QualificationScopeError):
-                classify_release_scope(
-                    policy,
-                    evidence,
-                    candidate_sha=CANDIDATE_SHA,
-                    changed_paths=lambda _base, _candidate: set(),
-                    repo=root,
-                    reference_content=lambda reference: (root / reference).read_bytes(),
-                    workflow_phase="preparation",
-                    as_of=date(2026, 8, 5),
-                )
+        result = self.result_for(report, "clean-machine-signed-update")
+        self.assertEqual(result["status"], "retest")
+        self.assertEqual(result["trigger"], "invalidated")
+        self.assertTrue(result["applicable"])
 
-    def test_periodic_policy_rejects_noncanonical_cadence_types(self) -> None:
-        for field, value in (("max_age_days", True), ("first_rc_or_stable_candidate", "false")):
-            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary_directory:
+    def test_tier3_evidence_rejects_mismatched_hardware_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            evidence = self.tier3_evidence(root, "usb-bluray-makemkv")
+            receipt_path = root / evidence["receipts"][0]["reference"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt["hardware"]["class"] = "vision-pro"
+            receipt["receipt_sha256"] = tier3_receipt_sha256(receipt)
+            receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            evidence["receipts"][0]["sha256"] = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+
+            with self.assertRaisesRegex(QualificationScopeError, "hardware class"):
+                self.classify(evidence, root, release_stage="beta")
+
+    def test_periodic_policy_rejects_noncanonical_cadence_and_expiry(self) -> None:
+        mutations = (
+            ("cadence", "first_rc", "yes"),
+            ("evidence_expiry", "max_age_days", True),
+        )
+        for section, field, value in mutations:
+            with self.subTest(section=section, field=field), tempfile.TemporaryDirectory() as temporary_directory:
                 policy = json.loads(json.dumps(self.policy))
-                cadence = {
-                    "first_rc_or_stable_candidate": True,
-                    "max_age_days": 30,
-                    "hardware": ["usb_bluray_drive"],
-                }
-                cadence[field] = value
-                policy["cases"].append(
-                    {
-                        "id": "real-drive-qualification",
-                        "tier": 3,
-                        "blocking_phase": "milestone",
-                        "invalidates_on": {"paths": ["bd_to_avp/modules/disc.py"], "contracts": []},
-                        "allowed_evidence_sources": ["hardware_qualification_receipt"],
-                        "carry_forward": {
-                            "allowed": True,
-                            "requires_prior_accepted_receipt": True,
-                            "requires_clean_invalidation": True,
-                        },
-                        "cadence": cadence,
-                    }
-                )
+                case = next(case for case in policy["cases"] if case["id"] == "clean-machine-signed-update")
+                case[section][field] = value
                 policy_path = Path(temporary_directory) / "policy.json"
                 policy_path.write_text(json.dumps(policy), encoding="utf-8")
 

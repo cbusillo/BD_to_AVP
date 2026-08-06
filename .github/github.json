@@ -125,6 +125,7 @@
       "releaseQualificationPolicy": "uv run python -m scripts.qualify_release_scope --validate-policy",
       "releaseQualification": "uv run python -m unittest tests.test_qualify_release_scope",
       "releaseReceipt": "uv run python -m unittest tests.test_release_receipt",
+      "tier3Receipt": "uv run python -m unittest tests.test_tier3_receipt",
       "macosApp": "uv run python scripts/native_app.py test",
       "importSmoke": "uv run python -c 'import bd_to_avp; import bd_to_avp.__main__; import bd_to_avp.app'",
       "cliSmoke": "uv run bd-to-avp --help"
