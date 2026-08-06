@@ -35,8 +35,9 @@ names a stable policy case, evidence source, source SHA, acceptance timestamp,
 repository-relative reference, and SHA-256 digest. The referenced receipt must
 be committed in the current repository `HEAD`, so an untracked local file can
 never satisfy release preparation. Tier 1 receipts additionally record a
-successful workflow conclusion and positive release-run ID. Tier 3 receipts
-must name every hardware/environment requirement declared by the case.
+successful workflow conclusion and positive release-run ID. Tier 3 evidence
+references a checked `bd-to-avp-tier3-qualification` receipt that is validated
+against the selected case and its exact checked release receipt.
 
 Use `--require-evidence` during release preparation. It exits with status `2`
 when any case applicable to the selected workflow phase remains a blocking
@@ -59,6 +60,47 @@ direct invalidation patterns or referenced contracts. RC3 migration overrides
 keep its Sparkle, accessibility, PGS, and subtitle-diagnostic checks fresh.
 Tier 1 invalidation mappings document release-engine ownership only; Tier 1
 always requires a new exact-candidate receipt and never carries.
+
+## Tier 3 Cadence And Receipts
+
+Tier 3 is risk- and cadence-based, not a blanket prerelease matrix. Each case
+declares its automation lane, automated or operator-assisted execution mode,
+allowed macOS environment classes and architecture, required public-safe
+hardware fields, first-RC and Stable cadence, expiry, invalidating contracts,
+assertions, evidence digest kinds, and cleanup outcomes.
+
+The classifier requires Tier 3 evidence only when one of these triggers applies:
+
+- the case declares the first candidate of an RC cycle;
+- the case declares a Stable candidate;
+- checked evidence has passed its receipt-declared expiry; or
+- mapped code, packaging, UI, updater, runtime, or playback paths changed.
+
+An ordinary alpha, beta, or later RC remains non-applicable when a case is not
+expired or invalidated. Valid prior evidence carries without becoming a
+blocking requirement. The report exposes the deterministic trigger for every
+case (`first_rc`, `stable_candidate`, `expired`, `invalidated`, `cadence_valid`,
+or `not_due`).
+
+Tier 3 receipts bind the release source SHA, tag, route, versions, signed app
+tree, DMG/checksum/appcast digests, and both semantic and file digests of the
+checked release receipt. Environment identity is limited to environment class,
+architecture, public macOS version, and public Apple build. Hardware identity
+uses only the bounded field names declared by policy; hostnames, usernames,
+paths, volume or disc titles, serials, tokens, media, and free-form logs are not
+accepted. Evidence is represented by at most eight named SHA-256 digests.
+
+Validate a checked Tier 3 receipt offline with:
+
+```sh
+uv run python -m scripts.tier3_receipt \
+  --case-id clean-machine-signed-update \
+  --receipt path/to/tier3-receipt.json
+```
+
+Passed receipts require every declared assertion to pass. Failed, skipped, and
+not-applicable receipts remain valid audit records with explicit bounded reason
+codes, but only a passed receipt may be indexed as accepted release evidence.
 
 ## Release Engine Receipts
 
