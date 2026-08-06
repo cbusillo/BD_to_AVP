@@ -102,6 +102,12 @@ Passed receipts require every declared assertion to pass. Failed, skipped, and
 not-applicable receipts remain valid audit records with explicit bounded reason
 codes, but only a passed receipt may be indexed as accepted release evidence.
 
+The maintained clean-machine and Sparkle collector is documented in
+[`docs/tier3-clean-machine.md`](tier3-clean-machine.md). It uses an isolated
+synthetic home in a runner-owned disposable location, reuses the installed-app
+package smoke, verifies a real-feed update from an exact prior signed release,
+and emits the checked `clean-machine-signed-update` receipt.
+
 ## Release Engine Receipts
 
 Every successful guarded Stable or Prerelease publication includes a
