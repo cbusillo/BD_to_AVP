@@ -39,8 +39,9 @@ successful workflow conclusion and positive release-run ID. Tier 3 receipts
 must name every hardware/environment requirement declared by the case.
 
 Use `--require-evidence` during release preparation. It exits with status `2`
-when any blocking case remains `retest`; Tier 4 `external` cases never affect
-that exit status.
+when any case applicable to the selected workflow phase remains a blocking
+`retest`; later-phase cases remain visible as deferred, and Tier 4 `external`
+cases never affect that exit status.
 
 ```sh
 uv run python -m scripts.qualify_release_scope \
@@ -48,6 +49,7 @@ uv run python -m scripts.qualify_release_scope \
   --qualification docs/qualification/rc3-signed-qualification-v1.json \
   --evidence path/to/checked-evidence.json \
   --release-stage rc \
+  --workflow-phase preparation \
   --require-evidence
 ```
 
@@ -77,6 +79,95 @@ The receipt's `receipt_sha256` is the SHA-256 of canonical compact JSON with the
 the SHA-256 of the exact formatted receipt file downloaded from GitHub. This
 avoids a self-referential file hash while preserving deterministic semantic and
 byte-for-byte identities.
+
+## Workflow Integration
+
+The release engine enforces qualification at two secret-free guarded boundaries.
+Neither job touches signing, notarization, PyPI, or Pages secrets, and both run
+on `ubuntu-latest` without a write-capable repository token.
+
+**Early gate (`qualify-preparation`)** runs after `prepare` and before `package`
+(the macOS signing job). It checks the `preparation` phase using the exact
+`github.sha`, the committed Sparkle channel as the release stage, the checked
+`docs/qualification/release-evidence-v1.json` as evidence, and
+`docs/qualification/rc3-signed-qualification-v1.json` as the candidate file.
+When committed metadata identifies the first candidate of a cycle,
+`--first-candidate-of-cycle` is passed. The preparation report is uploaded as a workflow Actions artifact with
+30-day retention before enforcement exits. macOS signing cannot reach the
+`macos-signing` environment until this gate passes.
+
+The qualification record path is committed release metadata. Release
+preparation must update the workflow and `.github/github.json` catalog to the
+new candidate record before dispatch; a missing, stale, or mismatched record
+fails closed.
+
+**Artifact gate (`qualify-artifact`)** runs after `build-receipt` and before
+`publish-release`. It downloads the release receipt by its exact GitHub Release
+asset ID (`build-receipt.outputs.receipt_asset_id`), verifies its SHA-256 digest
+against `build-receipt.outputs.receipt_file_sha256`, then invokes the `artifact`
+phase binding the exact release route, workflow run ID and attempt, release ID,
+signed app tree digest, and DMG/checksum/appcast asset IDs and digests. The
+artifact report is uploaded before enforcement. Publication cannot proceed until
+this gate passes.
+
+Both gates enforce using `--require-evidence` and upload their reports as Actions
+artifacts rather than GitHub Release assets. The exact CLI interface for the
+engine integration is:
+
+```sh
+# Early gate — preparation phase
+python -m scripts.qualify_release_scope \
+  --policy docs/qualification/release-qualification-policy-v1.json \
+  --candidate-sha "$GITHUB_SHA" \
+  --release-stage "$CHANNEL" \
+  --evidence docs/qualification/release-evidence-v1.json \
+  --qualification docs/qualification/rc3-signed-qualification-v1.json \
+  --workflow-phase preparation \
+  [--first-candidate-of-cycle] \
+  --output release-qualification-preparation.json \
+  --require-evidence
+
+# Artifact gate — artifact phase
+python -m scripts.qualify_release_scope \
+  --policy docs/qualification/release-qualification-policy-v1.json \
+  --candidate-sha "$GITHUB_SHA" \
+  --release-stage "$CHANNEL" \
+  --evidence docs/qualification/release-evidence-v1.json \
+  --qualification docs/qualification/rc3-signed-qualification-v1.json \
+  --workflow-phase artifact \
+  [--first-candidate-of-cycle] \
+  --release-receipt release-receipt.json \
+  --release-route "$RELEASE_ROUTE" \
+  --workflow-run-id "$GITHUB_RUN_ID" \
+  --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+  --release-id "$RELEASE_ID" \
+  --package-version "$PACKAGE_VERSION" \
+  --public-version "$PUBLIC_VERSION" \
+  --build-version "$BUILD_VERSION" \
+  --release-tag "$RELEASE_TAG" \
+  --dmg-name "$DMG_NAME" \
+  --release-receipt-sha256 "$RECEIPT_FILE_SHA256" \
+  --signed-app-tree-sha256 "$SIGNED_APP_TREE_SHA256" \
+  --dmg-asset-id "$DMG_ASSET_ID" \
+  --dmg-sha256 "$DMG_SHA256" \
+  --checksum-asset-id "$CHECKSUM_ASSET_ID" \
+  --checksum-sha256 "$CHECKSUM_SHA256" \
+  --appcast-asset-id "$APPCAST_ASSET_ID" \
+  --appcast-sha256 "$APPCAST_SHA256" \
+  --output release-qualification-final.json \
+  --require-evidence
+```
+
+The `--output` flag writes the JSON report before the enforcement exit,
+so the `if: always()` upload step captures it even when enforcement fails. The
+classifier also writes a structured error report when policy or receipt
+validation fails before case classification. The
+`--workflow-phase` flag keeps publication-owned Tier 1 retests visible but
+explicitly deferred during `preparation`; `artifact` additionally binds the
+exact run, release, and asset identities recorded in the receipt. The receipt's
+appcast digest is the verified snapshot awaiting deployment. Live Pages state
+remains owned by the post-publication deployment and reconciliation boundaries,
+so it is not required before its owning phase exists.
 
 After the operator workflow completes, `.github/workflows/release-evidence.yml`
 validates the successful `workflow_dispatch` run, approved actor, protected

@@ -199,38 +199,52 @@ The workflow performs these ordered boundaries:
 2. Reject a conflicting tag, release, Sparkle version/build, or Stable PyPI
    version while allowing a matching draft to resume. The active Pages state
    and newest durable snapshot are both checked.
-3. After the single release approval, build, sign, notarize, and
+3. Run the secret-free `qualify-preparation` gate. Classify the candidate
+   against the checked `docs/qualification/release-evidence-v1.json` evidence
+   and `docs/qualification/rc3-signed-qualification-v1.json` qualification file
+   for the `preparation` phase, using the exact `github.sha` and committed
+   Sparkle channel as the release stage. The preparation report is uploaded as
+   an Actions artifact with 30-day retention before enforcement. macOS signing
+   approval cannot be requested until this gate passes.
+4. After the single release approval, build, sign, notarize, and
    Gatekeeper-validate the SwiftUI macOS app and DMG without a write-capable
    repository token. Record its exact name, byte size, SHA-256, and
    `SHA256SUMS` entry, then publish GitHub artifact attestations for the verified
    package before release creation.
-4. Download that exact notarized DMG on the separate macOS 26 runner and repeat
+5. Download that exact notarized DMG on the separate macOS 26 runner and repeat
    checksum, signature, Gatekeeper, startup, bundled-tool, and worker validation.
    Draft creation cannot begin unless this compatibility boundary passes.
-5. Create a draft GitHub Release targeting only `github.sha`, retain its release
+6. Create a draft GitHub Release targeting only `github.sha`, retain its release
    ID for authenticated inspection, freeze the exact UTF-8 release body into a
    digest-bound workflow artifact, and transfer draft assets through release and
    asset IDs rather than runner-dependent tag lookup. Asset overwrite stays
    disabled by default.
-6. In the main-only `sparkle-release` environment, download the verified
+7. In the main-only `sparkle-release` environment, download the verified
    package and release-note workflow artifacts without a write-capable
    repository token, verify their exact identities, load the active durable
    `appcast.xml` selected by Pages state, sign the DMG, and build the cumulative
    snapshot. New items embed the frozen body as
    `<description sparkle:format="markdown">` and retain the GitHub Release page
    as their full-notes link; historical tag-page items remain valid.
-7. Upload `appcast.xml` to the draft, re-download the DMG, checksum, and appcast,
+8. Upload `appcast.xml` to the draft, re-download the DMG, checksum, and appcast,
    and repeat the exact digest, size, notarization, Gatekeeper, bundle-version,
    embedded-release-note, appcast-item, and exact-main-commit GitHub provenance
    checks.
-8. Build a deterministic public-safe `release-receipt.json` from those verified
+9. Build a deterministic public-safe `release-receipt.json` from those verified
    outputs. The receipt binds the route, workflow run and attempt, protected
    source SHA, versions, release ID, release asset IDs/sizes/digests, signed app
    tree, appcast, verification outcomes, and Tier 1 case references. Upload it
    to the draft, re-download it by asset ID, and verify its content and file
    digests before publication. The receipt deliberately excludes credentials,
    approval context, private paths, and diagnostic identifiers.
-9. Publish the verified draft only if it still targets the current `main` HEAD.
+10. Run the secret-free `qualify-artifact` gate. Download the release receipt by
+    its exact GitHub Release asset ID and verify its SHA-256 digest. Then classify
+    the candidate for the `artifact` phase, binding the exact release route,
+    workflow run ID and attempt, release ID, committed versions/tag/DMG name,
+    signed app tree digest, and DMG/checksum/appcast asset IDs and digests. The
+    artifact report is uploaded as an Actions artifact before enforcement.
+    Publication cannot proceed until this gate passes.
+11. Publish the verified draft only if it still targets the current `main` HEAD.
    The release body is hashed again immediately before and after publication so
    edits cannot silently diverge from the updater notes. The reusable engine
    returns Stable Python distributions only as an immutable workflow artifact
@@ -238,15 +252,15 @@ The workflow performs these ordered boundaries:
    and other prerelease routes return no Python artifact. Stable releases then
    publish that verified artifact through PyPI Trusted Publishing with PEP 740
    attestations; Alpha, Beta, and RC releases never publish to PyPI.
-10. Deploy the durable `appcast.xml` release asset to GitHub Pages. A deployment
+12. Deploy the durable `appcast.xml` release asset to GitHub Pages. A deployment
    failure can be retried without rebuilding, retagging, or re-signing.
-11. After the complete reusable engine succeeds, the Stable operator
+13. After the complete reusable engine succeeds, the Stable operator
     revalidates the current protected-main SHA, operator/engine policy evidence,
     GitHub artifact digest, and every distribution checksum, then publishes
     through the pinned PyPI Trusted Publisher with PEP 740 attestations. The publisher remains in
     `briefcase.yml` and the `pypi` environment so its existing OIDC identity does
     not change.
-12. After either operator workflow completes successfully, the secret-free
+14. After either operator workflow completes successfully, the secret-free
    `Release Evidence` workflow revalidates the completed workflow identity,
    immutable release, receipt asset, and live Pages appcast. It copies the exact
    receipt into `docs/release-evidence/<tag>/`, writes the publication record and
@@ -254,7 +268,7 @@ The workflow performs these ordered boundaries:
    or updates `automation/release-evidence-<tag>`. Branch protection, CI, review,
    and normal merge policy remain in force. A reconciliation failure does not
    rebuild, replace, or invalidate the correctly published release.
-13. The separate `cbusillo/homebrew-tap` repository checks the latest stable
+15. The separate `cbusillo/homebrew-tap` repository checks the latest stable
    GitHub Release on a schedule and by manual dispatch. Homebrew opens a formula
    update pull request when the version changes; tap CI must pass formula audit,
    source installation, command tests, and linkage checks before merge.
