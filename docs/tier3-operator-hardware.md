@@ -66,6 +66,12 @@ Pro identity uses only `model_family`, `chip_family`, and `visionos_major`.
 
 The release receipt must be committed and byte-identical to repository `HEAD`:
 
+For a newly published candidate, run from the idempotent
+`automation/release-evidence-<tag>` branch created by the Release Evidence
+workflow. Add passed operator receipts and their evidence-index entries to that
+same branch. Skipped or failed receipts remain truthful audit records but cannot
+satisfy protected CI's `milestone` qualification check.
+
 ```sh
 uv run python -m scripts.tier3_operator_receipt \
   --answers /path/to/bounded-answers.json \

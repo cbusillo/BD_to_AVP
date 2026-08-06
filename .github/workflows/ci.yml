@@ -136,3 +136,67 @@ jobs:
 
       - name: Verify bundled tools and deployment targets
         run: uv run python scripts/verify_app_tools.py
+
+      - name: Resolve post-publication milestone context
+        id: milestone-context
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.release_milestone_context \
+            --base-sha "${{ github.event.pull_request.base.sha }}" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --head-branch "$GITHUB_HEAD_REF" \
+            --base-repo "${{ github.event.pull_request.base.repo.full_name }}" \
+            --head-repo "${{ github.event.pull_request.head.repo.full_name }}" \
+            --base-branch "${{ github.event.pull_request.base.ref }}" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Classify post-publication milestone evidence
+        id: milestone-qualification
+        if: steps.milestone-context.outputs.required == 'true'
+        continue-on-error: true
+        env:
+          CANDIDATE_SHA: ${{ steps.milestone-context.outputs.candidate_sha }}
+          EVIDENCE_PATH: ${{ steps.milestone-context.outputs.evidence_path }}
+          FIRST_CANDIDATE_OF_CYCLE: ${{ steps.milestone-context.outputs.first_candidate_of_cycle }}
+          POLICY_PATH: ${{ steps.milestone-context.outputs.policy_path }}
+          QUALIFICATION_PATH: ${{ steps.milestone-context.outputs.qualification_path }}
+          RELEASE_RECEIPT_PATH: ${{ steps.milestone-context.outputs.release_receipt_path }}
+          RELEASE_STAGE: ${{ steps.milestone-context.outputs.release_stage }}
+        run: |
+          set -euo pipefail
+          ARGS=(
+            --policy "$POLICY_PATH"
+            --candidate-sha "$CANDIDATE_SHA"
+            --qualification "$QUALIFICATION_PATH"
+            --evidence "$EVIDENCE_PATH"
+            --milestone-release-receipt "$RELEASE_RECEIPT_PATH"
+            --release-stage "$RELEASE_STAGE"
+            --workflow-phase milestone
+            --output release-qualification-milestone.json
+            --require-evidence
+          )
+          if [ "$FIRST_CANDIDATE_OF_CYCLE" = "true" ]; then
+            ARGS+=(--first-candidate-of-cycle)
+          fi
+          uv run python -m scripts.qualify_release_scope "${ARGS[@]}"
+
+      - name: Upload post-publication milestone report
+        if: always() && steps.milestone-context.outputs.required == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-qualification-milestone-${{ github.run_attempt }}
+          path: release-qualification-milestone.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce post-publication milestone evidence
+        if: always() && steps.milestone-context.outputs.required == 'true'
+        env:
+          MILESTONE_OUTCOME: ${{ steps.milestone-qualification.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "$MILESTONE_OUTCOME" != "success" ]; then
+            echo "Post-publication milestone qualification is incomplete or invalid." >&2
+            exit 1
+          fi

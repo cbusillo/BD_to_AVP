@@ -874,7 +874,11 @@ printf '%s' "$CODESIGN_METADATA"
             release_operations["qualificationRecordPath"],
             "docs/qualification/rc3-signed-qualification-v1.json",
         )
-        self.assertEqual(len(release_operations["qualificationReportArtifacts"]), 2)
+        self.assertEqual(len(release_operations["qualificationReportArtifacts"]), 3)
+        self.assertIn(
+            "release-qualification-milestone-<run-attempt>",
+            release_operations["qualificationReportArtifacts"],
+        )
         artifact_checkouts = [
             step for step in qualify_artifact["steps"] if step.get("uses", "").startswith("actions/checkout@")
         ]
@@ -919,7 +923,35 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn(".immutable == true", str(prepare))
         self.assertIn("Preserve an existing idempotent evidence branch", str(prepare))
         self.assertIn("automation/release-evidence-", str(create_pr))
+        self.assertIn("remains intentionally unmergeable", str(create_pr))
         self.assertIn("peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1", str(create_pr))
+
+    def test_release_evidence_pr_enforces_post_publication_milestone(self) -> None:
+        workflow = load_workflow("ci.yml")
+        steps = workflow["jobs"]["validate"]["steps"]
+        by_name = {step["name"]: step for step in steps}
+        context = by_name["Resolve post-publication milestone context"]
+        classify = by_name["Classify post-publication milestone evidence"]
+        upload = by_name["Upload post-publication milestone report"]
+        enforce = by_name["Enforce post-publication milestone evidence"]
+
+        self.assertEqual(context["if"], "github.event_name == 'pull_request'")
+        for step in (classify, upload, enforce):
+            self.assertIn("steps.milestone-context.outputs.required == 'true'", step["if"])
+        self.assertIn("scripts.release_milestone_context", context["run"])
+        self.assertIn("github.event.pull_request.base.sha", context["run"])
+        self.assertIn("github.event.pull_request.head.sha", context["run"])
+        self.assertIn("github.event.pull_request.base.repo.full_name", context["run"])
+        self.assertIn("github.event.pull_request.head.repo.full_name", context["run"])
+        self.assertIn("github.event.pull_request.base.ref", context["run"])
+        self.assertIn("$GITHUB_HEAD_REF", context["run"])
+        self.assertIn("--workflow-phase milestone", classify["run"])
+        self.assertIn("--milestone-release-receipt", classify["run"])
+        self.assertIn("--require-evidence", classify["run"])
+        self.assertTrue(classify["continue-on-error"])
+        self.assertEqual(upload["with"]["if-no-files-found"], "error")
+        self.assertIn("release-qualification-milestone-${{ github.run_attempt }}", upload["with"]["name"])
+        self.assertIn("steps.milestone-qualification.outcome", str(enforce))
 
     def test_release_notes_are_frozen_embedded_and_reverified(self) -> None:
         workflow = load_release_engine()

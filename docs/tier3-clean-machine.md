@@ -37,6 +37,13 @@ SHA-256 digests in those receipts. The candidate build must be newer than the
 prior build and must be present on the live public appcast for the selected
 route.
 
+For a newly published candidate, run from the idempotent
+`automation/release-evidence-<tag>` branch created by the Release Evidence
+workflow. Add the validated Tier 3 receipts and their evidence-index entries to
+that branch. Protected CI's `milestone` classifier is expected to remain red
+until all due receipts are present; do not merge around it or create a parallel
+evidence branch.
+
 Run the read-only preflight first:
 
 ```sh
