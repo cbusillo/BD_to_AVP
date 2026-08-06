@@ -14,12 +14,19 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
+from scripts.release_receipt import (
+    ArtifactReceiptExpectation,
+    ReleaseReceiptError,
+    load_validated_artifact_receipt,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY_PATH = REPO_ROOT / "docs" / "qualification" / "release-qualification-policy-v1.json"
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 RESULT_STATES = ("covered", "carry", "retest", "external")
+WORKFLOW_PHASES = ("preparation", "artifact")
 
 
 class QualificationScopeError(RuntimeError):
@@ -405,6 +412,47 @@ def _receipt_summary(receipt: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _artifact_receipt_summary(receipt: Mapping[str, Any], path: Path) -> dict[str, Any]:
+    return {
+        "receipt_id": receipt["receipt_sha256"],
+        "reference": path.name,
+        "source_sha": receipt["source_sha"],
+    }
+
+
+def _evidence_requirement(
+    case: Mapping[str, Any],
+    *,
+    status: str,
+    applicable: bool,
+    deferred: bool,
+) -> dict[str, Any]:
+    case_id = cast(str, case["id"])
+    tier = cast(int, case["tier"])
+    source = _strings(case["allowed_evidence_sources"], f"case {case_id!r} evidence sources")[0]
+    if tier == 0:
+        binding = "automatic_per_commit_gate"
+    elif tier == 1:
+        binding = "exact_same_run_release_receipt"
+    elif tier in {2, 3}:
+        binding = "exact_candidate_or_valid_carry_forward"
+    else:
+        binding = "post_publication_observation"
+    required = status == "retest"
+    action: str | None = None
+    if required:
+        timing = "before the artifact phase" if deferred else "before this phase can pass"
+        action = f"Provide accepted {source} evidence {timing}."
+    return {
+        "source": source,
+        "binding": binding,
+        "required": required,
+        "required_for_phase": required and applicable,
+        "satisfied": not required,
+        "action": action,
+    }
+
+
 def classify_release_scope(
     policy: Mapping[str, Any],
     evidence: Mapping[str, Any],
@@ -417,12 +465,17 @@ def classify_release_scope(
     fresh_retest: Mapping[str, bool] | None = None,
     release_stage: str = "rc",
     first_candidate_of_cycle: bool = False,
+    workflow_phase: str = "preparation",
+    artifact_receipt_path: Path | None = None,
+    artifact_receipt_expectation: ArtifactReceiptExpectation | None = None,
     as_of: date | None = None,
 ) -> dict[str, Any]:
     if SHA_PATTERN.fullmatch(candidate_sha) is None:
         raise QualificationScopeError("Candidate SHA must be a full lowercase Git SHA.")
     if release_stage not in {"alpha", "beta", "rc", "stable"}:
         raise QualificationScopeError("Release stage must be alpha, beta, rc, or stable.")
+    if workflow_phase not in WORKFLOW_PHASES:
+        raise QualificationScopeError(f"Workflow phase must be one of {WORKFLOW_PHASES!r}.")
     as_of = as_of or datetime.now(timezone.utc).date()
     contracts = _mapping(policy["contracts"], "release qualification contracts")
     cases = [_mapping(case, "release qualification case") for case in _sequence(policy["cases"], "cases")]
@@ -434,6 +487,35 @@ def classify_release_scope(
         reference_content or git_checked_reference_content(repo),
         as_of,
     )
+    artifact_tier1_cases: set[str] = set()
+    artifact_receipt_evidence: dict[str, Any] | None = None
+    if (artifact_receipt_path is None) != (artifact_receipt_expectation is None):
+        raise QualificationScopeError(
+            "Artifact release receipt and exact run, release, asset, and digest inputs must be supplied together."
+        )
+    if workflow_phase == "preparation" and artifact_receipt_path is not None:
+        raise QualificationScopeError("Preparation workflow phase cannot consume artifact release evidence.")
+    if workflow_phase == "artifact":
+        if artifact_receipt_path is None or artifact_receipt_expectation is None:
+            raise QualificationScopeError(
+                "Artifact workflow phase requires the exact same-run release receipt and all binding inputs."
+            )
+        try:
+            artifact_receipt = load_validated_artifact_receipt(
+                artifact_receipt_path,
+                artifact_receipt_expectation,
+            )
+        except ReleaseReceiptError as error:
+            raise QualificationScopeError(f"Artifact release receipt validation failed: {error}") from error
+        expected_tier1_cases = {case_id for case_id, case in cases_by_id.items() if case["tier"] == 1}
+        artifact_tier1_cases = set(
+            _strings(artifact_receipt.get("tier1_case_references"), "artifact receipt Tier 1 case references")
+        )
+        if artifact_tier1_cases != expected_tier1_cases:
+            raise QualificationScopeError(
+                "Artifact release receipt Tier 1 case references do not match the current qualification policy."
+            )
+        artifact_receipt_evidence = _artifact_receipt_summary(artifact_receipt, artifact_receipt_path)
     fresh_retest = fresh_retest or {}
     unknown_overrides = sorted(set(fresh_retest) - case_ids)
     if unknown_overrides:
@@ -457,6 +539,9 @@ def classify_release_scope(
             status, reason = "covered", "Owned by the automatic per-commit quality gate."
         elif tier == 4:
             status, reason = "external", "Post-publication field evidence cannot block publication."
+        elif tier == 1 and case_id in artifact_tier1_cases:
+            status, reason = "covered", "Validated evidence is bound to the exact artifact workflow run and release."
+            selected_receipt = None
         elif exact is not None:
             status, reason = "covered", "Accepted evidence is bound to the exact candidate SHA."
         elif tier == 1:
@@ -500,21 +585,42 @@ def classify_release_scope(
                     status, reason = "carry", "Accepted prior evidence remains valid because no mapped paths changed."
 
         blocking_phase = cast(str, case["blocking_phase"])
+        deferred = workflow_phase == "preparation" and blocking_phase == "publication"
+        applicable = blocking_phase != "none" and not deferred
+        evidence_summary = (
+            artifact_receipt_evidence
+            if tier == 1 and case_id in artifact_tier1_cases and artifact_receipt_evidence is not None
+            else _receipt_summary(selected_receipt)
+        )
         result = {
             "case_id": case_id,
             "tier": tier,
             "status": status,
             "blocking_phase": blocking_phase,
             "blocking": blocking_phase != "none",
+            "applicable": applicable,
+            "deferred": deferred,
             "reason": reason,
             "invalidating_paths": invalidating_paths,
-            "evidence": _receipt_summary(selected_receipt),
+            "evidence": evidence_summary,
+            "evidence_required": status == "retest",
+            "evidence_requirement": _evidence_requirement(
+                case,
+                status=status,
+                applicable=applicable,
+                deferred=deferred,
+            ),
         }
         results.append(result)
 
     counts = Counter(result["status"] for result in results)
     blocking_retests = [
-        cast(str, result["case_id"]) for result in results if result["status"] == "retest" and result["blocking"]
+        cast(str, result["case_id"])
+        for result in results
+        if result["status"] == "retest" and result["blocking"] and result["applicable"]
+    ]
+    deferred_retests = [
+        cast(str, result["case_id"]) for result in results if result["status"] == "retest" and result["deferred"]
     ]
     return {
         "schema_version": 1,
@@ -523,10 +629,12 @@ def classify_release_scope(
         "candidate_sha": candidate_sha,
         "release_stage": release_stage,
         "first_candidate_of_cycle": first_candidate_of_cycle,
+        "workflow_phase": workflow_phase,
         "as_of": as_of.isoformat(),
         "cases": results,
         "summary": {state: counts[state] for state in RESULT_STATES},
         "blocking_retests": blocking_retests,
+        "deferred_retests": deferred_retests,
         "passed": not blocking_retests,
     }
 
@@ -542,6 +650,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--candidate-sha")
     parser.add_argument("--release-stage", choices=("alpha", "beta", "rc", "stable"), default="rc")
     parser.add_argument("--first-candidate-of-cycle", action="store_true")
+    parser.add_argument("--workflow-phase", choices=WORKFLOW_PHASES, default="preparation")
+    parser.add_argument("--release-receipt", type=Path)
+    parser.add_argument("--release-route", choices=("stable", "prerelease"))
+    parser.add_argument("--workflow-run-id", type=int)
+    parser.add_argument("--workflow-run-attempt", type=int)
+    parser.add_argument("--release-id", type=int)
+    parser.add_argument("--package-version")
+    parser.add_argument("--public-version")
+    parser.add_argument("--build-version")
+    parser.add_argument("--release-tag")
+    parser.add_argument("--dmg-name")
+    parser.add_argument("--release-receipt-sha256")
+    parser.add_argument("--signed-app-tree-sha256")
+    parser.add_argument("--dmg-asset-id", type=int)
+    parser.add_argument("--dmg-sha256")
+    parser.add_argument("--checksum-asset-id", type=int)
+    parser.add_argument("--checksum-sha256")
+    parser.add_argument("--appcast-asset-id", type=int)
+    parser.add_argument("--appcast-sha256")
     parser.add_argument("--as-of", type=date.fromisoformat)
     parser.add_argument("--repo", type=Path, default=REPO_ROOT)
     parser.add_argument("--output", type=Path)
@@ -564,6 +691,56 @@ def main(argv: list[str] | None = None) -> int:
                 raise QualificationScopeError("--candidate-sha is required unless --validate-policy is used.")
             evidence = load_evidence(args.evidence)
             qualification_id, fresh_retest = load_qualification_overrides(args.qualification, policy)
+            artifact_receipt_expectation: ArtifactReceiptExpectation | None = None
+            receipt_inputs = {
+                "--release-receipt": args.release_receipt,
+                "--release-route": args.release_route,
+                "--workflow-run-id": args.workflow_run_id,
+                "--workflow-run-attempt": args.workflow_run_attempt,
+                "--release-id": args.release_id,
+                "--package-version": args.package_version,
+                "--public-version": args.public_version,
+                "--build-version": args.build_version,
+                "--release-tag": args.release_tag,
+                "--dmg-name": args.dmg_name,
+                "--release-receipt-sha256": args.release_receipt_sha256,
+                "--signed-app-tree-sha256": args.signed_app_tree_sha256,
+                "--dmg-asset-id": args.dmg_asset_id,
+                "--dmg-sha256": args.dmg_sha256,
+                "--checksum-asset-id": args.checksum_asset_id,
+                "--checksum-sha256": args.checksum_sha256,
+                "--appcast-asset-id": args.appcast_asset_id,
+                "--appcast-sha256": args.appcast_sha256,
+            }
+            supplied_receipt_inputs = [name for name, value in receipt_inputs.items() if value is not None]
+            if supplied_receipt_inputs:
+                if args.workflow_phase != "artifact":
+                    raise QualificationScopeError("Artifact receipt inputs require --workflow-phase artifact.")
+                missing_inputs = [name for name, value in receipt_inputs.items() if value is None]
+                if missing_inputs:
+                    raise QualificationScopeError(
+                        "Artifact workflow phase requires exact receipt inputs: " + ", ".join(missing_inputs) + "."
+                    )
+                artifact_receipt_expectation = ArtifactReceiptExpectation(
+                    candidate_sha=args.candidate_sha,
+                    release_route=args.release_route,
+                    workflow_run_id=args.workflow_run_id,
+                    workflow_run_attempt=args.workflow_run_attempt,
+                    release_id=args.release_id,
+                    package_version=args.package_version,
+                    public_version=args.public_version,
+                    build_version=args.build_version,
+                    release_tag=args.release_tag,
+                    dmg_name=args.dmg_name,
+                    receipt_file_sha256=args.release_receipt_sha256,
+                    signed_app_tree_sha256=args.signed_app_tree_sha256,
+                    dmg_asset_id=args.dmg_asset_id,
+                    dmg_sha256=args.dmg_sha256,
+                    checksum_asset_id=args.checksum_asset_id,
+                    checksum_sha256=args.checksum_sha256,
+                    appcast_asset_id=args.appcast_asset_id,
+                    appcast_sha256=args.appcast_sha256,
+                )
             payload = classify_release_scope(
                 policy,
                 evidence,
@@ -574,6 +751,9 @@ def main(argv: list[str] | None = None) -> int:
                 fresh_retest=fresh_retest,
                 release_stage=args.release_stage,
                 first_candidate_of_cycle=args.first_candidate_of_cycle,
+                workflow_phase=args.workflow_phase,
+                artifact_receipt_path=args.release_receipt,
+                artifact_receipt_expectation=artifact_receipt_expectation,
                 as_of=args.as_of,
             )
         rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -581,9 +761,33 @@ def main(argv: list[str] | None = None) -> int:
             args.output.write_text(rendered, encoding="utf-8")
         print(rendered, end="")
         if args.require_evidence and not cast(bool, payload.get("passed", True)):
+            print(
+                f"Release qualification evidence is required for workflow phase {payload['workflow_phase']}:",
+                file=sys.stderr,
+            )
+            cases = {cast(str, case["case_id"]): case for case in cast(Sequence[Mapping[str, Any]], payload["cases"])}
+            for case_id in cast(Sequence[str], payload["blocking_retests"]):
+                case = cases[case_id]
+                requirement = _mapping(case["evidence_requirement"], "evidence requirement")
+                print(
+                    f"- {case_id}: {requirement['action']} Reason: {case['reason']}",
+                    file=sys.stderr,
+                )
             return 2
         return 0
     except QualificationScopeError as error:
+        if args.output is not None:
+            failure_payload = {
+                "schema_version": 1,
+                "candidate_sha": args.candidate_sha,
+                "workflow_phase": args.workflow_phase,
+                "passed": False,
+                "error": str(error),
+                "blocking_retests": [],
+                "deferred_retests": [],
+                "cases": [],
+            }
+            args.output.write_text(json.dumps(failure_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"Release qualification scope failed: {error}", file=sys.stderr)
         return 1
 

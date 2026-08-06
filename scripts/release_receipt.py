@@ -6,8 +6,12 @@ import json
 import re
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
+
+from scripts.release import DMG_NAME_PREFIX, ReleaseError, parse_build_version, parse_release_version
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -36,10 +40,36 @@ VERIFICATION_FIELDS = (
     "attestation",
     "appcast",
 )
+TIER1_CASE_VERIFICATIONS = {
+    "release-workflow-identity": VERIFICATION_FIELDS,
+    "signed-packaged-route-parity": ("package_smoke", "asset_redownload", "attestation", "appcast"),
+}
 
 
 class ReleaseReceiptError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ArtifactReceiptExpectation:
+    candidate_sha: str
+    release_route: str
+    workflow_run_id: int
+    workflow_run_attempt: int
+    release_id: int
+    package_version: str
+    public_version: str
+    build_version: str
+    release_tag: str
+    dmg_name: str
+    receipt_file_sha256: str
+    signed_app_tree_sha256: str
+    dmg_asset_id: int
+    dmg_sha256: str
+    checksum_asset_id: int
+    checksum_sha256: str
+    appcast_asset_id: int
+    appcast_sha256: str
 
 
 def _mapping(value: object, description: str) -> Mapping[str, Any]:
@@ -128,7 +158,14 @@ def _tier1_case_ids(policy_path: Path) -> list[str]:
             case_ids.append(_string(case.get("id"), f"release qualification case {index} id"))
     if not case_ids or len(case_ids) != len(set(case_ids)):
         raise ReleaseReceiptError("Release qualification policy must define unique Tier 1 case IDs.")
-    return sorted(case_ids)
+    policy_case_ids = set(case_ids)
+    mapped_case_ids = set(TIER1_CASE_VERIFICATIONS)
+    if policy_case_ids != mapped_case_ids:
+        raise ReleaseReceiptError(
+            "Release qualification Tier 1 cases require explicit receipt verification mappings; "
+            f"unmapped={sorted(policy_case_ids - mapped_case_ids)}, stale={sorted(mapped_case_ids - policy_case_ids)}."
+        )
+    return sorted(policy_case_ids)
 
 
 def build_receipt(facts: Mapping[str, Any], policy_path: Path = DEFAULT_POLICY_PATH) -> dict[str, Any]:
@@ -254,12 +291,25 @@ def validate_receipt(receipt: Mapping[str, Any]) -> None:
     _exact_keys(versions, {"build", "package", "public"}, "versions")
     for key in versions:
         _string(versions[key], f"versions.{key}")
+    package_version = cast(str, versions["package"])
+    try:
+        parsed_version = parse_release_version(package_version)
+        parse_build_version(cast(str, versions["build"]))
+    except ReleaseError as error:
+        raise ReleaseReceiptError(f"Release receipt version identity is invalid: {error}") from error
+    if versions.get("public") != parsed_version.public_version:
+        raise ReleaseReceiptError("Release receipt public version does not match its package version.")
+    expected_route = "prerelease" if parsed_version.prerelease else "stable"
+    if route != expected_route:
+        raise ReleaseReceiptError("Release receipt route does not match its package version stage.")
 
     release = _mapping(receipt.get("release"), "release")
     _exact_keys(release, {"created_at", "id", "make_latest", "name", "prerelease", "tag", "target_sha"}, "release")
     tag = _string(release.get("tag"), "release tag")
     if TAG_PATTERN.fullmatch(tag) is None:
         raise ReleaseReceiptError("Release receipt tag is not canonical.")
+    if tag != parsed_version.release_tag or release.get("name") != tag:
+        raise ReleaseReceiptError("Release receipt tag or name does not match its package version.")
     _integer(release.get("id"), "release id")
     prerelease = _boolean(release.get("prerelease"), "release prerelease")
     make_latest = _boolean(release.get("make_latest"), "release make_latest")
@@ -270,11 +320,17 @@ def validate_receipt(receipt: Mapping[str, Any]) -> None:
         raise ReleaseReceiptError("Release prerelease and Latest state do not match the guarded route.")
     if release.get("target_sha") != source_sha:
         raise ReleaseReceiptError("Release target SHA does not match source_sha.")
-    _string(release.get("created_at"), "release created_at")
-    _string(release.get("name"), "release name")
+    created_at = _string(release.get("created_at"), "release created_at")
+    try:
+        parsed_created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ReleaseReceiptError("Release receipt created_at must be an ISO-8601 timestamp.") from error
+    if parsed_created_at.tzinfo is None:
+        raise ReleaseReceiptError("Release receipt created_at must include a timezone.")
 
     artifacts = _sequence(receipt.get("artifacts"), "artifacts")
     seen: set[str] = set()
+    artifacts_by_kind: dict[str, Mapping[str, Any]] = {}
     for index, raw_artifact in enumerate(artifacts):
         artifact = _mapping(raw_artifact, f"artifact {index}")
         _exact_keys(artifact, {"asset_id", "kind", "name", "sha256", "size_bytes"}, f"artifact {index}")
@@ -282,12 +338,21 @@ def validate_receipt(receipt: Mapping[str, Any]) -> None:
         if kind not in {"dmg", "checksum", "appcast"} or kind in seen:
             raise ReleaseReceiptError("Release receipt artifacts are incomplete or duplicated.")
         seen.add(kind)
+        artifacts_by_kind[kind] = artifact
         _integer(artifact.get("asset_id"), f"artifact {kind} asset_id")
         _integer(artifact.get("size_bytes"), f"artifact {kind} size_bytes")
         _string(artifact.get("name"), f"artifact {kind} name")
         _sha256(artifact.get("sha256"), f"artifact {kind} sha256")
     if seen != {"dmg", "checksum", "appcast"}:
         raise ReleaseReceiptError("Release receipt artifacts are incomplete or duplicated.")
+    expected_names = {
+        "dmg": f"{DMG_NAME_PREFIX}-{parsed_version.public_version}.dmg",
+        "checksum": "SHA256SUMS",
+        "appcast": "appcast.xml",
+    }
+    for kind, expected_name in expected_names.items():
+        if artifacts_by_kind[kind].get("name") != expected_name:
+            raise ReleaseReceiptError(f"Release receipt {kind} asset name does not match its release identity.")
 
     appcast = _mapping(receipt.get("appcast"), "appcast")
     _exact_keys(appcast, {"live_pages_sha256", "live_pages_state", "live_pages_url"}, "appcast")
@@ -311,10 +376,99 @@ def validate_receipt(receipt: Mapping[str, Any]) -> None:
         raise ReleaseReceiptError("Tier 1 case references must contain non-empty strings.")
     if list(case_ids) != sorted(set(cast(list[str], case_ids))):
         raise ReleaseReceiptError("Tier 1 case references must be sorted and unique.")
+    if set(case_ids) != set(TIER1_CASE_VERIFICATIONS):
+        raise ReleaseReceiptError("Tier 1 case references do not match the explicit receipt verification mappings.")
+    for case_id in cast(Sequence[str], case_ids):
+        if any(verification.get(field) != "passed" for field in TIER1_CASE_VERIFICATIONS[case_id]):
+            raise ReleaseReceiptError(f"Tier 1 case {case_id!r} is missing a required verification outcome.")
 
     recorded_digest = _sha256(receipt.get("receipt_sha256"), "receipt_sha256")
     if recorded_digest != receipt_sha256(receipt):
         raise ReleaseReceiptError("Release receipt self-digest mismatch.")
+
+
+def load_validated_artifact_receipt(
+    path: Path,
+    expectation: ArtifactReceiptExpectation,
+) -> Mapping[str, Any]:
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        raise ReleaseReceiptError(f"Unable to read artifact release receipt at {path}: {error}") from error
+    expected_file_digest = _sha256(expectation.receipt_file_sha256, "expected receipt file SHA-256")
+    if hashlib.sha256(content).hexdigest() != expected_file_digest:
+        raise ReleaseReceiptError("Artifact release receipt file digest does not match the expected digest.")
+    try:
+        receipt = _mapping(json.loads(content), "artifact release receipt")
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ReleaseReceiptError(f"Invalid JSON in artifact release receipt at {path}: {error}") from error
+    validate_receipt(receipt)
+
+    candidate_sha = _sha(expectation.candidate_sha, "expected candidate SHA")
+    if receipt.get("source_sha") != candidate_sha:
+        raise ReleaseReceiptError("Artifact release receipt is stale or bound to the wrong candidate SHA.")
+    release_route = _string(expectation.release_route, "expected release route")
+    if release_route not in ROUTES:
+        raise ReleaseReceiptError(f"Expected release route must be one of {sorted(ROUTES)}.")
+    if receipt.get("release_route") != release_route:
+        raise ReleaseReceiptError("Artifact release receipt is bound to the wrong release route.")
+
+    workflow = _mapping(receipt.get("workflow"), "workflow")
+    expected_run_id = _integer(expectation.workflow_run_id, "expected workflow run ID")
+    expected_run_attempt = _integer(expectation.workflow_run_attempt, "expected workflow run attempt")
+    if workflow.get("run_id") != expected_run_id or workflow.get("run_attempt") != expected_run_attempt:
+        raise ReleaseReceiptError("Artifact release receipt is not bound to the exact workflow run and attempt.")
+
+    release = _mapping(receipt.get("release"), "release")
+    if release.get("id") != _integer(expectation.release_id, "expected release ID"):
+        raise ReleaseReceiptError("Artifact release receipt is bound to the wrong GitHub release ID.")
+    expected_release_tag = _string(expectation.release_tag, "expected release tag")
+    if release.get("tag") != expected_release_tag or release.get("name") != expected_release_tag:
+        raise ReleaseReceiptError("Artifact release receipt tag or name does not match the committed release metadata.")
+    versions = _mapping(receipt.get("versions"), "versions")
+    expected_versions = {
+        "package": _string(expectation.package_version, "expected package version"),
+        "public": _string(expectation.public_version, "expected public version"),
+        "build": _string(expectation.build_version, "expected build version"),
+    }
+    if any(versions.get(field) != value for field, value in expected_versions.items()):
+        raise ReleaseReceiptError("Artifact release receipt versions do not match the committed release metadata.")
+    expected_app_tree_digest = _sha256(
+        expectation.signed_app_tree_sha256,
+        "expected signed app tree SHA-256",
+    )
+    if receipt.get("signed_app_tree_sha256") != expected_app_tree_digest:
+        raise ReleaseReceiptError("Artifact release receipt signed app tree digest does not match.")
+
+    expected_artifacts = {
+        "dmg": (
+            _integer(expectation.dmg_asset_id, "expected DMG asset ID"),
+            _sha256(expectation.dmg_sha256, "expected DMG SHA-256"),
+        ),
+        "checksum": (
+            _integer(expectation.checksum_asset_id, "expected checksum asset ID"),
+            _sha256(expectation.checksum_sha256, "expected checksum SHA-256"),
+        ),
+        "appcast": (
+            _integer(expectation.appcast_asset_id, "expected appcast asset ID"),
+            _sha256(expectation.appcast_sha256, "expected appcast SHA-256"),
+        ),
+    }
+    artifacts = {
+        cast(str, artifact["kind"]): artifact
+        for artifact in (
+            _mapping(raw_artifact, "artifact") for raw_artifact in _sequence(receipt.get("artifacts"), "artifacts")
+        )
+    }
+    for kind, (expected_asset_id, expected_digest) in expected_artifacts.items():
+        artifact = artifacts[kind]
+        if artifact.get("asset_id") != expected_asset_id:
+            raise ReleaseReceiptError(f"Artifact release receipt {kind} asset ID does not match.")
+        if artifact.get("sha256") != expected_digest:
+            raise ReleaseReceiptError(f"Artifact release receipt {kind} digest does not match.")
+    if artifacts["dmg"].get("name") != _string(expectation.dmg_name, "expected DMG name"):
+        raise ReleaseReceiptError("Artifact release receipt DMG name does not match the committed release metadata.")
+    return receipt
 
 
 def write_receipt(receipt: Mapping[str, Any], output: Path) -> None:

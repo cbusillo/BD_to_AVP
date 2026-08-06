@@ -113,6 +113,10 @@ class ReleaseVersion:
         return self.stage if self.prerelease else "stable"
 
     @property
+    def first_candidate_of_cycle(self) -> bool:
+        return self.prerelease_number == 1
+
+    @property
     def order_key(self) -> tuple[int, int, int, int, int]:
         return (
             self.major,
@@ -133,6 +137,7 @@ class ReleaseMetadata:
     dmg_name: str
     channel: str
     prerelease: bool
+    first_candidate_of_cycle: bool
     make_latest: bool
     publish_pypi: bool
 
@@ -643,6 +648,7 @@ def load_release_metadata(
         dmg_name=f"{DMG_NAME_PREFIX}-{version.public_version}.dmg",
         channel=version.channel,
         prerelease=version.prerelease,
+        first_candidate_of_cycle=version.first_candidate_of_cycle,
         make_latest=not version.prerelease,
         publish_pypi=not version.prerelease,
     )
