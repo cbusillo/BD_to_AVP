@@ -97,6 +97,7 @@
     "releaseProcess": "docs/release-process.md",
     "releaseQualificationPolicy": "docs/release-qualification-policy.md",
     "tier3CleanMachine": "docs/tier3-clean-machine.md",
+    "tier3OperatorHardware": "docs/tier3-operator-hardware.md",
     "releaseWorkflows": [
       ".github/workflows/briefcase.yml",
       ".github/workflows/prerelease.yml",
@@ -128,6 +129,7 @@
       "releaseReceipt": "uv run python -m unittest tests.test_release_receipt",
       "tier3Receipt": "uv run python -m unittest tests.test_tier3_receipt",
       "tier3CleanMachine": "uv run python -m unittest tests.test_tier3_clean_machine",
+      "tier3OperatorHardware": "uv run python -m unittest tests.test_tier3_operator_receipt",
       "macosApp": "uv run python scripts/native_app.py test",
       "importSmoke": "uv run python -c 'import bd_to_avp; import bd_to_avp.__main__; import bd_to_avp.app'",
       "cliSmoke": "uv run bd-to-avp --help"
