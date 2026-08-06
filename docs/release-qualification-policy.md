@@ -109,6 +109,12 @@ package smoke, verifies a real-feed update from an exact prior signed release,
 and emits checked `clean-machine-signed-update` and
 `installed-ui-accessibility` receipts.
 
+Physical drive, protected-media conversion, and Vision Pro playback evidence
+uses the bounded operator-assisted helper documented in
+[`docs/tier3-operator-hardware.md`](tier3-operator-hardware.md). The helper
+derives assertion states from exact enums, binds the checked release artifact,
+and rejects private media names, paths, serials, screenshots, and raw logs.
+
 ## Release Engine Receipts
 
 Every successful guarded Stable or Prerelease publication includes a
