@@ -246,7 +246,12 @@
       "cadence": {"first_rc": true, "stable_candidate": true},
       "evidence_expiry": {"basis": "completed_at", "max_age_days": 30},
       "invalidates_on": {
-        "paths": ["docs/release-routes.md", "pyproject.toml"],
+        "paths": [
+          "docs/release-routes.md",
+          "docs/tier3-clean-machine.md",
+          "pyproject.toml",
+          "scripts/tier3_clean_machine.py"
+        ],
         "contracts": ["release-engine", "sparkle-update", "packaged-worker", "profile-storage", "tier3-evidence"]
       },
       "allowed_evidence_sources": ["tier3_automation_receipt"],
