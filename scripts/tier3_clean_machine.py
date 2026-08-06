@@ -34,7 +34,8 @@ from scripts.tier3_receipt import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CASE_ID = "clean-machine-signed-update"
+CLEAN_MACHINE_CASE_ID = "clean-machine-signed-update"
+INSTALLED_UI_CASE_ID = "installed-ui-accessibility"
 APP_NAME = "3D Blu-ray to Vision Pro.app"
 BUNDLE_IDENTIFIER = "com.shinycomputers.bd-to-avp"
 PREFERENCES_DOMAIN = BUNDLE_IDENTIFIER
@@ -43,6 +44,7 @@ SENTINEL_KEY = "BDToAVPTier3Sentinel"
 AUTOMATIC_CHECKS_KEY = "SUEnableAutomaticChecks"
 SENTINEL_VALUE = "tier3-preserve"
 LIVE_FEED_URL = "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
+RELEASES_URL = "https://github.com/cbusillo/BD_to_AVP/releases"
 PROFILE_DOCUMENT = {"version": 5, "profiles": []}
 PROFILE_RELATIVE_PATH = Path("Library/Application Support/3D Blu-ray to Vision Pro/profiles.json")
 MAX_FEED_BYTES = 5 * 1024 * 1024
@@ -52,7 +54,9 @@ COMMAND_TIMEOUT_SECONDS = 60
 SMOKE_TIMEOUT_SECONDS = 15 * 60
 GUI_TIMEOUT_SECONDS = 270
 UPDATE_TIMEOUT_SECONDS = 5 * 60
-ROUTE_CHANNELS = {
+UI_TEST_TIMEOUT_SECONDS = 15 * 60
+MAX_UI_SCREENSHOT_BYTES = 20 * 1024 * 1024
+ROUTE_CHANNELS: dict[str, set[str | None]] = {
     "stable": {None},
     "rc": {None, "rc"},
     "beta": {None, "rc", "beta"},
@@ -67,6 +71,7 @@ SYSTEM_TOOL_PATHS = {
     "hdiutil": Path("/usr/bin/hdiutil"),
     "open": Path("/usr/bin/open"),
     "osascript": Path("/usr/bin/osascript"),
+    "xcodebuild": Path("/usr/bin/xcodebuild"),
 }
 
 
@@ -123,6 +128,7 @@ class FeedCandidate:
     download_url: str
     length: int
     minimum_system_version: str
+    release_notes_url: str
 
 
 @dataclass(frozen=True)
@@ -136,6 +142,7 @@ class QualificationConfig:
     route: str
     environment_class: str
     output_receipt: Path | None = None
+    ui_output_receipt: Path | None = None
     evidence_directory: Path | None = None
 
 
@@ -164,6 +171,18 @@ class QualificationOperations(Protocol):
         raise NotImplementedError
 
     def perform_update(self, app_path: Path, synthetic_home: Path) -> UpdateInteraction:
+        raise NotImplementedError
+
+    def collect_ui_evidence(
+        self,
+        *,
+        repo: Path,
+        phase: str,
+        app_path: Path,
+        synthetic_home: Path,
+        output_directory: Path,
+        release_notes_url: str,
+    ) -> None:
         raise NotImplementedError
 
     def app_running(self) -> bool:
@@ -372,6 +391,11 @@ def parse_feed_candidate(feed_bytes: bytes, candidate: ReleaseArtifact, route: s
     minimum_system_version = (item.findtext(f"{SPARKLE}minimumSystemVersion") or "").strip()
     if not minimum_system_version:
         raise CleanMachineError("Live appcast candidate is missing minimum system version.")
+    release_notes_url = (
+        item.findtext(f"{SPARKLE}fullReleaseNotesLink") or item.findtext(f"{SPARKLE}releaseNotesLink") or ""
+    ).strip()
+    if not release_notes_url:
+        raise CleanMachineError("Live appcast candidate is missing its release-notes URL.")
     return FeedCandidate(
         feed_sha256=hashlib.sha256(feed_bytes).hexdigest(),
         build_version=build_version,
@@ -380,6 +404,7 @@ def parse_feed_candidate(feed_bytes: bytes, candidate: ReleaseArtifact, route: s
         download_url=download_url,
         length=candidate.dmg_size,
         minimum_system_version=minimum_system_version,
+        release_notes_url=release_notes_url,
     )
 
 
@@ -465,7 +490,7 @@ def validate_environment(
 
 
 class MacOSOperations:
-    required_tools = ("defaults", "ditto", "hdiutil", "open", "osascript")
+    required_tools = ("defaults", "ditto", "hdiutil", "open", "osascript", "xcodebuild")
 
     @staticmethod
     def _run(
@@ -643,6 +668,59 @@ class MacOSOperations:
         )
         return UpdateInteraction(clicked_button=result.stdout.strip())
 
+    def collect_ui_evidence(
+        self,
+        *,
+        repo: Path,
+        phase: str,
+        app_path: Path,
+        synthetic_home: Path,
+        output_directory: Path,
+        release_notes_url: str,
+    ) -> None:
+        test_names = {
+            "updater": "testPriorUpdaterControlsAndReleaseLinks",
+            "candidate": "testCandidateMainWindowProfileAndSettings",
+        }
+        try:
+            test_name = test_names[phase]
+        except KeyError as error:
+            raise CleanMachineError(f"Unsupported installed UI phase: {phase}") from error
+        output_directory.mkdir(parents=True, exist_ok=True)
+        derived_data = output_directory.parent / f"InstalledUIDerivedData-{phase}"
+        result_bundle = output_directory.parent / f"InstalledUI-{phase}.xcresult"
+        environment = dict(os.environ)
+        environment.update(
+            {
+                "BD_TO_AVP_UI_APP_PATH": str(app_path),
+                "BD_TO_AVP_UI_BUNDLE_IDENTIFIER": BUNDLE_IDENTIFIER,
+                "BD_TO_AVP_UI_HOME": str(synthetic_home),
+                "BD_TO_AVP_UI_OUTPUT_DIRECTORY": str(output_directory),
+                "BD_TO_AVP_UI_PHASE": phase,
+                "BD_TO_AVP_UI_RELEASE_NOTES_URL": release_notes_url,
+                "BD_TO_AVP_UI_RELEASES_URL": RELEASES_URL,
+            }
+        )
+        self._run(
+            [
+                str(SYSTEM_TOOL_PATHS["xcodebuild"]),
+                "-project",
+                str(repo / "macos" / "BluRayToVisionPro.xcodeproj"),
+                "-scheme",
+                "BluRayToVisionProInstalledUI",
+                "-derivedDataPath",
+                str(derived_data),
+                "-resultBundlePath",
+                str(result_bundle),
+                "-destination",
+                "platform=macOS,arch=arm64",
+                "test",
+                f"-only-testing:BluRayToVisionProUITests/InstalledUIAcceptanceTests/{test_name}",
+            ],
+            timeout=UI_TEST_TIMEOUT_SECONDS,
+            env=environment,
+        )
+
     @staticmethod
     def app_running() -> bool:
         script = (
@@ -739,24 +817,33 @@ end tell'''
 end run"""
 
 
-def _case_policy(policy: Mapping[str, Any]) -> Mapping[str, Any]:
+def _case_policy(policy: Mapping[str, Any], case_id: str) -> Mapping[str, Any]:
     matches = [
         _mapping(item, "qualification case")
         for item in _sequence(policy.get("cases"), "qualification cases")
-        if _mapping(item, "qualification case").get("id") == CASE_ID
+        if _mapping(item, "qualification case").get("id") == case_id
     ]
     if len(matches) != 1:
-        raise CleanMachineError(f"Policy must define exactly one {CASE_ID!r} case.")
+        raise CleanMachineError(f"Policy must define exactly one {case_id!r} case.")
     return matches[0]
 
 
 def prepare_qualification(
     config: QualificationConfig,
     operations: QualificationOperations,
-) -> tuple[Mapping[str, Any], Mapping[str, Any], ReleaseArtifact, ReleaseArtifact, EnvironmentFacts, FeedCandidate]:
+) -> tuple[
+    Mapping[str, Any],
+    Mapping[str, Any],
+    Mapping[str, Any],
+    ReleaseArtifact,
+    ReleaseArtifact,
+    EnvironmentFacts,
+    FeedCandidate,
+]:
     repo = config.repo.resolve()
     policy = load_policy(repo / DEFAULT_POLICY_PATH.relative_to(REPO_ROOT))
-    case = _case_policy(policy)
+    clean_machine_case = _case_policy(policy, CLEAN_MACHINE_CASE_ID)
+    installed_ui_case = _case_policy(policy, INSTALLED_UI_CASE_ID)
     candidate = load_release_artifact(
         repo,
         config.candidate_receipt,
@@ -779,25 +866,34 @@ def prepare_qualification(
         raise CleanMachineError("Qualification root must be a dedicated location inside the current home directory.")
     if config.output_receipt is not None and qualification_root in config.output_receipt.resolve().parents:
         raise CleanMachineError("Output receipt must be outside the disposable qualification root.")
+    if config.ui_output_receipt is not None and qualification_root in config.ui_output_receipt.resolve().parents:
+        raise CleanMachineError("Installed UI output receipt must be outside the disposable qualification root.")
+    if (
+        config.output_receipt is not None
+        and config.ui_output_receipt is not None
+        and config.output_receipt.resolve() == config.ui_output_receipt.resolve()
+    ):
+        raise CleanMachineError("Clean-machine and installed UI receipts must use different output paths.")
     if config.evidence_directory is not None and qualification_root in config.evidence_directory.resolve().parents:
         raise CleanMachineError("Evidence directory must be outside the disposable qualification root.")
     required_free_bytes = BASE_FREE_SPACE_BYTES + prior.dmg_size + (candidate.dmg_size * 2)
     environment = operations.inspect_environment(qualification_root, config.environment_class)
-    validate_environment(environment, case, required_free_bytes=required_free_bytes)
+    validate_environment(environment, clean_machine_case, required_free_bytes=required_free_bytes)
+    validate_environment(environment, installed_ui_case, required_free_bytes=required_free_bytes)
     feed = parse_feed_candidate(operations.fetch_live_feed(), candidate, config.route)
     if _version_tuple(environment.macos_version, "Environment macOS version") < _version_tuple(
         feed.minimum_system_version,
         "Appcast minimum system version",
     ):
         raise CleanMachineError("Qualification environment is older than the candidate appcast minimum system version.")
-    return policy, case, prior, candidate, environment, feed
+    return policy, clean_machine_case, installed_ui_case, prior, candidate, environment, feed
 
 
 def preflight_report(
     config: QualificationConfig,
     operations: QualificationOperations,
 ) -> Mapping[str, Any]:
-    _, _, prior, candidate, environment, feed = prepare_qualification(config, operations)
+    _, _, _, prior, candidate, environment, feed = prepare_qualification(config, operations)
     return {
         "candidate": {
             "build_version": candidate.build_version,
@@ -871,20 +967,252 @@ def _reset_runtime_workspace(app_path: Path, synthetic_home: Path) -> None:
     synthetic_home.mkdir(parents=True)
 
 
-def _run_qualification(config: QualificationConfig, operations: QualificationOperations) -> Mapping[str, Any]:
-    if config.output_receipt is None or config.evidence_directory is None:
-        raise CleanMachineError("Run mode requires output receipt and evidence directory paths.")
-    output_receipt = config.output_receipt.resolve()
-    evidence_directory = config.evidence_directory.resolve()
-    if output_receipt.exists() or evidence_directory.exists():
-        raise CleanMachineError("Output receipt and evidence directory must not already exist.")
+def _load_ui_json(path: Path, expected_keys: set[str]) -> Mapping[str, Any]:
+    try:
+        value = _mapping(json.loads(path.read_text(encoding="utf-8")), path.name)
+    except (OSError, json.JSONDecodeError) as error:
+        raise CleanMachineError(f"Installed UI evidence is missing or invalid: {path.name}") from error
+    if set(value) != expected_keys:
+        raise CleanMachineError(f"Installed UI evidence has unexpected fields: {path.name}")
+    return value
 
-    policy, case, prior, candidate, environment, feed = prepare_qualification(config, operations)
+
+def _copy_ui_screenshot(source: Path, destination: Path) -> str:
+    try:
+        payload = source.read_bytes()
+    except OSError as error:
+        raise CleanMachineError(f"Installed UI screenshot is missing: {source.name}") from error
+    if not payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise CleanMachineError(f"Installed UI screenshot is not a PNG: {source.name}")
+    if not 64 <= len(payload) <= MAX_UI_SCREENSHOT_BYTES:
+        raise CleanMachineError(f"Installed UI screenshot size is outside the accepted bounds: {source.name}")
+    destination.write_bytes(payload)
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _normalize_installed_ui_evidence(
+    raw_directory: Path,
+    evidence_directory: Path,
+    feed: FeedCandidate,
+) -> Mapping[str, str]:
+    updater = _load_ui_json(
+        raw_directory / "updater-ui.json",
+        {"install_action", "release_notes_url", "release_notes_url_observed", "schema_version", "status"},
+    )
+    if updater != {
+        "install_action": updater.get("install_action"),
+        "release_notes_url": feed.release_notes_url,
+        "release_notes_url_observed": True,
+        "schema_version": 1,
+        "status": "passed",
+    }:
+        raise CleanMachineError("Installed UI updater evidence does not match the exact appcast candidate.")
+    if updater.get("install_action") not in {"Install and Relaunch", "Install Update", "Relaunch"}:
+        raise CleanMachineError("Installed UI updater evidence contains an unsupported install action.")
+
+    candidate = _load_ui_json(
+        raw_directory / "candidate-ui.json",
+        {
+            "main_window_ready",
+            "profile_document_version",
+            "profile_save_accessible",
+            "profile_save_succeeded",
+            "profiles_after",
+            "release_page_url",
+            "release_page_url_observed",
+            "schema_version",
+            "status",
+            "updater_controls_accessible",
+        },
+    )
+    expected_candidate = {
+        "main_window_ready": True,
+        "profile_document_version": 5,
+        "profile_save_accessible": True,
+        "profile_save_succeeded": True,
+        "profiles_after": 1,
+        "release_page_url": RELEASES_URL,
+        "release_page_url_observed": True,
+        "schema_version": 1,
+        "status": "passed",
+        "updater_controls_accessible": True,
+    }
+    if candidate != expected_candidate:
+        raise CleanMachineError("Installed UI candidate evidence did not satisfy the maintained acceptance contract.")
+
+    accessibility = _load_ui_json(raw_directory / "accessibility-tree.json", {"elements", "schema_version"})
+    if accessibility.get("schema_version") != 1:
+        raise CleanMachineError("Installed UI accessibility evidence uses an unsupported schema version.")
+    records = [
+        _mapping(item, "installed UI accessibility element")
+        for item in _sequence(accessibility.get("elements"), "installed UI accessibility elements")
+    ]
+    expected_identifiers = {
+        "all-releases-link",
+        "main-status",
+        "save-profile-action",
+        "update-action",
+        "update-route-picker",
+    }
+    normalized_records: list[Mapping[str, Any]] = []
+    observed_identifiers: set[str] = set()
+    for record in records:
+        allowed_keys = {"actions", "enabled", "help", "identifier", "label", "role", "url"}
+        if not set(record).issubset(allowed_keys):
+            raise CleanMachineError("Installed UI accessibility evidence contains unsupported fields.")
+        identifier = _string(record.get("identifier"), "installed UI accessibility identifier")
+        if identifier not in expected_identifiers or identifier in observed_identifiers:
+            raise CleanMachineError("Installed UI accessibility evidence contains an unexpected or duplicate element.")
+        observed_identifiers.add(identifier)
+        role = _string(record.get("role"), f"{identifier} accessibility role")
+        label = _string(record.get("label"), f"{identifier} accessibility label")
+        help_text = record.get("help")
+        actions = record.get("actions")
+        enabled = record.get("enabled")
+        if not isinstance(help_text, str) or len(help_text) > 300:
+            raise CleanMachineError(f"{identifier} accessibility help is invalid.")
+        if (
+            not isinstance(enabled, bool)
+            or not isinstance(actions, list)
+            or not all(isinstance(item, str) for item in actions)
+        ):
+            raise CleanMachineError(f"{identifier} accessibility state is invalid.")
+        if len(label) > 300 or any(character in label for character in ("\n", "\r")):
+            raise CleanMachineError(f"{identifier} accessibility label is invalid.")
+        normalized: dict[str, Any] = {
+            "enabled": enabled,
+            "help": help_text,
+            "identifier": identifier,
+            "label": label,
+            "press_action": "AXPress" in actions,
+            "role": role,
+        }
+        if identifier == "all-releases-link":
+            if record.get("url") != RELEASES_URL:
+                raise CleanMachineError("Installed UI releases link is not bound to the public releases page.")
+            normalized["url_sha256"] = hashlib.sha256(RELEASES_URL.encode()).hexdigest()
+        if identifier == "save-profile-action":
+            if (
+                role != "AXButton"
+                or label != "Save current settings as new profile"
+                or help_text != "Opens a form to name and save these settings as a reusable profile"
+                or not enabled
+                or "AXPress" not in actions
+            ):
+                raise CleanMachineError("Profile save accessibility semantics do not match the maintained contract.")
+        normalized_records.append(normalized)
+    if observed_identifiers != expected_identifiers:
+        raise CleanMachineError("Installed UI accessibility evidence is incomplete.")
+
+    evidence_directory.mkdir(parents=True, exist_ok=True)
+    accessibility_digest = _write_json(
+        evidence_directory / "accessibility-tree.json",
+        {"elements": sorted(normalized_records, key=lambda item: cast(str, item["identifier"])), "schema_version": 1},
+    )
+    ui_result_digest = _write_json(
+        evidence_directory / "ui-result.json",
+        {
+            "main_window_ready": True,
+            "profile_document_version": 5,
+            "profile_save_accessible": True,
+            "profile_save_succeeded": True,
+            "release_notes_url_sha256": hashlib.sha256(feed.release_notes_url.encode()).hexdigest(),
+            "release_page_url_sha256": hashlib.sha256(RELEASES_URL.encode()).hexdigest(),
+            "schema_version": 1,
+            "status": "passed",
+            "updater_controls_accessible": True,
+        },
+    )
+    light_digest = _copy_ui_screenshot(
+        raw_directory / "screenshot-light.png",
+        evidence_directory / "screenshot-light.png",
+    )
+    dark_digest = _copy_ui_screenshot(
+        raw_directory / "screenshot-dark.png",
+        evidence_directory / "screenshot-dark.png",
+    )
+    return {
+        "accessibility-tree": accessibility_digest,
+        "ui-result": ui_result_digest,
+        "screenshot-light": light_digest,
+        "screenshot-dark": dark_digest,
+    }
+
+
+def _build_checked_receipt(
+    *,
+    policy: Mapping[str, Any],
+    case: Mapping[str, Any],
+    candidate: ReleaseArtifact,
+    environment: EnvironmentFacts,
+    assertions: Mapping[str, str],
+    evidence: Sequence[Mapping[str, str]],
+    cleanup_status: str,
+    cleanup_digest: str,
+    started_at: str,
+    completed_at: str,
+    repo: Path,
+) -> Mapping[str, Any]:
+    required_assertions = set(cast(Sequence[str], case["required_assertions"]))
+    if set(assertions) != required_assertions:
+        raise CleanMachineError(
+            f"Runner assertion contract changed; code={sorted(assertions)}, policy={sorted(required_assertions)}."
+        )
+    receipt = build_tier3_receipt(
+        {
+            "assertions": dict(assertions),
+            "cleanup": {"status": cleanup_status, "evidence_sha256": cleanup_digest},
+            "completed_at": completed_at,
+            "environment": {
+                "architecture": environment.architecture,
+                "environment_class": environment.environment_class,
+                "macos_build": environment.macos_build,
+                "macos_version": environment.macos_version,
+            },
+            "evidence": list(evidence),
+            "evidence_source": "tier3_automation_receipt",
+            "hardware": {"class": "none", "identity": {}},
+            "release_receipt_file_sha256": candidate.receipt_file_sha256,
+            "release_receipt_reference": candidate.receipt_reference,
+            "result": {"status": "passed", "reason_code": "all_assertions_passed"},
+            "started_at": started_at,
+        },
+        policy_id=_string(policy.get("policy_id"), "policy_id"),
+        case=case,
+        release_receipt=candidate.receipt,
+    )
+    try:
+        validate_tier3_receipt(
+            receipt,
+            policy_id=_string(policy.get("policy_id"), "policy_id"),
+            case=case,
+            reference_content=lambda reference: (repo / reference).read_bytes(),
+        )
+    except Tier3ReceiptError as error:
+        raise CleanMachineError(f"Generated Tier 3 receipt is invalid: {error}") from error
+    return receipt
+
+
+def _run_qualification(
+    config: QualificationConfig, operations: QualificationOperations
+) -> Mapping[str, Mapping[str, Any]]:
+    if config.output_receipt is None or config.ui_output_receipt is None or config.evidence_directory is None:
+        raise CleanMachineError("Run mode requires both output receipts and the evidence directory path.")
+    output_receipt = config.output_receipt.resolve()
+    ui_output_receipt = config.ui_output_receipt.resolve()
+    evidence_directory = config.evidence_directory.resolve()
+    if output_receipt.exists() or ui_output_receipt.exists() or evidence_directory.exists():
+        raise CleanMachineError("Output receipts and evidence directory must not already exist.")
+
+    policy, clean_machine_case, installed_ui_case, prior, candidate, environment, feed = prepare_qualification(
+        config, operations
+    )
     started_at = _utc_timestamp()
     qualification_root = config.qualification_root.resolve()
     synthetic_home = qualification_root / "Home"
     app_path = qualification_root / "Applications" / APP_NAME
     log_path = qualification_root / "Logs" / "package-smoke.log"
+    raw_ui_directory = qualification_root / "InstalledUIEvidence"
     marker_path = qualification_root / ".bd-to-avp-tier3-owned.json"
     qualification_root.mkdir(parents=True)
     marker = {"owner": "bd-to-avp-tier3-clean-machine", "run_id": str(uuid.uuid4())}
@@ -908,6 +1236,18 @@ def _run_qualification(config: QualificationConfig, operations: QualificationOpe
         if operations.read_preference(synthetic_home, SENTINEL_KEY) != SENTINEL_VALUE:
             raise CleanMachineError("Preference sentinel did not persist before the Sparkle update.")
 
+        operations.collect_ui_evidence(
+            repo=config.repo.resolve(),
+            phase="updater",
+            app_path=app_path,
+            synthetic_home=synthetic_home,
+            output_directory=raw_ui_directory,
+            release_notes_url=feed.release_notes_url,
+        )
+        operations.quit_app()
+        if operations.app_running():
+            raise CleanMachineError("Installed UI updater inspection left the production app running.")
+
         interaction = operations.perform_update(app_path, synthetic_home)
         candidate_identity = _wait_for_candidate(app_path, candidate, operations)
         route_after = operations.read_preference(synthetic_home, UPDATE_ROUTE_KEY)
@@ -917,6 +1257,19 @@ def _run_qualification(config: QualificationConfig, operations: QualificationOpe
             raise CleanMachineError("Update route or unrelated preference changed across Sparkle relaunch.")
         if profile_after_sha256 != profile_before_sha256:
             raise CleanMachineError("Profile library changed across Sparkle relaunch.")
+
+        operations.quit_app()
+        operations.collect_ui_evidence(
+            repo=config.repo.resolve(),
+            phase="candidate",
+            app_path=app_path,
+            synthetic_home=synthetic_home,
+            output_directory=raw_ui_directory,
+            release_notes_url=feed.release_notes_url,
+        )
+        operations.quit_app()
+        if operations.app_running():
+            raise CleanMachineError("Installed UI candidate inspection left the production app running.")
 
         evidence_directory.mkdir(parents=True)
         install_digest = _write_json(
@@ -968,6 +1321,7 @@ def _run_qualification(config: QualificationConfig, operations: QualificationOpe
                 "sentinel_preserved": sentinel_after == SENTINEL_VALUE,
             },
         )
+        ui_evidence_digests = _normalize_installed_ui_evidence(raw_ui_directory, evidence_directory, feed)
     finally:
         try:
             operations.quit_app()
@@ -994,7 +1348,7 @@ def _run_qualification(config: QualificationConfig, operations: QualificationOpe
     )
 
     completed_at = _utc_timestamp()
-    assertions = {
+    clean_machine_assertions = {
         "exact-app-installed": "passed",
         "final-identity-matched": "passed",
         "package-smoke-passed": "passed",
@@ -1002,59 +1356,62 @@ def _run_qualification(config: QualificationConfig, operations: QualificationOpe
         "profile-preserved": "passed",
         "sparkle-relaunch-passed": "passed",
     }
-    required_assertions = set(cast(Sequence[str], case["required_assertions"]))
-    if set(assertions) != required_assertions:
-        raise CleanMachineError(
-            f"Runner assertion contract changed; code={sorted(assertions)}, policy={sorted(required_assertions)}."
-        )
-    receipt = build_tier3_receipt(
-        {
-            "assertions": assertions,
-            "cleanup": {"status": cleanup_status, "evidence_sha256": cleanup_digest},
-            "completed_at": completed_at,
-            "environment": {
-                "architecture": environment.architecture,
-                "environment_class": environment.environment_class,
-                "macos_build": environment.macos_build,
-                "macos_version": environment.macos_version,
-            },
-            "evidence": [
-                {"kind": "install-log", "sha256": install_digest},
-                {"kind": "package-smoke", "sha256": package_digest},
-                {"kind": "sparkle-update", "sha256": update_digest},
-                {"kind": "profile-snapshot", "sha256": profile_digest},
-                {"kind": "cleanup", "sha256": cleanup_digest},
-            ],
-            "evidence_source": "tier3_automation_receipt",
-            "hardware": {"class": "none", "identity": {}},
-            "release_receipt_file_sha256": candidate.receipt_file_sha256,
-            "release_receipt_reference": candidate.receipt_reference,
-            "result": {"status": "passed", "reason_code": "all_assertions_passed"},
-            "started_at": started_at,
-        },
-        policy_id=_string(policy.get("policy_id"), "policy_id"),
-        case=case,
-        release_receipt=candidate.receipt,
+    clean_machine_receipt = _build_checked_receipt(
+        policy=policy,
+        case=clean_machine_case,
+        candidate=candidate,
+        environment=environment,
+        assertions=clean_machine_assertions,
+        evidence=[
+            {"kind": "install-log", "sha256": install_digest},
+            {"kind": "package-smoke", "sha256": package_digest},
+            {"kind": "sparkle-update", "sha256": update_digest},
+            {"kind": "profile-snapshot", "sha256": profile_digest},
+            {"kind": "cleanup", "sha256": cleanup_digest},
+        ],
+        cleanup_status=cleanup_status,
+        cleanup_digest=cleanup_digest,
+        started_at=started_at,
+        completed_at=completed_at,
+        repo=config.repo.resolve(),
     )
-    try:
-        validate_tier3_receipt(
-            receipt,
-            policy_id=_string(policy.get("policy_id"), "policy_id"),
-            case=case,
-            reference_content=lambda reference: (config.repo.resolve() / reference).read_bytes(),
-        )
-    except Tier3ReceiptError as error:
-        raise CleanMachineError(f"Generated Tier 3 receipt is invalid: {error}") from error
-    _write_json(output_receipt, receipt)
-    return receipt
+    installed_ui_receipt = _build_checked_receipt(
+        policy=policy,
+        case=installed_ui_case,
+        candidate=candidate,
+        environment=environment,
+        assertions={
+            "main-window-ready": "passed",
+            "profile-save-accessible": "passed",
+            "profile-save-succeeded": "passed",
+            "release-note-links-bound": "passed",
+            "updater-controls-accessible": "passed",
+        },
+        evidence=[{"kind": kind, "sha256": digest} for kind, digest in sorted(ui_evidence_digests.items())],
+        cleanup_status=cleanup_status,
+        cleanup_digest=cleanup_digest,
+        started_at=started_at,
+        completed_at=completed_at,
+        repo=config.repo.resolve(),
+    )
+    _write_json(output_receipt, clean_machine_receipt)
+    _write_json(ui_output_receipt, installed_ui_receipt)
+    return {
+        CLEAN_MACHINE_CASE_ID: clean_machine_receipt,
+        INSTALLED_UI_CASE_ID: installed_ui_receipt,
+    }
 
 
-def run_qualification(config: QualificationConfig, operations: QualificationOperations) -> Mapping[str, Any]:
+def run_qualification(
+    config: QualificationConfig, operations: QualificationOperations
+) -> Mapping[str, Mapping[str, Any]]:
     try:
         return _run_qualification(config, operations)
     except BaseException:
         if config.output_receipt is not None and config.output_receipt.exists():
             config.output_receipt.unlink()
+        if config.ui_output_receipt is not None and config.ui_output_receipt.exists():
+            config.ui_output_receipt.unlink()
         if config.evidence_directory is not None and config.evidence_directory.exists():
             shutil.rmtree(config.evidence_directory)
         raise
@@ -1075,6 +1432,7 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--environment-class", choices=("restorable-location",), required=True)
         if command == "run":
             subparser.add_argument("--output-receipt", type=Path, required=True)
+            subparser.add_argument("--ui-output-receipt", type=Path, required=True)
             subparser.add_argument("--evidence-directory", type=Path, required=True)
     return parser
 
@@ -1090,6 +1448,7 @@ def _config_from_args(args: argparse.Namespace) -> QualificationConfig:
         route=args.route,
         environment_class=args.environment_class,
         output_receipt=getattr(args, "output_receipt", None),
+        ui_output_receipt=getattr(args, "ui_output_receipt", None),
         evidence_directory=getattr(args, "evidence_directory", None),
     )
 
@@ -1102,11 +1461,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "preflight":
             payload = preflight_report(config, operations)
         else:
-            receipt = run_qualification(config, operations)
+            receipts = run_qualification(config, operations)
             payload = {
-                "case_id": receipt["case_id"],
-                "receipt_sha256": receipt["receipt_sha256"],
-                "result": receipt["result"],
+                "receipts": [
+                    {
+                        "case_id": receipt["case_id"],
+                        "receipt_sha256": receipt["receipt_sha256"],
+                        "result": receipt["result"],
+                    }
+                    for _, receipt in sorted(receipts.items())
+                ]
             }
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0

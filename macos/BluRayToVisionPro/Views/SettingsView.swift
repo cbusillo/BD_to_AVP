@@ -14,7 +14,10 @@ struct SettingsView: View {
                 .tabItem { Label("Profiles", systemImage: "slider.horizontal.3") }
 
             UpdatesSettingsPane(updater: updater)
-                .tabItem { Label("Updates", systemImage: "arrow.triangle.2.circlepath") }
+                .tabItem {
+                    Label("Updates", systemImage: "arrow.triangle.2.circlepath")
+                        .accessibilityIdentifier("updates-settings-tab")
+                }
 
             AdvancedSettingsPane(settings: settings)
                 .tabItem { Label("Advanced", systemImage: "wrench.and.screwdriver") }
@@ -731,6 +734,7 @@ private struct UpdatesSettingsPane: View {
             Section("Update Preferences") {
                 Toggle("Automatically check for updates", isOn: $updater.automaticallyChecksForUpdates)
                     .disabled(!updater.supportsAutomaticChecks)
+                    .accessibilityIdentifier("automatic-update-checks-toggle")
 
                 Picker("Update route", selection: $updater.updateChannel) {
                     ForEach(UpdateChannelPreference.allCases) { channel in
@@ -738,6 +742,7 @@ private struct UpdatesSettingsPane: View {
                     }
                 }
                 .disabled(!updater.supportsChannels)
+                .accessibilityIdentifier("update-route-picker")
 
                 Text(updater.updateChannel.explanation)
                     .font(.callout)
@@ -759,13 +764,16 @@ private struct UpdatesSettingsPane: View {
                     updater.performUpdateAction()
                 }
                 .disabled(!updater.canPerformUpdateAction)
+                .accessibilityIdentifier("update-action")
 
                 if updater.mode == .sparkle {
                     Link("View All Releases…", destination: UpdateController.releasesURL)
+                        .accessibilityIdentifier("all-releases-link")
                 }
             }
         }
         .formStyle(.grouped)
+        .accessibilityIdentifier("updates-settings-pane")
     }
 }
 

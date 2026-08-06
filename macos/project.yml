@@ -77,6 +77,20 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.tests
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/3D Blu-ray to Vision Pro Development.app/Contents/MacOS/3D Blu-ray to Vision Pro Development
 
+  BluRayToVisionProUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: BluRayToVisionProUITests
+    dependencies:
+      - target: BluRayToVisionPro
+    settings:
+      base:
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.shinycomputers.bd-to-avp.ui-tests
+        TEST_TARGET_NAME: BluRayToVisionPro
+
   SpatialPlaybackProbe:
     type: application
     platform: auto
@@ -146,6 +160,15 @@ schemes:
       gatherCoverageData: true
       targets:
         - BluRayToVisionProTests
+
+  BluRayToVisionProInstalledUI:
+    build:
+      targets:
+        BluRayToVisionPro: all
+        BluRayToVisionProUITests: [test]
+    test:
+      targets:
+        - BluRayToVisionProUITests
 
   SpatialPlaybackProbe:
     build:

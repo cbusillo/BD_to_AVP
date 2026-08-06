@@ -1,9 +1,10 @@
 # Tier 3 Clean-Machine And Sparkle Qualification
 
 `scripts/tier3_clean_machine.py` collects the automated
-`clean-machine-signed-update` evidence declared by the release qualification
-policy. It operates only on immutable signed release artifacts and never signs,
-notarizes, publishes, approves an environment, or changes the live appcast.
+`clean-machine-signed-update` and `installed-ui-accessibility` evidence declared
+by the release qualification policy. It operates only on immutable signed
+release artifacts and never signs, notarizes, publishes, approves an
+environment, or changes the live appcast.
 
 ## Maintained Environment
 
@@ -17,7 +18,8 @@ The host must provide:
 
 - macOS 26 on `arm64`;
 - Accessibility control for the terminal or automation host;
-- `defaults`, `ditto`, `hdiutil`, `open`, and `osascript`;
+- Xcode with `xcodebuild`, plus `defaults`, `ditto`, `hdiutil`, `open`, and
+  `osascript`;
 - enough free space for both DMGs, two candidate copies, and 2 GiB of working
   headroom;
 - no running production app process; and
@@ -67,6 +69,7 @@ uv run python -m scripts.tier3_clean_machine run \
   --route rc \
   --environment-class restorable-location \
   --output-receipt /path/out/clean-machine-signed-update.json \
+  --ui-output-receipt /path/out/installed-ui-accessibility.json \
   --evidence-directory /path/out/clean-machine-signed-update-evidence
 ```
 
@@ -77,20 +80,27 @@ The runner performs this bounded sequence:
 2. Clear the owned runtime location, install the exact prior release, and seed a
    valid profile library plus route and unrelated preference sentinels in the
    synthetic home.
-3. Launch the prior app, invoke `Check for Updates…`, click Sparkle's bounded
-   install/relaunch action, and wait for the exact candidate bundle, build, and
-   signed app tree to relaunch.
-4. Verify the selected route, unrelated preference, and byte-for-byte profile
+3. Run the installed-app XCUITest lane against the exact prior app, verifying
+   Sparkle controls and the source-bound release-notes URL without installing.
+4. Launch the prior app again, invoke `Check for Updates…`, click Sparkle's
+   bounded install/relaunch action, and wait for the exact candidate bundle,
+   build, and signed app tree to relaunch.
+5. Verify the selected route, unrelated preference, and byte-for-byte profile
    library are preserved.
-5. Quit the app, detach every mounted DMG, verify the cleanup ownership marker,
-   and delete the complete qualification root.
-6. Emit five public-safe evidence summaries and a validated
-   `bd-to-avp-tier3-qualification` receipt with `cleanup.status = disposed`.
+6. Run the candidate installed-app XCUITest lane. It verifies main-window
+   readiness, profile-save accessibility and success, updater settings, the
+   public releases link, and cropped light/dark app-window screenshots.
+7. Quit the app, detach every mounted DMG, verify the cleanup ownership marker,
+   and delete the qualification root with raw XCTest and build output.
+8. Emit normalized public-safe evidence and validated receipts for both policy
+   cases with `cleanup.status = disposed`.
 
 Every mount, subprocess, network request, GUI wait, update wait, and cleanup
 action has a timeout. Raw package-smoke output remains inside the disposable
-root and is deleted; public evidence records only its SHA-256 digest. A failed
-run does not emit an accepted receipt.
+root and is deleted; public evidence records only its SHA-256 digest. Raw AX
+trees, XCTest logs, `.xcresult` bundles, local paths, and full-screen captures
+are deleted. Retained screenshots contain only the app window. A failed run
+does not emit either accepted receipt.
 
 If the cleanup ownership marker is missing or changed, the runner refuses to
 delete the qualification root because it can no longer prove ownership. It

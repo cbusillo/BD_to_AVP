@@ -53,6 +53,8 @@ struct ConversionSetupView: View {
                 .buttonStyle(.borderless)
                 .help("Save current settings as a new profile")
                 .accessibilityLabel("Save current settings as new profile")
+                .accessibilityHint("Opens a form to name and save these settings as a reusable profile")
+                .accessibilityIdentifier("save-profile-action")
                 .disabled(isLocked)
 
                 Menu {
