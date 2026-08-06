@@ -132,6 +132,9 @@ permissions:
 
 env:
   GH_REPO: ${{ github.repository }}
+  RELEASE_QUALIFICATION_EVIDENCE: docs/qualification/release-evidence-v1.json
+  RELEASE_QUALIFICATION_POLICY: docs/qualification/release-qualification-policy-v1.json
+  RELEASE_QUALIFICATION_RECORD: docs/qualification/rc3-signed-qualification-v1.json
   XCODEGEN_VERSION: 2.45.4
   XCODEGEN_SHA256: 090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef
   XCODE_VERSION: "26.5"
@@ -241,6 +244,7 @@ jobs:
       dmg_name: ${{ steps.metadata.outputs.dmg_name }}
       channel: ${{ steps.metadata.outputs.channel }}
       prerelease: ${{ steps.metadata.outputs.prerelease }}
+      first_candidate_of_cycle: ${{ steps.metadata.outputs.first_candidate_of_cycle }}
       make_latest: ${{ steps.metadata.outputs.make_latest }}
       publish_pypi: ${{ steps.metadata.outputs.publish_pypi }}
       previous_release_tag: ${{ steps.release_history.outputs.previous_release_tag }}
@@ -534,11 +538,79 @@ jobs:
               ;;
           esac
 
+  qualify-preparation:
+    name: Qualify release preparation
+    needs:
+      - prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact candidate and qualification evidence
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Classify preparation evidence
+        id: qualification
+        env:
+          FIRST_CANDIDATE_OF_CYCLE: ${{ needs.prepare.outputs.first_candidate_of_cycle }}
+          RELEASE_STAGE: ${{ needs.prepare.outputs.channel }}
+        run: |
+          set -euo pipefail
+          FIRST_CANDIDATE_ARGS=()
+          if [ "$FIRST_CANDIDATE_OF_CYCLE" = "true" ]; then
+            FIRST_CANDIDATE_ARGS+=(--first-candidate-of-cycle)
+          fi
+          set +e
+          python -m scripts.qualify_release_scope \
+            --policy "$RELEASE_QUALIFICATION_POLICY" \
+            --qualification "$RELEASE_QUALIFICATION_RECORD" \
+            --evidence "$RELEASE_QUALIFICATION_EVIDENCE" \
+            --candidate-sha "$GITHUB_SHA" \
+            --release-stage "$RELEASE_STAGE" \
+            --workflow-phase preparation \
+            "${FIRST_CANDIDATE_ARGS[@]}" \
+            --output release-qualification-preparation.json \
+            --require-evidence
+          EXIT_CODE=$?
+          set -e
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Retain preparation qualification report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-qualification-preparation-${{ github.run_attempt }}
+          path: release-qualification-preparation.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce preparation qualification
+        if: always()
+        env:
+          QUALIFICATION_EXIT_CODE: ${{ steps.qualification.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          if [ "$QUALIFICATION_EXIT_CODE" != "0" ]; then
+            echo "Release preparation qualification failed with exit code $QUALIFICATION_EXIT_CODE." >&2
+            exit "$QUALIFICATION_EXIT_CODE"
+          fi
+
   package:
     name: Build, sign, notarize, and validate DMG
     needs:
       - policy
       - prepare
+      - qualify-preparation
     runs-on: macos-26
     timeout-minutes: 180
     environment: macos-signing
@@ -1139,7 +1211,9 @@ jobs:
 
   build-python:
     name: Build stable Python distributions
-    needs: prepare
+    needs:
+      - prepare
+      - qualify-preparation
     if: needs.prepare.outputs.publish_pypi == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -2046,6 +2120,126 @@ jobs:
             echo "receipt_sha256=$RECEIPT_SHA256"
           } >> "$GITHUB_OUTPUT"
 
+  qualify-artifact:
+    name: Qualify exact release artifact
+    needs:
+      - policy
+      - prepare
+      - package
+      - create-draft
+      - publish-appcast
+      - verify-draft
+      - build-receipt
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact candidate and qualification evidence
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Download and verify release receipt
+        env:
+          EXPECTED_RECEIPT_ASSET_ID: ${{ needs.build-receipt.outputs.receipt_asset_id }}
+          EXPECTED_RECEIPT_FILE_SHA256: ${{ needs.build-receipt.outputs.receipt_file_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$EXPECTED_RECEIPT_ASSET_ID" \
+            -H "Accept: application/octet-stream" > release-receipt.json
+          if [ "$(sha256sum release-receipt.json | awk '{print $1}')" != "$EXPECTED_RECEIPT_FILE_SHA256" ]; then
+            echo "Release receipt digest mismatch before artifact qualification." >&2
+            exit 1
+          fi
+
+      - name: Classify exact artifact evidence
+        id: qualification
+        env:
+          APPCAST_ASSET_ID: ${{ needs.verify-draft.outputs.appcast_asset_id }}
+          APPCAST_SHA256: ${{ needs.publish-appcast.outputs.appcast_sha256 }}
+          CHECKSUM_ASSET_ID: ${{ needs.verify-draft.outputs.checksum_asset_id }}
+          CHECKSUM_SHA256: ${{ needs.verify-draft.outputs.checksum_sha256 }}
+          BUILD_VERSION: ${{ needs.prepare.outputs.build_version }}
+          DMG_ASSET_ID: ${{ needs.verify-draft.outputs.dmg_asset_id }}
+          DMG_NAME: ${{ needs.prepare.outputs.dmg_name }}
+          DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
+          FIRST_CANDIDATE_OF_CYCLE: ${{ needs.prepare.outputs.first_candidate_of_cycle }}
+          PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
+          PUBLIC_VERSION: ${{ needs.prepare.outputs.public_version }}
+          RECEIPT_FILE_SHA256: ${{ needs.build-receipt.outputs.receipt_file_sha256 }}
+          RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
+          RELEASE_ROUTE: ${{ needs.policy.outputs.release_route }}
+          RELEASE_STAGE: ${{ needs.prepare.outputs.channel }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          SIGNED_APP_TREE_SHA256: ${{ needs.package.outputs.signed_app_tree_sha256 }}
+        run: |
+          set -euo pipefail
+          FIRST_CANDIDATE_ARGS=()
+          if [ "$FIRST_CANDIDATE_OF_CYCLE" = "true" ]; then
+            FIRST_CANDIDATE_ARGS+=(--first-candidate-of-cycle)
+          fi
+          set +e
+          python -m scripts.qualify_release_scope \
+            --policy "$RELEASE_QUALIFICATION_POLICY" \
+            --qualification "$RELEASE_QUALIFICATION_RECORD" \
+            --evidence "$RELEASE_QUALIFICATION_EVIDENCE" \
+            --candidate-sha "$GITHUB_SHA" \
+            --release-stage "$RELEASE_STAGE" \
+            --workflow-phase artifact \
+            "${FIRST_CANDIDATE_ARGS[@]}" \
+            --release-receipt release-receipt.json \
+            --release-route "$RELEASE_ROUTE" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --release-id "$RELEASE_ID" \
+            --package-version "$PACKAGE_VERSION" \
+            --public-version "$PUBLIC_VERSION" \
+            --build-version "$BUILD_VERSION" \
+            --release-tag "$RELEASE_TAG" \
+            --dmg-name "$DMG_NAME" \
+            --release-receipt-sha256 "$RECEIPT_FILE_SHA256" \
+            --signed-app-tree-sha256 "$SIGNED_APP_TREE_SHA256" \
+            --dmg-asset-id "$DMG_ASSET_ID" \
+            --dmg-sha256 "$DMG_SHA256" \
+            --checksum-asset-id "$CHECKSUM_ASSET_ID" \
+            --checksum-sha256 "$CHECKSUM_SHA256" \
+            --appcast-asset-id "$APPCAST_ASSET_ID" \
+            --appcast-sha256 "$APPCAST_SHA256" \
+            --output release-qualification-final.json \
+            --require-evidence
+          EXIT_CODE=$?
+          set -e
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Retain final qualification report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-qualification-final-${{ github.run_attempt }}
+          path: release-qualification-final.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce exact artifact qualification
+        if: always()
+        env:
+          QUALIFICATION_EXIT_CODE: ${{ steps.qualification.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          if [ "$QUALIFICATION_EXIT_CODE" != "0" ]; then
+            echo "Exact artifact qualification failed with exit code $QUALIFICATION_EXIT_CODE." >&2
+            exit "$QUALIFICATION_EXIT_CODE"
+          fi
+
   publish-release:
     name: Publish verified GitHub Release
     needs:
@@ -2055,6 +2249,7 @@ jobs:
       - package
       - verify-draft
       - build-receipt
+      - qualify-artifact
     if: >-
       !cancelled() &&
       needs.create-draft.result == 'success' &&
@@ -2062,6 +2257,7 @@ jobs:
       needs.package.result == 'success' &&
       needs.verify-draft.result == 'success' &&
       needs.build-receipt.result == 'success' &&
+      needs.qualify-artifact.result == 'success' &&
       (
         needs.prepare.outputs.publish_pypi != 'true' ||
         needs.build-python.result == 'success'

@@ -224,7 +224,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("release_route", policy["outputs"])
         self.assertIn("operator_workflow_path", policy["outputs"])
         self.assertEqual(workflow["jobs"]["prepare"]["needs"], "policy")
-        self.assertEqual(set(workflow["jobs"]["package"]["needs"]), {"policy", "prepare"})
+        self.assertEqual(set(workflow["jobs"]["package"]["needs"]), {"policy", "prepare", "qualify-preparation"})
         self.assertIn("--expected-fingerprint", str(workflow["jobs"]["package"]))
         self.assertIn("needs.policy.outputs.engine_workflow_ref", str(workflow["jobs"]["package"]))
 
@@ -324,7 +324,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         cleanup_script = cleanup_step["run"]
         package_step = next(step for step in package["steps"] if step["name"] == "Package application for GitHub")
 
-        self.assertEqual(set(package["needs"]), {"policy", "prepare"})
+        self.assertEqual(set(package["needs"]), {"policy", "prepare", "qualify-preparation"})
         self.assertEqual(package["environment"], "macos-signing")
         self.assertEqual(package["permissions"]["contents"], "read")
         self.assertEqual(package["runs-on"], "macos-26")
@@ -739,9 +739,10 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("--verify-distribution", str(jobs["verify-draft"]))
         self.assertEqual(
             set(jobs["publish-release"]["needs"]),
-            {"build-python", "create-draft", "prepare", "package", "verify-draft", "build-receipt"},
+            {"build-python", "create-draft", "prepare", "package", "verify-draft", "build-receipt", "qualify-artifact"},
         )
         self.assertIn("needs.create-draft.result == 'success'", jobs["publish-release"]["if"])
+        self.assertIn("needs.qualify-artifact.result == 'success'", jobs["publish-release"]["if"])
         self.assertIn("needs.build-python.result == 'success'", jobs["publish-release"]["if"])
         self.assertIn("draft: false", str(jobs["publish-release"]))
         self.assertIn("--method PATCH", str(jobs["publish-release"]))
@@ -773,6 +774,114 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("Draft release did not become visible through the API", str(workflow))
         self.assertIn('[ "$TOTAL_ASSET_COUNT" = "3" ]', str(jobs["verify-draft"]))
         self.assertIn('[ "$TOTAL_ASSET_COUNT" != "4" ]', str(jobs["publish-release"]))
+
+    def test_qualification_gates_block_signing_and_publication(self) -> None:
+        workflow = load_release_engine()
+        jobs = workflow["jobs"]
+        qualify_prep = jobs["qualify-preparation"]
+        qualify_artifact = jobs["qualify-artifact"]
+
+        operators = [load_workflow("briefcase.yml"), load_workflow("prerelease.yml")]
+        self.assertTrue(
+            all(
+                operator["jobs"]["release"]["uses"] == "./.github/workflows/release-engine.yml"
+                for operator in operators
+            )
+        )
+        self.assertIn("qualify-preparation", set(jobs["package"]["needs"]))
+        self.assertIn("qualify-preparation", set(jobs["build-python"]["needs"]))
+        self.assertEqual(set(qualify_prep["needs"]), {"prepare"})
+        self.assertIn("qualify-artifact", set(jobs["publish-release"]["needs"]))
+        self.assertIn("needs.qualify-artifact.result == 'success'", jobs["publish-release"]["if"])
+        self.assertNotIn("environment", qualify_prep)
+        self.assertNotIn("environment", qualify_artifact)
+        self.assertNotIn("secrets.", str(qualify_prep))
+        self.assertNotIn("secrets.", str(qualify_artifact))
+        self.assertEqual(qualify_prep["permissions"], {"contents": "read"})
+        self.assertEqual(qualify_artifact["permissions"], {"contents": "read"})
+        self.assertIn("qualify_release_scope", str(qualify_prep))
+        self.assertIn("qualify_release_scope", str(qualify_artifact))
+        self.assertIn("--workflow-phase preparation", str(qualify_prep))
+        self.assertIn("--workflow-phase artifact", str(qualify_artifact))
+        self.assertIn("--require-evidence", str(qualify_prep))
+        self.assertIn("--require-evidence", str(qualify_artifact))
+        self.assertEqual(
+            workflow["env"]["RELEASE_QUALIFICATION_EVIDENCE"], "docs/qualification/release-evidence-v1.json"
+        )
+        self.assertEqual(
+            workflow["env"]["RELEASE_QUALIFICATION_POLICY"], "docs/qualification/release-qualification-policy-v1.json"
+        )
+        self.assertEqual(
+            workflow["env"]["RELEASE_QUALIFICATION_RECORD"], "docs/qualification/rc3-signed-qualification-v1.json"
+        )
+        self.assertIn("--candidate-sha", str(qualify_prep))
+        self.assertIn("--release-stage", str(qualify_prep))
+        self.assertIn("first_candidate_of_cycle", jobs["prepare"]["outputs"])
+        self.assertIn("--first-candidate-of-cycle", str(qualify_prep))
+        self.assertIn("GITHUB_SHA", str(qualify_prep))
+        self.assertIn("needs.prepare.outputs.channel", str(qualify_prep))
+        self.assertIn("receipt_asset_id", str(qualify_artifact))
+        self.assertIn("receipt_file_sha256", str(qualify_artifact))
+        self.assertIn("Release receipt digest mismatch", str(qualify_artifact))
+        self.assertIn("release_route", str(qualify_artifact))
+        self.assertIn("GITHUB_RUN_ID", str(qualify_artifact))
+        self.assertIn("GITHUB_RUN_ATTEMPT", str(qualify_artifact))
+        self.assertIn("release_id", str(qualify_artifact))
+        self.assertIn("signed_app_tree_sha256", str(qualify_artifact))
+        self.assertIn("dmg_asset_id", str(qualify_artifact))
+        self.assertIn("dmg_sha256", str(qualify_artifact))
+        self.assertIn("checksum_asset_id", str(qualify_artifact))
+        self.assertIn("checksum_sha256", str(qualify_artifact))
+        self.assertIn("appcast_asset_id", str(qualify_artifact))
+        self.assertIn("appcast_sha256", str(qualify_artifact))
+        self.assertIn("--release-receipt release-receipt.json", str(qualify_artifact))
+        self.assertIn("--release-receipt-sha256", str(qualify_artifact))
+        self.assertIn("--workflow-run-id", str(qualify_artifact))
+        self.assertIn("--workflow-run-attempt", str(qualify_artifact))
+        self.assertIn("--signed-app-tree-sha256", str(qualify_artifact))
+        for metadata_flag in ("package-version", "public-version", "build-version", "release-tag", "dmg-name"):
+            self.assertIn(f"--{metadata_flag}", str(qualify_artifact))
+        prep_uploads = [step for step in qualify_prep["steps"] if "upload-artifact" in step.get("uses", "")]
+        artifact_uploads = [step for step in qualify_artifact["steps"] if "upload-artifact" in step.get("uses", "")]
+        self.assertEqual(len(prep_uploads), 1)
+        self.assertEqual(len(artifact_uploads), 1)
+        self.assertIn("release-qualification-preparation-${{ github.run_attempt }}", str(prep_uploads[0]))
+        self.assertIn("release-qualification-final-${{ github.run_attempt }}", str(artifact_uploads[0]))
+        self.assertEqual(prep_uploads[0]["if"], "always()")
+        self.assertEqual(artifact_uploads[0]["if"], "always()")
+        self.assertIn("--output release-qualification-preparation.json", str(qualify_prep))
+        self.assertIn("--output release-qualification-final.json", str(qualify_artifact))
+        self.assertNotIn("macos-signing", str(qualify_artifact))
+        self.assertNotIn("sparkle-release", str(qualify_artifact))
+        prep_checkouts = [
+            step for step in qualify_prep["steps"] if step.get("uses", "").startswith("actions/checkout@")
+        ]
+        for checkout in prep_checkouts:
+            self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+            self.assertEqual(checkout["with"]["persist-credentials"], "false")
+            self.assertEqual(checkout["with"]["fetch-depth"], "0")
+
+        release_operations = load_github_config()["releaseOperations"]
+        self.assertEqual(
+            release_operations["qualificationPolicyPath"],
+            "docs/qualification/release-qualification-policy-v1.json",
+        )
+        self.assertEqual(
+            release_operations["qualificationEvidencePath"],
+            "docs/qualification/release-evidence-v1.json",
+        )
+        self.assertEqual(
+            release_operations["qualificationRecordPath"],
+            "docs/qualification/rc3-signed-qualification-v1.json",
+        )
+        self.assertEqual(len(release_operations["qualificationReportArtifacts"]), 2)
+        artifact_checkouts = [
+            step for step in qualify_artifact["steps"] if step.get("uses", "").startswith("actions/checkout@")
+        ]
+        for checkout in artifact_checkouts:
+            self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+            self.assertEqual(checkout["with"]["persist-credentials"], "false")
+            self.assertEqual(checkout["with"]["fetch-depth"], "0")
 
     def test_release_receipt_is_verified_before_publication(self) -> None:
         workflow = load_release_engine()
