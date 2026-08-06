@@ -145,23 +145,32 @@ class UpdateInteraction:
 
 
 class QualificationOperations(Protocol):
-    def inspect_environment(self, qualification_root: Path, environment_class: str) -> EnvironmentFacts: ...
+    def inspect_environment(self, qualification_root: Path, environment_class: str) -> EnvironmentFacts:
+        raise NotImplementedError
 
-    def fetch_live_feed(self) -> bytes: ...
+    def fetch_live_feed(self) -> bytes:
+        raise NotImplementedError
 
-    def install_app(self, dmg_path: Path, destination: Path) -> None: ...
+    def install_app(self, dmg_path: Path, destination: Path) -> None:
+        raise NotImplementedError
 
-    def smoke_app(self, app_path: Path, synthetic_home: Path, log_path: Path) -> str: ...
+    def smoke_app(self, app_path: Path, synthetic_home: Path, log_path: Path) -> str:
+        raise NotImplementedError
 
-    def write_preferences(self, synthetic_home: Path, route: str) -> None: ...
+    def write_preferences(self, synthetic_home: Path, route: str) -> None:
+        raise NotImplementedError
 
-    def read_preference(self, synthetic_home: Path, key: str) -> str: ...
+    def read_preference(self, synthetic_home: Path, key: str) -> str:
+        raise NotImplementedError
 
-    def perform_update(self, app_path: Path, synthetic_home: Path) -> UpdateInteraction: ...
+    def perform_update(self, app_path: Path, synthetic_home: Path) -> UpdateInteraction:
+        raise NotImplementedError
 
-    def app_running(self) -> bool: ...
+    def app_running(self) -> bool:
+        raise NotImplementedError
 
-    def quit_app(self) -> None: ...
+    def quit_app(self) -> None:
+        raise NotImplementedError
 
 
 def _mapping(value: object, description: str) -> Mapping[str, Any]:
@@ -538,10 +547,7 @@ class MacOSOperations:
             timeout=COMMAND_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
-            try:
-                mount_point.rmdir()
-            except OSError:
-                pass
+            shutil.rmtree(mount_point, ignore_errors=True)
             raise CleanMachineError(f"Unable to mount release DMG: {result.stderr.decode(errors='replace').strip()}")
         return mount_point
 
