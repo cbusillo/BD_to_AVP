@@ -182,9 +182,10 @@ new candidate record before dispatch; a missing, stale, or mismatched record
 fails closed.
 
 **Signed artifact UI (`signed-artifact-ui`)** runs after `build-receipt` on a
-secret-free macOS 26 runner. It downloads the exact immutable release receipt and
-DMG by GitHub Release asset ID, verifies their digests, installs the signed DMG,
-runs the maintained
+secret-free macOS 26 runner. It downloads the exact verified release receipt and
+package from same-run Actions artifacts by immutable artifact ID, verifies their
+externally supplied file digests and the receipt's GitHub Release asset bindings,
+installs the signed DMG, runs the maintained
 `BluRayToVisionProUITests/InstalledUIAcceptanceTests/testCandidateMainWindowProfileAndSettings`
 selector, normalizes the candidate UI evidence, and emits a bounded
 `signed_artifact_receipt` for `profile-save-action-accessibility`. That case
@@ -194,11 +195,12 @@ seven-day retention window; the artifact gate downloads it by immutable Actions
 artifact ID and verifies the externally supplied receipt file digest.
 
 **Artifact gate (`qualify-artifact`)** runs after `build-receipt` and
-`signed-artifact-ui` and before `publish-release`. It downloads the release
-receipt by its exact GitHub Release asset ID (`build-receipt.outputs.receipt_asset_id`),
-verifies its SHA-256 digest against `build-receipt.outputs.receipt_file_sha256`,
+`signed-artifact-ui` and before `publish-release`. It downloads the already
+verified release receipt from a same-run Actions artifact by immutable artifact
+ID, verifies its SHA-256 digest against
+`build-receipt.outputs.receipt_file_sha256`,
 then invokes the `artifact` phase binding the exact release route, workflow run
-ID and attempt, release ID, release receipt asset ID, release receipt file and
+ID and attempt, release ID, original GitHub Release receipt asset ID, release receipt file and
 self digests, signed app tree digest, DMG asset ID/name/size/digest, and
 checksum/appcast asset IDs and digests. It also validates the signed UI receipt
 against those same bindings. The artifact report is uploaded before enforcement.
