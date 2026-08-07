@@ -180,14 +180,28 @@ preparation must update the workflow and `.github/github.json` catalog to the
 new candidate record before dispatch; a missing, stale, or mismatched record
 fails closed.
 
-**Artifact gate (`qualify-artifact`)** runs after `build-receipt` and before
-`publish-release`. It downloads the release receipt by its exact GitHub Release
-asset ID (`build-receipt.outputs.receipt_asset_id`), verifies its SHA-256 digest
-against `build-receipt.outputs.receipt_file_sha256`, then invokes the `artifact`
-phase binding the exact release route, workflow run ID and attempt, release ID,
-signed app tree digest, and DMG/checksum/appcast asset IDs and digests. The
-artifact report is uploaded before enforcement. Publication cannot proceed until
-this gate passes.
+**Signed artifact UI (`signed-artifact-ui`)** runs after `build-receipt` on a
+secret-free macOS 26 runner. It downloads the exact immutable release receipt and
+DMG by GitHub Release asset ID, verifies their digests, installs the signed DMG,
+runs the maintained
+`BluRayToVisionProUITests/InstalledUIAcceptanceTests/testCandidateMainWindowProfileAndSettings`
+selector, normalizes the candidate UI evidence, and emits a bounded
+`signed_artifact_receipt` for `profile-save-action-accessibility`. That case
+remains Tier 2, but it is artifact-owned and preparation defers invalidated
+evidence to this phase. The workflow uploads only the normalized receipt with a
+seven-day retention window; the artifact gate downloads it by immutable Actions
+artifact ID and verifies the externally supplied receipt file digest.
+
+**Artifact gate (`qualify-artifact`)** runs after `build-receipt` and
+`signed-artifact-ui` and before `publish-release`. It downloads the release
+receipt by its exact GitHub Release asset ID (`build-receipt.outputs.receipt_asset_id`),
+verifies its SHA-256 digest against `build-receipt.outputs.receipt_file_sha256`,
+then invokes the `artifact` phase binding the exact release route, workflow run
+ID and attempt, release ID, release receipt asset ID, release receipt file and
+self digests, signed app tree digest, DMG asset ID/name/size/digest, and
+checksum/appcast asset IDs and digests. It also validates the signed UI receipt
+against those same bindings. The artifact report is uploaded before enforcement.
+Publication cannot proceed until both gates pass.
 
 Both gates enforce using `--require-evidence` and upload their reports as Actions
 artifacts rather than GitHub Release assets. The exact CLI interface for the
@@ -216,6 +230,8 @@ python -m scripts.qualify_release_scope \
   --workflow-phase artifact \
   [--first-candidate-of-cycle] \
   --release-receipt release-receipt.json \
+  --signed-artifact-receipt signed-artifact-ui-receipt.json \
+  --signed-artifact-receipt-sha256 "$SIGNED_ARTIFACT_RECEIPT_SHA256" \
   --release-route "$RELEASE_ROUTE" \
   --workflow-run-id "$GITHUB_RUN_ID" \
   --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
@@ -225,9 +241,12 @@ python -m scripts.qualify_release_scope \
   --build-version "$BUILD_VERSION" \
   --release-tag "$RELEASE_TAG" \
   --dmg-name "$DMG_NAME" \
+  --release-receipt-asset-id "$RECEIPT_ASSET_ID" \
   --release-receipt-sha256 "$RECEIPT_FILE_SHA256" \
+  --release-receipt-self-sha256 "$RECEIPT_SELF_SHA256" \
   --signed-app-tree-sha256 "$SIGNED_APP_TREE_SHA256" \
   --dmg-asset-id "$DMG_ASSET_ID" \
+  --dmg-size "$DMG_SIZE" \
   --dmg-sha256 "$DMG_SHA256" \
   --checksum-asset-id "$CHECKSUM_ASSET_ID" \
   --checksum-sha256 "$CHECKSUM_SHA256" \

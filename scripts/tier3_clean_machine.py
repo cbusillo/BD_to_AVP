@@ -1010,6 +1010,21 @@ def _normalize_installed_ui_evidence(
     if updater.get("install_action") not in {"Install and Relaunch", "Install Update", "Relaunch"}:
         raise CleanMachineError("Installed UI updater evidence contains an unsupported install action.")
 
+    return normalize_installed_ui_candidate_evidence(
+        raw_directory,
+        evidence_directory,
+        release_notes_url=feed.release_notes_url,
+    )
+
+
+def normalize_installed_ui_candidate_evidence(
+    raw_directory: Path,
+    evidence_directory: Path,
+    *,
+    release_notes_url: str,
+) -> Mapping[str, str]:
+    _string(release_notes_url, "installed UI release notes URL")
+
     candidate = _load_ui_json(
         raw_directory / "candidate-ui.json",
         {
@@ -1116,7 +1131,7 @@ def _normalize_installed_ui_evidence(
             "profile_document_version": 5,
             "profile_save_accessible": True,
             "profile_save_succeeded": True,
-            "release_notes_url_sha256": hashlib.sha256(feed.release_notes_url.encode()).hexdigest(),
+            "release_notes_url_sha256": hashlib.sha256(release_notes_url.encode()).hexdigest(),
             "release_page_url_sha256": hashlib.sha256(RELEASES_URL.encode()).hexdigest(),
             "schema_version": 1,
             "status": "passed",

@@ -62,9 +62,12 @@ class ArtifactReceiptExpectation:
     build_version: str
     release_tag: str
     dmg_name: str
+    receipt_asset_id: int
     receipt_file_sha256: str
+    receipt_sha256: str
     signed_app_tree_sha256: str
     dmg_asset_id: int
+    dmg_size: int
     dmg_sha256: str
     checksum_asset_id: int
     checksum_sha256: str
@@ -416,6 +419,8 @@ def load_validated_artifact_receipt(
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ReleaseReceiptError(f"Invalid JSON in artifact release receipt at {path}: {error}") from error
     validate_receipt(receipt)
+    if receipt.get("receipt_sha256") != _sha256(expectation.receipt_sha256, "expected receipt self SHA-256"):
+        raise ReleaseReceiptError("Artifact release receipt self-digest does not match the expected digest.")
 
     candidate_sha = _sha(expectation.candidate_sha, "expected candidate SHA")
     if receipt.get("source_sha") != candidate_sha:
@@ -481,6 +486,8 @@ def load_validated_artifact_receipt(
             raise ReleaseReceiptError(f"Artifact release receipt {kind} digest does not match.")
     if artifacts["dmg"].get("name") != _string(expectation.dmg_name, "expected DMG name"):
         raise ReleaseReceiptError("Artifact release receipt DMG name does not match the committed release metadata.")
+    if artifacts["dmg"].get("size_bytes") != _integer(expectation.dmg_size, "expected DMG size"):
+        raise ReleaseReceiptError("Artifact release receipt DMG size does not match the committed release metadata.")
     return receipt
 
 
