@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from scripts import sparkle_appcast
 from scripts.artifact_identity import app_tree_sha256
@@ -160,14 +160,6 @@ class FakeOperations(QualificationOperations):
         )
         records = [
             {
-                "actions": [],
-                "enabled": True,
-                "help": "",
-                "identifier": "main-status",
-                "label": "Status: Ready",
-                "role": "AXStaticText",
-            },
-            {
                 "actions": ["AXPress"],
                 "enabled": True,
                 "help": "Opens a form to name and save these settings as a reusable profile",
@@ -188,7 +180,7 @@ class FakeOperations(QualificationOperations):
                 "enabled": True,
                 "help": "",
                 "identifier": "update-route-picker",
-                "label": "Update route",
+                "label": "",
                 "role": "AXPopUpButton",
             },
             {
@@ -217,6 +209,51 @@ class FakeOperations(QualificationOperations):
 
 
 class Tier3CleanMachineTests(unittest.TestCase):
+    def test_extract_ui_attachments_accepts_xcresult_generated_names(self) -> None:
+        operations = MacOSOperations()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            result_bundle = root / "InstalledUI-candidate.xcresult"
+            result_bundle.mkdir()
+            output_directory = root / "Evidence"
+            output_directory.mkdir()
+
+            def run(command: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+                del kwargs
+                attachments_directory = Path(command[-1])
+                attachments_directory.mkdir()
+                records = []
+                for index, expected_name in enumerate(
+                    ("candidate-ui.json", "screenshot-light.png", "screenshot-dark.png")
+                ):
+                    expected_path = Path(expected_name)
+                    exported_name = f"attachment-{index}{expected_path.suffix}"
+                    (attachments_directory / exported_name).write_bytes(expected_name.encode())
+                    records.append(
+                        {
+                            "exportedFileName": exported_name,
+                            "suggestedHumanReadableName": (
+                                f"{expected_path.stem}_0_00000000-0000-0000-0000-00000000000{index}"
+                                f"{expected_path.suffix}"
+                            ),
+                        }
+                    )
+                (attachments_directory / "manifest.json").write_text(
+                    json.dumps([{"attachments": records}]),
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch.object(MacOSOperations, "_run", side_effect=run):
+                operations._extract_ui_attachments(
+                    result_bundle=result_bundle,
+                    output_directory=output_directory,
+                    expected_names=("candidate-ui.json", "screenshot-light.png", "screenshot-dark.png"),
+                )
+
+            for expected_name in ("candidate-ui.json", "screenshot-light.png", "screenshot-dark.png"):
+                self.assertEqual((output_directory / expected_name).read_bytes(), expected_name.encode())
+
     def test_collect_ui_evidence_forwards_exact_scheme_build_settings(self) -> None:
         operations = MacOSOperations()
         release_notes_url = "https://example.test/releases/v1?name=encoded%20space&route=stable"
@@ -238,17 +275,71 @@ class Tier3CleanMachineTests(unittest.TestCase):
                     def run(
                         command: Any,
                         captured_commands: list[list[str]] = captured_commands,
-                        output_directory: Path = output_directory,
-                        evidence_name: str = evidence_name,
                         **kwargs: Any,
                     ) -> subprocess.CompletedProcess[str]:
                         captured_commands.append(list(command))
                         self.assertNotIn("env", kwargs)
-                        output_directory.mkdir(parents=True, exist_ok=True)
-                        (output_directory / evidence_name).write_text("{}\n", encoding="utf-8")
                         return subprocess.CompletedProcess(command, 0, "", "")
 
-                    with patch.object(MacOSOperations, "_run", side_effect=run):
+                    def extract_attachments(
+                        *,
+                        output_directory: Path = output_directory,
+                        evidence_name: str = evidence_name,
+                        phase: str = phase,
+                        **kwargs: Any,
+                    ) -> None:
+                        del kwargs
+                        output_directory.mkdir(parents=True, exist_ok=True)
+                        if phase == "candidate":
+                            (output_directory / evidence_name).write_text("{}\n", encoding="utf-8")
+                            (output_directory / "accessibility-tree.json").write_text(
+                                json.dumps(
+                                    {
+                                        "elements": [
+                                            {
+                                                "identifier": "all-releases-link",
+                                                "url": RELEASES_URL,
+                                            }
+                                        ],
+                                        "schema_version": 1,
+                                    }
+                                )
+                                + "\n",
+                                encoding="utf-8",
+                            )
+                        else:
+                            (output_directory / evidence_name).write_text(
+                                json.dumps(
+                                    {
+                                        "install_action": "Install and Relaunch",
+                                        "release_notes_url": release_notes_url,
+                                        "release_notes_url_observed": False,
+                                        "schema_version": 1,
+                                        "status": "passed",
+                                    }
+                                )
+                                + "\n",
+                                encoding="utf-8",
+                            )
+                            (output_directory / "updater-accessibility.json").write_text(
+                                json.dumps(
+                                    {
+                                        "release_notes_url": release_notes_url,
+                                        "release_notes_url_observed": True,
+                                        "schema_version": 1,
+                                    }
+                                )
+                                + "\n",
+                                encoding="utf-8",
+                            )
+
+                    collector = Mock()
+                    with (
+                        patch.object(MacOSOperations, "_run", side_effect=run),
+                        patch.object(MacOSOperations, "_start_accessibility_collector", return_value=collector),
+                        patch.object(MacOSOperations, "_finish_accessibility_collector") as finish_collector,
+                        patch.object(MacOSOperations, "_extract_ui_attachments", side_effect=extract_attachments),
+                    ):
                         operations.collect_ui_evidence(
                             repo=repo,
                             phase=phase,
@@ -259,6 +350,10 @@ class Tier3CleanMachineTests(unittest.TestCase):
                         )
 
                     self.assertEqual(len(captured_commands), 1)
+                    finish_collector.assert_called_once_with(collector)
+                    if phase == "updater":
+                        updater_evidence = json.loads((output_directory / evidence_name).read_text(encoding="utf-8"))
+                        self.assertIs(updater_evidence["release_notes_url_observed"], True)
                     command = captured_commands[0]
                     expected_settings = {
                         "BD_TO_AVP_UI_APP_PATH": str(app_path),
@@ -289,10 +384,19 @@ class Tier3CleanMachineTests(unittest.TestCase):
         operations = MacOSOperations()
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            with patch.object(
-                MacOSOperations,
-                "_run",
-                return_value=subprocess.CompletedProcess([], 0, "", ""),
+            with (
+                patch.object(
+                    MacOSOperations,
+                    "_run",
+                    return_value=subprocess.CompletedProcess([], 0, "", ""),
+                ),
+                patch.object(
+                    MacOSOperations,
+                    "_start_accessibility_collector",
+                    return_value=Mock(),
+                ),
+                patch.object(MacOSOperations, "_finish_accessibility_collector"),
+                patch.object(MacOSOperations, "_extract_ui_attachments"),
             ):
                 with self.assertRaisesRegex(
                     CleanMachineError,
@@ -306,6 +410,19 @@ class Tier3CleanMachineTests(unittest.TestCase):
                         output_directory=root / "Evidence",
                         release_notes_url=RELEASES_URL,
                     )
+
+    def test_stop_accessibility_collector_reaps_an_already_exited_process(self) -> None:
+        collector = Mock()
+        collector.poll.return_value = 2
+        collector.communicate.return_value = ("collector stdout", "collector stderr")
+
+        self.assertEqual(
+            MacOSOperations._stop_accessibility_collector(collector),
+            ("collector stdout", "collector stderr"),
+        )
+        collector.terminate.assert_not_called()
+        collector.kill.assert_not_called()
+        collector.communicate.assert_called_once_with()
 
     @staticmethod
     def make_app(root: Path, package_version: str, build_version: str, payload: str) -> Path:

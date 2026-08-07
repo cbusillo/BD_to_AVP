@@ -193,6 +193,15 @@ remains Tier 2, but it is artifact-owned and preparation defers invalidated
 evidence to this phase. The workflow uploads only the normalized receipt with a
 seven-day retention window; the artifact gate downloads it by immutable Actions
 artifact ID and verifies the externally supplied receipt file digest.
+Main-window readiness is asserted through XCUITest; the raw AX receipt is limited
+to the actionable profile and updater controls plus the source-bound releases link
+because macOS does not consistently expose combined SwiftUI status text as an AX node.
+The update-route picker remains bound by identifier, `AXPopUpButton` role, enabled
+state, and `AXPress`; its raw label may be empty because macOS 27 omits the visible
+SwiftUI picker title from that AX node.
+If the UI lane fails, it uploads a separate seven-day diagnostic artifact containing
+only the bounded `.xcresult`, partial UI evidence, and failure summary; the installed
+app, synthetic home, and qualification workspace are still deleted.
 
 **Artifact gate (`qualify-artifact`)** runs after `build-receipt` and
 `signed-artifact-ui` and before `publish-release`. It downloads the already

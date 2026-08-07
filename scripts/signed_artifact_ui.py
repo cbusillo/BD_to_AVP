@@ -51,6 +51,7 @@ class SignedArtifactUIConfig:
     workflow_run_attempt: int
     release_receipt_asset_id: int
     release_receipt_file_sha256: str
+    failure_diagnostics_directory: Path | None = None
 
 
 def _mapping(value: object, description: str) -> Mapping[str, Any]:
@@ -87,8 +88,30 @@ def _artifact(receipt: Mapping[str, Any], kind: str) -> Mapping[str, Any]:
     return artifacts[0]
 
 
+def _preserve_failure_diagnostics(
+    config: SignedArtifactUIConfig,
+    raw_ui_directory: Path,
+    error: BaseException,
+) -> None:
+    destination = config.failure_diagnostics_directory
+    if destination is None:
+        return
+    destination.mkdir(parents=True)
+    (destination / "failure.txt").write_text(f"{type(error).__name__}: {error}\n", encoding="utf-8")
+    result_bundle = config.qualification_root / "InstalledUI-candidate.xcresult"
+    if result_bundle.is_dir():
+        shutil.copytree(result_bundle, destination / result_bundle.name)
+    if raw_ui_directory.is_dir():
+        shutil.copytree(raw_ui_directory, destination / raw_ui_directory.name)
+
+
 def _run(config: SignedArtifactUIConfig, operations: MacOSOperations) -> Mapping[str, Any]:
-    if config.output_receipt.exists() or config.evidence_directory.exists() or config.qualification_root.exists():
+    if (
+        config.output_receipt.exists()
+        or config.evidence_directory.exists()
+        or config.qualification_root.exists()
+        or (config.failure_diagnostics_directory is not None and config.failure_diagnostics_directory.exists())
+    ):
         raise SignedArtifactUIError("Signed artifact UI outputs and workspace must not already exist.")
     if operations.app_running():
         raise SignedArtifactUIError("The production app must not be running before signed artifact UI qualification.")
@@ -148,6 +171,9 @@ def _run(config: SignedArtifactUIConfig, operations: MacOSOperations) -> Mapping
         receipt = build_receipt(expectation=expectation, evidence=evidence_digests)
         write_receipt(receipt, config.output_receipt)
         return receipt
+    except BaseException as error:
+        _preserve_failure_diagnostics(config, raw_ui_directory, error)
+        raise
     finally:
         try:
             operations.quit_app()
@@ -183,6 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--qualification-root", type=Path, required=True)
     parser.add_argument("--evidence-directory", type=Path, required=True)
     parser.add_argument("--output-receipt", type=Path, required=True)
+    parser.add_argument("--failure-diagnostics-directory", type=Path)
     parser.add_argument("--case-id", default=PROFILE_CASE_ID)
     parser.add_argument("--release-notes-url", default=RELEASES_URL)
     parser.add_argument("--workflow-run-id", type=int, required=True)
@@ -208,6 +235,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         workflow_run_attempt=args.workflow_run_attempt,
         release_receipt_asset_id=args.release_receipt_asset_id,
         release_receipt_file_sha256=args.release_receipt_file_sha256,
+        failure_diagnostics_directory=args.failure_diagnostics_directory,
     )
     try:
         run(config)

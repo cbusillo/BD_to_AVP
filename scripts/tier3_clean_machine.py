@@ -55,6 +55,7 @@ SMOKE_TIMEOUT_SECONDS = 15 * 60
 GUI_TIMEOUT_SECONDS = 270
 UPDATE_TIMEOUT_SECONDS = 5 * 60
 UI_TEST_TIMEOUT_SECONDS = 15 * 60
+ACCESSIBILITY_COLLECTOR_FINISH_TIMEOUT_SECONDS = 15
 MAX_UI_SCREENSHOT_BYTES = 20 * 1024 * 1024
 ROUTE_CHANNELS: dict[str, set[str | None]] = {
     "stable": {None},
@@ -71,6 +72,7 @@ SYSTEM_TOOL_PATHS = {
     "hdiutil": Path("/usr/bin/hdiutil"),
     "open": Path("/usr/bin/open"),
     "osascript": Path("/usr/bin/osascript"),
+    "xcrun": Path("/usr/bin/xcrun"),
     "xcodebuild": Path("/usr/bin/xcodebuild"),
 }
 
@@ -490,7 +492,7 @@ def validate_environment(
 
 
 class MacOSOperations:
-    required_tools = ("defaults", "ditto", "hdiutil", "open", "osascript", "xcodebuild")
+    required_tools = ("defaults", "ditto", "hdiutil", "open", "osascript", "xcrun", "xcodebuild")
 
     @staticmethod
     def _run(
@@ -509,9 +511,133 @@ class MacOSOperations:
             input=input_text,
         )
         if result.returncode != 0:
-            detail = result.stderr.strip() or result.stdout.strip() or "command failed"
+            details = []
+            for label, output in (("stdout", result.stdout), ("stderr", result.stderr)):
+                if output := output.strip():
+                    if len(output) > 20_000:
+                        output = f"[truncated to final 20000 characters]\n{output[-20_000:]}"
+                    details.append(f"--- {label} ---\n{output}")
+            detail = "\n".join(details) or "command failed"
             raise CleanMachineError(f"Command failed ({command[0]}): {detail}")
         return result
+
+    def _start_accessibility_collector(
+        self,
+        *,
+        repo: Path,
+        phase: str,
+        output_directory: Path,
+        expected_url: str,
+    ) -> subprocess.Popen[str]:
+        collector_binary = output_directory.parent / "installed-ui-accessibility"
+        self._run(
+            [
+                str(SYSTEM_TOOL_PATHS["xcrun"]),
+                "swiftc",
+                str(repo / "scripts" / "installed_ui_accessibility.swift"),
+                "-o",
+                str(collector_binary),
+            ],
+            timeout=SMOKE_TIMEOUT_SECONDS,
+        )
+        collector_output = output_directory / (
+            "accessibility-tree.json" if phase == "candidate" else "updater-accessibility.json"
+        )
+        return subprocess.Popen(
+            [
+                str(collector_binary),
+                "--mode",
+                phase,
+                "--bundle-identifier",
+                BUNDLE_IDENTIFIER,
+                "--expected-url",
+                expected_url,
+                "--output",
+                str(collector_output),
+                "--timeout-seconds",
+                str(UI_TEST_TIMEOUT_SECONDS),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    @staticmethod
+    def _stop_accessibility_collector(collector: subprocess.Popen[str]) -> tuple[str, str]:
+        if collector.poll() is None:
+            collector.terminate()
+            try:
+                return collector.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                collector.kill()
+        return collector.communicate()
+
+    @staticmethod
+    def _finish_accessibility_collector(collector: subprocess.Popen[str]) -> None:
+        try:
+            stdout, stderr = collector.communicate(timeout=ACCESSIBILITY_COLLECTOR_FINISH_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as error:
+            MacOSOperations._stop_accessibility_collector(collector)
+            raise CleanMachineError("Installed UI accessibility collector did not finish after the UI test.") from error
+        if collector.returncode != 0:
+            detail = stderr.strip() or stdout.strip() or "collector failed"
+            raise CleanMachineError(f"Installed UI accessibility collector failed: {detail}")
+
+    def _extract_ui_attachments(
+        self,
+        *,
+        result_bundle: Path,
+        output_directory: Path,
+        expected_names: Sequence[str],
+    ) -> None:
+        attachments_directory = result_bundle.parent / f"{result_bundle.stem}-attachments"
+        self._run(
+            [
+                str(SYSTEM_TOOL_PATHS["xcrun"]),
+                "xcresulttool",
+                "export",
+                "attachments",
+                "--path",
+                str(result_bundle),
+                "--output-path",
+                str(attachments_directory),
+            ],
+            timeout=SMOKE_TIMEOUT_SECONDS,
+        )
+        manifest = json.loads((attachments_directory / "manifest.json").read_text(encoding="utf-8"))
+        if not isinstance(manifest, list):
+            raise CleanMachineError("Installed UI attachment manifest must be a JSON array.")
+        records = [
+            attachment
+            for test_record in manifest
+            if isinstance(test_record, Mapping)
+            for attachment in test_record.get("attachments", [])
+            if isinstance(attachment, Mapping)
+        ]
+        for expected_name in expected_names:
+            expected_path = Path(expected_name)
+            generated_prefix = f"{expected_path.stem}_"
+            matches = [
+                record
+                for record in records
+                if record.get("suggestedHumanReadableName") == expected_name
+                or (
+                    isinstance(record.get("suggestedHumanReadableName"), str)
+                    and cast(str, record["suggestedHumanReadableName"]).startswith(generated_prefix)
+                    and cast(str, record["suggestedHumanReadableName"]).endswith(expected_path.suffix)
+                )
+            ]
+            if len(matches) != 1:
+                raise CleanMachineError(
+                    f"Installed UI result must contain exactly one {expected_name} attachment; found {len(matches)}."
+                )
+            exported_name = matches[0].get("exportedFileName")
+            if not isinstance(exported_name, str) or Path(exported_name).name != exported_name:
+                raise CleanMachineError(f"Installed UI {expected_name} attachment has an invalid exported filename.")
+            source = attachments_directory / exported_name
+            if not source.is_file():
+                raise CleanMachineError(f"Installed UI {expected_name} attachment export is missing.")
+            shutil.copyfile(source, output_directory / expected_name)
 
     @staticmethod
     def _synthetic_env(synthetic_home: Path) -> dict[str, str]:
@@ -698,30 +824,93 @@ class MacOSOperations:
             "BD_TO_AVP_UI_RELEASE_NOTES_URL": release_notes_url,
             "BD_TO_AVP_UI_RELEASES_URL": RELEASES_URL,
         }
-        self._run(
-            [
-                str(SYSTEM_TOOL_PATHS["xcodebuild"]),
-                "-project",
-                str(repo / "macos" / "BluRayToVisionPro.xcodeproj"),
-                "-scheme",
-                "BluRayToVisionProInstalledUI",
-                "-derivedDataPath",
-                str(derived_data),
-                "-resultBundlePath",
-                str(result_bundle),
-                "-destination",
-                "platform=macOS,arch=arm64",
-                f"-only-testing:BluRayToVisionProUITests/InstalledUIAcceptanceTests/{test_name}",
-                *(f"{key}={value}" for key, value in build_settings.items()),
-                "test",
-            ],
-            timeout=UI_TEST_TIMEOUT_SECONDS,
+        collector = self._start_accessibility_collector(
+            repo=repo,
+            phase=phase,
+            output_directory=output_directory,
+            expected_url=RELEASES_URL if phase == "candidate" else release_notes_url,
+        )
+        try:
+            self._run(
+                [
+                    str(SYSTEM_TOOL_PATHS["xcodebuild"]),
+                    "-project",
+                    str(repo / "macos" / "BluRayToVisionPro.xcodeproj"),
+                    "-scheme",
+                    "BluRayToVisionProInstalledUI",
+                    "-derivedDataPath",
+                    str(derived_data),
+                    "-resultBundlePath",
+                    str(result_bundle),
+                    "-destination",
+                    "platform=macOS,arch=arm64",
+                    f"-only-testing:BluRayToVisionProUITests/InstalledUIAcceptanceTests/{test_name}",
+                    *(f"{key}={value}" for key, value in build_settings.items()),
+                    "test",
+                ],
+                timeout=UI_TEST_TIMEOUT_SECONDS,
+            )
+        except BaseException as error:
+            stdout, stderr = self._stop_accessibility_collector(collector)
+            detail = stderr.strip() or stdout.strip()
+            if detail:
+                raise CleanMachineError(f"{error}\nInstalled UI accessibility collector: {detail}") from error
+            raise
+        self._finish_accessibility_collector(collector)
+        expected_attachments = (
+            ("candidate-ui.json", "screenshot-light.png", "screenshot-dark.png")
+            if phase == "candidate"
+            else ("updater-ui.json",)
+        )
+        self._extract_ui_attachments(
+            result_bundle=result_bundle,
+            output_directory=output_directory,
+            expected_names=expected_attachments,
         )
         expected_evidence = "candidate-ui.json" if phase == "candidate" else "updater-ui.json"
         if not (output_directory / expected_evidence).is_file():
             raise CleanMachineError(
                 f"Installed UI {phase} test completed without required evidence: {expected_evidence}."
             )
+        if phase == "candidate" and not (output_directory / "accessibility-tree.json").is_file():
+            raise CleanMachineError("Installed UI candidate test completed without accessibility-tree.json.")
+        if phase == "updater":
+            updater_accessibility = _load_ui_json(
+                output_directory / "updater-accessibility.json",
+                {"release_notes_url", "release_notes_url_observed", "schema_version"},
+            )
+            if updater_accessibility != {
+                "release_notes_url": release_notes_url,
+                "release_notes_url_observed": True,
+                "schema_version": 1,
+            }:
+                raise CleanMachineError("Installed UI updater accessibility evidence is not source-bound.")
+            updater_path = output_directory / "updater-ui.json"
+            updater = dict(
+                _load_ui_json(
+                    updater_path,
+                    {"install_action", "release_notes_url", "release_notes_url_observed", "schema_version", "status"},
+                )
+            )
+            if updater.get("release_notes_url_observed") is not False:
+                raise CleanMachineError("Installed UI updater test claimed accessibility evidence before collection.")
+            updater["release_notes_url_observed"] = True
+            updater_path.write_bytes(_canonical_json_bytes(updater))
+        if phase == "candidate":
+            accessibility = _load_ui_json(
+                output_directory / "accessibility-tree.json",
+                {"elements", "schema_version"},
+            )
+            elements = accessibility["elements"]
+            if not isinstance(elements, list):
+                raise CleanMachineError("Installed UI candidate accessibility elements must be a JSON array.")
+            release_records = [
+                element
+                for element in elements
+                if isinstance(element, Mapping) and element.get("identifier") == "all-releases-link"
+            ]
+            if len(release_records) != 1 or release_records[0].get("url") != RELEASES_URL:
+                raise CleanMachineError("Installed UI candidate release-link evidence is not source-bound.")
 
     @staticmethod
     def app_running() -> bool:
@@ -1066,7 +1255,6 @@ def normalize_installed_ui_candidate_evidence(
     ]
     expected_identifiers = {
         "all-releases-link",
-        "main-status",
         "save-profile-action",
         "update-action",
         "update-route-picker",
@@ -1082,7 +1270,15 @@ def normalize_installed_ui_candidate_evidence(
             raise CleanMachineError("Installed UI accessibility evidence contains an unexpected or duplicate element.")
         observed_identifiers.add(identifier)
         role = _string(record.get("role"), f"{identifier} accessibility role")
-        label = _string(record.get("label"), f"{identifier} accessibility label")
+        label_value = record.get("label")
+        if not isinstance(label_value, str):
+            raise CleanMachineError(f"{identifier} accessibility label must be a string.")
+        if identifier == "update-route-picker":
+            if label_value not in {"", "Update route"}:
+                raise CleanMachineError("Update route picker accessibility label is unexpected.")
+            label = label_value
+        else:
+            label = _string(label_value, f"{identifier} accessibility label")
         help_text = record.get("help")
         actions = record.get("actions")
         enabled = record.get("enabled")
@@ -1117,6 +1313,8 @@ def normalize_installed_ui_candidate_evidence(
                 or "AXPress" not in actions
             ):
                 raise CleanMachineError("Profile save accessibility semantics do not match the maintained contract.")
+        if identifier == "update-route-picker" and (role != "AXPopUpButton" or not enabled or "AXPress" not in actions):
+            raise CleanMachineError("Update route picker accessibility semantics do not match the maintained contract.")
         normalized_records.append(normalized)
     if observed_identifiers != expected_identifiers:
         raise CleanMachineError("Installed UI accessibility evidence is incomplete.")

@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 import XCTest
 
 final class InstalledUIAcceptanceTests: XCTestCase {
@@ -32,23 +31,20 @@ final class InstalledUIAcceptanceTests: XCTestCase {
             timeout: 120
         )
         XCTAssertNotNil(installButton)
-
-        let applicationElement = try AXInspector.applicationElement(bundleIdentifier: context.bundleIdentifier)
-        let observedURLs = AXInspector.linkURLs(root: applicationElement)
         XCTAssertTrue(
-            observedURLs.contains(context.releaseNotesURL),
-            "The Sparkle window did not expose the candidate release-notes URL."
+            waitForAccessibilityEvidence(context: context, timeout: 30),
+            "The trusted accessibility collector did not capture the updater window."
         )
 
-        try writeJSON(
+        try attachJSON(
             [
                 "install_action": installButton?.label ?? "",
                 "release_notes_url": context.releaseNotesURL,
-                "release_notes_url_observed": true,
+                "release_notes_url_observed": false,
                 "schema_version": 1,
                 "status": "passed",
             ],
-            to: context.outputDirectory.appendingPathComponent("updater-ui.json")
+            name: "updater-ui.json"
         )
     }
 
@@ -62,25 +58,18 @@ final class InstalledUIAcceptanceTests: XCTestCase {
 
         let mainContent = lightApp.descendants(matching: .any)["main-window-content"]
         XCTAssertTrue(mainContent.waitForExistence(timeout: 30))
-        XCTAssertTrue(lightApp.descendants(matching: .any)["main-status"].waitForExistence(timeout: 20))
 
         let saveAction = lightApp.buttons["save-profile-action"]
         XCTAssertTrue(saveAction.waitForExistence(timeout: 20))
-        let applicationElement = try AXInspector.applicationElement(bundleIdentifier: context.bundleIdentifier)
-        let saveRecord = try AXInspector.record(identifier: "save-profile-action", root: applicationElement)
-        XCTAssertEqual(saveRecord.role, kAXButtonRole as String)
-        XCTAssertEqual(saveRecord.label, "Save current settings as new profile")
-        XCTAssertEqual(
-            saveRecord.help,
-            "Opens a form to name and save these settings as a reusable profile"
-        )
-        XCTAssertTrue(saveRecord.enabled)
-        XCTAssertTrue(saveRecord.actions.contains(kAXPressAction as String))
+        XCTAssertEqual(saveAction.elementType, .button)
+        XCTAssertEqual(saveAction.label, "Save current settings as new profile")
+        XCTAssertTrue(saveAction.isEnabled)
 
         saveAction.click()
         let nameField = lightApp.textFields["save-profile-name-field"]
         XCTAssertTrue(nameField.waitForExistence(timeout: 20))
         nameField.click()
+        nameField.typeKey("a", modifierFlags: .command)
         nameField.typeText(Self.profileName)
         let confirmButton = lightApp.buttons["save-profile-confirm"]
         XCTAssertTrue(confirmButton.isEnabled)
@@ -94,10 +83,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
 
         let lightWindow = lightApp.windows.firstMatch
         XCTAssertTrue(lightWindow.exists)
-        try lightWindow.screenshot().pngRepresentation.write(
-            to: context.outputDirectory.appendingPathComponent("screenshot-light.png"),
-            options: .atomic
-        )
+        attachScreenshot(lightWindow.screenshot(), name: "screenshot-light.png")
 
         openUpdatesSettings(in: lightApp)
         let updateAction = lightApp.buttons["update-action"]
@@ -106,25 +92,13 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertTrue(updateAction.waitForExistence(timeout: 20))
         XCTAssertTrue(routePicker.waitForExistence(timeout: 20))
         XCTAssertTrue(releasesLink.waitForExistence(timeout: 20))
-
-        let updatedApplicationElement = try AXInspector.applicationElement(bundleIdentifier: context.bundleIdentifier)
-        let releasesRecord = try AXInspector.record(identifier: "all-releases-link", root: updatedApplicationElement)
-        XCTAssertEqual(releasesRecord.url, context.releasesURL)
-
-        let updateRecord = try AXInspector.record(identifier: "update-action", root: updatedApplicationElement)
-        let routeRecord = try AXInspector.record(identifier: "update-route-picker", root: updatedApplicationElement)
-        let statusRecord = try AXInspector.record(identifier: "main-status", root: updatedApplicationElement)
-
-        try writeJSON(
-            [
-                "elements": [statusRecord.jsonValue, saveRecord.jsonValue, updateRecord.jsonValue, routeRecord.jsonValue,
-                             releasesRecord.jsonValue],
-                "schema_version": 1,
-            ],
-            to: context.outputDirectory.appendingPathComponent("accessibility-tree.json")
+        XCTAssertEqual(releasesLink.label, "View All Releases…")
+        XCTAssertTrue(
+            waitForAccessibilityEvidence(context: context, timeout: 30),
+            "The trusted accessibility collector did not capture the candidate settings window."
         )
 
-        try writeJSON(
+        try attachJSON(
             [
                 "main_window_ready": true,
                 "profile_document_version": profileSummary.version,
@@ -137,18 +111,18 @@ final class InstalledUIAcceptanceTests: XCTestCase {
                 "status": "passed",
                 "updater_controls_accessible": true,
             ],
-            to: context.outputDirectory.appendingPathComponent("candidate-ui.json")
+            name: "candidate-ui.json"
         )
 
         lightApp.terminate()
         let darkApp = try launchInstalledApp(context: context, appearance: .dark)
         defer { darkApp.terminate() }
+        XCTAssertTrue(
+            darkApp.descendants(matching: .any)["main-window-content"].waitForExistence(timeout: 30)
+        )
         let darkWindow = darkApp.windows.firstMatch
         XCTAssertTrue(darkWindow.waitForExistence(timeout: 30))
-        try darkWindow.screenshot().pngRepresentation.write(
-            to: context.outputDirectory.appendingPathComponent("screenshot-dark.png"),
-            options: .atomic
-        )
+        attachScreenshot(darkWindow.screenshot(), name: "screenshot-dark.png")
     }
 
     private func launchInstalledApp(
@@ -156,21 +130,12 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         appearance: QualificationAppearance
     ) throws -> XCUIApplication {
         try setAppearance(appearance, syntheticHome: context.syntheticHome)
-        XCUIApplication(bundleIdentifier: context.bundleIdentifier).terminate()
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = [
-            "-n", "-F",
-            "--env", "HOME=\(context.syntheticHome.path)",
-            "--env", "CFFIXED_USER_HOME=\(context.syntheticHome.path)",
-            context.appURL.path,
+        let app = XCUIApplication(url: context.appURL)
+        app.launchEnvironment = [
+            "HOME": context.syntheticHome.path,
+            "CFFIXED_USER_HOME": context.syntheticHome.path,
         ]
-        try process.run()
-        process.waitUntilExit()
-        XCTAssertEqual(process.terminationStatus, 0)
-
-        let app = XCUIApplication(bundleIdentifier: context.bundleIdentifier)
+        app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 30))
         let matches = NSRunningApplication.runningApplications(withBundleIdentifier: context.bundleIdentifier)
         XCTAssertEqual(matches.count, 1)
@@ -215,7 +180,44 @@ final class InstalledUIAcceptanceTests: XCTestCase {
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         } while Date() < deadline
+        for identifier in identifiers {
+            let element = query[identifier]
+            if element.exists {
+                return element
+            }
+        }
         return nil
+    }
+
+    private func waitForAccessibilityEvidence(
+        context: QualificationContext,
+        timeout: TimeInterval
+    ) -> Bool {
+        let filename = context.phase == "candidate"
+            ? "accessibility-tree.json"
+            : "updater-accessibility.json"
+        let evidenceURL = context.outputDirectory.appendingPathComponent(filename)
+        return waitUntil(timeout: timeout) {
+            FileManager.default.fileExists(atPath: evidenceURL.path)
+        }
+    }
+
+    private func attachScreenshot(_ screenshot: XCUIScreenshot, name: String) {
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func attachJSON(_ value: [String: Any], name: String) throws {
+        guard JSONSerialization.isValidJSONObject(value) else {
+            throw QualificationError.missingEnvironment("valid JSON evidence")
+        }
+        let data = try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys])
+        let attachment = XCTAttachment(data: data + Data("\n".utf8), uniformTypeIdentifier: "public.json")
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func waitUntil(timeout: TimeInterval, predicate: () -> Bool) -> Bool {
@@ -333,133 +335,5 @@ private func setAppearance(_ appearance: QualificationAppearance, syntheticHome:
     process.waitUntilExit()
     if appearance == .dark, process.terminationStatus != 0 {
         throw QualificationError.missingEnvironment("synthetic appearance preference")
-    }
-}
-
-private func writeJSON(_ value: [String: Any], to url: URL) throws {
-    guard JSONSerialization.isValidJSONObject(value) else {
-        throw QualificationError.missingEnvironment("valid JSON evidence")
-    }
-    let data = try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys])
-    try (data + Data("\n".utf8)).write(to: url, options: .atomic)
-}
-
-private struct AXRecord {
-    let actions: [String]
-    let enabled: Bool
-    let help: String
-    let identifier: String
-    let label: String
-    let role: String
-    let url: String?
-
-    var jsonValue: [String: Any] {
-        var result: [String: Any] = [
-            "actions": actions,
-            "enabled": enabled,
-            "help": help,
-            "identifier": identifier,
-            "label": label,
-            "role": role,
-        ]
-        if let url {
-            result["url"] = url
-        }
-        return result
-    }
-}
-
-private enum AXInspector {
-    static func applicationElement(bundleIdentifier: String) throws -> AXUIElement {
-        let matches = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
-        guard matches.count == 1, let processIdentifier = matches.first?.processIdentifier else {
-            throw QualificationError.missingAccessibilityElement(bundleIdentifier)
-        }
-        return AXUIElementCreateApplication(processIdentifier)
-    }
-
-    static func record(identifier: String, root: AXUIElement) throws -> AXRecord {
-        guard let element = find(identifier: identifier, root: root) else {
-            throw QualificationError.missingAccessibilityElement(identifier)
-        }
-        let actions = actionNames(element).sorted()
-        return AXRecord(
-            actions: actions,
-            enabled: attribute(element, kAXEnabledAttribute) ?? false,
-            help: attribute(element, kAXHelpAttribute) ?? "",
-            identifier: identifier,
-            label: attribute(element, kAXTitleAttribute) ?? attribute(element, kAXDescriptionAttribute) ?? "",
-            role: attribute(element, kAXRoleAttribute) ?? "",
-            url: normalizedURL(attributeValue(element, kAXURLAttribute))
-        )
-    }
-
-    static func linkURLs(root: AXUIElement) -> Set<String> {
-        var urls = Set<String>()
-        walk(root: root) { element in
-            let role: String? = attribute(element, kAXRoleAttribute)
-            guard role == "AXLink",
-                  let url = normalizedURL(attributeValue(element, kAXURLAttribute))
-            else {
-                return
-            }
-            urls.insert(url)
-        }
-        return urls
-    }
-
-    private static func find(identifier: String, root: AXUIElement) -> AXUIElement? {
-        var result: AXUIElement?
-        walk(root: root) { element in
-            guard result == nil else {
-                return
-            }
-            let observed: String? = attribute(element, kAXIdentifierAttribute)
-            if observed == identifier {
-                result = element
-            }
-        }
-        return result
-    }
-
-    private static func walk(root: AXUIElement, visit: (AXUIElement) -> Void) {
-        var pending = [root]
-        var visited = 0
-        while let element = pending.popLast(), visited < 2_000 {
-            visited += 1
-            visit(element)
-            let children: [AXUIElement] = attribute(element, kAXChildrenAttribute) ?? []
-            pending.append(contentsOf: children.reversed())
-        }
-    }
-
-    private static func attribute<T>(_ element: AXUIElement, _ name: String) -> T? {
-        attributeValue(element, name) as? T
-    }
-
-    private static func attributeValue(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else {
-            return nil
-        }
-        return value
-    }
-
-    private static func actionNames(_ element: AXUIElement) -> [String] {
-        var names: CFArray?
-        guard AXUIElementCopyActionNames(element, &names) == .success else {
-            return []
-        }
-        return names as? [String] ?? []
-    }
-
-    private static func normalizedURL(_ value: CFTypeRef?) -> String? {
-        if let url = value as? URL {
-            return url.absoluteString
-        }
-        if let string = value as? String {
-            return string
-        }
-        return nil
     }
 }
