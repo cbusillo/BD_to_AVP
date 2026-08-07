@@ -156,41 +156,41 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         self.assertEqual(apps["bd-to-avp"]["min_os_version"], "14.0")
 
-    def test_repository_is_prepared_for_rc3(self) -> None:
+    def test_repository_is_prepared_for_stable(self) -> None:
         metadata = release.load_release_metadata()
 
-        self.assertEqual(metadata.package_version, "0.3.0rc3")
-        self.assertEqual(metadata.public_version, "0.3.0-rc.3")
-        self.assertEqual(metadata.build_version, "160")
-        self.assertEqual(metadata.release_tag, "v0.3.0-rc.3")
-        self.assertEqual(metadata.release_name, "v0.3.0-rc.3")
-        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.3.dmg")
-        self.assertEqual(metadata.channel, "rc")
-        self.assertTrue(metadata.prerelease)
+        self.assertEqual(metadata.package_version, "0.3.0")
+        self.assertEqual(metadata.public_version, "0.3.0")
+        self.assertEqual(metadata.build_version, "161")
+        self.assertEqual(metadata.release_tag, "v0.3.0")
+        self.assertEqual(metadata.release_name, "v0.3.0")
+        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0.dmg")
+        self.assertEqual(metadata.channel, "stable")
+        self.assertFalse(metadata.prerelease)
         self.assertFalse(metadata.first_candidate_of_cycle)
-        self.assertFalse(metadata.make_latest)
-        self.assertFalse(metadata.publish_pypi)
+        self.assertTrue(metadata.make_latest)
+        self.assertTrue(metadata.publish_pypi)
 
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
-        self.assertNotIn("v0.3.0-rc.3", freeze_policy["frozen_release_tags"])
+        self.assertNotIn("v0.3.0", freeze_policy["frozen_release_tags"])
 
-        cut_packet = (REPO_ROOT / "docs" / "0.3.0-rc.3-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.0rc3`", cut_packet)
-        self.assertIn("Build `160`", cut_packet)
-        for pull_request in (466, 467, 468):
-            self.assertIn(f"#{pull_request}", cut_packet)
+        cut_packet = (REPO_ROOT / "docs" / "0.3.0-cut-packet.md").read_text(encoding="utf-8")
+        self.assertIn("`0.3.0`", cut_packet)
+        self.assertIn("Build `161`", cut_packet)
+        self.assertIn("#489", cut_packet)
         self.assertIn("Privacy rules version `5`", cut_packet)
-        self.assertIn("#458", cut_packet)
-        self.assertIn("Published and immutable", cut_packet)
-        self.assertIn("30990186667", cut_packet)
-        self.assertIn("Content-aware targeted qualification", cut_packet)
-        self.assertIn("post-publication backfill", cut_packet)
+        self.assertIn("Prepared metadata; publication pending", cut_packet)
+        self.assertIn("post-publication", cut_packet)
+        self.assertIn("PyPI", cut_packet)
+        self.assertIn("Homebrew", cut_packet)
 
         qualification = json.loads(
-            (REPO_ROOT / "docs" / "qualification" / "rc3-signed-qualification-v1.json").read_text(encoding="utf-8")
+            (REPO_ROOT / "docs" / "qualification" / "stable-signed-qualification-v1.json").read_text(
+                encoding="utf-8"
+            )
         )
-        self.assertEqual(qualification["candidate"]["package_version"], "0.3.0rc3")
-        self.assertEqual(qualification["candidate"]["build_version"], "160")
+        self.assertEqual(qualification["candidate"]["package_version"], "0.3.0")
+        self.assertEqual(qualification["candidate"]["build_version"], "161")
         self.assertEqual(qualification["candidate"]["worker_protocol_version"], 12)
         self.assertEqual(qualification["candidate"]["mapping_version"], 2)
         self.assertEqual(
@@ -199,8 +199,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         expected_case_ids = {
             "release-workflow-identity",
-            "updater-route-rc2-to-rc3",
-            "native-sparkle-notes-rc3",
+            "updater-route-rc3-to-stable",
+            "native-sparkle-notes-stable",
             "profile-save-action-accessibility",
             "signed-packaged-route-parity",
             "gui-preview-low-local-ample-destination",
@@ -212,6 +212,11 @@ class ReleaseMetadataTests(unittest.TestCase):
             "overwrite-and-conversion-cancel",
             "malformed-pgs-parser-recovery",
             "subtitle-partial-output-diagnostics",
+            "clean-machine-signed-update",
+            "installed-ui-accessibility",
+            "usb-bluray-makemkv",
+            "protected-real-media-conversion",
+            "vision-pro-physical-playback",
             "public-diagnostics-and-field-closure",
         }
         self.assertEqual({case["id"] for case in qualification["matrix"]}, expected_case_ids)
@@ -232,6 +237,11 @@ class ReleaseMetadataTests(unittest.TestCase):
                 "overwrite-and-conversion-cancel",
                 "malformed-pgs-parser-recovery",
                 "subtitle-partial-output-diagnostics",
+                "clean-machine-signed-update",
+                "installed-ui-accessibility",
+                "usb-bluray-makemkv",
+                "protected-real-media-conversion",
+                "vision-pro-physical-playback",
             },
         )
         self.assertEqual(set(qualification["acceptance"]["preregistered_matrix_case_ids"]), expected_case_ids)
@@ -244,36 +254,34 @@ class ReleaseMetadataTests(unittest.TestCase):
             {case["migration"] for case in qualification["matrix"]},
             {"release_run_receipt", "fresh_retest", "scope_evaluated", "external_nonblocking"},
         )
+        for field in (
+            "source_git_sha",
+            "dmg_sha256",
+            "signed_app_tree_sha256",
+            "release_run_id",
+            "release_id",
+            "appcast_sha256",
+        ):
+            self.assertIsNone(qualification["candidate"][field])
+        self.assertEqual(qualification["status"], "preregistered_pending_exact_candidate")
         self.assertEqual(
-            qualification["candidate"]["source_git_sha"],
-            "0b06582a83a45bb38d851e62ccf38cd148c7bb95",
+            set(qualification["acceptance"]["blocking_case_ids"]),
+            {
+                "sparkle-update-route",
+                "native-sparkle-release-notes",
+                "clean-machine-signed-update",
+                "installed-ui-accessibility",
+                "usb-bluray-makemkv",
+                "protected-real-media-conversion",
+                "vision-pro-physical-playback",
+            },
         )
-        self.assertEqual(
-            qualification["candidate"]["dmg_sha256"],
-            "e1d936cc3231aea4f9d87fde1fd9e7792c1189254fc85bfc10fea382ffce690f",
-        )
-        self.assertEqual(
-            qualification["candidate"]["signed_app_tree_sha256"],
-            "30a7256feb4fb1dee78de70eefeec6a5e69db0e7355e7fd2aaf46efaa71f0d37",
-        )
-        self.assertEqual(qualification["candidate"]["release_run_id"], 30990186667)
-        self.assertEqual(qualification["candidate"]["release_id"], 365399671)
-        self.assertEqual(
-            qualification["candidate"]["appcast_sha256"],
-            "6404424910172cfccc9f23472e8748eda7bfba5b1f07d373e69cdb9b0679e9ed",
-        )
-        self.assertEqual(
-            qualification["status"],
-            "published_immutable_qualified",
-        )
-        self.assertEqual(qualification["acceptance"]["blocking_case_ids"], [])
-        self.assertFalse(qualification["acceptance"]["field_case_open"])
+        self.assertFalse(qualification["acceptance"]["milestone_complete"])
         self.assertTrue(
             qualification["execution_policy"]["macos_signing_requires_fresh_explicit_run_bound_authorization"]
         )
         self.assertEqual(qualification["execution_policy"]["approval_required_exit_code"], 20)
-        self.assertTrue(qualification["acceptance"]["signed_rc_complete"])
-        self.assertTrue(qualification["acceptance"]["passed"])
+        self.assertFalse(qualification["acceptance"]["passed"])
 
         targeted = json.loads(
             (REPO_ROOT / "docs" / "qualification" / "rc3-targeted-qualification-v1.json").read_text(encoding="utf-8")

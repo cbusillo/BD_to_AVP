@@ -9,10 +9,10 @@ tooling, reusable release engine, and guarded operator entrypoints implement
 this four-route contract. Beta 3 through Beta 8, Beta 10, and Beta 11 are
 published and immutable at builds `148` through `156`, excluding permanently
 burned builds `147`, `154`, and abandoned metadata build `157`. Failed Beta 9
-(`0.3.0b9`, build `154`) was never published. RC 1 (`0.3.0rc1`, build `158`)
-and RC 2 (`0.3.0rc2`, build `159`) are published and immutable. The next
-prepared target is RC 3 at `0.3.0rc3` build `160`; issue #458 owns its
-exact-signed-candidate subtitle qualification.
+(`0.3.0b9`, build `154`) was never published. RC 1 (`0.3.0rc1`, build `158`),
+RC 2 (`0.3.0rc2`, build `159`), and RC 3 (`0.3.0rc3`, build `160`) are
+published and immutable. The next prepared target is Stable `0.3.0` build
+`161`; issue #489 owns publication and exact-artifact qualification.
 Run-bound signing approval
 remains a separate authorization boundary.
 
@@ -274,30 +274,52 @@ RC-route client to update forward without changing its saved route.
 The immutable metadata and publication receipt are in
 [the RC 2 cut packet](0.3.0-rc.2-cut-packet.md).
 
-## RC 3 Prepared Target
+## RC 3 Published History
 
-The repository is prepared for review of the guarded `v0.3.0-rc.3`
-Prerelease workflow:
+Published `v0.3.0-rc.3` is immutable production history:
 
 - internal version `0.3.0rc3`;
 - public tag and title `v0.3.0-rc.3`;
 - global build `160`;
+- protected-main commit `0b06582a83a45bb38d851e62ccf38cd148c7bb95`;
+- guarded Prerelease run `30990186667`;
 - Sparkle channel `rc`;
 - GitHub prerelease, never Latest, PyPI, or Homebrew; and
-- the same production product, bundle, feed, key, signing team, and diagnostics
-  endpoint as RC 2.
+- DMG SHA-256
+  `e1d936cc3231aea4f9d87fde1fd9e7792c1189254fc85bfc10fea382ffce690f`.
 
-Publication must place RC 3 above immutable RC 2 build `159` and all earlier
-history, with burned builds `147` and `154` and abandoned build `157` absent.
-Stable continues to exclude the RC; RC, Beta, and Alpha admit it.
+The cumulative appcast places RC 3 above immutable RC 2 build `159` and all
+earlier history, with burned builds `147` and `154` and abandoned build `157`
+absent. Stable excludes the RC; RC, Beta, and Alpha admit it. Its updater,
+native release-note links, accessibility, malformed-PGS recovery, and
+privacy-safe subtitle diagnostics are fully qualified.
 
-Issue #458 owns exact-artifact qualification of the new malformed-PGS recovery
-and subtitle diagnostics. The repository has no freeze entry for this exact
-tag; that absence allows workflow preflight but does not assert that a tag,
-draft, DMG, release, or appcast item exists. Dispatch requires explicit release
-authorization under a fixed-`main` merge hold. The reviewed metadata,
-release-note seed, and qualification boundary are in
+The immutable metadata and checked publication evidence are in
 [the RC 3 cut packet](0.3.0-rc.3-cut-packet.md).
+
+## Stable 0.3.0 Prepared Target
+
+The repository is prepared for review of the guarded `v0.3.0` Stable workflow:
+
+- internal and public version `0.3.0`;
+- public tag and title `v0.3.0`;
+- global build `161`;
+- no Sparkle channel, making the item eligible on every route;
+- GitHub Stable and Latest;
+- PyPI publication and downstream Homebrew update; and
+- the same production product, bundle, feed, key, signing team, and diagnostics
+  endpoint as RC 3.
+
+Publication must place Stable above immutable RC 3 build `160` and all earlier
+history, with burned builds `147` and `154` and abandoned build `157` absent.
+Stable, RC, Beta, and Alpha clients can all select the newer Stable item without
+changing their saved route.
+
+The repository has no freeze entry for this exact tag and no conflicting tag,
+draft, release, PyPI version, Homebrew pull request, or appcast item. Dispatch
+requires explicit release authorization under a fixed-`main` merge hold. The
+reviewed metadata, release-note seed, publication effects, and post-publication
+qualification boundary are in [the Stable cut packet](0.3.0-cut-packet.md).
 
 ## Historical Boundaries
 

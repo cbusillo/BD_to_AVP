@@ -25,9 +25,9 @@ uv run python -m scripts.qualify_release_scope --validate-policy
 ```sh
 uv run python -m scripts.qualify_release_scope \
   --candidate-sha "$CANDIDATE_SHA" \
-  --qualification docs/qualification/rc3-signed-qualification-v1.json \
+  --qualification docs/qualification/stable-signed-qualification-v1.json \
   --evidence path/to/checked-evidence.json \
-  --release-stage rc
+  --release-stage stable
 ```
 
 Evidence uses schema version 1 and a `receipts` array. Each accepted receipt
@@ -70,17 +70,18 @@ reviewed candidate rather than being deferred through publication.
 ```sh
 uv run python -m scripts.qualify_release_scope \
   --candidate-sha "$CANDIDATE_SHA" \
-  --qualification docs/qualification/rc3-signed-qualification-v1.json \
+  --qualification docs/qualification/stable-signed-qualification-v1.json \
   --evidence path/to/checked-evidence.json \
-  --release-stage rc \
+  --release-stage stable \
   --workflow-phase preparation \
   --require-evidence
 ```
 
 Carry-forward is allowed only when an accepted named receipt exists and the
 diff from that receipt's source SHA contains no path covered by the case's
-direct invalidation patterns or referenced contracts. RC3 migration overrides
-keep its Sparkle, accessibility, PGS, and subtitle-diagnostic checks fresh.
+direct invalidation patterns or referenced contracts. The Stable migration
+keeps the live Sparkle route, native notes, and every Stable-cadence Tier 3 case
+fresh while allowing unchanged ordinary Tier 2 cases to remain scope-evaluated.
 Tier 1 invalidation mappings document release-engine ownership only; Tier 1
 always requires a new exact-candidate receipt and never carries.
 
@@ -169,7 +170,7 @@ secrets.
 (the macOS signing job). It checks the `preparation` phase using the exact
 `github.sha`, the committed Sparkle channel as the release stage, the checked
 `docs/qualification/release-evidence-v1.json` as evidence, and
-`docs/qualification/rc3-signed-qualification-v1.json` as the candidate file.
+`docs/qualification/stable-signed-qualification-v1.json` as the candidate file.
 When committed metadata identifies the first candidate of a cycle,
 `--first-candidate-of-cycle` is passed. The preparation report is uploaded as a workflow Actions artifact with
 30-day retention before enforcement exits. macOS signing cannot reach the
@@ -200,7 +201,7 @@ python -m scripts.qualify_release_scope \
   --candidate-sha "$GITHUB_SHA" \
   --release-stage "$CHANNEL" \
   --evidence docs/qualification/release-evidence-v1.json \
-  --qualification docs/qualification/rc3-signed-qualification-v1.json \
+  --qualification docs/qualification/stable-signed-qualification-v1.json \
   --workflow-phase preparation \
   [--first-candidate-of-cycle] \
   --output release-qualification-preparation.json \
@@ -212,7 +213,7 @@ python -m scripts.qualify_release_scope \
   --candidate-sha "$GITHUB_SHA" \
   --release-stage "$CHANNEL" \
   --evidence docs/qualification/release-evidence-v1.json \
-  --qualification docs/qualification/rc3-signed-qualification-v1.json \
+  --qualification docs/qualification/stable-signed-qualification-v1.json \
   --workflow-phase artifact \
   [--first-candidate-of-cycle] \
   --release-receipt release-receipt.json \
