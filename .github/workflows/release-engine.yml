@@ -2131,6 +2131,7 @@ jobs:
 
       - name: Retain verified release receipt transfer
         id: receipt_artifact
+        if: success()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-receipt-${{ github.run_attempt }}
@@ -2229,7 +2230,7 @@ jobs:
           CHECKSUM_PATH="signed-artifact-assets/package/SHA256SUMS"
           test "$(shasum -a 256 "$RECEIPT_PATH" | awk '{print $1}')" = "$RECEIPT_FILE_SHA256"
           uv run python -m scripts.release_receipt validate --receipt "$RECEIPT_PATH"
-          jq -e \
+          DMG_BINDING_MATCH_COUNT=$(jq \
             --argjson asset_id "$DMG_ASSET_ID" \
             --arg name "$DMG_NAME" \
             --arg sha256 "$DMG_SHA256" \
@@ -2240,8 +2241,12 @@ jobs:
               .name == $name and
               .sha256 == $sha256 and
               .size_bytes == $size
-            )] | length == 1' \
-            "$RECEIPT_PATH" >/dev/null
+            )] | length' \
+            "$RECEIPT_PATH")
+          if [ "$DMG_BINDING_MATCH_COUNT" != "1" ]; then
+            echo "Release receipt DMG binding mismatch: expected one exact artifact, found $DMG_BINDING_MATCH_COUNT." >&2
+            exit 1
+          fi
           test "$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')" = "$DMG_SHA256"
           test "$(stat -f %z "$DMG_PATH")" = "$DMG_SIZE"
           test "$(cat "$CHECKSUM_PATH")" = "$DMG_SHA256  $DMG_NAME"
