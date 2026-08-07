@@ -689,18 +689,15 @@ class MacOSOperations:
         output_directory.mkdir(parents=True, exist_ok=True)
         derived_data = output_directory.parent / f"InstalledUIDerivedData-{phase}"
         result_bundle = output_directory.parent / f"InstalledUI-{phase}.xcresult"
-        environment = dict(os.environ)
-        environment.update(
-            {
-                "BD_TO_AVP_UI_APP_PATH": str(app_path),
-                "BD_TO_AVP_UI_BUNDLE_IDENTIFIER": BUNDLE_IDENTIFIER,
-                "BD_TO_AVP_UI_HOME": str(synthetic_home),
-                "BD_TO_AVP_UI_OUTPUT_DIRECTORY": str(output_directory),
-                "BD_TO_AVP_UI_PHASE": phase,
-                "BD_TO_AVP_UI_RELEASE_NOTES_URL": release_notes_url,
-                "BD_TO_AVP_UI_RELEASES_URL": RELEASES_URL,
-            }
-        )
+        build_settings = {
+            "BD_TO_AVP_UI_APP_PATH": str(app_path),
+            "BD_TO_AVP_UI_BUNDLE_IDENTIFIER": BUNDLE_IDENTIFIER,
+            "BD_TO_AVP_UI_HOME": str(synthetic_home),
+            "BD_TO_AVP_UI_OUTPUT_DIRECTORY": str(output_directory),
+            "BD_TO_AVP_UI_PHASE": phase,
+            "BD_TO_AVP_UI_RELEASE_NOTES_URL": release_notes_url,
+            "BD_TO_AVP_UI_RELEASES_URL": RELEASES_URL,
+        }
         self._run(
             [
                 str(SYSTEM_TOOL_PATHS["xcodebuild"]),
@@ -714,12 +711,17 @@ class MacOSOperations:
                 str(result_bundle),
                 "-destination",
                 "platform=macOS,arch=arm64",
-                "test",
                 f"-only-testing:BluRayToVisionProUITests/InstalledUIAcceptanceTests/{test_name}",
+                *(f"{key}={value}" for key, value in build_settings.items()),
+                "test",
             ],
             timeout=UI_TEST_TIMEOUT_SECONDS,
-            env=environment,
         )
+        expected_evidence = "candidate-ui.json" if phase == "candidate" else "updater-ui.json"
+        if not (output_directory / expected_evidence).is_file():
+            raise CleanMachineError(
+                f"Installed UI {phase} test completed without required evidence: {expected_evidence}."
+            )
 
     @staticmethod
     def app_running() -> bool:

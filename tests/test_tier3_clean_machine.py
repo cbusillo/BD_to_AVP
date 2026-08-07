@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
 from scripts import sparkle_appcast
 from scripts.artifact_identity import app_tree_sha256
@@ -216,6 +217,96 @@ class FakeOperations(QualificationOperations):
 
 
 class Tier3CleanMachineTests(unittest.TestCase):
+    def test_collect_ui_evidence_forwards_exact_scheme_build_settings(self) -> None:
+        operations = MacOSOperations()
+        release_notes_url = "https://example.test/releases/v1?name=encoded%20space&route=stable"
+        expected_tests = {
+            "candidate": ("testCandidateMainWindowProfileAndSettings", "candidate-ui.json"),
+            "updater": ("testPriorUpdaterControlsAndReleaseLinks", "updater-ui.json"),
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            repo = root / "Repo With Spaces"
+            (repo / "macos").mkdir(parents=True)
+            app_path = root / "Applications" / APP_NAME
+            synthetic_home = root / "Synthetic Home"
+            for phase, (test_name, evidence_name) in expected_tests.items():
+                with self.subTest(phase=phase):
+                    output_directory = root / f"Evidence {phase}"
+                    captured_commands: list[list[str]] = []
+
+                    def run(
+                        command: Any,
+                        captured_commands: list[list[str]] = captured_commands,
+                        output_directory: Path = output_directory,
+                        evidence_name: str = evidence_name,
+                        **kwargs: Any,
+                    ) -> subprocess.CompletedProcess[str]:
+                        captured_commands.append(list(command))
+                        self.assertNotIn("env", kwargs)
+                        output_directory.mkdir(parents=True, exist_ok=True)
+                        (output_directory / evidence_name).write_text("{}\n", encoding="utf-8")
+                        return subprocess.CompletedProcess(command, 0, "", "")
+
+                    with patch.object(MacOSOperations, "_run", side_effect=run):
+                        operations.collect_ui_evidence(
+                            repo=repo,
+                            phase=phase,
+                            app_path=app_path,
+                            synthetic_home=synthetic_home,
+                            output_directory=output_directory,
+                            release_notes_url=release_notes_url,
+                        )
+
+                    self.assertEqual(len(captured_commands), 1)
+                    command = captured_commands[0]
+                    expected_settings = {
+                        "BD_TO_AVP_UI_APP_PATH": str(app_path),
+                        "BD_TO_AVP_UI_BUNDLE_IDENTIFIER": BUNDLE_IDENTIFIER,
+                        "BD_TO_AVP_UI_HOME": str(synthetic_home),
+                        "BD_TO_AVP_UI_OUTPUT_DIRECTORY": str(output_directory),
+                        "BD_TO_AVP_UI_PHASE": phase,
+                        "BD_TO_AVP_UI_RELEASE_NOTES_URL": release_notes_url,
+                        "BD_TO_AVP_UI_RELEASES_URL": RELEASES_URL,
+                    }
+                    observed_settings = {
+                        argument.split("=", maxsplit=1)[0]: argument.split("=", maxsplit=1)[1]
+                        for argument in command
+                        if argument.split("=", maxsplit=1)[0] in expected_settings
+                    }
+                    self.assertEqual(observed_settings, expected_settings)
+                    self.assertEqual(command[-1], "test")
+                    self.assertIn(
+                        f"-only-testing:BluRayToVisionProUITests/InstalledUIAcceptanceTests/{test_name}",
+                        command,
+                    )
+                    for key, value in expected_settings.items():
+                        argument = f"{key}={value}"
+                        self.assertEqual(command.count(argument), 1)
+                        self.assertLess(command.index(argument), len(command) - 1)
+
+    def test_collect_ui_evidence_rejects_skipped_test_without_phase_output(self) -> None:
+        operations = MacOSOperations()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            with patch.object(
+                MacOSOperations,
+                "_run",
+                return_value=subprocess.CompletedProcess([], 0, "", ""),
+            ):
+                with self.assertRaisesRegex(
+                    CleanMachineError,
+                    "candidate test completed without required evidence: candidate-ui.json",
+                ):
+                    operations.collect_ui_evidence(
+                        repo=root,
+                        phase="candidate",
+                        app_path=root / APP_NAME,
+                        synthetic_home=root / "Home",
+                        output_directory=root / "Evidence",
+                        release_notes_url=RELEASES_URL,
+                    )
+
     @staticmethod
     def make_app(root: Path, package_version: str, build_version: str, payload: str) -> Path:
         app = root / f"app-{package_version}" / APP_NAME
