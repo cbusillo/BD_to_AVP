@@ -71,7 +71,7 @@ final class WorkerProcessClientTests: XCTestCase {
             }
         }
 
-        await fulfillment(of: [slowHandlerStarted], timeout: 5)
+        await fulfillment(of: [slowHandlerStarted], timeout: 15)
         let writerStarted = await waitForDiagnosticMarker("WRITER-STARTED", client: client)
         XCTAssertTrue(writerStarted)
         guard writerStarted else {

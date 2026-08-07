@@ -21,6 +21,12 @@ from scripts.release_receipt import (
     load_validated_checked_receipt,
     validate_receipt,
 )
+from scripts.signed_artifact_receipt import (
+    PROFILE_CASE_ID,
+    SignedArtifactReceiptError,
+    SignedArtifactReceiptExpectation,
+    load_validated_receipt as load_validated_signed_artifact_receipt,
+)
 from scripts.tier3_receipt import Tier3ReceiptError, load_validated_receipt_bytes
 
 
@@ -38,6 +44,7 @@ BLOCKING_PHASE_OWNERS = {
     "milestone": "milestone",
     "none": None,
 }
+ARTIFACT_OWNED_TIER2_SOURCES = {"signed_artifact_receipt"}
 TIER3_EXECUTION_MODES = {"automated", "operator_assisted"}
 TIER3_ENVIRONMENT_IDENTITY_FIELDS = {
     "environment_class",
@@ -147,11 +154,16 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Mapping[str, Any]:
                 f"Qualification tier {tier} has unsupported blocking_phase {expected_blocking_phase!r}."
             )
         requires_live_publication = case.get("requires_live_publication")
-        allowed_blocking_phases = (
-            {expected_blocking_phase, "milestone"}
-            if tier == 2 and requires_live_publication is True
-            else {expected_blocking_phase}
-        )
+        artifact_owned = case.get("artifact_owned", False)
+        if not isinstance(artifact_owned, bool):
+            raise QualificationScopeError(
+                f"Qualification case {case_id!r} artifact_owned must be boolean when present."
+            )
+        allowed_blocking_phases = {expected_blocking_phase}
+        if tier == 2 and requires_live_publication is True:
+            allowed_blocking_phases.add("milestone")
+        if tier == 2 and artifact_owned:
+            allowed_blocking_phases.add("publication")
         if blocking_phase not in allowed_blocking_phases:
             raise QualificationScopeError(
                 f"Qualification case {case_id!r} blocking_phase must be one of "
@@ -168,6 +180,10 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Mapping[str, Any]:
         if tier == 2 and blocking_phase == "milestone" and requires_live_publication is not True:
             raise QualificationScopeError(
                 f"Milestone-owned Tier 2 case {case_id!r} must declare requires_live_publication=true."
+            )
+        if artifact_owned and (tier != 2 or blocking_phase != "publication" or requires_live_publication is True):
+            raise QualificationScopeError(
+                f"Artifact-owned case {case_id!r} must be a publication-owned non-live Tier 2 case."
             )
         live_evidence_case_ids = case.get("live_evidence_case_ids")
         if requires_live_publication is True:
@@ -206,6 +222,14 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Mapping[str, Any]:
         if len(evidence_sources) != 1:
             raise QualificationScopeError(
                 f"Qualification case {case_id!r} must have exactly one allowed evidence source."
+            )
+        if artifact_owned and evidence_sources[0] not in ARTIFACT_OWNED_TIER2_SOURCES:
+            raise QualificationScopeError(
+                f"Artifact-owned case {case_id!r} must use an exact signed artifact receipt source."
+            )
+        if not artifact_owned and tier == 2 and blocking_phase == "publication":
+            raise QualificationScopeError(
+                f"Publication-owned Tier 2 case {case_id!r} must explicitly declare artifact_owned=true."
             )
         carry = _mapping(case.get("carry_forward"), f"qualification case {case_id!r} carry_forward")
         for field in ("allowed", "requires_prior_accepted_receipt", "requires_clean_invalidation"):
@@ -778,6 +802,42 @@ def _artifact_receipt_summary(receipt: Mapping[str, Any], path: Path) -> dict[st
     }
 
 
+def _signed_artifact_receipt_summary(receipt: Mapping[str, Any], path: Path) -> dict[str, Any]:
+    return {
+        "receipt_id": receipt["receipt_sha256"],
+        "reference": path.name,
+        "source_sha": receipt["candidate_sha"],
+    }
+
+
+def _signed_artifact_expectation(
+    expectation: ArtifactReceiptExpectation,
+    *,
+    policy_id: str,
+    case_id: str,
+) -> SignedArtifactReceiptExpectation:
+    return SignedArtifactReceiptExpectation(
+        policy_id=policy_id,
+        case_id=case_id,
+        candidate_sha=expectation.candidate_sha,
+        workflow_run_id=expectation.workflow_run_id,
+        workflow_run_attempt=expectation.workflow_run_attempt,
+        release_id=expectation.release_id,
+        release_receipt_asset_id=expectation.receipt_asset_id,
+        release_receipt_file_sha256=expectation.receipt_file_sha256,
+        release_receipt_sha256=expectation.receipt_sha256,
+        package_version=expectation.package_version,
+        public_version=expectation.public_version,
+        build_version=expectation.build_version,
+        release_tag=expectation.release_tag,
+        dmg_asset_id=expectation.dmg_asset_id,
+        dmg_name=expectation.dmg_name,
+        dmg_size=expectation.dmg_size,
+        dmg_sha256=expectation.dmg_sha256,
+        signed_app_tree_sha256=expectation.signed_app_tree_sha256,
+    )
+
+
 def _matches_milestone_tier1_receipt(
     evidence_receipt: Mapping[str, Any] | None,
     release_receipt: Mapping[str, Any],
@@ -870,6 +930,8 @@ def _evidence_requirement(
         binding = "automatic_per_commit_gate"
     elif tier == 1:
         binding = "exact_same_run_release_receipt"
+    elif case.get("artifact_owned") is True:
+        binding = "exact_same_run_signed_artifact_receipt"
     elif tier in {2, 3}:
         binding = "exact_candidate_or_valid_carry_forward"
     else:
@@ -907,6 +969,8 @@ def classify_release_scope(
     workflow_phase: str = "preparation",
     artifact_receipt_path: Path | None = None,
     artifact_receipt_expectation: ArtifactReceiptExpectation | None = None,
+    signed_artifact_receipt_path: Path | None = None,
+    signed_artifact_receipt_file_sha256: str | None = None,
     milestone_receipt_path: Path | None = None,
     as_of: date | None = None,
 ) -> dict[str, Any]:
@@ -931,6 +995,7 @@ def classify_release_scope(
     )
     artifact_tier1_cases: set[str] = set()
     artifact_receipt_evidence: dict[str, Any] | None = None
+    signed_artifact_receipts: dict[str, tuple[Mapping[str, Any], Path]] = {}
     milestone_receipt: Mapping[str, Any] | None = None
     milestone_receipt_reference: str | None = None
     milestone_receipt_file_sha256: str | None = None
@@ -943,6 +1008,14 @@ def classify_release_scope(
     if workflow_phase != "artifact" and artifact_receipt_path is not None:
         raise QualificationScopeError(
             f"{workflow_phase.capitalize()} workflow phase cannot consume artifact release evidence."
+        )
+    if (signed_artifact_receipt_path is None) != (signed_artifact_receipt_file_sha256 is None):
+        raise QualificationScopeError(
+            "Signed artifact UI receipt and exact workflow file digest must be supplied together."
+        )
+    if workflow_phase != "artifact" and signed_artifact_receipt_path is not None:
+        raise QualificationScopeError(
+            f"{workflow_phase.capitalize()} workflow phase cannot consume signed artifact UI evidence."
         )
     if workflow_phase == "milestone" and milestone_receipt_path is None:
         raise QualificationScopeError("Milestone workflow phase requires the exact checked release receipt.")
@@ -971,6 +1044,28 @@ def classify_release_scope(
                 "Artifact release receipt Tier 1 case references do not match the current qualification policy."
             )
         artifact_receipt_evidence = _artifact_receipt_summary(artifact_receipt, artifact_receipt_path)
+        if signed_artifact_receipt_path is not None:
+            artifact_owned_cases = [
+                case_id for case_id, case in cases_by_id.items() if case.get("artifact_owned") is True
+            ]
+            if artifact_owned_cases != [PROFILE_CASE_ID]:
+                raise QualificationScopeError(
+                    "Signed artifact UI receipt support is limited to the profile accessibility policy case."
+                )
+            signed_expectation = _signed_artifact_expectation(
+                artifact_receipt_expectation,
+                policy_id=cast(str, policy["policy_id"]),
+                case_id=PROFILE_CASE_ID,
+            )
+            try:
+                signed_receipt = load_validated_signed_artifact_receipt(
+                    signed_artifact_receipt_path,
+                    signed_expectation,
+                    expected_file_sha256=cast(str, signed_artifact_receipt_file_sha256),
+                )
+            except SignedArtifactReceiptError as error:
+                raise QualificationScopeError(f"Signed artifact UI receipt validation failed: {error}") from error
+            signed_artifact_receipts[PROFILE_CASE_ID] = (signed_receipt, signed_artifact_receipt_path)
     if milestone_receipt_path is not None:
         try:
             milestone_receipt, milestone_receipt_file_sha256 = load_validated_checked_receipt(milestone_receipt_path)
@@ -1033,6 +1128,18 @@ def classify_release_scope(
             status, reason = "covered", "Validated evidence is bound to the exact artifact workflow run and release."
             selected_receipt = None
             trigger = "exact_artifact"
+        elif case.get("artifact_owned") is True and workflow_phase == "artifact":
+            signed_artifact = signed_artifact_receipts.get(case_id)
+            if signed_artifact is not None:
+                status = "covered"
+                reason = "Validated UI evidence is bound to the exact signed artifact workflow run and release."
+                selected_receipt = None
+                trigger = "exact_signed_artifact"
+            else:
+                status = "retest"
+                reason = "The artifact phase has no exact signed UI receipt for this candidate."
+                selected_receipt = None
+                trigger = "missing_exact_signed_artifact"
         elif tier == 1 and workflow_phase == "milestone":
             if (
                 milestone_receipt is not None
@@ -1148,6 +1255,11 @@ def classify_release_scope(
         evidence_summary = (
             artifact_receipt_evidence
             if tier == 1 and case_id in artifact_tier1_cases and artifact_receipt_evidence is not None
+            else _signed_artifact_receipt_summary(
+                signed_artifact_receipts[case_id][0],
+                signed_artifact_receipts[case_id][1],
+            )
+            if case_id in signed_artifact_receipts
             else _receipt_summary(selected_receipt)
         )
         result = {
@@ -1213,6 +1325,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--first-candidate-of-cycle", action="store_true")
     parser.add_argument("--workflow-phase", choices=WORKFLOW_PHASES, default="preparation")
     parser.add_argument("--release-receipt", type=Path)
+    parser.add_argument("--signed-artifact-receipt", type=Path)
+    parser.add_argument("--signed-artifact-receipt-sha256")
     parser.add_argument("--milestone-release-receipt", type=Path)
     parser.add_argument("--release-route", choices=("stable", "prerelease"))
     parser.add_argument("--workflow-run-id", type=int)
@@ -1223,9 +1337,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--build-version")
     parser.add_argument("--release-tag")
     parser.add_argument("--dmg-name")
+    parser.add_argument("--release-receipt-asset-id", type=int)
     parser.add_argument("--release-receipt-sha256")
+    parser.add_argument("--release-receipt-self-sha256")
     parser.add_argument("--signed-app-tree-sha256")
     parser.add_argument("--dmg-asset-id", type=int)
+    parser.add_argument("--dmg-size", type=int)
     parser.add_argument("--dmg-sha256")
     parser.add_argument("--checksum-asset-id", type=int)
     parser.add_argument("--checksum-sha256")
@@ -1265,9 +1382,12 @@ def main(argv: list[str] | None = None) -> int:
                 "--build-version": args.build_version,
                 "--release-tag": args.release_tag,
                 "--dmg-name": args.dmg_name,
+                "--release-receipt-asset-id": args.release_receipt_asset_id,
                 "--release-receipt-sha256": args.release_receipt_sha256,
+                "--release-receipt-self-sha256": args.release_receipt_self_sha256,
                 "--signed-app-tree-sha256": args.signed_app_tree_sha256,
                 "--dmg-asset-id": args.dmg_asset_id,
+                "--dmg-size": args.dmg_size,
                 "--dmg-sha256": args.dmg_sha256,
                 "--checksum-asset-id": args.checksum_asset_id,
                 "--checksum-sha256": args.checksum_sha256,
@@ -1294,9 +1414,12 @@ def main(argv: list[str] | None = None) -> int:
                     build_version=args.build_version,
                     release_tag=args.release_tag,
                     dmg_name=args.dmg_name,
+                    receipt_asset_id=args.release_receipt_asset_id,
                     receipt_file_sha256=args.release_receipt_sha256,
+                    receipt_sha256=args.release_receipt_self_sha256,
                     signed_app_tree_sha256=args.signed_app_tree_sha256,
                     dmg_asset_id=args.dmg_asset_id,
+                    dmg_size=args.dmg_size,
                     dmg_sha256=args.dmg_sha256,
                     checksum_asset_id=args.checksum_asset_id,
                     checksum_sha256=args.checksum_sha256,
@@ -1316,6 +1439,8 @@ def main(argv: list[str] | None = None) -> int:
                 workflow_phase=args.workflow_phase,
                 artifact_receipt_path=args.release_receipt,
                 artifact_receipt_expectation=artifact_receipt_expectation,
+                signed_artifact_receipt_path=args.signed_artifact_receipt,
+                signed_artifact_receipt_file_sha256=args.signed_artifact_receipt_sha256,
                 milestone_receipt_path=args.milestone_release_receipt,
                 as_of=args.as_of,
             )

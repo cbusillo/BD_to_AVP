@@ -2120,6 +2120,130 @@ jobs:
             echo "receipt_sha256=$RECEIPT_SHA256"
           } >> "$GITHUB_OUTPUT"
 
+  signed-artifact-ui:
+    name: Prove signed artifact UI accessibility
+    needs:
+      - policy
+      - prepare
+      - package
+      - create-draft
+      - verify-draft
+      - build-receipt
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.signed_ui_artifact.outputs.artifact-id }}
+      receipt_path: ${{ steps.ui.outputs.receipt_path }}
+      receipt_file_sha256: ${{ steps.ui.outputs.receipt_file_sha256 }}
+    steps:
+      - name: Checkout exact candidate UI tests
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Select pinned macOS UI toolchain
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          test "$(sw_vers -productVersion | cut -d. -f1)" = "26"
+          XCODE_PATH="/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+          if [ ! -d "$XCODE_PATH" ]; then
+            echo "Pinned Xcode path is unavailable: $XCODE_PATH" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_PATH"
+          test "$(xcodebuild -version | sed -n '1p')" = "Xcode $XCODE_VERSION"
+          test "$(xcodebuild -version | sed -n '2p')" = "Build version $XCODE_BUILD_VERSION"
+
+      - name: Install pinned XcodeGen
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/xcodegen.zip"
+          curl --fail --location --silent --show-error \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip" \
+            --output "$ARCHIVE"
+          printf '%s  %s\n' "$XCODEGEN_SHA256" "$ARCHIVE" | shasum -a 256 --check
+          ditto -x -k "$ARCHIVE" "$RUNNER_TEMP"
+          test "$("$RUNNER_TEMP/xcodegen/bin/xcodegen" --version)" = "Version: $XCODEGEN_VERSION"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install Python and generate Xcode project
+        run: |
+          set -euo pipefail
+          uv python install 3.12
+          uv sync --locked --all-groups --python 3.12
+          uv run python scripts/native_app.py generate
+
+      - name: Download exact signed release assets
+        env:
+          DMG_ASSET_ID: ${{ needs.verify-draft.outputs.dmg_asset_id }}
+          DMG_NAME: ${{ needs.prepare.outputs.dmg_name }}
+          DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
+          DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
+          RECEIPT_ASSET_ID: ${{ needs.build-receipt.outputs.receipt_asset_id }}
+          RECEIPT_FILE_SHA256: ${{ needs.build-receipt.outputs.receipt_file_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p signed-artifact-assets
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$RECEIPT_ASSET_ID" \
+            -H "Accept: application/octet-stream" > signed-artifact-assets/release-receipt.json
+          test "$(shasum -a 256 signed-artifact-assets/release-receipt.json | awk '{print $1}')" = "$RECEIPT_FILE_SHA256"
+          RECEIPT_ASSET_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/assets/$RECEIPT_ASSET_ID")
+          test "$(jq -r .digest <<< "$RECEIPT_ASSET_JSON")" = "sha256:$RECEIPT_FILE_SHA256"
+
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$DMG_ASSET_ID" \
+            -H "Accept: application/octet-stream" > "signed-artifact-assets/$DMG_NAME"
+          test "$(shasum -a 256 "signed-artifact-assets/$DMG_NAME" | awk '{print $1}')" = "$DMG_SHA256"
+          test "$(stat -f %z "signed-artifact-assets/$DMG_NAME")" = "$DMG_SIZE"
+          DMG_ASSET_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/assets/$DMG_ASSET_ID")
+          test "$(jq -r .digest <<< "$DMG_ASSET_JSON")" = "sha256:$DMG_SHA256"
+
+      - name: Run installed candidate UI accessibility lane
+        id: ui
+        env:
+          DMG_NAME: ${{ needs.prepare.outputs.dmg_name }}
+          RECEIPT_ASSET_ID: ${{ needs.build-receipt.outputs.receipt_asset_id }}
+          RECEIPT_FILE_SHA256: ${{ needs.build-receipt.outputs.receipt_file_sha256 }}
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.signed_artifact_ui \
+            --policy "$RELEASE_QUALIFICATION_POLICY" \
+            --release-receipt signed-artifact-assets/release-receipt.json \
+            --dmg "signed-artifact-assets/$DMG_NAME" \
+            --qualification-root "$RUNNER_TEMP/signed-artifact-ui" \
+            --evidence-directory signed-artifact-ui-evidence \
+            --output-receipt signed-artifact-ui-receipt.json \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --release-receipt-asset-id "$RECEIPT_ASSET_ID" \
+            --release-receipt-file-sha256 "$RECEIPT_FILE_SHA256"
+          RECEIPT_FILE_SHA256=$(shasum -a 256 signed-artifact-ui-receipt.json | awk '{print $1}')
+          {
+            echo "receipt_path=signed-artifact-ui-receipt.json"
+            echo "receipt_file_sha256=$RECEIPT_FILE_SHA256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Retain signed artifact UI receipt
+        id: signed_ui_artifact
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: signed-artifact-ui-${{ github.run_attempt }}
+          path: signed-artifact-ui-receipt.json
+          if-no-files-found: error
+          retention-days: 7
+
   qualify-artifact:
     name: Qualify exact release artifact
     needs:
@@ -2130,6 +2254,7 @@ jobs:
       - publish-appcast
       - verify-draft
       - build-receipt
+      - signed-artifact-ui
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -2161,6 +2286,12 @@ jobs:
             exit 1
           fi
 
+      - name: Download signed artifact UI receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.signed-artifact-ui.outputs.artifact_id }}
+          path: signed-artifact-ui
+
       - name: Classify exact artifact evidence
         id: qualification
         env:
@@ -2172,15 +2303,20 @@ jobs:
           DMG_ASSET_ID: ${{ needs.verify-draft.outputs.dmg_asset_id }}
           DMG_NAME: ${{ needs.prepare.outputs.dmg_name }}
           DMG_SHA256: ${{ needs.package.outputs.dmg_sha256 }}
+          DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
           FIRST_CANDIDATE_OF_CYCLE: ${{ needs.prepare.outputs.first_candidate_of_cycle }}
           PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
           PUBLIC_VERSION: ${{ needs.prepare.outputs.public_version }}
+          RECEIPT_ASSET_ID: ${{ needs.build-receipt.outputs.receipt_asset_id }}
           RECEIPT_FILE_SHA256: ${{ needs.build-receipt.outputs.receipt_file_sha256 }}
+          RECEIPT_SELF_SHA256: ${{ needs.build-receipt.outputs.receipt_sha256 }}
           RELEASE_ID: ${{ needs.create-draft.outputs.release_id }}
           RELEASE_ROUTE: ${{ needs.policy.outputs.release_route }}
           RELEASE_STAGE: ${{ needs.prepare.outputs.channel }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
           SIGNED_APP_TREE_SHA256: ${{ needs.package.outputs.signed_app_tree_sha256 }}
+          SIGNED_ARTIFACT_RECEIPT: signed-artifact-ui/${{ needs.signed-artifact-ui.outputs.receipt_path }}
+          SIGNED_ARTIFACT_RECEIPT_SHA256: ${{ needs.signed-artifact-ui.outputs.receipt_file_sha256 }}
         run: |
           set -euo pipefail
           FIRST_CANDIDATE_ARGS=()
@@ -2197,6 +2333,8 @@ jobs:
             --workflow-phase artifact \
             "${FIRST_CANDIDATE_ARGS[@]}" \
             --release-receipt release-receipt.json \
+            --signed-artifact-receipt "$SIGNED_ARTIFACT_RECEIPT" \
+            --signed-artifact-receipt-sha256 "$SIGNED_ARTIFACT_RECEIPT_SHA256" \
             --release-route "$RELEASE_ROUTE" \
             --workflow-run-id "$GITHUB_RUN_ID" \
             --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
@@ -2206,9 +2344,12 @@ jobs:
             --build-version "$BUILD_VERSION" \
             --release-tag "$RELEASE_TAG" \
             --dmg-name "$DMG_NAME" \
+            --release-receipt-asset-id "$RECEIPT_ASSET_ID" \
             --release-receipt-sha256 "$RECEIPT_FILE_SHA256" \
+            --release-receipt-self-sha256 "$RECEIPT_SELF_SHA256" \
             --signed-app-tree-sha256 "$SIGNED_APP_TREE_SHA256" \
             --dmg-asset-id "$DMG_ASSET_ID" \
+            --dmg-size "$DMG_SIZE" \
             --dmg-sha256 "$DMG_SHA256" \
             --checksum-asset-id "$CHECKSUM_ASSET_ID" \
             --checksum-sha256 "$CHECKSUM_SHA256" \
@@ -2249,6 +2390,7 @@ jobs:
       - package
       - verify-draft
       - build-receipt
+      - signed-artifact-ui
       - qualify-artifact
     if: >-
       !cancelled() &&
@@ -2257,6 +2399,7 @@ jobs:
       needs.package.result == 'success' &&
       needs.verify-draft.result == 'success' &&
       needs.build-receipt.result == 'success' &&
+      needs.signed-artifact-ui.result == 'success' &&
       needs.qualify-artifact.result == 'success' &&
       (
         needs.prepare.outputs.publish_pypi != 'true' ||

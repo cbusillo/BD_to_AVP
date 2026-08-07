@@ -1,0 +1,267 @@
+import json
+import tempfile
+import unittest
+
+from pathlib import Path
+
+from scripts.artifact_identity import app_tree_sha256
+from scripts.release_receipt import build_receipt, file_sha256, write_receipt
+from scripts.signed_artifact_ui import SignedArtifactUIConfig, SignedArtifactUIError, run
+from scripts.tier3_clean_machine import APP_NAME, RELEASES_URL
+
+
+CANDIDATE_SHA = "b" * 40
+DMG_SHA256 = "c" * 64
+CHECKSUM_SHA256 = "d" * 64
+APPCAST_SHA256 = "e" * 64
+
+
+class FakeOperations:
+    def __init__(self, app_source: Path) -> None:
+        self.app_source = app_source
+        self.running = False
+
+    def install_app(self, _dmg_path: Path, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            raise AssertionError("test destination should start empty")
+        import shutil
+
+        shutil.copytree(self.app_source, destination, symlinks=True)
+
+    def collect_ui_evidence(
+        self,
+        *,
+        repo: Path,
+        phase: str,
+        app_path: Path,
+        synthetic_home: Path,
+        output_directory: Path,
+        release_notes_url: str,
+    ) -> None:
+        del repo, app_path, synthetic_home, release_notes_url
+        self.running = True
+        if phase != "candidate":
+            raise AssertionError("signed artifact UI runner must use the candidate lane")
+        output_directory.mkdir(parents=True)
+        (output_directory / "candidate-ui.json").write_text(
+            json.dumps(
+                {
+                    "main_window_ready": True,
+                    "profile_document_version": 5,
+                    "profile_save_accessible": True,
+                    "profile_save_succeeded": True,
+                    "profiles_after": 1,
+                    "release_page_url": RELEASES_URL,
+                    "release_page_url_observed": True,
+                    "schema_version": 1,
+                    "status": "passed",
+                    "updater_controls_accessible": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (output_directory / "accessibility-tree.json").write_text(
+            json.dumps(
+                {
+                    "elements": [
+                        {
+                            "actions": [],
+                            "enabled": True,
+                            "help": "Current status",
+                            "identifier": "main-status",
+                            "label": "Ready",
+                            "role": "AXStaticText",
+                        },
+                        {
+                            "actions": ["AXPress"],
+                            "enabled": True,
+                            "help": "Opens a form to name and save these settings as a reusable profile",
+                            "identifier": "save-profile-action",
+                            "label": "Save current settings as new profile",
+                            "role": "AXButton",
+                        },
+                        {
+                            "actions": ["AXPress"],
+                            "enabled": True,
+                            "help": "Checks for updates",
+                            "identifier": "update-action",
+                            "label": "Check for Updates",
+                            "role": "AXButton",
+                        },
+                        {
+                            "actions": [],
+                            "enabled": True,
+                            "help": "Update route",
+                            "identifier": "update-route-picker",
+                            "label": "Update Route",
+                            "role": "AXPopUpButton",
+                        },
+                        {
+                            "actions": ["AXPress"],
+                            "enabled": True,
+                            "help": "Opens all releases",
+                            "identifier": "all-releases-link",
+                            "label": "All Releases",
+                            "role": "AXLink",
+                            "url": RELEASES_URL,
+                        },
+                    ],
+                    "schema_version": 1,
+                }
+            ),
+            encoding="utf-8",
+        )
+        png = b"\x89PNG\r\n\x1a\n" + (b"0" * 64)
+        (output_directory / "screenshot-light.png").write_bytes(png)
+        (output_directory / "screenshot-dark.png").write_bytes(png)
+
+    def quit_app(self) -> None:
+        self.running = False
+
+    def app_running(self) -> bool:
+        return self.running
+
+
+def make_app(root: Path) -> Path:
+    app = root / APP_NAME
+    contents = app / "Contents"
+    contents.mkdir(parents=True)
+    (contents / "Info.plist").write_text("plist", encoding="utf-8")
+    (contents / "MacOS").mkdir()
+    (contents / "MacOS" / "BD_to_AVP").write_text("binary", encoding="utf-8")
+    return app
+
+
+class SignedArtifactUITests(unittest.TestCase):
+    def test_runner_rejects_preexisting_production_app_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            operations = FakeOperations(root)
+            operations.running = True
+            config = SignedArtifactUIConfig(
+                repo=Path.cwd(),
+                policy=Path.cwd() / "docs/qualification/release-qualification-policy-v1.json",
+                release_receipt=root / "release-receipt.json",
+                dmg=root / "candidate.dmg",
+                qualification_root=root / "workspace",
+                evidence_directory=root / "evidence",
+                output_receipt=root / "signed-artifact-ui-receipt.json",
+                case_id="profile-save-action-accessibility",
+                release_notes_url=RELEASES_URL,
+                workflow_run_id=12345,
+                workflow_run_attempt=2,
+                release_receipt_asset_id=4,
+                release_receipt_file_sha256="0" * 64,
+            )
+
+            with self.assertRaisesRegex(SignedArtifactUIError, "must not be running"):
+                run(config, operations)
+
+            self.assertFalse(config.qualification_root.exists())
+
+    def test_runner_installs_exact_dmg_and_writes_bound_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            app = make_app(root / "source")
+            dmg = root / "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.3.dmg"
+            dmg.write_bytes(b"candidate-dmg")
+            facts = {
+                "release_route": "prerelease",
+                "source_sha": CANDIDATE_SHA,
+                "workflow_actor": "shiny-code-bot",
+                "workflow_run_id": 12345,
+                "workflow_run_attempt": 2,
+                "package_version": "0.3.0rc3",
+                "public_version": "0.3.0-rc.3",
+                "build_version": "160",
+                "release_tag": "v0.3.0-rc.3",
+                "release_name": "v0.3.0-rc.3",
+                "release_id": 67890,
+                "release_created_at": "2026-08-05T12:00:00Z",
+                "prerelease": True,
+                "make_latest": False,
+                "signed_app_tree_sha256": app_tree_sha256(app),
+                "artifacts": [
+                    {
+                        "kind": "dmg",
+                        "name": dmg.name,
+                        "sha256": file_sha256(dmg),
+                        "size_bytes": dmg.stat().st_size,
+                        "asset_id": 1,
+                    },
+                    {
+                        "kind": "checksum",
+                        "name": "SHA256SUMS",
+                        "sha256": CHECKSUM_SHA256,
+                        "size_bytes": 100,
+                        "asset_id": 2,
+                    },
+                    {
+                        "kind": "appcast",
+                        "name": "appcast.xml",
+                        "sha256": APPCAST_SHA256,
+                        "size_bytes": 500,
+                        "asset_id": 3,
+                    },
+                ],
+            }
+            release_receipt = root / "release-receipt.json"
+            write_receipt(build_receipt(facts), release_receipt)
+            output_receipt = root / "signed-artifact-ui-receipt.json"
+            config = SignedArtifactUIConfig(
+                repo=Path.cwd(),
+                policy=Path.cwd() / "docs/qualification/release-qualification-policy-v1.json",
+                release_receipt=release_receipt,
+                dmg=dmg,
+                qualification_root=root / "workspace",
+                evidence_directory=root / "evidence",
+                output_receipt=output_receipt,
+                case_id="profile-save-action-accessibility",
+                release_notes_url=RELEASES_URL,
+                workflow_run_id=12345,
+                workflow_run_attempt=2,
+                release_receipt_asset_id=4,
+                release_receipt_file_sha256=file_sha256(release_receipt),
+            )
+
+            receipt = run(config, FakeOperations(app))
+
+            self.assertTrue(output_receipt.exists())
+            self.assertFalse(config.qualification_root.exists())
+            self.assertEqual(receipt["case_id"], "profile-save-action-accessibility")
+            self.assertEqual(receipt["release_receipt"]["asset_id"], 4)
+            self.assertEqual(receipt["dmg"]["name"], dmg.name)
+
+    def test_runner_removes_partial_outputs_on_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            release_receipt = root / "release-receipt.json"
+            release_receipt.write_text("{}", encoding="utf-8")
+            output_receipt = root / "signed-artifact-ui-receipt.json"
+            evidence = root / "evidence"
+            config = SignedArtifactUIConfig(
+                repo=Path.cwd(),
+                policy=Path.cwd() / "docs/qualification/release-qualification-policy-v1.json",
+                release_receipt=release_receipt,
+                dmg=root / "missing.dmg",
+                qualification_root=root / "workspace",
+                evidence_directory=evidence,
+                output_receipt=output_receipt,
+                case_id="profile-save-action-accessibility",
+                release_notes_url=RELEASES_URL,
+                workflow_run_id=12345,
+                workflow_run_attempt=2,
+                release_receipt_asset_id=4,
+                release_receipt_file_sha256="0" * 64,
+            )
+
+            with self.assertRaises(SignedArtifactUIError):
+                run(config, FakeOperations(root))
+
+            self.assertFalse(output_receipt.exists())
+            self.assertFalse(evidence.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

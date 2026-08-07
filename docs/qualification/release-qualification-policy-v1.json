@@ -155,7 +155,8 @@
     {
       "id": "profile-save-action-accessibility",
       "tier": 2,
-      "blocking_phase": "release_candidate",
+      "blocking_phase": "publication",
+      "artifact_owned": true,
       "invalidates_on": {"paths": ["macos/BluRayToVisionPro/Views/**"], "contracts": ["profile-storage"]},
       "allowed_evidence_sources": ["signed_artifact_receipt"],
       "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}

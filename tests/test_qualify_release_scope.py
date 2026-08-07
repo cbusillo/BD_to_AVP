@@ -26,6 +26,8 @@ from scripts.release_receipt import (
     receipt_sha256,
     write_receipt,
 )
+from scripts.signed_artifact_receipt import build_receipt as build_signed_artifact_receipt
+from scripts.signed_artifact_receipt import SignedArtifactReceiptExpectation
 from scripts.tier3_receipt import build_receipt as build_tier3_receipt
 from scripts.tier3_receipt import receipt_sha256 as tier3_receipt_sha256
 
@@ -83,6 +85,8 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         workflow_phase: str = "preparation",
         artifact_receipt_path: Path | None = None,
         artifact_receipt_expectation: ArtifactReceiptExpectation | None = None,
+        signed_artifact_receipt_path: Path | None = None,
+        signed_artifact_receipt_file_sha256: str | None = None,
         milestone_receipt_path: Path | None = None,
         release_stage: str = "rc",
         first_candidate_of_cycle: bool = False,
@@ -101,6 +105,8 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
             workflow_phase=workflow_phase,
             artifact_receipt_path=artifact_receipt_path,
             artifact_receipt_expectation=artifact_receipt_expectation,
+            signed_artifact_receipt_path=signed_artifact_receipt_path,
+            signed_artifact_receipt_file_sha256=signed_artifact_receipt_file_sha256,
             milestone_receipt_path=milestone_receipt_path,
             as_of=as_of,
         )
@@ -162,9 +168,12 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
             build_version="160",
             release_tag="v0.3.0-rc.3",
             dmg_name="3D-Blu-ray-to-Vision-Pro-0.3.0-rc.3.dmg",
+            receipt_asset_id=4,
             receipt_file_sha256=file_sha256(receipt_path),
+            receipt_sha256=json.loads(receipt_path.read_text(encoding="utf-8"))["receipt_sha256"],
             signed_app_tree_sha256=APP_TREE_SHA256,
             dmg_asset_id=1,
+            dmg_size=1000,
             dmg_sha256=DMG_SHA256,
             checksum_asset_id=2,
             checksum_sha256=CHECKSUM_SHA256,
@@ -172,6 +181,40 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
             appcast_sha256=APPCAST_SHA256,
         )
         return receipt_path, expectation
+
+    def signed_artifact_receipt(self, root: Path, expectation: ArtifactReceiptExpectation) -> Path:
+        signed_expectation = SignedArtifactReceiptExpectation(
+            policy_id=self.policy["policy_id"],
+            case_id="profile-save-action-accessibility",
+            candidate_sha=expectation.candidate_sha,
+            workflow_run_id=expectation.workflow_run_id,
+            workflow_run_attempt=expectation.workflow_run_attempt,
+            release_id=expectation.release_id,
+            release_receipt_asset_id=expectation.receipt_asset_id,
+            release_receipt_file_sha256=expectation.receipt_file_sha256,
+            release_receipt_sha256=expectation.receipt_sha256,
+            package_version=expectation.package_version,
+            public_version=expectation.public_version,
+            build_version=expectation.build_version,
+            release_tag=expectation.release_tag,
+            dmg_asset_id=expectation.dmg_asset_id,
+            dmg_name=expectation.dmg_name,
+            dmg_size=expectation.dmg_size,
+            dmg_sha256=expectation.dmg_sha256,
+            signed_app_tree_sha256=expectation.signed_app_tree_sha256,
+        )
+        receipt = build_signed_artifact_receipt(
+            expectation=signed_expectation,
+            evidence={
+                "accessibility-tree": "1" * 64,
+                "screenshot-dark": "2" * 64,
+                "screenshot-light": "3" * 64,
+                "ui-result": "4" * 64,
+            },
+        )
+        path = root / "signed-artifact-ui-receipt.json"
+        path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return path
 
     def milestone_receipt(self, root: Path) -> Path:
         receipt_path = self.artifact_receipt(root)[0]
@@ -455,7 +498,45 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         self.assertEqual(clean_machine["required_phase"], "milestone")
         self.assertFalse(clean_machine["requires_live_publication"])
 
+        profile = self.result_for(report, "profile-save-action-accessibility")
+        self.assertEqual(profile["tier"], 2)
+        self.assertEqual(profile["blocking_phase"], "publication")
+        self.assertEqual(profile["required_phase"], "artifact")
+        self.assertTrue(profile["deferred"])
+        self.assertFalse(profile["applicable"])
+        self.assertIn("profile-save-action-accessibility", report["deferred_retests"])
+
     def test_artifact_phase_uses_exact_receipt_to_cover_tier1(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt_path, expectation = self.artifact_receipt(root)
+            signed_receipt_path = self.signed_artifact_receipt(root, expectation)
+            report = self.classify(
+                {"schema_version": 1, "receipts": []},
+                root,
+                workflow_phase="artifact",
+                artifact_receipt_path=receipt_path,
+                artifact_receipt_expectation=expectation,
+                signed_artifact_receipt_path=signed_receipt_path,
+                signed_artifact_receipt_file_sha256=hashlib.sha256(signed_receipt_path.read_bytes()).hexdigest(),
+            )
+
+        result = self.result_for(report, "release-workflow-identity")
+        profile = self.result_for(report, "profile-save-action-accessibility")
+        self.assertTrue(result["applicable"])
+        self.assertFalse(result["deferred"])
+        self.assertEqual(result["status"], "covered")
+        self.assertEqual(result["evidence"]["reference"], "release-receipt.json")
+        self.assertTrue(profile["applicable"])
+        self.assertEqual(profile["status"], "covered")
+        self.assertEqual(profile["trigger"], "exact_signed_artifact")
+        self.assertEqual(profile["evidence"]["reference"], "signed-artifact-ui-receipt.json")
+        self.assertNotIn("release-workflow-identity", report["blocking_retests"])
+        self.assertNotIn("profile-save-action-accessibility", report["blocking_retests"])
+        self.assertIn("sparkle-update-route", report["deferred_retests"])
+        self.assertIn("native-sparkle-release-notes", report["deferred_retests"])
+
+    def test_artifact_phase_requires_exact_signed_ui_receipt_for_profile_case(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             receipt_path, expectation = self.artifact_receipt(root)
@@ -467,14 +548,29 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                 artifact_receipt_expectation=expectation,
             )
 
-        result = self.result_for(report, "release-workflow-identity")
-        self.assertTrue(result["applicable"])
-        self.assertFalse(result["deferred"])
-        self.assertEqual(result["status"], "covered")
-        self.assertEqual(result["evidence"]["reference"], "release-receipt.json")
-        self.assertNotIn("release-workflow-identity", report["blocking_retests"])
-        self.assertIn("sparkle-update-route", report["deferred_retests"])
-        self.assertIn("native-sparkle-release-notes", report["deferred_retests"])
+        profile = self.result_for(report, "profile-save-action-accessibility")
+        self.assertEqual(profile["status"], "retest")
+        self.assertEqual(profile["trigger"], "missing_exact_signed_artifact")
+        self.assertTrue(profile["applicable"])
+        self.assertIn("profile-save-action-accessibility", report["blocking_retests"])
+
+    def test_artifact_phase_rejects_replayed_signed_ui_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt_path, expectation = self.artifact_receipt(root)
+            signed_receipt_path = self.signed_artifact_receipt(root, expectation)
+            replayed = replace(expectation, workflow_run_attempt=3)
+
+            with self.assertRaisesRegex(QualificationScopeError, "workflow"):
+                self.classify(
+                    {"schema_version": 1, "receipts": []},
+                    root,
+                    workflow_phase="artifact",
+                    artifact_receipt_path=receipt_path,
+                    artifact_receipt_expectation=replayed,
+                    signed_artifact_receipt_path=signed_receipt_path,
+                    signed_artifact_receipt_file_sha256=hashlib.sha256(signed_receipt_path.read_bytes()).hexdigest(),
+                )
 
     def test_artifact_phase_fails_closed_without_receipt_and_requires_exact_policy_tier1_references(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -750,8 +846,24 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
     def test_milestone_owned_tier2_requires_live_publication_declaration(self) -> None:
         mutations = (
             ("sparkle-update-route", "requires_live_publication", False),
-            ("profile-save-action-accessibility", "blocking_phase", "milestone"),
             ("sparkle-update-route", "live_evidence_case_ids", ["updater-route-rc2-to-rc3"]),
+        )
+        for case_id, field, value in mutations:
+            with self.subTest(case_id=case_id, field=field), tempfile.TemporaryDirectory() as temporary_directory:
+                policy = json.loads(json.dumps(self.policy))
+                case = next(case for case in policy["cases"] if case["id"] == case_id)
+                case[field] = value
+                policy_path = Path(temporary_directory) / "policy.json"
+                policy_path.write_text(json.dumps(policy), encoding="utf-8")
+
+                with self.assertRaises(QualificationScopeError):
+                    load_policy(policy_path)
+
+    def test_artifact_owned_tier2_requires_explicit_publication_contract(self) -> None:
+        mutations = (
+            ("profile-save-action-accessibility", "artifact_owned", False),
+            ("profile-save-action-accessibility", "blocking_phase", "release_candidate"),
+            ("profile-save-action-accessibility", "allowed_evidence_sources", ["release_run_receipt"]),
         )
         for case_id, field, value in mutations:
             with self.subTest(case_id=case_id, field=field), tempfile.TemporaryDirectory() as temporary_directory:
@@ -915,12 +1027,18 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                         expectation.release_tag,
                         "--dmg-name",
                         expectation.dmg_name,
+                        "--release-receipt-asset-id",
+                        str(expectation.receipt_asset_id),
                         "--release-receipt-sha256",
                         expectation.receipt_file_sha256,
+                        "--release-receipt-self-sha256",
+                        expectation.receipt_sha256,
                         "--signed-app-tree-sha256",
                         expectation.signed_app_tree_sha256,
                         "--dmg-asset-id",
                         str(expectation.dmg_asset_id),
+                        "--dmg-size",
+                        str(expectation.dmg_size),
                         "--dmg-sha256",
                         expectation.dmg_sha256,
                         "--checksum-asset-id",
