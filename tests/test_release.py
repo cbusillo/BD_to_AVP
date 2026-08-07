@@ -185,9 +185,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("Homebrew", cut_packet)
 
         qualification = json.loads(
-            (REPO_ROOT / "docs" / "qualification" / "stable-signed-qualification-v1.json").read_text(
-                encoding="utf-8"
-            )
+            (REPO_ROOT / "docs" / "qualification" / "stable-signed-qualification-v1.json").read_text(encoding="utf-8")
         )
         self.assertEqual(qualification["candidate"]["package_version"], "0.3.0")
         self.assertEqual(qualification["candidate"]["build_version"], "161")
