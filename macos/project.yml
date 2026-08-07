@@ -167,6 +167,15 @@ schemes:
         BluRayToVisionPro: all
         BluRayToVisionProUITests: [test]
     test:
+      macroExpansion: BluRayToVisionPro
+      environmentVariables:
+        BD_TO_AVP_UI_APP_PATH: "$(BD_TO_AVP_UI_APP_PATH)"
+        BD_TO_AVP_UI_BUNDLE_IDENTIFIER: "$(BD_TO_AVP_UI_BUNDLE_IDENTIFIER)"
+        BD_TO_AVP_UI_HOME: "$(BD_TO_AVP_UI_HOME)"
+        BD_TO_AVP_UI_OUTPUT_DIRECTORY: "$(BD_TO_AVP_UI_OUTPUT_DIRECTORY)"
+        BD_TO_AVP_UI_PHASE: "$(BD_TO_AVP_UI_PHASE)"
+        BD_TO_AVP_UI_RELEASE_NOTES_URL: "$(BD_TO_AVP_UI_RELEASE_NOTES_URL)"
+        BD_TO_AVP_UI_RELEASES_URL: "$(BD_TO_AVP_UI_RELEASES_URL)"
       targets:
         - BluRayToVisionProUITests
 

@@ -134,6 +134,25 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertEqual(NATIVE_MINIMUM_SYSTEM_VERSION, "26.0")
         self.assertEqual(MV_HEVC_ENCODER_NAME, "mv-hevc-encoder")
 
+    def test_installed_ui_scheme_forwards_qualification_environment(self) -> None:
+        project = yaml.load((MACOS_ROOT / "project.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        test_action = project["schemes"]["BluRayToVisionProInstalledUI"]["test"]
+        environment_keys = {
+            "BD_TO_AVP_UI_APP_PATH",
+            "BD_TO_AVP_UI_BUNDLE_IDENTIFIER",
+            "BD_TO_AVP_UI_HOME",
+            "BD_TO_AVP_UI_OUTPUT_DIRECTORY",
+            "BD_TO_AVP_UI_PHASE",
+            "BD_TO_AVP_UI_RELEASE_NOTES_URL",
+            "BD_TO_AVP_UI_RELEASES_URL",
+        }
+
+        self.assertEqual(test_action["macroExpansion"], "BluRayToVisionPro")
+        self.assertEqual(
+            test_action["environmentVariables"],
+            {key: f"$({key})" for key in environment_keys},
+        )
+
     def test_builds_packaged_mv_hevc_encoder_at_requested_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_path = Path(temporary_directory) / "tools" / MV_HEVC_ENCODER_NAME

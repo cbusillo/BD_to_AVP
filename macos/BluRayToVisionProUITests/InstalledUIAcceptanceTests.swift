@@ -10,7 +10,9 @@ final class InstalledUIAcceptanceTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
-        guard let bundleIdentifier = ProcessInfo.processInfo.environment["BD_TO_AVP_UI_BUNDLE_IDENTIFIER"] else {
+        guard let bundleIdentifier = ProcessInfo.processInfo.environment["BD_TO_AVP_UI_BUNDLE_IDENTIFIER"],
+              !bundleIdentifier.isEmpty
+        else {
             return
         }
         XCUIApplication(bundleIdentifier: bundleIdentifier).terminate()
@@ -244,7 +246,7 @@ private struct QualificationContext {
 
     static func load(expectedPhase: String) throws -> QualificationContext {
         let environment = ProcessInfo.processInfo.environment
-        guard environment["BD_TO_AVP_UI_PHASE"] != nil else {
+        guard let phase = environment["BD_TO_AVP_UI_PHASE"], !phase.isEmpty else {
             throw XCTSkip("Installed UI qualification runs only through the Tier 3 clean-machine runner.")
         }
         func required(_ key: String) throws -> String {
@@ -254,7 +256,6 @@ private struct QualificationContext {
             return value
         }
 
-        let phase = try required("BD_TO_AVP_UI_PHASE")
         guard phase == expectedPhase else {
             throw QualificationError.invalidPhase(expected: expectedPhase, actual: phase)
         }
