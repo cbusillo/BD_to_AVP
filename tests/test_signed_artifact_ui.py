@@ -7,7 +7,7 @@ from pathlib import Path
 from scripts.artifact_identity import app_tree_sha256
 from scripts.release_receipt import build_receipt, file_sha256, write_receipt
 from scripts.signed_artifact_ui import SignedArtifactUIConfig, SignedArtifactUIError, run
-from scripts.tier3_clean_machine import APP_NAME, RELEASES_URL
+from scripts.tier3_clean_machine import APP_NAME, RELEASES_URL, CleanMachineError
 
 
 CANDIDATE_SHA = "b" * 40
@@ -66,14 +66,6 @@ class FakeOperations:
                 {
                     "elements": [
                         {
-                            "actions": [],
-                            "enabled": True,
-                            "help": "Current status",
-                            "identifier": "main-status",
-                            "label": "Ready",
-                            "role": "AXStaticText",
-                        },
-                        {
                             "actions": ["AXPress"],
                             "enabled": True,
                             "help": "Opens a form to name and save these settings as a reusable profile",
@@ -90,11 +82,11 @@ class FakeOperations:
                             "role": "AXButton",
                         },
                         {
-                            "actions": [],
+                            "actions": ["AXPress"],
                             "enabled": True,
                             "help": "Update route",
                             "identifier": "update-route-picker",
-                            "label": "Update Route",
+                            "label": "",
                             "role": "AXPopUpButton",
                         },
                         {
@@ -134,6 +126,52 @@ def make_app(root: Path) -> Path:
 
 
 class SignedArtifactUITests(unittest.TestCase):
+    @staticmethod
+    def _make_release_receipt(root: Path, app: Path, dmg: Path) -> tuple[Path, str]:
+        facts = {
+            "release_route": "prerelease",
+            "source_sha": CANDIDATE_SHA,
+            "workflow_actor": "shiny-code-bot",
+            "workflow_run_id": 12345,
+            "workflow_run_attempt": 2,
+            "package_version": "0.3.0rc3",
+            "public_version": "0.3.0-rc.3",
+            "build_version": "160",
+            "release_tag": "v0.3.0-rc.3",
+            "release_name": "v0.3.0-rc.3",
+            "release_id": 67890,
+            "release_created_at": "2026-08-05T12:00:00Z",
+            "prerelease": True,
+            "make_latest": False,
+            "signed_app_tree_sha256": app_tree_sha256(app),
+            "artifacts": [
+                {
+                    "kind": "dmg",
+                    "name": dmg.name,
+                    "sha256": file_sha256(dmg),
+                    "size_bytes": dmg.stat().st_size,
+                    "asset_id": 1,
+                },
+                {
+                    "kind": "checksum",
+                    "name": "SHA256SUMS",
+                    "sha256": CHECKSUM_SHA256,
+                    "size_bytes": 100,
+                    "asset_id": 2,
+                },
+                {
+                    "kind": "appcast",
+                    "name": "appcast.xml",
+                    "sha256": APPCAST_SHA256,
+                    "size_bytes": 500,
+                    "asset_id": 3,
+                },
+            ],
+        }
+        release_receipt = root / "release-receipt.json"
+        write_receipt(build_receipt(facts), release_receipt)
+        return release_receipt, file_sha256(release_receipt)
+
     def test_runner_rejects_preexisting_production_app_process(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -160,54 +198,58 @@ class SignedArtifactUITests(unittest.TestCase):
 
             self.assertFalse(config.qualification_root.exists())
 
+    def test_runner_preserves_bounded_failure_diagnostics(self) -> None:
+        class FailingOperations(FakeOperations):
+            def collect_ui_evidence(self, **kwargs: object) -> None:
+                output_directory = kwargs["output_directory"]
+                if not isinstance(output_directory, Path):
+                    raise AssertionError("output_directory must be a path")
+                output_directory.mkdir(parents=True)
+                (output_directory / "partial.json").write_text("{}\n", encoding="utf-8")
+                result_bundle = output_directory.parent / "InstalledUI-candidate.xcresult"
+                result_bundle.mkdir()
+                (result_bundle / "Info.plist").write_text("partial", encoding="utf-8")
+                raise CleanMachineError("simulated UI failure")
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            app = make_app(root / "source")
+            dmg = root / "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.3.dmg"
+            dmg.write_bytes(b"candidate-dmg")
+            release_receipt, release_receipt_sha256 = self._make_release_receipt(root, app, dmg)
+            diagnostics = root / "diagnostics"
+            config = SignedArtifactUIConfig(
+                repo=Path.cwd(),
+                policy=Path.cwd() / "docs/qualification/release-qualification-policy-v1.json",
+                release_receipt=release_receipt,
+                dmg=dmg,
+                qualification_root=root / "workspace",
+                evidence_directory=root / "evidence",
+                output_receipt=root / "signed-artifact-ui-receipt.json",
+                case_id="profile-save-action-accessibility",
+                release_notes_url=RELEASES_URL,
+                workflow_run_id=12345,
+                workflow_run_attempt=2,
+                release_receipt_asset_id=4,
+                release_receipt_file_sha256=release_receipt_sha256,
+                failure_diagnostics_directory=diagnostics,
+            )
+
+            with self.assertRaisesRegex(CleanMachineError, "simulated UI failure"):
+                run(config, FailingOperations(app))
+
+            self.assertFalse(config.qualification_root.exists())
+            self.assertTrue((diagnostics / "failure.txt").is_file())
+            self.assertTrue((diagnostics / "InstalledUI-candidate.xcresult" / "Info.plist").is_file())
+            self.assertTrue((diagnostics / "InstalledUIEvidence" / "partial.json").is_file())
+
     def test_runner_installs_exact_dmg_and_writes_bound_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             app = make_app(root / "source")
             dmg = root / "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.3.dmg"
             dmg.write_bytes(b"candidate-dmg")
-            facts = {
-                "release_route": "prerelease",
-                "source_sha": CANDIDATE_SHA,
-                "workflow_actor": "shiny-code-bot",
-                "workflow_run_id": 12345,
-                "workflow_run_attempt": 2,
-                "package_version": "0.3.0rc3",
-                "public_version": "0.3.0-rc.3",
-                "build_version": "160",
-                "release_tag": "v0.3.0-rc.3",
-                "release_name": "v0.3.0-rc.3",
-                "release_id": 67890,
-                "release_created_at": "2026-08-05T12:00:00Z",
-                "prerelease": True,
-                "make_latest": False,
-                "signed_app_tree_sha256": app_tree_sha256(app),
-                "artifacts": [
-                    {
-                        "kind": "dmg",
-                        "name": dmg.name,
-                        "sha256": file_sha256(dmg),
-                        "size_bytes": dmg.stat().st_size,
-                        "asset_id": 1,
-                    },
-                    {
-                        "kind": "checksum",
-                        "name": "SHA256SUMS",
-                        "sha256": CHECKSUM_SHA256,
-                        "size_bytes": 100,
-                        "asset_id": 2,
-                    },
-                    {
-                        "kind": "appcast",
-                        "name": "appcast.xml",
-                        "sha256": APPCAST_SHA256,
-                        "size_bytes": 500,
-                        "asset_id": 3,
-                    },
-                ],
-            }
-            release_receipt = root / "release-receipt.json"
-            write_receipt(build_receipt(facts), release_receipt)
+            release_receipt, release_receipt_sha256 = self._make_release_receipt(root, app, dmg)
             output_receipt = root / "signed-artifact-ui-receipt.json"
             config = SignedArtifactUIConfig(
                 repo=Path.cwd(),
@@ -222,7 +264,7 @@ class SignedArtifactUITests(unittest.TestCase):
                 workflow_run_id=12345,
                 workflow_run_attempt=2,
                 release_receipt_asset_id=4,
-                release_receipt_file_sha256=file_sha256(release_receipt),
+                release_receipt_file_sha256=release_receipt_sha256,
             )
 
             receipt = run(config, FakeOperations(app))
