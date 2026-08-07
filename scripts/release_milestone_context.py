@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from scripts.release import ReleaseError, parse_release_version
+from scripts.release_evidence import effective_successful_workflow_run_id
 from scripts.release_receipt import ReleaseReceiptError, load_validated_checked_receipt
 
 
@@ -257,7 +258,6 @@ def resolve_milestone_context(repo_root: Path, receipt_path: Path) -> ReleaseMil
         "release_id": release["id"],
         "source_sha": receipt["source_sha"],
         "workflow_run_id": workflow["run_id"],
-        "workflow_conclusion": "success",
         "receipt_file_sha256": receipt_file_sha256,
     }
     for field, expected in expected_publication.items():
@@ -265,6 +265,10 @@ def resolve_milestone_context(repo_root: Path, receipt_path: Path) -> ReleaseMil
             raise ReleaseMilestoneContextError(
                 f"Milestone publication record {field} does not match the checked release receipt."
             )
+    if effective_successful_workflow_run_id(publication) is None:
+        raise ReleaseMilestoneContextError(
+            "Milestone publication record does not contain a successful release or recovery workflow."
+        )
     live_pages = _mapping(publication.get("live_pages"), "milestone publication live_pages")
     if (
         live_pages.get("state") != "verified"

@@ -1243,15 +1243,21 @@ jobs:
         run: |
           set -euo pipefail
           python -m scripts.release validate
-          uv build
-          mkdir -p python-distributions
-          mv dist python-distributions/
+          mkdir -p python-distributions/dist
+          uv build --out-dir python-distributions/dist
           (
             cd python-distributions
+            find dist -mindepth 1 -maxdepth 1 -type f \
+              ! -name '*.whl' ! -name '*.tar.gz' -delete
+            test -z "$(find dist -type l -print -quit)"
+            test "$(find dist -maxdepth 1 -type f -name '*.whl' | wc -l | tr -d ' ')" = "1"
+            test "$(find dist -maxdepth 1 -type f -name '*.tar.gz' | wc -l | tr -d ' ')" = "1"
+            test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" = "2"
+            test -z "$(find dist -mindepth 1 ! -type f -print -quit)"
             find dist -type f -print | LC_ALL=C sort | while IFS= read -r file; do
               shasum -a 256 "$file"
             done > SHA256SUMS
-            test -s SHA256SUMS
+            test "$(wc -l < SHA256SUMS | tr -d ' ')" = "2"
           )
 
       - name: Upload Python distributions

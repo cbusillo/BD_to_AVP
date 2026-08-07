@@ -28,6 +28,33 @@ class ReleaseEvidenceError(RuntimeError):
     pass
 
 
+def effective_successful_workflow_run_id(
+    record: Mapping[str, Any],
+    *,
+    run_id_field: str = "workflow_run_id",
+) -> int | None:
+    run_id = record.get(run_id_field)
+    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+        return None
+    if record.get("workflow_conclusion") == "success":
+        return run_id
+    if record.get("workflow_conclusion") != "failure":
+        return None
+    recovery = record.get("recovery_workflow_run")
+    if not isinstance(recovery, Mapping) or recovery.get("operation") != "pypi_recovery":
+        return None
+    recovery_run_id = recovery.get("workflow_run_id")
+    if (
+        recovery.get("workflow_conclusion") != "success"
+        or isinstance(recovery_run_id, bool)
+        or not isinstance(recovery_run_id, int)
+        or recovery_run_id <= 0
+        or recovery_run_id == run_id
+    ):
+        return None
+    return recovery_run_id
+
+
 def _mapping(value: object, description: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ReleaseEvidenceError(f"{description} must be a JSON object.")
@@ -94,6 +121,7 @@ def validate_publication(
     receipt: Mapping[str, Any],
     receipt_path: Path,
     live_appcast_path: Path,
+    recovery_workflow_run: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
         validate_receipt(receipt)
@@ -108,8 +136,52 @@ def validate_publication(
         raise ReleaseEvidenceError("Completed workflow identity does not match the release route.")
     if workflow_run.get("event") != "workflow_dispatch":
         raise ReleaseEvidenceError("Evidence reconciliation requires a workflow_dispatch release run.")
-    if workflow_run.get("status") != "completed" or workflow_run.get("conclusion") != "success":
-        raise ReleaseEvidenceError("Evidence reconciliation requires a successful completed release run.")
+    if workflow_run.get("status") != "completed":
+        raise ReleaseEvidenceError("Evidence reconciliation requires a completed release run.")
+    workflow_conclusion = workflow_run.get("conclusion")
+    recovery_workflow_run_id: int | None = None
+    if workflow_conclusion != "success":
+        if workflow_conclusion != "failure" or recovery_workflow_run is None:
+            raise ReleaseEvidenceError("Evidence reconciliation requires a successful release or checked recovery run.")
+        from scripts.stable_pypi_recovery import StablePyPIRecoveryError, load_evidence
+
+        try:
+            recovery_evidence = load_evidence()
+        except StablePyPIRecoveryError as error:
+            raise ReleaseEvidenceError(str(error)) from error
+        expected_failed_run = _mapping(recovery_evidence.get("failed_run"), "Stable PyPI recovery failed run")
+        expected_release = _mapping(recovery_evidence.get("release"), "Stable PyPI recovery release")
+        if (
+            route != "stable"
+            or workflow_run.get("id") != expected_failed_run.get("id")
+            or workflow_run.get("head_sha") != expected_release.get("source_sha")
+            or _mapping(receipt.get("release"), "receipt release").get("tag") != expected_release.get("tag")
+        ):
+            raise ReleaseEvidenceError("Failed release run does not match the reviewed Stable PyPI recovery evidence.")
+        expected_recovery_identity = {
+            "name": "Stable",
+            "path": ".github/workflows/briefcase.yml",
+            "event": "workflow_dispatch",
+            "status": "completed",
+            "conclusion": "success",
+            "head_branch": EXPECTED_BRANCH,
+            "display_title": "Stable PyPI recovery",
+        }
+        for field, expected in expected_recovery_identity.items():
+            if recovery_workflow_run.get(field) != expected:
+                raise ReleaseEvidenceError(f"Checked PyPI recovery run has unexpected {field}.")
+        for actor_field in ("actor", "triggering_actor"):
+            actor = _mapping(recovery_workflow_run.get(actor_field), f"recovery workflow run {actor_field}")
+            if actor.get("login") != "shiny-code-bot":
+                raise ReleaseEvidenceError(f"Recovery workflow run {actor_field} is not the approved release actor.")
+        recovery_repository = _mapping(recovery_workflow_run.get("repository"), "recovery workflow repository")
+        if recovery_repository.get("full_name") != EXPECTED_REPOSITORY:
+            raise ReleaseEvidenceError("Recovery workflow run repository is not canonical.")
+        recovery_workflow_run_id = _integer(recovery_workflow_run.get("id"), "recovery workflow run ID")
+        if recovery_workflow_run_id == workflow_run.get("id"):
+            raise ReleaseEvidenceError("Recovery workflow run must differ from the failed release run.")
+    elif recovery_workflow_run is not None:
+        raise ReleaseEvidenceError("A successful release run must not be reconciled through recovery mode.")
     if workflow_run.get("head_branch") != EXPECTED_BRANCH or workflow_run.get("head_sha") != source_sha:
         raise ReleaseEvidenceError("Completed release run is not bound to the receipt's protected-main SHA.")
     if workflow_run.get("id") != workflow.get("run_id") or workflow_run.get("run_attempt") != workflow.get(
@@ -183,6 +255,8 @@ def validate_publication(
         "receipt_asset_id": _integer(receipt_assets[0].get("id"), "receipt asset id"),
         "receipt_file_sha256": receipt_file_digest,
         "live_appcast_sha256": live_appcast_sha256,
+        "original_workflow_conclusion": workflow_conclusion,
+        "recovery_workflow_run_id": recovery_workflow_run_id,
     }
 
 
@@ -237,9 +311,12 @@ def _update_cut_packet(repo_root: Path, receipt: Mapping[str, Any], publication:
     except OSError as error:
         raise ReleaseEvidenceError(f"Unable to read release cut packet at {path}: {error}") from error
     pending = "**Prepared metadata; publication pending.**"
+    recovery_pending = "**Published and immutable; PyPI recovery pending.**"
     published = "**Published and immutable.**"
     if pending in text:
         text = text.replace(pending, published, 1)
+    elif recovery_pending in text:
+        text = text.replace(recovery_pending, published, 1)
     elif published not in text:
         raise ReleaseEvidenceError("Release cut packet has no recognized publication state.")
     marker = "<!-- release-evidence-receipt-v1 -->"
@@ -273,8 +350,16 @@ def reconcile(
     receipt: Mapping[str, Any],
     receipt_path: Path,
     live_appcast_path: Path,
+    recovery_workflow_run: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    publication = validate_publication(workflow_run, release, receipt, receipt_path, live_appcast_path)
+    publication = validate_publication(
+        workflow_run,
+        release,
+        receipt,
+        receipt_path,
+        live_appcast_path,
+        recovery_workflow_run,
+    )
     release_data = _mapping(receipt.get("release"), "receipt release")
     workflow = _mapping(receipt.get("workflow"), "receipt workflow")
     tag = _string(release_data.get("tag"), "release tag")
@@ -284,6 +369,15 @@ def reconcile(
         raise ReleaseEvidenceError(f"Checked receipt for immutable release {tag} conflicts with the published asset.")
     checked_receipt.parent.mkdir(parents=True, exist_ok=True)
     checked_receipt.write_bytes(receipt_path.read_bytes())
+    recovery_workflow_run = (
+        {
+            "operation": "pypi_recovery",
+            "workflow_conclusion": "success",
+            "workflow_run_id": publication["recovery_workflow_run_id"],
+        }
+        if publication["recovery_workflow_run_id"] is not None
+        else None
+    )
 
     publication_record = {
         "live_pages": {
@@ -298,9 +392,11 @@ def reconcile(
         "release_tag": tag,
         "schema_version": 1,
         "source_sha": receipt["source_sha"],
-        "workflow_conclusion": "success",
+        "workflow_conclusion": publication["original_workflow_conclusion"],
         "workflow_run_id": workflow["run_id"],
     }
+    if recovery_workflow_run is not None:
+        publication_record["recovery_workflow_run"] = recovery_workflow_run
     publication_path = evidence_directory / "publication-record.json"
     if publication_path.exists() and _load_json(publication_path, "publication record") != publication_record:
         raise ReleaseEvidenceError(f"Checked publication record for immutable release {tag} conflicts.")
@@ -328,6 +424,8 @@ def reconcile(
         "tag": tag,
         "workflow_run_id": workflow["run_id"],
     }
+    if recovery_workflow_run is not None:
+        ledger_record["recovery_workflow_run"] = recovery_workflow_run
     _merge_unique_record(releases, ledger_record, "tag")
     ledger["releases"] = sorted(releases, key=lambda item: cast(str, item["tag"]))
     _write_json(ledger_path, ledger)
@@ -357,8 +455,10 @@ def reconcile(
             "source": "release_run_receipt",
             "source_sha": receipt["source_sha"],
             "status": "accepted",
-            "workflow_conclusion": "success",
+            "workflow_conclusion": publication["original_workflow_conclusion"],
         }
+        if recovery_workflow_run is not None:
+            evidence_record["recovery_workflow_run"] = recovery_workflow_run
         _merge_unique_record(receipts, evidence_record, "receipt_id")
     evidence["receipts"] = sorted(receipts, key=lambda item: cast(str, item["receipt_id"]))
     _write_json(evidence_path, evidence)
@@ -373,6 +473,7 @@ def reconcile(
         "receipt": reference,
         "receipt_file_sha256": publication["receipt_file_sha256"],
         "release_ledger": RELEASE_LEDGER_PATH.as_posix(),
+        "release_run_id": workflow["run_id"],
         "release_tag": tag,
         "source_sha": receipt["source_sha"],
     }
@@ -390,6 +491,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--release", type=Path, required=True)
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--live-appcast", type=Path, required=True)
+    parser.add_argument("--recovery-workflow-run", type=Path)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args(argv)
@@ -401,6 +503,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             _load_json(args.receipt, "release receipt"),
             args.receipt,
             args.live_appcast,
+            (
+                _load_json(args.recovery_workflow_run, "recovery workflow run")
+                if args.recovery_workflow_run is not None
+                else None
+            ),
         )
         if args.github_output is not None:
             _write_github_output(args.github_output, outputs)

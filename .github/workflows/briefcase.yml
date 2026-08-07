@@ -1,11 +1,16 @@
 ---
 name: Stable
+run-name: ${{ inputs.pypi_recovery_evidence_sha256 != '' && 'Stable PyPI recovery' || 'Stable' }}
 
 "on":
   workflow_dispatch:
     inputs:
       release_notes:
         description: Optional notes prepended to the generated GitHub release notes
+        required: false
+        type: string
+      pypi_recovery_evidence_sha256:
+        description: Exact reviewed evidence fingerprint for the one-time Stable 0.3.0 PyPI recovery
         required: false
         type: string
 
@@ -18,6 +23,7 @@ concurrency:
 jobs:
   release:
     name: Run guarded signed-release engine
+    if: inputs.pypi_recovery_evidence_sha256 == ''
     uses: ./.github/workflows/release-engine.yml
     with:
       release_notes: ${{ inputs.release_notes }}
@@ -146,3 +152,137 @@ jobs:
         with:
           attestations: true
           packages-dir: python-distributions/dist
+
+  recover-pypi:
+    name: Recover exact Stable 0.3.0 Python distributions
+    if: inputs.pypi_recovery_evidence_sha256 != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: pypi
+      url: https://pypi.org/p/bd-to-avp
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout current protected main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Resolve reviewed recovery evidence
+        id: evidence
+        env:
+          RECOVERY_EVIDENCE_SHA256: ${{ inputs.pypi_recovery_evidence_sha256 }}
+        run: |
+          set -euo pipefail
+          python -m scripts.stable_pypi_recovery \
+            --expected-evidence-sha256 "$RECOVERY_EVIDENCE_SHA256" \
+            outputs \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Verify recovery authorization and immutable source state
+        env:
+          ARTIFACT_ID: ${{ steps.evidence.outputs.artifact_id }}
+          EXPECTED_RELEASE_ID: ${{ steps.evidence.outputs.release_id }}
+          EXPECTED_RELEASE_RUN_ID: ${{ steps.evidence.outputs.release_run_id }}
+          EXPECTED_SOURCE_SHA: ${{ steps.evidence.outputs.release_source_sha }}
+          RECEIPT_ASSET_ID: ${{ steps.evidence.outputs.release_receipt_asset_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "cbusillo/BD_to_AVP"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_REF_PROTECTED" = "true"
+          test "$GITHUB_WORKFLOW_REF" = \
+            "cbusillo/BD_to_AVP/.github/workflows/briefcase.yml@refs/heads/main"
+          test "$GITHUB_ACTOR" = "shiny-code-bot"
+          test "$GITHUB_TRIGGERING_ACTOR" = "shiny-code-bot"
+          MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          test "$MAIN_SHA" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$EXPECTED_SOURCE_SHA" "$GITHUB_SHA"
+          TAG_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v0.3.0" --jq .object.sha)
+          test "$TAG_SHA" = "$EXPECTED_SOURCE_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$EXPECTED_RELEASE_RUN_ID" > workflow-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$EXPECTED_RELEASE_RUN_ID/jobs?per_page=100" > workflow-jobs.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" > python-artifact.json
+          gh api "repos/$GITHUB_REPOSITORY/releases/$EXPECTED_RELEASE_ID" > release.json
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$RECEIPT_ASSET_ID" \
+            -H "Accept: application/octet-stream" > release-receipt.json
+          python -m scripts.stable_pypi_recovery verify-remote-files \
+            --workflow-run workflow-run.json \
+            --jobs workflow-jobs.json \
+            --artifact python-artifact.json \
+            --release release.json \
+            --receipt release-receipt.json
+          python -m scripts.stable_pypi_recovery verify-pypi \
+            --state recoverable \
+            --retries 6 \
+            --delay 10
+
+      - name: Download exact failed-run Python artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.evidence.outputs.artifact_id }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: python-distributions
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.evidence.outputs.release_run_id }}
+
+      - name: Verify exact original distribution bytes
+        run: |
+          set -euo pipefail
+          python -m scripts.stable_pypi_recovery verify-payload \
+            --artifact-root python-distributions
+
+      - name: Resolve idempotent PyPI recovery action
+        id: pypi
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [ "$MAIN_SHA" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved immediately before PyPI recovery publication." >&2
+            exit 1
+          fi
+          python -m scripts.stable_pypi_recovery resolve-pypi-action \
+            --github-output "$GITHUB_OUTPUT" \
+            --retries 6 \
+            --delay 10
+
+      - name: Publish exact original bytes with PyPI trusted publishing and attestations
+        if: steps.pypi.outputs.publish_required == 'true'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          attestations: true
+          packages-dir: python-distributions/dist
+          skip-existing: true
+
+      - name: Verify recovered PyPI publication
+        run: |
+          set -euo pipefail
+          python -m scripts.stable_pypi_recovery verify-pypi \
+            --state published \
+            --retries 12 \
+            --delay 10
+          python -m scripts.stable_pypi_recovery write-receipt \
+            --output stable-0.3.0-pypi-recovery-receipt.json \
+            --publication-action "${{ steps.pypi.outputs.publication_action }}"
+
+      - name: Upload PyPI recovery receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: stable-0.3.0-pypi-recovery-${{ github.run_attempt }}
+          path: stable-0.3.0-pypi-recovery-receipt.json
+          if-no-files-found: error
+          retention-days: 30

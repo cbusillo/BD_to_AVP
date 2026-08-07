@@ -4,8 +4,9 @@ import unittest
 
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
-from scripts.release_evidence import ReleaseEvidenceError, reconcile
+from scripts.release_evidence import ReleaseEvidenceError, effective_successful_workflow_run_id, reconcile
 from scripts.release_receipt import (
     ArtifactReceiptExpectation,
     DEFAULT_POLICY_PATH,
@@ -355,6 +356,56 @@ class ReleaseReceiptTests(unittest.TestCase):
                 reconcile(root, bad_run, release, receipt, receipt_path, live_appcast)
             with self.assertRaisesRegex(ReleaseEvidenceError, "Live Pages appcast"):
                 reconcile(root, workflow_run(), release, receipt, receipt_path, live_appcast)
+
+    def test_reconcile_attributes_recovered_success_to_the_recovery_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt_path = root / "release-receipt.json"
+            receipt_path.write_text("{}\n", encoding="utf-8")
+            qualification_path = root / "docs" / "qualification.json"
+            cut_packet_path = root / "docs" / "cut-packet.md"
+            qualification_path.parent.mkdir(parents=True)
+            qualification_path.write_text("{}\n", encoding="utf-8")
+            cut_packet_path.write_text("# Cut packet\n", encoding="utf-8")
+            receipt = {
+                "appcast": {"live_pages_url": "https://example.com/appcast.xml"},
+                "release": {"id": 20, "tag": "v0.3.0"},
+                "source_sha": SOURCE_SHA,
+                "tier1_case_references": ["release-workflow-identity"],
+                "workflow": {"run_id": 30},
+            }
+            publication = {
+                "live_appcast_sha256": "a" * 64,
+                "original_workflow_conclusion": "failure",
+                "published_at": "2026-08-07T21:42:28Z",
+                "receipt_asset_id": 40,
+                "receipt_file_sha256": file_sha256(receipt_path),
+                "recovery_workflow_run_id": 50,
+            }
+            with (
+                patch("scripts.release_evidence.validate_publication", return_value=publication),
+                patch("scripts.release_evidence._update_qualification", return_value=qualification_path),
+                patch("scripts.release_evidence._update_cut_packet", return_value=cut_packet_path),
+            ):
+                outputs = reconcile(root, {}, {}, receipt, receipt_path, root / "appcast.xml")
+
+            publication_record = json.loads((root / outputs["publication_record"]).read_text(encoding="utf-8"))
+            self.assertEqual(publication_record["workflow_run_id"], 30)
+            self.assertEqual(publication_record["workflow_conclusion"], "failure")
+            self.assertEqual(
+                publication_record["recovery_workflow_run"],
+                {"operation": "pypi_recovery", "workflow_conclusion": "success", "workflow_run_id": 50},
+            )
+            self.assertEqual(effective_successful_workflow_run_id(publication_record), 50)
+            evidence = json.loads((root / outputs["evidence_index"]).read_text(encoding="utf-8"))
+            self.assertEqual(evidence["receipts"][0]["release_run_id"], 30)
+            self.assertEqual(evidence["receipts"][0]["workflow_conclusion"], "failure")
+            self.assertEqual(evidence["receipts"][0]["recovery_workflow_run"]["workflow_run_id"], 50)
+            self.assertEqual(
+                effective_successful_workflow_run_id(evidence["receipts"][0], run_id_field="release_run_id"),
+                50,
+            )
+            self.assertEqual(outputs["release_run_id"], 30)
 
 
 if __name__ == "__main__":

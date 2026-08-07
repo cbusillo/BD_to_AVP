@@ -91,7 +91,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         for name, operator in operators.items():
             with self.subTest(operator=name):
                 self.assertEqual(set(operator["on"]), {"workflow_dispatch"})
-                self.assertEqual(set(operator["on"]["workflow_dispatch"]["inputs"]), {"release_notes"})
+                expected_inputs = (
+                    {"release_notes", "pypi_recovery_evidence_sha256"} if name == "Stable" else {"release_notes"}
+                )
+                self.assertEqual(set(operator["on"]["workflow_dispatch"]["inputs"]), expected_inputs)
                 self.assertEqual(operator["concurrency"]["group"], "release")
                 self.assertEqual(operator["concurrency"]["cancel-in-progress"], "false")
         self.assertEqual(set(workflow["on"]), {"workflow_call"})
@@ -142,9 +145,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         policy_checkout = policy["steps"][1]
         policy_step = next(step for step in policy["steps"] if step.get("id") == "policy")
 
-        self.assertEqual(set(stable["jobs"]), {"release", "publish-pypi"})
+        self.assertEqual(set(stable["jobs"]), {"release", "publish-pypi", "recover-pypi"})
         self.assertEqual(set(prerelease["jobs"]), {"release"})
-        self.assertEqual(prerelease["jobs"]["release"], release)
+        stable_release = dict(release)
+        stable_release.pop("if")
+        self.assertEqual(prerelease["jobs"]["release"], stable_release)
         self.assertEqual(release["uses"], "./.github/workflows/release-engine.yml")
         self.assertEqual(declared_secret_names, macos_secret_names | sparkle_secret_names)
         self.assertEqual(declared_secret_names, referenced_secret_names)
@@ -1006,6 +1011,9 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertNotIn("environment", create_pr)
         self.assertNotIn("secrets.", str(workflow))
         self.assertIn("python -m scripts.release_evidence", str(prepare))
+        self.assertIn("Stable PyPI recovery", str(prepare))
+        self.assertIn("scripts.stable_pypi_recovery verify-pypi", str(prepare))
+        self.assertIn("--recovery-workflow-run", str(prepare))
         self.assertIn("release-receipt.json", str(prepare))
         self.assertIn(".immutable == true", str(prepare))
         self.assertIn("Preserve an existing idempotent evidence branch", str(prepare))
@@ -1142,7 +1150,14 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertEqual(publish["environment"]["name"], "pypi")
         self.assertEqual(publish["permissions"]["actions"], "read")
         self.assertEqual(publish["permissions"]["id-token"], "write")
-        self.assertIn("uv build", str(build))
+        self.assertIn("uv build --out-dir python-distributions/dist", str(build))
+        self.assertNotIn("mv dist python-distributions", str(build))
+        self.assertIn("find dist -mindepth 1 -maxdepth 1 -type f", str(build))
+        self.assertIn("*.whl", str(build))
+        self.assertIn("*.tar.gz", str(build))
+        self.assertIn("-delete", str(build))
+        self.assertIn("find dist -maxdepth 1 -type f | wc -l", str(build))
+        self.assertIn('= "2"', str(build))
         self.assertNotIn("uv build", str(publish))
         self.assertIn("pypa/gh-action-pypi-publish@", str(publish))
         self.assertIn("attestations", str(publish))
@@ -1187,6 +1202,44 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertNotIn("pypa/gh-action-pypi-publish@", str(prerelease))
         self.assertNotIn("pypa/gh-action-pypi-publish@", str(workflow))
         self.assertNotIn("PYPI_TOKEN", str(operator) + str(prerelease) + str(workflow))
+        recovery = operator["jobs"]["recover-pypi"]
+        recovery_input = operator["on"]["workflow_dispatch"]["inputs"]["pypi_recovery_evidence_sha256"]
+        self.assertEqual(recovery_input["required"], "false")
+        self.assertEqual(operator["jobs"]["release"]["if"], "inputs.pypi_recovery_evidence_sha256 == ''")
+        self.assertEqual(recovery["if"], "inputs.pypi_recovery_evidence_sha256 != ''")
+        self.assertEqual(recovery["environment"]["name"], "pypi")
+        self.assertEqual(recovery["permissions"], {"actions": "read", "contents": "read", "id-token": "write"})
+        self.assertIn("scripts.stable_pypi_recovery", str(recovery))
+        self.assertIn("artifact-ids", str(recovery))
+        self.assertIn("Verify exact original distribution bytes", str(recovery))
+        self.assertIn("Protected main moved immediately before PyPI recovery publication", str(recovery))
+        recovery_steps = {step["name"]: step for step in recovery["steps"]}
+        self.assertIn(
+            "--state recoverable", str(recovery_steps["Verify recovery authorization and immutable source state"])
+        )
+        self.assertIn("resolve-pypi-action", str(recovery_steps["Resolve idempotent PyPI recovery action"]))
+        self.assertEqual(
+            recovery_steps["Publish exact original bytes with PyPI trusted publishing and attestations"]["if"],
+            "steps.pypi.outputs.publish_required == 'true'",
+        )
+        self.assertEqual(
+            recovery_steps["Publish exact original bytes with PyPI trusted publishing and attestations"]["with"][
+                "skip-existing"
+            ],
+            "true",
+        )
+        recovery_download = next(
+            step for step in recovery["steps"] if step["name"] == "Download exact failed-run Python artifact"
+        )
+        self.assertEqual(recovery_download["with"]["github-token"], "${{ github.token }}")
+        self.assertEqual(recovery_download["with"]["repository"], "${{ github.repository }}")
+        self.assertEqual(recovery_download["with"]["run-id"], "${{ steps.evidence.outputs.release_run_id }}")
+        self.assertEqual(
+            next(step for step in recovery["steps"] if "pypa/gh-action-pypi-publish@" in step.get("uses", ""))["with"][
+                "packages-dir"
+            ],
+            "python-distributions/dist",
+        )
         self.assertEqual(
             release_operations["workflows"]["Stable"]["path"],
             ".github/workflows/briefcase.yml",

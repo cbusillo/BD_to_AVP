@@ -183,6 +183,24 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         self.assertFalse(context.first_candidate_of_cycle)
         self.assertEqual(context.qualification_path, "docs/qualification/stable-signed-qualification-v1.json")
 
+    def test_accepts_explicit_successful_recovery_for_failed_release_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt_path = self.build_repository(root)
+            publication_path = root / "docs/release-evidence/v0.3.0/publication-record.json"
+            publication = json.loads(publication_path.read_text(encoding="utf-8"))
+            publication["workflow_conclusion"] = "failure"
+            publication["recovery_workflow_run"] = {
+                "operation": "pypi_recovery",
+                "workflow_conclusion": "success",
+                "workflow_run_id": 54321,
+            }
+            publication_path.write_text(json.dumps(publication) + "\n", encoding="utf-8")
+
+            context = resolve_milestone_context(root, receipt_path)
+
+        self.assertEqual(context.release_tag, "v0.3.0")
+
     def test_rejects_mismatched_qualification_identity(self) -> None:
         for field, value in (
             ("build_version", "162"),
