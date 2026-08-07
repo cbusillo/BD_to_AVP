@@ -10,7 +10,9 @@ final class InstalledUIAcceptanceTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
-        guard let bundleIdentifier = ProcessInfo.processInfo.environment["BD_TO_AVP_UI_BUNDLE_IDENTIFIER"] else {
+        guard let bundleIdentifier = ProcessInfo.processInfo.environment["BD_TO_AVP_UI_BUNDLE_IDENTIFIER"],
+              !bundleIdentifier.isEmpty
+        else {
             return
         }
         XCUIApplication(bundleIdentifier: bundleIdentifier).terminate()
