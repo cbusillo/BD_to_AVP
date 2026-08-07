@@ -51,10 +51,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
     func testCandidateMainWindowProfileAndSettings() throws {
         let context = try QualificationContext.load(expectedPhase: "candidate")
         let lightApp = try launchInstalledApp(context: context, appearance: .light)
-        defer {
-            lightApp.terminate()
-            try? setAppearance(.light, syntheticHome: context.syntheticHome)
-        }
+        defer { lightApp.terminate() }
 
         let mainContent = lightApp.descendants(matching: .any)["main-window-content"]
         XCTAssertTrue(mainContent.waitForExistence(timeout: 30))
@@ -129,12 +126,12 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         context: QualificationContext,
         appearance: QualificationAppearance
     ) throws -> XCUIApplication {
-        try setAppearance(appearance, syntheticHome: context.syntheticHome)
         let app = XCUIApplication(url: context.appURL)
         app.launchEnvironment = [
             "HOME": context.syntheticHome.path,
             "CFFIXED_USER_HOME": context.syntheticHome.path,
         ]
+        app.launchArguments = appearance.launchArguments
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 30))
         let matches = NSRunningApplication.runningApplications(withBundleIdentifier: context.bundleIdentifier)
@@ -235,6 +232,15 @@ final class InstalledUIAcceptanceTests: XCTestCase {
 private enum QualificationAppearance: Equatable {
     case light
     case dark
+
+    var launchArguments: [String] {
+        switch self {
+        case .light:
+            ["-NSRequiresAquaSystemAppearance", "YES"]
+        case .dark:
+            ["-AppleInterfaceStyle", "Dark"]
+        }
+    }
 }
 
 private struct QualificationContext {
@@ -315,25 +321,4 @@ private func readProfileSummary(syntheticHome: URL) throws -> ProfileSummary {
         throw QualificationError.missingProfileDocument
     }
     return ProfileSummary(count: profiles.count, name: name, version: version)
-}
-
-private func setAppearance(_ appearance: QualificationAppearance, syntheticHome: URL) throws {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
-    process.environment = [
-        "CFFIXED_USER_HOME": syntheticHome.path,
-        "HOME": syntheticHome.path,
-        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-    ]
-    switch appearance {
-    case .light:
-        process.arguments = ["delete", "NSGlobalDomain", "AppleInterfaceStyle"]
-    case .dark:
-        process.arguments = ["write", "NSGlobalDomain", "AppleInterfaceStyle", "Dark"]
-    }
-    try process.run()
-    process.waitUntilExit()
-    if appearance == .dark, process.terminationStatus != 0 {
-        throw QualificationError.missingEnvironment("synthetic appearance preference")
-    }
 }

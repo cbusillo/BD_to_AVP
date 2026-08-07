@@ -153,6 +153,16 @@ class NativeAppPackagingTests(unittest.TestCase):
             {key: f"$({key})" for key in environment_keys},
         )
 
+    def test_installed_ui_appearance_uses_app_launch_arguments(self) -> None:
+        source = (MACOS_ROOT / "BluRayToVisionProUITests" / "InstalledUIAcceptanceTests.swift").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("app.launchArguments = appearance.launchArguments", source)
+        self.assertIn('["-NSRequiresAquaSystemAppearance", "YES"]', source)
+        self.assertIn('["-AppleInterfaceStyle", "Dark"]', source)
+        self.assertNotIn('executableURL = URL(fileURLWithPath: "/usr/bin/defaults")', source)
+
     def test_builds_packaged_mv_hevc_encoder_at_requested_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_path = Path(temporary_directory) / "tools" / MV_HEVC_ENCODER_NAME
