@@ -831,7 +831,8 @@ printf '%s' "$CODESIGN_METADATA"
             workflow["env"]["RELEASE_QUALIFICATION_POLICY"], "docs/qualification/release-qualification-policy-v1.json"
         )
         self.assertEqual(
-            workflow["env"]["RELEASE_QUALIFICATION_RECORD"], "docs/qualification/rc3-signed-qualification-v1.json"
+            workflow["env"]["RELEASE_QUALIFICATION_RECORD"],
+            "docs/qualification/stable-signed-qualification-v1.json",
         )
         self.assertIn("--candidate-sha", str(qualify_prep))
         self.assertIn("--release-stage", str(qualify_prep))
@@ -917,7 +918,7 @@ printf '%s' "$CODESIGN_METADATA"
         )
         self.assertEqual(
             release_operations["qualificationRecordPath"],
-            "docs/qualification/rc3-signed-qualification-v1.json",
+            "docs/qualification/stable-signed-qualification-v1.json",
         )
         self.assertEqual(len(release_operations["qualificationReportArtifacts"]), 3)
         self.assertIn(

@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "qualification_id": "stable-signed-qualification-v1",
+  "status": "preregistered_pending_exact_candidate",
+  "issues": ["#489"],
+  "qualification_policy": {
+    "id": "release-qualification-policy-v1",
+    "path": "docs/qualification/release-qualification-policy-v1.json",
+    "scope_command": "uv run python -m scripts.qualify_release_scope --qualification docs/qualification/stable-signed-qualification-v1.json --candidate-sha <full-sha> --evidence docs/qualification/release-evidence-v1.json --release-stage stable --workflow-phase preparation --require-evidence"
+  },
+  "candidate": {
+    "package_version": "0.3.0",
+    "public_version": "0.3.0",
+    "build_version": "161",
+    "release_tag": "v0.3.0",
+    "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.0.dmg",
+    "workflow": "Stable",
+    "worker_protocol_version": 12,
+    "route_table_id": "route-relative-video-quality-v2",
+    "mapping_version": 2,
+    "route_table_sha256": "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214",
+    "source_git_sha": null,
+    "dmg_sha256": null,
+    "signed_app_tree_sha256": null,
+    "release_run_id": null,
+    "release_id": null,
+    "appcast_sha256": null
+  },
+  "prior_evidence": [
+    {
+      "id": "rc3-signed-qualification-v1",
+      "scope": "immutable qualified RC3 release identity and signed-artifact inputs"
+    },
+    {
+      "id": "v0.2.143-appcast",
+      "scope": "previous Stable update-route and release-note base"
+    }
+  ],
+  "immutable_history": {
+    "previous_stable": {
+      "release_tag": "v0.2.143",
+      "package_version": "0.2.143",
+      "build_version": "146",
+      "source_git_sha": "03fe03ab58abf85b74c32f6b3b7387d9ad6f1941",
+      "must_not_rebuild": true
+    },
+    "rc3": {
+      "release_tag": "v0.3.0-rc.3",
+      "package_version": "0.3.0rc3",
+      "build_version": "160",
+      "source_git_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95",
+      "release_run_id": 30990186667,
+      "release_id": 365399671,
+      "published_at": "2026-08-05T09:06:41Z",
+      "dmg_sha256": "e1d936cc3231aea4f9d87fde1fd9e7792c1189254fc85bfc10fea382ffce690f",
+      "signed_app_tree_sha256": "30a7256feb4fb1dee78de70eefeec6a5e69db0e7355e7fd2aaf46efaa71f0d37",
+      "appcast_sha256": "6404424910172cfccc9f23472e8748eda7bfba5b1f07d373e69cdb9b0679e9ed",
+      "must_not_rebuild": true
+    },
+    "burned_builds": [147, 154],
+    "abandoned_builds": [157]
+  },
+  "execution_policy": {
+    "main_must_remain_fixed_while_nonterminal": true,
+    "watch_command": "uv run python -m scripts.github_release_run watch",
+    "generic_run_waiter_is_sufficient": false,
+    "approval_required_exit_code": 20,
+    "macos_signing_requires_fresh_explicit_run_bound_authorization": true,
+    "approval_command": "uv run python -m scripts.github_release_run approve",
+    "release_stage": "stable",
+    "field_qualification_timing": "post_publication_exact_artifact"
+  },
+  "matrix": [
+    {"id": "release-workflow-identity", "policy_case_id": "release-workflow-identity", "phase": "workflow", "migration": "release_run_receipt"},
+    {"id": "updater-route-rc3-to-stable", "policy_case_id": "sparkle-update-route", "phase": "milestone", "migration": "fresh_retest"},
+    {"id": "native-sparkle-notes-stable", "policy_case_id": "native-sparkle-release-notes", "phase": "milestone", "migration": "fresh_retest"},
+    {"id": "profile-save-action-accessibility", "policy_case_id": "profile-save-action-accessibility", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "signed-packaged-route-parity", "policy_case_id": "signed-packaged-route-parity", "phase": "signed_artifact", "migration": "release_run_receipt"},
+    {"id": "gui-preview-low-local-ample-destination", "policy_case_id": "gui-preview-low-local-ample-destination", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "gui-preview-cancel-cleanup", "policy_case_id": "gui-preview-cancel-cleanup", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "gui-preview-failure-cleanup", "policy_case_id": "gui-preview-failure-cleanup", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "capacity-known-low", "policy_case_id": "capacity-known-low", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "capacity-unknown-and-conflicting", "policy_case_id": "capacity-unknown-and-conflicting", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "network-generated-final-output", "policy_case_id": "network-generated-final-output", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "overwrite-and-conversion-cancel", "policy_case_id": "overwrite-and-conversion-cancel", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "malformed-pgs-parser-recovery", "policy_case_id": "malformed-pgs-parser-recovery", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "subtitle-partial-output-diagnostics", "policy_case_id": "subtitle-partial-output-diagnostics", "phase": "signed_artifact", "migration": "scope_evaluated"},
+    {"id": "clean-machine-signed-update", "policy_case_id": "clean-machine-signed-update", "phase": "milestone", "migration": "fresh_retest"},
+    {"id": "installed-ui-accessibility", "policy_case_id": "installed-ui-accessibility", "phase": "milestone", "migration": "fresh_retest"},
+    {"id": "usb-bluray-makemkv", "policy_case_id": "usb-bluray-makemkv", "phase": "milestone", "migration": "fresh_retest"},
+    {"id": "protected-real-media-conversion", "policy_case_id": "protected-real-media-conversion", "phase": "milestone", "migration": "fresh_retest"},
+    {"id": "vision-pro-physical-playback", "policy_case_id": "vision-pro-physical-playback", "phase": "milestone", "migration": "fresh_retest"},
+    {"id": "public-diagnostics-and-field-closure", "policy_case_id": "public-diagnostics-and-field-closure", "phase": "post_publication", "migration": "external_nonblocking"}
+  ],
+  "acceptance": {
+    "required_case_ids": [
+      "release-workflow-identity",
+      "sparkle-update-route",
+      "native-sparkle-release-notes",
+      "profile-save-action-accessibility",
+      "signed-packaged-route-parity",
+      "gui-preview-low-local-ample-destination",
+      "gui-preview-cancel-cleanup",
+      "gui-preview-failure-cleanup",
+      "capacity-known-low",
+      "capacity-unknown-and-conflicting",
+      "network-generated-final-output",
+      "overwrite-and-conversion-cancel",
+      "malformed-pgs-parser-recovery",
+      "subtitle-partial-output-diagnostics",
+      "clean-machine-signed-update",
+      "installed-ui-accessibility",
+      "usb-bluray-makemkv",
+      "protected-real-media-conversion",
+      "vision-pro-physical-playback"
+    ],
+    "preregistered_matrix_case_ids": [
+      "release-workflow-identity",
+      "updater-route-rc3-to-stable",
+      "native-sparkle-notes-stable",
+      "profile-save-action-accessibility",
+      "signed-packaged-route-parity",
+      "gui-preview-low-local-ample-destination",
+      "gui-preview-cancel-cleanup",
+      "gui-preview-failure-cleanup",
+      "capacity-known-low",
+      "capacity-unknown-and-conflicting",
+      "network-generated-final-output",
+      "overwrite-and-conversion-cancel",
+      "malformed-pgs-parser-recovery",
+      "subtitle-partial-output-diagnostics",
+      "clean-machine-signed-update",
+      "installed-ui-accessibility",
+      "usb-bluray-makemkv",
+      "protected-real-media-conversion",
+      "vision-pro-physical-playback",
+      "public-diagnostics-and-field-closure"
+    ],
+    "nonblocking_case_ids": ["public-diagnostics-and-field-closure"],
+    "blocking_case_ids": [
+      "sparkle-update-route",
+      "native-sparkle-release-notes",
+      "clean-machine-signed-update",
+      "installed-ui-accessibility",
+      "usb-bluray-makemkv",
+      "protected-real-media-conversion",
+      "vision-pro-physical-playback"
+    ],
+    "milestone_complete": false,
+    "passed": false
+  }
+}

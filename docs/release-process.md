@@ -201,7 +201,7 @@ The workflow performs these ordered boundaries:
    and newest durable snapshot are both checked.
 3. Run the secret-free `qualify-preparation` gate. Classify the candidate
    against the checked `docs/qualification/release-evidence-v1.json` evidence
-   and `docs/qualification/rc3-signed-qualification-v1.json` qualification file
+   and `docs/qualification/stable-signed-qualification-v1.json` qualification file
    for the `preparation` phase, using the exact `github.sha` and committed
    Sparkle channel as the release stage. The preparation report is uploaded as
    an Actions artifact with 30-day retention before enforcement. macOS signing

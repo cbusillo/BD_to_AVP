@@ -117,13 +117,12 @@ older Stable and RC installations cannot discover it, while an installed Beta
 `154`) failed after production signing and is burned without a public appcast
   item. Beta 10 (`0.3.0b10`, build `155`) and Beta 11 (`0.3.0b11`, build `156`)
   are published and immutable. Abandoned Beta 12 metadata build `157` has no
-  public artifact. RC 1 (`0.3.0rc1`, build `158`) and RC 2 (`0.3.0rc2`, build
-  `159`) are published and immutable. RC 3 (`0.3.0rc3`, build `160`) is the next
-  prepared target for the guarded exact-SHA Prerelease workflow. Its future
-  cumulative item must sit above RC 2, RC 1, Beta 11, Beta 10, Beta 8 through
-  Beta 3, skip builds `147`, `154`, and `157`,
-  remain excluded from Stable, and be visible to RC, Beta, and Alpha until a
-  later newer Stable supersedes it.
+  public artifact. RC 1 (`0.3.0rc1`, build `158`), RC 2 (`0.3.0rc2`, build
+  `159`), and RC 3 (`0.3.0rc3`, build `160`) are published and immutable.
+  Stable `0.3.0` build `161` is the next prepared target for the guarded
+  exact-SHA Stable workflow. Its future unchanneled cumulative item must sit
+  above RC 3 and all earlier history, skip builds `147`, `154`, and `157`, and
+  be visible to Stable, RC, Beta, and Alpha.
 
 ## Release Workflow
 

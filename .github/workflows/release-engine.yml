@@ -134,7 +134,7 @@ env:
   GH_REPO: ${{ github.repository }}
   RELEASE_QUALIFICATION_EVIDENCE: docs/qualification/release-evidence-v1.json
   RELEASE_QUALIFICATION_POLICY: docs/qualification/release-qualification-policy-v1.json
-  RELEASE_QUALIFICATION_RECORD: docs/qualification/rc3-signed-qualification-v1.json
+  RELEASE_QUALIFICATION_RECORD: docs/qualification/stable-signed-qualification-v1.json
   XCODEGEN_VERSION: 2.45.4
   XCODEGEN_SHA256: 090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef
   XCODE_VERSION: "26.5"
