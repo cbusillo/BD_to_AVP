@@ -789,6 +789,9 @@ printf '%s' "$CODESIGN_METADATA"
         workflow = load_release_engine()
         jobs = workflow["jobs"]
         qualify_prep = jobs["qualify-preparation"]
+        package = jobs["package"]
+        verify_draft = jobs["verify-draft"]
+        build_receipt = jobs["build-receipt"]
         signed_ui = jobs["signed-artifact-ui"]
         qualify_artifact = jobs["qualify-artifact"]
 
@@ -816,9 +819,17 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertEqual(qualify_prep["permissions"], {"contents": "read"})
         self.assertEqual(signed_ui["permissions"], {"contents": "read"})
         self.assertEqual(qualify_artifact["permissions"], {"contents": "read"})
+        self.assertIn("steps.release_package.outputs.artifact-id", package["outputs"]["workflow_artifact_id"])
+        self.assertIn("steps.receipt_artifact.outputs.artifact-id", build_receipt["outputs"]["receipt_artifact_id"])
         self.assertIn("qualify_release_scope", str(qualify_prep))
         self.assertIn("signed_artifact_ui", str(signed_ui))
         self.assertIn("signed-artifact-ui-receipt.json", str(signed_ui))
+        self.assertNotIn("GH_TOKEN", str(signed_ui))
+        self.assertNotIn("releases/assets/", str(signed_ui))
+        self.assertNotIn("GH_TOKEN", str(qualify_artifact))
+        self.assertNotIn("releases/assets/", str(qualify_artifact))
+        self.assertIn("GitHub DMG asset digest differs from the verified package", str(verify_draft))
+        self.assertIn("Release receipt DMG binding mismatch", str(signed_ui))
         self.assertIn("qualify_release_scope", str(qualify_artifact))
         self.assertIn("--workflow-phase preparation", str(qualify_prep))
         self.assertIn("--workflow-phase artifact", str(qualify_artifact))
@@ -859,7 +870,7 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("checksum_sha256", str(qualify_artifact))
         self.assertIn("appcast_asset_id", str(qualify_artifact))
         self.assertIn("appcast_sha256", str(qualify_artifact))
-        self.assertIn("--release-receipt release-receipt.json", str(qualify_artifact))
+        self.assertIn('--release-receipt "$RELEASE_RECEIPT_PATH"', str(qualify_artifact))
         self.assertIn("--signed-artifact-receipt", str(qualify_artifact))
         self.assertIn("--signed-artifact-receipt-sha256", str(qualify_artifact))
         self.assertIn("--release-receipt-asset-id", str(qualify_artifact))
@@ -873,8 +884,18 @@ printf '%s' "$CODESIGN_METADATA"
             self.assertIn(f"--{metadata_flag}", str(qualify_artifact))
         prep_uploads = [step for step in qualify_prep["steps"] if "upload-artifact" in step.get("uses", "")]
         artifact_uploads = [step for step in qualify_artifact["steps"] if "upload-artifact" in step.get("uses", "")]
+        package_uploads = [step for step in package["steps"] if "upload-artifact" in step.get("uses", "")]
+        receipt_uploads = [step for step in build_receipt["steps"] if "upload-artifact" in step.get("uses", "")]
         signed_ui_uploads = [step for step in signed_ui["steps"] if "upload-artifact" in step.get("uses", "")]
         self.assertEqual(len(prep_uploads), 1)
+        release_package_uploads = [step for step in package_uploads if step.get("id") == "release_package"]
+        self.assertEqual(len(release_package_uploads), 1)
+        self.assertEqual(len(receipt_uploads), 1)
+        self.assertEqual(receipt_uploads[0]["id"], "receipt_artifact")
+        self.assertEqual(receipt_uploads[0]["if"], "success()")
+        self.assertEqual(receipt_uploads[0]["with"]["path"], "downloaded-release-receipt.json")
+        self.assertEqual(receipt_uploads[0]["with"]["if-no-files-found"], "error")
+        self.assertEqual(receipt_uploads[0]["with"]["retention-days"], "7")
         self.assertEqual(len(signed_ui_uploads), 1)
         self.assertEqual(len(artifact_uploads), 1)
         self.assertIn("release-qualification-preparation-${{ github.run_attempt }}", str(prep_uploads[0]))
@@ -883,15 +904,29 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertEqual(signed_ui_uploads[0]["with"]["path"], "signed-artifact-ui-receipt.json")
         self.assertEqual(signed_ui_uploads[0]["with"]["if-no-files-found"], "error")
         self.assertEqual(signed_ui_uploads[0]["with"]["retention-days"], "7")
-        signed_ui_downloads = [
+        signed_ui_input_downloads = [step for step in signed_ui["steps"] if "download-artifact" in step.get("uses", "")]
+        self.assertEqual(len(signed_ui_input_downloads), 2)
+        signed_ui_input_ids = {step["with"]["artifact-ids"] for step in signed_ui_input_downloads}
+        self.assertEqual(
+            signed_ui_input_ids,
+            {
+                "${{ needs.package.outputs.workflow_artifact_id }}",
+                "${{ needs.build-receipt.outputs.receipt_artifact_id }}",
+            },
+        )
+        artifact_input_downloads = [
             step for step in qualify_artifact["steps"] if "download-artifact" in step.get("uses", "")
         ]
-        self.assertEqual(len(signed_ui_downloads), 1)
+        self.assertEqual(len(artifact_input_downloads), 2)
+        artifact_input_ids = {step["with"]["artifact-ids"] for step in artifact_input_downloads}
         self.assertEqual(
-            signed_ui_downloads[0]["with"]["artifact-ids"],
-            "${{ needs.signed-artifact-ui.outputs.artifact_id }}",
+            artifact_input_ids,
+            {
+                "${{ needs.build-receipt.outputs.receipt_artifact_id }}",
+                "${{ needs.signed-artifact-ui.outputs.artifact_id }}",
+            },
         )
-        self.assertNotIn("name", signed_ui_downloads[0]["with"])
+        self.assertTrue(all("name" not in step["with"] for step in artifact_input_downloads))
         self.assertIn("release-qualification-final-${{ github.run_attempt }}", str(artifact_uploads[0]))
         self.assertEqual(prep_uploads[0]["if"], "always()")
         self.assertEqual(artifact_uploads[0]["if"], "always()")

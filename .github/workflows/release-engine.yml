@@ -620,6 +620,7 @@ jobs:
       dmg_name: ${{ steps.package_artifact.outputs.dmg_name }}
       dmg_sha256: ${{ steps.package_artifact.outputs.dmg_sha256 }}
       dmg_size: ${{ steps.package_artifact.outputs.dmg_size }}
+      workflow_artifact_id: ${{ steps.release_package.outputs.artifact-id }}
       signed_app_tree_sha256: ${{ steps.package_artifact.outputs.signed_app_tree_sha256 }}
     steps:
       - name: Checkout validated main commit
@@ -1117,6 +1118,7 @@ jobs:
           exit "$cleanup_status"
 
       - name: Upload verified release package
+        id: release_package
         if: success()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -1886,6 +1888,12 @@ jobs:
           fi
           DMG_ASSET_ID=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
             '.assets[] | select(.name == $name) | .id' <<< "$RELEASE_JSON")
+          DMG_ASSET_DIGEST=$(jq -r --arg name "$EXPECTED_DMG_NAME" \
+            '.assets[] | select(.name == $name) | .digest' <<< "$RELEASE_JSON")
+          if [ "$DMG_ASSET_DIGEST" != "sha256:$EXPECTED_DMG_SHA256" ]; then
+            echo "GitHub DMG asset digest differs from the verified package." >&2
+            exit 1
+          fi
           CHECKSUM_ASSET_ID=$(jq -r \
             '.assets[] | select(.name == "SHA256SUMS") | .id' \
             <<< "$RELEASE_JSON")
@@ -1977,6 +1985,7 @@ jobs:
       contents: write
     outputs:
       receipt_asset_id: ${{ steps.receipt.outputs.receipt_asset_id }}
+      receipt_artifact_id: ${{ steps.receipt_artifact.outputs.artifact-id }}
       receipt_file_sha256: ${{ steps.receipt.outputs.receipt_file_sha256 }}
       receipt_sha256: ${{ steps.receipt.outputs.receipt_sha256 }}
     steps:
@@ -2120,6 +2129,16 @@ jobs:
             echo "receipt_sha256=$RECEIPT_SHA256"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Retain verified release receipt transfer
+        id: receipt_artifact
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-receipt-${{ github.run_attempt }}
+          path: downloaded-release-receipt.json
+          if-no-files-found: error
+          retention-days: 7
+
   signed-artifact-ui:
     name: Prove signed artifact UI accessibility
     needs:
@@ -2184,7 +2203,19 @@ jobs:
           uv sync --locked --all-groups --python 3.12
           uv run python scripts/native_app.py generate
 
-      - name: Download exact signed release assets
+      - name: Download exact verified package transfer
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.package.outputs.workflow_artifact_id }}
+          path: signed-artifact-assets/package
+
+      - name: Download exact verified receipt transfer
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.build-receipt.outputs.receipt_artifact_id }}
+          path: signed-artifact-assets/receipt
+
+      - name: Verify exact signed release transfers
         env:
           DMG_ASSET_ID: ${{ needs.verify-draft.outputs.dmg_asset_id }}
           DMG_NAME: ${{ needs.prepare.outputs.dmg_name }}
@@ -2192,22 +2223,34 @@ jobs:
           DMG_SIZE: ${{ needs.package.outputs.dmg_size }}
           RECEIPT_ASSET_ID: ${{ needs.build-receipt.outputs.receipt_asset_id }}
           RECEIPT_FILE_SHA256: ${{ needs.build-receipt.outputs.receipt_file_sha256 }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p signed-artifact-assets
-          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$RECEIPT_ASSET_ID" \
-            -H "Accept: application/octet-stream" > signed-artifact-assets/release-receipt.json
-          test "$(shasum -a 256 signed-artifact-assets/release-receipt.json | awk '{print $1}')" = "$RECEIPT_FILE_SHA256"
-          RECEIPT_ASSET_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/assets/$RECEIPT_ASSET_ID")
-          test "$(jq -r .digest <<< "$RECEIPT_ASSET_JSON")" = "sha256:$RECEIPT_FILE_SHA256"
-
-          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$DMG_ASSET_ID" \
-            -H "Accept: application/octet-stream" > "signed-artifact-assets/$DMG_NAME"
-          test "$(shasum -a 256 "signed-artifact-assets/$DMG_NAME" | awk '{print $1}')" = "$DMG_SHA256"
-          test "$(stat -f %z "signed-artifact-assets/$DMG_NAME")" = "$DMG_SIZE"
-          DMG_ASSET_JSON=$(gh api "repos/$GITHUB_REPOSITORY/releases/assets/$DMG_ASSET_ID")
-          test "$(jq -r .digest <<< "$DMG_ASSET_JSON")" = "sha256:$DMG_SHA256"
+          RECEIPT_PATH="signed-artifact-assets/receipt/downloaded-release-receipt.json"
+          DMG_PATH="signed-artifact-assets/package/$DMG_NAME"
+          CHECKSUM_PATH="signed-artifact-assets/package/SHA256SUMS"
+          test "$(shasum -a 256 "$RECEIPT_PATH" | awk '{print $1}')" = "$RECEIPT_FILE_SHA256"
+          uv run python -m scripts.release_receipt validate --receipt "$RECEIPT_PATH"
+          DMG_BINDING_MATCH_COUNT=$(jq \
+            --argjson asset_id "$DMG_ASSET_ID" \
+            --arg name "$DMG_NAME" \
+            --arg sha256 "$DMG_SHA256" \
+            --argjson size "$DMG_SIZE" \
+            '[.artifacts[] | select(
+              .kind == "dmg" and
+              .asset_id == $asset_id and
+              .name == $name and
+              .sha256 == $sha256 and
+              .size_bytes == $size
+            )] | length' \
+            "$RECEIPT_PATH")
+          if [ "$DMG_BINDING_MATCH_COUNT" != "1" ]; then
+            echo "Release receipt DMG binding mismatch: expected one exact artifact, found $DMG_BINDING_MATCH_COUNT." >&2
+            exit 1
+          fi
+          test "$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')" = "$DMG_SHA256"
+          test "$(stat -f %z "$DMG_PATH")" = "$DMG_SIZE"
+          test "$(cat "$CHECKSUM_PATH")" = "$DMG_SHA256  $DMG_NAME"
+          (cd signed-artifact-assets/package && shasum -a 256 --check SHA256SUMS)
 
       - name: Run installed candidate UI accessibility lane
         id: ui
@@ -2219,8 +2262,8 @@ jobs:
           set -euo pipefail
           uv run python -m scripts.signed_artifact_ui \
             --policy "$RELEASE_QUALIFICATION_POLICY" \
-            --release-receipt signed-artifact-assets/release-receipt.json \
-            --dmg "signed-artifact-assets/$DMG_NAME" \
+            --release-receipt signed-artifact-assets/receipt/downloaded-release-receipt.json \
+            --dmg "signed-artifact-assets/package/$DMG_NAME" \
             --qualification-root "$RUNNER_TEMP/signed-artifact-ui" \
             --evidence-directory signed-artifact-ui-evidence \
             --output-receipt signed-artifact-ui-receipt.json \
@@ -2272,19 +2315,23 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Download and verify release receipt
+      - name: Download exact verified receipt transfer
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.build-receipt.outputs.receipt_artifact_id }}
+          path: release-receipt-transfer
+
+      - name: Verify release receipt transfer
         env:
-          EXPECTED_RECEIPT_ASSET_ID: ${{ needs.build-receipt.outputs.receipt_asset_id }}
           EXPECTED_RECEIPT_FILE_SHA256: ${{ needs.build-receipt.outputs.receipt_file_sha256 }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$EXPECTED_RECEIPT_ASSET_ID" \
-            -H "Accept: application/octet-stream" > release-receipt.json
-          if [ "$(sha256sum release-receipt.json | awk '{print $1}')" != "$EXPECTED_RECEIPT_FILE_SHA256" ]; then
+          RECEIPT_PATH="release-receipt-transfer/downloaded-release-receipt.json"
+          if [ "$(sha256sum "$RECEIPT_PATH" | awk '{print $1}')" != "$EXPECTED_RECEIPT_FILE_SHA256" ]; then
             echo "Release receipt digest mismatch before artifact qualification." >&2
             exit 1
           fi
+          python -m scripts.release_receipt validate --receipt "$RECEIPT_PATH"
 
       - name: Download signed artifact UI receipt
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -2314,6 +2361,7 @@ jobs:
           RELEASE_ROUTE: ${{ needs.policy.outputs.release_route }}
           RELEASE_STAGE: ${{ needs.prepare.outputs.channel }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          RELEASE_RECEIPT_PATH: release-receipt-transfer/downloaded-release-receipt.json
           SIGNED_APP_TREE_SHA256: ${{ needs.package.outputs.signed_app_tree_sha256 }}
           SIGNED_ARTIFACT_RECEIPT: signed-artifact-ui/${{ needs.signed-artifact-ui.outputs.receipt_path }}
           SIGNED_ARTIFACT_RECEIPT_SHA256: ${{ needs.signed-artifact-ui.outputs.receipt_file_sha256 }}
@@ -2332,7 +2380,7 @@ jobs:
             --release-stage "$RELEASE_STAGE" \
             --workflow-phase artifact \
             "${FIRST_CANDIDATE_ARGS[@]}" \
-            --release-receipt release-receipt.json \
+            --release-receipt "$RELEASE_RECEIPT_PATH" \
             --signed-artifact-receipt "$SIGNED_ARTIFACT_RECEIPT" \
             --signed-artifact-receipt-sha256 "$SIGNED_ARTIFACT_RECEIPT_SHA256" \
             --release-route "$RELEASE_ROUTE" \

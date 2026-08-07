@@ -237,15 +237,18 @@ The workflow performs these ordered boundaries:
    to the draft, re-download it by asset ID, and verify its content and file
    digests before publication. The receipt deliberately excludes credentials,
    approval context, private paths, and diagnostic identifiers.
-10. Run the secret-free `qualify-artifact` gate. Download the release receipt by
-    its exact GitHub Release asset ID and verify its SHA-256 digest. Then classify
-    the candidate for the `artifact` phase, binding the exact release route,
-    workflow run ID and attempt, release ID, committed versions/tag/DMG name,
-    signed app tree digest, and DMG/checksum/appcast asset IDs and digests. The
-    artifact report is uploaded as an Actions artifact before enforcement.
-    Publication cannot proceed until this gate passes. Cases whose exact
-    evidence requires the live published appcast or physical candidate hardware
-    remain visible but deferred to milestone qualification.
+10. Run the secret-free signed-artifact UI and `qualify-artifact` gates. Transfer
+    the already verified package and release receipt through same-run Actions
+    artifacts by immutable artifact ID, then verify their externally supplied
+    SHA-256 digests. The receipt preserves the original GitHub Release asset IDs
+    and digests. Test the installed signed DMG, then classify the candidate for
+    the `artifact` phase, binding the exact release route, workflow run ID and
+    attempt, release ID, committed versions/tag/DMG name, signed app tree digest,
+    and DMG/checksum/appcast asset IDs and digests. The artifact report is
+    uploaded as an Actions artifact before enforcement. Publication cannot
+    proceed until both gates pass. Cases whose exact evidence requires the live
+    published appcast or physical candidate hardware remain visible but deferred
+    to milestone qualification.
 11. Publish the verified draft only if it still targets the current `main` HEAD.
    The release body is hashed again immediately before and after publication so
    edits cannot silently diverge from the updater notes. The reusable engine
@@ -342,7 +345,10 @@ If a release run fails before publication, leave the release as a draft while
 diagnosing it, then rerun the failed jobs or dispatch the same committed release
 again. A matching draft and its byte-identical assets resume safely; a
 conflicting draft or tag fails closed. Never replace a published DMG or appcast
-asset. If the Pages job fails after publication, rerun the failed job or dispatch
+asset. When the failure requires a workflow-definition fix or changes an
+attempt-bound receipt, preserve the failed-run evidence, merge the fix, delete
+only the abandoned unpublished draft after recording its identities, and start a
+fresh release from the new protected-main SHA. If the Pages job fails after publication, rerun the failed job or dispatch
 `Manage Sparkle Pages` from `main` with `deploy` and the release tag.
 
 For the Beta 3 seed, a pre-publication failure leaves the existing feed and all
