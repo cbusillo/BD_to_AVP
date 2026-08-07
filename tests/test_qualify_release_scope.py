@@ -83,6 +83,7 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         workflow_phase: str = "preparation",
         artifact_receipt_path: Path | None = None,
         artifact_receipt_expectation: ArtifactReceiptExpectation | None = None,
+        milestone_receipt_path: Path | None = None,
         release_stage: str = "rc",
         first_candidate_of_cycle: bool = False,
         as_of: date = date(2026, 8, 5),
@@ -100,6 +101,7 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
             workflow_phase=workflow_phase,
             artifact_receipt_path=artifact_receipt_path,
             artifact_receipt_expectation=artifact_receipt_expectation,
+            milestone_receipt_path=milestone_receipt_path,
             as_of=as_of,
         )
 
@@ -170,6 +172,26 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
             appcast_sha256=APPCAST_SHA256,
         )
         return receipt_path, expectation
+
+    def milestone_receipt(self, root: Path) -> Path:
+        receipt_path = self.artifact_receipt(root)[0]
+        self.write_milestone_publication(root, receipt_path)
+        return receipt_path
+
+    @staticmethod
+    def write_milestone_publication(root: Path, receipt_path: Path) -> None:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        publication_path = root / f"docs/release-evidence/{receipt['release']['tag']}/publication-record.json"
+        publication_path.parent.mkdir(parents=True, exist_ok=True)
+        publication_path.write_text("{}\n", encoding="utf-8")
+
+    @staticmethod
+    def milestone_receipt_from_tier3(root: Path, evidence: dict[str, Any]) -> Path:
+        tier3_path = root / evidence["receipts"][0]["reference"]
+        tier3_receipt = json.loads(tier3_path.read_text(encoding="utf-8"))
+        receipt_path = root / tier3_receipt["release_identity"]["release_receipt"]["reference"]
+        ReleaseQualificationScopeTests.write_milestone_publication(root, receipt_path)
+        return receipt_path
 
     def tier3_evidence(
         self,
@@ -424,6 +446,15 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         self.assertNotIn("release-workflow-identity", report["blocking_retests"])
         self.assertIn("release-workflow-identity", report["deferred_retests"])
 
+        sparkle = self.result_for(report, "sparkle-update-route")
+        clean_machine = self.result_for(report, "clean-machine-signed-update")
+        self.assertEqual(sparkle["required_phase"], "milestone")
+        self.assertTrue(sparkle["requires_live_publication"])
+        self.assertTrue(sparkle["deferred"])
+        self.assertFalse(sparkle["applicable"])
+        self.assertEqual(clean_machine["required_phase"], "milestone")
+        self.assertFalse(clean_machine["requires_live_publication"])
+
     def test_artifact_phase_uses_exact_receipt_to_cover_tier1(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -442,7 +473,8 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         self.assertEqual(result["status"], "covered")
         self.assertEqual(result["evidence"]["reference"], "release-receipt.json")
         self.assertNotIn("release-workflow-identity", report["blocking_retests"])
-        self.assertEqual(report["deferred_retests"], [])
+        self.assertIn("sparkle-update-route", report["deferred_retests"])
+        self.assertIn("native-sparkle-release-notes", report["deferred_retests"])
 
     def test_artifact_phase_fails_closed_without_receipt_and_requires_exact_policy_tier1_references(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -487,6 +519,55 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
             with self.assertRaisesRegex(QualificationScopeError, "exact same-run release receipt"):
                 self.classify(evidence, root, workflow_phase="artifact")
 
+    def test_milestone_uses_checked_tier1_evidence_and_rejects_artifact_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt_path, expectation = self.artifact_receipt(root)
+            self.write_milestone_publication(root, receipt_path)
+            evidence = {
+                "schema_version": 1,
+                "receipts": [
+                    {
+                        "case_id": "release-workflow-identity",
+                        "receipt_id": "release-workflow-identity-receipt-v1",
+                        "source": "release_run_receipt",
+                        "status": "accepted",
+                        "source_sha": CANDIDATE_SHA,
+                        "accepted_at": "2026-08-05T13:00:00Z",
+                        "reference": receipt_path.relative_to(root).as_posix(),
+                        "sha256": file_sha256(receipt_path),
+                        "workflow_conclusion": "success",
+                        "release_run_id": expectation.workflow_run_id,
+                    }
+                ],
+            }
+            report = self.classify(
+                evidence,
+                root,
+                workflow_phase="milestone",
+                release_stage="stable",
+                milestone_receipt_path=receipt_path,
+            )
+            with self.assertRaisesRegex(QualificationScopeError, "Milestone workflow phase"):
+                self.classify(
+                    evidence,
+                    root,
+                    workflow_phase="milestone",
+                    artifact_receipt_path=receipt_path,
+                    artifact_receipt_expectation=expectation,
+                    milestone_receipt_path=receipt_path,
+                )
+
+        tier1 = self.result_for(report, "release-workflow-identity")
+        sparkle = self.result_for(report, "sparkle-update-route")
+        clean_machine = self.result_for(report, "clean-machine-signed-update")
+        self.assertEqual(tier1["status"], "covered")
+        self.assertTrue(tier1["applicable"])
+        self.assertFalse(tier1["deferred"])
+        self.assertTrue(sparkle["applicable"])
+        self.assertIn("sparkle-update-route", report["blocking_retests"])
+        self.assertTrue(clean_machine["applicable"])
+
     def test_artifact_receipt_does_not_bypass_checked_evidence_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -512,12 +593,16 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                 root,
                 release_stage="rc",
                 first_candidate_of_cycle=True,
+                workflow_phase="milestone",
+                milestone_receipt_path=self.milestone_receipt(root),
             )
             empty_report = self.classify(
                 {"schema_version": 1, "receipts": []},
                 root,
                 release_stage="rc",
                 first_candidate_of_cycle=True,
+                workflow_phase="milestone",
+                milestone_receipt_path=self.milestone_receipt(root),
             )
 
         clean_result = self.result_for(clean_report, "clean-machine-signed-update")
@@ -542,6 +627,8 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                 evidence,
                 root,
                 release_stage="beta",
+                workflow_phase="milestone",
+                milestone_receipt_path=self.milestone_receipt(root),
                 as_of=date(2026, 8, 5),
             )
 
@@ -564,6 +651,8 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                 evidence,
                 root,
                 release_stage="beta",
+                workflow_phase="milestone",
+                milestone_receipt_path=self.milestone_receipt_from_tier3(root, evidence),
                 as_of=date(2026, 8, 5),
             )
 
@@ -572,11 +661,37 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         self.assertEqual(result["trigger"], "expired")
         self.assertTrue(result["applicable"])
 
+    def test_exact_candidate_tier3_evidence_must_match_milestone_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            evidence = self.tier3_evidence(
+                root,
+                "clean-machine-signed-update",
+                source_sha=CANDIDATE_SHA,
+            )
+            report = self.classify(
+                evidence,
+                root,
+                release_stage="beta",
+                workflow_phase="milestone",
+                milestone_receipt_path=self.milestone_receipt(root),
+            )
+
+        result = self.result_for(report, "clean-machine-signed-update")
+        self.assertEqual(result["status"], "retest")
+        self.assertEqual(result["trigger"], "milestone_receipt_mismatch")
+
     def test_periodic_evidence_carries_inside_cadence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             evidence = self.tier3_evidence(root, "clean-machine-signed-update")
-            report = self.classify(evidence, root, release_stage="beta")
+            report = self.classify(
+                evidence,
+                root,
+                release_stage="beta",
+                workflow_phase="milestone",
+                milestone_receipt_path=self.milestone_receipt(root),
+            )
 
         result = self.result_for(report, "clean-machine-signed-update")
         self.assertEqual(result["status"], "carry")
@@ -593,6 +708,8 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                 root,
                 changed={"scripts/sparkle_bundle.py"},
                 release_stage="beta",
+                workflow_phase="milestone",
+                milestone_receipt_path=self.milestone_receipt(root),
             )
 
         result = self.result_for(report, "clean-machine-signed-update")
@@ -629,6 +746,73 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
 
                 with self.assertRaises(QualificationScopeError):
                     load_policy(policy_path)
+
+    def test_milestone_owned_tier2_requires_live_publication_declaration(self) -> None:
+        mutations = (
+            ("sparkle-update-route", "requires_live_publication", False),
+            ("profile-save-action-accessibility", "blocking_phase", "milestone"),
+            ("sparkle-update-route", "live_evidence_case_ids", ["updater-route-rc2-to-rc3"]),
+        )
+        for case_id, field, value in mutations:
+            with self.subTest(case_id=case_id, field=field), tempfile.TemporaryDirectory() as temporary_directory:
+                policy = json.loads(json.dumps(self.policy))
+                case = next(case for case in policy["cases"] if case["id"] == case_id)
+                case[field] = value
+                policy_path = Path(temporary_directory) / "policy.json"
+                policy_path.write_text(json.dumps(policy), encoding="utf-8")
+
+                with self.assertRaises(QualificationScopeError):
+                    load_policy(policy_path)
+
+    def test_live_publication_evidence_requires_receipt_binding_and_embedded_post_publication_time(self) -> None:
+        evidence_path = REPO_ROOT / "docs/qualification/release-evidence-v1.json"
+        reference_path = REPO_ROOT / "docs/qualification/rc3-targeted-qualification-v1.json"
+        for section, field, value in (
+            (None, "qualified_at", "2026-08-05T08:00:00Z"),
+            ("candidate", "release_run_id", 1),
+            ("candidate", "release_tag", "v0.3.0-rc.2"),
+        ):
+            with self.subTest(section=section, field=field):
+                evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                receipt = next(item for item in evidence["receipts"] if item["case_id"] == "sparkle-update-route")
+                reference = json.loads(reference_path.read_text(encoding="utf-8"))
+                if section is None:
+                    reference[field] = value
+                else:
+                    reference[section][field] = value
+                reference_bytes = (json.dumps(reference, indent=2) + "\n").encode()
+                receipt["sha256"] = hashlib.sha256(reference_bytes).hexdigest()
+
+                with self.assertRaises(QualificationScopeError):
+                    classify_release_scope(
+                        self.policy,
+                        evidence,
+                        candidate_sha="0b06582a83a45bb38d851e62ccf38cd148c7bb95",
+                        changed_paths=lambda _base, _candidate: set(),
+                        repo=REPO_ROOT,
+                        reference_content=lambda path, content=reference_bytes: (
+                            content
+                            if path == "docs/qualification/rc3-targeted-qualification-v1.json"
+                            else (REPO_ROOT / path).read_bytes()
+                        ),
+                        as_of=date(2026, 8, 6),
+                    )
+
+    def test_checked_rc3_live_publication_evidence_matches_milestone_receipt(self) -> None:
+        evidence = json.loads((REPO_ROOT / "docs/qualification/release-evidence-v1.json").read_text(encoding="utf-8"))
+        report = classify_release_scope(
+            self.policy,
+            evidence,
+            candidate_sha="0b06582a83a45bb38d851e62ccf38cd148c7bb95",
+            changed_paths=lambda _base, _candidate: set(),
+            repo=REPO_ROOT,
+            workflow_phase="milestone",
+            milestone_receipt_path=REPO_ROOT / "docs/release-evidence/v0.3.0-rc.3/release-receipt.json",
+            as_of=date(2026, 8, 6),
+        )
+
+        self.assertEqual(self.result_for(report, "sparkle-update-route")["status"], "covered")
+        self.assertEqual(self.result_for(report, "native-sparkle-release-notes")["status"], "covered")
 
     def test_future_dated_receipt_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -697,7 +881,7 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertIn("gui-preview-failure-cleanup", stderr.getvalue())
         self.assertIn("signed_artifact_receipt", stderr.getvalue())
-        self.assertIn("before this phase can pass", stderr.getvalue())
+        self.assertIn("before the preparation phase can pass", stderr.getvalue())
 
     def test_artifact_cli_accepts_exact_receipt_identity_flags(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

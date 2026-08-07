@@ -387,6 +387,19 @@ def validate_receipt(receipt: Mapping[str, Any]) -> None:
         raise ReleaseReceiptError("Release receipt self-digest mismatch.")
 
 
+def load_validated_checked_receipt(path: Path) -> tuple[Mapping[str, Any], str]:
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        raise ReleaseReceiptError(f"Unable to read checked release receipt at {path}: {error}") from error
+    try:
+        receipt = _mapping(json.loads(content), "checked release receipt")
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ReleaseReceiptError(f"Invalid JSON in checked release receipt at {path}: {error}") from error
+    validate_receipt(receipt)
+    return receipt, hashlib.sha256(content).hexdigest()
+
+
 def load_validated_artifact_receipt(
     path: Path,
     expectation: ArtifactReceiptExpectation,

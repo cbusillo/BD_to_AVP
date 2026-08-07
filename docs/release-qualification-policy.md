@@ -39,10 +39,33 @@ successful workflow conclusion and positive release-run ID. Tier 3 evidence
 references a checked `bd-to-avp-tier3-qualification` receipt that is validated
 against the selected case and its exact checked release receipt.
 
+Milestone-owned Tier 2 references must be structured JSON containing a matching
+candidate identity, a passed accepted case ID, and an embedded qualification
+timestamp after publication. The classifier derives the canonical checked
+release-receipt and publication-record paths from that candidate tag, verifies
+their file digests and release/run/appcast identities, and requires index
+acceptance after publication. This prevents a generic exact-SHA file or a
+relabeled pre-publication observation from satisfying a live-publication case.
+
 Use `--require-evidence` during release preparation. It exits with status `2`
 when any case applicable to the selected workflow phase remains a blocking
 `retest`; later-phase cases remain visible as deferred, and Tier 4 `external`
 cases never affect that exit status.
+
+The ordered phases are:
+
+| Classifier phase | Enforced evidence |
+| --- | --- |
+| `preparation` | Per-commit coverage and ordinary change-scoped Tier 2 evidence required before signing. |
+| `artifact` | Everything from preparation plus exact same-run Tier 1 receipt evidence required before publication. |
+| `milestone` | Everything from earlier phases plus live-publication Tier 2 and due Tier 3 evidence required before milestone closeout. |
+
+Only Tier 2 cases that explicitly declare `requires_live_publication: true` may
+use the `milestone` blocking phase. This exception is limited to checks such as
+the real Sparkle update route and native release notes, whose exact-candidate
+evidence requires the published DMG, checked release receipt, and live appcast.
+Other Tier 2 invalidations continue to block preparation and require another
+reviewed candidate rather than being deferred through publication.
 
 ```sh
 uv run python -m scripts.qualify_release_scope \
@@ -137,9 +160,10 @@ byte-for-byte identities.
 
 ## Workflow Integration
 
-The release engine enforces qualification at two secret-free guarded boundaries.
-Neither job touches signing, notarization, PyPI, or Pages secrets, and both run
-on `ubuntu-latest` without a write-capable repository token.
+The release engine enforces qualification at two secret-free guarded boundaries,
+and protected pull-request CI enforces the post-publication milestone boundary.
+None of these checks receives signing, notarization, PyPI, Sparkle, or Pages
+secrets.
 
 **Early gate (`qualify-preparation`)** runs after `prepare` and before `package`
 (the macOS signing job). It checks the `preparation` phase using the exact
@@ -213,16 +237,45 @@ python -m scripts.qualify_release_scope \
   --require-evidence
 ```
 
+After publication, the Release Evidence workflow opens or updates
+`automation/release-evidence-<tag>`. CI validates the checked release receipt
+against the configured qualification record with
+`scripts.release_milestone_context`, then runs:
+
+```sh
+python -m scripts.qualify_release_scope \
+  --policy "$POLICY_PATH" \
+  --candidate-sha "$CANDIDATE_SHA" \
+  --release-stage "$RELEASE_STAGE" \
+  --evidence "$EVIDENCE_PATH" \
+  --qualification "$QUALIFICATION_PATH" \
+  --milestone-release-receipt "$RELEASE_RECEIPT_PATH" \
+  --workflow-phase milestone \
+  [--first-candidate-of-cycle] \
+  --output release-qualification-milestone.json \
+  --require-evidence
+```
+
+The initial evidence PR is expected to remain unmergeable while due
+live-artifact or Tier 3 receipts are absent. Collectors add validated receipts
+to that same idempotent branch. A milestone failure never rebuilds, retags,
+re-signs, replaces, or unpublishes the immutable release; it blocks evidence
+reconciliation and milestone completion until the checked evidence passes.
+CI discovers checked release-receipt changes from the pull-request diff and
+requires a same-repository PR targeting `main`, the exact
+`automation/release-evidence-<tag>` branch, and a docs-only diff, so a fork or a
+copied evidence branch cannot skip the milestone gate.
+
 The `--output` flag writes the JSON report before the enforcement exit,
 so the `if: always()` upload step captures it even when enforcement fails. The
 classifier also writes a structured error report when policy or receipt
-validation fails before case classification. The
-`--workflow-phase` flag keeps publication-owned Tier 1 retests visible but
-explicitly deferred during `preparation`; `artifact` additionally binds the
-exact run, release, and asset identities recorded in the receipt. The receipt's
-appcast digest is the verified snapshot awaiting deployment. Live Pages state
-remains owned by the post-publication deployment and reconciliation boundaries,
-so it is not required before its owning phase exists.
+validation fails before case classification. The `--workflow-phase` flag keeps
+later-phase retests visible but explicitly deferred. `artifact` additionally
+binds the exact run, release, and asset identities recorded in the receipt.
+`milestone` consumes the checked immutable receipt and enforces every due
+live-publication Tier 2 and Tier 3 case. The receipt's appcast digest is the
+verified snapshot awaiting deployment during the artifact phase; live Pages
+state is required only after publication.
 
 After the operator workflow completes, `.github/workflows/release-evidence.yml`
 validates the successful `workflow_dispatch` run, approved actor, protected
@@ -230,4 +283,5 @@ source SHA, immutable release fields, asset IDs and sizes, receipt digest, and
 live Pages appcast. It then opens or updates one task-branch PR containing the
 receipt, publication record, release ledger, qualification fields, and cut
 packet status. The workflow has no signing, notarization, Sparkle private-key,
-PyPI, or deployment secrets.
+PyPI, or deployment secrets. The evidence PR cannot merge until protected CI's
+milestone report passes.

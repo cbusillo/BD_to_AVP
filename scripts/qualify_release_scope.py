@@ -18,6 +18,8 @@ from scripts.release_receipt import (
     ArtifactReceiptExpectation,
     ReleaseReceiptError,
     load_validated_artifact_receipt,
+    load_validated_checked_receipt,
+    validate_receipt,
 )
 from scripts.tier3_receipt import Tier3ReceiptError, load_validated_receipt_bytes
 
@@ -27,7 +29,15 @@ DEFAULT_POLICY_PATH = REPO_ROOT / "docs" / "qualification" / "release-qualificat
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 RESULT_STATES = ("covered", "carry", "retest", "external")
-WORKFLOW_PHASES = ("preparation", "artifact")
+WORKFLOW_PHASES = ("preparation", "artifact", "milestone")
+WORKFLOW_PHASE_INDEX = {phase: index for index, phase in enumerate(WORKFLOW_PHASES)}
+BLOCKING_PHASE_OWNERS = {
+    "commit": "preparation",
+    "release_candidate": "preparation",
+    "publication": "artifact",
+    "milestone": "milestone",
+    "none": None,
+}
 TIER3_EXECUTION_MODES = {"automated", "operator_assisted"}
 TIER3_ENVIRONMENT_IDENTITY_FIELDS = {
     "environment_class",
@@ -127,10 +137,51 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Mapping[str, Any]:
                 f"Qualification case {case_id!r} must have exactly one tier from 0 through 4."
             )
         blocking_phase = case.get("blocking_phase")
-        expected_blocking_phase = _mapping(tiers[str(tier)], f"qualification tier {tier}").get("blocking_phase")
-        if blocking_phase != expected_blocking_phase:
+        if blocking_phase not in BLOCKING_PHASE_OWNERS:
             raise QualificationScopeError(
-                f"Qualification case {case_id!r} blocking_phase must match tier {tier}: {expected_blocking_phase!r}."
+                f"Qualification case {case_id!r} has unsupported blocking_phase {blocking_phase!r}."
+            )
+        expected_blocking_phase = _mapping(tiers[str(tier)], f"qualification tier {tier}").get("blocking_phase")
+        if not isinstance(expected_blocking_phase, str) or expected_blocking_phase not in BLOCKING_PHASE_OWNERS:
+            raise QualificationScopeError(
+                f"Qualification tier {tier} has unsupported blocking_phase {expected_blocking_phase!r}."
+            )
+        requires_live_publication = case.get("requires_live_publication")
+        allowed_blocking_phases = (
+            {expected_blocking_phase, "milestone"}
+            if tier == 2 and requires_live_publication is True
+            else {expected_blocking_phase}
+        )
+        if blocking_phase not in allowed_blocking_phases:
+            raise QualificationScopeError(
+                f"Qualification case {case_id!r} blocking_phase must be one of "
+                f"{sorted(allowed_blocking_phases)!r} for tier {tier}."
+            )
+        if requires_live_publication is not None and not isinstance(requires_live_publication, bool):
+            raise QualificationScopeError(
+                f"Qualification case {case_id!r} requires_live_publication must be boolean when present."
+            )
+        if requires_live_publication is True and (tier != 2 or blocking_phase != "milestone"):
+            raise QualificationScopeError(
+                f"Qualification case {case_id!r} may require live publication only as a milestone-owned Tier 2 case."
+            )
+        if tier == 2 and blocking_phase == "milestone" and requires_live_publication is not True:
+            raise QualificationScopeError(
+                f"Milestone-owned Tier 2 case {case_id!r} must declare requires_live_publication=true."
+            )
+        live_evidence_case_ids = case.get("live_evidence_case_ids")
+        if requires_live_publication is True:
+            accepted_live_case_ids = _strings(
+                live_evidence_case_ids,
+                f"qualification case {case_id!r} live_evidence_case_ids",
+            )
+            if case_id not in accepted_live_case_ids:
+                raise QualificationScopeError(
+                    f"Qualification case {case_id!r} live_evidence_case_ids must include its canonical policy ID."
+                )
+        elif live_evidence_case_ids is not None:
+            raise QualificationScopeError(
+                f"Qualification case {case_id!r} may declare live_evidence_case_ids only for live publication."
             )
         invalidates_on = _mapping(case.get("invalidates_on"), f"qualification case {case_id!r} invalidates_on")
         direct_paths = _path_patterns(
@@ -479,6 +530,168 @@ def _validated_receipts(
                 f"Evidence reference {reference!r} does not match its recorded SHA-256 digest."
             )
         validated_receipt = dict(receipt)
+        if case.get("requires_live_publication") is True:
+            try:
+                evidence_document = _mapping(
+                    json.loads(reference_bytes),
+                    f"live-publication evidence for {case_id!r}",
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise QualificationScopeError(
+                    f"Live-publication evidence for {case_id!r} must be structured JSON."
+                ) from error
+            evidence_candidate = _mapping(
+                evidence_document.get("candidate"),
+                f"live-publication evidence for {case_id!r} candidate",
+            )
+            release_tag = evidence_candidate.get("release_tag")
+            if not isinstance(release_tag, str) or not release_tag:
+                raise QualificationScopeError(
+                    f"Live-publication evidence for {case_id!r} candidate requires release_tag."
+                )
+            release_receipt_reference = f"docs/release-evidence/{release_tag}/release-receipt.json"
+            try:
+                release_receipt_bytes = reference_content(release_receipt_reference)
+            except OSError as error:
+                raise QualificationScopeError(
+                    f"Unable to read live-publication release receipt {release_receipt_reference!r}: {error}"
+                ) from error
+            release_receipt_digest = hashlib.sha256(release_receipt_bytes).hexdigest()
+            try:
+                release_receipt = _mapping(
+                    json.loads(release_receipt_bytes),
+                    f"live-publication evidence for {case_id!r} release receipt",
+                )
+                validate_receipt(release_receipt)
+            except (UnicodeDecodeError, json.JSONDecodeError, ReleaseReceiptError) as error:
+                raise QualificationScopeError(
+                    f"Live-publication evidence for {case_id!r} release receipt is invalid: {error}"
+                ) from error
+            release = _mapping(release_receipt.get("release"), f"live-publication evidence for {case_id!r} release")
+            workflow = _mapping(
+                release_receipt.get("workflow"),
+                f"live-publication evidence for {case_id!r} workflow",
+            )
+            artifacts = [
+                _mapping(item, f"live-publication evidence for {case_id!r} artifact")
+                for item in _sequence(
+                    release_receipt.get("artifacts"),
+                    f"live-publication evidence for {case_id!r} artifacts",
+                )
+            ]
+            appcasts = [item for item in artifacts if item.get("kind") == "appcast"]
+            if len(appcasts) != 1:
+                raise QualificationScopeError(
+                    f"Live-publication evidence for {case_id!r} release receipt requires one appcast artifact."
+                )
+            expected_candidate = {
+                "release_tag": release["tag"],
+                "package_version": _mapping(
+                    release_receipt.get("versions"),
+                    f"live-publication evidence for {case_id!r} versions",
+                )["package"],
+                "public_version": _mapping(
+                    release_receipt.get("versions"),
+                    f"live-publication evidence for {case_id!r} versions",
+                )["public"],
+                "build": _mapping(
+                    release_receipt.get("versions"),
+                    f"live-publication evidence for {case_id!r} versions",
+                )["build"],
+                "source_sha": release_receipt["source_sha"],
+                "release_run_id": workflow["run_id"],
+                "release_id": release["id"],
+                "appcast_sha256": appcasts[0]["sha256"],
+            }
+            if source_sha != release_receipt["source_sha"] or any(
+                evidence_candidate.get(field) != expected for field, expected in expected_candidate.items()
+            ):
+                raise QualificationScopeError(
+                    f"Live-publication evidence for {case_id!r} does not match its checked release receipt."
+                )
+            allowed_live_case_ids = set(
+                _strings(
+                    case.get("live_evidence_case_ids"),
+                    f"live-publication evidence for {case_id!r} accepted case IDs",
+                )
+            )
+            evidence_cases = [
+                _mapping(item, f"live-publication evidence for {case_id!r} case")
+                for item in _sequence(
+                    evidence_document.get("cases"),
+                    f"live-publication evidence for {case_id!r} cases",
+                )
+            ]
+            if not any(
+                item.get("id") in allowed_live_case_ids and item.get("result") == "passed" for item in evidence_cases
+            ):
+                raise QualificationScopeError(
+                    f"Live-publication evidence for {case_id!r} does not contain a passed matching case."
+                )
+            publication_reference = f"docs/release-evidence/{release_tag}/publication-record.json"
+            try:
+                publication_bytes = reference_content(publication_reference)
+            except OSError as error:
+                raise QualificationScopeError(
+                    f"Unable to read live-publication record {publication_reference!r}: {error}"
+                ) from error
+            publication_digest = hashlib.sha256(publication_bytes).hexdigest()
+            try:
+                publication = _mapping(
+                    json.loads(publication_bytes),
+                    f"live-publication evidence for {case_id!r} publication record",
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise QualificationScopeError(
+                    f"Live-publication evidence for {case_id!r} publication record is invalid."
+                ) from error
+            expected_publication = {
+                "schema_version": 1,
+                "release_tag": release["tag"],
+                "release_id": release["id"],
+                "source_sha": release_receipt["source_sha"],
+                "workflow_run_id": workflow["run_id"],
+                "workflow_conclusion": "success",
+                "receipt_file_sha256": release_receipt_digest,
+            }
+            if any(publication.get(field) != expected for field, expected in expected_publication.items()):
+                raise QualificationScopeError(
+                    f"Live-publication evidence for {case_id!r} publication record does not match its release receipt."
+                )
+            live_pages = _mapping(
+                publication.get("live_pages"),
+                f"live-publication evidence for {case_id!r} live_pages",
+            )
+            if (
+                live_pages.get("state") != "verified"
+                or live_pages.get("sha256") != appcasts[0]["sha256"]
+                or live_pages.get("url") != "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
+            ):
+                raise QualificationScopeError(
+                    f"Live-publication evidence for {case_id!r} does not match the verified live appcast."
+                )
+            published_at = publication.get("published_at")
+            qualified_at = evidence_document.get("qualified_at")
+            if not isinstance(published_at, str) or not isinstance(qualified_at, str):
+                raise QualificationScopeError(f"Live-publication evidence for {case_id!r} timestamps are invalid.")
+            try:
+                published = datetime.fromisoformat(published_at.replace("Z", "+00:00")).astimezone(timezone.utc)
+                qualified = datetime.fromisoformat(qualified_at.replace("Z", "+00:00")).astimezone(timezone.utc)
+            except ValueError as error:
+                raise QualificationScopeError(
+                    f"Live-publication evidence for {case_id!r} timestamps are invalid."
+                ) from error
+            if qualified < published or accepted_at < published:
+                raise QualificationScopeError(
+                    f"Live-publication evidence for {case_id!r} must be observed after publication "
+                    "and accepted afterward."
+                )
+            validated_receipt["_live_release_binding"] = {
+                "publication_record_reference": publication_reference,
+                "publication_record_sha256": publication_digest,
+                "release_receipt_reference": release_receipt_reference,
+                "release_receipt_sha256": release_receipt_digest,
+            }
         if tier == 3:
             try:
                 tier3_receipt = load_validated_receipt_bytes(
@@ -565,6 +778,58 @@ def _artifact_receipt_summary(receipt: Mapping[str, Any], path: Path) -> dict[st
     }
 
 
+def _matches_milestone_tier1_receipt(
+    evidence_receipt: Mapping[str, Any] | None,
+    release_receipt: Mapping[str, Any],
+    *,
+    receipt_reference: str,
+    receipt_file_sha256: str,
+) -> bool:
+    if evidence_receipt is None:
+        return False
+    workflow = _mapping(release_receipt.get("workflow"), "milestone release receipt workflow")
+    return (
+        evidence_receipt.get("source_sha") == release_receipt.get("source_sha")
+        and evidence_receipt.get("release_run_id") == workflow.get("run_id")
+        and evidence_receipt.get("workflow_conclusion") == "success"
+        and evidence_receipt.get("reference") == receipt_reference
+        and evidence_receipt.get("sha256") == receipt_file_sha256
+    )
+
+
+def _matches_milestone_candidate_receipt(
+    evidence_receipt: Mapping[str, Any],
+    case: Mapping[str, Any],
+    *,
+    receipt_reference: str,
+    receipt_file_sha256: str,
+    publication_reference: str,
+    publication_file_sha256: str,
+) -> bool:
+    if case.get("requires_live_publication") is True:
+        binding = evidence_receipt.get("_live_release_binding")
+        return isinstance(binding, Mapping) and dict(binding) == {
+            "publication_record_reference": publication_reference,
+            "publication_record_sha256": publication_file_sha256,
+            "release_receipt_reference": receipt_reference,
+            "release_receipt_sha256": receipt_file_sha256,
+        }
+    if case.get("tier") == 3:
+        tier3_receipt = evidence_receipt.get("_tier3_receipt")
+        if not isinstance(tier3_receipt, Mapping):
+            return False
+        release_identity = _mapping(tier3_receipt.get("release_identity"), "Tier 3 milestone release identity")
+        release_reference = _mapping(
+            release_identity.get("release_receipt"),
+            "Tier 3 milestone release receipt reference",
+        )
+        return (
+            release_reference.get("reference") == receipt_reference
+            and release_reference.get("file_sha256") == receipt_file_sha256
+        )
+    return True
+
+
 def _tier3_expiry(receipt: Mapping[str, Any], case_id: str) -> date:
     tier3_receipt = _mapping(receipt.get("_tier3_receipt"), f"Tier 3 evidence for {case_id!r}")
     cadence = _mapping(tier3_receipt.get("cadence"), f"Tier 3 evidence for {case_id!r} cadence")
@@ -596,7 +861,7 @@ def _evidence_requirement(
     *,
     required: bool,
     applicable: bool,
-    deferred: bool,
+    required_phase: str | None,
 ) -> dict[str, Any]:
     case_id = cast(str, case["id"])
     tier = cast(int, case["tier"])
@@ -611,7 +876,11 @@ def _evidence_requirement(
         binding = "post_publication_observation"
     action: str | None = None
     if required:
-        timing = "before the artifact phase" if deferred else "before this phase can pass"
+        timing = (
+            f"before the {required_phase} phase can pass"
+            if required_phase is not None
+            else "before this phase can pass"
+        )
         action = f"Provide accepted {source} evidence {timing}."
     return {
         "source": source,
@@ -638,6 +907,7 @@ def classify_release_scope(
     workflow_phase: str = "preparation",
     artifact_receipt_path: Path | None = None,
     artifact_receipt_expectation: ArtifactReceiptExpectation | None = None,
+    milestone_receipt_path: Path | None = None,
     as_of: date | None = None,
 ) -> dict[str, Any]:
     if SHA_PATTERN.fullmatch(candidate_sha) is None:
@@ -651,21 +921,35 @@ def classify_release_scope(
     cases = [_mapping(case, "release qualification case") for case in _sequence(policy["cases"], "cases")]
     case_ids = {cast(str, case["id"]) for case in cases}
     cases_by_id = {cast(str, case["id"]): case for case in cases}
+    read_reference = reference_content or git_checked_reference_content(repo)
     receipt_map = _validated_receipts(
         evidence,
         cases_by_id,
         cast(str, policy["policy_id"]),
-        reference_content or git_checked_reference_content(repo),
+        read_reference,
         as_of,
     )
     artifact_tier1_cases: set[str] = set()
     artifact_receipt_evidence: dict[str, Any] | None = None
+    milestone_receipt: Mapping[str, Any] | None = None
+    milestone_receipt_reference: str | None = None
+    milestone_receipt_file_sha256: str | None = None
+    milestone_publication_reference: str | None = None
+    milestone_publication_file_sha256: str | None = None
     if (artifact_receipt_path is None) != (artifact_receipt_expectation is None):
         raise QualificationScopeError(
             "Artifact release receipt and exact run, release, asset, and digest inputs must be supplied together."
         )
-    if workflow_phase == "preparation" and artifact_receipt_path is not None:
-        raise QualificationScopeError("Preparation workflow phase cannot consume artifact release evidence.")
+    if workflow_phase != "artifact" and artifact_receipt_path is not None:
+        raise QualificationScopeError(
+            f"{workflow_phase.capitalize()} workflow phase cannot consume artifact release evidence."
+        )
+    if workflow_phase == "milestone" and milestone_receipt_path is None:
+        raise QualificationScopeError("Milestone workflow phase requires the exact checked release receipt.")
+    if workflow_phase != "milestone" and milestone_receipt_path is not None:
+        raise QualificationScopeError(
+            f"{workflow_phase.capitalize()} workflow phase cannot consume milestone release evidence."
+        )
     if workflow_phase == "artifact":
         if artifact_receipt_path is None or artifact_receipt_expectation is None:
             raise QualificationScopeError(
@@ -687,6 +971,28 @@ def classify_release_scope(
                 "Artifact release receipt Tier 1 case references do not match the current qualification policy."
             )
         artifact_receipt_evidence = _artifact_receipt_summary(artifact_receipt, artifact_receipt_path)
+    if milestone_receipt_path is not None:
+        try:
+            milestone_receipt, milestone_receipt_file_sha256 = load_validated_checked_receipt(milestone_receipt_path)
+        except ReleaseReceiptError as error:
+            raise QualificationScopeError(f"Milestone release receipt validation failed: {error}") from error
+        if milestone_receipt.get("source_sha") != candidate_sha:
+            raise QualificationScopeError("Milestone release receipt is bound to the wrong candidate SHA.")
+        expected_tier1_cases = {case_id for case_id, case in cases_by_id.items() if case["tier"] == 1}
+        milestone_tier1_cases = set(
+            _strings(milestone_receipt.get("tier1_case_references"), "milestone receipt Tier 1 case references")
+        )
+        if milestone_tier1_cases != expected_tier1_cases:
+            raise QualificationScopeError(
+                "Milestone release receipt Tier 1 case references do not match the current qualification policy."
+            )
+        try:
+            milestone_receipt_reference = milestone_receipt_path.resolve().relative_to(repo.resolve()).as_posix()
+        except ValueError as error:
+            raise QualificationScopeError("Milestone release receipt must be inside the repository.") from error
+        milestone_release = _mapping(milestone_receipt.get("release"), "milestone release receipt release")
+        milestone_publication_reference = f"docs/release-evidence/{milestone_release['tag']}/publication-record.json"
+        milestone_publication_file_sha256 = hashlib.sha256(read_reference(milestone_publication_reference)).hexdigest()
     fresh_retest = fresh_retest or {}
     unknown_overrides = sorted(set(fresh_retest) - case_ids)
     if unknown_overrides:
@@ -727,8 +1033,48 @@ def classify_release_scope(
             status, reason = "covered", "Validated evidence is bound to the exact artifact workflow run and release."
             selected_receipt = None
             trigger = "exact_artifact"
+        elif tier == 1 and workflow_phase == "milestone":
+            if (
+                milestone_receipt is not None
+                and milestone_receipt_reference is not None
+                and milestone_receipt_file_sha256 is not None
+                and _matches_milestone_tier1_receipt(
+                    exact,
+                    milestone_receipt,
+                    receipt_reference=milestone_receipt_reference,
+                    receipt_file_sha256=milestone_receipt_file_sha256,
+                )
+            ):
+                status, reason = "covered", "Checked Tier 1 evidence matches the exact milestone release receipt."
+                trigger = "checked_milestone_receipt"
+            else:
+                status, reason = "retest", "Checked Tier 1 evidence does not match the milestone release receipt."
+                selected_receipt = None
+                trigger = "milestone_receipt_mismatch"
         elif exact is not None:
-            if tier == 3 and as_of > _tier3_expiry(exact, case_id):
+            if (
+                workflow_phase == "milestone"
+                and (case.get("requires_live_publication") is True or tier == 3)
+                and (
+                    milestone_receipt_reference is None
+                    or milestone_receipt_file_sha256 is None
+                    or milestone_publication_reference is None
+                    or milestone_publication_file_sha256 is None
+                    or not _matches_milestone_candidate_receipt(
+                        exact,
+                        case,
+                        receipt_reference=milestone_receipt_reference,
+                        receipt_file_sha256=milestone_receipt_file_sha256,
+                        publication_reference=milestone_publication_reference,
+                        publication_file_sha256=milestone_publication_file_sha256,
+                    )
+                )
+            ):
+                status, reason = "retest", "Exact-candidate evidence is bound to a different release receipt."
+                selected_receipt = None
+                trigger = "milestone_receipt_mismatch"
+                tier3_applicable = True
+            elif tier == 3 and as_of > _tier3_expiry(exact, case_id):
                 status, reason = "retest", "Tier 3 evidence exceeded its declared expiry."
                 trigger = "expired"
                 tier3_applicable = True
@@ -792,9 +1138,13 @@ def classify_release_scope(
                     trigger = "clean_invalidation"
 
         blocking_phase = cast(str, case["blocking_phase"])
-        deferred = workflow_phase == "preparation" and blocking_phase == "publication"
-        applicable = blocking_phase != "none" and not deferred and tier3_applicable
+        required_phase = BLOCKING_PHASE_OWNERS[blocking_phase]
         evidence_required = status == "retest" and (tier != 3 or tier3_applicable)
+        phase_deferred = (
+            required_phase is not None and WORKFLOW_PHASE_INDEX[workflow_phase] < WORKFLOW_PHASE_INDEX[required_phase]
+        )
+        deferred = phase_deferred and evidence_required
+        applicable = blocking_phase != "none" and not phase_deferred and tier3_applicable
         evidence_summary = (
             artifact_receipt_evidence
             if tier == 1 and case_id in artifact_tier1_cases and artifact_receipt_evidence is not None
@@ -805,6 +1155,8 @@ def classify_release_scope(
             "tier": tier,
             "status": status,
             "blocking_phase": blocking_phase,
+            "required_phase": required_phase,
+            "requires_live_publication": case.get("requires_live_publication", False),
             "blocking": blocking_phase != "none",
             "applicable": applicable,
             "deferred": deferred,
@@ -817,7 +1169,7 @@ def classify_release_scope(
                 case,
                 required=evidence_required,
                 applicable=applicable,
-                deferred=deferred,
+                required_phase=required_phase,
             ),
         }
         results.append(result)
@@ -861,6 +1213,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--first-candidate-of-cycle", action="store_true")
     parser.add_argument("--workflow-phase", choices=WORKFLOW_PHASES, default="preparation")
     parser.add_argument("--release-receipt", type=Path)
+    parser.add_argument("--milestone-release-receipt", type=Path)
     parser.add_argument("--release-route", choices=("stable", "prerelease"))
     parser.add_argument("--workflow-run-id", type=int)
     parser.add_argument("--workflow-run-attempt", type=int)
@@ -963,6 +1316,7 @@ def main(argv: list[str] | None = None) -> int:
                 workflow_phase=args.workflow_phase,
                 artifact_receipt_path=args.release_receipt,
                 artifact_receipt_expectation=artifact_receipt_expectation,
+                milestone_receipt_path=args.milestone_release_receipt,
                 as_of=args.as_of,
             )
         rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"

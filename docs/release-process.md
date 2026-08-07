@@ -243,7 +243,9 @@ The workflow performs these ordered boundaries:
     workflow run ID and attempt, release ID, committed versions/tag/DMG name,
     signed app tree digest, and DMG/checksum/appcast asset IDs and digests. The
     artifact report is uploaded as an Actions artifact before enforcement.
-    Publication cannot proceed until this gate passes.
+    Publication cannot proceed until this gate passes. Cases whose exact
+    evidence requires the live published appcast or physical candidate hardware
+    remain visible but deferred to milestone qualification.
 11. Publish the verified draft only if it still targets the current `main` HEAD.
    The release body is hashed again immediately before and after publication so
    edits cannot silently diverge from the updater notes. The reusable engine
@@ -265,9 +267,13 @@ The workflow performs these ordered boundaries:
    immutable release, receipt asset, and live Pages appcast. It copies the exact
    receipt into `docs/release-evidence/<tag>/`, writes the publication record and
    release ledger, updates the matching qualification and cut packet, and opens
-   or updates `automation/release-evidence-<tag>`. Branch protection, CI, review,
-   and normal merge policy remain in force. A reconciliation failure does not
-   rebuild, replace, or invalidate the correctly published release.
+   or updates `automation/release-evidence-<tag>`. Protected CI validates the
+   checked receipt identity and runs the `milestone` qualification phase. The
+   PR remains intentionally unmergeable until every due live-publication Tier 2
+   and Tier 3 receipt has been added to that same idempotent branch and the
+   milestone report passes. Branch protection, review, and normal merge policy
+   remain in force. A reconciliation or milestone failure does not rebuild,
+   replace, or invalidate the correctly published release.
 15. The separate `cbusillo/homebrew-tap` repository checks the latest stable
    GitHub Release on a schedule and by manual dispatch. Homebrew opens a formula
    update pull request when the version changes; tap CI must pass formula audit,

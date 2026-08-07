@@ -129,7 +129,12 @@
     {
       "id": "sparkle-update-route",
       "tier": 2,
-      "blocking_phase": "release_candidate",
+      "blocking_phase": "milestone",
+      "requires_live_publication": true,
+      "live_evidence_case_ids": [
+        "sparkle-update-route",
+        "updater-route-rc2-to-rc3"
+      ],
       "invalidates_on": {"paths": ["docs/release-routes.md", "pyproject.toml"], "contracts": ["sparkle-update"]},
       "allowed_evidence_sources": ["signed_artifact_receipt"],
       "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
@@ -137,7 +142,12 @@
     {
       "id": "native-sparkle-release-notes",
       "tier": 2,
-      "blocking_phase": "release_candidate",
+      "blocking_phase": "milestone",
+      "requires_live_publication": true,
+      "live_evidence_case_ids": [
+        "native-sparkle-release-notes",
+        "native-sparkle-notes-rc3"
+      ],
       "invalidates_on": {"paths": ["docs/release-notes/**", "docs/*-cut-packet.md"], "contracts": ["sparkle-update"]},
       "allowed_evidence_sources": ["signed_artifact_receipt"],
       "carry_forward": {"allowed": true, "requires_prior_accepted_receipt": true, "requires_clean_invalidation": true}
