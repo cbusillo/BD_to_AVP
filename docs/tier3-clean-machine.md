@@ -53,10 +53,12 @@ The successful run uploads the validated signed-artifact UI receipt, both Tier
 3 receipts, normalized evidence, artifact metadata, and a bounded run summary
 with 30-day retention. Download those outputs, validate them again, and add the
 accepted receipts to the same evidence branch. The hosted collector proves the
-real Sparkle install/relaunch path and source-bound release-notes link, but it
-does not by itself prove the visual presentation of native Sparkle release
-notes; that separate live-publication case still requires its targeted
-appearance evidence.
+real Sparkle install/relaunch path, exact appcast-bound release-notes URL, and
+installed accessibility semantics. The guarded release engine separately proves
+that the embedded Markdown and full-notes URL match the immutable release-note
+source. Targeted native-window appearance capture remains useful operational
+evidence when Sparkle or release-note rendering changes, but missing or failed
+desktop capture does not block release evidence reconciliation.
 
 Homebrew may be installed on the host. The package smoke and launched app use a
 system-only runtime `PATH`; host developer tools are not accepted as packaged
@@ -73,9 +75,10 @@ route.
 For a newly published candidate, run from the idempotent
 `automation/release-evidence-<tag>` branch created by the Release Evidence
 workflow. Add the validated Tier 3 receipts and their evidence-index entries to
-that branch. Protected CI's `milestone` classifier is expected to remain red
-until all due receipts are present; do not merge around it or create a parallel
-evidence branch.
+that branch. Protected CI's `milestone` classifier remains red until all
+blocking automated receipts are present. It reports optional presentation and
+physical evidence without making those operator-only outcomes release blockers;
+do not create a parallel evidence branch.
 
 Run the read-only preflight first:
 

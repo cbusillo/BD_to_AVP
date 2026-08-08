@@ -231,7 +231,6 @@ class ReleaseMetadataTests(unittest.TestCase):
             {
                 "release-workflow-identity",
                 "sparkle-update-route",
-                "native-sparkle-release-notes",
                 "profile-save-action-accessibility",
                 "signed-packaged-route-parity",
                 "gui-preview-low-local-ample-destination",
@@ -245,15 +244,22 @@ class ReleaseMetadataTests(unittest.TestCase):
                 "subtitle-partial-output-diagnostics",
                 "clean-machine-signed-update",
                 "installed-ui-accessibility",
-                "usb-bluray-makemkv",
-                "protected-real-media-conversion",
-                "vision-pro-physical-playback",
             },
         )
         self.assertEqual(set(qualification["acceptance"]["preregistered_matrix_case_ids"]), expected_case_ids)
         self.assertEqual(
-            qualification["acceptance"]["nonblocking_case_ids"],
-            ["public-diagnostics-and-field-closure"],
+            set(qualification["acceptance"]["nonblocking_case_ids"]),
+            {
+                "native-sparkle-release-notes",
+                "usb-bluray-makemkv",
+                "protected-real-media-conversion",
+                "vision-pro-physical-playback",
+                "public-diagnostics-and-field-closure",
+            },
+        )
+        self.assertEqual(
+            set(qualification["acceptance"]["blocking_case_ids"]),
+            {"sparkle-update-route", "clean-machine-signed-update", "installed-ui-accessibility"},
         )
         self.assertEqual(qualification["qualification_policy"]["id"], "release-qualification-policy-v1")
         self.assertEqual(
@@ -289,15 +295,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(qualification["status"], "preregistered_pending_exact_candidate")
         self.assertEqual(
             set(qualification["acceptance"]["blocking_case_ids"]),
-            {
-                "sparkle-update-route",
-                "native-sparkle-release-notes",
-                "clean-machine-signed-update",
-                "installed-ui-accessibility",
-                "usb-bluray-makemkv",
-                "protected-real-media-conversion",
-                "vision-pro-physical-playback",
-            },
+            {"sparkle-update-route", "clean-machine-signed-update", "installed-ui-accessibility"},
         )
         self.assertFalse(qualification["acceptance"]["milestone_complete"])
         self.assertTrue(

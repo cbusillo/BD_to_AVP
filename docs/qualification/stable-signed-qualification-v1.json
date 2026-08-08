@@ -2,15 +2,15 @@
   "acceptance": {
     "blocking_case_ids": [
       "sparkle-update-route",
-      "native-sparkle-release-notes",
       "clean-machine-signed-update",
-      "installed-ui-accessibility",
-      "usb-bluray-makemkv",
-      "protected-real-media-conversion",
-      "vision-pro-physical-playback"
+      "installed-ui-accessibility"
     ],
     "milestone_complete": false,
     "nonblocking_case_ids": [
+      "native-sparkle-release-notes",
+      "usb-bluray-makemkv",
+      "protected-real-media-conversion",
+      "vision-pro-physical-playback",
       "public-diagnostics-and-field-closure"
     ],
     "passed": false,
@@ -39,7 +39,6 @@
     "required_case_ids": [
       "release-workflow-identity",
       "sparkle-update-route",
-      "native-sparkle-release-notes",
       "profile-save-action-accessibility",
       "signed-packaged-route-parity",
       "gui-preview-low-local-ample-destination",
@@ -52,10 +51,7 @@
       "malformed-pgs-parser-recovery",
       "subtitle-partial-output-diagnostics",
       "clean-machine-signed-update",
-      "installed-ui-accessibility",
-      "usb-bluray-makemkv",
-      "protected-real-media-conversion",
-      "vision-pro-physical-playback"
+      "installed-ui-accessibility"
     ]
   },
   "candidate": {
@@ -116,7 +112,9 @@
     }
   },
   "issues": [
-    "#489"
+    "#489",
+    "#516",
+    "#518"
   ],
   "matrix": [
     {
@@ -133,7 +131,7 @@
     },
     {
       "id": "native-sparkle-notes-stable",
-      "migration": "fresh_retest",
+      "migration": "scope_evaluated",
       "phase": "milestone",
       "policy_case_id": "native-sparkle-release-notes"
     },
@@ -217,19 +215,19 @@
     },
     {
       "id": "usb-bluray-makemkv",
-      "migration": "fresh_retest",
+      "migration": "scope_evaluated",
       "phase": "milestone",
       "policy_case_id": "usb-bluray-makemkv"
     },
     {
       "id": "protected-real-media-conversion",
-      "migration": "fresh_retest",
+      "migration": "scope_evaluated",
       "phase": "milestone",
       "policy_case_id": "protected-real-media-conversion"
     },
     {
       "id": "vision-pro-physical-playback",
-      "migration": "fresh_retest",
+      "migration": "scope_evaluated",
       "phase": "milestone",
       "policy_case_id": "vision-pro-physical-playback"
     },

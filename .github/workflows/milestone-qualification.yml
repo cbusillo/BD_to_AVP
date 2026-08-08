@@ -378,13 +378,13 @@ jobs:
             > qualification-output/qualification-run.updated.json
           mv qualification-output/qualification-run.updated.json qualification-output/qualification-run.json
           {
-            echo "## Milestone qualification $CANDIDATE_TAG"
+            echo "## Blocking automated milestone qualification $CANDIDATE_TAG"
             echo
             echo "- Protected code: \`main\` at \`$GITHUB_SHA\`"
             echo "- Evidence branch: \`$EVIDENCE_REF\` at \`$EVIDENCE_SHA\`"
             echo "- Signed UI receipt: \`$SIGNED_RECEIPT_SHA256\`"
-            echo "- Clean-machine receipt: \`$(jq -r .receipt_sha256 qualification-output/clean-machine-signed-update.json)\`"
-            echo "- Installed UI receipt: \`$(jq -r .receipt_sha256 qualification-output/installed-ui-accessibility.json)\`"
+            echo "- Blocking clean-machine receipt: \`$(jq -r .receipt_sha256 qualification-output/clean-machine-signed-update.json)\`"
+            echo "- Blocking installed UI receipt: \`$(jq -r .receipt_sha256 qualification-output/installed-ui-accessibility.json)\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Retain exact qualification receipts

@@ -35,6 +35,7 @@ from scripts.tier3_receipt import receipt_sha256 as tier3_receipt_sha256
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RC3_QUALIFICATION_PATH = REPO_ROOT / "docs" / "qualification" / "rc3-signed-qualification-v1.json"
+STABLE_QUALIFICATION_PATH = REPO_ROOT / "docs" / "qualification" / "stable-signed-qualification-v1.json"
 CANDIDATE_SHA = "b" * 40
 PRIOR_SHA = "a" * 40
 DMG_SHA256 = "c" * 64
@@ -278,6 +279,7 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         source_sha: str = PRIOR_SHA,
         completed_at: str = "2026-08-01T00:00:00Z",
         accepted_at: str = "2026-08-01T00:10:00Z",
+        result_status: str = "passed",
     ) -> dict[str, Any]:
         case = next(case for case in self.policy["cases"] if case["id"] == case_id)
         release_facts: dict[str, object] = {
@@ -344,8 +346,11 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
             if hardware["required"]
             else {"class": "none", "identity": {}}
         )
+        assertion_status = (
+            "passed" if result_status == "passed" else "failed" if result_status == "failed" else "not_run"
+        )
         tier3_facts = {
-            "assertions": {assertion_id: "passed" for assertion_id in case["required_assertions"]},
+            "assertions": {assertion_id: assertion_status for assertion_id in case["required_assertions"]},
             "cleanup": {"status": case["allowed_cleanup_results"][0], "evidence_sha256": "1" * 64},
             "completed_at": completed_at,
             "environment": {
@@ -354,12 +359,19 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                 "macos_version": "26.0",
                 "macos_build": "25A123",
             },
-            "evidence": [{"kind": case["allowed_evidence_kinds"][0], "sha256": "2" * 64}],
+            "evidence": (
+                [{"kind": case["allowed_evidence_kinds"][0], "sha256": "2" * 64}]
+                if result_status in {"passed", "failed"}
+                else []
+            ),
             "evidence_source": case["allowed_evidence_sources"][0],
             "hardware": hardware_receipt,
             "release_receipt_file_sha256": file_sha256(release_path),
             "release_receipt_reference": release_reference.as_posix(),
-            "result": {"status": "passed", "reason_code": "all_assertions_passed"},
+            "result": {
+                "status": result_status,
+                "reason_code": "all_assertions_passed" if result_status == "passed" else "operator-deferred",
+            },
             "started_at": completed_at,
         }
         tier3_receipt = build_tier3_receipt(
@@ -379,7 +391,7 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                     "case_id": case_id,
                     "receipt_id": f"{case_id}-receipt-v1",
                     "source": case["allowed_evidence_sources"][0],
-                    "status": "accepted",
+                    "status": "accepted" if result_status == "passed" else result_status,
                     "source_sha": source_sha,
                     "accepted_at": accepted_at,
                     "reference": reference.as_posix(),
@@ -410,6 +422,50 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
             "public-diagnostics-and-field-closure",
             qualification["acceptance"]["required_case_ids"],
         )
+
+    def test_stable_migration_separates_release_blockers_from_operational_evidence(self) -> None:
+        qualification_id, overrides = load_qualification_overrides(
+            STABLE_QUALIFICATION_PATH,
+            self.policy,
+        )
+        qualification = json.loads(STABLE_QUALIFICATION_PATH.read_text(encoding="utf-8"))
+        acceptance = qualification["acceptance"]
+        optional_cases = {
+            "native-sparkle-release-notes",
+            "usb-bluray-makemkv",
+            "protected-real-media-conversion",
+            "vision-pro-physical-playback",
+        }
+
+        self.assertEqual(qualification_id, "stable-signed-qualification-v1")
+        self.assertTrue(optional_cases.issubset(acceptance["nonblocking_case_ids"]))
+        self.assertTrue(optional_cases.isdisjoint(acceptance["required_case_ids"]))
+        self.assertTrue(optional_cases.isdisjoint(acceptance["blocking_case_ids"]))
+        self.assertEqual(
+            set(acceptance["blocking_case_ids"]),
+            {"sparkle-update-route", "clean-machine-signed-update", "installed-ui-accessibility"},
+        )
+        self.assertTrue(overrides["sparkle-update-route"])
+        self.assertTrue(overrides["clean-machine-signed-update"])
+        self.assertTrue(overrides["installed-ui-accessibility"])
+        self.assertTrue(all(not overrides[case_id] for case_id in optional_cases))
+
+    def test_nonblocking_fresh_retest_requires_bounded_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            qualification = json.loads(STABLE_QUALIFICATION_PATH.read_text(encoding="utf-8"))
+            physical = next(case for case in qualification["matrix"] if case["policy_case_id"] == "usb-bluray-makemkv")
+            physical["migration"] = "fresh_retest"
+            path = Path(temporary_directory) / "qualification.json"
+            path.write_text(json.dumps(qualification), encoding="utf-8")
+
+            with self.assertRaisesRegex(QualificationScopeError, "fresh_retest entries require"):
+                load_qualification_overrides(path, self.policy)
+
+            physical["retest_reason"] = "device_family_changed"
+            path.write_text(json.dumps(qualification), encoding="utf-8")
+            _, overrides = load_qualification_overrides(path, self.policy)
+
+        self.assertTrue(overrides["usb-bluray-makemkv"])
 
     def test_contract_change_forces_retest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -744,6 +800,156 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         self.assertFalse(real_media_result["applicable"])
         self.assertFalse(real_media_result["evidence_required"])
 
+    def test_stable_does_not_force_operator_hardware_retests(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            report = self.classify(
+                {"schema_version": 1, "receipts": []},
+                root,
+                release_stage="stable",
+                workflow_phase="milestone",
+                milestone_receipt_path=self.milestone_receipt(root),
+            )
+
+        for case_id in (
+            "usb-bluray-makemkv",
+            "protected-real-media-conversion",
+            "vision-pro-physical-playback",
+        ):
+            with self.subTest(case_id=case_id):
+                result = self.result_for(report, case_id)
+                self.assertEqual(result["trigger"], "not_due")
+                self.assertEqual(result["operational_status"], "missing")
+                self.assertFalse(result["blocking"])
+                self.assertFalse(result["applicable"])
+                self.assertFalse(result["evidence_due"])
+                self.assertFalse(result["evidence_required"])
+                self.assertNotIn(case_id, report["blocking_retests"])
+
+        automated = self.result_for(report, "clean-machine-signed-update")
+        self.assertEqual(automated["trigger"], "stable_candidate")
+        self.assertTrue(automated["blocking"])
+        self.assertTrue(automated["evidence_due"])
+        self.assertTrue(automated["evidence_required"])
+        self.assertIn("clean-machine-signed-update", report["blocking_retests"])
+
+    def test_explicit_operator_and_presentation_retests_are_visible_but_nonblocking(self) -> None:
+        optional_cases = {
+            "native-sparkle-release-notes": True,
+            "usb-bluray-makemkv": True,
+            "protected-real-media-conversion": True,
+            "vision-pro-physical-playback": True,
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            report = self.classify(
+                {"schema_version": 1, "receipts": []},
+                root,
+                fresh=optional_cases,
+                release_stage="stable",
+                workflow_phase="milestone",
+                milestone_receipt_path=self.milestone_receipt(root),
+            )
+
+        for case_id in optional_cases:
+            with self.subTest(case_id=case_id):
+                result = self.result_for(report, case_id)
+                self.assertEqual(result["status"], "retest")
+                self.assertEqual(result["operational_status"], "due")
+                self.assertFalse(result["blocking"])
+                self.assertTrue(result["applicable"])
+                self.assertTrue(result["evidence_due"])
+                self.assertFalse(result["evidence_required"])
+                self.assertTrue(result["evidence_requirement"]["due_for_phase"])
+                self.assertFalse(result["evidence_requirement"]["required_for_phase"])
+                self.assertNotIn(case_id, report["blocking_retests"])
+
+    def test_failed_and_skipped_nonblocking_operator_receipts_remain_visible(self) -> None:
+        for outcome in ("failed", "skipped"):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                evidence = self.tier3_evidence(
+                    root,
+                    "usb-bluray-makemkv",
+                    source_sha=CANDIDATE_SHA,
+                    result_status=outcome,
+                )
+                report = self.classify(
+                    evidence,
+                    root,
+                    fresh={"usb-bluray-makemkv": True},
+                    release_stage="stable",
+                    workflow_phase="milestone",
+                    milestone_receipt_path=self.milestone_receipt(root),
+                )
+
+            result = self.result_for(report, "usb-bluray-makemkv")
+            self.assertEqual(result["operational_status"], outcome)
+            self.assertEqual(result["evidence"]["receipt_id"], "usb-bluray-makemkv-receipt-v1")
+            self.assertFalse(result["blocking"])
+            self.assertNotIn("usb-bluray-makemkv", report["blocking_retests"])
+
+    def test_recorded_nonblocking_outcome_requires_exact_candidate_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            evidence = self.tier3_evidence(
+                root,
+                "usb-bluray-makemkv",
+                source_sha=PRIOR_SHA,
+                result_status="failed",
+            )
+
+            with self.assertRaisesRegex(QualificationScopeError, "exact candidate SHA"):
+                self.classify(
+                    evidence,
+                    root,
+                    fresh={"usb-bluray-makemkv": True},
+                    release_stage="stable",
+                    workflow_phase="milestone",
+                    milestone_receipt_path=self.milestone_receipt(root),
+                )
+
+    def test_failed_native_presentation_is_exact_source_visible_and_nonblocking(self) -> None:
+        candidate_sha = "0b06582a83a45bb38d851e62ccf38cd148c7bb95"
+        reference = "docs/qualification/rc3-targeted-qualification-v1.json"
+        document = json.loads((REPO_ROOT / reference).read_text(encoding="utf-8"))
+        case = next(item for item in document["cases"] if item["id"] == "native-sparkle-notes-rc3")
+        case["result"] = "failed"
+        reference_bytes = (json.dumps(document, indent=2) + "\n").encode()
+        evidence = {
+            "schema_version": 1,
+            "receipts": [
+                {
+                    "case_id": "native-sparkle-release-notes",
+                    "receipt_id": "native-sparkle-release-notes-failed-v1",
+                    "source": "signed_artifact_receipt",
+                    "status": "failed",
+                    "source_sha": candidate_sha,
+                    "accepted_at": "2026-08-05T10:30:00Z",
+                    "reference": reference,
+                    "sha256": hashlib.sha256(reference_bytes).hexdigest(),
+                }
+            ],
+        }
+        report = classify_release_scope(
+            self.policy,
+            evidence,
+            candidate_sha=candidate_sha,
+            changed_paths=lambda _base, _candidate: set(),
+            repo=REPO_ROOT,
+            reference_content=lambda path: reference_bytes if path == reference else (REPO_ROOT / path).read_bytes(),
+            fresh_retest={"native-sparkle-release-notes": True},
+            release_stage="rc",
+            workflow_phase="milestone",
+            milestone_receipt_path=REPO_ROOT / "docs/release-evidence/v0.3.0-rc.3/release-receipt.json",
+            as_of=date(2026, 8, 8),
+        )
+
+        result = self.result_for(report, "native-sparkle-release-notes")
+        self.assertEqual(result["operational_status"], "failed")
+        self.assertFalse(result["blocking"])
+        self.assertNotIn("native-sparkle-release-notes", report["blocking_retests"])
+
     def test_periodic_evidence_expires_outside_milestone(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -877,10 +1083,22 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                 with self.assertRaises(QualificationScopeError):
                     load_policy(policy_path)
 
+    def test_policy_rejects_nonblocking_automated_tier3_case(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy = json.loads(json.dumps(self.policy))
+            case = next(case for case in policy["cases"] if case["id"] == "clean-machine-signed-update")
+            case["release_blocking"] = False
+            policy_path = Path(temporary_directory) / "policy.json"
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+
+            with self.assertRaisesRegex(QualificationScopeError, "not approved as nonblocking"):
+                load_policy(policy_path)
+
     def test_milestone_owned_tier2_requires_live_publication_declaration(self) -> None:
         mutations = (
             ("sparkle-update-route", "requires_live_publication", False),
             ("sparkle-update-route", "live_evidence_case_ids", ["updater-route-rc2-to-rc3"]),
+            ("native-sparkle-release-notes", "evidence_role", "automated"),
         )
         for case_id, field, value in mutations:
             with self.subTest(case_id=case_id, field=field), tempfile.TemporaryDirectory() as temporary_directory:
@@ -892,6 +1110,29 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
 
                 with self.assertRaises(QualificationScopeError):
                     load_policy(policy_path)
+
+    def test_policy_rejects_nonblocking_tier1_case(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy = json.loads(json.dumps(self.policy))
+            case = next(case for case in policy["cases"] if case["id"] == "release-workflow-identity")
+            case["release_blocking"] = False
+            policy_path = Path(temporary_directory) / "policy.json"
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+
+            with self.assertRaisesRegex(QualificationScopeError, "must remain release blocking"):
+                load_policy(policy_path)
+
+    def test_policy_rejects_demoting_unapproved_live_automation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy = json.loads(json.dumps(self.policy))
+            case = next(case for case in policy["cases"] if case["id"] == "sparkle-update-route")
+            case["release_blocking"] = False
+            case["evidence_role"] = "operator_presentation"
+            policy_path = Path(temporary_directory) / "policy.json"
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+
+            with self.assertRaisesRegex(QualificationScopeError, "not approved as nonblocking"):
+                load_policy(policy_path)
 
     def test_artifact_owned_tier2_requires_explicit_publication_contract(self) -> None:
         mutations = (

@@ -58,14 +58,18 @@ The ordered phases are:
 | --- | --- |
 | `preparation` | Per-commit coverage and ordinary change-scoped Tier 2 evidence required before signing. |
 | `artifact` | Everything from preparation plus exact same-run Tier 1 receipt evidence required before publication. |
-| `milestone` | Everything from earlier phases plus live-publication Tier 2 and due Tier 3 evidence required before milestone closeout. |
+| `milestone` | Everything from earlier phases plus blocking live-publication Tier 2 and automated Tier 3 evidence required before milestone closeout; optional operational evidence remains visible. |
 
 Only Tier 2 cases that explicitly declare `requires_live_publication: true` may
-use the `milestone` blocking phase. This exception is limited to checks such as
-the real Sparkle update route and native release notes, whose exact-candidate
-evidence requires the published DMG, checked release receipt, and live appcast.
-Other Tier 2 invalidations continue to block preparation and require another
-reviewed candidate rather than being deferred through publication.
+use the `milestone` phase. The real Sparkle update route remains blocking because
+its exact-candidate evidence requires the published DMG, checked release receipt,
+and live appcast. Native Sparkle desktop capture is retained as nonblocking
+presentation evidence. Exact release-note source identity, embedded Markdown,
+full-notes URL, appcast identity, installed release-notes URL, and accessibility
+semantics remain enforced by the guarded release engine, live Sparkle route, and
+installed UI receipts. Other Tier 2 invalidations continue to block preparation
+and require another reviewed candidate rather than being deferred through
+publication.
 
 ```sh
 uv run python -m scripts.qualify_release_scope \
@@ -79,11 +83,12 @@ uv run python -m scripts.qualify_release_scope \
 
 Carry-forward is allowed only when an accepted named receipt exists and the
 diff from that receipt's source SHA contains no path covered by the case's
-direct invalidation patterns or referenced contracts. The Stable migration
-keeps the live Sparkle route, native notes, and every Stable-cadence Tier 3 case
-fresh while allowing unchanged ordinary Tier 2 cases to remain scope-evaluated.
-Tier 1 invalidation mappings document release-engine ownership only; Tier 1
-always requires a new exact-candidate receipt and never carries.
+direct invalidation patterns or referenced contracts. Stable continues to
+require the live Sparkle route and automated clean-machine/UI receipts. It does
+not force a fresh physical-hardware receipt or manual native-notes capture solely
+because a Stable milestone is due. Tier 1 invalidation mappings document
+release-engine ownership only; Tier 1 always requires a new exact-candidate
+receipt and never carries.
 
 ## Tier 3 Cadence And Receipts
 
@@ -93,18 +98,30 @@ allowed macOS environment classes and architecture, required public-safe
 hardware fields, first-RC and Stable cadence, expiry, invalidating contracts,
 assertions, evidence digest kinds, and cleanup outcomes.
 
-The classifier requires Tier 3 evidence only when one of these triggers applies:
+The classifier marks Tier 3 evidence due only when one of these triggers applies:
 
 - the case declares the first candidate of an RC cycle;
-- the case declares a Stable candidate;
+- an automated case declares a Stable candidate;
 - checked evidence has passed its receipt-declared expiry; or
-- mapped code, packaging, UI, updater, runtime, or playback paths changed.
+- mapped code, packaging, UI, updater, runtime, or playback paths changed;
+- an environment or device-family change is recorded as an explicit retest; or
+- a maintainer explicitly requests a retest.
 
-An ordinary alpha, beta, or later RC remains non-applicable when a case is not
-expired or invalidated. Valid prior evidence carries without becoming a
-blocking requirement. The report exposes the deterministic trigger for every
-case (`first_rc`, `stable_candidate`, `expired`, `invalidated`, `cadence_valid`,
-or `not_due`).
+An ordinary alpha, beta, later RC, or Stable release remains non-applicable for
+operator-assisted hardware when the case is not expired, invalidated, or
+explicitly requested. The USB/MakeMKV first-RC baseline is still scheduled, but
+it is operational evidence rather than a release blocker. Valid prior evidence
+carries without becoming a blocking requirement. The report exposes the
+deterministic trigger for every case (`first_rc`, `stable_candidate`, `expired`,
+`invalidated`, `explicit_retest`, `cadence_valid`, or `not_due`) and reports
+nonblocking operational status as `passed`, `failed`, `skipped`, `missing`, or
+`due`.
+
+A candidate migration may use `fresh_retest` for nonblocking physical evidence
+only with `retest_reason` set to `first_baseline`, `environment_changed`,
+`device_family_changed`, or `maintainer_request`. Optional native presentation
+may use only `rendering_contract_changed` or `maintainer_request`. This prevents
+an unexplained per-release ceremony from becoming policy by accident.
 
 Tier 3 receipts bind the release source SHA, tag, route, versions, signed app
 tree, DMG/checksum/appcast digests, and both semantic and file digests of the
@@ -122,9 +139,12 @@ uv run python -m scripts.tier3_receipt \
   --receipt path/to/tier3-receipt.json
 ```
 
-Passed receipts require every declared assertion to pass. Failed, skipped, and
-not-applicable receipts remain valid audit records with explicit bounded reason
-codes, but only a passed receipt may be indexed as accepted release evidence.
+Passed receipts require every declared assertion to pass. Failed and skipped
+receipts remain valid audit records with explicit bounded reason codes. For the
+four policy-approved nonblocking operational cases, they may be indexed with
+matching `failed` or `skipped` status so reports remain honest, but they never
+satisfy a blocking assertion. Blocking cases reject failed or skipped index
+entries. Only a passed receipt may be indexed as accepted release evidence.
 
 The maintained clean-machine, Sparkle, and installed UI/accessibility collector is documented in
 [`docs/tier3-clean-machine.md`](tier3-clean-machine.md). It uses an isolated
@@ -138,6 +158,9 @@ uses the bounded operator-assisted helper documented in
 [`docs/tier3-operator-hardware.md`](tier3-operator-hardware.md). The helper
 derives assertion states from exact enums, binds the checked release artifact,
 and rejects private media names, paths, serials, screenshots, and raw logs.
+These cases are visible operational evidence governed by expiry, mapped
+invalidation, environment/device-family changes, and explicit retest requests;
+they do not block release publication or evidence-PR reconciliation.
 
 ## Release Engine Receipts
 
@@ -162,7 +185,8 @@ byte-for-byte identities.
 ## Workflow Integration
 
 The release engine enforces qualification at two secret-free guarded boundaries,
-and protected pull-request CI enforces the post-publication milestone boundary.
+and protected pull-request CI enforces the post-publication blocking milestone
+boundary while reporting nonblocking operational evidence separately.
 None of these checks receives signing, notarization, PyPI, Sparkle, or Pages
 secrets.
 
@@ -287,11 +311,13 @@ python -m scripts.qualify_release_scope \
   --require-evidence
 ```
 
-The initial evidence PR is expected to remain unmergeable while due
-live-artifact or Tier 3 receipts are absent. Collectors add validated receipts
-to that same idempotent branch. A milestone failure never rebuilds, retags,
-re-signs, replaces, or unpublishes the immutable release; it blocks evidence
-reconciliation and milestone completion until the checked evidence passes.
+The initial evidence PR is expected to remain unmergeable while blocking
+live-artifact or automated Tier 3 receipts are absent. Collectors add validated
+receipts to that same idempotent branch. Optional physical and native-window
+presentation outcomes remain visible in the report. A blocking milestone
+failure never rebuilds, retags, re-signs, replaces, or unpublishes the immutable
+release; it blocks evidence reconciliation and milestone completion until the
+checked blocking evidence passes.
 CI discovers checked release-receipt changes from the pull-request diff and
 requires a same-repository PR targeting `main`, the exact
 `automation/release-evidence-<tag>` branch, and a docs-only diff, so a fork or a
@@ -303,10 +329,11 @@ classifier also writes a structured error report when policy or receipt
 validation fails before case classification. The `--workflow-phase` flag keeps
 later-phase retests visible but explicitly deferred. `artifact` additionally
 binds the exact run, release, and asset identities recorded in the receipt.
-`milestone` consumes the checked immutable receipt and enforces every due
-live-publication Tier 2 and Tier 3 case. The receipt's appcast digest is the
-verified snapshot awaiting deployment during the artifact phase; live Pages
-state is required only after publication.
+`milestone` consumes the checked immutable receipt and enforces every blocking
+live-publication Tier 2 and automated Tier 3 case. It reports due nonblocking
+operator evidence without converting it into a pass. The receipt's appcast
+digest is the verified snapshot awaiting deployment during the artifact phase;
+live Pages state is required only after publication.
 
 After the operator workflow completes, `.github/workflows/release-evidence.yml`
 validates the successful `workflow_dispatch` run, approved actor, protected

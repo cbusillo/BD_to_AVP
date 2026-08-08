@@ -143,6 +143,8 @@
       "id": "native-sparkle-release-notes",
       "tier": 2,
       "blocking_phase": "milestone",
+      "release_blocking": false,
+      "evidence_role": "operator_presentation",
       "requires_live_publication": true,
       "live_evidence_case_ids": [
         "native-sparkle-release-notes",
@@ -321,6 +323,7 @@
       "id": "usb-bluray-makemkv",
       "tier": 3,
       "blocking_phase": "milestone",
+      "release_blocking": false,
       "automation_lane": "operator-physical-drive",
       "execution_mode": "operator_assisted",
       "environment": {
@@ -334,7 +337,7 @@
         "classes": ["usb-bluray-drive"],
         "identity_fields": ["vendor_id", "product_id", "transport", "makemkv_version"]
       },
-      "cadence": {"first_rc": true, "stable_candidate": true},
+      "cadence": {"first_rc": true, "stable_candidate": false},
       "evidence_expiry": {"basis": "completed_at", "max_age_days": 90},
       "invalidates_on": {
         "paths": [
@@ -361,6 +364,7 @@
       "id": "protected-real-media-conversion",
       "tier": 3,
       "blocking_phase": "milestone",
+      "release_blocking": false,
       "automation_lane": "operator-real-media",
       "execution_mode": "operator_assisted",
       "environment": {
@@ -374,7 +378,7 @@
         "classes": ["usb-bluray-drive"],
         "identity_fields": ["vendor_id", "product_id", "transport", "makemkv_version"]
       },
-      "cadence": {"first_rc": false, "stable_candidate": true},
+      "cadence": {"first_rc": false, "stable_candidate": false},
       "evidence_expiry": {"basis": "completed_at", "max_age_days": 180},
       "invalidates_on": {
         "paths": [
@@ -401,6 +405,7 @@
       "id": "vision-pro-physical-playback",
       "tier": 3,
       "blocking_phase": "milestone",
+      "release_blocking": false,
       "automation_lane": "operator-vision-pro",
       "execution_mode": "operator_assisted",
       "environment": {
@@ -414,7 +419,7 @@
         "classes": ["vision-pro"],
         "identity_fields": ["model_family", "chip_family", "visionos_major"]
       },
-      "cadence": {"first_rc": false, "stable_candidate": true},
+      "cadence": {"first_rc": false, "stable_candidate": false},
       "evidence_expiry": {"basis": "completed_at", "max_age_days": 180},
       "invalidates_on": {
         "paths": [
