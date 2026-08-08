@@ -1,16 +1,31 @@
 {
-  "schema_version": 1,
   "releases": [
     {
-      "tag": "v0.3.0-rc.3",
-      "release_id": 365399671,
-      "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95",
-      "workflow_run_id": 30990186667,
+      "publication_record": "docs/release-evidence/v0.3.0/publication-record.json",
+      "published_at": "2026-08-07T21:42:28Z",
+      "receipt": "docs/release-evidence/v0.3.0/release-receipt.json",
+      "receipt_file_sha256": "f1da7083036120104fe702326cb88224e0233e26a2044a8e0ca0bd57520f9f79",
+      "recovery_workflow_run": {
+        "operation": "pypi_recovery",
+        "workflow_conclusion": "success",
+        "workflow_run_id": 31238358554
+      },
+      "release_id": 367020071,
+      "source_sha": "a9abbcf6cd1281d2c701e0c050b68fdafc5b9522",
+      "tag": "v0.3.0",
+      "workflow_run_id": 31219050718
+    },
+    {
+      "publication_record": "docs/release-evidence/v0.3.0-rc.3/publication-record.json",
       "published_at": "2026-08-05T09:06:41Z",
       "receipt": "docs/release-evidence/v0.3.0-rc.3/release-receipt.json",
       "receipt_file_sha256": "e2cd5c52b5e177048783a8ca2d8f6d8ba7580be8f933702a42072928839f2c3d",
       "receipt_origin": "post_publication_generated_from_verified_public_facts",
-      "publication_record": "docs/release-evidence/v0.3.0-rc.3/publication-record.json"
+      "release_id": 365399671,
+      "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95",
+      "tag": "v0.3.0-rc.3",
+      "workflow_run_id": 30990186667
     }
-  ]
+  ],
+  "schema_version": 1
 }
