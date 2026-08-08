@@ -2,7 +2,7 @@
   "schema_version": 1,
   "qualification_id": "stable-signed-qualification-v1",
   "status": "preregistered_pending_exact_candidate",
-  "issues": ["#489"],
+  "issues": ["#489", "#516", "#518"],
   "qualification_policy": {
     "id": "release-qualification-policy-v1",
     "path": "docs/qualification/release-qualification-policy-v1.json",
@@ -73,7 +73,7 @@
   "matrix": [
     {"id": "release-workflow-identity", "policy_case_id": "release-workflow-identity", "phase": "workflow", "migration": "release_run_receipt"},
     {"id": "updater-route-rc3-to-stable", "policy_case_id": "sparkle-update-route", "phase": "milestone", "migration": "fresh_retest"},
-    {"id": "native-sparkle-notes-stable", "policy_case_id": "native-sparkle-release-notes", "phase": "milestone", "migration": "fresh_retest"},
+    {"id": "native-sparkle-notes-stable", "policy_case_id": "native-sparkle-release-notes", "phase": "milestone", "migration": "scope_evaluated"},
     {"id": "profile-save-action-accessibility", "policy_case_id": "profile-save-action-accessibility", "phase": "signed_artifact", "migration": "scope_evaluated"},
     {"id": "signed-packaged-route-parity", "policy_case_id": "signed-packaged-route-parity", "phase": "signed_artifact", "migration": "release_run_receipt"},
     {"id": "gui-preview-low-local-ample-destination", "policy_case_id": "gui-preview-low-local-ample-destination", "phase": "signed_artifact", "migration": "scope_evaluated"},
@@ -87,16 +87,15 @@
     {"id": "subtitle-partial-output-diagnostics", "policy_case_id": "subtitle-partial-output-diagnostics", "phase": "signed_artifact", "migration": "scope_evaluated"},
     {"id": "clean-machine-signed-update", "policy_case_id": "clean-machine-signed-update", "phase": "milestone", "migration": "fresh_retest"},
     {"id": "installed-ui-accessibility", "policy_case_id": "installed-ui-accessibility", "phase": "milestone", "migration": "fresh_retest"},
-    {"id": "usb-bluray-makemkv", "policy_case_id": "usb-bluray-makemkv", "phase": "milestone", "migration": "fresh_retest"},
-    {"id": "protected-real-media-conversion", "policy_case_id": "protected-real-media-conversion", "phase": "milestone", "migration": "fresh_retest"},
-    {"id": "vision-pro-physical-playback", "policy_case_id": "vision-pro-physical-playback", "phase": "milestone", "migration": "fresh_retest"},
+    {"id": "usb-bluray-makemkv", "policy_case_id": "usb-bluray-makemkv", "phase": "milestone", "migration": "scope_evaluated"},
+    {"id": "protected-real-media-conversion", "policy_case_id": "protected-real-media-conversion", "phase": "milestone", "migration": "scope_evaluated"},
+    {"id": "vision-pro-physical-playback", "policy_case_id": "vision-pro-physical-playback", "phase": "milestone", "migration": "scope_evaluated"},
     {"id": "public-diagnostics-and-field-closure", "policy_case_id": "public-diagnostics-and-field-closure", "phase": "post_publication", "migration": "external_nonblocking"}
   ],
   "acceptance": {
     "required_case_ids": [
       "release-workflow-identity",
       "sparkle-update-route",
-      "native-sparkle-release-notes",
       "profile-save-action-accessibility",
       "signed-packaged-route-parity",
       "gui-preview-low-local-ample-destination",
@@ -109,10 +108,7 @@
       "malformed-pgs-parser-recovery",
       "subtitle-partial-output-diagnostics",
       "clean-machine-signed-update",
-      "installed-ui-accessibility",
-      "usb-bluray-makemkv",
-      "protected-real-media-conversion",
-      "vision-pro-physical-playback"
+      "installed-ui-accessibility"
     ],
     "preregistered_matrix_case_ids": [
       "release-workflow-identity",
@@ -136,15 +132,17 @@
       "vision-pro-physical-playback",
       "public-diagnostics-and-field-closure"
     ],
-    "nonblocking_case_ids": ["public-diagnostics-and-field-closure"],
-    "blocking_case_ids": [
-      "sparkle-update-route",
+    "nonblocking_case_ids": [
       "native-sparkle-release-notes",
-      "clean-machine-signed-update",
-      "installed-ui-accessibility",
       "usb-bluray-makemkv",
       "protected-real-media-conversion",
-      "vision-pro-physical-playback"
+      "vision-pro-physical-playback",
+      "public-diagnostics-and-field-closure"
+    ],
+    "blocking_case_ids": [
+      "sparkle-update-route",
+      "clean-machine-signed-update",
+      "installed-ui-accessibility"
     ],
     "milestone_complete": false,
     "passed": false

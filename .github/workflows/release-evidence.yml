@@ -267,4 +267,4 @@ jobs:
 
             The release workflow, immutable asset identities, live Pages appcast, qualification record, release ledger, and cut packet were revalidated before this branch was prepared. Signing and deployment secrets are not available to this workflow.
 
-            Publication is immutable, but this PR remains intentionally unmergeable until its post-publication milestone qualification check has accepted every due live-artifact and Tier 3 receipt. Add validated receipts to this idempotent branch; do not rebuild, retag, or replace the published release.
+            Publication is immutable, but this PR remains intentionally unmergeable until its post-publication milestone qualification check has accepted every blocking live-artifact and automated Tier 3 receipt. Optional physical-hardware and native-window presentation outcomes remain visible without blocking reconciliation. Add validated receipts to this idempotent branch; do not rebuild, retag, or replace the published release.
