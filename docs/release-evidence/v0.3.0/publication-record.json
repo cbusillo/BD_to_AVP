@@ -1,0 +1,21 @@
+{
+  "live_pages": {
+    "sha256": "d1682c4b79c42ec0a24b98c74a03dcde3e00186d4ccbacfad0c3e0a91362c7b2",
+    "state": "verified",
+    "url": "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
+  },
+  "published_at": "2026-08-07T21:42:28Z",
+  "receipt_asset_id": 505690975,
+  "receipt_file_sha256": "f1da7083036120104fe702326cb88224e0233e26a2044a8e0ca0bd57520f9f79",
+  "recovery_workflow_run": {
+    "operation": "pypi_recovery",
+    "workflow_conclusion": "success",
+    "workflow_run_id": 31238358554
+  },
+  "release_id": 367020071,
+  "release_tag": "v0.3.0",
+  "schema_version": 1,
+  "source_sha": "a9abbcf6cd1281d2c701e0c050b68fdafc5b9522",
+  "workflow_conclusion": "failure",
+  "workflow_run_id": 31219050718
+}
