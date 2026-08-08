@@ -21,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 GITHUB_CONFIG_PATH = Path(".github/github.json")
 EVIDENCE_INDEX_PATH = "docs/qualification/release-evidence-v1.json"
 RECEIPT_PATH_PATTERN = re.compile(r"^docs/release-evidence/(v[^/]+)/release-receipt\.json$")
+RECOVERY_AUTHORIZATION_PATHS = frozenset({"docs/release-evidence/v0.3.0-pypi-recovery.json"})
 EXPECTED_REPOSITORY = "cbusillo/BD_to_AVP"
 EXPECTED_BASE_BRANCH = "main"
 
@@ -131,7 +132,9 @@ def discover_milestone_receipt(
         operations.get("qualificationRecordPath"),
         "qualificationRecordPath",
     )
-    checked_release_mutation = any(path.startswith("docs/release-evidence/") for path in changed_paths)
+    checked_release_mutation = any(
+        path.startswith("docs/release-evidence/") and path not in RECOVERY_AUTHORIZATION_PATHS for path in changed_paths
+    )
     evidence_index_mutation = EVIDENCE_INDEX_PATH in changed_paths
     qualification_mutation = qualification_relative in changed_paths
     if not receipt_matches:

@@ -322,6 +322,75 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                     base_branch="main",
                 )
 
+    def test_recovery_authorization_does_not_impersonate_checked_release_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            recovery_path = root / "docs/release-evidence/v0.3.0-pypi-recovery.json"
+            recovery_path.write_text('{"schema": "bd_to_avp.pypi_recovery"}\n', encoding="utf-8")
+            subprocess.run(["git", "add", recovery_path.relative_to(root)], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "add recovery authorization"], cwd=root, check=True)
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            discovered = discover_milestone_receipt(
+                root,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                head_branch="fix/stable-pypi-recovery",
+                base_repo="cbusillo/BD_to_AVP",
+                head_repo="cbusillo/BD_to_AVP",
+                base_branch="main",
+            )
+
+        self.assertIsNone(discovered)
+
+    def test_other_release_evidence_still_requires_checked_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            unbound_path = root / "docs/release-evidence/v0.3.1-pypi-recovery.json"
+            unbound_path.write_text("{}\n", encoding="utf-8")
+            subprocess.run(["git", "add", unbound_path.relative_to(root)], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "add unbound release evidence"], cwd=root, check=True)
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "exactly one checked release receipt"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="fix/stable-pypi-recovery",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
+
     def test_rejects_non_docs_changes_on_evidence_branch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
