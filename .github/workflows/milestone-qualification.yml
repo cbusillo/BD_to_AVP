@@ -87,6 +87,10 @@ jobs:
           test "$EVIDENCE_REMOTE_HEAD" = "$EVIDENCE_SHA"
           git worktree add --detach evidence "$EVIDENCE_SHA"
           git -C evidence fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          if ! git -C evidence merge-base --is-ancestor origin/main HEAD; then
+            echo "Evidence branch does not contain the current protected main commit." >&2
+            exit 1
+          fi
           UNTRUSTED_PATHS=$(git -C evidence diff --name-only origin/main...HEAD | grep -Ev '^docs/' || true)
           if [ -n "$UNTRUSTED_PATHS" ]; then
             echo "Evidence branch contains non-documentation changes:" >&2

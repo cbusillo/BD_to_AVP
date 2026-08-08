@@ -1048,6 +1048,7 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn('test "$GITHUB_REF_NAME" = "main"', workflow_text)
         self.assertIn("refs/remotes/origin/milestone-evidence", workflow_text)
         self.assertIn("git worktree add --detach evidence", workflow_text)
+        self.assertIn("merge-base --is-ancestor origin/main HEAD", workflow_text)
         self.assertIn("origin/main...HEAD", workflow_text)
         self.assertIn("cmp docs/qualification/release-qualification-policy-v1.json", workflow_text)
         self.assertIn("automation/release-evidence-$CANDIDATE_TAG", workflow_text)
