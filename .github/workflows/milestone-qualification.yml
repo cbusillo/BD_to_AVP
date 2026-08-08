@@ -169,13 +169,17 @@ jobs:
             local release_id source_sha expected_prerelease asset_count
             release_id=$(jq -er .release.id "$receipt")
             source_sha=$(jq -er .source_sha "$receipt")
-            expected_prerelease=$(jq -er .release.prerelease "$receipt")
+            expected_prerelease=$(jq -r .release.prerelease "$receipt")
+            if [ "$expected_prerelease" != "true" ] && [ "$expected_prerelease" != "false" ]; then
+              echo "Release receipt prerelease identity is invalid for $tag." >&2
+              exit 1
+            fi
             gh api "repos/$GH_REPO/releases/tags/$tag" > "$output"
             test "$(jq -er .id "$output")" = "$release_id"
             test "$(jq -er .target_commitish "$output")" = "$source_sha"
             test "$(jq -er .tag_name "$output")" = "$tag"
-            test "$(jq -er .draft "$output")" = "false"
-            test "$(jq -er .prerelease "$output")" = "$expected_prerelease"
+            test "$(jq -r .draft "$output")" = "false"
+            test "$(jq -r .prerelease "$output")" = "$expected_prerelease"
             asset_count=$(jq -r '.artifacts | length' "$receipt")
             test "$asset_count" -gt 0
             while IFS= read -r artifact; do
