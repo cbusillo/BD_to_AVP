@@ -260,15 +260,32 @@ class ReleaseMetadataTests(unittest.TestCase):
             {case["migration"] for case in qualification["matrix"]},
             {"release_run_receipt", "fresh_retest", "scope_evaluated", "external_nonblocking"},
         )
-        for field in (
+        candidate_identity_fields = (
             "source_git_sha",
             "dmg_sha256",
             "signed_app_tree_sha256",
             "release_run_id",
             "release_id",
             "appcast_sha256",
-        ):
-            self.assertIsNone(qualification["candidate"][field])
+        )
+        stable_receipt_path = REPO_ROOT / "docs" / "release-evidence" / "v0.3.0" / "release-receipt.json"
+        if stable_receipt_path.exists():
+            stable_receipt = json.loads(stable_receipt_path.read_text(encoding="utf-8"))
+            artifacts_by_kind = {artifact["kind"]: artifact for artifact in stable_receipt["artifacts"]}
+            self.assertEqual(
+                {field: qualification["candidate"][field] for field in candidate_identity_fields},
+                {
+                    "source_git_sha": stable_receipt["source_sha"],
+                    "dmg_sha256": artifacts_by_kind["dmg"]["sha256"],
+                    "signed_app_tree_sha256": stable_receipt["signed_app_tree_sha256"],
+                    "release_run_id": stable_receipt["workflow"]["run_id"],
+                    "release_id": stable_receipt["release"]["id"],
+                    "appcast_sha256": artifacts_by_kind["appcast"]["sha256"],
+                },
+            )
+        else:
+            for field in candidate_identity_fields:
+                self.assertIsNone(qualification["candidate"][field])
         self.assertEqual(qualification["status"], "preregistered_pending_exact_candidate")
         self.assertEqual(
             set(qualification["acceptance"]["blocking_case_ids"]),
