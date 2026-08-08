@@ -57,7 +57,13 @@ UPDATE_TIMEOUT_SECONDS = 5 * 60
 UI_TEST_TIMEOUT_SECONDS = 15 * 60
 ACCESSIBILITY_COLLECTOR_FINISH_TIMEOUT_SECONDS = 15
 MAX_UI_SCREENSHOT_BYTES = 20 * 1024 * 1024
-SPARKLE_INSTALL_ACTIONS = ("Install Update", "Install and Relaunch", "Install on Quit")
+SPARKLE_INSTALL_IDENTIFIER = "SPUUserUpdateChoiceInstall"
+SPARKLE_INSTALL_ACTIONS = (
+    SPARKLE_INSTALL_IDENTIFIER,
+    "Install Update",
+    "Install and Relaunch",
+    "Install on Quit",
+)
 ROUTE_CHANNELS: dict[str, set[str | None]] = {
     "stable": {None},
     "rc": {None, "rc"},
@@ -1006,10 +1012,12 @@ end tell'''
                         end repeat
                         set selectedButton to missing value
                         set selectedTitle to ""
+                        set selectedByIdentifier to false
                         if identifiedButton is not missing value then
                             if enabled of identifiedButton then
                                 set selectedButton to identifiedButton
                                 set selectedTitle to name of identifiedButton as text
+                                set selectedByIdentifier to true
                             end if
                         else
                             repeat with buttonTitle in {"Install and Relaunch", "Install Update", "Install on Quit"}
@@ -1033,6 +1041,7 @@ end tell'''
                                 exit repeat
                             else
                                 perform action "AXPress" of selectedButton
+                                if selectedByIdentifier then return "SPUUserUpdateChoiceInstall"
                                 return selectedTitle
                             end if
                         end if
