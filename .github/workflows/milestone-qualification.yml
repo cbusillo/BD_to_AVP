@@ -61,14 +61,6 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
 
-      - name: Check out exact evidence branch data
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0
-          path: evidence
-          persist-credentials: false
-          ref: ${{ inputs.evidence_ref }}
-
       - name: Bind protected code and canonical evidence data
         env:
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
@@ -87,10 +79,13 @@ jobs:
           test "$GITHUB_REF_NAME" = "main"
           MAIN_REMOTE_HEAD=$(git ls-remote --heads origin refs/heads/main | awk '{print $1}')
           test "$MAIN_REMOTE_HEAD" = "$GITHUB_SHA"
-          EVIDENCE_SHA=$(git -C evidence rev-parse HEAD)
           EVIDENCE_REMOTE_HEAD=$(git ls-remote --heads origin "refs/heads/$EVIDENCE_REF" | awk '{print $1}')
           test -n "$EVIDENCE_REMOTE_HEAD"
+          git fetch --no-tags origin \
+            "refs/heads/$EVIDENCE_REF:refs/remotes/origin/milestone-evidence"
+          EVIDENCE_SHA=$(git rev-parse refs/remotes/origin/milestone-evidence)
           test "$EVIDENCE_REMOTE_HEAD" = "$EVIDENCE_SHA"
+          git worktree add --detach evidence "$EVIDENCE_SHA"
           git -C evidence fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
           UNTRUSTED_PATHS=$(git -C evidence diff --name-only origin/main...HEAD | grep -Ev '^docs/' || true)
           if [ -n "$UNTRUSTED_PATHS" ]; then

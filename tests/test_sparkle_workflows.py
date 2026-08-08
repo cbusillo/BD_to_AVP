@@ -1028,7 +1028,6 @@ printf '%s' "$CODESIGN_METADATA"
         qualify = workflow["jobs"]["qualify"]
         steps = qualify["steps"]
         checkout = steps[0]
-        evidence_checkout = steps[1]
         upload = steps[-1]
         workflow_text = str(workflow)
 
@@ -1046,12 +1045,9 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertEqual(checkout["with"]["fetch-depth"], "0")
         self.assertEqual(checkout["with"]["persist-credentials"], "false")
         self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
-        self.assertRegex(evidence_checkout["uses"], r"^actions/checkout@[0-9a-f]{40}$")
-        self.assertEqual(evidence_checkout["with"]["fetch-depth"], "0")
-        self.assertEqual(evidence_checkout["with"]["path"], "evidence")
-        self.assertEqual(evidence_checkout["with"]["persist-credentials"], "false")
-        self.assertEqual(evidence_checkout["with"]["ref"], "${{ inputs.evidence_ref }}")
         self.assertIn('test "$GITHUB_REF_NAME" = "main"', workflow_text)
+        self.assertIn("refs/remotes/origin/milestone-evidence", workflow_text)
+        self.assertIn("git worktree add --detach evidence", workflow_text)
         self.assertIn("origin/main...HEAD", workflow_text)
         self.assertIn("cmp docs/qualification/release-qualification-policy-v1.json", workflow_text)
         self.assertIn("automation/release-evidence-$CANDIDATE_TAG", workflow_text)
