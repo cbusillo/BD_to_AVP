@@ -30,7 +30,8 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         let identifiedInstallButton = updateWindow.buttons
             .matching(identifier: "SPUUserUpdateChoiceInstall")
             .firstMatch
-        let installButton = identifiedInstallButton.waitForExistence(timeout: 30)
+        let identifiedInstallButtonExists = identifiedInstallButton.waitForExistence(timeout: 30)
+        let installButton = identifiedInstallButtonExists
             ? identifiedInstallButton
             : firstExistingElement(
                 in: updateWindow.buttons,
@@ -45,7 +46,9 @@ final class InstalledUIAcceptanceTests: XCTestCase {
 
         try attachJSON(
             [
-                "install_action": installButton?.label ?? "",
+                "install_action": identifiedInstallButtonExists
+                    ? "SPUUserUpdateChoiceInstall"
+                    : installButton?.label ?? "",
                 "release_notes_url": context.releaseNotesURL,
                 "release_notes_url_observed": false,
                 "schema_version": 1,

@@ -828,6 +828,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
         self.assertIn('perform action "AXPress" of selectedButton', script)
         self.assertIn("set installStarted to true", script)
         self.assertIn('"Install on Quit"', script)
+        self.assertIn('return "SPUUserUpdateChoiceInstall"', script)
 
     @unittest.skipUnless(platform.system() == "Darwin", "DMG mount integration requires macOS")
     def test_synthetic_dmg_mount_and_detach(self) -> None:
