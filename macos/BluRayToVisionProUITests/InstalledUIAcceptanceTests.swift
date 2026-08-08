@@ -34,7 +34,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
             ? identifiedInstallButton
             : firstExistingElement(
                 in: updateWindow.buttons,
-                identifiers: ["Install and Relaunch", "Install Update", "Relaunch"],
+                identifiers: ["Install and Relaunch", "Install Update", "Install on Quit"],
                 timeout: 90
             )
         XCTAssertNotNil(installButton)
