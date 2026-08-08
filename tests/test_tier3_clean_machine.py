@@ -785,6 +785,14 @@ class Tier3CleanMachineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_updater_waits_for_identified_enabled_install_button(self) -> None:
+        script = MacOSOperations()._updater_script()
+
+        self.assertIn('attribute "AXIdentifier"', script)
+        self.assertIn('"SPUUserUpdateChoiceInstall"', script)
+        self.assertIn("enabled of identifiedButton", script)
+        self.assertIn("enabled of titledButton", script)
+
     @unittest.skipUnless(platform.system() == "Darwin", "DMG mount integration requires macOS")
     def test_synthetic_dmg_mount_and_detach(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
