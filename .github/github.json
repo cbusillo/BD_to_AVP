@@ -71,6 +71,7 @@
     "approvalEnvironment": "macos-signing",
     "engineWorkflowPath": ".github/workflows/release-engine.yml",
     "evidenceWorkflowPath": ".github/workflows/release-evidence.yml",
+    "milestoneQualificationWorkflowPath": ".github/workflows/milestone-qualification.yml",
     "qualificationPolicyPath": "docs/qualification/release-qualification-policy-v1.json",
     "qualificationEvidencePath": "docs/qualification/release-evidence-v1.json",
     "qualificationRecordPath": "docs/qualification/stable-signed-qualification-v1.json",
@@ -165,6 +166,7 @@
     "Stable",
     "Prerelease",
     "Release Evidence",
+    "Milestone Qualification",
     "Manage Sparkle Pages",
     "Update FFmpeg Vendor Pins"
   ],

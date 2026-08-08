@@ -25,6 +25,39 @@ The host must provide:
 - no running production app process; and
 - network access to the real public appcast.
 
+When the operator workstation is not running the policy-required macOS major
+version, use the owner-dispatched `Milestone Qualification` workflow instead of
+weakening the environment check. The workflow runs the same collector on the
+GitHub-hosted `macos-26` image with read-only repository and Actions access. It
+accepts only the canonical `automation/release-evidence-<tag>` branch at its
+exact remote head, rejects non-documentation differences from protected
+`main`, downloads both DMGs by the asset IDs in their checked receipts, and
+recovers the exact signed-artifact UI receipt by immutable Actions artifact ID.
+It cannot push, edit a release, approve an environment, or access release
+secrets.
+
+Dispatch it only after its workflow definition is present on the canonical
+evidence branch:
+
+```sh
+gh workflow run milestone-qualification.yml \
+  --ref main \
+  -f evidence_ref=automation/release-evidence-v0.3.0 \
+  -f candidate_tag=v0.3.0 \
+  -f prior_tag=v0.3.0-rc.3 \
+  -f route=rc \
+  -f signed_ui_artifact_id=<exact-artifact-id>
+```
+
+The successful run uploads the validated signed-artifact UI receipt, both Tier
+3 receipts, normalized evidence, artifact metadata, and a bounded run summary
+with 30-day retention. Download those outputs, validate them again, and add the
+accepted receipts to the same evidence branch. The hosted collector proves the
+real Sparkle install/relaunch path and source-bound release-notes link, but it
+does not by itself prove the visual presentation of native Sparkle release
+notes; that separate live-publication case still requires its targeted
+appearance evidence.
+
 Homebrew may be installed on the host. The package smoke and launched app use a
 system-only runtime `PATH`; host developer tools are not accepted as packaged
 dependencies.

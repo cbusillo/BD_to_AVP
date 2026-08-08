@@ -1022,6 +1022,50 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("remains intentionally unmergeable", str(create_pr))
         self.assertIn("peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1", str(create_pr))
 
+    def test_milestone_qualification_is_hosted_secret_free_and_read_only(self) -> None:
+        workflow = load_workflow("milestone-qualification.yml")
+        dispatch = workflow["on"]["workflow_dispatch"]
+        qualify = workflow["jobs"]["qualify"]
+        steps = qualify["steps"]
+        checkout = steps[0]
+        upload = steps[-1]
+        workflow_text = str(workflow)
+
+        self.assertEqual(
+            set(dispatch["inputs"]),
+            {"candidate_tag", "evidence_ref", "prior_tag", "route", "signed_ui_artifact_id"},
+        )
+        self.assertEqual(workflow["permissions"], {})
+        self.assertEqual(qualify["permissions"], {"actions": "read", "contents": "read"})
+        self.assertEqual(qualify["runs-on"], "macos-26")
+        self.assertEqual(qualify["if"], "github.actor == github.repository_owner")
+        self.assertNotIn("environment", qualify)
+        self.assertNotIn("secrets.", workflow_text)
+        self.assertRegex(checkout["uses"], r"^actions/checkout@[0-9a-f]{40}$")
+        self.assertEqual(checkout["with"]["fetch-depth"], "0")
+        self.assertEqual(checkout["with"]["persist-credentials"], "false")
+        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+        self.assertIn('test "$GITHUB_REF_NAME" = "main"', workflow_text)
+        self.assertIn("refs/remotes/origin/milestone-evidence", workflow_text)
+        self.assertIn("git worktree add --detach evidence", workflow_text)
+        self.assertIn("origin/main...HEAD", workflow_text)
+        self.assertIn("cmp docs/qualification/release-qualification-policy-v1.json", workflow_text)
+        self.assertIn("automation/release-evidence-$CANDIDATE_TAG", workflow_text)
+        self.assertIn("scripts.signed_artifact_receipt validate", workflow_text)
+        self.assertIn("scripts.tier3_clean_machine preflight", workflow_text)
+        self.assertIn("scripts.tier3_clean_machine run", workflow_text)
+        self.assertIn("scripts.tier3_receipt", workflow_text)
+        self.assertNotRegex(workflow_text, r"\b(git push|git commit|gh release (upload|edit|delete))\b")
+        self.assertRegex(upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
+        self.assertEqual(upload["with"]["retention-days"], "30")
+
+        config = load_github_config()
+        self.assertIn("Milestone Qualification", config["importantWorkflows"])
+        self.assertEqual(
+            config["releaseOperations"]["milestoneQualificationWorkflowPath"],
+            ".github/workflows/milestone-qualification.yml",
+        )
+
     def test_release_evidence_pr_enforces_post_publication_milestone(self) -> None:
         workflow = load_workflow("ci.yml")
         steps = workflow["jobs"]["validate"]["steps"]
