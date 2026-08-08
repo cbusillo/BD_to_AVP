@@ -1020,6 +1020,8 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("Preserve an existing idempotent evidence branch", str(prepare))
         self.assertIn("automation/release-evidence-", str(create_pr))
         self.assertIn("remains intentionally unmergeable", str(create_pr))
+        self.assertIn("blocking live-artifact and automated Tier 3 receipt", str(create_pr))
+        self.assertIn("Optional physical-hardware and native-window presentation", str(create_pr))
         self.assertIn("peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1", str(create_pr))
 
     def test_milestone_qualification_is_hosted_secret_free_and_read_only(self) -> None:
@@ -1056,6 +1058,9 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("scripts.tier3_clean_machine preflight", workflow_text)
         self.assertIn("scripts.tier3_clean_machine run", workflow_text)
         self.assertIn("scripts.tier3_receipt", workflow_text)
+        self.assertIn("Blocking automated milestone qualification", workflow_text)
+        self.assertIn("Blocking clean-machine receipt", workflow_text)
+        self.assertIn("Blocking installed UI receipt", workflow_text)
         self.assertIn("expected_prerelease=$(jq -r .release.prerelease", workflow_text)
         self.assertNotIn("jq -er .release.prerelease", workflow_text)
         self.assertNotIn("jq -er .draft", workflow_text)
@@ -1078,10 +1083,11 @@ printf '%s' "$CODESIGN_METADATA"
         context = by_name["Resolve post-publication milestone context"]
         classify = by_name["Classify post-publication milestone evidence"]
         upload = by_name["Upload post-publication milestone report"]
+        summarize = by_name["Summarize post-publication operational evidence"]
         enforce = by_name["Enforce post-publication milestone evidence"]
 
         self.assertEqual(context["if"], "github.event_name == 'pull_request'")
-        for step in (classify, upload, enforce):
+        for step in (classify, upload, summarize, enforce):
             self.assertIn("steps.milestone-context.outputs.required == 'true'", step["if"])
         self.assertIn("scripts.release_milestone_context", context["run"])
         self.assertIn("github.event.pull_request.base.sha", context["run"])
@@ -1096,7 +1102,10 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertTrue(classify["continue-on-error"])
         self.assertEqual(upload["with"]["if-no-files-found"], "error")
         self.assertIn("release-qualification-milestone-${{ github.run_attempt }}", upload["with"]["name"])
+        self.assertIn("operational_status", summarize["run"])
+        self.assertIn("release blocking", summarize["run"])
         self.assertIn("steps.milestone-qualification.outcome", str(enforce))
+        self.assertIn("Blocking post-publication qualification", enforce["run"])
 
     def test_release_notes_are_frozen_embedded_and_reverified(self) -> None:
         workflow = load_release_engine()

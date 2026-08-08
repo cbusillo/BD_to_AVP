@@ -190,6 +190,21 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Summarize post-publication operational evidence
+        if: always() && steps.milestone-context.outputs.required == 'true'
+        run: |
+          set -euo pipefail
+          test -f release-qualification-milestone.json
+          {
+            echo "## Post-publication qualification"
+            echo
+            jq -r '
+              .cases[]
+              | select(.operational_status != null)
+              | "- `\(.case_id)`: **\(.operational_status)** (release blocking: `\(.blocking)`)"
+            ' release-qualification-milestone.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Enforce post-publication milestone evidence
         if: always() && steps.milestone-context.outputs.required == 'true'
         env:
@@ -197,6 +212,6 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$MILESTONE_OUTCOME" != "success" ]; then
-            echo "Post-publication milestone qualification is incomplete or invalid." >&2
+            echo "Blocking post-publication qualification is incomplete or invalid." >&2
             exit 1
           fi

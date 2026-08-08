@@ -64,6 +64,15 @@ TIER3_FORBIDDEN_IDENTITY_FIELDS = {
     "username",
     "volume",
 }
+RECORDED_NONBLOCKING_STATUSES = {"failed", "skipped"}
+OPERATOR_RETEST_REASONS = {"device_family_changed", "environment_changed", "first_baseline", "maintainer_request"}
+PRESENTATION_RETEST_REASONS = {"maintainer_request", "rendering_contract_changed"}
+NONBLOCKING_RELEASE_CASE_IDS = {
+    "native-sparkle-release-notes",
+    "protected-real-media-conversion",
+    "usb-bluray-makemkv",
+    "vision-pro-physical-playback",
+}
 
 
 class QualificationScopeError(RuntimeError):
@@ -170,6 +179,25 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Mapping[str, Any]:
                 f"Qualification case {case_id!r} blocking_phase must be one of "
                 f"{sorted(allowed_blocking_phases)!r} for tier {tier}."
             )
+        release_blocking = case.get("release_blocking", blocking_phase != "none")
+        if not isinstance(release_blocking, bool):
+            raise QualificationScopeError(f"Qualification case {case_id!r} release_blocking must be boolean.")
+        if blocking_phase == "none" and release_blocking:
+            raise QualificationScopeError(
+                f"Qualification case {case_id!r} cannot block release closeout with blocking_phase='none'."
+            )
+        if tier in {0, 1} and not release_blocking:
+            raise QualificationScopeError(
+                f"Automatic Tier {tier} qualification case {case_id!r} must remain release blocking."
+            )
+        if blocking_phase != "none" and not release_blocking and case_id not in NONBLOCKING_RELEASE_CASE_IDS:
+            raise QualificationScopeError(
+                f"Qualification case {case_id!r} is not approved as nonblocking release evidence."
+            )
+        if case_id in NONBLOCKING_RELEASE_CASE_IDS and release_blocking:
+            raise QualificationScopeError(
+                f"Qualification case {case_id!r} must remain nonblocking operational evidence."
+            )
         if requires_live_publication is not None and not isinstance(requires_live_publication, bool):
             raise QualificationScopeError(
                 f"Qualification case {case_id!r} requires_live_publication must be boolean when present."
@@ -182,10 +210,28 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Mapping[str, Any]:
             raise QualificationScopeError(
                 f"Milestone-owned Tier 2 case {case_id!r} must declare requires_live_publication=true."
             )
+        if (
+            tier == 2
+            and not release_blocking
+            and (
+                blocking_phase != "milestone"
+                or requires_live_publication is not True
+                or case.get("evidence_role") != "operator_presentation"
+            )
+        ):
+            raise QualificationScopeError(
+                f"Nonblocking Tier 2 qualification case {case_id!r} must be milestone-owned live presentation evidence."
+            )
+        if tier == 2 and release_blocking and case.get("evidence_role") is not None:
+            raise QualificationScopeError(
+                f"Blocking Tier 2 qualification case {case_id!r} cannot declare an operational evidence role."
+            )
         if artifact_owned and (tier != 2 or blocking_phase != "publication" or requires_live_publication is True):
             raise QualificationScopeError(
                 f"Artifact-owned case {case_id!r} must be a publication-owned non-live Tier 2 case."
             )
+        if artifact_owned and not release_blocking:
+            raise QualificationScopeError(f"Artifact-owned case {case_id!r} must remain release blocking.")
         live_evidence_case_ids = case.get("live_evidence_case_ids")
         if requires_live_publication is True:
             accepted_live_case_ids = _strings(
@@ -273,6 +319,10 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Mapping[str, Any]:
                 raise QualificationScopeError(
                     f"Tier 3 qualification case {case_id!r} execution_mode must be automated or operator_assisted."
                 )
+            if not release_blocking and execution_mode != "operator_assisted":
+                raise QualificationScopeError(
+                    f"Nonblocking Tier 3 qualification case {case_id!r} must be operator_assisted."
+                )
             expected_source = {
                 "automated": "tier3_automation_receipt",
                 "operator_assisted": "tier3_operator_receipt",
@@ -348,6 +398,10 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Mapping[str, Any]:
     return policy
 
 
+def _release_blocking(case: Mapping[str, Any]) -> bool:
+    return cast(bool, case.get("release_blocking", case.get("blocking_phase") != "none"))
+
+
 def load_evidence(path: Path | None) -> Mapping[str, Any]:
     if path is None:
         return {"schema_version": 1, "receipts": []}
@@ -377,6 +431,7 @@ def load_qualification_overrides(
     }
     overrides: dict[str, bool] = {}
     matrix_case_ids: set[str] = set()
+    unreasoned_nonblocking_retests: list[str] = []
     for raw_case in _sequence(qualification.get("matrix"), "qualification matrix"):
         case = _mapping(raw_case, "qualification matrix case")
         matrix_case_id = case.get("id")
@@ -407,25 +462,63 @@ def load_qualification_overrides(
             raise QualificationScopeError(
                 f"Qualification migration {migration!r} is invalid for tier {tier} case {policy_case_id!r}."
             )
+        retest_reason = case.get("retest_reason")
+        policy_case = policy_cases[policy_case_id]
+        if migration == "fresh_retest" and not _release_blocking(policy_case):
+            allowed_reasons = (
+                PRESENTATION_RETEST_REASONS
+                if policy_case.get("evidence_role") == "operator_presentation"
+                else OPERATOR_RETEST_REASONS
+            )
+            if retest_reason is None:
+                unreasoned_nonblocking_retests.append(policy_case_id)
+            elif retest_reason not in allowed_reasons:
+                raise QualificationScopeError(
+                    f"Nonblocking qualification case {policy_case_id!r} fresh_retest requires one of "
+                    f"{sorted(allowed_reasons)!r}."
+                )
+        elif retest_reason is not None:
+            raise QualificationScopeError(
+                f"Qualification case {policy_case_id!r} may declare retest_reason only for a nonblocking fresh_retest."
+            )
         overrides[policy_case_id] = migration == "fresh_retest"
     acceptance = _mapping(qualification.get("acceptance"), "qualification acceptance")
     required_case_ids = set(_strings(acceptance.get("required_case_ids"), "qualification required case IDs"))
     nonblocking_case_ids = set(_strings(acceptance.get("nonblocking_case_ids"), "qualification nonblocking case IDs"))
+    blocking_case_ids = set(_strings(acceptance.get("blocking_case_ids"), "qualification blocking case IDs"))
     preregistered_case_ids = set(
         _strings(
             acceptance.get("preregistered_matrix_case_ids"),
             "qualification preregistered matrix case IDs",
         )
     )
-    expected_required = {case_id for case_id in overrides if cast(int, policy_cases[case_id]["tier"]) in {0, 1, 2, 3}}
-    expected_nonblocking = {case_id for case_id in overrides if cast(int, policy_cases[case_id]["tier"]) == 4}
-    if required_case_ids != expected_required:
+    legacy_required = {case_id for case_id in overrides if cast(int, policy_cases[case_id]["tier"]) in {0, 1, 2, 3}}
+    policy_required = {case_id for case_id in legacy_required if _release_blocking(policy_cases[case_id])}
+    legacy_nonblocking = {case_id for case_id in overrides if cast(int, policy_cases[case_id]["tier"]) == 4}
+    policy_nonblocking = set(overrides) - policy_required
+    milestone_case_ids = {
+        cast(str, case["policy_case_id"])
+        for case in (_mapping(item, "qualification matrix case") for item in qualification["matrix"])
+        if case.get("phase") == "milestone"
+    }
+    legacy_blocking = milestone_case_ids & legacy_required
+    policy_blocking = milestone_case_ids & policy_required
+    if frozenset(required_case_ids) not in {frozenset(legacy_required), frozenset(policy_required)}:
         raise QualificationScopeError(
-            "Qualification acceptance required_case_ids must use the mapped blocking policy case IDs."
+            "Qualification acceptance required_case_ids must use the mapped release-required policy case IDs."
         )
-    if nonblocking_case_ids != expected_nonblocking:
+    if frozenset(nonblocking_case_ids) not in {frozenset(legacy_nonblocking), frozenset(policy_nonblocking)}:
         raise QualificationScopeError(
-            "Qualification acceptance nonblocking_case_ids must use the mapped Tier 4 policy case IDs."
+            "Qualification acceptance nonblocking_case_ids must use the mapped nonblocking policy case IDs."
+        )
+    if frozenset(blocking_case_ids) not in {frozenset(legacy_blocking), frozenset(policy_blocking)}:
+        raise QualificationScopeError(
+            "Qualification acceptance blocking_case_ids must use the mapped milestone release blockers."
+        )
+    if required_case_ids == policy_required and unreasoned_nonblocking_retests:
+        raise QualificationScopeError(
+            "Nonblocking fresh_retest entries require bounded retest_reason values: "
+            f"{sorted(unreasoned_nonblocking_retests)!r}."
         )
     if preregistered_case_ids != matrix_case_ids:
         raise QualificationScopeError(
@@ -489,6 +582,169 @@ def _parse_accepted_at(value: object, case_id: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _validate_live_publication_evidence(
+    reference_bytes: bytes,
+    case: Mapping[str, Any],
+    case_id: str,
+    source_sha: str,
+    reference_content: ReferenceContent,
+    accepted_at: datetime,
+    expected_status: str,
+) -> Mapping[str, str]:
+    try:
+        evidence_document = _mapping(
+            json.loads(reference_bytes),
+            f"live-publication evidence for {case_id!r}",
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise QualificationScopeError(f"Live-publication evidence for {case_id!r} must be structured JSON.") from error
+    evidence_candidate = _mapping(
+        evidence_document.get("candidate"),
+        f"live-publication evidence for {case_id!r} candidate",
+    )
+    release_tag = evidence_candidate.get("release_tag")
+    if not isinstance(release_tag, str) or not release_tag:
+        raise QualificationScopeError(f"Live-publication evidence for {case_id!r} candidate requires release_tag.")
+    release_receipt_reference = f"docs/release-evidence/{release_tag}/release-receipt.json"
+    try:
+        release_receipt_bytes = reference_content(release_receipt_reference)
+    except OSError as error:
+        raise QualificationScopeError(
+            f"Unable to read live-publication release receipt {release_receipt_reference!r}: {error}"
+        ) from error
+    release_receipt_digest = hashlib.sha256(release_receipt_bytes).hexdigest()
+    try:
+        release_receipt = _mapping(
+            json.loads(release_receipt_bytes),
+            f"live-publication evidence for {case_id!r} release receipt",
+        )
+        validate_receipt(release_receipt)
+    except (UnicodeDecodeError, json.JSONDecodeError, ReleaseReceiptError) as error:
+        raise QualificationScopeError(
+            f"Live-publication evidence for {case_id!r} release receipt is invalid: {error}"
+        ) from error
+    release = _mapping(release_receipt.get("release"), f"live-publication evidence for {case_id!r} release")
+    workflow = _mapping(
+        release_receipt.get("workflow"),
+        f"live-publication evidence for {case_id!r} workflow",
+    )
+    versions = _mapping(
+        release_receipt.get("versions"),
+        f"live-publication evidence for {case_id!r} versions",
+    )
+    artifacts = [
+        _mapping(item, f"live-publication evidence for {case_id!r} artifact")
+        for item in _sequence(
+            release_receipt.get("artifacts"),
+            f"live-publication evidence for {case_id!r} artifacts",
+        )
+    ]
+    appcasts = [item for item in artifacts if item.get("kind") == "appcast"]
+    if len(appcasts) != 1:
+        raise QualificationScopeError(
+            f"Live-publication evidence for {case_id!r} release receipt requires one appcast artifact."
+        )
+    expected_candidate = {
+        "release_tag": release["tag"],
+        "package_version": versions["package"],
+        "public_version": versions["public"],
+        "build": versions["build"],
+        "source_sha": release_receipt["source_sha"],
+        "release_run_id": workflow["run_id"],
+        "release_id": release["id"],
+        "appcast_sha256": appcasts[0]["sha256"],
+    }
+    if source_sha != release_receipt["source_sha"] or any(
+        evidence_candidate.get(field) != expected for field, expected in expected_candidate.items()
+    ):
+        raise QualificationScopeError(
+            f"Live-publication evidence for {case_id!r} does not match its checked release receipt."
+        )
+    allowed_live_case_ids = set(
+        _strings(
+            case.get("live_evidence_case_ids"),
+            f"live-publication evidence for {case_id!r} accepted case IDs",
+        )
+    )
+    evidence_cases = [
+        _mapping(item, f"live-publication evidence for {case_id!r} case")
+        for item in _sequence(
+            evidence_document.get("cases"),
+            f"live-publication evidence for {case_id!r} cases",
+        )
+    ]
+    if not any(
+        item.get("id") in allowed_live_case_ids and item.get("result") == expected_status for item in evidence_cases
+    ):
+        raise QualificationScopeError(
+            f"Live-publication evidence for {case_id!r} does not contain a matching {expected_status} case."
+        )
+    publication_reference = f"docs/release-evidence/{release_tag}/publication-record.json"
+    try:
+        publication_bytes = reference_content(publication_reference)
+    except OSError as error:
+        raise QualificationScopeError(
+            f"Unable to read live-publication record {publication_reference!r}: {error}"
+        ) from error
+    publication_digest = hashlib.sha256(publication_bytes).hexdigest()
+    try:
+        publication = _mapping(
+            json.loads(publication_bytes),
+            f"live-publication evidence for {case_id!r} publication record",
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise QualificationScopeError(
+            f"Live-publication evidence for {case_id!r} publication record is invalid."
+        ) from error
+    expected_publication = {
+        "schema_version": 1,
+        "release_tag": release["tag"],
+        "release_id": release["id"],
+        "source_sha": release_receipt["source_sha"],
+        "workflow_run_id": workflow["run_id"],
+        "receipt_file_sha256": release_receipt_digest,
+    }
+    if any(publication.get(field) != expected for field, expected in expected_publication.items()):
+        raise QualificationScopeError(
+            f"Live-publication evidence for {case_id!r} publication record does not match its release receipt."
+        )
+    if effective_successful_workflow_run_id(publication) is None:
+        raise QualificationScopeError(
+            f"Live-publication evidence for {case_id!r} does not contain a successful release or recovery run."
+        )
+    live_pages = _mapping(
+        publication.get("live_pages"),
+        f"live-publication evidence for {case_id!r} live_pages",
+    )
+    if (
+        live_pages.get("state") != "verified"
+        or live_pages.get("sha256") != appcasts[0]["sha256"]
+        or live_pages.get("url") != "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
+    ):
+        raise QualificationScopeError(
+            f"Live-publication evidence for {case_id!r} does not match the verified live appcast."
+        )
+    published_at = publication.get("published_at")
+    qualified_at = evidence_document.get("qualified_at")
+    if not isinstance(published_at, str) or not isinstance(qualified_at, str):
+        raise QualificationScopeError(f"Live-publication evidence for {case_id!r} timestamps are invalid.")
+    try:
+        published = datetime.fromisoformat(published_at.replace("Z", "+00:00")).astimezone(timezone.utc)
+        qualified = datetime.fromisoformat(qualified_at.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError as error:
+        raise QualificationScopeError(f"Live-publication evidence for {case_id!r} timestamps are invalid.") from error
+    if qualified < published or accepted_at < published:
+        raise QualificationScopeError(
+            f"Live-publication evidence for {case_id!r} must be observed after publication and accepted afterward."
+        )
+    return {
+        "publication_record_reference": publication_reference,
+        "publication_record_sha256": publication_digest,
+        "release_receipt_reference": release_receipt_reference,
+        "release_receipt_sha256": release_receipt_digest,
+    }
+
+
 def _validated_receipts(
     evidence: Mapping[str, Any],
     cases_by_id: Mapping[str, Mapping[str, Any]],
@@ -503,7 +759,16 @@ def _validated_receipts(
         case_id = receipt.get("case_id")
         if not isinstance(case_id, str) or case_id not in cases_by_id:
             raise QualificationScopeError(f"Evidence receipt {index} references unknown case {case_id!r}.")
-        if receipt.get("status") != "accepted":
+        status = receipt.get("status")
+        if status not in {"accepted", *RECORDED_NONBLOCKING_STATUSES}:
+            raise QualificationScopeError(f"Evidence for {case_id!r} has unsupported status {status!r}.")
+        receipt_id = receipt.get("receipt_id")
+        if not isinstance(receipt_id, str) or not receipt_id:
+            raise QualificationScopeError(f"Evidence for {case_id!r} requires receipt_id.")
+        if receipt_id in receipt_ids:
+            raise QualificationScopeError(f"Duplicate release qualification receipt ID: {receipt_id}")
+        receipt_ids.add(receipt_id)
+        if status != "accepted":
             continue
         case = cases_by_id[case_id]
         evidence_source = _strings(
@@ -518,12 +783,6 @@ def _validated_receipts(
         source_sha = receipt.get("source_sha")
         if not isinstance(source_sha, str) or SHA_PATTERN.fullmatch(source_sha) is None:
             raise QualificationScopeError(f"Evidence for {case_id!r} requires a full lowercase source_sha.")
-        receipt_id = receipt.get("receipt_id")
-        if not isinstance(receipt_id, str) or not receipt_id:
-            raise QualificationScopeError(f"Evidence for {case_id!r} requires receipt_id.")
-        if receipt_id in receipt_ids:
-            raise QualificationScopeError(f"Duplicate release qualification receipt ID: {receipt_id}")
-        receipt_ids.add(receipt_id)
         accepted_at = _parse_accepted_at(receipt.get("accepted_at"), case_id)
         if accepted_at.date() > as_of:
             raise QualificationScopeError(f"Evidence for {case_id!r} cannot be accepted after {as_of.isoformat()}.")
@@ -556,170 +815,15 @@ def _validated_receipts(
             )
         validated_receipt = dict(receipt)
         if case.get("requires_live_publication") is True:
-            try:
-                evidence_document = _mapping(
-                    json.loads(reference_bytes),
-                    f"live-publication evidence for {case_id!r}",
-                )
-            except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                raise QualificationScopeError(
-                    f"Live-publication evidence for {case_id!r} must be structured JSON."
-                ) from error
-            evidence_candidate = _mapping(
-                evidence_document.get("candidate"),
-                f"live-publication evidence for {case_id!r} candidate",
+            validated_receipt["_live_release_binding"] = _validate_live_publication_evidence(
+                reference_bytes,
+                case,
+                case_id,
+                source_sha,
+                reference_content,
+                accepted_at,
+                "passed",
             )
-            release_tag = evidence_candidate.get("release_tag")
-            if not isinstance(release_tag, str) or not release_tag:
-                raise QualificationScopeError(
-                    f"Live-publication evidence for {case_id!r} candidate requires release_tag."
-                )
-            release_receipt_reference = f"docs/release-evidence/{release_tag}/release-receipt.json"
-            try:
-                release_receipt_bytes = reference_content(release_receipt_reference)
-            except OSError as error:
-                raise QualificationScopeError(
-                    f"Unable to read live-publication release receipt {release_receipt_reference!r}: {error}"
-                ) from error
-            release_receipt_digest = hashlib.sha256(release_receipt_bytes).hexdigest()
-            try:
-                release_receipt = _mapping(
-                    json.loads(release_receipt_bytes),
-                    f"live-publication evidence for {case_id!r} release receipt",
-                )
-                validate_receipt(release_receipt)
-            except (UnicodeDecodeError, json.JSONDecodeError, ReleaseReceiptError) as error:
-                raise QualificationScopeError(
-                    f"Live-publication evidence for {case_id!r} release receipt is invalid: {error}"
-                ) from error
-            release = _mapping(release_receipt.get("release"), f"live-publication evidence for {case_id!r} release")
-            workflow = _mapping(
-                release_receipt.get("workflow"),
-                f"live-publication evidence for {case_id!r} workflow",
-            )
-            artifacts = [
-                _mapping(item, f"live-publication evidence for {case_id!r} artifact")
-                for item in _sequence(
-                    release_receipt.get("artifacts"),
-                    f"live-publication evidence for {case_id!r} artifacts",
-                )
-            ]
-            appcasts = [item for item in artifacts if item.get("kind") == "appcast"]
-            if len(appcasts) != 1:
-                raise QualificationScopeError(
-                    f"Live-publication evidence for {case_id!r} release receipt requires one appcast artifact."
-                )
-            expected_candidate = {
-                "release_tag": release["tag"],
-                "package_version": _mapping(
-                    release_receipt.get("versions"),
-                    f"live-publication evidence for {case_id!r} versions",
-                )["package"],
-                "public_version": _mapping(
-                    release_receipt.get("versions"),
-                    f"live-publication evidence for {case_id!r} versions",
-                )["public"],
-                "build": _mapping(
-                    release_receipt.get("versions"),
-                    f"live-publication evidence for {case_id!r} versions",
-                )["build"],
-                "source_sha": release_receipt["source_sha"],
-                "release_run_id": workflow["run_id"],
-                "release_id": release["id"],
-                "appcast_sha256": appcasts[0]["sha256"],
-            }
-            if source_sha != release_receipt["source_sha"] or any(
-                evidence_candidate.get(field) != expected for field, expected in expected_candidate.items()
-            ):
-                raise QualificationScopeError(
-                    f"Live-publication evidence for {case_id!r} does not match its checked release receipt."
-                )
-            allowed_live_case_ids = set(
-                _strings(
-                    case.get("live_evidence_case_ids"),
-                    f"live-publication evidence for {case_id!r} accepted case IDs",
-                )
-            )
-            evidence_cases = [
-                _mapping(item, f"live-publication evidence for {case_id!r} case")
-                for item in _sequence(
-                    evidence_document.get("cases"),
-                    f"live-publication evidence for {case_id!r} cases",
-                )
-            ]
-            if not any(
-                item.get("id") in allowed_live_case_ids and item.get("result") == "passed" for item in evidence_cases
-            ):
-                raise QualificationScopeError(
-                    f"Live-publication evidence for {case_id!r} does not contain a passed matching case."
-                )
-            publication_reference = f"docs/release-evidence/{release_tag}/publication-record.json"
-            try:
-                publication_bytes = reference_content(publication_reference)
-            except OSError as error:
-                raise QualificationScopeError(
-                    f"Unable to read live-publication record {publication_reference!r}: {error}"
-                ) from error
-            publication_digest = hashlib.sha256(publication_bytes).hexdigest()
-            try:
-                publication = _mapping(
-                    json.loads(publication_bytes),
-                    f"live-publication evidence for {case_id!r} publication record",
-                )
-            except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                raise QualificationScopeError(
-                    f"Live-publication evidence for {case_id!r} publication record is invalid."
-                ) from error
-            expected_publication = {
-                "schema_version": 1,
-                "release_tag": release["tag"],
-                "release_id": release["id"],
-                "source_sha": release_receipt["source_sha"],
-                "workflow_run_id": workflow["run_id"],
-                "receipt_file_sha256": release_receipt_digest,
-            }
-            if any(publication.get(field) != expected for field, expected in expected_publication.items()):
-                raise QualificationScopeError(
-                    f"Live-publication evidence for {case_id!r} publication record does not match its release receipt."
-                )
-            if effective_successful_workflow_run_id(publication) is None:
-                raise QualificationScopeError(
-                    f"Live-publication evidence for {case_id!r} does not contain a successful release or recovery run."
-                )
-            live_pages = _mapping(
-                publication.get("live_pages"),
-                f"live-publication evidence for {case_id!r} live_pages",
-            )
-            if (
-                live_pages.get("state") != "verified"
-                or live_pages.get("sha256") != appcasts[0]["sha256"]
-                or live_pages.get("url") != "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
-            ):
-                raise QualificationScopeError(
-                    f"Live-publication evidence for {case_id!r} does not match the verified live appcast."
-                )
-            published_at = publication.get("published_at")
-            qualified_at = evidence_document.get("qualified_at")
-            if not isinstance(published_at, str) or not isinstance(qualified_at, str):
-                raise QualificationScopeError(f"Live-publication evidence for {case_id!r} timestamps are invalid.")
-            try:
-                published = datetime.fromisoformat(published_at.replace("Z", "+00:00")).astimezone(timezone.utc)
-                qualified = datetime.fromisoformat(qualified_at.replace("Z", "+00:00")).astimezone(timezone.utc)
-            except ValueError as error:
-                raise QualificationScopeError(
-                    f"Live-publication evidence for {case_id!r} timestamps are invalid."
-                ) from error
-            if qualified < published or accepted_at < published:
-                raise QualificationScopeError(
-                    f"Live-publication evidence for {case_id!r} must be observed after publication "
-                    "and accepted afterward."
-                )
-            validated_receipt["_live_release_binding"] = {
-                "publication_record_reference": publication_reference,
-                "publication_record_sha256": publication_digest,
-                "release_receipt_reference": release_receipt_reference,
-                "release_receipt_sha256": release_receipt_digest,
-            }
         if tier == 3:
             try:
                 tier3_receipt = load_validated_receipt_bytes(
@@ -760,6 +864,119 @@ def _validated_receipts(
             )
         )
     return receipts
+
+
+def _recorded_nonblocking_outcomes(
+    evidence: Mapping[str, Any],
+    cases_by_id: Mapping[str, Mapping[str, Any]],
+    policy_id: str,
+    candidate_sha: str,
+    reference_content: ReferenceContent,
+    as_of: date,
+) -> dict[str, Mapping[str, Any]]:
+    outcomes: dict[str, Mapping[str, Any]] = {}
+    outcome_times: dict[str, datetime] = {}
+    outcome_ids: set[str] = set()
+    for index, raw_receipt in enumerate(_sequence(evidence.get("receipts"), "release qualification receipts")):
+        receipt = _mapping(raw_receipt, f"release qualification receipt {index}")
+        status = receipt.get("status")
+        if status not in RECORDED_NONBLOCKING_STATUSES:
+            continue
+        case_id = receipt.get("case_id")
+        if not isinstance(case_id, str) or case_id not in cases_by_id:
+            raise QualificationScopeError(f"Evidence receipt {index} references unknown case {case_id!r}.")
+        case = cases_by_id[case_id]
+        if _release_blocking(case):
+            raise QualificationScopeError(
+                f"Failed or skipped evidence for blocking case {case_id!r} cannot replace accepted evidence."
+            )
+        evidence_source = _strings(case["allowed_evidence_sources"], f"case {case_id!r} evidence sources")[0]
+        if receipt.get("source") != evidence_source:
+            raise QualificationScopeError(
+                f"Evidence for {case_id!r} must use source {evidence_source!r}, not {receipt.get('source')!r}."
+            )
+        source_sha = receipt.get("source_sha")
+        if not isinstance(source_sha, str) or SHA_PATTERN.fullmatch(source_sha) is None:
+            raise QualificationScopeError(f"Evidence for {case_id!r} requires a full lowercase source_sha.")
+        if source_sha != candidate_sha:
+            raise QualificationScopeError(
+                f"Recorded nonblocking evidence for {case_id!r} must match the exact candidate SHA."
+            )
+        receipt_id = receipt.get("receipt_id")
+        if not isinstance(receipt_id, str) or not receipt_id:
+            raise QualificationScopeError(f"Evidence for {case_id!r} requires receipt_id.")
+        if receipt_id in outcome_ids:
+            raise QualificationScopeError(f"Duplicate release qualification receipt ID: {receipt_id}")
+        outcome_ids.add(receipt_id)
+        recorded_at = _parse_accepted_at(receipt.get("accepted_at"), case_id)
+        if recorded_at.date() > as_of:
+            raise QualificationScopeError(f"Evidence for {case_id!r} cannot be recorded after {as_of.isoformat()}.")
+        reference = receipt.get("reference")
+        digest = receipt.get("sha256")
+        if (
+            not isinstance(reference, str)
+            or not reference
+            or Path(reference).is_absolute()
+            or ".." in Path(reference).parts
+        ):
+            raise QualificationScopeError(f"Evidence for {case_id!r} requires a repository-relative reference.")
+        if not isinstance(digest, str) or SHA256_PATTERN.fullmatch(digest) is None:
+            raise QualificationScopeError(f"Evidence for {case_id!r} requires a lowercase SHA-256 digest.")
+        reference_bytes = reference_content(reference)
+        if hashlib.sha256(reference_bytes).hexdigest() != digest:
+            raise QualificationScopeError(
+                f"Evidence reference {reference!r} does not match its recorded SHA-256 digest."
+            )
+        if case["tier"] == 3:
+            try:
+                validated_document = load_validated_receipt_bytes(
+                    reference_bytes,
+                    policy_id=policy_id,
+                    case=case,
+                    reference_content=reference_content,
+                )
+            except Tier3ReceiptError as error:
+                raise QualificationScopeError(
+                    f"Recorded Tier 3 evidence for {case_id!r} is invalid: {error}"
+                ) from error
+            result = _mapping(validated_document.get("result"), f"recorded evidence for {case_id!r} result")
+            release_identity = _mapping(
+                validated_document.get("release_identity"),
+                f"recorded evidence for {case_id!r} release identity",
+            )
+            if release_identity.get("source_sha") != candidate_sha:
+                raise QualificationScopeError(
+                    f"Recorded Tier 3 evidence for {case_id!r} is bound to a different release source."
+                )
+            document_status = result.get("status")
+        elif case.get("requires_live_publication") is True:
+            _validate_live_publication_evidence(
+                reference_bytes,
+                case,
+                case_id,
+                source_sha,
+                reference_content,
+                recorded_at,
+                cast(str, status),
+            )
+            document_status = status
+        else:
+            raise QualificationScopeError(
+                f"Qualification case {case_id!r} does not support recorded nonblocking outcomes."
+            )
+        if document_status != status:
+            raise QualificationScopeError(
+                f"Recorded evidence for {case_id!r} status does not match the referenced report."
+            )
+        if case_id not in outcome_times or recorded_at > outcome_times[case_id]:
+            outcome_times[case_id] = recorded_at
+            outcomes[case_id] = {
+                "receipt_id": receipt_id,
+                "reference": reference,
+                "source_sha": source_sha,
+                "status": status,
+            }
+    return outcomes
 
 
 def _case_patterns(case: Mapping[str, Any], contracts: Mapping[str, Any]) -> tuple[str, ...]:
@@ -923,6 +1140,7 @@ def _tier3_milestone_trigger(
 def _evidence_requirement(
     case: Mapping[str, Any],
     *,
+    due: bool,
     required: bool,
     applicable: bool,
     required_phase: str | None,
@@ -948,12 +1166,16 @@ def _evidence_requirement(
             else "before this phase can pass"
         )
         action = f"Provide accepted {source} evidence {timing}."
+    elif due:
+        action = f"Record {source} evidence when available; this operational evidence does not block release closeout."
     return {
         "source": source,
         "binding": binding,
+        "due": due,
+        "due_for_phase": due and applicable,
         "required": required,
         "required_for_phase": required and applicable,
-        "satisfied": not required,
+        "satisfied": not due,
         "action": action,
     }
 
@@ -994,6 +1216,14 @@ def classify_release_scope(
         evidence,
         cases_by_id,
         cast(str, policy["policy_id"]),
+        read_reference,
+        as_of,
+    )
+    recorded_outcomes = _recorded_nonblocking_outcomes(
+        evidence,
+        cases_by_id,
+        cast(str, policy["policy_id"]),
+        candidate_sha,
         read_reference,
         as_of,
     )
@@ -1103,6 +1333,7 @@ def classify_release_scope(
     for case in cases:
         case_id = cast(str, case["id"])
         tier = cast(int, case["tier"])
+        release_blocking = _release_blocking(case)
         accepted = receipt_map.get(case_id, [])
         exact = next((receipt for receipt in reversed(accepted) if receipt["source_sha"] == candidate_sha), None)
         prior = next((receipt for receipt in reversed(accepted) if receipt["source_sha"] != candidate_sha), None)
@@ -1250,12 +1481,24 @@ def classify_release_scope(
 
         blocking_phase = cast(str, case["blocking_phase"])
         required_phase = BLOCKING_PHASE_OWNERS[blocking_phase]
-        evidence_required = status == "retest" and (tier != 3 or tier3_applicable)
+        evidence_due = status == "retest" and (tier != 3 or tier3_applicable)
+        evidence_required = evidence_due and release_blocking
         phase_deferred = (
             required_phase is not None and WORKFLOW_PHASE_INDEX[workflow_phase] < WORKFLOW_PHASE_INDEX[required_phase]
         )
-        deferred = phase_deferred and evidence_required
+        deferred = phase_deferred and evidence_due
         applicable = blocking_phase != "none" and not phase_deferred and tier3_applicable
+        recorded_outcome = recorded_outcomes.get(case_id)
+        operational_status: str | None = None
+        if not release_blocking and blocking_phase != "none":
+            if status in {"covered", "carry"}:
+                operational_status = "passed"
+            elif recorded_outcome is not None:
+                operational_status = cast(str, recorded_outcome["status"])
+            elif trigger in {"missing_prior_evidence", "not_due"}:
+                operational_status = "missing"
+            else:
+                operational_status = "due"
         evidence_summary = (
             artifact_receipt_evidence
             if tier == 1 and case_id in artifact_tier1_cases and artifact_receipt_evidence is not None
@@ -1264,6 +1507,8 @@ def classify_release_scope(
                 signed_artifact_receipts[case_id][1],
             )
             if case_id in signed_artifact_receipts
+            else dict(recorded_outcome)
+            if recorded_outcome is not None and status == "retest"
             else _receipt_summary(selected_receipt)
         )
         result = {
@@ -1273,16 +1518,19 @@ def classify_release_scope(
             "blocking_phase": blocking_phase,
             "required_phase": required_phase,
             "requires_live_publication": case.get("requires_live_publication", False),
-            "blocking": blocking_phase != "none",
+            "blocking": release_blocking and blocking_phase != "none",
             "applicable": applicable,
             "deferred": deferred,
             "trigger": trigger,
             "reason": reason,
             "invalidating_paths": invalidating_paths,
             "evidence": evidence_summary,
+            "evidence_due": evidence_due,
             "evidence_required": evidence_required,
+            "operational_status": operational_status,
             "evidence_requirement": _evidence_requirement(
                 case,
+                due=evidence_due,
                 required=evidence_required,
                 applicable=applicable,
                 required_phase=required_phase,

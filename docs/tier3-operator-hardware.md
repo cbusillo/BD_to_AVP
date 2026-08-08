@@ -68,9 +68,11 @@ The release receipt must be committed and byte-identical to repository `HEAD`:
 
 For a newly published candidate, run from the idempotent
 `automation/release-evidence-<tag>` branch created by the Release Evidence
-workflow. Add passed operator receipts and their evidence-index entries to that
-same branch. Skipped or failed receipts remain truthful audit records but cannot
-satisfy protected CI's `milestone` qualification check.
+workflow. Add operator receipts and their evidence-index entries to that same
+branch when collection is due. Passed receipts use `status: accepted`; skipped
+or failed receipts use matching `skipped` or `failed` index status. Those
+outcomes remain visible in the milestone report but cannot satisfy any automated
+or blocking assertion.
 
 ```sh
 uv run python -m scripts.tier3_operator_receipt \
@@ -85,10 +87,12 @@ Skipped runs produce no evidence summaries. Cleanup, cancellation, ejection,
 recovery, conversion completion, and subjective spatial-presentation outcomes
 remain distinct bounded fields.
 
-Physical receipts run only on policy cadence. The USB/MakeMKV case is eligible
-for first RC and stable-candidate milestones; protected-media conversion and
-Vision Pro playback are stable-candidate cases. They are not prerequisites for
-every prerelease.
+Physical receipts run only when risk requires them: an explicitly scheduled
+first baseline, receipt expiry, mapped invalidating changes, environment or
+device-family changes, or a maintainer-requested retest. The USB/MakeMKV case
+retains its first-RC baseline. A Stable milestone alone does not force any of
+the three physical cases, and missing, skipped, failed, or due physical evidence
+does not block publication, the evidence PR, or milestone closeout.
 
 ## Validation
 
@@ -98,5 +102,6 @@ uv run python -m scripts.qualify_release_scope --validate-policy
 ```
 
 Fixture receipts cover passed, failed, skipped, private-field rejection, and
-missing-hardware rejection. Real hardware collection is performed only when the
-declared cadence requires it.
+missing-hardware rejection. Real hardware collection is performed only when a
+risk trigger requires it; release closeout never requires repeated collection
+solely to refresh operator ceremony.
