@@ -27,6 +27,10 @@ NONTERMINAL_STATUSES = {"in_progress", "pending", "queued", "requested"}
 REPOSITORY = "cbusillo/BD_to_AVP"
 WORKFLOW_POLICIES = OPERATOR_WORKFLOWS
 ALLOWED_WORKFLOWS = tuple(WORKFLOW_POLICIES)
+ALLOWED_RUN_NAMES = {
+    "Stable": frozenset({"Stable", "Stable PyPI recovery"}),
+    "Prerelease": frozenset({"Prerelease"}),
+}
 REQUIRED_BRANCH = "main"
 REQUIRED_EVENT = "workflow_dispatch"
 REQUIRED_ENVIRONMENT = "macos-signing"
@@ -245,15 +249,14 @@ def validate_expectation(expectation: RunExpectation) -> None:
 
 
 def validate_run_identity(run: Mapping[str, Any], expectation: RunExpectation) -> ValidatedRunIdentity:
+    actual_workflow_name = _string(run, "name", "Workflow run")
     actual = {
-        "workflow": _string(run, "name", "Workflow run"),
         "workflow_path": _string(run, "path", "Workflow run"),
         "head_sha": _string(run, "head_sha", "Workflow run"),
         "branch": _string(run, "head_branch", "Workflow run"),
         "event": _string(run, "event", "Workflow run"),
     }
     expected = {
-        "workflow": expectation.workflow,
         "workflow_path": expectation.workflow_path,
         "head_sha": expectation.head_sha,
         "branch": expectation.branch,
@@ -264,6 +267,11 @@ def validate_run_identity(run: Mapping[str, Any], expectation: RunExpectation) -
     ]
     if mismatches:
         raise ReleaseRunError("Workflow run identity mismatch: " + ", ".join(mismatches))
+    if actual_workflow_name not in ALLOWED_RUN_NAMES[expectation.workflow]:
+        raise ReleaseRunError(
+            f"Workflow run identity mismatch: workflow={actual_workflow_name!r} "
+            f"(expected one of {sorted(ALLOWED_RUN_NAMES[expectation.workflow])!r})"
+        )
     workflow_id = run.get("workflow_id")
     if isinstance(workflow_id, bool) or not isinstance(workflow_id, int) or workflow_id <= 0:
         raise ReleaseRunError("Workflow run workflow ID must be a positive integer returned by GitHub.")

@@ -159,7 +159,7 @@ def validate_publication(
         ):
             raise ReleaseEvidenceError("Failed release run does not match the reviewed Stable PyPI recovery evidence.")
         expected_recovery_identity = {
-            "name": "Stable",
+            "name": "Stable PyPI recovery",
             "path": ".github/workflows/briefcase.yml",
             "event": "workflow_dispatch",
             "status": "completed",
