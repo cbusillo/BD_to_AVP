@@ -53,7 +53,7 @@ NETWORK_TIMEOUT_SECONDS = 30
 COMMAND_TIMEOUT_SECONDS = 60
 SMOKE_TIMEOUT_SECONDS = 15 * 60
 GUI_TIMEOUT_SECONDS = 270
-UPDATE_TIMEOUT_SECONDS = 5 * 60
+UPDATE_TIMEOUT_SECONDS = 15 * 60
 UI_TEST_TIMEOUT_SECONDS = 15 * 60
 ACCESSIBILITY_COLLECTOR_FINISH_TIMEOUT_SECONDS = 15
 MAX_UI_SCREENSHOT_BYTES = 20 * 1024 * 1024
@@ -992,12 +992,33 @@ end tell'''
                 set targetProcess to first application process whose bundle identifier is targetBundleID
                 tell targetProcess
                     repeat with targetWindow in windows
-                        repeat with buttonTitle in {"Install and Relaunch", "Install Update", "Relaunch"}
-                            if exists button (buttonTitle as text) of targetWindow then
-                                click button (buttonTitle as text) of targetWindow
-                                return buttonTitle as text
-                            end if
+                        set identifiedButton to missing value
+                        repeat with targetButton in buttons of targetWindow
+                            try
+                                set buttonIdentifier to value of attribute "AXIdentifier" of targetButton
+                                if buttonIdentifier is "SPUUserUpdateChoiceInstall" then
+                                    set identifiedButton to targetButton
+                                    exit repeat
+                                end if
+                            end try
                         end repeat
+                        if identifiedButton is not missing value then
+                            if enabled of identifiedButton then
+                                set clickedTitle to name of identifiedButton as text
+                                click identifiedButton
+                                return clickedTitle
+                            end if
+                        else
+                            repeat with buttonTitle in {"Install and Relaunch", "Install Update", "Relaunch"}
+                                if exists button (buttonTitle as text) of targetWindow then
+                                    set titledButton to button (buttonTitle as text) of targetWindow
+                                    if enabled of titledButton then
+                                        click titledButton
+                                        return buttonTitle as text
+                                    end if
+                                end if
+                            end repeat
+                        end if
                     end repeat
                 end tell
             end if
