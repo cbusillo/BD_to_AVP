@@ -14,6 +14,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
+from scripts.release_evidence import effective_successful_workflow_run_id
 from scripts.release_receipt import (
     ArtifactReceiptExpectation,
     ReleaseReceiptError,
@@ -528,7 +529,7 @@ def _validated_receipts(
             raise QualificationScopeError(f"Evidence for {case_id!r} cannot be accepted after {as_of.isoformat()}.")
         tier = cast(int, case["tier"])
         if tier == 1:
-            if receipt.get("workflow_conclusion") != "success":
+            if effective_successful_workflow_run_id(receipt, run_id_field="release_run_id") is None:
                 raise QualificationScopeError(f"Tier 1 case {case_id!r} requires a successful workflow conclusion.")
             run_id = receipt.get("release_run_id")
             if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
@@ -675,12 +676,15 @@ def _validated_receipts(
                 "release_id": release["id"],
                 "source_sha": release_receipt["source_sha"],
                 "workflow_run_id": workflow["run_id"],
-                "workflow_conclusion": "success",
                 "receipt_file_sha256": release_receipt_digest,
             }
             if any(publication.get(field) != expected for field, expected in expected_publication.items()):
                 raise QualificationScopeError(
                     f"Live-publication evidence for {case_id!r} publication record does not match its release receipt."
+                )
+            if effective_successful_workflow_run_id(publication) is None:
+                raise QualificationScopeError(
+                    f"Live-publication evidence for {case_id!r} does not contain a successful release or recovery run."
                 )
             live_pages = _mapping(
                 publication.get("live_pages"),
@@ -851,7 +855,7 @@ def _matches_milestone_tier1_receipt(
     return (
         evidence_receipt.get("source_sha") == release_receipt.get("source_sha")
         and evidence_receipt.get("release_run_id") == workflow.get("run_id")
-        and evidence_receipt.get("workflow_conclusion") == "success"
+        and effective_successful_workflow_run_id(evidence_receipt, run_id_field="release_run_id") is not None
         and evidence_receipt.get("reference") == receipt_reference
         and evidence_receipt.get("sha256") == receipt_file_sha256
     )

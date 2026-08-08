@@ -351,6 +351,24 @@ only the abandoned unpublished draft after recording its identities, and start a
 fresh release from the new protected-main SHA. If the Pages job fails after publication, rerun the failed job or dispatch
 `Manage Sparkle Pages` from `main` with `deploy` and the release tag.
 
+Stable `0.3.0` has one bounded post-publication PyPI recovery. Run
+`31219050718` published the immutable GitHub release and Sparkle feed, then
+failed before PyPI trusted publishing because its checksum manifest included a
+generated `dist/.gitignore` that the artifact uploader omitted. The temporary
+`Stable` recovery job accepts only the exact reviewed evidence fingerprint in
+`docs/release-evidence/v0.3.0-pypi-recovery.json`, revalidates the failed run,
+immutable release receipt, original artifact ID and digest, and exact wheel and
+source-archive hashes, then publishes those original bytes through the existing
+`pypi` environment. A retry after a partial successful upload may skip
+publication only when PyPI already contains the exact reviewed file set and
+hashes; it then completes the receipt and checked evidence. The resulting PyPI
+attestation is bound to the recovery workflow commit, while durable evidence
+records the original failed release run separately from the successful recovery
+run. Do not rebuild, add another trusted-publisher workflow, use a local token,
+or relax the transfer verifier. Obtain fresh explicit authorization before
+dispatching the recovery fingerprint, and remove the one-time path after PyPI
+and checked release evidence are complete.
+
 For the Beta 3 seed, a pre-publication failure leaves the existing feed and all
 published assets unchanged: retain the matching draft for an exact retry or stop
 the release before publication. After publication, do not upload a replacement

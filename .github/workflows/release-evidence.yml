@@ -26,6 +26,7 @@ jobs:
       base_main_sha: ${{ steps.base.outputs.sha }}
       has_changes: ${{ steps.stage.outputs.has_changes }}
       receipt_file_sha256: ${{ steps.reconcile.outputs.receipt_file_sha256 }}
+      release_run_id: ${{ steps.reconcile.outputs.release_run_id }}
       release_tag: ${{ steps.reconcile.outputs.release_tag }}
       source_sha: ${{ steps.reconcile.outputs.source_sha }}
     steps:
@@ -45,10 +46,41 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Resolve release evidence source
+        id: source
+        env:
+          COMPLETED_DISPLAY_TITLE: ${{ github.event.workflow_run.display_title }}
+          COMPLETED_RUN_ID: ${{ github.event.workflow_run.id }}
+          COMPLETED_SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$COMPLETED_DISPLAY_TITLE" = "Stable PyPI recovery" ]; then
+            python -m scripts.stable_pypi_recovery outputs --github-output "$GITHUB_OUTPUT"
+            {
+              echo "recovery=true"
+              echo "recovery_run_id=$COMPLETED_RUN_ID"
+            } >> "$GITHUB_OUTPUT"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$COMPLETED_RUN_ID" > recovery-workflow-run.json
+            python -m scripts.stable_pypi_recovery verify-pypi \
+              --state published \
+              --retries 6 \
+              --delay 10
+            RELEASE_SOURCE_SHA=$(sed -n 's/^release_source_sha=//p' "$GITHUB_OUTPUT" | tail -1)
+            git merge-base --is-ancestor "$RELEASE_SOURCE_SHA" HEAD
+          else
+            {
+              echo "release_run_id=$COMPLETED_RUN_ID"
+              echo "release_source_sha=$COMPLETED_SOURCE_SHA"
+              echo "recovery=false"
+              echo "recovery_run_id="
+            } >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Resolve the immutable release and receipt
         env:
-          EXPECTED_RUN_ID: ${{ github.event.workflow_run.id }}
-          EXPECTED_SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          EXPECTED_RUN_ID: ${{ steps.source.outputs.release_run_id }}
+          EXPECTED_SOURCE_SHA: ${{ steps.source.outputs.release_source_sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -121,14 +153,21 @@ jobs:
 
       - name: Reconcile checked evidence
         id: reconcile
+        env:
+          RECOVERY: ${{ steps.source.outputs.recovery }}
         run: |
           set -euo pipefail
+          RECOVERY_ARGS=()
+          if [ "$RECOVERY" = "true" ]; then
+            RECOVERY_ARGS+=(--recovery-workflow-run recovery-workflow-run.json)
+          fi
           python -m scripts.release_evidence \
             --workflow-run workflow-run.json \
             --release release.json \
             --receipt release-receipt.json \
             --live-appcast live-appcast.xml \
             --repo-root "$GITHUB_WORKSPACE" \
+            "${RECOVERY_ARGS[@]}" \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Stage only generated evidence files
@@ -222,7 +261,7 @@ jobs:
           body: |
             Records the deterministic public-safe receipt and publication evidence for `${{ needs.validate-and-prepare.outputs.release_tag }}`.
 
-            - Release run: `${{ github.event.workflow_run.id }}`
+            - Release run: `${{ needs.validate-and-prepare.outputs.release_run_id }}`
             - Source SHA: `${{ needs.validate-and-prepare.outputs.source_sha }}`
             - Receipt file SHA-256: `${{ needs.validate-and-prepare.outputs.receipt_file_sha256 }}`
 

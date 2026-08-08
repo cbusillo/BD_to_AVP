@@ -1,0 +1,80 @@
+{
+  "schema": "bd_to_avp.pypi_recovery",
+  "schema_version": 1,
+  "observed_at": "2026-08-07T21:43:40Z",
+  "repository": {
+    "id": 771225421,
+    "node_id": "R_kgDOLff3TQ",
+    "full_name": "cbusillo/BD_to_AVP"
+  },
+  "release": {
+    "id": 367020071,
+    "tag": "v0.3.0",
+    "name": "v0.3.0",
+    "version": "0.3.0",
+    "source_sha": "a9abbcf6cd1281d2c701e0c050b68fdafc5b9522",
+    "published_at": "2026-08-07T21:42:28Z",
+    "immutable": true,
+    "draft": false,
+    "prerelease": false,
+    "receipt_asset_id": 505690975,
+    "receipt_sha256": "f1da7083036120104fe702326cb88224e0233e26a2044a8e0ca0bd57520f9f79",
+    "receipt_size": 2258
+  },
+  "failed_run": {
+    "id": 31219050718,
+    "workflow_id": 101708423,
+    "run_number": 231,
+    "run_attempt": 1,
+    "workflow_name": "Stable",
+    "workflow_path": ".github/workflows/briefcase.yml",
+    "event": "workflow_dispatch",
+    "head_branch": "main",
+    "head_sha": "a9abbcf6cd1281d2c701e0c050b68fdafc5b9522",
+    "actor": "shiny-code-bot",
+    "triggering_actor": "shiny-code-bot",
+    "status": "completed",
+    "conclusion": "failure",
+    "failed_job_id": 93005764021,
+    "failed_job": "Publish stable Python distribution with trusted publishing",
+    "failed_step": "Verify Python distribution transfer",
+    "skipped_publish_step": "Publish with PyPI trusted publishing and attestations"
+  },
+  "artifact": {
+    "id": 9009656530,
+    "node_id": "MDg6QXJ0aWZhY3Q5MDA5NjU2NTMw",
+    "name": "python-distributions",
+    "digest": "92f3e21084ec98e20e9c18ac3531985d8ad03ee50a514eca841dfe9ce12dd157",
+    "size": 11435706,
+    "created_at": "2026-08-07T21:12:37Z",
+    "expires_at": "2026-08-14T21:12:36Z",
+    "manifest_sha256": "ae80b90501b41dc1b3e1b828e0faab94f04449fa710010e12a98220d68aada95",
+    "omitted_hidden_file": {
+      "path": "dist/.gitignore",
+      "sha256": "684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1"
+    }
+  },
+  "distributions": [
+    {
+      "path": "dist/bd_to_avp-0.3.0-py3-none-any.whl",
+      "filename": "bd_to_avp-0.3.0-py3-none-any.whl",
+      "packagetype": "bdist_wheel",
+      "sha256": "cf939a83680bf8df9af465cc337b2de84b79830aae91112f117618de8a7645b0",
+      "size": 5739045
+    },
+    {
+      "path": "dist/bd_to_avp-0.3.0.tar.gz",
+      "filename": "bd_to_avp-0.3.0.tar.gz",
+      "packagetype": "sdist",
+      "sha256": "c325c72b860353df8103e7838655b6f990abbc94c886a097cfd59c8aaea70ff1",
+      "size": 5722488
+    }
+  ],
+  "recovery": {
+    "trusted_workflow": ".github/workflows/briefcase.yml",
+    "environment": "pypi",
+    "requires_original_artifact_bytes": true,
+    "pypi_version_must_be_absent_before_publish": true,
+    "remove_after_verified_recovery": true
+  }
+}

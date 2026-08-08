@@ -14,6 +14,7 @@ from typing import Any
 from scripts.qualify_release_scope import (
     DEFAULT_POLICY_PATH,
     QualificationScopeError,
+    _matches_milestone_tier1_receipt,
     classify_release_scope,
     load_policy,
     load_qualification_overrides,
@@ -45,6 +46,39 @@ APP_TREE_SHA256 = "f" * 64
 class ReleaseQualificationScopeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.policy = load_policy(DEFAULT_POLICY_PATH)
+
+    def test_milestone_tier1_receipt_accepts_explicit_successful_recovery(self) -> None:
+        release_receipt = {"source_sha": CANDIDATE_SHA, "workflow": {"run_id": 12345}}
+        evidence_receipt = {
+            "source_sha": CANDIDATE_SHA,
+            "release_run_id": 12345,
+            "workflow_conclusion": "failure",
+            "recovery_workflow_run": {
+                "operation": "pypi_recovery",
+                "workflow_conclusion": "success",
+                "workflow_run_id": 54321,
+            },
+            "reference": "docs/release-evidence/v0.3.0/release-receipt.json",
+            "sha256": "a" * 64,
+        }
+
+        self.assertTrue(
+            _matches_milestone_tier1_receipt(
+                evidence_receipt,
+                release_receipt,
+                receipt_reference="docs/release-evidence/v0.3.0/release-receipt.json",
+                receipt_file_sha256="a" * 64,
+            )
+        )
+        evidence_receipt["recovery_workflow_run"]["operation"] = "unexpected"
+        self.assertFalse(
+            _matches_milestone_tier1_receipt(
+                evidence_receipt,
+                release_receipt,
+                receipt_reference="docs/release-evidence/v0.3.0/release-receipt.json",
+                receipt_file_sha256="a" * 64,
+            )
+        )
 
     def evidence(
         self,
