@@ -1012,6 +1012,7 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertNotIn("secrets.", str(workflow))
         self.assertIn("python -m scripts.release_evidence", str(prepare))
         self.assertIn("Stable PyPI recovery", str(prepare))
+        self.assertIn('"name": "Stable PyPI recovery"', (REPO_ROOT / "scripts/release_evidence.py").read_text())
         self.assertIn("scripts.stable_pypi_recovery verify-pypi", str(prepare))
         self.assertIn("--recovery-workflow-run", str(prepare))
         self.assertIn("release-receipt.json", str(prepare))

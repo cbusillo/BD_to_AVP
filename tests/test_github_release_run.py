@@ -23,6 +23,7 @@ from scripts.github_release_run import (
     build_approval_fingerprint,
     main,
     parse_args,
+    validate_run_identity,
     watch_release_run,
 )
 from scripts.release_workflow_policy import (
@@ -375,6 +376,14 @@ class GitHubReleaseRunWatchTests(unittest.TestCase):
         self.assertEqual(result, EXIT_SAFETY_ERROR)
         self.assertEqual(events[0]["event"], "safety_error")
         self.assertIn("identity mismatch", str(events[0]["message"]))
+
+    def test_stable_recovery_run_name_preserves_workflow_identity(self) -> None:
+        identity = validate_run_identity(
+            workflow_run(status="in_progress", name="Stable PyPI recovery"),
+            expectation(),
+        )
+
+        self.assertEqual(identity.workflow_id, WORKFLOW_ID)
 
     def test_wrong_workflow_path_is_a_safety_error(self) -> None:
         client = FakeGitHubAPI()
