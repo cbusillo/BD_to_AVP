@@ -23,6 +23,7 @@ TEST_SELECTOR = "BluRayToVisionProUITests/InstalledUIAcceptanceTests/testCandida
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MAX_RECEIPT_BYTES = 16 * 1024
+MAX_POLICY_BYTES = 256 * 1024
 
 
 class SignedArtifactReceiptError(RuntimeError):
@@ -97,13 +98,13 @@ def _sha256(value: object, description: str) -> str:
     return text
 
 
-def _load_json(path: Path, description: str) -> Mapping[str, Any]:
+def _load_json(path: Path, description: str, *, max_bytes: int = MAX_RECEIPT_BYTES) -> Mapping[str, Any]:
     try:
         content = path.read_bytes()
     except OSError as error:
         raise SignedArtifactReceiptError(f"Unable to read {description} at {path}: {error}") from error
-    if len(content) > MAX_RECEIPT_BYTES:
-        raise SignedArtifactReceiptError(f"{description.capitalize()} exceeds the {MAX_RECEIPT_BYTES}-byte limit.")
+    if len(content) > max_bytes:
+        raise SignedArtifactReceiptError(f"{description.capitalize()} exceeds the {max_bytes}-byte limit.")
     try:
         return _mapping(json.loads(content), description)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -398,6 +399,51 @@ def load_validated_receipt(
     return receipt
 
 
+def validate_receipt_files(
+    *,
+    receipt_path: Path,
+    release_receipt_path: Path,
+    policy_path: Path,
+    case_id: str,
+    workflow_run_id: int,
+    workflow_run_attempt: int,
+    release_receipt_asset_id: int,
+    release_receipt_file_sha256: str,
+    receipt_file_sha256: str,
+) -> Mapping[str, Any]:
+    expected_release_receipt_file_sha256 = _sha256(
+        release_receipt_file_sha256,
+        "expected release receipt file SHA-256",
+    )
+    try:
+        actual_release_receipt_file_sha256 = hashlib.sha256(release_receipt_path.read_bytes()).hexdigest()
+    except OSError as error:
+        raise SignedArtifactReceiptError(
+            f"Unable to read release receipt at {release_receipt_path}: {error}"
+        ) from error
+    if actual_release_receipt_file_sha256 != expected_release_receipt_file_sha256:
+        raise SignedArtifactReceiptError("Release receipt file digest does not match the expected immutable asset.")
+
+    policy_id = validate_policy_case(
+        _load_json(policy_path, "release qualification policy", max_bytes=MAX_POLICY_BYTES),
+        case_id,
+    )
+    expectation = release_expectation_from_receipt(
+        _load_json(release_receipt_path, "release receipt"),
+        policy_id=policy_id,
+        case_id=case_id,
+        workflow_run_id=workflow_run_id,
+        workflow_run_attempt=workflow_run_attempt,
+        release_receipt_asset_id=release_receipt_asset_id,
+        release_receipt_file_sha256=expected_release_receipt_file_sha256,
+    )
+    return load_validated_receipt(
+        receipt_path,
+        expectation,
+        expected_file_sha256=receipt_file_sha256,
+    )
+
+
 def write_receipt(receipt: Mapping[str, Any], output: Path) -> None:
     content = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode()
     if len(content) > MAX_RECEIPT_BYTES:
@@ -414,11 +460,51 @@ def main(argv: Sequence[str] | None = None) -> int:
     validate_policy_parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY_PATH)
     validate_policy_parser.add_argument("--case-id", default=PROFILE_CASE_ID)
 
+    validate_parser = subparsers.add_parser(
+        "validate",
+        help="Validate a signed artifact receipt against an exact checked release receipt.",
+    )
+    validate_parser.add_argument("--receipt", type=Path, required=True)
+    validate_parser.add_argument("--receipt-file-sha256", required=True)
+    validate_parser.add_argument("--release-receipt", type=Path, required=True)
+    validate_parser.add_argument("--release-receipt-asset-id", type=int, required=True)
+    validate_parser.add_argument("--release-receipt-file-sha256", required=True)
+    validate_parser.add_argument("--workflow-run-id", type=int, required=True)
+    validate_parser.add_argument("--workflow-run-attempt", type=int, required=True)
+    validate_parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY_PATH)
+    validate_parser.add_argument("--case-id", default=PROFILE_CASE_ID)
+
     args = parser.parse_args(argv)
     try:
         if args.command == "validate-policy":
-            policy_id = validate_policy_case(_load_json(args.policy, "release qualification policy"), args.case_id)
+            policy_id = validate_policy_case(
+                _load_json(args.policy, "release qualification policy", max_bytes=MAX_POLICY_BYTES),
+                args.case_id,
+            )
             print(json.dumps({"case_id": args.case_id, "policy_id": policy_id, "valid": True}, sort_keys=True))
+        elif args.command == "validate":
+            receipt = validate_receipt_files(
+                receipt_path=args.receipt,
+                release_receipt_path=args.release_receipt,
+                policy_path=args.policy,
+                case_id=args.case_id,
+                workflow_run_id=args.workflow_run_id,
+                workflow_run_attempt=args.workflow_run_attempt,
+                release_receipt_asset_id=args.release_receipt_asset_id,
+                release_receipt_file_sha256=args.release_receipt_file_sha256,
+                receipt_file_sha256=args.receipt_file_sha256,
+            )
+            print(
+                json.dumps(
+                    {
+                        "candidate_sha": receipt["candidate_sha"],
+                        "case_id": receipt["case_id"],
+                        "receipt_sha256": receipt["receipt_sha256"],
+                        "valid": True,
+                    },
+                    sort_keys=True,
+                )
+            )
     except SignedArtifactReceiptError as error:
         parser.error(str(error))
     return 0

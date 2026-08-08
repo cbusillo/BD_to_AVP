@@ -25,11 +25,18 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 30))
         openUpdateWindow(in: app)
 
-        let installButton = firstExistingElement(
-            in: app.buttons,
-            identifiers: ["Install and Relaunch", "Install Update", "Relaunch"],
-            timeout: 120
-        )
+        let updateWindow = app.windows.matching(identifier: "SUUpdateAlert").firstMatch
+        XCTAssertTrue(updateWindow.waitForExistence(timeout: 30))
+        let identifiedInstallButton = updateWindow.buttons
+            .matching(identifier: "SPUUserUpdateChoiceInstall")
+            .firstMatch
+        let installButton = identifiedInstallButton.waitForExistence(timeout: 30)
+            ? identifiedInstallButton
+            : firstExistingElement(
+                in: updateWindow.buttons,
+                identifiers: ["Install and Relaunch", "Install Update", "Relaunch"],
+                timeout: 90
+            )
         XCTAssertNotNil(installButton)
         XCTAssertTrue(
             waitForAccessibilityEvidence(context: context, timeout: 30),

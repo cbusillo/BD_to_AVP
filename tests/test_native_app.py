@@ -163,6 +163,16 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn('["-AppleInterfaceStyle", "Dark"]', source)
         self.assertNotIn('executableURL = URL(fileURLWithPath: "/usr/bin/defaults")', source)
 
+    def test_installed_ui_update_button_is_scoped_to_sparkle_window(self) -> None:
+        source = (MACOS_ROOT / "BluRayToVisionProUITests" / "InstalledUIAcceptanceTests.swift").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('app.windows.matching(identifier: "SUUpdateAlert").firstMatch', source)
+        self.assertIn('matching(identifier: "SPUUserUpdateChoiceInstall")', source)
+        self.assertIn("in: updateWindow.buttons", source)
+        self.assertNotIn("in: app.buttons,\n            identifiers:", source)
+
     def test_builds_packaged_mv_hevc_encoder_at_requested_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_path = Path(temporary_directory) / "tools" / MV_HEVC_ENCODER_NAME
