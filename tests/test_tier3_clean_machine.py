@@ -27,6 +27,7 @@ from scripts.tier3_clean_machine import (
     QualificationOperations,
     RELEASES_URL,
     ReleaseArtifact,
+    SPARKLE_INSTALL_ACTIONS,
     UpdateInteraction,
     file_sha256,
     parse_feed_candidate,
@@ -53,6 +54,7 @@ class FakeOperations(QualificationOperations):
         update_failure: bool = False,
         sentinel_failure: bool = False,
         tamper_marker: bool = False,
+        install_action: str = "Install and Relaunch",
     ) -> None:
         self.app_sources = app_sources
         self.feed_bytes = feed_bytes
@@ -60,6 +62,7 @@ class FakeOperations(QualificationOperations):
         self.update_failure = update_failure
         self.sentinel_failure = sentinel_failure
         self.tamper_marker = tamper_marker
+        self.install_action = install_action
         self.preferences: dict[str, str] = {}
         self.running = False
         self.candidate_source = app_sources[candidate_dmg.resolve()]
@@ -107,7 +110,7 @@ class FakeOperations(QualificationOperations):
         shutil.rmtree(app_path)
         shutil.copytree(self.candidate_source, app_path, symlinks=True)
         self.running = True
-        return UpdateInteraction(clicked_button="Install and Relaunch")
+        return UpdateInteraction(clicked_button=self.install_action)
 
     def collect_ui_evidence(
         self,
@@ -125,7 +128,7 @@ class FakeOperations(QualificationOperations):
             (output_directory / "updater-ui.json").write_text(
                 json.dumps(
                     {
-                        "install_action": "Install and Relaunch",
+                        "install_action": self.install_action,
                         "release_notes_url": release_notes_url,
                         "release_notes_url_observed": True,
                         "schema_version": 1,
@@ -654,6 +657,35 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 self.assertEqual(receipt["release_identity"]["source_sha"], CANDIDATE_SHA)
             self.assertFalse(operations.app_running())
 
+    def test_run_accepts_supported_sparkle_install_actions(self) -> None:
+        for install_action in SPARKLE_INSTALL_ACTIONS:
+            with self.subTest(install_action=install_action), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                config, operations = self.fixture(root)
+                operations.install_action = install_action
+
+                receipts = run_qualification(config, operations)
+
+                self.assertEqual(
+                    receipts["installed-ui-accessibility"]["result"]["status"],
+                    "passed",
+                )
+
+    def test_run_rejects_unknown_sparkle_install_action_with_observed_value(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.install_action = "Learn More…"
+
+            with self.assertRaisesRegex(
+                CleanMachineError,
+                "unsupported install action: 'Learn More…'",
+            ):
+                run_qualification(config, operations)
+
+            self.assertFalse(config.qualification_root.exists())
+            self.assertFalse(config.evidence_directory.exists())
+
     def test_run_cleans_workspace_after_update_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -795,6 +827,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
         self.assertIn('if selectedTitle is "Install Update"', script)
         self.assertIn('perform action "AXPress" of selectedButton', script)
         self.assertIn("set installStarted to true", script)
+        self.assertIn('"Install on Quit"', script)
 
     @unittest.skipUnless(platform.system() == "Darwin", "DMG mount integration requires macOS")
     def test_synthetic_dmg_mount_and_detach(self) -> None:

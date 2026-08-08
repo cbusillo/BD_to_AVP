@@ -57,6 +57,7 @@ UPDATE_TIMEOUT_SECONDS = 5 * 60
 UI_TEST_TIMEOUT_SECONDS = 15 * 60
 ACCESSIBILITY_COLLECTOR_FINISH_TIMEOUT_SECONDS = 15
 MAX_UI_SCREENSHOT_BYTES = 20 * 1024 * 1024
+SPARKLE_INSTALL_ACTIONS = ("Install Update", "Install and Relaunch", "Install on Quit")
 ROUTE_CHANNELS: dict[str, set[str | None]] = {
     "stable": {None},
     "rc": {None, "rc"},
@@ -1011,7 +1012,7 @@ end tell'''
                                 set selectedTitle to name of identifiedButton as text
                             end if
                         else
-                            repeat with buttonTitle in {"Install and Relaunch", "Install Update", "Relaunch"}
+                            repeat with buttonTitle in {"Install and Relaunch", "Install Update", "Install on Quit"}
                                 if exists button (buttonTitle as text) of targetWindow then
                                     set titledButton to button (buttonTitle as text) of targetWindow
                                     if enabled of titledButton then
@@ -1237,8 +1238,12 @@ def _normalize_installed_ui_evidence(
         "status": "passed",
     }:
         raise CleanMachineError("Installed UI updater evidence does not match the exact appcast candidate.")
-    if updater.get("install_action") not in {"Install and Relaunch", "Install Update", "Relaunch"}:
-        raise CleanMachineError("Installed UI updater evidence contains an unsupported install action.")
+    install_action = updater.get("install_action")
+    if install_action not in SPARKLE_INSTALL_ACTIONS:
+        raise CleanMachineError(
+            f"Installed UI updater evidence contains an unsupported install action: {install_action!r}; "
+            f"expected one of {list(SPARKLE_INSTALL_ACTIONS)!r}."
+        )
 
     return normalize_installed_ui_candidate_evidence(
         raw_directory,
