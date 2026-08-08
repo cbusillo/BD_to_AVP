@@ -1,8 +1,10 @@
 import hashlib
+import io
 import json
 import tempfile
 import unittest
 
+from contextlib import redirect_stdout
 from dataclasses import replace
 from pathlib import Path
 
@@ -14,8 +16,10 @@ from scripts.signed_artifact_receipt import (
     SignedArtifactReceiptExpectation,
     build_receipt as build_signed_receipt,
     load_validated_receipt,
+    main,
     release_expectation_from_receipt,
     validate_policy_case,
+    validate_receipt_files,
 )
 from scripts.qualify_release_scope import DEFAULT_POLICY_PATH
 
@@ -155,6 +159,79 @@ class SignedArtifactReceiptTests(unittest.TestCase):
         case["artifact_owned"] = False
         with self.assertRaises(SignedArtifactReceiptError):
             validate_policy_case(policy)
+
+    def test_cli_validates_receipt_against_exact_checked_release_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            release_receipt = build_receipt(release_facts())
+            release_receipt_path = root / "release-receipt.json"
+            release_receipt_path.write_text(
+                json.dumps(release_receipt, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            release_receipt_file_sha256 = hashlib.sha256(release_receipt_path.read_bytes()).hexdigest()
+            expectation = release_expectation_from_receipt(
+                release_receipt,
+                policy_id=validate_policy_case(json.loads(DEFAULT_POLICY_PATH.read_text(encoding="utf-8"))),
+                case_id=PROFILE_CASE_ID,
+                workflow_run_id=12345,
+                workflow_run_attempt=2,
+                release_receipt_asset_id=4,
+                release_receipt_file_sha256=release_receipt_file_sha256,
+            )
+            signed_receipt = build_signed_receipt(expectation=expectation, evidence=evidence())
+            signed_receipt_path = root / "signed-artifact-ui-receipt.json"
+            signed_receipt_path.write_text(
+                json.dumps(signed_receipt, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            signed_receipt_file_sha256 = hashlib.sha256(signed_receipt_path.read_bytes()).hexdigest()
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                result = main(
+                    [
+                        "validate",
+                        "--receipt",
+                        str(signed_receipt_path),
+                        "--receipt-file-sha256",
+                        signed_receipt_file_sha256,
+                        "--release-receipt",
+                        str(release_receipt_path),
+                        "--release-receipt-asset-id",
+                        "4",
+                        "--release-receipt-file-sha256",
+                        release_receipt_file_sha256,
+                        "--workflow-run-id",
+                        "12345",
+                        "--workflow-run-attempt",
+                        "2",
+                    ]
+                )
+
+            self.assertEqual(result, 0)
+            self.assertEqual(
+                json.loads(stdout.getvalue()),
+                {
+                    "candidate_sha": CANDIDATE_SHA,
+                    "case_id": PROFILE_CASE_ID,
+                    "receipt_sha256": signed_receipt["receipt_sha256"],
+                    "valid": True,
+                },
+            )
+
+            with self.assertRaisesRegex(SignedArtifactReceiptError, "immutable asset"):
+                validate_receipt_files(
+                    receipt_path=signed_receipt_path,
+                    release_receipt_path=release_receipt_path,
+                    policy_path=DEFAULT_POLICY_PATH,
+                    case_id=PROFILE_CASE_ID,
+                    workflow_run_id=12345,
+                    workflow_run_attempt=2,
+                    release_receipt_asset_id=4,
+                    release_receipt_file_sha256="9" * 64,
+                    receipt_file_sha256=signed_receipt_file_sha256,
+                )
 
 
 if __name__ == "__main__":
