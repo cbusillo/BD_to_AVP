@@ -52,8 +52,8 @@ BASE_FREE_SPACE_BYTES = 2 * 1024 * 1024 * 1024
 NETWORK_TIMEOUT_SECONDS = 30
 COMMAND_TIMEOUT_SECONDS = 60
 SMOKE_TIMEOUT_SECONDS = 15 * 60
-GUI_TIMEOUT_SECONDS = 270
-UPDATE_TIMEOUT_SECONDS = 15 * 60
+GUI_TIMEOUT_SECONDS = 20 * 60
+UPDATE_TIMEOUT_SECONDS = 5 * 60
 UI_TEST_TIMEOUT_SECONDS = 15 * 60
 ACCESSIBILITY_COLLECTOR_FINISH_TIMEOUT_SECONDS = 15
 MAX_UI_SCREENSHOT_BYTES = 20 * 1024 * 1024
@@ -986,7 +986,8 @@ end tell'''
             end repeat
             click menu item "Check for Updates…" of menu 1 of menu bar item "Help" of menu bar 1
         end tell
-        set updateDeadline to (current date) + 120
+        set installStarted to false
+        set updateDeadline to (current date) + (15 * 60)
         repeat
             if exists (first application process whose bundle identifier is targetBundleID) then
                 set targetProcess to first application process whose bundle identifier is targetBundleID
@@ -1002,25 +1003,42 @@ end tell'''
                                 end if
                             end try
                         end repeat
+                        set selectedButton to missing value
+                        set selectedTitle to ""
                         if identifiedButton is not missing value then
                             if enabled of identifiedButton then
-                                set clickedTitle to name of identifiedButton as text
-                                click identifiedButton
-                                return clickedTitle
+                                set selectedButton to identifiedButton
+                                set selectedTitle to name of identifiedButton as text
                             end if
                         else
                             repeat with buttonTitle in {"Install and Relaunch", "Install Update", "Relaunch"}
                                 if exists button (buttonTitle as text) of targetWindow then
                                     set titledButton to button (buttonTitle as text) of targetWindow
                                     if enabled of titledButton then
-                                        click titledButton
-                                        return buttonTitle as text
+                                        set selectedButton to titledButton
+                                        set selectedTitle to buttonTitle as text
+                                        exit repeat
                                     end if
                                 end if
                             end repeat
                         end if
+                        if selectedButton is not missing value then
+                            if selectedTitle is "Install Update" then
+                                if installStarted is false then
+                                    perform action "AXPress" of selectedButton
+                                    set installStarted to true
+                                    delay 1
+                                end if
+                                exit repeat
+                            else
+                                perform action "AXPress" of selectedButton
+                                return selectedTitle
+                            end if
+                        end if
                     end repeat
                 end tell
+            else if installStarted then
+                return "Install Update"
             end if
             if (current date) > updateDeadline then error "Timed out waiting for a Sparkle install button."
             delay 0.5
