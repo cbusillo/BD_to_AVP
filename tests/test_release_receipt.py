@@ -115,13 +115,15 @@ def artifact_expectation(path: Path) -> ArtifactReceiptExpectation:
 
 
 def qualification_for_receipt(receipt: dict[str, object]) -> dict[str, object]:
+    qualification = json.loads(
+        (REPO_ROOT / "docs/qualification/stable-signed-qualification-v1.json").read_text(encoding="utf-8")
+    )
     release = receipt["release"]
     versions = receipt["versions"]
     workflow = receipt["workflow"]
     artifacts = {artifact["kind"]: artifact for artifact in receipt["artifacts"]}
-    return {
-        "schema_version": 1,
-        "candidate": {
+    qualification["candidate"].update(
+        {
             "appcast_sha256": artifacts["appcast"]["sha256"],
             "build_version": versions["build"],
             "dmg_name": artifacts["dmg"]["name"],
@@ -134,8 +136,19 @@ def qualification_for_receipt(receipt: dict[str, object]) -> dict[str, object]:
             "signed_app_tree_sha256": receipt["signed_app_tree_sha256"],
             "source_git_sha": receipt["source_sha"],
             "workflow": workflow["name"],
-        },
-    }
+        }
+    )
+    return qualification
+
+
+def write_qualification_support_files(root: Path) -> None:
+    for name in (
+        "release-qualification-policy-v1.json",
+        "video-quality-route-table-v2.json",
+    ):
+        destination = root / "docs/qualification" / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((REPO_ROOT / "docs/qualification" / name).read_bytes())
 
 
 def minimal_reconcile_receipt() -> dict[str, object]:
@@ -285,23 +298,18 @@ class ReleaseReceiptTests(unittest.TestCase):
             root = Path(temporary_directory)
             qualification_directory = root / "docs" / "qualification"
             qualification_directory.mkdir(parents=True)
-            qualification = {
-                "schema_version": 1,
-                "candidate": {
-                    "build_version": "160",
-                    "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.3.dmg",
-                    "package_version": "0.3.0rc3",
-                    "public_version": "0.3.0-rc.3",
-                    "release_tag": "v0.3.0-rc.3",
-                    "source_git_sha": None,
-                    "dmg_sha256": None,
-                    "signed_app_tree_sha256": None,
-                    "release_run_id": None,
-                    "release_id": None,
-                    "appcast_sha256": None,
-                    "workflow": "Prerelease",
-                },
-            }
+            write_qualification_support_files(root)
+            receipt = build_receipt(receipt_facts())
+            qualification = qualification_for_receipt(receipt)
+            for field in (
+                "appcast_sha256",
+                "dmg_sha256",
+                "release_id",
+                "release_run_id",
+                "signed_app_tree_sha256",
+                "source_git_sha",
+            ):
+                qualification["candidate"][field] = None
             qualification_path = qualification_directory / "rc3-signed-qualification-v1.json"
             qualification_path.write_text(json.dumps(qualification), encoding="utf-8")
             cut_packet = root / "docs" / "0.3.0-rc.3-cut-packet.md"
@@ -313,7 +321,6 @@ class ReleaseReceiptTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            receipt = build_receipt(receipt_facts())
             receipt_path = root / "published-release-receipt.json"
             write_receipt(receipt, receipt_path)
             live_appcast = root / "live-appcast.xml"
@@ -419,6 +426,7 @@ class ReleaseReceiptTests(unittest.TestCase):
             qualification_path = root / "docs" / "qualification.json"
             cut_packet_path = root / "docs" / "cut-packet.md"
             qualification_path.parent.mkdir(parents=True)
+            write_qualification_support_files(root)
             qualification_path.write_text("{}\n", encoding="utf-8")
             cut_packet_path.write_text("# Cut packet\n", encoding="utf-8")
             receipt = {
@@ -480,7 +488,7 @@ class ReleaseReceiptTests(unittest.TestCase):
             validate_publication.assert_not_called()
             self.assertFalse((root / "docs").exists())
 
-    def test_reconcile_rejects_conflicting_immutable_qualification_snapshot(self) -> None:
+    def test_reconcile_reuses_immutable_snapshot_after_rolling_qualification_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             receipt = minimal_reconcile_receipt()
@@ -489,6 +497,7 @@ class ReleaseReceiptTests(unittest.TestCase):
             qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
             cut_packet_path = root / "docs/0.3.0-cut-packet.md"
             qualification_path.parent.mkdir(parents=True)
+            write_qualification_support_files(root)
             qualification = qualification_for_receipt(receipt)
             qualification_path.write_text(
                 json.dumps(qualification, indent=2, sort_keys=True) + "\n",
@@ -514,8 +523,10 @@ class ReleaseReceiptTests(unittest.TestCase):
                     json.dumps(qualification, indent=2, sort_keys=True) + "\n",
                     encoding="utf-8",
                 )
-                with self.assertRaisesRegex(ReleaseEvidenceError, "immutable release v0.3.0 conflicts"):
-                    reconcile(root, {}, {}, receipt, receipt_path, root / "appcast.xml")
+                second = reconcile(root, {}, {}, receipt, receipt_path, root / "appcast.xml")
+
+            snapshot = json.loads((root / second["qualification_record"]).read_text(encoding="utf-8"))
+            self.assertNotEqual(snapshot["status"], "later-rolling-state")
 
     def test_reconcile_rejects_qualification_snapshot_identity_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -526,6 +537,7 @@ class ReleaseReceiptTests(unittest.TestCase):
             qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
             cut_packet_path = root / "docs/0.3.0-cut-packet.md"
             qualification_path.parent.mkdir(parents=True)
+            write_qualification_support_files(root)
             qualification = qualification_for_receipt(receipt)
             qualification["candidate"]["source_git_sha"] = "0" * 40
             qualification_path.write_text(
@@ -561,6 +573,7 @@ class ReleaseReceiptTests(unittest.TestCase):
             qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
             cut_packet_path = root / "docs/0.3.0-cut-packet.md"
             qualification_path.parent.mkdir(parents=True)
+            write_qualification_support_files(root)
             cut_packet_path.write_text("# Cut packet\n", encoding="utf-8")
             receipt = minimal_reconcile_receipt()
             qualification_path.write_text(

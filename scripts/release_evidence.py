@@ -24,6 +24,48 @@ from scripts.release_receipt import (
 EVIDENCE_INDEX_PATH = Path("docs/qualification/release-evidence-v1.json")
 RELEASE_LEDGER_PATH = Path("docs/release-evidence/index-v1.json")
 QUALIFICATION_RECORD_NAME = "qualification-record.json"
+QUALIFICATION_RECORD_KEYS = {
+    "acceptance",
+    "candidate",
+    "execution_policy",
+    "immutable_history",
+    "issues",
+    "matrix",
+    "prior_evidence",
+    "qualification_id",
+    "qualification_policy",
+    "schema_version",
+    "status",
+}
+QUALIFICATION_CANDIDATE_KEYS = {
+    "appcast_sha256",
+    "build_version",
+    "dmg_name",
+    "dmg_sha256",
+    "mapping_version",
+    "package_version",
+    "public_version",
+    "release_id",
+    "release_run_id",
+    "release_tag",
+    "route_table_id",
+    "route_table_sha256",
+    "signed_app_tree_sha256",
+    "source_git_sha",
+    "worker_protocol_version",
+    "workflow",
+}
+PRIVATE_QUALIFICATION_FIELD_FRAGMENTS = {
+    "certificate",
+    "hostname",
+    "keychain",
+    "password",
+    "private",
+    "secret",
+    "serial",
+    "token",
+    "username",
+}
 
 
 class ReleaseEvidenceError(RuntimeError):
@@ -345,14 +387,89 @@ def validate_qualification_record_identity(
             )
 
 
+def _reject_private_qualification_fields(value: object, path: str = "qualification") -> None:
+    if isinstance(value, Mapping):
+        for raw_key, child in value.items():
+            if not isinstance(raw_key, str) or not raw_key:
+                raise ReleaseEvidenceError(f"{path} contains a non-string key.")
+            lowered = raw_key.lower()
+            if any(fragment in lowered for fragment in PRIVATE_QUALIFICATION_FIELD_FRAGMENTS):
+                raise ReleaseEvidenceError(f"{path}.{raw_key} is not a public-safe qualification field name.")
+            _reject_private_qualification_fields(child, f"{path}.{raw_key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _reject_private_qualification_fields(child, f"{path}[{index}]")
+    elif isinstance(value, str) and (value.startswith("/") or value.startswith("~/")):
+        raise ReleaseEvidenceError(f"{path} contains an absolute or home-relative path.")
+
+
+def validate_qualification_record(
+    qualification_path: Path,
+    receipt: Mapping[str, Any],
+    *,
+    policy_path: Path,
+    route_table_path: Path,
+) -> Mapping[str, Any]:
+    qualification = _load_json(qualification_path, "qualification record")
+    if set(qualification) != QUALIFICATION_RECORD_KEYS:
+        raise ReleaseEvidenceError("Qualification record must use the complete canonical schema.")
+    if qualification.get("schema_version") != 1:
+        raise ReleaseEvidenceError("Qualification record schema_version must be 1.")
+    _string(qualification.get("qualification_id"), "qualification ID")
+    _string(qualification.get("status"), "qualification status")
+    candidate = _mapping(qualification.get("candidate"), "qualification candidate")
+    if set(candidate) != QUALIFICATION_CANDIDATE_KEYS:
+        raise ReleaseEvidenceError("Qualification record candidate must use the complete canonical schema.")
+    _reject_private_qualification_fields(qualification)
+    validate_qualification_record_identity(qualification, receipt)
+
+    try:
+        from scripts.qualify_release_scope import (
+            QualificationScopeError,
+            load_policy,
+            load_qualification_overrides,
+        )
+
+        policy = load_policy(policy_path)
+        load_qualification_overrides(qualification_path, policy)
+    except QualificationScopeError as error:
+        raise ReleaseEvidenceError(f"Qualification record is invalid: {error}") from error
+
+    qualification_policy = _mapping(qualification.get("qualification_policy"), "qualification policy binding")
+    if set(qualification_policy) != {"id", "path", "scope_command"}:
+        raise ReleaseEvidenceError("Qualification policy binding must use the canonical schema.")
+    if qualification_policy.get("id") != policy.get("policy_id"):
+        raise ReleaseEvidenceError("Qualification policy binding conflicts with the validated policy.")
+    policy_reference = _string(qualification_policy.get("path"), "qualification policy path")
+    if policy_reference != "docs/qualification/release-qualification-policy-v1.json":
+        raise ReleaseEvidenceError("Qualification policy path must use the canonical repository path.")
+    _string(qualification_policy.get("scope_command"), "qualification scope command")
+
+    route_table = _load_json(route_table_path, "qualification route table")
+    route_table_digest = hashlib.sha256(route_table_path.read_bytes()).hexdigest()
+    if candidate.get("route_table_id") != route_table.get("route_table_id"):
+        raise ReleaseEvidenceError("Qualification candidate route_table_id conflicts with the route table.")
+    if candidate.get("route_table_sha256") != route_table_digest:
+        raise ReleaseEvidenceError("Qualification candidate route_table_sha256 conflicts with the route table.")
+    if candidate.get("mapping_version") != route_table.get("mapping_version"):
+        raise ReleaseEvidenceError("Qualification candidate mapping_version conflicts with the route table.")
+    _integer(candidate.get("worker_protocol_version"), "qualification worker protocol version")
+    return qualification
+
+
 def _snapshot_qualification(
     repo_root: Path,
     release_tag: str,
     qualification_path: Path,
     receipt: Mapping[str, Any],
 ) -> Path:
+    validate_qualification_record(
+        qualification_path,
+        receipt,
+        policy_path=repo_root / "docs/qualification/release-qualification-policy-v1.json",
+        route_table_path=repo_root / "docs/qualification/video-quality-route-table-v2.json",
+    )
     qualification = _load_json(qualification_path, "signed qualification")
-    validate_qualification_record_identity(qualification, receipt)
     snapshot_path = repo_root / "docs" / "release-evidence" / release_tag / QUALIFICATION_RECORD_NAME
     content = (json.dumps(qualification, indent=2, sort_keys=True) + "\n").encode()
     if snapshot_path.exists():
@@ -549,14 +666,22 @@ def reconcile(
     evidence["receipts"] = receipts
     _write_json(evidence_path, evidence)
 
-    qualification_path = _update_qualification(repo_root, receipt)
-    qualification_record_path = _snapshot_qualification(repo_root, tag, qualification_path, receipt)
+    qualification_record_path = repo_root / "docs" / "release-evidence" / tag / QUALIFICATION_RECORD_NAME
+    if qualification_record_path.exists():
+        qualification_path = qualification_record_path
+        validate_qualification_record_identity(
+            _load_json(qualification_record_path, "qualification record"),
+            receipt,
+        )
+    else:
+        qualification_path = _update_qualification(repo_root, receipt)
+        qualification_record_path = _snapshot_qualification(repo_root, tag, qualification_path, receipt)
     cut_packet_path = _update_cut_packet(repo_root, receipt, publication)
     outputs = {
         "cut_packet": cut_packet_path.relative_to(repo_root).as_posix(),
         "evidence_index": EVIDENCE_INDEX_PATH.as_posix(),
         "publication_record": publication_path.relative_to(repo_root).as_posix(),
-        "qualification": qualification_path.relative_to(repo_root).as_posix(),
+        "qualification": qualification_record_path.relative_to(repo_root).as_posix(),
         "qualification_record": qualification_record_path.relative_to(repo_root).as_posix(),
         "receipt": reference,
         "receipt_file_sha256": publication["receipt_file_sha256"],

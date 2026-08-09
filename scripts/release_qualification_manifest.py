@@ -19,7 +19,7 @@ from scripts.release_evidence import (
     QUALIFICATION_RECORD_NAME,
     ReleaseEvidenceError,
     effective_successful_workflow_run_id,
-    validate_qualification_record_identity,
+    validate_qualification_record,
 )
 from scripts.release_receipt import ReleaseReceiptError, load_validated_checked_receipt
 from scripts.signed_artifact_receipt import (
@@ -534,9 +534,27 @@ def build_manifest(
         policy_relative,
         "release qualification policy",
     )
-    qualification = _load_json(qualification_path, "qualification record")
     try:
-        validate_qualification_record_identity(qualification, receipt)
+        with (
+            _revision_file(
+                repo_root,
+                runner_sha,
+                policy_relative,
+                "release qualification policy",
+            ) as runner_policy_path,
+            _revision_file(
+                repo_root,
+                runner_sha,
+                route_table_relative,
+                "video route table",
+            ) as runner_route_table_path,
+        ):
+            validate_qualification_record(
+                qualification_path,
+                receipt,
+                policy_path=runner_policy_path,
+                route_table_path=runner_route_table_path,
+            )
     except ReleaseEvidenceError as error:
         raise ReleaseQualificationManifestError(str(error)) from error
     publication = _publication_record(repo_root, release_tag)
@@ -794,9 +812,27 @@ def _validate_manifest(
     if receipt.get("source_sha") != source_sha or receipt_release.get("id") != release.get("id"):
         raise ReleaseQualificationManifestError("Manifest release identity conflicts with checked receipt.")
     receipt_versions = _mapping(receipt.get("versions"), "checked receipt versions")
-    qualification = _load_json(qualification_path, "qualification record")
     try:
-        validate_qualification_record_identity(qualification, receipt)
+        with (
+            _revision_file(
+                repo_root,
+                runner_sha,
+                path_values["policy"],
+                "release qualification policy",
+            ) as runner_policy_path,
+            _revision_file(
+                repo_root,
+                runner_sha,
+                path_values["route_table"],
+                "video route table",
+            ) as runner_route_table_path,
+        ):
+            validate_qualification_record(
+                qualification_path,
+                receipt,
+                policy_path=runner_policy_path,
+                route_table_path=runner_route_table_path,
+            )
     except ReleaseEvidenceError as error:
         raise ReleaseQualificationManifestError(str(error)) from error
     expected_candidate = {

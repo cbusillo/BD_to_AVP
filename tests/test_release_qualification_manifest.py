@@ -40,6 +40,7 @@ APP_TREE_SHA256 = "f" * 64
 PRIOR_DMG_SHA256 = "1" * 64
 PRIOR_CHECKSUM_SHA256 = "2" * 64
 PRIOR_APPCAST_SHA256 = "3" * 64
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def sha256(path: Path) -> str:
@@ -124,33 +125,12 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
         controller_path = root / ".github/workflows/milestone-qualification.yml"
         for path in (policy_path, evidence_path, qualification_path, route_table_path, controller_path):
             path.parent.mkdir(parents=True, exist_ok=True)
-        policy = {
-            "schema_version": 1,
-            "policy_id": "release-qualification-policy-v1",
-            "result_states": ["covered", "carry", "retest", "external"],
-            "tiers": {},
-            "contracts": {"release-engine": [], "profile-storage": []},
-            "cases": [
-                {
-                    "id": "release-workflow-identity",
-                    "tier": 1,
-                    "blocking_phase": "publication",
-                    "invalidates_on": {"paths": [], "contracts": ["release-engine"]},
-                    "allowed_evidence_sources": ["release_run_receipt"],
-                },
-                {
-                    "id": PROFILE_CASE_ID,
-                    "tier": 2,
-                    "blocking_phase": "publication",
-                    "artifact_owned": True,
-                    "invalidates_on": {"paths": [], "contracts": ["profile-storage"]},
-                    "allowed_evidence_sources": ["signed_artifact_receipt"],
-                },
-            ],
-        }
+        policy = json.loads(
+            (REPO_ROOT / "docs/qualification/release-qualification-policy-v1.json").read_text(encoding="utf-8")
+        )
         policy_path.write_text(json.dumps(policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         evidence_path.write_text('{"schema_version": 1, "receipts": []}\n', encoding="utf-8")
-        route_table_path.write_text('{"schema_version": 1, "routes": []}\n', encoding="utf-8")
+        route_table_path.write_bytes((REPO_ROOT / "docs/qualification/video-quality-route-table-v2.json").read_bytes())
         controller_path.write_text("name: Milestone Qualification\n", encoding="utf-8")
 
         candidate_receipt_path = root / "docs/release-evidence/v0.3.0/release-receipt.json"
@@ -165,9 +145,11 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
         candidate_versions = candidate_receipt["versions"]
         candidate_workflow = candidate_receipt["workflow"]
         candidate_artifacts = {artifact["kind"]: artifact for artifact in candidate_receipt["artifacts"]}
-        qualification = {
-            "schema_version": 1,
-            "candidate": {
+        qualification = json.loads(
+            (REPO_ROOT / "docs/qualification/stable-signed-qualification-v1.json").read_text(encoding="utf-8")
+        )
+        qualification["candidate"].update(
+            {
                 "appcast_sha256": candidate_artifacts["appcast"]["sha256"],
                 "build_version": candidate_versions["build"],
                 "dmg_name": candidate_artifacts["dmg"]["name"],
@@ -180,8 +162,8 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
                 "signed_app_tree_sha256": candidate_receipt["signed_app_tree_sha256"],
                 "source_git_sha": candidate_receipt["source_sha"],
                 "workflow": candidate_workflow["name"],
-            },
-        }
+            }
+        )
         qualification_content = json.dumps(qualification, indent=2, sort_keys=True) + "\n"
         qualification_path.write_text(qualification_content, encoding="utf-8")
         qualification_record_path = root / "docs/release-evidence/v0.3.0/qualification-record.json"

@@ -32,6 +32,7 @@ DMG_SHA256 = "a" * 64
 CHECKSUM_SHA256 = "b" * 64
 APPCAST_SHA256 = "c" * 64
 APP_TREE_SHA256 = "d" * 64
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseMilestoneContextTests(unittest.TestCase):
@@ -275,6 +276,45 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            policy_path.write_bytes(
+                (REPO_ROOT / "docs/qualification/release-qualification-policy-v1.json").read_bytes()
+            )
+            route_table_path = root / "docs/qualification/video-quality-route-table-v2.json"
+            route_table_path.write_bytes(
+                (REPO_ROOT / "docs/qualification/video-quality-route-table-v2.json").read_bytes()
+            )
+            receipt_document = json.loads(receipt_path.read_text(encoding="utf-8"))
+            artifacts = {item["kind"]: item for item in receipt_document["artifacts"]}
+            qualification = json.loads(
+                (REPO_ROOT / "docs/qualification/stable-signed-qualification-v1.json").read_text(encoding="utf-8")
+            )
+            qualification["candidate"].update(
+                {
+                    "appcast_sha256": artifacts["appcast"]["sha256"],
+                    "build_version": receipt_document["versions"]["build"],
+                    "dmg_name": artifacts["dmg"]["name"],
+                    "dmg_sha256": artifacts["dmg"]["sha256"],
+                    "package_version": receipt_document["versions"]["package"],
+                    "public_version": receipt_document["versions"]["public"],
+                    "release_id": receipt_document["release"]["id"],
+                    "release_run_id": receipt_document["workflow"]["run_id"],
+                    "release_tag": receipt_document["release"]["tag"],
+                    "signed_app_tree_sha256": receipt_document["signed_app_tree_sha256"],
+                    "source_git_sha": receipt_document["source_sha"],
+                    "workflow": receipt_document["workflow"]["name"],
+                }
+            )
+            qualification_content = json.dumps(qualification, indent=2, sort_keys=True) + "\n"
+            qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
+            qualification_record_path = root / "docs/release-evidence/v0.3.0/qualification-record.json"
+            qualification_path.write_text(qualification_content, encoding="utf-8")
+            qualification_record_path.write_text(qualification_content, encoding="utf-8")
+            subprocess.run(
+                ["git", "add", policy_path, route_table_path, qualification_path, qualification_record_path],
+                cwd=root,
+                check=True,
+            )
+            subprocess.run(["git", "commit", "-qm", "manifest inputs"], cwd=root, check=True)
             prior_path = root / "docs/release-evidence/v0.2.143/release-receipt.json"
             prior_path.parent.mkdir(parents=True)
             prior = build_receipt(
