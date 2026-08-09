@@ -729,6 +729,12 @@ def render_policy_markdown(report: Mapping[str, object]) -> str:
                 ),
                 "",
                 (
+                    "When transcoding, a missing layout is inferred only for unambiguous one-channel (`mono`) and "
+                    "two-channel (`stereo`) streams. Missing multichannel layouts remain fail-closed. Sources with "
+                    "no audio streams remain video-only rather than receiving fabricated audio."
+                ),
+                "",
+                (
                     "The production runtime imports this same policy for Automatic and Convert-to-AAC processing. "
                     "Signed-package and physical Vision Pro validation remains in #382."
                 ),
