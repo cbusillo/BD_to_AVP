@@ -25,6 +25,16 @@
       "source_sha": "0b06582a83a45bb38d851e62ccf38cd148c7bb95",
       "tag": "v0.3.0-rc.3",
       "workflow_run_id": 30990186667
+    },
+    {
+      "publication_record": "docs/release-evidence/v0.3.1/publication-record.json",
+      "published_at": "2026-08-09T17:44:19Z",
+      "receipt": "docs/release-evidence/v0.3.1/release-receipt.json",
+      "receipt_file_sha256": "47ae149d8c6a04085821c9f13dbbd112990902602876895a561530ca83ae2c88",
+      "release_id": 367541840,
+      "source_sha": "22982d5037e3b2bd03bbc9fa25332be2c8b04c97",
+      "tag": "v0.3.1",
+      "workflow_run_id": 31325968679
     }
   ],
   "schema_version": 1
