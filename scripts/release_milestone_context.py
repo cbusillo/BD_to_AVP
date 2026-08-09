@@ -138,10 +138,11 @@ def discover_milestone_receipt(
     evidence_index_mutation = EVIDENCE_INDEX_PATH in changed_paths
     qualification_mutation = qualification_relative in changed_paths
     if not receipt_matches:
-        if checked_release_mutation or evidence_index_mutation:
+        if checked_release_mutation:
             raise ReleaseMilestoneContextError(
                 "Release evidence changes require exactly one checked release receipt in the pull-request diff."
             )
+        unbound_candidate = False
         if qualification_mutation:
             qualification = _load_json(repo_root / qualification_relative, "configured qualification record")
             candidate = _mapping(qualification.get("candidate"), "configured qualification candidate")
@@ -157,6 +158,11 @@ def discover_milestone_receipt(
                 raise ReleaseMilestoneContextError(
                     "Published qualification record changes require the checked release receipt and milestone gate."
                 )
+            unbound_candidate = True
+        if evidence_index_mutation and not unbound_candidate:
+            raise ReleaseMilestoneContextError(
+                "Release evidence changes require exactly one checked release receipt in the pull-request diff."
+            )
         return None
     if len(receipt_matches) != 1:
         raise ReleaseMilestoneContextError(
