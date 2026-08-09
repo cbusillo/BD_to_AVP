@@ -179,14 +179,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("Build `162`", cut_packet)
         self.assertIn("#520", cut_packet)
         self.assertIn("Privacy rules version `5`", cut_packet)
-        self.assertTrue(
-            any(
-                state in cut_packet
-                for state in (
-                    "Prepared metadata; publication pending.",
-                )
-            )
-        )
+        self.assertTrue(any(state in cut_packet for state in ("Prepared metadata; publication pending.",)))
         self.assertIn("post-publication", cut_packet)
         self.assertIn("PyPI", cut_packet)
         self.assertIn("Homebrew", cut_packet)
