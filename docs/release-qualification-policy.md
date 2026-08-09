@@ -190,6 +190,20 @@ boundary while reporting nonblocking operational evidence separately.
 None of these checks receives signing, notarization, PyPI, Sparkle, or Pages
 secrets.
 
+Pull-request CI distinguishes release preparation evidence from checked
+post-publication evidence. A preparation PR may update the configured evidence
+index without a checked release receipt only when the same diff updates the
+configured qualification record and every immutable candidate field remains
+present with an explicit JSON `null`. The candidate must advance from the bound
+published Stable identity to a newer derived Stable version and global build,
+and the evidence index may only
+append receipts without modifying or deleting accepted history. Any mutation
+under `docs/release-evidence/`, any evidence-index change without that validated
+preparation transition, or any qualification record carrying release IDs, run
+IDs, source SHA, artifact digests, or appcast digest still requires exactly one
+canonical checked release receipt on the idempotent
+`automation/release-evidence-<tag>` branch.
+
 **Early gate (`qualify-preparation`)** runs after `prepare` and before `package`
 (the macOS signing job). It checks the `preparation` phase using the exact
 `github.sha`, the committed Sparkle channel as the release stage, the checked

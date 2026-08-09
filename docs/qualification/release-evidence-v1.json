@@ -267,6 +267,16 @@
       "source": "tier3_automation_receipt",
       "source_sha": "a9abbcf6cd1281d2c701e0c050b68fdafc5b9522",
       "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-09T14:07:15Z",
+      "case_id": "network-generated-final-output",
+      "receipt_id": "v0.3.1:network-generated-final-output:95e374e",
+      "reference": "docs/qualification/v0.3.1-mkv-audio-handling-v1.json",
+      "sha256": "222bcf0fef2cb0825641e4c60ff94930239b0974ff1ac728154ad911bc9c4665",
+      "source": "signed_artifact_receipt",
+      "source_sha": "95e374ed0a9aee092713cb76e323a54c1f552aca",
+      "status": "accepted"
     }
   ],
   "schema_version": 1

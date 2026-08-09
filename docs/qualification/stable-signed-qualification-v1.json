@@ -16,7 +16,7 @@
     "passed": false,
     "preregistered_matrix_case_ids": [
       "release-workflow-identity",
-      "updater-route-rc3-to-stable",
+      "updater-route-v0.3.0-to-v0.3.1",
       "native-sparkle-notes-stable",
       "profile-save-action-accessibility",
       "signed-packaged-route-parity",
@@ -55,20 +55,20 @@
     ]
   },
   "candidate": {
-    "appcast_sha256": "d1682c4b79c42ec0a24b98c74a03dcde3e00186d4ccbacfad0c3e0a91362c7b2",
-    "build_version": "161",
-    "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.0.dmg",
-    "dmg_sha256": "12fec196fea9faec1519a4e9f51133a9dd7a4690dff5ea342b7bae4ab2643ef1",
+    "appcast_sha256": null,
+    "build_version": "162",
+    "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.1.dmg",
+    "dmg_sha256": null,
     "mapping_version": 2,
-    "package_version": "0.3.0",
-    "public_version": "0.3.0",
-    "release_id": 367020071,
-    "release_run_id": 31219050718,
-    "release_tag": "v0.3.0",
+    "package_version": "0.3.1",
+    "public_version": "0.3.1",
+    "release_id": null,
+    "release_run_id": null,
+    "release_tag": "v0.3.1",
     "route_table_id": "route-relative-video-quality-v2",
     "route_table_sha256": "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214",
-    "signed_app_tree_sha256": "f0980d2a4206905cd56405a82c8e473a8342a819c78129f1c387d1273a4aea85",
-    "source_git_sha": "a9abbcf6cd1281d2c701e0c050b68fdafc5b9522",
+    "signed_app_tree_sha256": null,
+    "source_git_sha": null,
     "worker_protocol_version": 12,
     "workflow": "Stable"
   },
@@ -91,11 +91,17 @@
       154
     ],
     "previous_stable": {
-      "build_version": "146",
+      "appcast_sha256": "d1682c4b79c42ec0a24b98c74a03dcde3e00186d4ccbacfad0c3e0a91362c7b2",
+      "build_version": "161",
+      "dmg_sha256": "12fec196fea9faec1519a4e9f51133a9dd7a4690dff5ea342b7bae4ab2643ef1",
       "must_not_rebuild": true,
-      "package_version": "0.2.143",
-      "release_tag": "v0.2.143",
-      "source_git_sha": "03fe03ab58abf85b74c32f6b3b7387d9ad6f1941"
+      "package_version": "0.3.0",
+      "published_at": "2026-08-07T21:42:28Z",
+      "release_id": 367020071,
+      "release_run_id": 31219050718,
+      "release_tag": "v0.3.0",
+      "signed_app_tree_sha256": "f0980d2a4206905cd56405a82c8e473a8342a819c78129f1c387d1273a4aea85",
+      "source_git_sha": "a9abbcf6cd1281d2c701e0c050b68fdafc5b9522"
     },
     "rc3": {
       "appcast_sha256": "6404424910172cfccc9f23472e8748eda7bfba5b1f07d373e69cdb9b0679e9ed",
@@ -112,9 +118,8 @@
     }
   },
   "issues": [
-    "#489",
-    "#516",
-    "#518"
+    "#520",
+    "#502"
   ],
   "matrix": [
     {
@@ -124,7 +129,7 @@
       "policy_case_id": "release-workflow-identity"
     },
     {
-      "id": "updater-route-rc3-to-stable",
+      "id": "updater-route-v0.3.0-to-v0.3.1",
       "migration": "fresh_retest",
       "phase": "milestone",
       "policy_case_id": "sparkle-update-route"
@@ -240,11 +245,11 @@
   ],
   "prior_evidence": [
     {
-      "id": "rc3-signed-qualification-v1",
-      "scope": "immutable qualified RC3 release identity and signed-artifact inputs"
+      "id": "v0.3.0-release-evidence-v1",
+      "scope": "immutable qualified Stable 0.3.0 release identity, signed-artifact inputs, and publication receipts"
     },
     {
-      "id": "v0.2.143-appcast",
+      "id": "v0.3.0-appcast",
       "scope": "previous Stable update-route and release-note base"
     }
   ],

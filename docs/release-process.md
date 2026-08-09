@@ -17,7 +17,11 @@ records historical preparation, [the Beta 12 cut packet](0.3.0-beta.12-cut-packe
 records abandoned Beta metadata, [the RC 1 cut packet](0.3.0-rc.1-cut-packet.md)
 records immutable publication, [the RC 2 cut packet](0.3.0-rc.2-cut-packet.md)
 records immutable publication, and [the RC 3 cut packet](0.3.0-rc.3-cut-packet.md)
-records immutable publication plus its targeted qualification result.
+records immutable publication plus its targeted qualification result. Stable
+`0.3.0` build `161` is published and immutable; its publication and bounded
+PyPI recovery are recorded in [the Stable cut packet](0.3.0-cut-packet.md).
+The next prepared identity is Stable `0.3.1` build `162`, tracked in
+[the 0.3.1 cut packet](0.3.1-cut-packet.md) and issue #520.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease

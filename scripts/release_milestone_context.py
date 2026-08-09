@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from scripts.release import ReleaseError, parse_release_version
+from scripts.release import ReleaseError, parse_build_version, parse_release_version
 from scripts.release_evidence import effective_successful_workflow_run_id
 from scripts.release_receipt import ReleaseReceiptError, load_validated_checked_receipt
 
@@ -24,6 +24,14 @@ RECEIPT_PATH_PATTERN = re.compile(r"^docs/release-evidence/(v[^/]+)/release-rece
 RECOVERY_AUTHORIZATION_PATHS = frozenset({"docs/release-evidence/v0.3.0-pypi-recovery.json"})
 EXPECTED_REPOSITORY = "cbusillo/BD_to_AVP"
 EXPECTED_BASE_BRANCH = "main"
+IMMUTABLE_CANDIDATE_FIELDS = (
+    "source_git_sha",
+    "release_run_id",
+    "release_id",
+    "dmg_sha256",
+    "appcast_sha256",
+    "signed_app_tree_sha256",
+)
 
 
 class ReleaseMilestoneContextError(RuntimeError):
@@ -61,6 +69,90 @@ def _load_json(path: Path, description: str) -> Mapping[str, Any]:
         raise ReleaseMilestoneContextError(f"Unable to read {description} at {path}: {error}") from error
     except json.JSONDecodeError as error:
         raise ReleaseMilestoneContextError(f"Invalid JSON in {description} at {path}: {error}") from error
+
+
+def _load_json_at_revision(
+    repo_root: Path,
+    revision: str,
+    relative_path: str,
+    description: str,
+) -> Mapping[str, Any]:
+    result = subprocess.run(
+        ["git", "show", f"{revision}:{relative_path}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise ReleaseMilestoneContextError(f"Unable to read {description} from the pull-request base.")
+    try:
+        return _mapping(json.loads(result.stdout), description)
+    except json.JSONDecodeError as error:
+        raise ReleaseMilestoneContextError(f"Invalid JSON in base {description}: {error}") from error
+
+
+def _sequence(value: object, description: str) -> Sequence[Any]:
+    if not isinstance(value, list):
+        raise ReleaseMilestoneContextError(f"{description} must be a JSON array.")
+    return cast(Sequence[Any], value)
+
+
+def _validate_prepublication_candidate_transition(
+    repo_root: Path,
+    *,
+    base_sha: str,
+    qualification_relative: str,
+    candidate: Mapping[str, Any],
+) -> None:
+    base_qualification = _load_json_at_revision(
+        repo_root,
+        base_sha,
+        qualification_relative,
+        "base qualification record",
+    )
+    base_candidate = _mapping(base_qualification.get("candidate"), "base qualification candidate")
+    if any(field not in base_candidate or base_candidate[field] is None for field in IMMUTABLE_CANDIDATE_FIELDS):
+        raise ReleaseMilestoneContextError(
+            "Prepublication qualification must advance from a bound published candidate."
+        )
+    try:
+        base_version = parse_release_version(cast(str, base_candidate.get("package_version")))
+        next_version = parse_release_version(cast(str, candidate.get("package_version")))
+        base_build = parse_build_version(cast(str, base_candidate.get("build_version")))
+        next_build = parse_build_version(cast(str, candidate.get("build_version")))
+    except (ReleaseError, TypeError) as error:
+        raise ReleaseMilestoneContextError(f"Prepublication qualification identity is invalid: {error}") from error
+    if next_version.stage != "stable" or next_version.order_key <= base_version.order_key or next_build <= base_build:
+        raise ReleaseMilestoneContextError(
+            "Prepublication qualification must advance to a newer Stable version and global build."
+        )
+    expected_identity = {
+        "package_version": next_version.text,
+        "public_version": next_version.public_version,
+        "build_version": str(next_build),
+        "release_tag": next_version.release_tag,
+        "dmg_name": f"3D-Blu-ray-to-Vision-Pro-{next_version.public_version}.dmg",
+        "workflow": "Stable",
+    }
+    for field, expected in expected_identity.items():
+        if candidate.get(field) != expected:
+            raise ReleaseMilestoneContextError(
+                f"Prepublication qualification candidate.{field} does not match the derived Stable identity."
+            )
+
+
+def _validate_append_only_evidence_index(repo_root: Path, *, base_sha: str) -> None:
+    base_evidence = _load_json_at_revision(repo_root, base_sha, EVIDENCE_INDEX_PATH, "base qualification evidence")
+    head_evidence = _load_json(repo_root / EVIDENCE_INDEX_PATH, "qualification evidence")
+    if base_evidence.get("schema_version") != 1 or head_evidence.get("schema_version") != 1:
+        raise ReleaseMilestoneContextError("Qualification evidence schema_version must remain 1.")
+    base_receipts = list(_sequence(base_evidence.get("receipts"), "base qualification receipts"))
+    head_receipts = list(_sequence(head_evidence.get("receipts"), "qualification receipts"))
+    if len(head_receipts) <= len(base_receipts) or head_receipts[: len(base_receipts)] != base_receipts:
+        raise ReleaseMilestoneContextError(
+            "Prepublication qualification evidence may only append receipts without changing accepted history."
+        )
 
 
 def _repository_path(repo_root: Path, value: object, description: str) -> tuple[Path, str]:
@@ -138,25 +230,36 @@ def discover_milestone_receipt(
     evidence_index_mutation = EVIDENCE_INDEX_PATH in changed_paths
     qualification_mutation = qualification_relative in changed_paths
     if not receipt_matches:
-        if checked_release_mutation or evidence_index_mutation:
+        if checked_release_mutation:
             raise ReleaseMilestoneContextError(
                 "Release evidence changes require exactly one checked release receipt in the pull-request diff."
             )
+        unbound_candidate = False
         if qualification_mutation:
             qualification = _load_json(repo_root / qualification_relative, "configured qualification record")
             candidate = _mapping(qualification.get("candidate"), "configured qualification candidate")
-            immutable_fields = (
-                "source_git_sha",
-                "release_run_id",
-                "release_id",
-                "dmg_sha256",
-                "appcast_sha256",
-                "signed_app_tree_sha256",
-            )
-            if any(candidate.get(field) is not None for field in immutable_fields):
+            missing_immutable_fields = [field for field in IMMUTABLE_CANDIDATE_FIELDS if field not in candidate]
+            if missing_immutable_fields:
+                raise ReleaseMilestoneContextError(
+                    "Prepublication qualification must explicitly include every immutable candidate field as null."
+                )
+            if any(candidate[field] is not None for field in IMMUTABLE_CANDIDATE_FIELDS):
                 raise ReleaseMilestoneContextError(
                     "Published qualification record changes require the checked release receipt and milestone gate."
                 )
+            _validate_prepublication_candidate_transition(
+                repo_root,
+                base_sha=base_sha,
+                qualification_relative=qualification_relative,
+                candidate=candidate,
+            )
+            unbound_candidate = True
+        if evidence_index_mutation and not unbound_candidate:
+            raise ReleaseMilestoneContextError(
+                "Release evidence changes require exactly one checked release receipt in the pull-request diff."
+            )
+        if evidence_index_mutation:
+            _validate_append_only_evidence_index(repo_root, base_sha=base_sha)
         return None
     if len(receipt_matches) != 1:
         raise ReleaseMilestoneContextError(

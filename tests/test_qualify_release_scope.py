@@ -942,7 +942,7 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
             release_stage="rc",
             workflow_phase="milestone",
             milestone_receipt_path=REPO_ROOT / "docs/release-evidence/v0.3.0-rc.3/release-receipt.json",
-            as_of=date(2026, 8, 8),
+            as_of=date(2026, 8, 9),
         )
 
         result = self.result_for(report, "native-sparkle-release-notes")
@@ -1195,7 +1195,7 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
             repo=REPO_ROOT,
             workflow_phase="milestone",
             milestone_receipt_path=REPO_ROOT / "docs/release-evidence/v0.3.0-rc.3/release-receipt.json",
-            as_of=date(2026, 8, 8),
+            as_of=date(2026, 8, 9),
         )
 
         self.assertEqual(self.result_for(report, "sparkle-update-route")["status"], "covered")

@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "qualification_id": "v0.3.1-mkv-audio-handling-v1",
+  "recorded_at": "2026-08-09T14:07:15Z",
+  "source": {
+    "build_version": "162",
+    "package_version": "0.3.1",
+    "public_version": "0.3.1",
+    "release_tag": "v0.3.1",
+    "source_sha": "95e374ed0a9aee092713cb76e323a54c1f552aca"
+  },
+  "packaged_candidate": {
+    "app_tree_sha256": "919eef671195acf59620a67e1a4fdf5520804083225aa69c9179044c06ac3b7f",
+    "architecture": "arm64",
+    "bundle_identifier": "com.shinycomputers.bd-to-avp",
+    "codesign_verification": "passed",
+    "package_command": "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://diagnostics.shinycomputers.com uv run python scripts/native_app.py package",
+    "preview_presentation_smoke": "passed",
+    "signing": "ad_hoc_local",
+    "worker_cancellation_smoke": "passed"
+  },
+  "cases": [
+    {
+      "case_id": "network-generated-final-output",
+      "observations": {
+        "focused_regression_tests": {
+          "command": "uv run python -m unittest tests.test_audio tests.test_container",
+          "passed": 59
+        },
+        "missing_multichannel_layout": {
+          "input_channels": 6,
+          "input_layout_present": false,
+          "result": "failed_closed_as_required"
+        },
+        "missing_stereo_layout": {
+          "input_channels": 2,
+          "input_layout_present": false,
+          "output_codec": "aac",
+          "output_layout": "stereo",
+          "result": "passed"
+        },
+        "no_audio_final_mux": {
+          "audio_tracks": 0,
+          "result": "passed",
+          "video_tracks": 1
+        }
+      },
+      "status": "passed"
+    }
+  ],
+  "privacy": {
+    "diagnostic_tokens_recorded": false,
+    "private_hostnames_recorded": false,
+    "private_media_identifiers_recorded": false,
+    "private_paths_recorded": false
+  },
+  "result": "accepted_public_safe_summary"
+}
