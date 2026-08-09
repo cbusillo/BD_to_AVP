@@ -1034,6 +1034,7 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("--signed-ui-artifact-id", str(prepare))
         self.assertIn("--signed-ui-artifact-archive", str(prepare))
         self.assertIn("signed-artifact-ui.zip", str(prepare))
+        self.assertIn("qualification-record.json", str(prepare))
         self.assertIn("steps.reconcile.outputs.manifest_sha256", str(prepare))
         self.assertIn(".immutable == true", str(prepare))
         self.assertIn("Preserve an existing idempotent evidence branch", str(prepare))
@@ -1102,6 +1103,10 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertEqual(
             config["releaseOperations"]["qualificationManifestPath"],
             "docs/release-evidence/<tag>/qualification-manifest.json",
+        )
+        self.assertEqual(
+            config["releaseOperations"]["qualificationSnapshotPath"],
+            "docs/release-evidence/<tag>/qualification-record.json",
         )
         self.assertEqual(
             config["releaseOperations"]["qualificationManifestCommand"],

@@ -59,7 +59,29 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             controller_path,
         ):
             path.parent.mkdir(parents=True, exist_ok=True)
-        policy_path.write_text("{}\n", encoding="utf-8")
+        policy_path.write_text(
+            json.dumps(
+                {
+                    "cases": [
+                        {
+                            "allowed_evidence_sources": ["signed_artifact_receipt"],
+                            "artifact_owned": True,
+                            "blocking_phase": "publication",
+                            "id": "profile-save-action-accessibility",
+                            "invalidates_on": {"contracts": ["profile-storage"], "paths": []},
+                            "tier": 2,
+                        }
+                    ],
+                    "policy_id": "release-qualification-policy-v1",
+                    "result_states": ["covered", "carry", "retest", "external"],
+                    "schema_version": 1,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         evidence_path.write_text('{"schema_version": 1, "receipts": []}\n', encoding="utf-8")
         route_table_path.write_text('{"schema_version": 1, "routes": []}\n', encoding="utf-8")
         controller_path.write_text("name: Milestone Qualification\n", encoding="utf-8")
@@ -109,7 +131,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             text=True,
         ).stdout.strip()
 
-        qualification_path.write_text(
+        qualification_content = (
             json.dumps(
                 {
                     "candidate": {
@@ -126,11 +148,16 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                         "appcast_sha256": APPCAST_SHA256,
                         "signed_app_tree_sha256": APP_TREE_SHA256,
                     }
-                }
+                },
+                indent=2,
+                sort_keys=True,
             )
-            + "\n",
-            encoding="utf-8",
+            + "\n"
         )
+        qualification_path.write_text(qualification_content, encoding="utf-8")
+        qualification_record_path = root / "docs/release-evidence/v0.3.0/qualification-record.json"
+        qualification_record_path.parent.mkdir(parents=True, exist_ok=True)
+        qualification_record_path.write_text(qualification_content, encoding="utf-8")
         receipt = build_receipt(
             {
                 "release_route": "stable",
@@ -338,6 +365,13 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             archive_info.external_attr = 0o100644 << 16
             with zipfile.ZipFile(signed_archive_path, "w") as archive:
                 archive.writestr(archive_info, signed_ui_path.read_bytes())
+            runner_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
             manifest = build_manifest(
                 repo_root=root,
                 release_receipt_path=receipt_path,
@@ -358,7 +392,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                     capture_output=True,
                     text=True,
                 ).stdout.strip(),
-                runner_sha="7" * 40,
+                runner_sha=runner_sha,
                 sparkle_route="stable",
             )
             manifest_path = root / "docs/release-evidence/v0.3.0/qualification-manifest.json"
@@ -394,8 +428,8 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         self.assertEqual(discovered, manifest_path)
         self.assertEqual(context.manifest_path, "docs/release-evidence/v0.3.0/qualification-manifest.json")
         self.assertEqual(context.manifest_sha256, manifest["manifest_sha256"])
-        self.assertEqual(context.runner_sha, "7" * 40)
-        require_manifest_runner_sha(context, "7" * 40)
+        self.assertEqual(context.runner_sha, runner_sha)
+        require_manifest_runner_sha(context, runner_sha)
         with self.assertRaisesRegex(ReleaseMilestoneContextError, "runner SHA"):
             require_manifest_runner_sha(context, "8" * 40)
 

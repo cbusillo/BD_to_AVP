@@ -276,9 +276,10 @@ The workflow performs these ordered boundaries:
    `signed-artifact-ui` Actions artifact while that artifact is unexpired. It
    copies the exact release receipt, original one-file signed UI Actions ZIP,
    and signed UI receipt into
-   `docs/release-evidence/<tag>/`, writes a deterministic public-safe
+   `docs/release-evidence/<tag>/`, atomically snapshots the updated qualification
+   as immutable `qualification-record.json`, writes a deterministic public-safe
    `qualification-manifest.json`, writes the publication record and release
-   ledger, updates the matching qualification and cut packet, and opens or
+   ledger, updates the rolling qualification and cut packet, and opens or
    updates `automation/release-evidence-<tag>`. Protected CI validates the
    checked manifest/receipt identities and runs the `milestone` qualification
    phase. The PR remains intentionally unmergeable until every blocking
@@ -290,8 +291,10 @@ The workflow performs these ordered boundaries:
    milestone failure does not rebuild, replace, or invalidate the correctly
    published release. If protected `main` advances while the evidence PR is
    open, rerunning Release Evidence first validates the prior manifest against
-   its original branch snapshot, then refreshes only reviewed-main policy and
-   checkpoint fields while preserving exact release and artifact identity. If
+   its immutable qualification snapshot and the controller, policy, route table,
+   and case classifications stored at its recorded runner SHA, then refreshes
+   only reviewed-main policy and checkpoint fields while preserving exact
+   release and artifact identity. If
    the signed UI artifact expires before the first successful capture, the
    workflow stops explicitly because that immutable evidence cannot be
    reconstructed; it never substitutes a rebuilt or operator-authored receipt.

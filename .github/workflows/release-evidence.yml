@@ -134,10 +134,13 @@ jobs:
           RELEASE_TAG=$(jq -r .release.tag release-receipt.json)
           BRANCH_NAME="automation/release-evidence-$RELEASE_TAG"
           MANIFEST_PATH="docs/release-evidence/$RELEASE_TAG/qualification-manifest.json"
+          QUALIFICATION_RECORD_PATH="docs/release-evidence/$RELEASE_TAG/qualification-record.json"
           SIGNED_UI_ARCHIVE_PATH="docs/release-evidence/$RELEASE_TAG/signed-artifact-ui.zip"
           SIGNED_UI_PATH="docs/release-evidence/$RELEASE_TAG/signed-artifact-ui-receipt.json"
-          if [ -f "$MANIFEST_PATH" ] || [ -f "$SIGNED_UI_ARCHIVE_PATH" ] || [ -f "$SIGNED_UI_PATH" ]; then
-            if [ ! -f "$MANIFEST_PATH" ] || [ ! -f "$SIGNED_UI_ARCHIVE_PATH" ] || [ ! -f "$SIGNED_UI_PATH" ]; then
+          if [ -f "$MANIFEST_PATH" ] || [ -f "$QUALIFICATION_RECORD_PATH" ] \
+            || [ -f "$SIGNED_UI_ARCHIVE_PATH" ] || [ -f "$SIGNED_UI_PATH" ]; then
+            if [ ! -f "$MANIFEST_PATH" ] || [ ! -f "$QUALIFICATION_RECORD_PATH" ] \
+              || [ ! -f "$SIGNED_UI_ARCHIVE_PATH" ] || [ ! -f "$SIGNED_UI_PATH" ]; then
               echo "Protected main contains partial qualification checkpoint state." >&2
               exit 1
             fi
@@ -177,9 +180,11 @@ jobs:
           fi
           HAS_MANIFEST=false
           if git cat-file -e "refs/remotes/origin/release-evidence-existing:$MANIFEST_PATH" 2>/dev/null \
+            || git cat-file -e "refs/remotes/origin/release-evidence-existing:$QUALIFICATION_RECORD_PATH" 2>/dev/null \
             || git cat-file -e "refs/remotes/origin/release-evidence-existing:$SIGNED_UI_ARCHIVE_PATH" 2>/dev/null \
             || git cat-file -e "refs/remotes/origin/release-evidence-existing:$SIGNED_UI_PATH" 2>/dev/null; then
             if ! git cat-file -e "refs/remotes/origin/release-evidence-existing:$MANIFEST_PATH" 2>/dev/null \
+              || ! git cat-file -e "refs/remotes/origin/release-evidence-existing:$QUALIFICATION_RECORD_PATH" 2>/dev/null \
               || ! git cat-file -e "refs/remotes/origin/release-evidence-existing:$SIGNED_UI_ARCHIVE_PATH" 2>/dev/null \
               || ! git cat-file -e "refs/remotes/origin/release-evidence-existing:$SIGNED_UI_PATH" 2>/dev/null; then
               echo "Existing evidence branch contains partial qualification checkpoint state." >&2

@@ -23,6 +23,7 @@ from scripts.release_receipt import (
 
 EVIDENCE_INDEX_PATH = Path("docs/qualification/release-evidence-v1.json")
 RELEASE_LEDGER_PATH = Path("docs/release-evidence/index-v1.json")
+QUALIFICATION_RECORD_NAME = "qualification-record.json"
 
 
 class ReleaseEvidenceError(RuntimeError):
@@ -315,6 +316,53 @@ def _update_qualification(repo_root: Path, receipt: Mapping[str, Any]) -> Path:
     return path
 
 
+def validate_qualification_record_identity(
+    qualification: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+) -> None:
+    candidate = _mapping(qualification.get("candidate"), "qualification candidate")
+    release = _mapping(receipt.get("release"), "receipt release")
+    versions = _mapping(receipt.get("versions"), "receipt versions")
+    workflow = _mapping(receipt.get("workflow"), "receipt workflow")
+    expected = {
+        "appcast_sha256": _artifact(receipt, "appcast")["sha256"],
+        "build_version": versions["build"],
+        "dmg_name": _artifact(receipt, "dmg")["name"],
+        "dmg_sha256": _artifact(receipt, "dmg")["sha256"],
+        "package_version": versions["package"],
+        "public_version": versions["public"],
+        "release_id": release["id"],
+        "release_run_id": workflow["run_id"],
+        "release_tag": release["tag"],
+        "signed_app_tree_sha256": receipt["signed_app_tree_sha256"],
+        "source_git_sha": receipt["source_sha"],
+        "workflow": workflow["name"],
+    }
+    for field, value in expected.items():
+        if candidate.get(field) != value:
+            raise ReleaseEvidenceError(
+                f"Qualification record candidate.{field} conflicts with exact release receipt identity."
+            )
+
+
+def _snapshot_qualification(
+    repo_root: Path,
+    release_tag: str,
+    qualification_path: Path,
+    receipt: Mapping[str, Any],
+) -> Path:
+    qualification = _load_json(qualification_path, "signed qualification")
+    validate_qualification_record_identity(qualification, receipt)
+    snapshot_path = repo_root / "docs" / "release-evidence" / release_tag / QUALIFICATION_RECORD_NAME
+    content = (json.dumps(qualification, indent=2, sort_keys=True) + "\n").encode()
+    if snapshot_path.exists():
+        if snapshot_path.read_bytes() != content:
+            raise ReleaseEvidenceError(f"Checked qualification record for immutable release {release_tag} conflicts.")
+        return snapshot_path
+    _atomic_write_bytes(snapshot_path, content)
+    return snapshot_path
+
+
 def _update_cut_packet(repo_root: Path, receipt: Mapping[str, Any], publication: Mapping[str, Any]) -> Path:
     versions = _mapping(receipt.get("versions"), "receipt versions")
     path = repo_root / "docs" / f"{_string(versions.get('public'), 'public version')}-cut-packet.md"
@@ -502,12 +550,14 @@ def reconcile(
     _write_json(evidence_path, evidence)
 
     qualification_path = _update_qualification(repo_root, receipt)
+    qualification_record_path = _snapshot_qualification(repo_root, tag, qualification_path, receipt)
     cut_packet_path = _update_cut_packet(repo_root, receipt, publication)
     outputs = {
         "cut_packet": cut_packet_path.relative_to(repo_root).as_posix(),
         "evidence_index": EVIDENCE_INDEX_PATH.as_posix(),
         "publication_record": publication_path.relative_to(repo_root).as_posix(),
         "qualification": qualification_path.relative_to(repo_root).as_posix(),
+        "qualification_record": qualification_record_path.relative_to(repo_root).as_posix(),
         "receipt": reference,
         "receipt_file_sha256": publication["receipt_file_sha256"],
         "release_ledger": RELEASE_LEDGER_PATH.as_posix(),
@@ -536,7 +586,7 @@ def reconcile(
                 evidence_base_sha=cast(str, evidence_base_sha),
                 runner_sha=cast(str, runner_sha),
                 sparkle_route=cast(str, sparkle_route),
-                qualification_path=qualification_path.relative_to(repo_root),
+                qualification_path=qualification_record_path.relative_to(repo_root),
             )
         except ReleaseQualificationManifestError as error:
             raise ReleaseEvidenceError(str(error)) from error

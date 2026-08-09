@@ -9,12 +9,18 @@ import tempfile
 import zipfile
 
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Iterator, cast
 
 from scripts.release import ReleaseError, parse_release_version
-from scripts.release_evidence import ReleaseEvidenceError, effective_successful_workflow_run_id
+from scripts.release_evidence import (
+    QUALIFICATION_RECORD_NAME,
+    ReleaseEvidenceError,
+    effective_successful_workflow_run_id,
+    validate_qualification_record_identity,
+)
 from scripts.release_receipt import ReleaseReceiptError, load_validated_checked_receipt
 from scripts.signed_artifact_receipt import (
     PROFILE_CASE_ID,
@@ -167,6 +173,16 @@ def _file_sha256_at_revision(
     relative_path: str,
     description: str,
 ) -> str:
+    return hashlib.sha256(_file_bytes_at_revision(repo_root, revision, relative_path, description)).hexdigest()
+
+
+def _file_bytes_at_revision(
+    repo_root: Path,
+    revision: str,
+    relative_path: str,
+    description: str,
+) -> bytes:
+    revision = _sha(revision, f"{description} revision")
     result = subprocess.run(
         ["git", "show", f"{revision}:{relative_path}"],
         cwd=repo_root,
@@ -175,7 +191,38 @@ def _file_sha256_at_revision(
     )
     if result.returncode != 0:
         raise ReleaseQualificationManifestError(f"Unable to read {description} from revision {revision}.")
-    return hashlib.sha256(result.stdout).hexdigest()
+    return result.stdout
+
+
+def _load_json_at_revision(
+    repo_root: Path,
+    revision: str,
+    relative_path: str,
+    description: str,
+) -> Mapping[str, Any]:
+    try:
+        return _mapping(
+            json.loads(_file_bytes_at_revision(repo_root, revision, relative_path, description)),
+            description,
+        )
+    except json.JSONDecodeError as error:
+        raise ReleaseQualificationManifestError(
+            f"Invalid JSON in {description} from revision {revision}: {error}"
+        ) from error
+
+
+@contextmanager
+def _revision_file(
+    repo_root: Path,
+    revision: str,
+    relative_path: str,
+    description: str,
+) -> Iterator[Path]:
+    content = _file_bytes_at_revision(repo_root, revision, relative_path, description)
+    with tempfile.NamedTemporaryFile("wb", suffix=Path(relative_path).suffix) as temporary:
+        temporary.write(content)
+        temporary.flush()
+        yield Path(temporary.name)
 
 
 def _artifact(receipt: Mapping[str, Any], kind: str) -> Mapping[str, Any]:
@@ -313,20 +360,6 @@ def _case_classifications(policy: Mapping[str, Any]) -> list[dict[str, Any]]:
     return sorted(records, key=lambda item: cast(str, item["id"]))
 
 
-def _canonical_qualification_path(repo_root: Path, release_tag: str) -> str:
-    matches: list[str] = []
-    for path in sorted((repo_root / "docs" / "qualification").glob("*-signed-qualification-v1.json")):
-        document = _load_json(path, "signed qualification")
-        candidate = document.get("candidate")
-        if isinstance(candidate, Mapping) and candidate.get("release_tag") == release_tag:
-            matches.append(path.relative_to(repo_root).as_posix())
-    if len(matches) != 1:
-        raise ReleaseQualificationManifestError(
-            f"Expected exactly one canonical qualification record for {release_tag}; found {len(matches)}."
-        )
-    return matches[0]
-
-
 def _policy_checkpoint_digest(policy: Mapping[str, Any]) -> str:
     checkpoints = {
         "case_classifications": _case_classifications(policy),
@@ -359,6 +392,7 @@ def signed_ui_binding_from_files(
     signed_ui_archive_path: Path,
     signed_ui_receipt_path: Path,
     signed_ui_receipt_file_sha256: str,
+    policy_path: Path | None = None,
 ) -> SignedUiArtifactBinding:
     release = _mapping(receipt.get("release"), "release receipt release")
     workflow = _mapping(receipt.get("workflow"), "release receipt workflow")
@@ -406,7 +440,7 @@ def signed_ui_binding_from_files(
         signed_receipt = validate_receipt_files(
             receipt_path=signed_ui_receipt_path,
             release_receipt_path=release_receipt_path,
-            policy_path=repo_root / DEFAULT_POLICY_PATH,
+            policy_path=policy_path or repo_root / DEFAULT_POLICY_PATH,
             case_id=PROFILE_CASE_ID,
             workflow_run_id=_integer(workflow.get("run_id"), "workflow run ID"),
             workflow_run_attempt=_integer(workflow.get("run_attempt"), "workflow run attempt"),
@@ -438,18 +472,14 @@ def build_manifest(
     sparkle_route: str,
     policy_path: Path = DEFAULT_POLICY_PATH,
     evidence_path: Path = DEFAULT_EVIDENCE_PATH,
-    qualification_path: Path = Path("docs/qualification/stable-signed-qualification-v1.json"),
+    qualification_path: Path | None = None,
     route_table_path: Path = DEFAULT_ROUTE_TABLE_PATH,
     controller_runner_path: Path = CONTROLLER_RUNNER_PATH,
 ) -> dict[str, Any]:
     repo_root = repo_root.resolve()
+    runner_sha = _sha(runner_sha, "runner SHA")
     policy_path, policy_relative = _repo_path(repo_root, policy_path.as_posix(), "policy path")
     evidence_path, evidence_relative = _repo_path(repo_root, evidence_path.as_posix(), "evidence path")
-    qualification_path, qualification_relative = _repo_path(
-        repo_root,
-        qualification_path.as_posix(),
-        "qualification record path",
-    )
     route_table_path, route_table_relative = _repo_path(repo_root, route_table_path.as_posix(), "route table path")
     controller_runner_path, controller_runner_relative = _repo_path(
         repo_root,
@@ -475,6 +505,14 @@ def build_manifest(
     workflow = _mapping(receipt.get("workflow"), "release receipt workflow")
     release_tag = _string(release.get("tag"), "release tag")
     prior_tag = _string(prior_release.get("tag"), "prior release tag")
+    expected_qualification_relative = f"docs/release-evidence/{release_tag}/{QUALIFICATION_RECORD_NAME}"
+    qualification_path, qualification_relative = _repo_path(
+        repo_root,
+        (qualification_path or Path(expected_qualification_relative)).as_posix(),
+        "qualification record path",
+    )
+    if qualification_relative != expected_qualification_relative:
+        raise ReleaseQualificationManifestError("Qualification record must use the immutable per-release snapshot.")
     if release_receipt_relative != f"docs/release-evidence/{release_tag}/release-receipt.json":
         raise ReleaseQualificationManifestError("Candidate release receipt path does not match its release tag.")
     if prior_receipt_relative != f"docs/release-evidence/{prior_tag}/release-receipt.json":
@@ -490,7 +528,17 @@ def build_manifest(
     except ReleaseError as error:
         raise ReleaseQualificationManifestError(f"Candidate package version is invalid: {error}") from error
 
-    policy = _load_json(policy_path, "release qualification policy")
+    policy = _load_json_at_revision(
+        repo_root,
+        runner_sha,
+        policy_relative,
+        "release qualification policy",
+    )
+    qualification = _load_json(qualification_path, "qualification record")
+    try:
+        validate_qualification_record_identity(qualification, receipt)
+    except ReleaseEvidenceError as error:
+        raise ReleaseQualificationManifestError(str(error)) from error
     publication = _publication_record(repo_root, release_tag)
     if publication.get("receipt_file_sha256") != release_receipt_file_sha256:
         raise ReleaseQualificationManifestError("Publication record receipt digest does not match the checked receipt.")
@@ -539,16 +587,32 @@ def build_manifest(
             "source_sha": _sha(receipt.get("source_sha"), "source SHA"),
         },
         "input_digests": {
-            "controller_runner": _file_sha256(controller_runner_path, "controller runner"),
+            "controller_runner": _file_sha256_at_revision(
+                repo_root,
+                runner_sha,
+                controller_runner_relative,
+                "controller runner",
+            ),
             "evidence_index_base": _file_sha256_at_revision(
                 repo_root,
                 evidence_base_sha,
                 evidence_relative,
                 "qualification evidence baseline",
             ),
-            "policy": _file_sha256(policy_path, "release qualification policy"),
+            "policy": _file_sha256_at_revision(
+                repo_root,
+                runner_sha,
+                policy_relative,
+                "release qualification policy",
+            ),
             "policy_checkpoint": _policy_checkpoint_digest(policy),
-            "route_table": _file_sha256(route_table_path, "video route table"),
+            "qualification_record": _file_sha256(qualification_path, "qualification record"),
+            "route_table": _file_sha256_at_revision(
+                repo_root,
+                runner_sha,
+                route_table_relative,
+                "video route table",
+            ),
         },
         "manifest_type": MANIFEST_TYPE,
         "paths": {
@@ -596,7 +660,7 @@ def build_manifest(
             "run_id": _integer(workflow.get("run_id"), "workflow run ID"),
         },
     }
-    manifest["runner_sha"] = _sha(runner_sha, "runner SHA")
+    manifest["runner_sha"] = runner_sha
     if parsed_version.release_tag != release_tag:
         raise ReleaseQualificationManifestError("Candidate version and tag conflict.")
     manifest["manifest_sha256"] = manifest_sha256(manifest)
@@ -648,7 +712,7 @@ def _validate_manifest(
     ):
         raise ReleaseQualificationManifestError("Manifest evidence ref conflicts with candidate tag.")
     _sha(evidence.get("base_sha"), "evidence base SHA")
-    _sha(manifest.get("runner_sha"), "manifest runner SHA")
+    runner_sha = _sha(manifest.get("runner_sha"), "manifest runner SHA")
 
     paths = _mapping(manifest.get("paths"), "manifest paths")
     _exact_keys(
@@ -659,14 +723,14 @@ def _validate_manifest(
     path_values: dict[str, str] = {}
     for key in paths:
         path, relative = _repo_path(repo_root, paths[key], f"manifest paths.{key}")
-        if not path.is_file():
+        if key in {"evidence_index", "qualification"} and not path.is_file():
             raise ReleaseQualificationManifestError(f"Manifest path {relative!r} does not exist.")
         path_values[key] = relative
     expected_paths = {
         "controller_runner": CONTROLLER_RUNNER_PATH.as_posix(),
         "evidence_index": DEFAULT_EVIDENCE_PATH.as_posix(),
         "policy": DEFAULT_POLICY_PATH.as_posix(),
-        "qualification": _canonical_qualification_path(repo_root, release_tag),
+        "qualification": f"docs/release-evidence/{release_tag}/{QUALIFICATION_RECORD_NAME}",
         "route_table": DEFAULT_ROUTE_TABLE_PATH.as_posix(),
     }
     if path_values != expected_paths:
@@ -675,19 +739,41 @@ def _validate_manifest(
     digests = _mapping(manifest.get("input_digests"), "manifest input digests")
     _exact_keys(
         digests,
-        {"controller_runner", "evidence_index_base", "policy", "policy_checkpoint", "route_table"},
+        {
+            "controller_runner",
+            "evidence_index_base",
+            "policy",
+            "policy_checkpoint",
+            "qualification_record",
+            "route_table",
+        },
         "manifest input digests",
     )
     for key in ("controller_runner", "policy", "route_table"):
-        expected = _file_sha256(repo_root / path_values[key], f"manifest path {key}")
+        expected = _file_sha256_at_revision(
+            repo_root,
+            runner_sha,
+            path_values[key],
+            f"manifest path {key}",
+        )
         if digests.get(key) != expected:
-            raise ReleaseQualificationManifestError(f"Manifest {key} digest conflicts with checked content.")
+            raise ReleaseQualificationManifestError(f"Manifest {key} digest conflicts with runner revision content.")
     _sha256(digests.get("evidence_index_base"), "manifest evidence index baseline digest")
-    policy = _load_json(repo_root / path_values["policy"], "release qualification policy")
+    qualification_path = repo_root / path_values["qualification"]
+    if digests.get("qualification_record") != _file_sha256(qualification_path, "qualification record"):
+        raise ReleaseQualificationManifestError("Manifest qualification record digest conflicts with checked evidence.")
+    policy = _load_json_at_revision(
+        repo_root,
+        runner_sha,
+        path_values["policy"],
+        "release qualification policy",
+    )
     if digests.get("policy_checkpoint") != _policy_checkpoint_digest(policy):
-        raise ReleaseQualificationManifestError("Manifest policy checkpoint digest conflicts with checked policy.")
+        raise ReleaseQualificationManifestError(
+            "Manifest policy checkpoint digest conflicts with runner revision policy."
+        )
     if manifest.get("case_classifications") != _case_classifications(policy):
-        raise ReleaseQualificationManifestError("Manifest case classifications conflict with checked policy.")
+        raise ReleaseQualificationManifestError("Manifest case classifications conflict with runner revision policy.")
 
     release_receipt = _mapping(manifest.get("release_receipt"), "manifest release receipt")
     _exact_keys(release_receipt, {"asset_id", "file_sha256", "path", "receipt_sha256"}, "manifest release receipt")
@@ -708,6 +794,11 @@ def _validate_manifest(
     if receipt.get("source_sha") != source_sha or receipt_release.get("id") != release.get("id"):
         raise ReleaseQualificationManifestError("Manifest release identity conflicts with checked receipt.")
     receipt_versions = _mapping(receipt.get("versions"), "checked receipt versions")
+    qualification = _load_json(qualification_path, "qualification record")
+    try:
+        validate_qualification_record_identity(qualification, receipt)
+    except ReleaseEvidenceError as error:
+        raise ReleaseQualificationManifestError(str(error)) from error
     expected_candidate = {
         "build_version": receipt_versions.get("build"),
         "package_version": receipt_versions.get("package"),
@@ -796,21 +887,28 @@ def _validate_manifest(
     _sha256(signed_ui.get("receipt_file_sha256"), "signed UI receipt file SHA-256")
     _sha256(signed_ui.get("receipt_sha256"), "signed UI receipt self SHA-256")
     if validate_signed_ui_receipt:
-        validated_signed_ui = signed_ui_binding_from_files(
-            repo_root=repo_root,
-            release_receipt_path=receipt_path,
-            receipt=receipt,
-            release_receipt_asset_id=_integer(release_receipt.get("asset_id"), "release receipt asset ID"),
-            release_receipt_file_sha256=receipt_file_sha256,
-            signed_ui_artifact_id=_integer(signed_ui.get("artifact_id"), "signed UI artifact ID"),
-            signed_ui_artifact_digest=_sha256(signed_ui.get("artifact_sha256"), "signed UI artifact SHA-256"),
-            signed_ui_archive_path=archive_path,
-            signed_ui_receipt_path=signed_path,
-            signed_ui_receipt_file_sha256=_sha256(
-                signed_ui.get("receipt_file_sha256"),
-                "signed UI receipt file SHA-256",
-            ),
-        )
+        with _revision_file(
+            repo_root,
+            runner_sha,
+            path_values["policy"],
+            "release qualification policy",
+        ) as runner_policy_path:
+            validated_signed_ui = signed_ui_binding_from_files(
+                repo_root=repo_root,
+                release_receipt_path=receipt_path,
+                receipt=receipt,
+                release_receipt_asset_id=_integer(release_receipt.get("asset_id"), "release receipt asset ID"),
+                release_receipt_file_sha256=receipt_file_sha256,
+                signed_ui_artifact_id=_integer(signed_ui.get("artifact_id"), "signed UI artifact ID"),
+                signed_ui_artifact_digest=_sha256(signed_ui.get("artifact_sha256"), "signed UI artifact SHA-256"),
+                signed_ui_archive_path=archive_path,
+                signed_ui_receipt_path=signed_path,
+                signed_ui_receipt_file_sha256=_sha256(
+                    signed_ui.get("receipt_file_sha256"),
+                    "signed UI receipt file SHA-256",
+                ),
+                policy_path=runner_policy_path,
+            )
         if signed_ui != {
             "archive_path": validated_signed_ui.archive_path,
             "artifact_id": validated_signed_ui.artifact_id,
@@ -880,11 +978,17 @@ def load_validated_manifest(
 
 def _immutable_release_identity(manifest: Mapping[str, Any]) -> dict[str, Any]:
     evidence = _mapping(manifest.get("canonical_evidence"), "manifest canonical evidence")
+    digests = _mapping(manifest.get("input_digests"), "manifest input digests")
+    paths = _mapping(manifest.get("paths"), "manifest paths")
     return {
         "artifacts": manifest.get("artifacts"),
         "candidate": manifest.get("candidate"),
         "evidence_ref": evidence.get("ref"),
         "prior": manifest.get("prior"),
+        "qualification_record": {
+            "path": paths.get("qualification"),
+            "sha256": digests.get("qualification_record"),
+        },
         "release": manifest.get("release"),
         "release_receipt": manifest.get("release_receipt"),
         "signed_ui_artifact": manifest.get("signed_ui_artifact"),
@@ -946,18 +1050,25 @@ def build_manifest_for_reconciled_release(
             temporary.write(source_bytes)
             temporary_path = Path(temporary.name)
         temporary_path.replace(checked_signed_receipt)
-    signed_ui = signed_ui_binding_from_files(
-        repo_root=repo_root,
-        release_receipt_path=release_receipt_path,
-        receipt=receipt,
-        release_receipt_asset_id=_integer(publication.get("receipt_asset_id"), "release receipt asset ID"),
-        release_receipt_file_sha256=release_receipt_file_sha256,
-        signed_ui_artifact_id=signed_ui_artifact_id,
-        signed_ui_artifact_digest=signed_ui_artifact_digest,
-        signed_ui_archive_path=checked_signed_archive,
-        signed_ui_receipt_path=checked_signed_receipt,
-        signed_ui_receipt_file_sha256=signed_ui_receipt_file_sha256,
-    )
+    with _revision_file(
+        repo_root,
+        runner_sha,
+        DEFAULT_POLICY_PATH.as_posix(),
+        "release qualification policy",
+    ) as runner_policy_path:
+        signed_ui = signed_ui_binding_from_files(
+            repo_root=repo_root,
+            release_receipt_path=release_receipt_path,
+            receipt=receipt,
+            release_receipt_asset_id=_integer(publication.get("receipt_asset_id"), "release receipt asset ID"),
+            release_receipt_file_sha256=release_receipt_file_sha256,
+            signed_ui_artifact_id=signed_ui_artifact_id,
+            signed_ui_artifact_digest=signed_ui_artifact_digest,
+            signed_ui_archive_path=checked_signed_archive,
+            signed_ui_receipt_path=checked_signed_receipt,
+            signed_ui_receipt_file_sha256=signed_ui_receipt_file_sha256,
+            policy_path=runner_policy_path,
+        )
     manifest = build_manifest(
         repo_root=repo_root,
         release_receipt_path=release_receipt_path,

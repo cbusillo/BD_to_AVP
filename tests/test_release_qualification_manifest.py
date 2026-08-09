@@ -150,18 +150,6 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
         }
         policy_path.write_text(json.dumps(policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         evidence_path.write_text('{"schema_version": 1, "receipts": []}\n', encoding="utf-8")
-        qualification_path.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "candidate": {"release_tag": "v0.3.0"},
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
         route_table_path.write_text('{"schema_version": 1, "routes": []}\n', encoding="utf-8")
         controller_path.write_text("name: Milestone Qualification\n", encoding="utf-8")
 
@@ -173,6 +161,31 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
         prior_receipt = build_receipt(release_facts(tag="v0.3.0-rc.3", source_sha=PRIOR_SHA, stable=False))
         write_receipt(candidate_receipt, candidate_receipt_path)
         write_receipt(prior_receipt, prior_receipt_path)
+        candidate_release = candidate_receipt["release"]
+        candidate_versions = candidate_receipt["versions"]
+        candidate_workflow = candidate_receipt["workflow"]
+        candidate_artifacts = {artifact["kind"]: artifact for artifact in candidate_receipt["artifacts"]}
+        qualification = {
+            "schema_version": 1,
+            "candidate": {
+                "appcast_sha256": candidate_artifacts["appcast"]["sha256"],
+                "build_version": candidate_versions["build"],
+                "dmg_name": candidate_artifacts["dmg"]["name"],
+                "dmg_sha256": candidate_artifacts["dmg"]["sha256"],
+                "package_version": candidate_versions["package"],
+                "public_version": candidate_versions["public"],
+                "release_id": candidate_release["id"],
+                "release_run_id": candidate_workflow["run_id"],
+                "release_tag": candidate_release["tag"],
+                "signed_app_tree_sha256": candidate_receipt["signed_app_tree_sha256"],
+                "source_git_sha": candidate_receipt["source_sha"],
+                "workflow": candidate_workflow["name"],
+            },
+        }
+        qualification_content = json.dumps(qualification, indent=2, sort_keys=True) + "\n"
+        qualification_path.write_text(qualification_content, encoding="utf-8")
+        qualification_record_path = root / "docs/release-evidence/v0.3.0/qualification-record.json"
+        qualification_record_path.write_text(qualification_content, encoding="utf-8")
         publication_path = root / "docs/release-evidence/v0.3.0/publication-record.json"
         publication_path.write_text(
             json.dumps(
@@ -247,7 +260,7 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
                 signed_ui=signed_ui,
                 evidence_ref="automation/release-evidence-v0.3.0",
                 evidence_base_sha=git_head(root),
-                runner_sha="8" * 40,
+                runner_sha=git_head(root),
                 sparkle_route="rc",
             )
             manifest_path = root / "docs/release-evidence/v0.3.0" / MANIFEST_NAME
@@ -258,7 +271,7 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
             self.assertEqual(manifest["signed_ui_artifact"]["artifact_id"], 999)
             self.assertEqual(manifest["release"]["sparkle_route"], "rc")
             self.assertEqual(manifest["prior"]["release_tag"], "v0.3.0-rc.3")
-            self.assertEqual(manifest["runner_sha"], "8" * 40)
+            self.assertEqual(manifest["runner_sha"], git_head(root))
             self.assertNotEqual(manifest["runner_sha"], manifest["candidate"]["source_sha"])
 
             (root / "docs/qualification/release-evidence-v1.json").write_text(
@@ -278,9 +291,9 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
                     signed_ui_receipt_file_sha256=sha256(signed_receipt_path),
                     evidence_ref="automation/release-evidence-v0.3.0",
                     evidence_base_sha=git_head(root),
-                    runner_sha="8" * 40,
+                    runner_sha=git_head(root),
                     sparkle_route="rc",
-                    qualification_path=Path("docs/qualification/stable-signed-qualification-v1.json"),
+                    qualification_path=Path("docs/release-evidence/v0.3.0/qualification-record.json"),
                 ),
                 manifest,
             )
@@ -305,7 +318,7 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
                     signed_ui=signed_ui,
                     evidence_ref="automation/release-evidence-v0.3.0",
                     evidence_base_sha=git_head(root),
-                    runner_sha="8" * 40,
+                    runner_sha=git_head(root),
                     sparkle_route="stable",
                 )
             manifest = build_manifest(
@@ -315,7 +328,7 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
                 signed_ui=signed_ui,
                 evidence_ref="automation/release-evidence-v0.3.0",
                 evidence_base_sha=git_head(root),
-                runner_sha="8" * 40,
+                runner_sha=git_head(root),
                 sparkle_route="rc",
             )
             path = root / "docs/release-evidence/v0.3.0" / MANIFEST_NAME
@@ -348,6 +361,13 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
 
             mutated = json.loads(json.dumps(manifest))
             mutated["paths"]["policy"] = "docs/qualification/video-quality-route-table-v2.json"
+            mutated["manifest_sha256"] = manifest_sha256(mutated)
+            path.write_text(json.dumps(mutated, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ReleaseQualificationManifestError, "canonical qualification inputs"):
+                load_validated_manifest(path, repo_root=root)
+
+            mutated = json.loads(json.dumps(manifest))
+            mutated["paths"]["qualification"] = "docs/qualification/stable-signed-qualification-v1.json"
             mutated["manifest_sha256"] = manifest_sha256(mutated)
             path.write_text(json.dumps(mutated, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(ReleaseQualificationManifestError, "canonical qualification inputs"):
@@ -397,7 +417,7 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
                 signed_ui=signed_ui,
                 evidence_ref="automation/release-evidence-v0.3.0",
                 evidence_base_sha=git_head(root),
-                runner_sha="8" * 40,
+                runner_sha=git_head(root),
                 sparkle_route="stable",
             )
 
@@ -420,9 +440,9 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
                 signed_ui_receipt_file_sha256=sha256(signed_receipt_path),
                 evidence_ref="automation/release-evidence-v0.3.0",
                 evidence_base_sha=first_base,
-                runner_sha="8" * 40,
+                runner_sha=first_base,
                 sparkle_route="rc",
-                qualification_path=Path("docs/qualification/stable-signed-qualification-v1.json"),
+                qualification_path=Path("docs/release-evidence/v0.3.0/qualification-record.json"),
             )
             controller = root / ".github/workflows/milestone-qualification.yml"
             controller.write_text("name: Refreshed Milestone Qualification\n", encoding="utf-8")
@@ -441,14 +461,14 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
                 signed_ui_receipt_file_sha256=sha256(signed_receipt_path),
                 evidence_ref="automation/release-evidence-v0.3.0",
                 evidence_base_sha=second_base,
-                runner_sha="9" * 40,
+                runner_sha=second_base,
                 sparkle_route="rc",
-                qualification_path=Path("docs/qualification/stable-signed-qualification-v1.json"),
+                qualification_path=Path("docs/release-evidence/v0.3.0/qualification-record.json"),
             )
 
             self.assertNotEqual(first["manifest_sha256"], refreshed["manifest_sha256"])
             self.assertEqual(refreshed["canonical_evidence"]["base_sha"], second_base)
-            self.assertEqual(refreshed["runner_sha"], "9" * 40)
+            self.assertEqual(refreshed["runner_sha"], second_base)
             self.assertEqual(refreshed["candidate"], first["candidate"])
             self.assertEqual(load_validated_manifest(candidate_path.parent / MANIFEST_NAME, repo_root=root), refreshed)
 
@@ -464,10 +484,102 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
                     signed_ui_receipt_file_sha256=sha256(signed_receipt_path),
                     evidence_ref="automation/release-evidence-v0.3.0",
                     evidence_base_sha=second_base,
-                    runner_sha="9" * 40,
+                    runner_sha=second_base,
                     sparkle_route="rc",
-                    qualification_path=Path("docs/qualification/stable-signed-qualification-v1.json"),
+                    qualification_path=Path("docs/release-evidence/v0.3.0/qualification-record.json"),
                 )
+
+    def test_historical_manifest_survives_later_runner_and_rolling_input_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            candidate_path, prior_path, signed_receipt_path, signed_archive_path = self.build_repository(root)
+            runner_sha = git_head(root)
+            signed_ui = signed_ui_binding_from_files(
+                repo_root=root,
+                release_receipt_path=candidate_path,
+                receipt=json.loads(candidate_path.read_text(encoding="utf-8")),
+                release_receipt_asset_id=4,
+                release_receipt_file_sha256=sha256(candidate_path),
+                signed_ui_artifact_id=999,
+                signed_ui_artifact_digest=sha256(signed_archive_path),
+                signed_ui_archive_path=signed_archive_path,
+                signed_ui_receipt_path=signed_receipt_path,
+                signed_ui_receipt_file_sha256=sha256(signed_receipt_path),
+            )
+            manifest = build_manifest(
+                repo_root=root,
+                release_receipt_path=candidate_path,
+                prior_release_receipt_path=prior_path,
+                signed_ui=signed_ui,
+                evidence_ref="automation/release-evidence-v0.3.0",
+                evidence_base_sha=runner_sha,
+                runner_sha=runner_sha,
+                sparkle_route="rc",
+            )
+            manifest_path = candidate_path.parent / MANIFEST_NAME
+            write_manifest(manifest, manifest_path)
+
+            policy_path = root / "docs/qualification/release-qualification-policy-v1.json"
+            policy = json.loads(policy_path.read_text(encoding="utf-8"))
+            policy["cases"][0]["blocking_phase"] = "milestone"
+            policy_path.write_text(json.dumps(policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            (root / ".github/workflows/milestone-qualification.yml").write_text(
+                "name: Later Milestone Qualification\n",
+                encoding="utf-8",
+            )
+            (root / "docs/qualification/video-quality-route-table-v2.json").write_text(
+                '{"routes": [{"id": "later"}], "schema_version": 1}\n',
+                encoding="utf-8",
+            )
+            rolling_qualification = root / "docs/qualification/stable-signed-qualification-v1.json"
+            rolling_qualification.write_text(
+                '{"candidate": {"release_tag": "v0.3.1"}, "schema_version": 1}\n',
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "later main evolution"], cwd=root, check=True)
+
+            self.assertNotEqual(git_head(root), runner_sha)
+            self.assertEqual(load_validated_manifest(manifest_path, repo_root=root), manifest)
+            validate_manifest_evidence_history(manifest, repo_root=root, base_revision=runner_sha)
+
+    def test_manifest_rejects_snapshot_with_rebound_release_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            candidate_path, prior_path, signed_receipt_path, signed_archive_path = self.build_repository(root)
+            signed_ui = signed_ui_binding_from_files(
+                repo_root=root,
+                release_receipt_path=candidate_path,
+                receipt=json.loads(candidate_path.read_text(encoding="utf-8")),
+                release_receipt_asset_id=4,
+                release_receipt_file_sha256=sha256(candidate_path),
+                signed_ui_artifact_id=999,
+                signed_ui_artifact_digest=sha256(signed_archive_path),
+                signed_ui_archive_path=signed_archive_path,
+                signed_ui_receipt_path=signed_receipt_path,
+                signed_ui_receipt_file_sha256=sha256(signed_receipt_path),
+            )
+            manifest = build_manifest(
+                repo_root=root,
+                release_receipt_path=candidate_path,
+                prior_release_receipt_path=prior_path,
+                signed_ui=signed_ui,
+                evidence_ref="automation/release-evidence-v0.3.0",
+                evidence_base_sha=git_head(root),
+                runner_sha=git_head(root),
+                sparkle_route="rc",
+            )
+            snapshot_path = root / manifest["paths"]["qualification"]
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            snapshot["candidate"]["source_git_sha"] = "0" * 40
+            snapshot_path.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            manifest["input_digests"]["qualification_record"] = sha256(snapshot_path)
+            manifest["manifest_sha256"] = manifest_sha256(manifest)
+            manifest_path = candidate_path.parent / MANIFEST_NAME
+            write_manifest(manifest, manifest_path)
+
+            with self.assertRaisesRegex(ReleaseQualificationManifestError, "exact release receipt identity"):
+                load_validated_manifest(manifest_path, repo_root=root)
 
     def test_validates_append_only_evidence_from_manifest_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -501,7 +613,7 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
                 signed_ui=signed_ui,
                 evidence_ref="automation/release-evidence-v0.3.0",
                 evidence_base_sha=base_sha,
-                runner_sha="8" * 40,
+                runner_sha=git_head(root),
                 sparkle_route="rc",
             )
             evidence_path.write_text(

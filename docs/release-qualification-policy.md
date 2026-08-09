@@ -309,15 +309,19 @@ python -m scripts.qualify_release_scope \
 After publication, the Release Evidence workflow opens or updates
 `automation/release-evidence-<tag>`. New evidence branches must include the
 canonical public-safe `docs/release-evidence/<tag>/qualification-manifest.json`
-plus the checked `signed-artifact-ui-receipt.json`. The manifest is exact-key
-JSON with a deterministic self-digest over the canonical payload. It binds the
+plus the checked `qualification-record.json` and
+`signed-artifact-ui-receipt.json`. Release Evidence creates the qualification
+record atomically after updating the rolling qualification file, rejects a
+different snapshot on rerun, and validates its candidate identity against the
+exact release receipt. The manifest is exact-key JSON with a deterministic
+self-digest over the canonical payload. It binds the
 candidate version, tag, build, release ID, reviewed qualification-runner `main`
 SHA, release workflow run/attempt/actor/name/path, prior release tag, Sparkle
 route, release receipt path/file
 digest/self digest, DMG/checksum/appcast/signed-app-tree identities, signed UI
 Actions artifact ID/digest/archive path/receipt path/file digest/self digest,
-policy and
-route-table digests, controller runner digest, canonical evidence ref/base SHA,
+qualification-record digest, policy and route-table digests, controller runner
+digest, canonical evidence ref/base SHA,
 the evidence-index baseline digest, and policy case classifications/checkpoint
 digest. The evidence-index baseline remains an audit checkpoint while validated
 milestone receipts append to the checked index. The pull-request gate verifies
@@ -327,11 +331,17 @@ artifact ID and digest through GitHub while metadata is retained; after GitHub
 deletes expired metadata, the exact checked receipt and original Actions ZIP
 captured and validated by Release Evidence are the durable replacement.
 Manifest validation hashes that ZIP and requires its sole payload to be the
-byte-identical checked receipt. A later protected-main advance
-may refresh controller, policy, baseline, and reviewed-main checkpoint fields,
-but only after the prior manifest validates against its original evidence
-snapshot and the immutable release, workflow, receipt, prior-release, and
-signed-UI identities remain byte-for-byte equivalent. If no checked receipt was
+byte-identical checked receipt. Controller, policy, route-table, policy
+checkpoint, and case-classification validation uses Git revision reads at the
+manifest's recorded runner SHA rather than the current checkout, so historical
+manifests remain valid after normal protected-main evolution. The current
+evidence index, checked receipts, qualification snapshot, and original Actions
+ZIP remain validated from the evidence tree, while the baseline evidence index
+is validated at the manifest's canonical evidence base SHA. A later
+protected-main advance may refresh runner-owned and evidence-baseline checkpoint
+fields, but only after the prior manifest validates and the immutable release,
+qualification snapshot, workflow, receipt, prior-release, and signed-UI
+identities remain byte-for-byte equivalent. If no checked receipt was
 captured before artifact expiry, qualification stops rather than reconstructing
 evidence. Absolute paths, private field
 names, conflicts, and partial manifest input state fail closed. CI validates the
