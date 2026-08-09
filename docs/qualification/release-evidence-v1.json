@@ -301,6 +301,46 @@
       "source_sha": "22982d5037e3b2bd03bbc9fa25332be2c8b04c97",
       "status": "accepted",
       "workflow_conclusion": "success"
+    },
+    {
+      "accepted_at": "2026-08-09T19:05:28Z",
+      "case_id": "sparkle-update-route",
+      "receipt_id": "v0.3.1:sparkle-update-route:31330296987",
+      "reference": "docs/qualification/v0.3.1-live-qualification-v1.json",
+      "sha256": "cbf00540cc68f49d466a4f9d2d05d32da1881b9cb7f353cfc87ff31238bfeb3d",
+      "source": "signed_artifact_receipt",
+      "source_sha": "22982d5037e3b2bd03bbc9fa25332be2c8b04c97",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-09T19:05:28Z",
+      "case_id": "profile-save-action-accessibility",
+      "receipt_id": "v0.3.1:profile-save-action-accessibility:31325968679",
+      "reference": "docs/qualification/v0.3.1-profile-save-action-accessibility-v1.json",
+      "sha256": "88fe425baea66a9e432a5e5d21e01263ea70662c0d658f96805367fe7030be65",
+      "source": "signed_artifact_receipt",
+      "source_sha": "22982d5037e3b2bd03bbc9fa25332be2c8b04c97",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-09T19:05:28Z",
+      "case_id": "clean-machine-signed-update",
+      "receipt_id": "v0.3.1:clean-machine-signed-update:31330296987",
+      "reference": "docs/qualification/v0.3.1-clean-machine-signed-update-v1.json",
+      "sha256": "a5948f28f54feba7023d06196727b218bbd57b3cd6fe58f3573f9a5c044c0f76",
+      "source": "tier3_automation_receipt",
+      "source_sha": "22982d5037e3b2bd03bbc9fa25332be2c8b04c97",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-09T19:05:28Z",
+      "case_id": "installed-ui-accessibility",
+      "receipt_id": "v0.3.1:installed-ui-accessibility:31330296987",
+      "reference": "docs/qualification/v0.3.1-installed-ui-accessibility-v1.json",
+      "sha256": "3a86308669618e6cfc15810d30f97daf7873504c3d15a181fd0b2f4af0c2d85e",
+      "source": "tier3_automation_receipt",
+      "source_sha": "22982d5037e3b2bd03bbc9fa25332be2c8b04c97",
+      "status": "accepted"
     }
   ],
   "schema_version": 1
