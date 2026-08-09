@@ -267,11 +267,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             "appcast_sha256",
         )
         stable_receipt_path = (
-            REPO_ROOT
-            / "docs"
-            / "release-evidence"
-            / qualification["candidate"]["public_version"]
-            / "release-receipt.json"
+            REPO_ROOT / "docs" / "release-evidence" / qualification["candidate"]["release_tag"] / "release-receipt.json"
         )
         if stable_receipt_path.exists():
             stable_receipt = json.loads(stable_receipt_path.read_text(encoding="utf-8"))
