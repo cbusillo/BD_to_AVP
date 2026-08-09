@@ -179,7 +179,9 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("Build `162`", cut_packet)
         self.assertIn("#520", cut_packet)
         self.assertIn("Privacy rules version `5`", cut_packet)
-        self.assertTrue(any(state in cut_packet for state in ("Prepared metadata; publication pending.",)))
+        receipt_exists = (REPO_ROOT / "docs" / "release-evidence" / "v0.3.1" / "release-receipt.json").exists()
+        expected_state = "Published and immutable." if receipt_exists else "Prepared metadata; publication pending."
+        self.assertIn(expected_state, cut_packet)
         self.assertIn("post-publication", cut_packet)
         self.assertIn("PyPI", cut_packet)
         self.assertIn("Homebrew", cut_packet)
