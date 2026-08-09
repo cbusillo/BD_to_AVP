@@ -112,7 +112,7 @@ def _validate_prepublication_candidate_transition(
         "base qualification record",
     )
     base_candidate = _mapping(base_qualification.get("candidate"), "base qualification candidate")
-    if any(base_candidate.get(field) is None for field in IMMUTABLE_CANDIDATE_FIELDS):
+    if any(field not in base_candidate or base_candidate[field] is None for field in IMMUTABLE_CANDIDATE_FIELDS):
         raise ReleaseMilestoneContextError(
             "Prepublication qualification must advance from a bound published candidate."
         )
@@ -238,7 +238,12 @@ def discover_milestone_receipt(
         if qualification_mutation:
             qualification = _load_json(repo_root / qualification_relative, "configured qualification record")
             candidate = _mapping(qualification.get("candidate"), "configured qualification candidate")
-            if any(candidate.get(field) is not None for field in IMMUTABLE_CANDIDATE_FIELDS):
+            missing_immutable_fields = [field for field in IMMUTABLE_CANDIDATE_FIELDS if field not in candidate]
+            if missing_immutable_fields:
+                raise ReleaseMilestoneContextError(
+                    "Prepublication qualification must explicitly include every immutable candidate field as null."
+                )
+            if any(candidate[field] is not None for field in IMMUTABLE_CANDIDATE_FIELDS):
                 raise ReleaseMilestoneContextError(
                     "Published qualification record changes require the checked release receipt and milestone gate."
                 )

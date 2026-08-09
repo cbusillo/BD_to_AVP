@@ -436,6 +436,60 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                     base_branch="main",
                 )
 
+    def test_rejects_missing_prepublication_immutable_field(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
+            qualification = json.loads(qualification_path.read_text(encoding="utf-8"))
+            for field in (
+                "source_git_sha",
+                "release_run_id",
+                "release_id",
+                "dmg_sha256",
+                "appcast_sha256",
+                "signed_app_tree_sha256",
+            ):
+                qualification["candidate"][field] = None
+            del qualification["candidate"]["source_git_sha"]
+            qualification["candidate"].update(
+                {
+                    "package_version": "0.3.1",
+                    "public_version": "0.3.1",
+                    "build_version": "162",
+                    "release_tag": "v0.3.1",
+                    "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.1.dmg",
+                }
+            )
+            qualification_path.write_text(json.dumps(qualification) + "\n", encoding="utf-8")
+            subprocess.run(["git", "add", qualification_path], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "omit immutable field"], cwd=root, check=True)
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "explicitly include"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="release/v0.3.1",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
+
     def test_rejects_prepublication_evidence_history_rewrite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

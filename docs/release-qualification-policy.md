@@ -194,8 +194,9 @@ Pull-request CI distinguishes release preparation evidence from checked
 post-publication evidence. A preparation PR may update the configured evidence
 index without a checked release receipt only when the same diff updates the
 configured qualification record and every immutable candidate field remains
-unbound. The candidate must advance from the bound published Stable identity to
-a newer derived Stable version and global build, and the evidence index may only
+present with an explicit JSON `null`. The candidate must advance from the bound
+published Stable identity to a newer derived Stable version and global build,
+and the evidence index may only
 append receipts without modifying or deleting accepted history. Any mutation
 under `docs/release-evidence/`, any evidence-index change without that validated
 preparation transition, or any qualification record carrying release IDs, run
