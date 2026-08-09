@@ -272,18 +272,29 @@ The workflow performs these ordered boundaries:
     not change.
 14. After either operator workflow completes successfully, the secret-free
    `Release Evidence` workflow revalidates the completed workflow identity,
-   immutable release, receipt asset, and live Pages appcast. It copies the exact
-   receipt into `docs/release-evidence/<tag>/`, writes the publication record and
-   release ledger, updates the matching qualification and cut packet, and opens
-   or updates `automation/release-evidence-<tag>`. Protected CI validates the
-   checked receipt identity and runs the `milestone` qualification phase. The
-   PR remains intentionally unmergeable until every blocking live-publication
-   and automated Tier 3 receipt has been added to that same idempotent branch
-   and the milestone report passes. Physical hardware and manual Sparkle-window
-   evidence remains visible as passed, failed, skipped, missing, or due, but it
-   does not block reconciliation. Branch protection, review, and normal merge
-   policy remain in force. A reconciliation or milestone failure does not
-   rebuild, replace, or invalidate the correctly published release.
+   immutable release, receipt asset, live Pages appcast, and same-run
+   `signed-artifact-ui` Actions artifact while that artifact is unexpired. It
+   copies the exact release receipt, original one-file signed UI Actions ZIP,
+   and signed UI receipt into
+   `docs/release-evidence/<tag>/`, writes a deterministic public-safe
+   `qualification-manifest.json`, writes the publication record and release
+   ledger, updates the matching qualification and cut packet, and opens or
+   updates `automation/release-evidence-<tag>`. Protected CI validates the
+   checked manifest/receipt identities and runs the `milestone` qualification
+   phase. The PR remains intentionally unmergeable until every blocking
+   live-publication and automated Tier 3 receipt has been added to that same
+   idempotent branch and the milestone report passes. Physical hardware and
+   manual Sparkle-window evidence remains visible as passed, failed, skipped,
+   missing, or due, but it does not block reconciliation. Branch protection,
+   review, and normal merge policy remain in force. A reconciliation or
+   milestone failure does not rebuild, replace, or invalidate the correctly
+   published release. If protected `main` advances while the evidence PR is
+   open, rerunning Release Evidence first validates the prior manifest against
+   its original branch snapshot, then refreshes only reviewed-main policy and
+   checkpoint fields while preserving exact release and artifact identity. If
+   the signed UI artifact expires before the first successful capture, the
+   workflow stops explicitly because that immutable evidence cannot be
+   reconstructed; it never substitutes a rebuilt or operator-authored receipt.
 15. The separate `cbusillo/homebrew-tap` repository checks the latest stable
    GitHub Release on a schedule and by manual dispatch. Homebrew opens a formula
    update pull request when the version changes; tap CI must pass formula audit,

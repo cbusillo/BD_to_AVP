@@ -1016,6 +1016,25 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("scripts.stable_pypi_recovery verify-pypi", str(prepare))
         self.assertIn("--recovery-workflow-run", str(prepare))
         self.assertIn("release-receipt.json", str(prepare))
+        self.assertIn("Capture signed artifact UI receipt before expiry", str(prepare))
+        step_names = [step["name"] for step in prepare["steps"]]
+        self.assertLess(
+            step_names.index("Preserve an existing idempotent evidence branch"),
+            step_names.index("Capture signed artifact UI receipt before expiry"),
+        )
+        self.assertIn("signed-artifact-ui-metadata.json", str(prepare))
+        self.assertIn("EXISTING_WORKTREE", str(prepare))
+        self.assertIn("checkpoint_source=main", str(prepare))
+        self.assertIn("steps.reuse.outputs.checkpoint_source != 'main'", str(prepare))
+        self.assertIn("partial qualification checkpoint state", str(prepare))
+        self.assertIn("expired before Release Evidence captured it", str(prepare))
+        self.assertIn("scripts.release_qualification_manifest validate", str(prepare))
+        self.assertIn("scripts.signed_artifact_receipt validate", str(prepare))
+        self.assertIn("scripts.release notes-base", str(prepare))
+        self.assertIn("--signed-ui-artifact-id", str(prepare))
+        self.assertIn("--signed-ui-artifact-archive", str(prepare))
+        self.assertIn("signed-artifact-ui.zip", str(prepare))
+        self.assertIn("steps.reconcile.outputs.manifest_sha256", str(prepare))
         self.assertIn(".immutable == true", str(prepare))
         self.assertIn("Preserve an existing idempotent evidence branch", str(prepare))
         self.assertIn("automation/release-evidence-", str(create_pr))
@@ -1035,7 +1054,7 @@ printf '%s' "$CODESIGN_METADATA"
 
         self.assertEqual(
             set(dispatch["inputs"]),
-            {"candidate_tag", "evidence_ref", "prior_tag", "route", "signed_ui_artifact_id"},
+            {"candidate_tag", "manifest_sha256"},
         )
         self.assertEqual(workflow["permissions"], {})
         self.assertEqual(qualify["permissions"], {"actions": "read", "contents": "read"})
@@ -1054,11 +1073,16 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("origin/main...HEAD", workflow_text)
         self.assertIn("cmp docs/qualification/release-qualification-policy-v1.json", workflow_text)
         self.assertIn("automation/release-evidence-$CANDIDATE_TAG", workflow_text)
+        self.assertIn("scripts.release_qualification_manifest validate", workflow_text)
+        self.assertIn("--expected-sha256", workflow_text)
+        self.assertIn("--evidence-base-revision", workflow_text)
+        self.assertIn("MANIFEST_SHA256", workflow_text)
         self.assertIn("scripts.signed_artifact_receipt validate", workflow_text)
         self.assertIn("scripts.tier3_clean_machine preflight", workflow_text)
         self.assertIn("scripts.tier3_clean_machine run", workflow_text)
         self.assertIn("scripts.tier3_receipt", workflow_text)
         self.assertIn("Blocking automated milestone qualification", workflow_text)
+        self.assertIn("Qualification manifest", workflow_text)
         self.assertIn("Blocking clean-machine receipt", workflow_text)
         self.assertIn("Blocking installed UI receipt", workflow_text)
         self.assertIn("expected_prerelease=$(jq -r .release.prerelease", workflow_text)
@@ -1074,6 +1098,14 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertEqual(
             config["releaseOperations"]["milestoneQualificationWorkflowPath"],
             ".github/workflows/milestone-qualification.yml",
+        )
+        self.assertEqual(
+            config["releaseOperations"]["qualificationManifestPath"],
+            "docs/release-evidence/<tag>/qualification-manifest.json",
+        )
+        self.assertEqual(
+            config["releaseOperations"]["qualificationManifestCommand"],
+            "uv run python -m scripts.release_qualification_manifest",
         )
 
     def test_release_evidence_pr_enforces_post_publication_milestone(self) -> None:

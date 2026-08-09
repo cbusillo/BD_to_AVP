@@ -261,6 +261,12 @@ class ReleaseReceiptTests(unittest.TestCase):
             qualification_path.write_text(json.dumps(qualification), encoding="utf-8")
             cut_packet = root / "docs" / "0.3.0-rc.3-cut-packet.md"
             cut_packet.write_text("# RC3\n\n> **Prepared metadata; publication pending.**\n", encoding="utf-8")
+            historical_receipts = [{"receipt_id": "z-history"}, {"receipt_id": "a-history"}]
+            evidence_path = qualification_directory / "release-evidence-v1.json"
+            evidence_path.write_text(
+                json.dumps({"schema_version": 1, "receipts": historical_receipts}) + "\n",
+                encoding="utf-8",
+            )
 
             receipt = build_receipt(receipt_facts())
             receipt_path = root / "published-release-receipt.json"
@@ -308,8 +314,9 @@ class ReleaseReceiptTests(unittest.TestCase):
             checked_receipt = root / first["receipt"]
             self.assertEqual(checked_receipt.read_bytes(), receipt_path.read_bytes())
             evidence = json.loads((root / first["evidence_index"]).read_text(encoding="utf-8"))
-            self.assertEqual(len(evidence["receipts"]), 2)
-            self.assertTrue(all(item["workflow_conclusion"] == "success" for item in evidence["receipts"]))
+            self.assertEqual(evidence["receipts"][:2], historical_receipts)
+            self.assertEqual(len(evidence["receipts"]), 4)
+            self.assertTrue(all(item["workflow_conclusion"] == "success" for item in evidence["receipts"][2:]))
             updated_qualification = json.loads(qualification_path.read_text(encoding="utf-8"))
             self.assertEqual(updated_qualification["candidate"]["source_git_sha"], SOURCE_SHA)
             self.assertIn("Published and immutable", cut_packet.read_text(encoding="utf-8"))
@@ -406,6 +413,96 @@ class ReleaseReceiptTests(unittest.TestCase):
                 50,
             )
             self.assertEqual(outputs["release_run_id"], 30)
+
+    def test_reconcile_rejects_partial_manifest_inputs_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            with patch("scripts.release_evidence.validate_publication") as validate_publication:
+                with self.assertRaisesRegex(ReleaseEvidenceError, "manifest inputs are partial"):
+                    reconcile(
+                        root,
+                        {},
+                        {},
+                        {},
+                        root / "release-receipt.json",
+                        root / "appcast.xml",
+                        prior_tag="v0.3.0",
+                    )
+
+            validate_publication.assert_not_called()
+            self.assertFalse((root / "docs").exists())
+
+    def test_reconcile_wires_complete_manifest_inputs_and_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt_path = root / "release-receipt.json"
+            receipt_path.write_text("{}\n", encoding="utf-8")
+            signed_ui_path = root / "signed-artifact-ui-receipt.json"
+            signed_ui_path.write_text("{}\n", encoding="utf-8")
+            signed_ui_archive_path = root / "signed-artifact-ui.zip"
+            signed_ui_archive_path.write_bytes(b"archive")
+            qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
+            cut_packet_path = root / "docs/0.3.0-cut-packet.md"
+            qualification_path.parent.mkdir(parents=True)
+            qualification_path.write_text("{}\n", encoding="utf-8")
+            cut_packet_path.write_text("# Cut packet\n", encoding="utf-8")
+            receipt = {
+                "appcast": {"live_pages_url": "https://example.com/appcast.xml"},
+                "release": {"id": 20, "tag": "v0.3.0"},
+                "source_sha": SOURCE_SHA,
+                "tier1_case_references": [],
+                "workflow": {"run_id": 30},
+            }
+            publication = {
+                "live_appcast_sha256": "a" * 64,
+                "original_workflow_conclusion": "success",
+                "published_at": "2026-08-07T21:42:28Z",
+                "receipt_asset_id": 40,
+                "receipt_file_sha256": file_sha256(receipt_path),
+                "recovery_workflow_run_id": None,
+            }
+            manifest = {
+                "manifest_sha256": "b" * 64,
+                "signed_ui_artifact": {
+                    "artifact_sha256": "d" * 64,
+                    "receipt_sha256": "c" * 64,
+                },
+            }
+            with (
+                patch("scripts.release_evidence.validate_publication", return_value=publication),
+                patch("scripts.release_evidence._update_qualification", return_value=qualification_path),
+                patch("scripts.release_evidence._update_cut_packet", return_value=cut_packet_path),
+                patch(
+                    "scripts.release_qualification_manifest.build_manifest_for_reconciled_release",
+                    return_value=manifest,
+                ) as build_manifest,
+            ):
+                outputs = reconcile(
+                    root,
+                    {},
+                    {},
+                    receipt,
+                    receipt_path,
+                    root / "appcast.xml",
+                    prior_tag="v0.3.0-rc.3",
+                    signed_ui_artifact_id=50,
+                    signed_ui_artifact_digest="d" * 64,
+                    signed_ui_archive_path=signed_ui_archive_path,
+                    signed_ui_receipt_path=signed_ui_path,
+                    signed_ui_receipt_file_sha256=file_sha256(signed_ui_path),
+                    evidence_ref="automation/release-evidence-v0.3.0",
+                    evidence_base_sha="e" * 40,
+                    runner_sha="f" * 40,
+                    sparkle_route="rc",
+                )
+
+            build_manifest.assert_called_once()
+            self.assertEqual(outputs["manifest_sha256"], "b" * 64)
+            self.assertEqual(outputs["signed_ui_receipt_sha256"], "c" * 64)
+            self.assertEqual(
+                outputs["qualification_manifest"],
+                "docs/release-evidence/v0.3.0/qualification-manifest.json",
+            )
 
 
 if __name__ == "__main__":

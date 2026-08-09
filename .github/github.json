@@ -74,6 +74,8 @@
     "milestoneQualificationWorkflowPath": ".github/workflows/milestone-qualification.yml",
     "qualificationPolicyPath": "docs/qualification/release-qualification-policy-v1.json",
     "qualificationEvidencePath": "docs/qualification/release-evidence-v1.json",
+    "qualificationManifestPath": "docs/release-evidence/<tag>/qualification-manifest.json",
+    "qualificationManifestCommand": "uv run python -m scripts.release_qualification_manifest",
     "qualificationRecordPath": "docs/qualification/stable-signed-qualification-v1.json",
     "qualificationReportArtifacts": [
       "release-qualification-preparation-<run-attempt>",

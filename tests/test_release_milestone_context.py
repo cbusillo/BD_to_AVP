@@ -3,15 +3,29 @@ import json
 import subprocess
 import tempfile
 import unittest
+import zipfile
 
+from dataclasses import replace
 from pathlib import Path
 
 from scripts.release_milestone_context import (
+    EVIDENCE_INDEX_PATH,
     ReleaseMilestoneContextError,
+    discover_milestone_manifest,
     discover_milestone_receipt,
+    require_manifest_evidence_baseline,
+    require_manifest_runner_sha,
+    resolve_milestone_manifest_context,
     resolve_milestone_context,
 )
-from scripts.release_receipt import build_receipt, write_receipt
+from scripts.release_qualification_manifest import (
+    SIGNAL_ARCHIVE_NAME,
+    SIGNAL_RECEIPT_NAME,
+    SignedUiArtifactBinding,
+    build_manifest,
+    write_manifest,
+)
+from scripts.release_receipt import build_receipt, receipt_sha256, write_receipt
 
 
 DMG_SHA256 = "a" * 64
@@ -29,13 +43,26 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         policy_path = root / "docs/qualification/release-qualification-policy-v1.json"
         evidence_path = root / "docs/qualification/release-evidence-v1.json"
         qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
+        route_table_path = root / "docs/qualification/video-quality-route-table-v2.json"
         receipt_path = root / "docs/release-evidence/v0.3.0/release-receipt.json"
         publication_path = root / "docs/release-evidence/v0.3.0/publication-record.json"
         config_path = root / ".github/github.json"
-        for path in (policy_path, evidence_path, qualification_path, receipt_path, publication_path, config_path):
+        controller_path = root / ".github/workflows/milestone-qualification.yml"
+        for path in (
+            policy_path,
+            evidence_path,
+            qualification_path,
+            route_table_path,
+            receipt_path,
+            publication_path,
+            config_path,
+            controller_path,
+        ):
             path.parent.mkdir(parents=True, exist_ok=True)
         policy_path.write_text("{}\n", encoding="utf-8")
         evidence_path.write_text('{"schema_version": 1, "receipts": []}\n', encoding="utf-8")
+        route_table_path.write_text('{"schema_version": 1, "routes": []}\n', encoding="utf-8")
+        controller_path.write_text("name: Milestone Qualification\n", encoding="utf-8")
         config_path.write_text(
             json.dumps(
                 {
@@ -157,6 +184,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                     "workflow_run_id": 12345,
                     "workflow_conclusion": "success",
                     "published_at": "2026-08-06T13:00:00Z",
+                    "receipt_asset_id": 4,
                     "receipt_file_sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
                     "live_pages": {
                         "state": "verified",
@@ -182,6 +210,239 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         self.assertEqual(context.release_stage, "stable")
         self.assertFalse(context.first_candidate_of_cycle)
         self.assertEqual(context.qualification_path, "docs/qualification/stable-signed-qualification-v1.json")
+
+    def test_resolves_manifest_milestone_context_without_migrating_receipts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt_path = self.build_repository(root)
+            policy_path = root / "docs/qualification/release-qualification-policy-v1.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "policy_id": "release-qualification-policy-v1",
+                        "result_states": ["covered", "carry", "retest", "external"],
+                        "tiers": {},
+                        "contracts": {"profile-storage": [], "release-engine": []},
+                        "cases": [
+                            {
+                                "id": "release-workflow-identity",
+                                "tier": 1,
+                                "blocking_phase": "publication",
+                                "invalidates_on": {"paths": [], "contracts": ["release-engine"]},
+                                "allowed_evidence_sources": ["release_run_receipt"],
+                            },
+                            {
+                                "id": "profile-save-action-accessibility",
+                                "tier": 2,
+                                "blocking_phase": "publication",
+                                "artifact_owned": True,
+                                "invalidates_on": {"paths": [], "contracts": ["profile-storage"]},
+                                "allowed_evidence_sources": ["signed_artifact_receipt"],
+                            },
+                        ],
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            prior_path = root / "docs/release-evidence/v0.2.143/release-receipt.json"
+            prior_path.parent.mkdir(parents=True)
+            prior = build_receipt(
+                {
+                    "release_route": "stable",
+                    "source_sha": "e" * 40,
+                    "workflow_actor": "shiny-code-bot",
+                    "workflow_run_id": 111,
+                    "workflow_run_attempt": 1,
+                    "package_version": "0.2.143",
+                    "public_version": "0.2.143",
+                    "build_version": "143",
+                    "release_tag": "v0.2.143",
+                    "release_name": "v0.2.143",
+                    "release_id": 222,
+                    "release_created_at": "2026-08-01T12:00:00Z",
+                    "prerelease": False,
+                    "make_latest": True,
+                    "signed_app_tree_sha256": APP_TREE_SHA256,
+                    "artifacts": [
+                        {
+                            "kind": "dmg",
+                            "name": "3D-Blu-ray-to-Vision-Pro-0.2.143.dmg",
+                            "sha256": "1" * 64,
+                            "size_bytes": 1000,
+                            "asset_id": 11,
+                        },
+                        {
+                            "kind": "checksum",
+                            "name": "SHA256SUMS",
+                            "sha256": "2" * 64,
+                            "size_bytes": 100,
+                            "asset_id": 12,
+                        },
+                        {
+                            "kind": "appcast",
+                            "name": "appcast.xml",
+                            "sha256": "3" * 64,
+                            "size_bytes": 500,
+                            "asset_id": 13,
+                        },
+                    ],
+                }
+            )
+            write_receipt(prior, prior_path)
+            signed_ui_path = root / "docs/release-evidence/v0.3.0/signed-artifact-ui-receipt.json"
+            signed_ui = {
+                "case_id": "profile-save-action-accessibility",
+                "candidate_sha": json.loads(receipt_path.read_text(encoding="utf-8"))["source_sha"],
+                "dmg": {
+                    "asset_id": 1,
+                    "name": "3D-Blu-ray-to-Vision-Pro-0.3.0.dmg",
+                    "sha256": DMG_SHA256,
+                    "size_bytes": 1000,
+                },
+                "evidence": [
+                    {"kind": "accessibility-tree", "sha256": "4" * 64},
+                    {"kind": "screenshot-dark", "sha256": "5" * 64},
+                    {"kind": "screenshot-light", "sha256": "6" * 64},
+                    {"kind": "ui-result", "sha256": "7" * 64},
+                ],
+                "policy_id": "release-qualification-policy-v1",
+                "receipt_type": "bd-to-avp-signed-artifact-ui",
+                "release": {"id": 67890, "tag": "v0.3.0"},
+                "release_receipt": {
+                    "asset_id": 4,
+                    "file_sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+                    "receipt_sha256": json.loads(receipt_path.read_text(encoding="utf-8"))["receipt_sha256"],
+                },
+                "schema_version": 1,
+                "signed_app_tree_sha256": APP_TREE_SHA256,
+                "source": "signed_artifact_receipt",
+                "status": "passed",
+                "test_selector": (
+                    "BluRayToVisionProUITests/InstalledUIAcceptanceTests/testCandidateMainWindowProfileAndSettings"
+                ),
+                "versions": {"build": "161", "package": "0.3.0", "public": "0.3.0"},
+                "workflow": {"job": "signed-artifact-ui", "run_attempt": 1, "run_id": 12345},
+            }
+            signed_ui["receipt_sha256"] = receipt_sha256(signed_ui)
+            signed_ui_path.write_text(
+                json.dumps(signed_ui, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            signed_archive_path = signed_ui_path.parent / SIGNAL_ARCHIVE_NAME
+            archive_info = zipfile.ZipInfo(SIGNAL_RECEIPT_NAME, date_time=(2026, 1, 1, 0, 0, 0))
+            archive_info.compress_type = zipfile.ZIP_DEFLATED
+            archive_info.external_attr = 0o100644 << 16
+            with zipfile.ZipFile(signed_archive_path, "w") as archive:
+                archive.writestr(archive_info, signed_ui_path.read_bytes())
+            manifest = build_manifest(
+                repo_root=root,
+                release_receipt_path=receipt_path,
+                prior_release_receipt_path=prior_path,
+                signed_ui=SignedUiArtifactBinding(
+                    artifact_id=999,
+                    artifact_digest=hashlib.sha256(signed_archive_path.read_bytes()).hexdigest(),
+                    archive_path="docs/release-evidence/v0.3.0/signed-artifact-ui.zip",
+                    receipt_path="docs/release-evidence/v0.3.0/signed-artifact-ui-receipt.json",
+                    receipt_file_sha256=hashlib.sha256(signed_ui_path.read_bytes()).hexdigest(),
+                    receipt_sha256=signed_ui["receipt_sha256"],
+                ),
+                evidence_ref="automation/release-evidence-v0.3.0",
+                evidence_base_sha=subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip(),
+                runner_sha="7" * 40,
+                sparkle_route="stable",
+            )
+            manifest_path = root / "docs/release-evidence/v0.3.0/qualification-manifest.json"
+            write_manifest(manifest, manifest_path)
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "manifest"], cwd=root, check=True)
+            commits = subprocess.run(
+                ["git", "rev-list", "--reverse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.splitlines()
+
+            discovered = discover_milestone_manifest(
+                root,
+                base_sha=commits[-2],
+                head_sha=commits[-1],
+                head_branch="automation/release-evidence-v0.3.0",
+                base_repo="cbusillo/BD_to_AVP",
+                head_repo="cbusillo/BD_to_AVP",
+                base_branch="main",
+            )
+            context = resolve_milestone_manifest_context(root, manifest_path)
+            require_manifest_evidence_baseline(context, root, commits[-2])
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "evidence baseline"):
+                require_manifest_evidence_baseline(
+                    replace(context, evidence_index_base_sha256="0" * 64),
+                    root,
+                    commits[-2],
+                )
+
+        self.assertEqual(discovered, manifest_path)
+        self.assertEqual(context.manifest_path, "docs/release-evidence/v0.3.0/qualification-manifest.json")
+        self.assertEqual(context.manifest_sha256, manifest["manifest_sha256"])
+        self.assertEqual(context.runner_sha, "7" * 40)
+        require_manifest_runner_sha(context, "7" * 40)
+        with self.assertRaisesRegex(ReleaseMilestoneContextError, "runner SHA"):
+            require_manifest_runner_sha(context, "8" * 40)
+
+    def test_manifest_discovery_rejects_rewritten_evidence_history(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            evidence_path = root / EVIDENCE_INDEX_PATH
+            evidence_path.write_text(
+                json.dumps({"schema_version": 1, "receipts": [{"receipt_id": "accepted"}]}) + "\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", evidence_path], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "accept evidence"], cwd=root, check=True)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            manifest_path = root / "docs/release-evidence/v0.3.0/qualification-manifest.json"
+            manifest_path.write_text("{}\n", encoding="utf-8")
+            evidence_path.write_text(
+                json.dumps({"schema_version": 1, "receipts": [{"receipt_id": "replacement"}]}) + "\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", manifest_path, evidence_path], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "rewrite evidence with manifest"], cwd=root, check=True)
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "only append receipts"):
+                discover_milestone_manifest(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="automation/release-evidence-v0.3.0",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
 
     def test_accepts_explicit_successful_recovery_for_failed_release_run(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -565,7 +826,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             ).stdout.strip()
-            recovery_path = root / "docs/release-evidence/v0.3.0-pypi-recovery.json"
+            recovery_path = root / "docs/release-evidence/v0.3.1-pypi-recovery.json"
             recovery_path.write_text('{"schema": "bd_to_avp.pypi_recovery"}\n', encoding="utf-8")
             subprocess.run(["git", "add", recovery_path.relative_to(root)], cwd=root, check=True)
             subprocess.run(["git", "commit", "-qm", "add recovery authorization"], cwd=root, check=True)
@@ -600,7 +861,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             ).stdout.strip()
-            unbound_path = root / "docs/release-evidence/v0.3.1-pypi-recovery.json"
+            unbound_path = root / "docs/release-evidence/v0.3.1-unbound.json"
             unbound_path.write_text("{}\n", encoding="utf-8")
             subprocess.run(["git", "add", unbound_path.relative_to(root)], cwd=root, check=True)
             subprocess.run(["git", "commit", "-qm", "add unbound release evidence"], cwd=root, check=True)

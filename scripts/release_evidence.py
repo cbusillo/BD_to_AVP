@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import tempfile
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -88,9 +89,20 @@ def _load_json(path: Path, description: str) -> Mapping[str, Any]:
         raise ReleaseEvidenceError(f"Invalid JSON in {description} at {path}: {error}") from error
 
 
-def _write_json(path: Path, value: object) -> None:
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    with tempfile.NamedTemporaryFile("wb", dir=path.parent, delete=False) as temporary:
+        temporary.write(content)
+        temporary_path = Path(temporary.name)
+    temporary_path.replace(path)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    _atomic_write_bytes(path, content.encode())
+
+
+def _write_json(path: Path, value: object) -> None:
+    _atomic_write_text(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
 def _parse_timestamp(value: object, description: str) -> str:
@@ -339,7 +351,7 @@ def _update_cut_packet(repo_root: Path, receipt: Mapping[str, Any], publication:
         text = prefix + block
     else:
         text = text.rstrip() + block
-    path.write_text(text.rstrip() + "\n", encoding="utf-8")
+    _atomic_write_text(path, text.rstrip() + "\n")
     return path
 
 
@@ -351,7 +363,34 @@ def reconcile(
     receipt_path: Path,
     live_appcast_path: Path,
     recovery_workflow_run: Mapping[str, Any] | None = None,
+    *,
+    prior_tag: str | None = None,
+    signed_ui_artifact_id: int | None = None,
+    signed_ui_artifact_digest: str | None = None,
+    signed_ui_archive_path: Path | None = None,
+    signed_ui_receipt_path: Path | None = None,
+    signed_ui_receipt_file_sha256: str | None = None,
+    evidence_ref: str | None = None,
+    evidence_base_sha: str | None = None,
+    runner_sha: str | None = None,
+    sparkle_route: str | None = None,
 ) -> dict[str, Any]:
+    manifest_inputs = {
+        "prior_tag": prior_tag,
+        "signed_ui_artifact_id": signed_ui_artifact_id,
+        "signed_ui_artifact_digest": signed_ui_artifact_digest,
+        "signed_ui_archive_path": signed_ui_archive_path,
+        "signed_ui_receipt_path": signed_ui_receipt_path,
+        "signed_ui_receipt_file_sha256": signed_ui_receipt_file_sha256,
+        "evidence_ref": evidence_ref,
+        "evidence_base_sha": evidence_base_sha,
+        "runner_sha": runner_sha,
+        "sparkle_route": sparkle_route,
+    }
+    supplied_manifest_inputs = {key for key, value in manifest_inputs.items() if value is not None}
+    if supplied_manifest_inputs and supplied_manifest_inputs != set(manifest_inputs):
+        missing = sorted(set(manifest_inputs) - supplied_manifest_inputs)
+        raise ReleaseEvidenceError(f"Qualification manifest inputs are partial; missing={missing}.")
     publication = validate_publication(
         workflow_run,
         release,
@@ -367,8 +406,7 @@ def reconcile(
     checked_receipt = evidence_directory / RECEIPT_ASSET_NAME
     if checked_receipt.exists() and checked_receipt.read_bytes() != receipt_path.read_bytes():
         raise ReleaseEvidenceError(f"Checked receipt for immutable release {tag} conflicts with the published asset.")
-    checked_receipt.parent.mkdir(parents=True, exist_ok=True)
-    checked_receipt.write_bytes(receipt_path.read_bytes())
+    _atomic_write_bytes(checked_receipt, receipt_path.read_bytes())
     recovery_workflow_run = (
         {
             "operation": "pypi_recovery",
@@ -460,12 +498,12 @@ def reconcile(
         if recovery_workflow_run is not None:
             evidence_record["recovery_workflow_run"] = recovery_workflow_run
         _merge_unique_record(receipts, evidence_record, "receipt_id")
-    evidence["receipts"] = sorted(receipts, key=lambda item: cast(str, item["receipt_id"]))
+    evidence["receipts"] = receipts
     _write_json(evidence_path, evidence)
 
     qualification_path = _update_qualification(repo_root, receipt)
     cut_packet_path = _update_cut_packet(repo_root, receipt, publication)
-    return {
+    outputs = {
         "cut_packet": cut_packet_path.relative_to(repo_root).as_posix(),
         "evidence_index": EVIDENCE_INDEX_PATH.as_posix(),
         "publication_record": publication_path.relative_to(repo_root).as_posix(),
@@ -477,6 +515,50 @@ def reconcile(
         "release_tag": tag,
         "source_sha": receipt["source_sha"],
     }
+    if supplied_manifest_inputs:
+        from scripts.release_qualification_manifest import (
+            MANIFEST_NAME,
+            ReleaseQualificationManifestError,
+            build_manifest_for_reconciled_release,
+        )
+
+        try:
+            manifest = build_manifest_for_reconciled_release(
+                repo_root=repo_root,
+                release_tag=tag,
+                prior_tag=cast(str, prior_tag),
+                signed_ui_artifact_id=cast(int, signed_ui_artifact_id),
+                signed_ui_artifact_digest=cast(str, signed_ui_artifact_digest),
+                signed_ui_archive_source_path=cast(Path, signed_ui_archive_path),
+                signed_ui_receipt_source_path=cast(Path, signed_ui_receipt_path),
+                signed_ui_receipt_file_sha256=cast(str, signed_ui_receipt_file_sha256),
+                evidence_ref=cast(str, evidence_ref),
+                evidence_base_sha=cast(str, evidence_base_sha),
+                runner_sha=cast(str, runner_sha),
+                sparkle_route=cast(str, sparkle_route),
+                qualification_path=qualification_path.relative_to(repo_root),
+            )
+        except ReleaseQualificationManifestError as error:
+            raise ReleaseEvidenceError(str(error)) from error
+        outputs.update(
+            {
+                "manifest_sha256": manifest["manifest_sha256"],
+                "qualification_manifest": (evidence_directory / MANIFEST_NAME).relative_to(repo_root).as_posix(),
+                "signed_ui_receipt": (evidence_directory / "signed-artifact-ui-receipt.json")
+                .relative_to(repo_root)
+                .as_posix(),
+                "signed_ui_archive": (evidence_directory / "signed-artifact-ui.zip").relative_to(repo_root).as_posix(),
+                "signed_ui_receipt_sha256": _mapping(
+                    manifest.get("signed_ui_artifact"),
+                    "manifest signed UI artifact",
+                )["receipt_sha256"],
+                "signed_ui_artifact_sha256": _mapping(
+                    manifest.get("signed_ui_artifact"),
+                    "manifest signed UI artifact",
+                )["artifact_sha256"],
+            }
+        )
+    return outputs
 
 
 def _write_github_output(path: Path, outputs: Mapping[str, Any]) -> None:
@@ -492,6 +574,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--live-appcast", type=Path, required=True)
     parser.add_argument("--recovery-workflow-run", type=Path)
+    parser.add_argument("--prior-tag")
+    parser.add_argument("--signed-ui-artifact-id", type=int)
+    parser.add_argument("--signed-ui-artifact-digest")
+    parser.add_argument("--signed-ui-artifact-archive", type=Path)
+    parser.add_argument("--signed-ui-receipt", type=Path)
+    parser.add_argument("--signed-ui-receipt-file-sha256")
+    parser.add_argument("--evidence-ref")
+    parser.add_argument("--evidence-base-sha")
+    parser.add_argument("--runner-sha")
+    parser.add_argument("--sparkle-route")
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args(argv)
@@ -508,6 +600,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if args.recovery_workflow_run is not None
                 else None
             ),
+            prior_tag=args.prior_tag,
+            signed_ui_artifact_id=args.signed_ui_artifact_id,
+            signed_ui_artifact_digest=args.signed_ui_artifact_digest,
+            signed_ui_archive_path=args.signed_ui_artifact_archive,
+            signed_ui_receipt_path=args.signed_ui_receipt,
+            signed_ui_receipt_file_sha256=args.signed_ui_receipt_file_sha256,
+            evidence_ref=args.evidence_ref,
+            evidence_base_sha=args.evidence_base_sha,
+            runner_sha=args.runner_sha,
+            sparkle_route=args.sparkle_route,
         )
         if args.github_output is not None:
             _write_github_output(args.github_output, outputs)

@@ -307,9 +307,37 @@ python -m scripts.qualify_release_scope \
 ```
 
 After publication, the Release Evidence workflow opens or updates
-`automation/release-evidence-<tag>`. CI validates the checked release receipt
-against the configured qualification record with
-`scripts.release_milestone_context`, then runs:
+`automation/release-evidence-<tag>`. New evidence branches must include the
+canonical public-safe `docs/release-evidence/<tag>/qualification-manifest.json`
+plus the checked `signed-artifact-ui-receipt.json`. The manifest is exact-key
+JSON with a deterministic self-digest over the canonical payload. It binds the
+candidate version, tag, build, release ID, reviewed qualification-runner `main`
+SHA, release workflow run/attempt/actor/name/path, prior release tag, Sparkle
+route, release receipt path/file
+digest/self digest, DMG/checksum/appcast/signed-app-tree identities, signed UI
+Actions artifact ID/digest/archive path/receipt path/file digest/self digest,
+policy and
+route-table digests, controller runner digest, canonical evidence ref/base SHA,
+the evidence-index baseline digest, and policy case classifications/checkpoint
+digest. The evidence-index baseline remains an audit checkpoint while validated
+milestone receipts append to the checked index. The pull-request gate verifies
+that baseline against protected `main` and rejects any rewrite of accepted
+evidence history. Milestone qualification rechecks the recorded Actions
+artifact ID and digest through GitHub while metadata is retained; after GitHub
+deletes expired metadata, the exact checked receipt and original Actions ZIP
+captured and validated by Release Evidence are the durable replacement.
+Manifest validation hashes that ZIP and requires its sole payload to be the
+byte-identical checked receipt. A later protected-main advance
+may refresh controller, policy, baseline, and reviewed-main checkpoint fields,
+but only after the prior manifest validates against its original evidence
+snapshot and the immutable release, workflow, receipt, prior-release, and
+signed-UI identities remain byte-for-byte equivalent. If no checked receipt was
+captured before artifact expiry, qualification stops rather than reconstructing
+evidence. Absolute paths, private field
+names, conflicts, and partial manifest input state fail closed. CI validates the
+checked manifest or, for immutable historical evidence that predates the
+manifest, the checked release receipt against the configured qualification
+record with `scripts.release_milestone_context`, then runs:
 
 ```sh
 python -m scripts.qualify_release_scope \
@@ -332,8 +360,8 @@ presentation outcomes remain visible in the report. A blocking milestone
 failure never rebuilds, retags, re-signs, replaces, or unpublishes the immutable
 release; it blocks evidence reconciliation and milestone completion until the
 checked blocking evidence passes.
-CI discovers checked release-receipt changes from the pull-request diff and
-requires a same-repository PR targeting `main`, the exact
+CI discovers checked manifest or release-receipt changes from the pull-request
+diff and requires a same-repository PR targeting `main`, the exact
 `automation/release-evidence-<tag>` branch, and a docs-only diff, so a fork or a
 copied evidence branch cannot skip the milestone gate.
 
@@ -351,9 +379,11 @@ live Pages state is required only after publication.
 
 After the operator workflow completes, `.github/workflows/release-evidence.yml`
 validates the successful `workflow_dispatch` run, approved actor, protected
-source SHA, immutable release fields, asset IDs and sizes, receipt digest, and
-live Pages appcast. It then opens or updates one task-branch PR containing the
-receipt, publication record, release ledger, qualification fields, and cut
+source SHA, immutable release fields, asset IDs and sizes, receipt digest, live
+Pages appcast, and the same-run signed UI artifact metadata and receipt while
+the Actions artifact is still available. It then opens or updates one
+task-branch PR containing the release receipt, signed UI receipt, qualification
+manifest, publication record, release ledger, qualification fields, and cut
 packet status. The workflow has no signing, notarization, Sparkle private-key,
 PyPI, or deployment secrets. The evidence PR cannot merge until protected CI's
 milestone report passes.
