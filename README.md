@@ -225,6 +225,7 @@ bd-to-avp --source <source> [--source-folder <source-folder>] [options]
 - `--output-root-folder`: Output folder path. Defaults to the current directory.
 - `--audio-mode`: Audio handling mode: `automatic`, `convert_aac`, or `pcm` (default: `automatic`). Automatic copies
   qualified AAC audio to an owned M4A, and converts the whole selected set to AAC if any selected stream is unqualified.
+  Sources without audio produce a video-only movie; the app does not synthesize a silent track.
 - `--transcode-audio`: Legacy alias for `--audio-mode convert_aac`.
 - `--audio-bitrate`: Audio bitrate for AAC conversion in kb/s do not include unit (default: "384").
 - `--audio-preferred-language`: Keep every audio track matching this language metadata. Accepts ISO 639 alpha-2,

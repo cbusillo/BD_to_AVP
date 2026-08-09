@@ -59,6 +59,11 @@ EXPLICITLY_UNQUALIFIED_CODECS = frozenset({"ac3", "eac3", "ac-3", "e-ac-3"})
 AAC_COPY_PROFILES = frozenset({"lc", "he-aac", "he-aacv2", "mpeg-4 aac lc", "aac lc"})
 AAC_COPY_SAMPLE_RATES = frozenset({44_100, 48_000})
 AAC_COPY_LAYOUT_CHANNELS = _AAC_COPY_LAYOUT_CHANNELS
+INFERRED_TRANSCODE_LAYOUTS = {1: "mono", 2: "stereo"}
+
+
+class NoAudioStreamsError(RuntimeError):
+    pass
 
 
 def transcode_audio(
@@ -85,6 +90,8 @@ def transcode_audio(
             observability_context=observability_context,
         )
     )
+    if not selected_streams:
+        raise NoAudioStreamsError("The source does not contain an audio stream.")
     layout_plan = plan_aac_layouts(selected_streams)
     enforce_aac_layout_policy(layout_plan, activity)
     selected_inputs = (
@@ -153,11 +160,17 @@ def plan_aac_layouts(streams: list[dict[str, Any]]) -> list[PlannedAudioLayout]:
     for output_index, stream in enumerate(streams):
         stream_index = parse_optional_int(stream.get("index"))
         codec_name = str(stream.get("codec_name") or "unknown").strip().lower() or "unknown"
+        decision = resolve_aac_layout_policy(stream.get("channel_layout"), stream.get("channels"))
+        if decision.reason == "channel_layout_missing":
+            channel_count = parse_optional_int(stream.get("channels"))
+            inferred_layout = INFERRED_TRANSCODE_LAYOUTS.get(channel_count) if channel_count is not None else None
+            if inferred_layout is not None:
+                decision = resolve_aac_layout_policy(inferred_layout, channel_count)
         plans.append(
             PlannedAudioLayout(
                 stream_index=stream_index if stream_index is not None else output_index,
                 codec_name=codec_name,
-                decision=resolve_aac_layout_policy(stream.get("channel_layout"), stream.get("channels")),
+                decision=decision,
             )
         )
     return plans
@@ -356,7 +369,10 @@ def create_prepared_audio_file(
                     cancellation_event=cancellation_event,
                     observability_context=observability_context,
                 )
-                if qualifications and all(qualification.qualified for qualification in qualifications):
+                if not qualifications:
+                    emit_no_audio_warning(activity)
+                    return original_audio_path
+                if all(qualification.qualified for qualification in qualifications):
                     copy_audio(
                         original_audio_path,
                         temporary_audio_path,
@@ -378,16 +394,20 @@ def create_prepared_audio_file(
                         observability_context=observability_context,
                     )
             else:
-                transcode_audio(
-                    original_audio_path,
-                    temporary_audio_path,
-                    config.audio_bitrate,
-                    selection=selection,
-                    activity=activity,
-                    run_context=run_context,
-                    cancellation_event=cancellation_event,
-                    observability_context=observability_context,
-                )
+                try:
+                    transcode_audio(
+                        original_audio_path,
+                        temporary_audio_path,
+                        config.audio_bitrate,
+                        selection=selection,
+                        activity=activity,
+                        run_context=run_context,
+                        cancellation_event=cancellation_event,
+                        observability_context=observability_context,
+                    )
+                except NoAudioStreamsError:
+                    emit_no_audio_warning(activity)
+                    return original_audio_path
             temporary_audio_path.replace(prepared_audio_path)
             persist_audio_selection(prepared_audio_path, selection)
         finally:
@@ -409,6 +429,14 @@ def create_prepared_audio_file(
             "Legacy AAC audio artifact found. Restart from Prepare Audio to regenerate a compatible M4A file: "
             f"{legacy_transcoded_audio_path}"
         )
+    if not get_audio_stream_data(
+        original_audio_path,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
+    ):
+        emit_no_audio_warning(activity)
+        return original_audio_path
     raise FileNotFoundError(f"Prepared audio artifact not found: {prepared_audio_path}")
 
 
@@ -512,15 +540,15 @@ def preferred_audio_selection(
     preferred_language = config.audio_preferred_language
     if preferred_language is None:
         return None
-    selection = select_audio_streams(
-        get_audio_stream_data(
-            input_path,
-            run_context=run_context,
-            cancellation_event=cancellation_event,
-            observability_context=observability_context,
-        ),
-        preferred_language,
+    audio_streams = get_audio_stream_data(
+        input_path,
+        run_context=run_context,
+        cancellation_event=cancellation_event,
+        observability_context=observability_context,
     )
+    if not audio_streams:
+        return None
+    selection = select_audio_streams(audio_streams, preferred_language)
     emit_audio_selection_warning(selection, activity, stage=stage)
     return selection
 
@@ -701,4 +729,19 @@ def emit_automatic_fallback_warning(
             }
             for qualification in unqualified
         ],
+    )
+
+
+def emit_no_audio_warning(activity: AudioActivityReporter | None) -> None:
+    message = "The source does not contain audio; the output will remain video-only."
+    if activity is None:
+        cli_message(message)
+        return
+
+    activity.warning(
+        message,
+        stage="transcode_audio",
+        code="audio_not_present",
+        audio_mode=config.audio_mode.value,
+        action="omit_audio",
     )

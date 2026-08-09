@@ -4,6 +4,8 @@
 
 Use an explicit **preserve / remap / downmix / fail** policy. FFmpeg decode success and audio-track count are not sufficient evidence of Apple compatibility. Every supported output must use a canonical AAC channel configuration, survive both Apple passthrough and Apple LPCM decode, and preserve the expected per-channel identity map.
 
+When transcoding, a missing layout is inferred only for unambiguous one-channel (`mono`) and two-channel (`stereo`) streams. Missing multichannel layouts remain fail-closed. Sources with no audio streams remain video-only rather than receiving fabricated audio.
+
 The production runtime imports this same policy for Automatic and Convert-to-AAC processing. Signed-package and physical Vision Pro validation remains in #382.
 
 ## Evidence Method

@@ -20,7 +20,7 @@ class AudioExtractionTests(unittest.TestCase):
     def test_subtitle_filter_does_not_limit_extracted_audio_tracks(self) -> None:
         with (
             patch.object(container.config, "remove_extra_languages", True),
-            patch.object(container, "get_audio_stream_data", return_value=[]),
+            patch.object(container, "get_audio_stream_data", return_value=[audio_stream(0, "eng")]),
             patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
         ):
             container.extract_mvc_and_audio(Path("source.mkv"), None, Path("audio.mov"))
@@ -28,6 +28,15 @@ class AudioExtractionTests(unittest.TestCase):
         command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
         self.assertIn("0:a", command)
         self.assertNotIn("0:a:0", command)
+
+    def test_pcm_extraction_skips_audio_output_when_mkv_has_no_audio(self) -> None:
+        with (
+            patch.object(container, "get_audio_stream_data", return_value=[]),
+            patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
+        ):
+            container.extract_mvc_and_audio(Path("source.mkv"), None, Path("audio.mov"))
+
+        run_ffmpeg.assert_not_called()
 
     def test_pcm_extraction_preserves_audio_titles_as_handler_names(self) -> None:
         with (
@@ -112,6 +121,7 @@ class AudioExtractionTests(unittest.TestCase):
             patch.object(container.config, "audio_mode", AudioMode.PCM),
             patch.object(container.config, "keep_files", False),
             patch.object(container.config, "start_stage", Stage.CREATE_MKV),
+            patch.object(container, "get_audio_stream_data", return_value=[audio_stream(0, "eng")]),
             patch.object(container, "audio_handler_metadata_options", return_value={}),
             patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
         ):
@@ -123,8 +133,45 @@ class AudioExtractionTests(unittest.TestCase):
         self.assertIn("pcm_s24le", command)
         self.assertNotIn("file:output/Movie_mvc.h264", command)
 
+    def test_pcm_mode_uses_source_as_video_only_mux_probe_when_mkv_has_no_audio(self) -> None:
+        with (
+            patch.object(container.config, "audio_mode", AudioMode.PCM),
+            patch.object(container.config, "keep_files", False),
+            patch.object(container.config, "start_stage", Stage.CREATE_MKV),
+            patch.object(container, "get_audio_stream_data", return_value=[]),
+            patch.object(container, "run_ffmpeg_print_errors") as run_ffmpeg,
+        ):
+            audio_path, video_path = container.create_mvc_and_audio("Movie", Path("source.mkv"), Path("output"))
+
+        self.assertEqual(audio_path, Path("source.mkv"))
+        self.assertEqual(video_path, Path("source.mkv"))
+        run_ffmpeg.assert_not_called()
+
 
 class MuxCommandTests(unittest.TestCase):
+    def test_final_mux_keeps_no_audio_mkv_video_only(self) -> None:
+        with (
+            patch.object(container.config, "MP4BOX_PATH", Path("/tools/MP4Box")),
+            patch.object(container.config, "audio_preferred_language", "eng"),
+            patch.object(container.config, "start_stage", Stage.CREATE_MKV),
+            patch.object(container, "get_audio_stream_data", return_value=[]),
+            patch.object(container, "sorted_files_by_creation_filtered_on_suffix", return_value=[]),
+            patch.object(container, "run_process_capture") as run_command,
+        ):
+            container.mux_video_audio_subs(
+                Path("movie_MV-HEVC.mov"),
+                Path("source.mkv"),
+                Path("movie_AVP.mov"),
+                Path("."),
+            )
+
+        command = run_command.call_args.args[0]
+        self.assertEqual(
+            command[:5],
+            [Path("/tools/MP4Box"), "-new", "-add", "movie_MV-HEVC.mov:forcesync", Path("movie_AVP.mov")],
+        )
+        self.assertFalse(any("source.mkv#" in str(argument) for argument in command))
+
     def test_final_mux_uses_reindexed_prepared_tracks_in_source_order(self) -> None:
         streams = [
             audio_stream(0, "eng", title="English 5.1", default=True),

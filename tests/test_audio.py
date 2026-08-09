@@ -19,6 +19,55 @@ from bd_to_avp.modules.config import Stage, config
 
 
 class AudioPreparationTests(unittest.TestCase):
+    def test_automatic_no_audio_keeps_source_for_video_only_mux(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_path = temp_path / "source.mkv"
+            output_folder = temp_path / "Movie"
+            source_path.write_bytes(b"source")
+            output_folder.mkdir()
+            activity = Mock()
+
+            with (
+                patch.object(audio.config, "audio_mode", AudioMode.AUTOMATIC),
+                patch.object(audio.config, "audio_preferred_language", "eng"),
+                patch.object(audio.config, "start_stage", Stage.CREATE_MKV),
+                patch.object(audio, "get_audio_stream_data", return_value=[]),
+                patch.object(audio, "qualify_selected_audio_streams", return_value=[]),
+                patch.object(audio, "copy_audio") as copy,
+                patch.object(audio, "transcode_audio") as transcode,
+            ):
+                result = audio.create_prepared_audio_file(source_path, output_folder, activity)
+
+            self.assertEqual(result, source_path)
+            self.assertFalse((output_folder / "Movie_audio_AAC.m4a").exists())
+            copy.assert_not_called()
+            transcode.assert_not_called()
+            self.assertEqual(activity.warning.call_args.kwargs["code"], "audio_not_present")
+            self.assertEqual(activity.warning.call_args.kwargs["action"], "omit_audio")
+
+    def test_convert_aac_no_audio_keeps_source_for_video_only_mux(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_path = temp_path / "source.mkv"
+            output_folder = temp_path / "Movie"
+            source_path.write_bytes(b"source")
+            output_folder.mkdir()
+            activity = Mock()
+
+            with (
+                patch.object(audio.config, "audio_mode", AudioMode.CONVERT_AAC),
+                patch.object(audio.config, "audio_preferred_language", "eng"),
+                patch.object(audio.config, "start_stage", Stage.CREATE_MKV),
+                patch.object(audio, "get_audio_stream_data", return_value=[]),
+                patch.object(audio, "audio_streams_for_selector", return_value=[]),
+            ):
+                result = audio.create_prepared_audio_file(source_path, output_folder, activity)
+
+            self.assertEqual(result, source_path)
+            self.assertFalse((output_folder / "Movie_audio_AAC.m4a").exists())
+            self.assertEqual(activity.warning.call_args.kwargs["code"], "audio_not_present")
+
     def test_automatic_qualifies_only_retained_preferred_language_tracks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -367,9 +416,29 @@ class AudioPreparationTests(unittest.TestCase):
             with (
                 patch.object(audio.config, "audio_mode", AudioMode.AUTOMATIC),
                 patch.object(audio.config, "start_stage", Stage.CREATE_FINAL_FILE),
+                patch.object(audio, "get_audio_stream_data", return_value=[qualified_stream(index=0)]),
                 self.assertRaisesRegex(FileNotFoundError, "Prepared audio artifact not found"),
             ):
                 audio.create_prepared_audio_file(source_path, output_folder)
+
+    def test_final_mux_resume_keeps_no_audio_source_video_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_path = temp_path / "source.mkv"
+            output_folder = temp_path / "Movie"
+            source_path.write_bytes(b"source")
+            output_folder.mkdir()
+            activity = Mock()
+
+            with (
+                patch.object(audio.config, "audio_mode", AudioMode.AUTOMATIC),
+                patch.object(audio.config, "start_stage", Stage.CREATE_FINAL_FILE),
+                patch.object(audio, "get_audio_stream_data", return_value=[]),
+            ):
+                result = audio.create_prepared_audio_file(source_path, output_folder, activity)
+
+            self.assertEqual(result, source_path)
+            self.assertEqual(activity.warning.call_args.kwargs["code"], "audio_not_present")
 
     def test_final_mux_resume_rejects_legacy_aac_mov_with_recovery_guidance(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -490,6 +559,26 @@ class AudioPreparationTests(unittest.TestCase):
         self.assertIn("0:a:0", command)
         self.assertIn("file:audio.m4a", command)
         self.assertIn("-map_metadata", command)
+
+    def test_transcode_audio_infers_stereo_for_missing_two_channel_layout(self) -> None:
+        streams = [qualified_stream(index=1, codec_name="pcm_s16le", channel_layout=None)]
+        with (
+            patch.object(audio, "audio_streams_for_selector", return_value=streams),
+            patch.object(audio, "audio_handler_metadata_options", return_value={}),
+            patch.object(audio, "run_ffmpeg_print_errors") as run_ffmpeg,
+        ):
+            audio.transcode_audio(Path("source.mkv"), Path("audio.m4a"), 384)
+
+        command = ffmpeg.compile(run_ffmpeg.call_args.args[0])
+        self.assertEqual(command[command.index("-channel_layout:a:0") + 1], "stereo")
+
+    def test_transcode_audio_keeps_missing_multichannel_layout_fail_closed(self) -> None:
+        layout_plan = audio.plan_aac_layouts(
+            [qualified_stream(index=1, codec_name="pcm_s16le", channels=6, channel_layout=None)]
+        )
+
+        self.assertEqual(layout_plan[0].decision.action, AacLayoutAction.FAIL)
+        self.assertEqual(layout_plan[0].decision.reason, "channel_layout_missing")
 
     def test_copy_audio_maps_all_audio_tracks_without_encoder(self) -> None:
         with (
@@ -791,7 +880,7 @@ def qualified_stream(
     profile: str = "LC",
     sample_rate: str = "48000",
     channels: int = 2,
-    channel_layout: str = "stereo",
+    channel_layout: str | None = "stereo",
     language: str = "eng",
     title: str | None = None,
     is_default: bool = False,

@@ -65,6 +65,7 @@ def extract_mvc_and_audio(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
+    source_audio_streams: list[dict[str, Any]] | None = None,
 ) -> None:
     stream = ffmpeg.input(str(input_path))
     audio_selection = None
@@ -76,17 +77,23 @@ def extract_mvc_and_audio(
         )
 
     if audio_output_path:
-        if config.audio_preferred_language is not None:
-            audio_selection = select_audio_streams(
-                get_audio_stream_data(
-                    input_path,
-                    run_context=run_context,
-                    cancellation_event=cancellation_event,
-                    observability_context=observability_context,
-                ),
-                config.audio_preferred_language,
+        audio_streams = (
+            source_audio_streams
+            if source_audio_streams is not None
+            else get_audio_stream_data(
+                input_path,
+                run_context=run_context,
+                cancellation_event=cancellation_event,
+                observability_context=observability_context,
             )
+        )
+        if not audio_streams:
+            audio_output_path = None
+        elif config.audio_preferred_language is not None:
+            audio_selection = select_audio_streams(audio_streams, config.audio_preferred_language)
             emit_audio_selection_warning(audio_selection, activity, stage="extract_mvc_and_audio")
+
+    if audio_output_path:
         audio_inputs = (
             [stream[selected_stream.selector] for selected_stream in audio_selection.streams]
             if audio_selection is not None
@@ -171,20 +178,30 @@ def create_mvc_and_audio(
     audio_output_path = output_folder / f"{disc_name}_audio_PCM.mov"
     m4a_audio_preparation = is_audio_m4a_preparation_enabled()
     direct_mvc_stream = is_direct_mvc_stream_enabled()
+    source_audio_streams = None
+    if not m4a_audio_preparation:
+        source_audio_streams = get_audio_stream_data(
+            mkv_output_path,
+            run_context=run_context,
+            cancellation_event=cancellation_event,
+            observability_context=observability_context,
+        )
+    audio_source_path = mkv_output_path if m4a_audio_preparation or not source_audio_streams else audio_output_path
 
     if config.start_stage.value <= Stage.EXTRACT_MVC_AND_AUDIO.value:
         extract_mvc_and_audio(
             mkv_output_path,
             None if direct_mvc_stream else video_output_path,
-            None if m4a_audio_preparation else audio_output_path,
+            audio_output_path if audio_source_path == audio_output_path else None,
             activity=activity,
             run_context=run_context,
             cancellation_event=cancellation_event,
             observability_context=observability_context,
+            source_audio_streams=source_audio_streams,
         )
 
     return (
-        mkv_output_path if m4a_audio_preparation else audio_output_path,
+        audio_source_path,
         mkv_output_path if direct_mvc_stream else video_output_path,
     )
 
@@ -206,7 +223,7 @@ def mux_video_audio_subs(
         cancellation_event=cancellation_event,
         observability_context=observability_context,
     )
-    if config.audio_preferred_language is not None:
+    if audio_streams and config.audio_preferred_language is not None:
         selection = select_audio_streams(audio_streams, config.audio_preferred_language)
         audio_streams = [selected_stream.stream for selected_stream in selection.streams]
         if _audio_selection_not_prepared_in_current_run():
