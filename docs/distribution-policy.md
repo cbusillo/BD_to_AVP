@@ -103,10 +103,10 @@ document it as an external dependency with preflight behavior.
   immutable. RC 1 (`v0.3.0-rc.1`, internal version `0.3.0rc1`, build `158`) is
   published and immutable. RC 2 (`v0.3.0-rc.2`, internal version `0.3.0rc2`,
   build `159`) and RC 3 (`v0.3.0-rc.3`, internal version `0.3.0rc3`, build
-  `160`) are also published and immutable. The next prepared
-  production-identity field build is Stable `v0.3.0` build `161`. It remains
-  unpublished until exact-SHA signing and public verification complete. Beta 3
-  build `148` remains the
+  `160`) are also published and immutable. Stable `v0.3.0` build `161` is
+  published and immutable. The next prepared production-identity field build
+  is Stable `v0.3.1` build `162`; it remains unpublished until exact-SHA
+  signing and public verification complete. Beta 3 build `148` remains the
   manual-download seed and immutable appcast history below the later Beta
   releases.
 - Stable, RC, Beta, and Alpha are routes for the same product, bundle identifier,

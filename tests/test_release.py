@@ -159,12 +159,12 @@ class ReleaseMetadataTests(unittest.TestCase):
     def test_repository_is_prepared_for_stable(self) -> None:
         metadata = release.load_release_metadata()
 
-        self.assertEqual(metadata.package_version, "0.3.0")
-        self.assertEqual(metadata.public_version, "0.3.0")
-        self.assertEqual(metadata.build_version, "161")
-        self.assertEqual(metadata.release_tag, "v0.3.0")
-        self.assertEqual(metadata.release_name, "v0.3.0")
-        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.0.dmg")
+        self.assertEqual(metadata.package_version, "0.3.1")
+        self.assertEqual(metadata.public_version, "0.3.1")
+        self.assertEqual(metadata.build_version, "162")
+        self.assertEqual(metadata.release_tag, "v0.3.1")
+        self.assertEqual(metadata.release_name, "v0.3.1")
+        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.1.dmg")
         self.assertEqual(metadata.channel, "stable")
         self.assertFalse(metadata.prerelease)
         self.assertFalse(metadata.first_candidate_of_cycle)
@@ -172,19 +172,18 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertTrue(metadata.publish_pypi)
 
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
-        self.assertNotIn("v0.3.0", freeze_policy["frozen_release_tags"])
+        self.assertNotIn("v0.3.1", freeze_policy["frozen_release_tags"])
 
-        cut_packet = (REPO_ROOT / "docs" / "0.3.0-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.0`", cut_packet)
-        self.assertIn("Build `161`", cut_packet)
-        self.assertIn("#489", cut_packet)
+        cut_packet = (REPO_ROOT / "docs" / "0.3.1-cut-packet.md").read_text(encoding="utf-8")
+        self.assertIn("`0.3.1`", cut_packet)
+        self.assertIn("Build `162`", cut_packet)
+        self.assertIn("#520", cut_packet)
         self.assertIn("Privacy rules version `5`", cut_packet)
         self.assertTrue(
             any(
                 state in cut_packet
                 for state in (
-                    "Published and immutable; PyPI recovery pending",
-                    "Published and immutable.",
+                    "Prepared metadata; publication pending.",
                 )
             )
         )
@@ -195,8 +194,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         qualification = json.loads(
             (REPO_ROOT / "docs" / "qualification" / "stable-signed-qualification-v1.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(qualification["candidate"]["package_version"], "0.3.0")
-        self.assertEqual(qualification["candidate"]["build_version"], "161")
+        self.assertEqual(qualification["candidate"]["package_version"], "0.3.1")
+        self.assertEqual(qualification["candidate"]["build_version"], "162")
         self.assertEqual(qualification["candidate"]["worker_protocol_version"], 12)
         self.assertEqual(qualification["candidate"]["mapping_version"], 2)
         self.assertEqual(
@@ -205,7 +204,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         expected_case_ids = {
             "release-workflow-identity",
-            "updater-route-rc3-to-stable",
+            "updater-route-v0.3.0-to-v0.3.1",
             "native-sparkle-notes-stable",
             "profile-save-action-accessibility",
             "signed-packaged-route-parity",
@@ -274,7 +273,13 @@ class ReleaseMetadataTests(unittest.TestCase):
             "release_id",
             "appcast_sha256",
         )
-        stable_receipt_path = REPO_ROOT / "docs" / "release-evidence" / "v0.3.0" / "release-receipt.json"
+        stable_receipt_path = (
+            REPO_ROOT
+            / "docs"
+            / "release-evidence"
+            / qualification["candidate"]["public_version"]
+            / "release-receipt.json"
+        )
         if stable_receipt_path.exists():
             stable_receipt = json.loads(stable_receipt_path.read_text(encoding="utf-8"))
             artifacts_by_kind = {artifact["kind"]: artifact for artifact in stable_receipt["artifacts"]}

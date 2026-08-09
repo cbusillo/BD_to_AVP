@@ -278,9 +278,11 @@ excluded from Stable and admitted on RC, Beta, and Alpha. Its updater path and
 content-aware native release-note link qualification passed. The immutable notes
 contain no issue URL, so that category is explicitly not applicable; every PR,
 comparison, and full-release link present in the source notes opened externally.
-Stable `v0.3.0` build `161` is the next prepared target. Its item omits
-`sparkle:channel`, supersedes RC 3 for every route, and must not enter the live
-feed until guarded publication succeeds.
+Stable `v0.3.0` build `161` is published and immutable. Its item omits
+`sparkle:channel` and is the current head for every route. Stable `v0.3.1`
+build `162` is the next prepared target; its unchanneled cumulative item must
+supersede Stable `v0.3.0` without entering the live feed before guarded
+publication succeeds.
 
 ## Runtime Integration and UX
 

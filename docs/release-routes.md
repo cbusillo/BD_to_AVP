@@ -11,8 +11,9 @@ published and immutable at builds `148` through `156`, excluding permanently
 burned builds `147`, `154`, and abandoned metadata build `157`. Failed Beta 9
 (`0.3.0b9`, build `154`) was never published. RC 1 (`0.3.0rc1`, build `158`),
 RC 2 (`0.3.0rc2`, build `159`), and RC 3 (`0.3.0rc3`, build `160`) are
-published and immutable. The next prepared target is Stable `0.3.0` build
-`161`; issue #489 owns publication and exact-artifact qualification.
+published and immutable. Stable `0.3.0` build `161` is also published and
+immutable. The next prepared target is Stable `0.3.1` build `162`; issue #520
+owns publication and exact-artifact qualification.
 Run-bound signing approval
 remains a separate authorization boundary.
 
@@ -297,9 +298,9 @@ privacy-safe subtitle diagnostics are fully qualified.
 The immutable metadata and checked publication evidence are in
 [the RC 3 cut packet](0.3.0-rc.3-cut-packet.md).
 
-## Stable 0.3.0 Prepared Target
+## Published Stable 0.3.0
 
-The repository is prepared for review of the guarded `v0.3.0` Stable workflow:
+Stable `v0.3.0` is published and immutable:
 
 - internal and public version `0.3.0`;
 - public tag and title `v0.3.0`;
@@ -310,16 +311,39 @@ The repository is prepared for review of the guarded `v0.3.0` Stable workflow:
 - the same production product, bundle, feed, key, signing team, and diagnostics
   endpoint as RC 3.
 
-Publication must place Stable above immutable RC 3 build `160` and all earlier
+Publication placed Stable above immutable RC 3 build `160` and all earlier
 history, with burned builds `147` and `154` and abandoned build `157` absent.
 Stable, RC, Beta, and Alpha clients can all select the newer Stable item without
-changing their saved route.
+changing their saved route. The release targets exact source SHA
+`a9abbcf6cd1281d2c701e0c050b68fdafc5b9522`; its checked receipt and publication
+record remain immutable.
+
+The reviewed metadata, release notes, publication effects, recovery history,
+and exact qualification evidence are in
+[the Stable cut packet](0.3.0-cut-packet.md).
+
+## Stable 0.3.1 Prepared Target
+
+The repository is prepared for review of the guarded `v0.3.1` Stable workflow:
+
+- internal and public version `0.3.1`;
+- public tag and title `v0.3.1`;
+- global build `162`;
+- no Sparkle channel, making the item eligible on every route;
+- GitHub Stable and Latest;
+- PyPI publication and downstream Homebrew update; and
+- the same production product, bundle, feed, key, signing team, and diagnostics
+  endpoint as Stable `0.3.0`.
+
+Publication must place Stable `0.3.1` above immutable Stable `0.3.0` build
+`161` and all earlier history. Stable, RC, Beta, and Alpha clients can all
+select the newer Stable item without changing their saved route.
 
 The repository has no freeze entry for this exact tag and no conflicting tag,
 draft, release, PyPI version, Homebrew pull request, or appcast item. Dispatch
 requires explicit release authorization under a fixed-`main` merge hold. The
 reviewed metadata, release-note seed, publication effects, and post-publication
-qualification boundary are in [the Stable cut packet](0.3.0-cut-packet.md).
+qualification boundary are in [the 0.3.1 cut packet](0.3.1-cut-packet.md).
 
 ## Historical Boundaries
 
