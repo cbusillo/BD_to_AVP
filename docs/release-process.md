@@ -354,6 +354,17 @@ The workflow performs these ordered boundaries:
    protected `main` moved, rerun Release Evidence to refresh the manifest before
    resuming.
 
+   Resume exit `0` means observation completed without an operator decision,
+   exit `20` means an exact operator action or later observation is required,
+   exit `21` means an identity or concurrency safety conflict stopped the
+   transition, and exit `1` means local validation failed. Checkpoints live at
+   `<git-common-dir>/bd-to-avp/release-qualification/<tag>.json`. If later
+   evidence reconciliation advances the evidence branch while blockers remain,
+   first verify that no exact qualification run is queued or active and that the
+   recorded run no longer needs observation; only then remove the stale local
+   checkpoint and rerun the observational command. Never remove a prepared
+   checkpoint merely because its workflow run is slow to appear.
+
    This bounded stage does not download milestone artifacts or create commits,
    pushes, comments, or pull requests. `artifact_available` means the exact
    retained receipts are ready for validated reconciliation. `artifact_expired`

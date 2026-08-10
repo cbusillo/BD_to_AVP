@@ -17,6 +17,7 @@ from scripts.release_qualification_resume import (
     ResumeIdentity,
     _checkpoint_lock,
     _checkpoint_payload,
+    _dispatch,
     _write_checkpoint,
     resume_qualification,
     safety_error_payload,
@@ -344,6 +345,37 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
                 expected_manifest_sha256=MANIFEST_SHA,
             )
 
+        self.assertEqual(result.payload["state"], "dispatch_visibility_pending")
+        self.assertEqual(client.posts, [])
+
+    def test_dispatch_race_reports_prepared_checkpoint_as_operator_required(self) -> None:
+        client = self.configured_client()
+        client.set("user", {"login": "cbusillo"}, active_auth=True)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkpoint = Path(temporary_directory) / "checkpoint.json"
+            _write_checkpoint(
+                checkpoint,
+                _checkpoint_payload(
+                    identity(),
+                    state="prepared",
+                    high_water_run_id=100,
+                    retry_of_run_id=None,
+                ),
+            )
+            result = _dispatch(
+                client,
+                identity(),
+                checkpoint,
+                high_water_run_id=100,
+                retry_of_run_id=None,
+                replace_prepared_checkpoint_sha256=None,
+                status_payload=status_payload(),
+                poll_attempts=1,
+                poll_seconds=0,
+                sleep=lambda _seconds: None,
+            )
+
+        self.assertEqual(result.exit_code, EXIT_OPERATOR_REQUIRED)
         self.assertEqual(result.payload["state"], "dispatch_visibility_pending")
         self.assertEqual(client.posts, [])
 

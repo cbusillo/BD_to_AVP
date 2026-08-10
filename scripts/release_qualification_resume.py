@@ -738,9 +738,10 @@ def _dispatch_locked(
                     "Prepared checkpoint retry does not match the serialized qualification checkpoint."
                 )
         elif retry_of_run_id is None:
+            checkpoint_state = "dispatch_visibility_pending" if existing_state == "prepared" else "running"
             return _result(
-                "dispatch_visibility_pending" if existing_state == "prepared" else "running",
-                EXIT_SUCCESS,
+                checkpoint_state,
+                EXIT_OPERATOR_REQUIRED if checkpoint_state == "dispatch_visibility_pending" else EXIT_SUCCESS,
                 status_payload,
                 identity=identity,
                 checkpoint_path=checkpoint_path,
