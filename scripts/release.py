@@ -153,6 +153,12 @@ class PublishedRelease:
     prerelease: bool
 
 
+@dataclass(frozen=True)
+class QualificationUpdateBase:
+    prior_tag: str
+    sparkle_route: str
+
+
 LockRunner = Callable[[Path, str], None]
 RemoteEvidenceVerifier = Callable[[Mapping[str, Any]], None]
 TransactionObserver = Callable[[str, Path], None]
@@ -335,6 +341,42 @@ def select_release_notes_base(
         if not current_version.prerelease or is_ancestor(release.tag_name, head_ref):
             return release.tag_name
     return ""
+
+
+def select_qualification_update_base(
+    current_tag: str,
+    release_history: Any,
+    head_ref: str,
+    *,
+    tag_exists: TagExists = _git_tag_exists,
+    is_ancestor: AncestorCheck = _git_tag_is_ancestor,
+) -> QualificationUpdateBase:
+    current_version = parse_release_tag(current_tag, allow_legacy_rc=False)
+    candidates = sorted(
+        (
+            release
+            for release in _published_releases(release_history)
+            if release.version.order_key < current_version.order_key
+        ),
+        key=lambda release: release.version.order_key,
+        reverse=True,
+    )
+
+    for prior_release in candidates:
+        if not tag_exists(prior_release.tag_name):
+            raise ReleaseError(f"Published release tag is missing from the checkout: {prior_release.tag_name}")
+        if not is_ancestor(prior_release.tag_name, head_ref):
+            continue
+        sparkle_route = current_version.channel if current_version.prerelease else prior_release.version.channel
+        return QualificationUpdateBase(
+            prior_tag=prior_release.tag_name,
+            sparkle_route=sparkle_route,
+        )
+
+    return QualificationUpdateBase(
+        prior_tag="",
+        sparkle_route=current_version.channel,
+    )
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -1146,6 +1188,15 @@ def build_parser() -> argparse.ArgumentParser:
     notes_base.add_argument("--head-ref", required=True)
     notes_base.add_argument("--github-output", type=Path)
 
+    qualification_base = commands.add_parser(
+        "qualification-base",
+        help="Select the exact prior release and Sparkle route for updater qualification.",
+    )
+    qualification_base.add_argument("--release-tag", required=True)
+    qualification_base.add_argument("--releases-json", type=Path, required=True)
+    qualification_base.add_argument("--head-ref", required=True)
+    qualification_base.add_argument("--github-output", type=Path)
+
     prepare = commands.add_parser("prepare", help="Atomically prepare a newer committed release version and build.")
     _add_paths(prepare)
     prepare.add_argument("--version", required=True)
@@ -1182,6 +1233,22 @@ def main(argv: list[str] | None = None) -> int:
             with args.github_output.open("a", encoding="utf-8") as handle:
                 handle.write(f"previous_release_tag={previous_release_tag}\n")
         print(json.dumps({"previous_release_tag": previous_release_tag}, sort_keys=True))
+        return 0
+    if args.command == "qualification-base":
+        try:
+            release_history = json.loads(args.releases_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ReleaseError(f"Unable to load GitHub release history from {args.releases_json}: {error}") from error
+        selection = select_qualification_update_base(
+            args.release_tag,
+            release_history,
+            args.head_ref,
+        )
+        if args.github_output:
+            with args.github_output.open("a", encoding="utf-8") as handle:
+                handle.write(f"prior_tag={selection.prior_tag}\n")
+                handle.write(f"sparkle_route={selection.sparkle_route}\n")
+        print(json.dumps(asdict(selection), sort_keys=True))
         return 0
     if args.command == "prepare":
         metadata = prepare_release(

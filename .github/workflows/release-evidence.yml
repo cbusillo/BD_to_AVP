@@ -307,18 +307,16 @@ jobs:
             echo "receipt_file_sha256=$SIGNED_UI_RECEIPT_FILE_SHA256"
             echo "receipt_path=$SIGNED_UI_RECEIPT"
           } >> "$GITHUB_OUTPUT"
-          python -m scripts.release notes-base \
+          python -m scripts.release qualification-base \
             --release-tag "$CANDIDATE_TAG" \
             --releases-json releases-pages.json \
             --head-ref "$CANDIDATE_SHA" \
             --github-output "$GITHUB_OUTPUT"
-          PRIOR_TAG=$(sed -n 's/^previous_release_tag=//p' "$GITHUB_OUTPUT" | tail -1)
+          PRIOR_TAG=$(sed -n 's/^prior_tag=//p' "$GITHUB_OUTPUT" | tail -1)
           if [ -z "$PRIOR_TAG" ]; then
             echo "Unable to derive prior published release tag for milestone qualification." >&2
             exit 1
           fi
-          SPARKLE_ROUTE=$(python -c 'import sys; from scripts.release import parse_release_tag; v=parse_release_tag(sys.argv[1]); print("stable" if v.stage == "stable" else v.stage)' "$PRIOR_TAG")
-          echo "sparkle_route=$SPARKLE_ROUTE" >> "$GITHUB_OUTPUT"
 
       - name: Reconcile checked evidence
         id: reconcile

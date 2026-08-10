@@ -280,6 +280,36 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
                 manifest,
             )
 
+    def test_build_fails_closed_when_checked_prior_receipt_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            candidate_path, prior_path, signed_receipt_path, signed_archive_path = self.build_repository(root)
+            signed_ui = signed_ui_binding_from_files(
+                repo_root=root,
+                release_receipt_path=candidate_path,
+                receipt=json.loads(candidate_path.read_text(encoding="utf-8")),
+                release_receipt_asset_id=4,
+                release_receipt_file_sha256=sha256(candidate_path),
+                signed_ui_artifact_id=999,
+                signed_ui_artifact_digest=sha256(signed_archive_path),
+                signed_ui_archive_path=signed_archive_path,
+                signed_ui_receipt_path=signed_receipt_path,
+                signed_ui_receipt_file_sha256=sha256(signed_receipt_path),
+            )
+            prior_path.unlink()
+
+            with self.assertRaisesRegex(ReleaseQualificationManifestError, "Unable to read checked release receipt"):
+                build_manifest(
+                    repo_root=root,
+                    release_receipt_path=candidate_path,
+                    prior_release_receipt_path=prior_path,
+                    signed_ui=signed_ui,
+                    evidence_ref="automation/release-evidence-v0.3.0",
+                    evidence_base_sha=git_head(root),
+                    runner_sha=git_head(root),
+                    sparkle_route="rc",
+                )
+
     def test_validation_rejects_private_fields_absolute_paths_and_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

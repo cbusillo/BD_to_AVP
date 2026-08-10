@@ -323,10 +323,15 @@ Actions artifact ID/digest/archive path/receipt path/file digest/self digest,
 qualification-record digest, policy and route-table digests, controller runner
 digest, canonical evidence ref/base SHA,
 the evidence-index baseline digest, and policy case classifications/checkpoint
-digest. The evidence-index baseline remains an audit checkpoint while validated
-milestone receipts append to the checked index. The pull-request gate verifies
-that baseline against protected `main` and rejects any rewrite of accepted
-evidence history. Milestone qualification rechecks the recorded Actions
+digest. Release Evidence selects the newest lower published release whose tag is
+an ancestor of the candidate. Prerelease candidates use their own Sparkle route;
+stable candidates use the selected prior release's route, preserving transitions
+such as RC to Stable. The prior release's checked receipt must already be present
+in canonical evidence; missing prior evidence stops manifest creation rather than
+reconstructing release identity. The evidence-index baseline remains an audit
+checkpoint while validated milestone receipts append to the checked index. The
+pull-request gate verifies that baseline against protected `main` and rejects
+any rewrite of accepted evidence history. Milestone qualification rechecks the recorded Actions
 artifact ID and digest through GitHub while metadata is retained; after GitHub
 deletes expired metadata, the exact checked receipt and original Actions ZIP
 captured and validated by Release Evidence are the durable replacement.

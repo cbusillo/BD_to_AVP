@@ -360,6 +360,8 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                 }
             )
             write_receipt(prior, prior_path)
+            subprocess.run(["git", "add", prior_path], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "record prior release evidence"], cwd=root, check=True)
             signed_ui_path = root / "docs/release-evidence/v0.3.0/signed-artifact-ui-receipt.json"
             signed_ui = {
                 "case_id": "profile-save-action-accessibility",
@@ -938,7 +940,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             ).stdout.strip()
-            recovery_path = root / "docs/release-evidence/v0.3.1-pypi-recovery.json"
+            recovery_path = root / "docs/release-evidence/v0.3.0-pypi-recovery.json"
             recovery_path.write_text('{"schema": "bd_to_avp.pypi_recovery"}\n', encoding="utf-8")
             subprocess.run(["git", "add", recovery_path.relative_to(root)], cwd=root, check=True)
             subprocess.run(["git", "commit", "-qm", "add recovery authorization"], cwd=root, check=True)
@@ -961,6 +963,114 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             )
 
         self.assertIsNone(discovered)
+
+    def test_lookalike_future_recovery_authorization_requires_checked_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            recovery_path = root / "docs/release-evidence/v0.3.1-pypi-recovery.json"
+            recovery_path.write_text('{"schema": "bd_to_avp.pypi_recovery"}\n', encoding="utf-8")
+            subprocess.run(["git", "add", recovery_path.relative_to(root)], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "add lookalike recovery authorization"], cwd=root, check=True)
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "exactly one checked release receipt"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="fix/stable-pypi-recovery",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
+
+    def test_manifest_discovery_rejects_changed_receipt_for_another_release(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            manifest_path = root / "docs/release-evidence/v0.3.0/qualification-manifest.json"
+            manifest_path.write_text("{}\n", encoding="utf-8")
+            unrelated_receipt = root / "docs/release-evidence/v0.3.1/release-receipt.json"
+            unrelated_receipt.parent.mkdir(parents=True, exist_ok=True)
+            unrelated_receipt.write_text("{}\n", encoding="utf-8")
+            subprocess.run(["git", "add", manifest_path, unrelated_receipt], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "mix release evidence"], cwd=root, check=True)
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "same release tag"):
+                discover_milestone_manifest(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="automation/release-evidence-v0.3.0",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
+
+    def test_manifest_discovery_rejects_other_release_evidence_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            manifest_path = root / "docs/release-evidence/v0.3.0/qualification-manifest.json"
+            manifest_path.write_text("{}\n", encoding="utf-8")
+            unrelated_record = root / "docs/release-evidence/v0.3.1/publication-record.json"
+            unrelated_record.parent.mkdir(parents=True, exist_ok=True)
+            unrelated_record.write_text("{}\n", encoding="utf-8")
+            subprocess.run(["git", "add", manifest_path, unrelated_record], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "mix immutable release evidence"], cwd=root, check=True)
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "only one release tag"):
+                discover_milestone_manifest(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="automation/release-evidence-v0.3.0",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
 
     def test_other_release_evidence_still_requires_checked_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -32,9 +32,7 @@ RUNNER_BOUND_QUALIFICATION_PATHS = {
 }
 RECEIPT_PATH_PATTERN = re.compile(r"^docs/release-evidence/(v[^/]+)/release-receipt\.json$")
 MANIFEST_PATH_PATTERN = re.compile(rf"^docs/release-evidence/(v[^/]+)/{re.escape(MANIFEST_NAME)}$")
-RECOVERY_AUTHORIZATION_PATH_PATTERN = re.compile(
-    r"^docs/release-evidence/v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?-pypi-recovery\.json$"
-)
+RECOVERY_AUTHORIZATION_PATHS = frozenset({"docs/release-evidence/v0.3.0-pypi-recovery.json"})
 EXPECTED_REPOSITORY = "cbusillo/BD_to_AVP"
 EXPECTED_BASE_BRANCH = "main"
 IMMUTABLE_CANDIDATE_FIELDS = (
@@ -207,7 +205,23 @@ def _validate_append_only_evidence_index(repo_root: Path, *, base_sha: str) -> N
 
 
 def _is_recovery_authorization_path(path: str) -> bool:
-    return RECOVERY_AUTHORIZATION_PATH_PATTERN.fullmatch(path) is not None
+    return path in RECOVERY_AUTHORIZATION_PATHS
+
+
+def _validate_release_evidence_tag_scope(changed_paths: Sequence[str], release_tag: str) -> None:
+    expected_prefix = f"docs/release-evidence/{release_tag}/"
+    unrelated_paths = sorted(
+        path
+        for path in changed_paths
+        if path.startswith("docs/release-evidence/")
+        and not path.startswith(expected_prefix)
+        and not _is_recovery_authorization_path(path)
+    )
+    if unrelated_paths:
+        raise ReleaseMilestoneContextError(
+            "Release evidence pull requests may change only one release tag: "
+            f"expected {release_tag!r}, unrelated={unrelated_paths!r}."
+        )
 
 
 def _repository_path(repo_root: Path, value: object, description: str) -> tuple[Path, str]:
@@ -322,6 +336,7 @@ def discover_milestone_receipt(
             "A release evidence pull request must contain exactly one checked release receipt."
         )
     receipt_relative, release_tag = receipt_matches[0]
+    _validate_release_evidence_tag_scope(changed_paths, release_tag)
     expected_branch = f"automation/release-evidence-{release_tag}"
     if head_branch != expected_branch:
         raise ReleaseMilestoneContextError(f"Release evidence changes must use idempotent branch {expected_branch!r}.")
@@ -373,6 +388,18 @@ def discover_milestone_manifest(
             "A release evidence pull request must contain exactly one checked qualification manifest."
         )
     manifest_relative, release_tag = manifest_matches[0]
+    receipt_matches = [
+        (path, match.group(1)) for path in changed_paths if (match := RECEIPT_PATH_PATTERN.fullmatch(path)) is not None
+    ]
+    if len(receipt_matches) > 1:
+        raise ReleaseMilestoneContextError(
+            "A qualification manifest pull request may change at most one checked release receipt."
+        )
+    if receipt_matches and receipt_matches[0][1] != release_tag:
+        raise ReleaseMilestoneContextError(
+            "Qualification manifest and changed release receipt must use the same release tag."
+        )
+    _validate_release_evidence_tag_scope(changed_paths, release_tag)
     expected_branch = f"automation/release-evidence-{release_tag}"
     if head_branch != expected_branch:
         raise ReleaseMilestoneContextError(f"Release evidence changes must use idempotent branch {expected_branch!r}.")
