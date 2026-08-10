@@ -901,7 +901,6 @@ def reconcile(
 
     qualification_record_path = repo_root / "docs" / "release-evidence" / tag / QUALIFICATION_RECORD_NAME
     if qualification_record_path.exists():
-        qualification_path = qualification_record_path
         validate_qualification_record_identity(
             _load_json(qualification_record_path, "qualification record"),
             receipt,
