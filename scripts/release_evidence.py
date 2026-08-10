@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
+import tempfile
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -22,6 +24,112 @@ from scripts.release_receipt import (
 
 EVIDENCE_INDEX_PATH = Path("docs/qualification/release-evidence-v1.json")
 RELEASE_LEDGER_PATH = Path("docs/release-evidence/index-v1.json")
+QUALIFICATION_RECORD_NAME = "qualification-record.json"
+QUALIFICATION_RECORD_KEYS = {
+    "acceptance",
+    "candidate",
+    "execution_policy",
+    "immutable_history",
+    "issues",
+    "matrix",
+    "prior_evidence",
+    "qualification_id",
+    "qualification_policy",
+    "schema_version",
+    "status",
+}
+QUALIFICATION_RECORD_OPTIONAL_KEYS = {"immutable_publication"}
+QUALIFICATION_CANDIDATE_KEYS = {
+    "appcast_sha256",
+    "build_version",
+    "dmg_name",
+    "dmg_sha256",
+    "mapping_version",
+    "package_version",
+    "public_version",
+    "release_id",
+    "release_run_id",
+    "release_tag",
+    "route_table_id",
+    "route_table_sha256",
+    "signed_app_tree_sha256",
+    "source_git_sha",
+    "worker_protocol_version",
+    "workflow",
+}
+QUALIFICATION_ACCEPTANCE_REQUIRED_KEYS = {
+    "blocking_case_ids",
+    "nonblocking_case_ids",
+    "passed",
+    "preregistered_matrix_case_ids",
+    "required_case_ids",
+}
+QUALIFICATION_ACCEPTANCE_ALLOWED_KEYS = QUALIFICATION_ACCEPTANCE_REQUIRED_KEYS | {
+    "carried_case_count",
+    "failed_case_count",
+    "field_case_open",
+    "milestone_complete",
+    "passed_case_count",
+    "signed_rc_complete",
+}
+QUALIFICATION_EXECUTION_POLICY_KEYS = {
+    "approval_command",
+    "approval_required_exit_code",
+    "field_qualification_timing",
+    "generic_run_waiter_is_sufficient",
+    "macos_signing_requires_fresh_explicit_run_bound_authorization",
+    "main_must_remain_fixed_while_nonterminal",
+    "release_stage",
+    "watch_command",
+}
+QUALIFICATION_MATRIX_REQUIRED_KEYS = {"id", "migration", "phase", "policy_case_id"}
+QUALIFICATION_MATRIX_ALLOWED_KEYS = QUALIFICATION_MATRIX_REQUIRED_KEYS | {
+    "evidence",
+    "result",
+    "retest_reason",
+}
+QUALIFICATION_HISTORY_RELEASE_KEYS = {
+    "appcast_sha256",
+    "build_version",
+    "dmg_sha256",
+    "must_not_rebuild",
+    "package_version",
+    "published_at",
+    "release_id",
+    "release_run_id",
+    "release_tag",
+    "signed_app_tree_sha256",
+    "source_git_sha",
+}
+QUALIFICATION_IMMUTABLE_PUBLICATION_REQUIRED_KEYS = {
+    "dmg_size_bytes",
+    "must_not_rebuild",
+    "published_at",
+    "receipt",
+    "result",
+}
+QUALIFICATION_IMMUTABLE_PUBLICATION_ALLOWED_KEYS = QUALIFICATION_IMMUTABLE_PUBLICATION_REQUIRED_KEYS | {
+    "blocking_case_ids",
+    "failed_case_ids",
+    "outstanding_case_ids",
+    "targeted_qualification",
+}
+PRIVATE_QUALIFICATION_FIELD_FRAGMENTS = {
+    "address",
+    "certificate",
+    "contact",
+    "email",
+    "hostname",
+    "keychain",
+    "password",
+    "private",
+    "secret",
+    "serial",
+    "token",
+    "username",
+}
+QUALIFICATION_HISTORY_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+ISSUE_REFERENCE_PATTERN = re.compile(r"^#[1-9][0-9]*$")
 
 
 class ReleaseEvidenceError(RuntimeError):
@@ -88,9 +196,20 @@ def _load_json(path: Path, description: str) -> Mapping[str, Any]:
         raise ReleaseEvidenceError(f"Invalid JSON in {description} at {path}: {error}") from error
 
 
-def _write_json(path: Path, value: object) -> None:
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    with tempfile.NamedTemporaryFile("wb", dir=path.parent, delete=False) as temporary:
+        temporary.write(content)
+        temporary_path = Path(temporary.name)
+    temporary_path.replace(path)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    _atomic_write_bytes(path, content.encode())
+
+
+def _write_json(path: Path, value: object) -> None:
+    _atomic_write_text(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
 def _parse_timestamp(value: object, description: str) -> str:
@@ -303,6 +422,297 @@ def _update_qualification(repo_root: Path, receipt: Mapping[str, Any]) -> Path:
     return path
 
 
+def validate_qualification_record_identity(
+    qualification: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+) -> None:
+    candidate = _mapping(qualification.get("candidate"), "qualification candidate")
+    release = _mapping(receipt.get("release"), "receipt release")
+    versions = _mapping(receipt.get("versions"), "receipt versions")
+    workflow = _mapping(receipt.get("workflow"), "receipt workflow")
+    expected = {
+        "appcast_sha256": _artifact(receipt, "appcast")["sha256"],
+        "build_version": versions["build"],
+        "dmg_name": _artifact(receipt, "dmg")["name"],
+        "dmg_sha256": _artifact(receipt, "dmg")["sha256"],
+        "package_version": versions["package"],
+        "public_version": versions["public"],
+        "release_id": release["id"],
+        "release_run_id": workflow["run_id"],
+        "release_tag": release["tag"],
+        "signed_app_tree_sha256": receipt["signed_app_tree_sha256"],
+        "source_git_sha": receipt["source_sha"],
+        "workflow": workflow["name"],
+    }
+    for field, value in expected.items():
+        if candidate.get(field) != value:
+            raise ReleaseEvidenceError(
+                f"Qualification record candidate.{field} conflicts with exact release receipt identity."
+            )
+
+
+def _reject_private_qualification_fields(value: object, path: str = "qualification") -> None:
+    if isinstance(value, Mapping):
+        for raw_key, child in value.items():
+            if not isinstance(raw_key, str) or not raw_key:
+                raise ReleaseEvidenceError(f"{path} contains a non-string key.")
+            lowered = raw_key.lower()
+            if any(fragment in lowered for fragment in PRIVATE_QUALIFICATION_FIELD_FRAGMENTS):
+                raise ReleaseEvidenceError(f"{path}.{raw_key} is not a public-safe qualification field name.")
+            _reject_private_qualification_fields(child, f"{path}.{raw_key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _reject_private_qualification_fields(child, f"{path}[{index}]")
+    elif isinstance(value, str) and (value.startswith("/") or value.startswith("~/")):
+        raise ReleaseEvidenceError(f"{path} contains an absolute or home-relative path.")
+
+
+def _validate_object_keys(
+    value: Mapping[str, Any],
+    *,
+    required: set[str],
+    allowed: set[str],
+    description: str,
+) -> None:
+    actual = set(value)
+    missing = required - actual
+    extra = actual - allowed
+    if missing or extra:
+        raise ReleaseEvidenceError(f"{description} keys changed; missing={sorted(missing)}, extra={sorted(extra)}.")
+
+
+def _validate_string_list(value: object, description: str) -> None:
+    for item in _sequence(value, description):
+        _string(item, description)
+
+
+def _validate_boolean(value: object, description: str) -> None:
+    if not isinstance(value, bool):
+        raise ReleaseEvidenceError(f"{description} must be boolean.")
+
+
+def _validate_nonnegative_integer(value: object, description: str) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ReleaseEvidenceError(f"{description} must be a nonnegative integer.")
+
+
+def _validate_repository_relative_path(value: object, description: str) -> None:
+    text = _string(value, description)
+    path = Path(text)
+    if path.is_absolute() or ".." in path.parts or text.startswith("./"):
+        raise ReleaseEvidenceError(f"{description} must be a canonical repository-relative path.")
+
+
+def _validate_qualification_sections(qualification: Mapping[str, Any]) -> None:
+    acceptance = _mapping(qualification.get("acceptance"), "qualification acceptance")
+    _validate_object_keys(
+        acceptance,
+        required=QUALIFICATION_ACCEPTANCE_REQUIRED_KEYS,
+        allowed=QUALIFICATION_ACCEPTANCE_ALLOWED_KEYS,
+        description="Qualification acceptance",
+    )
+    for field in (
+        "blocking_case_ids",
+        "nonblocking_case_ids",
+        "preregistered_matrix_case_ids",
+        "required_case_ids",
+    ):
+        _validate_string_list(acceptance.get(field), f"qualification acceptance {field}")
+    for field in ("field_case_open", "milestone_complete", "passed", "signed_rc_complete"):
+        if field in acceptance:
+            _validate_boolean(acceptance[field], f"qualification acceptance {field}")
+    for field in ("carried_case_count", "failed_case_count", "passed_case_count"):
+        if field in acceptance:
+            _validate_nonnegative_integer(acceptance[field], f"qualification acceptance {field}")
+
+    execution_policy = _mapping(qualification.get("execution_policy"), "qualification execution policy")
+    _validate_object_keys(
+        execution_policy,
+        required=QUALIFICATION_EXECUTION_POLICY_KEYS,
+        allowed=QUALIFICATION_EXECUTION_POLICY_KEYS,
+        description="Qualification execution policy",
+    )
+    for field in ("approval_command", "field_qualification_timing", "release_stage", "watch_command"):
+        _string(execution_policy.get(field), f"qualification execution policy {field}")
+    _integer(
+        execution_policy.get("approval_required_exit_code"),
+        "qualification execution policy approval_required_exit_code",
+    )
+    for field in (
+        "generic_run_waiter_is_sufficient",
+        "macos_signing_requires_fresh_explicit_run_bound_authorization",
+        "main_must_remain_fixed_while_nonterminal",
+    ):
+        _validate_boolean(execution_policy.get(field), f"qualification execution policy {field}")
+
+    for index, raw_case in enumerate(_sequence(qualification.get("matrix"), "qualification matrix")):
+        case = _mapping(raw_case, f"qualification matrix case {index}")
+        _validate_object_keys(
+            case,
+            required=QUALIFICATION_MATRIX_REQUIRED_KEYS,
+            allowed=QUALIFICATION_MATRIX_ALLOWED_KEYS,
+            description=f"Qualification matrix case {index}",
+        )
+        for field in QUALIFICATION_MATRIX_REQUIRED_KEYS:
+            _string(case.get(field), f"qualification matrix case {index} {field}")
+        if "evidence" in case:
+            _validate_repository_relative_path(case["evidence"], f"qualification matrix case {index} evidence")
+        for field in ("result", "retest_reason"):
+            if field in case:
+                _string(case[field], f"qualification matrix case {index} {field}")
+
+    for index, raw_evidence in enumerate(
+        _sequence(qualification.get("prior_evidence"), "qualification prior evidence")
+    ):
+        evidence = _mapping(raw_evidence, f"qualification prior evidence {index}")
+        _validate_object_keys(
+            evidence,
+            required={"id", "scope"},
+            allowed={"id", "scope"},
+            description=f"Qualification prior evidence {index}",
+        )
+        _string(evidence.get("id"), f"qualification prior evidence {index} id")
+        _string(evidence.get("scope"), f"qualification prior evidence {index} scope")
+
+    for issue in _sequence(qualification.get("issues"), "qualification issues"):
+        if ISSUE_REFERENCE_PATTERN.fullmatch(_string(issue, "qualification issue")) is None:
+            raise ReleaseEvidenceError("Qualification issues must use canonical GitHub issue references.")
+
+    history = _mapping(qualification.get("immutable_history"), "qualification immutable history")
+    for history_key, raw_history in history.items():
+        if not isinstance(history_key, str) or QUALIFICATION_HISTORY_KEY_PATTERN.fullmatch(history_key) is None:
+            raise ReleaseEvidenceError("Qualification immutable history keys must use canonical identifiers.")
+        if isinstance(raw_history, list):
+            for build in raw_history:
+                _integer(build, f"qualification immutable history {history_key} build")
+            continue
+        release_history = _mapping(raw_history, f"qualification immutable history {history_key}")
+        _validate_object_keys(
+            release_history,
+            required=QUALIFICATION_HISTORY_RELEASE_KEYS,
+            allowed=QUALIFICATION_HISTORY_RELEASE_KEYS,
+            description=f"Qualification immutable history {history_key}",
+        )
+        for field in ("release_id", "release_run_id"):
+            _integer(release_history.get(field), f"qualification immutable history {history_key} {field}")
+        for field in QUALIFICATION_HISTORY_RELEASE_KEYS - {"release_id", "release_run_id", "must_not_rebuild"}:
+            _string(release_history.get(field), f"qualification immutable history {history_key} {field}")
+        _validate_boolean(
+            release_history.get("must_not_rebuild"),
+            f"qualification immutable history {history_key} must_not_rebuild",
+        )
+
+    if "immutable_publication" in qualification:
+        publication = _mapping(qualification["immutable_publication"], "qualification immutable publication")
+        _validate_object_keys(
+            publication,
+            required=QUALIFICATION_IMMUTABLE_PUBLICATION_REQUIRED_KEYS,
+            allowed=QUALIFICATION_IMMUTABLE_PUBLICATION_ALLOWED_KEYS,
+            description="Qualification immutable publication",
+        )
+        _integer(publication.get("dmg_size_bytes"), "qualification immutable publication dmg_size_bytes")
+        _validate_boolean(
+            publication.get("must_not_rebuild"),
+            "qualification immutable publication must_not_rebuild",
+        )
+        for field in ("published_at", "result"):
+            _string(publication.get(field), f"qualification immutable publication {field}")
+        _validate_repository_relative_path(
+            publication.get("receipt"),
+            "qualification immutable publication receipt",
+        )
+        if "targeted_qualification" in publication:
+            _validate_repository_relative_path(
+                publication["targeted_qualification"],
+                "qualification immutable publication targeted_qualification",
+            )
+        for field in ("blocking_case_ids", "failed_case_ids", "outstanding_case_ids"):
+            if field in publication:
+                _validate_string_list(publication[field], f"qualification immutable publication {field}")
+
+
+def validate_qualification_record(
+    qualification_path: Path,
+    receipt: Mapping[str, Any],
+    *,
+    policy_path: Path,
+    route_table_path: Path,
+) -> Mapping[str, Any]:
+    qualification = _load_json(qualification_path, "qualification record")
+    _validate_object_keys(
+        qualification,
+        required=QUALIFICATION_RECORD_KEYS,
+        allowed=QUALIFICATION_RECORD_KEYS | QUALIFICATION_RECORD_OPTIONAL_KEYS,
+        description="Qualification record",
+    )
+    if qualification.get("schema_version") != 1:
+        raise ReleaseEvidenceError("Qualification record schema_version must be 1.")
+    _string(qualification.get("qualification_id"), "qualification ID")
+    _string(qualification.get("status"), "qualification status")
+    candidate = _mapping(qualification.get("candidate"), "qualification candidate")
+    if set(candidate) != QUALIFICATION_CANDIDATE_KEYS:
+        raise ReleaseEvidenceError("Qualification record candidate must use the complete canonical schema.")
+    _reject_private_qualification_fields(qualification)
+    _validate_qualification_sections(qualification)
+    validate_qualification_record_identity(qualification, receipt)
+
+    try:
+        from scripts.qualify_release_scope import (
+            QualificationScopeError,
+            load_policy,
+            load_qualification_overrides,
+        )
+
+        policy = load_policy(policy_path)
+        load_qualification_overrides(qualification_path, policy)
+    except QualificationScopeError as error:
+        raise ReleaseEvidenceError(f"Qualification record is invalid: {error}") from error
+
+    qualification_policy = _mapping(qualification.get("qualification_policy"), "qualification policy binding")
+    if set(qualification_policy) != {"id", "path", "scope_command"}:
+        raise ReleaseEvidenceError("Qualification policy binding must use the canonical schema.")
+    if qualification_policy.get("id") != policy.get("policy_id"):
+        raise ReleaseEvidenceError("Qualification policy binding conflicts with the validated policy.")
+    policy_reference = _string(qualification_policy.get("path"), "qualification policy path")
+    if policy_reference != "docs/qualification/release-qualification-policy-v1.json":
+        raise ReleaseEvidenceError("Qualification policy path must use the canonical repository path.")
+    _string(qualification_policy.get("scope_command"), "qualification scope command")
+
+    route_table = _load_json(route_table_path, "qualification route table")
+    route_table_digest = hashlib.sha256(route_table_path.read_bytes()).hexdigest()
+    if candidate.get("route_table_id") != route_table.get("route_table_id"):
+        raise ReleaseEvidenceError("Qualification candidate route_table_id conflicts with the route table.")
+    if candidate.get("route_table_sha256") != route_table_digest:
+        raise ReleaseEvidenceError("Qualification candidate route_table_sha256 conflicts with the route table.")
+    if candidate.get("mapping_version") != route_table.get("mapping_version"):
+        raise ReleaseEvidenceError("Qualification candidate mapping_version conflicts with the route table.")
+    _integer(candidate.get("worker_protocol_version"), "qualification worker protocol version")
+    return qualification
+
+
+def _snapshot_qualification(
+    repo_root: Path,
+    release_tag: str,
+    qualification_path: Path,
+    receipt: Mapping[str, Any],
+) -> Path:
+    validate_qualification_record(
+        qualification_path,
+        receipt,
+        policy_path=repo_root / "docs/qualification/release-qualification-policy-v1.json",
+        route_table_path=repo_root / "docs/qualification/video-quality-route-table-v2.json",
+    )
+    qualification = _load_json(qualification_path, "signed qualification")
+    snapshot_path = repo_root / "docs" / "release-evidence" / release_tag / QUALIFICATION_RECORD_NAME
+    content = (json.dumps(qualification, indent=2, sort_keys=True) + "\n").encode()
+    if snapshot_path.exists():
+        if snapshot_path.read_bytes() != content:
+            raise ReleaseEvidenceError(f"Checked qualification record for immutable release {release_tag} conflicts.")
+        return snapshot_path
+    _atomic_write_bytes(snapshot_path, content)
+    return snapshot_path
+
+
 def _update_cut_packet(repo_root: Path, receipt: Mapping[str, Any], publication: Mapping[str, Any]) -> Path:
     versions = _mapping(receipt.get("versions"), "receipt versions")
     path = repo_root / "docs" / f"{_string(versions.get('public'), 'public version')}-cut-packet.md"
@@ -339,7 +749,7 @@ def _update_cut_packet(repo_root: Path, receipt: Mapping[str, Any], publication:
         text = prefix + block
     else:
         text = text.rstrip() + block
-    path.write_text(text.rstrip() + "\n", encoding="utf-8")
+    _atomic_write_text(path, text.rstrip() + "\n")
     return path
 
 
@@ -351,7 +761,34 @@ def reconcile(
     receipt_path: Path,
     live_appcast_path: Path,
     recovery_workflow_run: Mapping[str, Any] | None = None,
+    *,
+    prior_tag: str | None = None,
+    signed_ui_artifact_id: int | None = None,
+    signed_ui_artifact_digest: str | None = None,
+    signed_ui_archive_path: Path | None = None,
+    signed_ui_receipt_path: Path | None = None,
+    signed_ui_receipt_file_sha256: str | None = None,
+    evidence_ref: str | None = None,
+    evidence_base_sha: str | None = None,
+    runner_sha: str | None = None,
+    sparkle_route: str | None = None,
 ) -> dict[str, Any]:
+    manifest_inputs = {
+        "prior_tag": prior_tag,
+        "signed_ui_artifact_id": signed_ui_artifact_id,
+        "signed_ui_artifact_digest": signed_ui_artifact_digest,
+        "signed_ui_archive_path": signed_ui_archive_path,
+        "signed_ui_receipt_path": signed_ui_receipt_path,
+        "signed_ui_receipt_file_sha256": signed_ui_receipt_file_sha256,
+        "evidence_ref": evidence_ref,
+        "evidence_base_sha": evidence_base_sha,
+        "runner_sha": runner_sha,
+        "sparkle_route": sparkle_route,
+    }
+    supplied_manifest_inputs = {key for key, value in manifest_inputs.items() if value is not None}
+    if supplied_manifest_inputs and supplied_manifest_inputs != set(manifest_inputs):
+        missing = sorted(set(manifest_inputs) - supplied_manifest_inputs)
+        raise ReleaseEvidenceError(f"Qualification manifest inputs are partial; missing={missing}.")
     publication = validate_publication(
         workflow_run,
         release,
@@ -367,8 +804,7 @@ def reconcile(
     checked_receipt = evidence_directory / RECEIPT_ASSET_NAME
     if checked_receipt.exists() and checked_receipt.read_bytes() != receipt_path.read_bytes():
         raise ReleaseEvidenceError(f"Checked receipt for immutable release {tag} conflicts with the published asset.")
-    checked_receipt.parent.mkdir(parents=True, exist_ok=True)
-    checked_receipt.write_bytes(receipt_path.read_bytes())
+    _atomic_write_bytes(checked_receipt, receipt_path.read_bytes())
     recovery_workflow_run = (
         {
             "operation": "pypi_recovery",
@@ -460,16 +896,25 @@ def reconcile(
         if recovery_workflow_run is not None:
             evidence_record["recovery_workflow_run"] = recovery_workflow_run
         _merge_unique_record(receipts, evidence_record, "receipt_id")
-    evidence["receipts"] = sorted(receipts, key=lambda item: cast(str, item["receipt_id"]))
+    evidence["receipts"] = receipts
     _write_json(evidence_path, evidence)
 
-    qualification_path = _update_qualification(repo_root, receipt)
+    qualification_record_path = repo_root / "docs" / "release-evidence" / tag / QUALIFICATION_RECORD_NAME
+    if qualification_record_path.exists():
+        validate_qualification_record_identity(
+            _load_json(qualification_record_path, "qualification record"),
+            receipt,
+        )
+    else:
+        qualification_path = _update_qualification(repo_root, receipt)
+        qualification_record_path = _snapshot_qualification(repo_root, tag, qualification_path, receipt)
     cut_packet_path = _update_cut_packet(repo_root, receipt, publication)
-    return {
+    outputs = {
         "cut_packet": cut_packet_path.relative_to(repo_root).as_posix(),
         "evidence_index": EVIDENCE_INDEX_PATH.as_posix(),
         "publication_record": publication_path.relative_to(repo_root).as_posix(),
-        "qualification": qualification_path.relative_to(repo_root).as_posix(),
+        "qualification": qualification_record_path.relative_to(repo_root).as_posix(),
+        "qualification_record": qualification_record_path.relative_to(repo_root).as_posix(),
         "receipt": reference,
         "receipt_file_sha256": publication["receipt_file_sha256"],
         "release_ledger": RELEASE_LEDGER_PATH.as_posix(),
@@ -477,6 +922,50 @@ def reconcile(
         "release_tag": tag,
         "source_sha": receipt["source_sha"],
     }
+    if supplied_manifest_inputs:
+        from scripts.release_qualification_manifest import (
+            MANIFEST_NAME,
+            ReleaseQualificationManifestError,
+            build_manifest_for_reconciled_release,
+        )
+
+        try:
+            manifest = build_manifest_for_reconciled_release(
+                repo_root=repo_root,
+                release_tag=tag,
+                prior_tag=cast(str, prior_tag),
+                signed_ui_artifact_id=cast(int, signed_ui_artifact_id),
+                signed_ui_artifact_digest=cast(str, signed_ui_artifact_digest),
+                signed_ui_archive_source_path=cast(Path, signed_ui_archive_path),
+                signed_ui_receipt_source_path=cast(Path, signed_ui_receipt_path),
+                signed_ui_receipt_file_sha256=cast(str, signed_ui_receipt_file_sha256),
+                evidence_ref=cast(str, evidence_ref),
+                evidence_base_sha=cast(str, evidence_base_sha),
+                runner_sha=cast(str, runner_sha),
+                sparkle_route=cast(str, sparkle_route),
+                qualification_path=qualification_record_path.relative_to(repo_root),
+            )
+        except ReleaseQualificationManifestError as error:
+            raise ReleaseEvidenceError(str(error)) from error
+        outputs.update(
+            {
+                "manifest_sha256": manifest["manifest_sha256"],
+                "qualification_manifest": (evidence_directory / MANIFEST_NAME).relative_to(repo_root).as_posix(),
+                "signed_ui_receipt": (evidence_directory / "signed-artifact-ui-receipt.json")
+                .relative_to(repo_root)
+                .as_posix(),
+                "signed_ui_archive": (evidence_directory / "signed-artifact-ui.zip").relative_to(repo_root).as_posix(),
+                "signed_ui_receipt_sha256": _mapping(
+                    manifest.get("signed_ui_artifact"),
+                    "manifest signed UI artifact",
+                )["receipt_sha256"],
+                "signed_ui_artifact_sha256": _mapping(
+                    manifest.get("signed_ui_artifact"),
+                    "manifest signed UI artifact",
+                )["artifact_sha256"],
+            }
+        )
+    return outputs
 
 
 def _write_github_output(path: Path, outputs: Mapping[str, Any]) -> None:
@@ -492,6 +981,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--live-appcast", type=Path, required=True)
     parser.add_argument("--recovery-workflow-run", type=Path)
+    parser.add_argument("--prior-tag")
+    parser.add_argument("--signed-ui-artifact-id", type=int)
+    parser.add_argument("--signed-ui-artifact-digest")
+    parser.add_argument("--signed-ui-artifact-archive", type=Path)
+    parser.add_argument("--signed-ui-receipt", type=Path)
+    parser.add_argument("--signed-ui-receipt-file-sha256")
+    parser.add_argument("--evidence-ref")
+    parser.add_argument("--evidence-base-sha")
+    parser.add_argument("--runner-sha")
+    parser.add_argument("--sparkle-route")
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args(argv)
@@ -508,6 +1007,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if args.recovery_workflow_run is not None
                 else None
             ),
+            prior_tag=args.prior_tag,
+            signed_ui_artifact_id=args.signed_ui_artifact_id,
+            signed_ui_artifact_digest=args.signed_ui_artifact_digest,
+            signed_ui_archive_path=args.signed_ui_artifact_archive,
+            signed_ui_receipt_path=args.signed_ui_receipt,
+            signed_ui_receipt_file_sha256=args.signed_ui_receipt_file_sha256,
+            evidence_ref=args.evidence_ref,
+            evidence_base_sha=args.evidence_base_sha,
+            runner_sha=args.runner_sha,
+            sparkle_route=args.sparkle_route,
         )
         if args.github_output is not None:
             _write_github_output(args.github_output, outputs)

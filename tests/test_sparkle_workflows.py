@@ -1016,13 +1016,117 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("scripts.stable_pypi_recovery verify-pypi", str(prepare))
         self.assertIn("--recovery-workflow-run", str(prepare))
         self.assertIn("release-receipt.json", str(prepare))
+        self.assertIn("Capture signed artifact UI receipt before expiry", str(prepare))
+        step_names = [step["name"] for step in prepare["steps"]]
+        self.assertLess(
+            step_names.index("Preserve an existing idempotent evidence branch"),
+            step_names.index("Capture signed artifact UI receipt before expiry"),
+        )
+        self.assertIn("signed-artifact-ui-metadata.json", str(prepare))
+        self.assertIn("EXISTING_WORKTREE", str(prepare))
+        self.assertIn("checkpoint_source=main", str(prepare))
+        self.assertIn("existing_branch_sha", str(prepare))
+        self.assertIn("steps.reuse.outputs.checkpoint_source != 'main'", str(prepare))
+        self.assertIn("partial qualification checkpoint state", str(prepare))
+        self.assertIn("expired before Release Evidence captured it", str(prepare))
+        self.assertIn("scripts.release_qualification_manifest validate", str(prepare))
+        self.assertIn("scripts.signed_artifact_receipt validate", str(prepare))
+        self.assertIn("scripts.release qualification-base", str(prepare))
+        self.assertIn("prior_tag", str(prepare))
+        self.assertIn("sparkle_route", str(prepare))
+        self.assertIn('--prior-tag "${{ steps.signed-ui.outputs.prior_tag }}"', str(prepare))
+        self.assertNotIn("steps.signed-ui.outputs.previous_release_tag", str(prepare))
+        self.assertIn("--signed-ui-artifact-id", str(prepare))
+        self.assertIn("--signed-ui-artifact-archive", str(prepare))
+        self.assertIn("signed-artifact-ui.zip", str(prepare))
+        self.assertIn("qualification-record.json", str(prepare))
+        self.assertIn("steps.reconcile.outputs.manifest_sha256", str(prepare))
         self.assertIn(".immutable == true", str(prepare))
         self.assertIn("Preserve an existing idempotent evidence branch", str(prepare))
+        self.assertIn("ROLLING_QUALIFICATION_PATH", str(prepare))
+        self.assertIn("git diff --name-only --diff-filter=U", str(prepare))
+        self.assertIn('git checkout --theirs -- "$ROLLING_QUALIFICATION_PATH"', str(prepare))
+        self.assertIn("EXPECTED_EXISTING_BRANCH_SHA", str(create_pr))
+        self.assertIn("Evidence branch moved after evidence preparation", str(create_pr))
+        self.assertNotIn("conflicting qualification manifest", str(create_pr))
         self.assertIn("automation/release-evidence-", str(create_pr))
         self.assertIn("remains intentionally unmergeable", str(create_pr))
         self.assertIn("blocking live-artifact and automated Tier 3 receipt", str(create_pr))
         self.assertIn("Optional physical-hardware and native-window presentation", str(create_pr))
         self.assertIn("peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1", str(create_pr))
+
+    def test_release_evidence_merge_preserves_snapshot_and_accepts_later_rolling_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+            config_path = root / ".github/github.json"
+            qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
+            snapshot_path = root / "docs/release-evidence/v1.0.0/qualification-record.json"
+            config_path.parent.mkdir(parents=True)
+            qualification_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                json.dumps(
+                    {"releaseOperations": {"qualificationRecordPath": qualification_path.relative_to(root).as_posix()}}
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            qualification_path.write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+
+            subprocess.run(["git", "switch", "-c", "automation/release-evidence-v1.0.0"], cwd=root, check=True)
+            qualification_path.write_text("release-bound\n", encoding="utf-8")
+            snapshot_path.parent.mkdir(parents=True)
+            snapshot_path.write_text("immutable snapshot\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "evidence"], cwd=root, check=True)
+            evidence_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            subprocess.run(["git", "switch", "main"], cwd=root, check=True)
+            qualification_path.write_text("later main state\n", encoding="utf-8")
+            subprocess.run(["git", "add", qualification_path], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "advance qualification"], cwd=root, check=True)
+            subprocess.run(["git", "checkout", "--detach", evidence_sha], cwd=root, check=True)
+
+            merge_script = r"""
+set -euo pipefail
+if ! git merge --no-edit main; then
+  ROLLING_QUALIFICATION_PATH=$(jq -er .releaseOperations.qualificationRecordPath .github/github.json)
+  CONFLICTS=$(git diff --name-only --diff-filter=U)
+  CONFLICT_COUNT=$(printf '%s\n' "$CONFLICTS" | sed '/^$/d' | wc -l | tr -d ' ')
+  if [ "$CONFLICT_COUNT" = "1" ] && [ "$CONFLICTS" = "$ROLLING_QUALIFICATION_PATH" ]; then
+    git checkout --theirs -- "$ROLLING_QUALIFICATION_PATH"
+    git add "$ROLLING_QUALIFICATION_PATH"
+    git commit --no-edit
+  else
+    git merge --abort
+    exit 1
+  fi
+fi
+"""
+            subprocess.run(["bash", "-c", merge_script], cwd=root, check=True)
+
+            self.assertEqual(qualification_path.read_text(encoding="utf-8"), "later main state\n")
+            self.assertEqual(snapshot_path.read_text(encoding="utf-8"), "immutable snapshot\n")
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "diff", "--name-only", "--diff-filter=U"],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout,
+                "",
+            )
 
     def test_milestone_qualification_is_hosted_secret_free_and_read_only(self) -> None:
         workflow = load_workflow("milestone-qualification.yml")
@@ -1035,7 +1139,7 @@ printf '%s' "$CODESIGN_METADATA"
 
         self.assertEqual(
             set(dispatch["inputs"]),
-            {"candidate_tag", "evidence_ref", "prior_tag", "route", "signed_ui_artifact_id"},
+            {"candidate_tag", "manifest_sha256"},
         )
         self.assertEqual(workflow["permissions"], {})
         self.assertEqual(qualify["permissions"], {"actions": "read", "contents": "read"})
@@ -1054,11 +1158,16 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("origin/main...HEAD", workflow_text)
         self.assertIn("cmp docs/qualification/release-qualification-policy-v1.json", workflow_text)
         self.assertIn("automation/release-evidence-$CANDIDATE_TAG", workflow_text)
+        self.assertIn("scripts.release_qualification_manifest validate", workflow_text)
+        self.assertIn("--expected-sha256", workflow_text)
+        self.assertIn("--evidence-base-revision", workflow_text)
+        self.assertIn("MANIFEST_SHA256", workflow_text)
         self.assertIn("scripts.signed_artifact_receipt validate", workflow_text)
         self.assertIn("scripts.tier3_clean_machine preflight", workflow_text)
         self.assertIn("scripts.tier3_clean_machine run", workflow_text)
         self.assertIn("scripts.tier3_receipt", workflow_text)
         self.assertIn("Blocking automated milestone qualification", workflow_text)
+        self.assertIn("Qualification manifest", workflow_text)
         self.assertIn("Blocking clean-machine receipt", workflow_text)
         self.assertIn("Blocking installed UI receipt", workflow_text)
         self.assertIn("expected_prerelease=$(jq -r .release.prerelease", workflow_text)
@@ -1074,6 +1183,18 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertEqual(
             config["releaseOperations"]["milestoneQualificationWorkflowPath"],
             ".github/workflows/milestone-qualification.yml",
+        )
+        self.assertEqual(
+            config["releaseOperations"]["qualificationManifestPath"],
+            "docs/release-evidence/<tag>/qualification-manifest.json",
+        )
+        self.assertEqual(
+            config["releaseOperations"]["qualificationSnapshotPath"],
+            "docs/release-evidence/<tag>/qualification-record.json",
+        )
+        self.assertEqual(
+            config["releaseOperations"]["qualificationManifestCommand"],
+            "uv run python -m scripts.release_qualification_manifest",
         )
 
     def test_release_evidence_pr_enforces_post_publication_milestone(self) -> None:

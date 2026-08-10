@@ -24,10 +24,14 @@ jobs:
       contents: read
     outputs:
       base_main_sha: ${{ steps.base.outputs.sha }}
+      existing_branch_sha: ${{ steps.reuse.outputs.existing_branch_sha }}
       has_changes: ${{ steps.stage.outputs.has_changes }}
+      manifest_sha256: ${{ steps.reconcile.outputs.manifest_sha256 }}
       receipt_file_sha256: ${{ steps.reconcile.outputs.receipt_file_sha256 }}
       release_run_id: ${{ steps.reconcile.outputs.release_run_id }}
       release_tag: ${{ steps.reconcile.outputs.release_tag }}
+      signed_ui_receipt_sha256: ${{ steps.reconcile.outputs.signed_ui_receipt_sha256 }}
+      signed_ui_artifact_sha256: ${{ steps.reconcile.outputs.signed_ui_artifact_sha256 }}
       source_sha: ${{ steps.reconcile.outputs.source_sha }}
     steps:
       - name: Checkout current protected main
@@ -124,15 +128,49 @@ jobs:
             --output live-appcast.xml
 
       - name: Preserve an existing idempotent evidence branch
+        id: reuse
         run: |
           set -euo pipefail
           RECEIPT_FILE_SHA256=$(sha256sum release-receipt.json | awk '{print $1}')
           RELEASE_TAG=$(jq -r .release.tag release-receipt.json)
           BRANCH_NAME="automation/release-evidence-$RELEASE_TAG"
+          MANIFEST_PATH="docs/release-evidence/$RELEASE_TAG/qualification-manifest.json"
+          QUALIFICATION_RECORD_PATH="docs/release-evidence/$RELEASE_TAG/qualification-record.json"
+          SIGNED_UI_ARCHIVE_PATH="docs/release-evidence/$RELEASE_TAG/signed-artifact-ui.zip"
+          SIGNED_UI_PATH="docs/release-evidence/$RELEASE_TAG/signed-artifact-ui-receipt.json"
+          if [ -f "$MANIFEST_PATH" ] || [ -f "$QUALIFICATION_RECORD_PATH" ] \
+            || [ -f "$SIGNED_UI_ARCHIVE_PATH" ] || [ -f "$SIGNED_UI_PATH" ]; then
+            if [ ! -f "$MANIFEST_PATH" ] || [ ! -f "$QUALIFICATION_RECORD_PATH" ] \
+              || [ ! -f "$SIGNED_UI_ARCHIVE_PATH" ] || [ ! -f "$SIGNED_UI_PATH" ]; then
+              echo "Protected main contains partial qualification checkpoint state." >&2
+              exit 1
+            fi
+            MAIN_BASE_SHA=$(jq -er .canonical_evidence.base_sha "$MANIFEST_PATH")
+            python -m scripts.release_qualification_manifest validate \
+              --manifest "$MANIFEST_PATH" \
+              --repo-root . \
+              --evidence-base-revision "$MAIN_BASE_SHA" \
+              > existing-manifest-outputs.json
+            git merge-base --is-ancestor "$(jq -er .runner_sha existing-manifest-outputs.json)" HEAD
+            {
+              echo "artifact_id=$(jq -r .signed_ui_artifact_id existing-manifest-outputs.json)"
+              echo "artifact_sha256=$(jq -r .signed_ui_artifact_sha256 existing-manifest-outputs.json)"
+              echo "checkpoint_source=main"
+              echo "existing_branch_sha="
+              echo "has_manifest=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if ! git ls-remote --exit-code --heads origin "refs/heads/$BRANCH_NAME" >/dev/null 2>&1; then
+            {
+              echo "checkpoint_source=none"
+              echo "existing_branch_sha="
+              echo "has_manifest=false"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git fetch --no-tags origin "refs/heads/$BRANCH_NAME:refs/remotes/origin/release-evidence-existing"
+          echo "existing_branch_sha=$(git rev-parse refs/remotes/origin/release-evidence-existing)" >> "$GITHUB_OUTPUT"
           if git diff --name-only main...refs/remotes/origin/release-evidence-existing \
             | grep -Ev '^docs/' | grep -q .; then
             echo "Existing evidence branch contains changes outside docs/." >&2
@@ -146,13 +184,150 @@ jobs:
               exit 1
             fi
           fi
+          HAS_MANIFEST=false
+          if git cat-file -e "refs/remotes/origin/release-evidence-existing:$MANIFEST_PATH" 2>/dev/null \
+            || git cat-file -e "refs/remotes/origin/release-evidence-existing:$QUALIFICATION_RECORD_PATH" 2>/dev/null \
+            || git cat-file -e "refs/remotes/origin/release-evidence-existing:$SIGNED_UI_ARCHIVE_PATH" 2>/dev/null \
+            || git cat-file -e "refs/remotes/origin/release-evidence-existing:$SIGNED_UI_PATH" 2>/dev/null; then
+            if ! git cat-file -e "refs/remotes/origin/release-evidence-existing:$MANIFEST_PATH" 2>/dev/null \
+              || ! git cat-file -e "refs/remotes/origin/release-evidence-existing:$QUALIFICATION_RECORD_PATH" 2>/dev/null \
+              || ! git cat-file -e "refs/remotes/origin/release-evidence-existing:$SIGNED_UI_ARCHIVE_PATH" 2>/dev/null \
+              || ! git cat-file -e "refs/remotes/origin/release-evidence-existing:$SIGNED_UI_PATH" 2>/dev/null; then
+              echo "Existing evidence branch contains partial qualification checkpoint state." >&2
+              exit 1
+            fi
+            EXISTING_WORKTREE="$RUNNER_TEMP/release-evidence-existing"
+            git worktree add --detach "$EXISTING_WORKTREE" refs/remotes/origin/release-evidence-existing
+            EXISTING_BASE_SHA=$(jq -er .canonical_evidence.base_sha "$EXISTING_WORKTREE/$MANIFEST_PATH")
+            python -m scripts.release_qualification_manifest validate \
+              --manifest "$EXISTING_WORKTREE/$MANIFEST_PATH" \
+              --repo-root "$EXISTING_WORKTREE" \
+              --evidence-base-revision "$EXISTING_BASE_SHA" \
+              > existing-manifest-outputs.json
+            git -C "$EXISTING_WORKTREE" merge-base --is-ancestor \
+              "$(jq -er .runner_sha existing-manifest-outputs.json)" HEAD
+            git worktree remove --force "$EXISTING_WORKTREE"
+            HAS_MANIFEST=true
+            {
+              echo "artifact_id=$(jq -r .signed_ui_artifact_id existing-manifest-outputs.json)"
+              echo "artifact_sha256=$(jq -r .signed_ui_artifact_sha256 existing-manifest-outputs.json)"
+            } >> "$GITHUB_OUTPUT"
+          fi
+          echo "checkpoint_source=branch" >> "$GITHUB_OUTPUT"
+          echo "has_manifest=$HAS_MANIFEST" >> "$GITHUB_OUTPUT"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git checkout --detach refs/remotes/origin/release-evidence-existing
-          git merge --no-edit main
+          if ! git merge --no-edit main; then
+            ROLLING_QUALIFICATION_PATH=$(jq -er .releaseOperations.qualificationRecordPath .github/github.json)
+            CONFLICTS=$(git diff --name-only --diff-filter=U)
+            CONFLICT_COUNT=$(printf '%s\n' "$CONFLICTS" | sed '/^$/d' | wc -l | tr -d ' ')
+            if [ "$CONFLICT_COUNT" = "1" ] && [ "$CONFLICTS" = "$ROLLING_QUALIFICATION_PATH" ]; then
+              git checkout --theirs -- "$ROLLING_QUALIFICATION_PATH"
+              git add "$ROLLING_QUALIFICATION_PATH"
+              git commit --no-edit
+            else
+              printf 'Existing evidence branch has unsupported merge conflicts:\n%s\n' "$CONFLICTS" >&2
+              git merge --abort
+              exit 1
+            fi
+          fi
+
+      - name: Capture signed artifact UI receipt before expiry
+        id: signed-ui
+        if: steps.reuse.outputs.checkpoint_source != 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REUSED_ARTIFACT_ID: ${{ steps.reuse.outputs.artifact_id }}
+          REUSED_ARTIFACT_SHA256: ${{ steps.reuse.outputs.artifact_sha256 }}
+          REUSED_MANIFEST: ${{ steps.reuse.outputs.has_manifest }}
+        run: |
+          set -euo pipefail
+          CANDIDATE_TAG=$(jq -er .release.tag release-receipt.json)
+          CANDIDATE_SHA=$(jq -er .source_sha release-receipt.json)
+          CANDIDATE_RUN_ID=$(jq -er .workflow.run_id release-receipt.json)
+          CANDIDATE_RUN_ATTEMPT=$(jq -er .workflow.run_attempt release-receipt.json)
+          RECEIPT_FILE_SHA256=$(sha256sum release-receipt.json | awk '{print $1}')
+          RECEIPT_ASSET_ID=$(jq -er \
+            --arg digest "sha256:$RECEIPT_FILE_SHA256" \
+            '.assets[] | select(.name == "release-receipt.json" and .digest == $digest) | .id' \
+            release.json)
+          ARTIFACT_NAME="signed-artifact-ui-$CANDIDATE_RUN_ATTEMPT"
+          mkdir -p signed-artifact-ui
+          SIGNED_UI_ARCHIVE=signed-artifact-ui.zip
+          SIGNED_UI_RECEIPT=signed-artifact-ui/signed-artifact-ui-receipt.json
+          CHECKED_SIGNED_UI_ARCHIVE="docs/release-evidence/$CANDIDATE_TAG/signed-artifact-ui.zip"
+          CHECKED_SIGNED_UI="docs/release-evidence/$CANDIDATE_TAG/signed-artifact-ui-receipt.json"
+          if [ "$REUSED_MANIFEST" = "true" ]; then
+            test -f "$CHECKED_SIGNED_UI"
+            SIGNED_UI_ARTIFACT_ID=$REUSED_ARTIFACT_ID
+            SIGNED_UI_ARTIFACT_SHA256=$REUSED_ARTIFACT_SHA256
+            SIGNED_UI_ARCHIVE=$CHECKED_SIGNED_UI_ARCHIVE
+            cp "$CHECKED_SIGNED_UI" "$SIGNED_UI_RECEIPT"
+          else
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100" \
+              --paginate --slurp > signed-ui-artifacts-pages.json
+            jq -c \
+              --arg name "$ARTIFACT_NAME" \
+              --arg head_sha "$CANDIDATE_SHA" \
+              --argjson run_id "$CANDIDATE_RUN_ID" \
+              '[.[] | .artifacts[] | select(
+                .expired == false
+                and .name == $name
+                and .workflow_run.id == $run_id
+                and .workflow_run.head_branch == "main"
+                and .workflow_run.head_sha == $head_sha
+                and (.digest | startswith("sha256:"))
+              )]' signed-ui-artifacts-pages.json > signed-ui-artifact-matches.json
+            MATCH_COUNT=$(jq 'length' signed-ui-artifact-matches.json)
+            if [ "$MATCH_COUNT" = "0" ]; then
+              echo "The signed UI Actions artifact expired before Release Evidence captured it; immutable release qualification cannot be reconstructed." >&2
+              exit 1
+            fi
+            if [ "$MATCH_COUNT" != "1" ]; then
+              echo "Expected one exact signed UI Actions artifact; found $MATCH_COUNT." >&2
+              exit 1
+            fi
+            jq '.[0]' signed-ui-artifact-matches.json > signed-artifact-ui-metadata.json
+            SIGNED_UI_ARTIFACT_ID=$(jq -er .id signed-artifact-ui-metadata.json)
+            SIGNED_UI_ARTIFACT_SHA256=$(jq -er '.digest | sub("^sha256:"; "")' signed-artifact-ui-metadata.json)
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$SIGNED_UI_ARTIFACT_ID/zip" \
+              > "$SIGNED_UI_ARCHIVE"
+            test "$(sha256sum "$SIGNED_UI_ARCHIVE" | awk '{print $1}')" = "$SIGNED_UI_ARTIFACT_SHA256"
+            unzip -q "$SIGNED_UI_ARCHIVE" -d signed-artifact-ui
+            test "$(find signed-artifact-ui -type f | wc -l | tr -d ' ')" = "1"
+          fi
+          test -f "$SIGNED_UI_RECEIPT"
+          SIGNED_UI_RECEIPT_FILE_SHA256=$(sha256sum "$SIGNED_UI_RECEIPT" | awk '{print $1}')
+          python -m scripts.signed_artifact_receipt validate \
+            --receipt "$SIGNED_UI_RECEIPT" \
+            --receipt-file-sha256 "$SIGNED_UI_RECEIPT_FILE_SHA256" \
+            --release-receipt release-receipt.json \
+            --release-receipt-asset-id "$RECEIPT_ASSET_ID" \
+            --release-receipt-file-sha256 "$RECEIPT_FILE_SHA256" \
+            --workflow-run-id "$CANDIDATE_RUN_ID" \
+            --workflow-run-attempt "$CANDIDATE_RUN_ATTEMPT"
+          {
+            echo "artifact_id=$SIGNED_UI_ARTIFACT_ID"
+            echo "artifact_sha256=$SIGNED_UI_ARTIFACT_SHA256"
+            echo "archive_path=$SIGNED_UI_ARCHIVE"
+            echo "receipt_file_sha256=$SIGNED_UI_RECEIPT_FILE_SHA256"
+            echo "receipt_path=$SIGNED_UI_RECEIPT"
+          } >> "$GITHUB_OUTPUT"
+          python -m scripts.release qualification-base \
+            --release-tag "$CANDIDATE_TAG" \
+            --releases-json releases-pages.json \
+            --head-ref "$CANDIDATE_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+          PRIOR_TAG=$(sed -n 's/^prior_tag=//p' "$GITHUB_OUTPUT" | tail -1)
+          if [ -z "$PRIOR_TAG" ]; then
+            echo "Unable to derive prior published release tag for milestone qualification." >&2
+            exit 1
+          fi
 
       - name: Reconcile checked evidence
         id: reconcile
+        if: steps.reuse.outputs.checkpoint_source != 'main'
         env:
           RECOVERY: ${{ steps.source.outputs.recovery }}
         run: |
@@ -166,6 +341,16 @@ jobs:
             --release release.json \
             --receipt release-receipt.json \
             --live-appcast live-appcast.xml \
+            --prior-tag "${{ steps.signed-ui.outputs.prior_tag }}" \
+            --signed-ui-artifact-id "${{ steps.signed-ui.outputs.artifact_id }}" \
+            --signed-ui-artifact-digest "${{ steps.signed-ui.outputs.artifact_sha256 }}" \
+            --signed-ui-artifact-archive "${{ steps.signed-ui.outputs.archive_path }}" \
+            --signed-ui-receipt "${{ steps.signed-ui.outputs.receipt_path }}" \
+            --signed-ui-receipt-file-sha256 "${{ steps.signed-ui.outputs.receipt_file_sha256 }}" \
+            --evidence-ref "automation/release-evidence-$(jq -er .release.tag release-receipt.json)" \
+            --evidence-base-sha "${{ steps.base.outputs.sha }}" \
+            --runner-sha "${{ steps.base.outputs.sha }}" \
+            --sparkle-route "${{ steps.signed-ui.outputs.sparkle_route }}" \
             --repo-root "$GITHUB_WORKSPACE" \
             "${RECOVERY_ARGS[@]}" \
             --github-output "$GITHUB_OUTPUT"
@@ -227,11 +412,19 @@ jobs:
       - name: Reject conflicting evidence on the idempotent branch
         env:
           BRANCH_NAME: automation/release-evidence-${{ needs.validate-and-prepare.outputs.release_tag }}
+          EXPECTED_EXISTING_BRANCH_SHA: ${{ needs.validate-and-prepare.outputs.existing_branch_sha }}
           EXPECTED_RECEIPT_FILE_SHA256: ${{ needs.validate-and-prepare.outputs.receipt_file_sha256 }}
+          EXPECTED_SIGNED_UI_RECEIPT_SHA256: ${{ needs.validate-and-prepare.outputs.signed_ui_receipt_sha256 }}
+          EXPECTED_SIGNED_UI_ARTIFACT_SHA256: ${{ needs.validate-and-prepare.outputs.signed_ui_artifact_sha256 }}
           RELEASE_TAG: ${{ needs.validate-and-prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code --heads origin "refs/heads/$BRANCH_NAME" >/dev/null 2>&1; then
+          REMOTE_BRANCH_SHA=$(git ls-remote --heads origin "refs/heads/$BRANCH_NAME" | awk '{print $1}')
+          if [ "$REMOTE_BRANCH_SHA" != "$EXPECTED_EXISTING_BRANCH_SHA" ]; then
+            echo "Evidence branch moved after evidence preparation; rerun against its current head." >&2
+            exit 1
+          fi
+          if [ -n "$REMOTE_BRANCH_SHA" ]; then
             git fetch --no-tags origin "refs/heads/$BRANCH_NAME:refs/remotes/origin/release-evidence-existing"
             RECEIPT_PATH="docs/release-evidence/$RELEASE_TAG/release-receipt.json"
             if git cat-file -e "refs/remotes/origin/release-evidence-existing:$RECEIPT_PATH" 2>/dev/null; then
@@ -239,6 +432,25 @@ jobs:
               if [ "$(sha256sum existing-release-receipt.json | awk '{print $1}')" \
                 != "$EXPECTED_RECEIPT_FILE_SHA256" ]; then
                 echo "Existing evidence branch contains a conflicting receipt for the immutable release." >&2
+                exit 1
+              fi
+            fi
+            SIGNED_UI_PATH="docs/release-evidence/$RELEASE_TAG/signed-artifact-ui-receipt.json"
+            if git cat-file -e "refs/remotes/origin/release-evidence-existing:$SIGNED_UI_PATH" 2>/dev/null; then
+              SIGNED_UI_SELF_DIGEST=$(git show "refs/remotes/origin/release-evidence-existing:$SIGNED_UI_PATH" \
+                | jq -r .receipt_sha256)
+              if [ "$SIGNED_UI_SELF_DIGEST" != "$EXPECTED_SIGNED_UI_RECEIPT_SHA256" ]; then
+                echo "Existing evidence branch contains a conflicting signed UI receipt." >&2
+                exit 1
+              fi
+            fi
+            SIGNED_UI_ARCHIVE_PATH="docs/release-evidence/$RELEASE_TAG/signed-artifact-ui.zip"
+            if git cat-file -e "refs/remotes/origin/release-evidence-existing:$SIGNED_UI_ARCHIVE_PATH" 2>/dev/null; then
+              git show "refs/remotes/origin/release-evidence-existing:$SIGNED_UI_ARCHIVE_PATH" \
+                > existing-signed-artifact-ui.zip
+              if [ "$(sha256sum existing-signed-artifact-ui.zip | awk '{print $1}')" \
+                != "$EXPECTED_SIGNED_UI_ARTIFACT_SHA256" ]; then
+                echo "Existing evidence branch contains a conflicting signed UI artifact archive." >&2
                 exit 1
               fi
             fi
@@ -264,7 +476,8 @@ jobs:
             - Release run: `${{ needs.validate-and-prepare.outputs.release_run_id }}`
             - Source SHA: `${{ needs.validate-and-prepare.outputs.source_sha }}`
             - Receipt file SHA-256: `${{ needs.validate-and-prepare.outputs.receipt_file_sha256 }}`
+            - Qualification manifest SHA-256: `${{ needs.validate-and-prepare.outputs.manifest_sha256 }}`
 
-            The release workflow, immutable asset identities, live Pages appcast, qualification record, release ledger, and cut packet were revalidated before this branch was prepared. Signing and deployment secrets are not available to this workflow.
+            The release workflow, immutable asset identities, signed artifact UI receipt, live Pages appcast, qualification manifest, qualification record, release ledger, and cut packet were revalidated before this branch was prepared. Signing and deployment secrets are not available to this workflow.
 
             Publication is immutable, but this PR remains intentionally unmergeable until its post-publication milestone qualification check has accepted every blocking live-artifact and automated Tier 3 receipt. Optional physical-hardware and native-window presentation outcomes remain visible without blocking reconciliation. Add validated receipts to this idempotent branch; do not rebuild, retag, or replace the published release.

@@ -5,29 +5,12 @@ run-name: Milestone qualification ${{ inputs.candidate_tag }}
 "on":
   workflow_dispatch:
     inputs:
-      evidence_ref:
-        description: Canonical automation/release-evidence-<tag> branch
-        required: true
-        type: string
       candidate_tag:
         description: Published candidate tag including the v prefix
         required: true
         type: string
-      prior_tag:
-        description: Exact prior release tag including the v prefix
-        required: true
-        type: string
-      route:
-        description: Saved Sparkle route used by the prior installation
-        required: true
-        type: choice
-        options:
-          - stable
-          - rc
-          - beta
-          - alpha
-      signed_ui_artifact_id:
-        description: Exact signed-artifact-ui artifact ID from the candidate release run
+      manifest_sha256:
+        description: Canonical qualification manifest self SHA-256
         required: true
         type: string
 
@@ -64,17 +47,19 @@ jobs:
       - name: Bind protected code and canonical evidence data
         env:
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
-          EVIDENCE_REF: ${{ inputs.evidence_ref }}
-          PRIOR_TAG: ${{ inputs.prior_tag }}
+          INPUT_MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
         run: |
           set -euo pipefail
           TAG_PATTERN='^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$'
-          if [[ ! "$CANDIDATE_TAG" =~ $TAG_PATTERN ]] || [[ ! "$PRIOR_TAG" =~ $TAG_PATTERN ]]; then
-            echo "Candidate and prior tags must use the canonical public tag format." >&2
+          if [[ ! "$CANDIDATE_TAG" =~ $TAG_PATTERN ]]; then
+            echo "Candidate tag must use the canonical public tag format." >&2
             exit 1
           fi
-          EXPECTED_REF="automation/release-evidence-$CANDIDATE_TAG"
-          test "$EVIDENCE_REF" = "$EXPECTED_REF"
+          if [[ ! "$INPUT_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Manifest SHA-256 input must be a lowercase digest." >&2
+            exit 1
+          fi
+          EVIDENCE_REF="automation/release-evidence-$CANDIDATE_TAG"
           test "$GITHUB_REF_TYPE" = "branch"
           test "$GITHUB_REF_NAME" = "main"
           MAIN_REMOTE_HEAD=$(git ls-remote --heads origin refs/heads/main | awk '{print $1}')
@@ -91,7 +76,8 @@ jobs:
             echo "Evidence branch does not contain the current protected main commit." >&2
             exit 1
           fi
-          UNTRUSTED_PATHS=$(git -C evidence diff --name-only origin/main...HEAD | grep -Ev '^docs/' || true)
+          EVIDENCE_DIFF=$(git -C evidence diff --name-only origin/main...HEAD)
+          UNTRUSTED_PATHS=$(printf '%s\n' "$EVIDENCE_DIFF" | grep -Ev '^docs/' || true)
           if [ -n "$UNTRUSTED_PATHS" ]; then
             echo "Evidence branch contains non-documentation changes:" >&2
             printf '%s\n' "$UNTRUSTED_PATHS" >&2
@@ -99,15 +85,37 @@ jobs:
           fi
           cmp docs/qualification/release-qualification-policy-v1.json \
             evidence/docs/qualification/release-qualification-policy-v1.json
-          CANDIDATE_RECEIPT="evidence/docs/release-evidence/$CANDIDATE_TAG/release-receipt.json"
-          PRIOR_RECEIPT="evidence/docs/release-evidence/$PRIOR_TAG/release-receipt.json"
-          git -C evidence cat-file -e "HEAD:docs/release-evidence/$CANDIDATE_TAG/release-receipt.json"
-          git -C evidence cat-file -e "HEAD:docs/release-evidence/$PRIOR_TAG/release-receipt.json"
-          test "$(jq -r .release.tag "$CANDIDATE_RECEIPT")" = "$CANDIDATE_TAG"
-          test "$(jq -r .release.tag "$PRIOR_RECEIPT")" = "$PRIOR_TAG"
-          CANDIDATE_SHA=$(jq -r .source_sha "$CANDIDATE_RECEIPT")
+          MANIFEST="evidence/docs/release-evidence/$CANDIDATE_TAG/qualification-manifest.json"
+          test -f "$MANIFEST"
+          EVIDENCE_BASE_SHA=$(jq -er .canonical_evidence.base_sha "$MANIFEST")
+          python3 -m scripts.release_qualification_manifest validate \
+            --manifest "$MANIFEST" \
+            --repo-root evidence \
+            --expected-sha256 "$INPUT_MANIFEST_SHA256" \
+            --evidence-base-revision "$EVIDENCE_BASE_SHA" \
+            > manifest-outputs.json
+          test "$(jq -er .candidate_tag manifest-outputs.json)" = "$CANDIDATE_TAG"
+          test "$(jq -er .runner_sha manifest-outputs.json)" = "$GITHUB_SHA"
+          test "$(jq -er .evidence_base_sha manifest-outputs.json)" = "$EVIDENCE_BASE_SHA"
+          if ! git -C evidence merge-base --is-ancestor "$EVIDENCE_BASE_SHA" "$EVIDENCE_SHA"; then
+            echo "Evidence branch no longer descends from the manifest checkpoint." >&2
+            exit 1
+          fi
+          CANDIDATE_SHA=$(jq -er .candidate.source_sha "$MANIFEST")
           git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
-          echo "EVIDENCE_SHA=$EVIDENCE_SHA" >> "$GITHUB_ENV"
+          {
+            echo "CANDIDATE_RECEIPT=evidence/$(jq -er .release_receipt_path manifest-outputs.json)"
+            echo "EVIDENCE_REF=$EVIDENCE_REF"
+            echo "EVIDENCE_SHA=$EVIDENCE_SHA"
+            echo "MANIFEST_PATH=evidence/docs/release-evidence/$CANDIDATE_TAG/qualification-manifest.json"
+            echo "MANIFEST_SHA256=$INPUT_MANIFEST_SHA256"
+            echo "PRIOR_TAG=$(jq -er .prior_tag manifest-outputs.json)"
+            echo "PRIOR_RECEIPT=evidence/docs/release-evidence/$(jq -er .prior_tag manifest-outputs.json)/release-receipt.json"
+            echo "ROUTE=$(jq -er .sparkle_route manifest-outputs.json)"
+            echo "SIGNED_UI_ARTIFACT_ID=$(jq -er .signed_ui_artifact_id manifest-outputs.json)"
+            echo "SIGNED_UI_ARTIFACT_SHA256=$(jq -er .signed_ui_artifact_sha256 manifest-outputs.json)"
+            echo "SIGNED_UI_RECEIPT=evidence/$(jq -er .signed_ui_receipt_path manifest-outputs.json)"
+          } >> "$GITHUB_ENV"
 
       - name: Select pinned macOS UI toolchain
         run: |
@@ -152,17 +160,9 @@ jobs:
         env:
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
           GH_TOKEN: ${{ github.token }}
-          PRIOR_TAG: ${{ inputs.prior_tag }}
-          SIGNED_UI_ARTIFACT_ID: ${{ inputs.signed_ui_artifact_id }}
         run: |
           set -euo pipefail
-          if [[ ! "$SIGNED_UI_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
-            echo "Signed UI artifact ID must be a positive integer." >&2
-            exit 1
-          fi
-          mkdir -p qualification-inputs/signed-ui qualification-output
-          CANDIDATE_RECEIPT="evidence/docs/release-evidence/$CANDIDATE_TAG/release-receipt.json"
-          PRIOR_RECEIPT="evidence/docs/release-evidence/$PRIOR_TAG/release-receipt.json"
+          mkdir -p qualification-inputs qualification-output
           uv run python -m scripts.release_receipt validate --receipt "$CANDIDATE_RECEIPT"
           uv run python -m scripts.release_receipt validate --receipt "$PRIOR_RECEIPT"
 
@@ -253,25 +253,26 @@ jobs:
             '.assets[] | select(.name == "release-receipt.json" and .digest == $digest) | .id' \
             qualification-inputs/candidate-release.json)
 
-          gh api "repos/$GH_REPO/actions/artifacts/$SIGNED_UI_ARTIFACT_ID" \
-            > qualification-output/signed-artifact-ui-metadata.json
-          EXPECTED_ARTIFACT_NAME="signed-artifact-ui-$CANDIDATE_RUN_ATTEMPT"
-          jq -e \
-            --arg expected_name "$EXPECTED_ARTIFACT_NAME" \
-            --arg head_sha "$CANDIDATE_SHA" \
-            --argjson run_id "$CANDIDATE_RUN_ID" \
-            '.expired == false and .name == $expected_name and .workflow_run.id == $run_id and
-             .workflow_run.head_branch == "main" and .workflow_run.head_sha == $head_sha and
-             (.digest | startswith("sha256:"))' \
-            qualification-output/signed-artifact-ui-metadata.json > /dev/null
-          ARTIFACT_SHA256=$(jq -er '.digest | sub("^sha256:"; "")' \
-            qualification-output/signed-artifact-ui-metadata.json)
-          gh api "repos/$GH_REPO/actions/artifacts/$SIGNED_UI_ARTIFACT_ID/zip" \
-            > qualification-inputs/signed-artifact-ui.zip
-          test "$(shasum -a 256 qualification-inputs/signed-artifact-ui.zip | awk '{print $1}')" = "$ARTIFACT_SHA256"
-          unzip -q qualification-inputs/signed-artifact-ui.zip -d qualification-inputs/signed-ui
-          test "$(find qualification-inputs/signed-ui -type f | wc -l | tr -d ' ')" = "1"
-          SIGNED_UI_RECEIPT=qualification-inputs/signed-ui/signed-artifact-ui-receipt.json
+          if gh api "repos/$GH_REPO/actions/artifacts/$SIGNED_UI_ARTIFACT_ID" \
+            > qualification-inputs/signed-artifact-ui-metadata.json 2> qualification-inputs/signed-artifact-ui-metadata.err; then
+            jq -e \
+              --arg digest "sha256:$SIGNED_UI_ARTIFACT_SHA256" \
+              --arg head_sha "$CANDIDATE_SHA" \
+              --arg name "signed-artifact-ui-$CANDIDATE_RUN_ATTEMPT" \
+              --argjson artifact_id "$SIGNED_UI_ARTIFACT_ID" \
+              --argjson run_id "$CANDIDATE_RUN_ID" \
+              '.id == $artifact_id and .name == $name and .digest == $digest and
+               .workflow_run.id == $run_id and .workflow_run.head_branch == "main" and
+               .workflow_run.head_sha == $head_sha' \
+              qualification-inputs/signed-artifact-ui-metadata.json > /dev/null
+          else
+            if ! grep -Eq 'HTTP 404|Not Found' qualification-inputs/signed-artifact-ui-metadata.err; then
+              cat qualification-inputs/signed-artifact-ui-metadata.err >&2
+              exit 1
+            fi
+            echo "Signed UI Actions metadata has expired; using the checked receipt captured by Release Evidence." >&2
+          fi
+
           test -f "$SIGNED_UI_RECEIPT"
           SIGNED_UI_RECEIPT_SHA256=$(shasum -a 256 "$SIGNED_UI_RECEIPT" | awk '{print $1}')
           uv run python -m scripts.signed_artifact_receipt validate \
@@ -287,8 +288,6 @@ jobs:
       - name: Preflight exact clean-machine qualification
         env:
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
-          PRIOR_TAG: ${{ inputs.prior_tag }}
-          ROUTE: ${{ inputs.route }}
         run: |
           set -euo pipefail
           source qualification-inputs/paths.env
@@ -307,8 +306,6 @@ jobs:
       - name: Run exact clean-machine qualification
         env:
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
-          PRIOR_TAG: ${{ inputs.prior_tag }}
-          ROUTE: ${{ inputs.route }}
         run: |
           set -euo pipefail
           source qualification-inputs/paths.env
@@ -337,10 +334,6 @@ jobs:
       - name: Summarize exact qualification outputs
         env:
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
-          PRIOR_TAG: ${{ inputs.prior_tag }}
-          ROUTE: ${{ inputs.route }}
-          SIGNED_UI_ARTIFACT_ID: ${{ inputs.signed_ui_artifact_id }}
-          EVIDENCE_REF: ${{ inputs.evidence_ref }}
         run: |
           set -euo pipefail
           REMOTE_HEAD=$(git ls-remote --heads origin "refs/heads/$EVIDENCE_REF" | awk '{print $1}')
@@ -349,21 +342,23 @@ jobs:
             --arg candidate_tag "$CANDIDATE_TAG" \
             --arg evidence_ref "$EVIDENCE_REF" \
             --arg evidence_sha "$EVIDENCE_SHA" \
+            --arg manifest_sha256 "$MANIFEST_SHA256" \
             --arg prior_tag "$PRIOR_TAG" \
             --arg route "$ROUTE" \
             --argjson signed_ui_artifact_id "$SIGNED_UI_ARTIFACT_ID" \
-            --slurpfile artifact qualification-output/signed-artifact-ui-metadata.json \
+            --slurpfile manifest "$MANIFEST_PATH" \
             --slurpfile clean qualification-output/clean-machine-signed-update.json \
             --slurpfile ui qualification-output/installed-ui-accessibility.json \
             '{
               candidate_tag: $candidate_tag,
               evidence_ref: $evidence_ref,
               evidence_sha: $evidence_sha,
+              manifest_sha256: $manifest_sha256,
               prior_tag: $prior_tag,
               route: $route,
               signed_ui_artifact: {
                 id: $signed_ui_artifact_id,
-                digest: $artifact[0].digest,
+                digest: ("sha256:" + $manifest[0].signed_ui_artifact.artifact_sha256),
                 receipt_sha256: null
               },
               tier3_receipts: [
@@ -382,6 +377,7 @@ jobs:
             echo
             echo "- Protected code: \`main\` at \`$GITHUB_SHA\`"
             echo "- Evidence branch: \`$EVIDENCE_REF\` at \`$EVIDENCE_SHA\`"
+            echo "- Qualification manifest: \`$MANIFEST_SHA256\`"
             echo "- Signed UI receipt: \`$SIGNED_RECEIPT_SHA256\`"
             echo "- Blocking clean-machine receipt: \`$(jq -r .receipt_sha256 qualification-output/clean-machine-signed-update.json)\`"
             echo "- Blocking installed UI receipt: \`$(jq -r .receipt_sha256 qualification-output/installed-ui-accessibility.json)\`"

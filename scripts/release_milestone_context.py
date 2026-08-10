@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -14,13 +15,23 @@ from typing import Any, cast
 
 from scripts.release import ReleaseError, parse_build_version, parse_release_version
 from scripts.release_evidence import effective_successful_workflow_run_id
+from scripts.release_qualification_manifest import (
+    MANIFEST_NAME,
+    ReleaseQualificationManifestError,
+    load_validated_manifest,
+)
 from scripts.release_receipt import ReleaseReceiptError, load_validated_checked_receipt
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GITHUB_CONFIG_PATH = Path(".github/github.json")
 EVIDENCE_INDEX_PATH = "docs/qualification/release-evidence-v1.json"
+RUNNER_BOUND_QUALIFICATION_PATHS = {
+    "docs/qualification/release-qualification-policy-v1.json",
+    "docs/qualification/video-quality-route-table-v2.json",
+}
 RECEIPT_PATH_PATTERN = re.compile(r"^docs/release-evidence/(v[^/]+)/release-receipt\.json$")
+MANIFEST_PATH_PATTERN = re.compile(rf"^docs/release-evidence/(v[^/]+)/{re.escape(MANIFEST_NAME)}$")
 RECOVERY_AUTHORIZATION_PATHS = frozenset({"docs/release-evidence/v0.3.0-pypi-recovery.json"})
 EXPECTED_REPOSITORY = "cbusillo/BD_to_AVP"
 EXPECTED_BASE_BRANCH = "main"
@@ -48,6 +59,10 @@ class ReleaseMilestoneContext:
     release_receipt_path: str
     release_stage: str
     release_tag: str
+    manifest_path: str = ""
+    manifest_sha256: str = ""
+    evidence_index_base_sha256: str = ""
+    runner_sha: str = ""
     required: bool = True
 
     def github_outputs(self) -> dict[str, str]:
@@ -60,6 +75,40 @@ def _mapping(value: object, description: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ReleaseMilestoneContextError(f"{description} must be a JSON object.")
     return cast(Mapping[str, Any], value)
+
+
+def _string(value: object, description: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ReleaseMilestoneContextError(f"{description} must be a non-empty string.")
+    return value
+
+
+def require_manifest_runner_sha(context: ReleaseMilestoneContext, expected_sha: str) -> None:
+    if context.runner_sha != expected_sha:
+        raise ReleaseMilestoneContextError(
+            "Milestone qualification manifest runner SHA must match the pull-request base SHA."
+        )
+
+
+def require_manifest_evidence_baseline(
+    context: ReleaseMilestoneContext,
+    repo_root: Path,
+    base_sha: str,
+) -> None:
+    result = subprocess.run(
+        ["git", "show", f"{base_sha}:{context.evidence_path}"],
+        cwd=repo_root,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise ReleaseMilestoneContextError(
+            "Unable to read the qualification evidence baseline from the pull-request base."
+        )
+    if hashlib.sha256(result.stdout).hexdigest() != context.evidence_index_base_sha256:
+        raise ReleaseMilestoneContextError(
+            "Milestone qualification manifest evidence baseline must match the pull-request base."
+        )
 
 
 def _load_json(path: Path, description: str) -> Mapping[str, Any]:
@@ -155,6 +204,26 @@ def _validate_append_only_evidence_index(repo_root: Path, *, base_sha: str) -> N
         )
 
 
+def _is_recovery_authorization_path(path: str) -> bool:
+    return path in RECOVERY_AUTHORIZATION_PATHS
+
+
+def _validate_release_evidence_tag_scope(changed_paths: Sequence[str], release_tag: str) -> None:
+    expected_prefix = f"docs/release-evidence/{release_tag}/"
+    unrelated_paths = sorted(
+        path
+        for path in changed_paths
+        if path.startswith("docs/release-evidence/")
+        and not path.startswith(expected_prefix)
+        and not _is_recovery_authorization_path(path)
+    )
+    if unrelated_paths:
+        raise ReleaseMilestoneContextError(
+            "Release evidence pull requests may change only one release tag: "
+            f"expected {release_tag!r}, unrelated={unrelated_paths!r}."
+        )
+
+
 def _repository_path(repo_root: Path, value: object, description: str) -> tuple[Path, str]:
     if not isinstance(value, str) or not value:
         raise ReleaseMilestoneContextError(f"{description} must be a repository-relative path.")
@@ -225,7 +294,8 @@ def discover_milestone_receipt(
         "qualificationRecordPath",
     )
     checked_release_mutation = any(
-        path.startswith("docs/release-evidence/") and path not in RECOVERY_AUTHORIZATION_PATHS for path in changed_paths
+        path.startswith("docs/release-evidence/") and not _is_recovery_authorization_path(path)
+        for path in changed_paths
     )
     evidence_index_mutation = EVIDENCE_INDEX_PATH in changed_paths
     qualification_mutation = qualification_relative in changed_paths
@@ -266,13 +336,137 @@ def discover_milestone_receipt(
             "A release evidence pull request must contain exactly one checked release receipt."
         )
     receipt_relative, release_tag = receipt_matches[0]
+    _validate_release_evidence_tag_scope(changed_paths, release_tag)
     expected_branch = f"automation/release-evidence-{release_tag}"
     if head_branch != expected_branch:
         raise ReleaseMilestoneContextError(f"Release evidence changes must use idempotent branch {expected_branch!r}.")
     out_of_scope = [path for path in changed_paths if not path.startswith("docs/")]
     if out_of_scope:
         raise ReleaseMilestoneContextError(f"Release evidence pull requests may change only docs/: {out_of_scope!r}.")
+    runner_input_changes = sorted(RUNNER_BOUND_QUALIFICATION_PATHS.intersection(changed_paths))
+    if runner_input_changes:
+        raise ReleaseMilestoneContextError(
+            "Release evidence pull requests may not change runner-bound policy or route inputs: "
+            f"{runner_input_changes!r}."
+        )
+    if evidence_index_mutation:
+        _validate_append_only_evidence_index(repo_root, base_sha=base_sha)
     return repo_root / receipt_relative
+
+
+def discover_milestone_manifest(
+    repo_root: Path,
+    *,
+    base_sha: str,
+    head_sha: str,
+    head_branch: str,
+    base_repo: str,
+    head_repo: str,
+    base_branch: str,
+) -> Path | None:
+    if base_repo != EXPECTED_REPOSITORY or head_repo != EXPECTED_REPOSITORY or base_branch != EXPECTED_BASE_BRANCH:
+        raise ReleaseMilestoneContextError(
+            "Release evidence qualification requires a same-repository pull request targeting protected main."
+        )
+    changed = subprocess.run(
+        ["git", "diff", "--name-only", f"{base_sha}...{head_sha}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if changed.returncode != 0:
+        raise ReleaseMilestoneContextError("Unable to inspect pull-request evidence changes.")
+    changed_paths = tuple(path for path in changed.stdout.splitlines() if path)
+    manifest_matches = [
+        (path, match.group(1)) for path in changed_paths if (match := MANIFEST_PATH_PATTERN.fullmatch(path)) is not None
+    ]
+    if not manifest_matches:
+        return None
+    if len(manifest_matches) != 1:
+        raise ReleaseMilestoneContextError(
+            "A release evidence pull request must contain exactly one checked qualification manifest."
+        )
+    manifest_relative, release_tag = manifest_matches[0]
+    receipt_matches = [
+        (path, match.group(1)) for path in changed_paths if (match := RECEIPT_PATH_PATTERN.fullmatch(path)) is not None
+    ]
+    if len(receipt_matches) > 1:
+        raise ReleaseMilestoneContextError(
+            "A qualification manifest pull request may change at most one checked release receipt."
+        )
+    if receipt_matches and receipt_matches[0][1] != release_tag:
+        raise ReleaseMilestoneContextError(
+            "Qualification manifest and changed release receipt must use the same release tag."
+        )
+    _validate_release_evidence_tag_scope(changed_paths, release_tag)
+    expected_branch = f"automation/release-evidence-{release_tag}"
+    if head_branch != expected_branch:
+        raise ReleaseMilestoneContextError(f"Release evidence changes must use idempotent branch {expected_branch!r}.")
+    out_of_scope = [path for path in changed_paths if not path.startswith("docs/")]
+    if out_of_scope:
+        raise ReleaseMilestoneContextError(f"Release evidence pull requests may change only docs/: {out_of_scope!r}.")
+    runner_input_changes = sorted(RUNNER_BOUND_QUALIFICATION_PATHS.intersection(changed_paths))
+    if runner_input_changes:
+        raise ReleaseMilestoneContextError(
+            "Release evidence pull requests may not change runner-bound policy or route inputs: "
+            f"{runner_input_changes!r}."
+        )
+    if EVIDENCE_INDEX_PATH in changed_paths:
+        _validate_append_only_evidence_index(repo_root, base_sha=base_sha)
+    return repo_root / manifest_relative
+
+
+def resolve_milestone_manifest_context(repo_root: Path, manifest_path: Path) -> ReleaseMilestoneContext:
+    repo_root = repo_root.resolve()
+    try:
+        manifest_relative = manifest_path.resolve().relative_to(repo_root).as_posix()
+    except ValueError as error:
+        raise ReleaseMilestoneContextError("Milestone manifest must be inside the repository.") from error
+    try:
+        manifest = load_validated_manifest(manifest_path, repo_root=repo_root)
+    except ReleaseQualificationManifestError as error:
+        raise ReleaseMilestoneContextError(f"Milestone qualification manifest is invalid: {error}") from error
+    candidate = _mapping(manifest.get("candidate"), "milestone manifest candidate")
+    release_tag = _string(candidate.get("release_tag"), "manifest release tag")
+    expected_manifest_path = f"docs/release-evidence/{release_tag}/{MANIFEST_NAME}"
+    if manifest_relative != expected_manifest_path:
+        raise ReleaseMilestoneContextError(
+            f"Milestone qualification manifest must use checked path {expected_manifest_path!r}."
+        )
+    try:
+        version = parse_release_version(cast(str, candidate["package_version"]))
+    except ReleaseError as error:
+        raise ReleaseMilestoneContextError(f"Milestone manifest release version is invalid: {error}") from error
+    paths = _mapping(manifest.get("paths"), "milestone manifest paths")
+    release_receipt = _mapping(manifest.get("release_receipt"), "milestone manifest release receipt")
+    evidence = _mapping(manifest.get("canonical_evidence"), "milestone manifest canonical evidence")
+    input_digests = _mapping(manifest.get("input_digests"), "milestone manifest input digests")
+    evidence_ref = _string(evidence.get("ref"), "manifest evidence ref")
+    if evidence_ref != f"automation/release-evidence-{release_tag}":
+        raise ReleaseMilestoneContextError("Milestone manifest evidence ref conflicts with release tag.")
+    source_sha = cast(str, candidate["source_sha"])
+    manifest_digest = _string(manifest.get("manifest_sha256"), "manifest digest")
+    _require_tracked_path(repo_root, manifest_relative, "Milestone qualification manifest")
+    _require_tracked_path(repo_root, cast(str, release_receipt["path"]), "Milestone release receipt")
+    _require_source_ancestor(repo_root, source_sha)
+    return ReleaseMilestoneContext(
+        candidate_sha=source_sha,
+        evidence_path=cast(str, paths["evidence_index"]),
+        first_candidate_of_cycle=version.first_candidate_of_cycle,
+        evidence_index_base_sha256=_string(
+            input_digests.get("evidence_index_base"),
+            "manifest evidence index baseline SHA-256",
+        ),
+        manifest_path=manifest_relative,
+        manifest_sha256=manifest_digest,
+        policy_path=cast(str, paths["policy"]),
+        qualification_path=cast(str, paths["qualification"]),
+        release_receipt_path=cast(str, release_receipt["path"]),
+        release_stage=version.stage,
+        release_tag=release_tag,
+        runner_sha=_string(manifest.get("runner_sha"), "manifest runner SHA"),
+    )
 
 
 def resolve_milestone_context(repo_root: Path, receipt_path: Path) -> ReleaseMilestoneContext:
@@ -422,6 +616,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Resolve checked post-publication milestone qualification context.")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--release-receipt", type=Path)
+    source.add_argument("--manifest", type=Path)
     source.add_argument("--base-sha")
     parser.add_argument("--head-sha")
     parser.add_argument("--head-branch")
@@ -433,6 +628,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         receipt_path = args.release_receipt
+        manifest_path = args.manifest
         if args.base_sha is not None:
             if not all(
                 (
@@ -446,7 +642,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ReleaseMilestoneContextError(
                     "Pull-request discovery requires head/base SHA, branch, and repository identity inputs."
                 )
-            receipt_path = discover_milestone_receipt(
+            manifest_path = discover_milestone_manifest(
                 args.repo_root.resolve(),
                 base_sha=args.base_sha,
                 head_sha=args.head_sha,
@@ -455,13 +651,30 @@ def main(argv: Sequence[str] | None = None) -> int:
                 head_repo=args.head_repo,
                 base_branch=args.base_branch,
             )
-        if receipt_path is None:
+            receipt_path = None
+            if manifest_path is None:
+                receipt_path = discover_milestone_receipt(
+                    args.repo_root.resolve(),
+                    base_sha=args.base_sha,
+                    head_sha=args.head_sha,
+                    head_branch=args.head_branch,
+                    base_repo=args.base_repo,
+                    head_repo=args.head_repo,
+                    base_branch=args.base_branch,
+                )
+        if manifest_path is not None:
+            context = resolve_milestone_manifest_context(args.repo_root, manifest_path)
+            if args.base_sha is not None:
+                require_manifest_runner_sha(context, args.base_sha)
+                require_manifest_evidence_baseline(context, args.repo_root.resolve(), args.base_sha)
+        elif receipt_path is None:
             outputs = {"required": "false"}
             if args.github_output is not None:
                 _write_github_output(args.github_output, outputs)
             print(json.dumps(outputs, sort_keys=True))
             return 0
-        context = resolve_milestone_context(args.repo_root, receipt_path)
+        else:
+            context = resolve_milestone_context(args.repo_root, receipt_path)
     except ReleaseMilestoneContextError as error:
         parser.exit(1, f"{error}\n")
     outputs = context.github_outputs()

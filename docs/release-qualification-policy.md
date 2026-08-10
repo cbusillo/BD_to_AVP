@@ -307,9 +307,56 @@ python -m scripts.qualify_release_scope \
 ```
 
 After publication, the Release Evidence workflow opens or updates
-`automation/release-evidence-<tag>`. CI validates the checked release receipt
-against the configured qualification record with
-`scripts.release_milestone_context`, then runs:
+`automation/release-evidence-<tag>`. New evidence branches must include the
+canonical public-safe `docs/release-evidence/<tag>/qualification-manifest.json`
+plus the checked `qualification-record.json` and
+`signed-artifact-ui-receipt.json`. Release Evidence creates the qualification
+record atomically after updating the rolling qualification file, rejects a
+different snapshot on rerun, and validates its candidate identity against the
+exact release receipt. The manifest is exact-key JSON with a deterministic
+self-digest over the canonical payload. It binds the
+candidate version, tag, build, release ID, reviewed qualification-runner `main`
+SHA, release workflow run/attempt/actor/name/path, prior release tag, Sparkle
+route, release receipt path/file
+digest/self digest, DMG/checksum/appcast/signed-app-tree identities, signed UI
+Actions artifact ID/digest/archive path/receipt path/file digest/self digest,
+qualification-record digest, policy and route-table digests, controller runner
+digest, canonical evidence ref/base SHA,
+the evidence-index baseline digest, and policy case classifications/checkpoint
+digest. Release Evidence selects the newest lower published release whose tag is
+an ancestor of the candidate. Prerelease candidates use their own Sparkle route;
+stable candidates use the selected prior release's route, preserving transitions
+such as RC to Stable. The prior release's checked receipt must already be present
+in canonical evidence; missing prior evidence stops manifest creation rather than
+reconstructing release identity. The evidence-index baseline remains an audit
+checkpoint while validated milestone receipts append to the checked index. The
+pull-request gate verifies that baseline against protected `main` and rejects
+any rewrite of accepted evidence history. Milestone qualification rechecks the recorded Actions
+artifact ID and digest through GitHub while metadata is retained; after GitHub
+deletes expired metadata, the exact checked receipt and original Actions ZIP
+captured and validated by Release Evidence are the durable replacement.
+Manifest validation hashes that ZIP and requires its sole payload to be the
+byte-identical checked receipt. Controller, policy, route-table, policy
+checkpoint, and case-classification validation uses Git revision reads at the
+manifest's recorded runner SHA rather than the current checkout, so historical
+manifests remain valid after normal protected-main evolution. The current
+evidence index, checked receipts, qualification snapshot, and original Actions
+ZIP remain validated from the evidence tree, while the baseline evidence index
+is validated at the manifest's canonical evidence base SHA. A later
+protected-main advance may refresh runner-owned and evidence-baseline checkpoint
+fields, but only after the prior manifest validates and the immutable release,
+qualification snapshot, workflow, receipt, prior-release, and signed-UI
+identities remain byte-for-byte equivalent. Evidence pull requests may not
+modify the runner-bound policy or route table directly. A rolling qualification
+merge conflict may be resolved only in favor of protected main because the
+release-specific snapshot is immutable; every other conflict fails closed. If
+no checked receipt was
+captured before artifact expiry, qualification stops rather than reconstructing
+evidence. Absolute paths, private field
+names, conflicts, and partial manifest input state fail closed. CI validates the
+checked manifest or, for immutable historical evidence that predates the
+manifest, the checked release receipt against the configured qualification
+record with `scripts.release_milestone_context`, then runs:
 
 ```sh
 python -m scripts.qualify_release_scope \
@@ -332,8 +379,8 @@ presentation outcomes remain visible in the report. A blocking milestone
 failure never rebuilds, retags, re-signs, replaces, or unpublishes the immutable
 release; it blocks evidence reconciliation and milestone completion until the
 checked blocking evidence passes.
-CI discovers checked release-receipt changes from the pull-request diff and
-requires a same-repository PR targeting `main`, the exact
+CI discovers checked manifest or release-receipt changes from the pull-request
+diff and requires a same-repository PR targeting `main`, the exact
 `automation/release-evidence-<tag>` branch, and a docs-only diff, so a fork or a
 copied evidence branch cannot skip the milestone gate.
 
@@ -351,9 +398,11 @@ live Pages state is required only after publication.
 
 After the operator workflow completes, `.github/workflows/release-evidence.yml`
 validates the successful `workflow_dispatch` run, approved actor, protected
-source SHA, immutable release fields, asset IDs and sizes, receipt digest, and
-live Pages appcast. It then opens or updates one task-branch PR containing the
-receipt, publication record, release ledger, qualification fields, and cut
+source SHA, immutable release fields, asset IDs and sizes, receipt digest, live
+Pages appcast, and the same-run signed UI artifact metadata and receipt while
+the Actions artifact is still available. It then opens or updates one
+task-branch PR containing the release receipt, signed UI receipt, qualification
+manifest, publication record, release ledger, qualification fields, and cut
 packet status. The workflow has no signing, notarization, Sparkle private-key,
 PyPI, or deployment secrets. The evidence PR cannot merge until protected CI's
 milestone report passes.

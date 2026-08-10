@@ -114,6 +114,59 @@ def artifact_expectation(path: Path) -> ArtifactReceiptExpectation:
     )
 
 
+def qualification_for_receipt(receipt: dict[str, object]) -> dict[str, object]:
+    qualification = json.loads(
+        (REPO_ROOT / "docs/qualification/stable-signed-qualification-v1.json").read_text(encoding="utf-8")
+    )
+    release = receipt["release"]
+    versions = receipt["versions"]
+    workflow = receipt["workflow"]
+    artifacts = {artifact["kind"]: artifact for artifact in receipt["artifacts"]}
+    qualification["candidate"].update(
+        {
+            "appcast_sha256": artifacts["appcast"]["sha256"],
+            "build_version": versions["build"],
+            "dmg_name": artifacts["dmg"]["name"],
+            "dmg_sha256": artifacts["dmg"]["sha256"],
+            "package_version": versions["package"],
+            "public_version": versions["public"],
+            "release_id": release["id"],
+            "release_run_id": workflow["run_id"],
+            "release_tag": release["tag"],
+            "signed_app_tree_sha256": receipt["signed_app_tree_sha256"],
+            "source_git_sha": receipt["source_sha"],
+            "workflow": workflow["name"],
+        }
+    )
+    return qualification
+
+
+def write_qualification_support_files(root: Path) -> None:
+    for name in (
+        "release-qualification-policy-v1.json",
+        "video-quality-route-table-v2.json",
+    ):
+        destination = root / "docs/qualification" / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((REPO_ROOT / "docs/qualification" / name).read_bytes())
+
+
+def minimal_reconcile_receipt() -> dict[str, object]:
+    return {
+        "appcast": {"live_pages_url": "https://example.com/appcast.xml"},
+        "artifacts": [
+            {"kind": "appcast", "name": "appcast.xml", "sha256": "a" * 64},
+            {"kind": "dmg", "name": "release.dmg", "sha256": "d" * 64},
+        ],
+        "release": {"id": 20, "tag": "v0.3.0"},
+        "signed_app_tree_sha256": "e" * 64,
+        "source_sha": SOURCE_SHA,
+        "tier1_case_references": [],
+        "versions": {"build": "1", "package": "0.3.0", "public": "0.3.0"},
+        "workflow": {"name": "Stable", "run_id": 30},
+    }
+
+
 class ReleaseReceiptTests(unittest.TestCase):
     def test_build_is_deterministic_and_public_safe(self) -> None:
         first = build_receipt(receipt_facts())
@@ -245,24 +298,29 @@ class ReleaseReceiptTests(unittest.TestCase):
             root = Path(temporary_directory)
             qualification_directory = root / "docs" / "qualification"
             qualification_directory.mkdir(parents=True)
-            qualification = {
-                "schema_version": 1,
-                "candidate": {
-                    "release_tag": "v0.3.0-rc.3",
-                    "source_git_sha": None,
-                    "dmg_sha256": None,
-                    "signed_app_tree_sha256": None,
-                    "release_run_id": None,
-                    "release_id": None,
-                    "appcast_sha256": None,
-                },
-            }
+            write_qualification_support_files(root)
+            receipt = build_receipt(receipt_facts())
+            qualification = qualification_for_receipt(receipt)
+            for field in (
+                "appcast_sha256",
+                "dmg_sha256",
+                "release_id",
+                "release_run_id",
+                "signed_app_tree_sha256",
+                "source_git_sha",
+            ):
+                qualification["candidate"][field] = None
             qualification_path = qualification_directory / "rc3-signed-qualification-v1.json"
             qualification_path.write_text(json.dumps(qualification), encoding="utf-8")
             cut_packet = root / "docs" / "0.3.0-rc.3-cut-packet.md"
             cut_packet.write_text("# RC3\n\n> **Prepared metadata; publication pending.**\n", encoding="utf-8")
+            historical_receipts = [{"receipt_id": "z-history"}, {"receipt_id": "a-history"}]
+            evidence_path = qualification_directory / "release-evidence-v1.json"
+            evidence_path.write_text(
+                json.dumps({"schema_version": 1, "receipts": historical_receipts}) + "\n",
+                encoding="utf-8",
+            )
 
-            receipt = build_receipt(receipt_facts())
             receipt_path = root / "published-release-receipt.json"
             write_receipt(receipt, receipt_path)
             live_appcast = root / "live-appcast.xml"
@@ -308,10 +366,13 @@ class ReleaseReceiptTests(unittest.TestCase):
             checked_receipt = root / first["receipt"]
             self.assertEqual(checked_receipt.read_bytes(), receipt_path.read_bytes())
             evidence = json.loads((root / first["evidence_index"]).read_text(encoding="utf-8"))
-            self.assertEqual(len(evidence["receipts"]), 2)
-            self.assertTrue(all(item["workflow_conclusion"] == "success" for item in evidence["receipts"]))
+            self.assertEqual(evidence["receipts"][:2], historical_receipts)
+            self.assertEqual(len(evidence["receipts"]), 4)
+            self.assertTrue(all(item["workflow_conclusion"] == "success" for item in evidence["receipts"][2:]))
             updated_qualification = json.loads(qualification_path.read_text(encoding="utf-8"))
             self.assertEqual(updated_qualification["candidate"]["source_git_sha"], SOURCE_SHA)
+            qualification_record = json.loads((root / first["qualification_record"]).read_text(encoding="utf-8"))
+            self.assertEqual(qualification_record, updated_qualification)
             self.assertIn("Published and immutable", cut_packet.read_text(encoding="utf-8"))
 
     def test_reconcile_fails_closed_for_wrong_actor_or_live_appcast(self) -> None:
@@ -365,6 +426,7 @@ class ReleaseReceiptTests(unittest.TestCase):
             qualification_path = root / "docs" / "qualification.json"
             cut_packet_path = root / "docs" / "cut-packet.md"
             qualification_path.parent.mkdir(parents=True)
+            write_qualification_support_files(root)
             qualification_path.write_text("{}\n", encoding="utf-8")
             cut_packet_path.write_text("# Cut packet\n", encoding="utf-8")
             receipt = {
@@ -385,6 +447,7 @@ class ReleaseReceiptTests(unittest.TestCase):
             with (
                 patch("scripts.release_evidence.validate_publication", return_value=publication),
                 patch("scripts.release_evidence._update_qualification", return_value=qualification_path),
+                patch("scripts.release_evidence._snapshot_qualification", return_value=qualification_path),
                 patch("scripts.release_evidence._update_cut_packet", return_value=cut_packet_path),
             ):
                 outputs = reconcile(root, {}, {}, receipt, receipt_path, root / "appcast.xml")
@@ -406,6 +469,175 @@ class ReleaseReceiptTests(unittest.TestCase):
                 50,
             )
             self.assertEqual(outputs["release_run_id"], 30)
+
+    def test_reconcile_rejects_partial_manifest_inputs_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            with patch("scripts.release_evidence.validate_publication") as validate_publication:
+                with self.assertRaisesRegex(ReleaseEvidenceError, "manifest inputs are partial"):
+                    reconcile(
+                        root,
+                        {},
+                        {},
+                        {},
+                        root / "release-receipt.json",
+                        root / "appcast.xml",
+                        prior_tag="v0.3.0",
+                    )
+
+            validate_publication.assert_not_called()
+            self.assertFalse((root / "docs").exists())
+
+    def test_reconcile_reuses_immutable_snapshot_after_rolling_qualification_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt = minimal_reconcile_receipt()
+            receipt_path = root / "release-receipt.json"
+            receipt_path.write_text("{}\n", encoding="utf-8")
+            qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
+            cut_packet_path = root / "docs/0.3.0-cut-packet.md"
+            qualification_path.parent.mkdir(parents=True)
+            write_qualification_support_files(root)
+            qualification = qualification_for_receipt(receipt)
+            qualification_path.write_text(
+                json.dumps(qualification, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            cut_packet_path.write_text("# Cut packet\n", encoding="utf-8")
+            publication = {
+                "live_appcast_sha256": "a" * 64,
+                "original_workflow_conclusion": "success",
+                "published_at": "2026-08-07T21:42:28Z",
+                "receipt_asset_id": 40,
+                "receipt_file_sha256": file_sha256(receipt_path),
+                "recovery_workflow_run_id": None,
+            }
+            with (
+                patch("scripts.release_evidence.validate_publication", return_value=publication),
+                patch("scripts.release_evidence._update_qualification", return_value=qualification_path),
+                patch("scripts.release_evidence._update_cut_packet", return_value=cut_packet_path),
+            ):
+                reconcile(root, {}, {}, receipt, receipt_path, root / "appcast.xml")
+                qualification["status"] = "later-rolling-state"
+                qualification_path.write_text(
+                    json.dumps(qualification, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                second = reconcile(root, {}, {}, receipt, receipt_path, root / "appcast.xml")
+
+            snapshot = json.loads((root / second["qualification_record"]).read_text(encoding="utf-8"))
+            self.assertNotEqual(snapshot["status"], "later-rolling-state")
+
+    def test_reconcile_rejects_qualification_snapshot_identity_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt = minimal_reconcile_receipt()
+            receipt_path = root / "release-receipt.json"
+            receipt_path.write_text("{}\n", encoding="utf-8")
+            qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
+            cut_packet_path = root / "docs/0.3.0-cut-packet.md"
+            qualification_path.parent.mkdir(parents=True)
+            write_qualification_support_files(root)
+            qualification = qualification_for_receipt(receipt)
+            qualification["candidate"]["source_git_sha"] = "0" * 40
+            qualification_path.write_text(
+                json.dumps(qualification, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            cut_packet_path.write_text("# Cut packet\n", encoding="utf-8")
+            publication = {
+                "live_appcast_sha256": "a" * 64,
+                "original_workflow_conclusion": "success",
+                "published_at": "2026-08-07T21:42:28Z",
+                "receipt_asset_id": 40,
+                "receipt_file_sha256": file_sha256(receipt_path),
+                "recovery_workflow_run_id": None,
+            }
+            with (
+                patch("scripts.release_evidence.validate_publication", return_value=publication),
+                patch("scripts.release_evidence._update_qualification", return_value=qualification_path),
+                patch("scripts.release_evidence._update_cut_packet", return_value=cut_packet_path),
+            ):
+                with self.assertRaisesRegex(ReleaseEvidenceError, "exact release receipt identity"):
+                    reconcile(root, {}, {}, receipt, receipt_path, root / "appcast.xml")
+
+    def test_reconcile_wires_complete_manifest_inputs_and_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt_path = root / "release-receipt.json"
+            receipt_path.write_text("{}\n", encoding="utf-8")
+            signed_ui_path = root / "signed-artifact-ui-receipt.json"
+            signed_ui_path.write_text("{}\n", encoding="utf-8")
+            signed_ui_archive_path = root / "signed-artifact-ui.zip"
+            signed_ui_archive_path.write_bytes(b"archive")
+            qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
+            cut_packet_path = root / "docs/0.3.0-cut-packet.md"
+            qualification_path.parent.mkdir(parents=True)
+            write_qualification_support_files(root)
+            cut_packet_path.write_text("# Cut packet\n", encoding="utf-8")
+            receipt = minimal_reconcile_receipt()
+            qualification_path.write_text(
+                json.dumps(qualification_for_receipt(receipt), indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            publication = {
+                "live_appcast_sha256": "a" * 64,
+                "original_workflow_conclusion": "success",
+                "published_at": "2026-08-07T21:42:28Z",
+                "receipt_asset_id": 40,
+                "receipt_file_sha256": file_sha256(receipt_path),
+                "recovery_workflow_run_id": None,
+            }
+            manifest = {
+                "manifest_sha256": "b" * 64,
+                "signed_ui_artifact": {
+                    "artifact_sha256": "d" * 64,
+                    "receipt_sha256": "c" * 64,
+                },
+            }
+            with (
+                patch("scripts.release_evidence.validate_publication", return_value=publication),
+                patch("scripts.release_evidence._update_qualification", return_value=qualification_path),
+                patch("scripts.release_evidence._update_cut_packet", return_value=cut_packet_path),
+                patch(
+                    "scripts.release_qualification_manifest.build_manifest_for_reconciled_release",
+                    return_value=manifest,
+                ) as build_manifest,
+            ):
+                outputs = reconcile(
+                    root,
+                    {},
+                    {},
+                    receipt,
+                    receipt_path,
+                    root / "appcast.xml",
+                    prior_tag="v0.3.0-rc.3",
+                    signed_ui_artifact_id=50,
+                    signed_ui_artifact_digest="d" * 64,
+                    signed_ui_archive_path=signed_ui_archive_path,
+                    signed_ui_receipt_path=signed_ui_path,
+                    signed_ui_receipt_file_sha256=file_sha256(signed_ui_path),
+                    evidence_ref="automation/release-evidence-v0.3.0",
+                    evidence_base_sha="e" * 40,
+                    runner_sha="f" * 40,
+                    sparkle_route="rc",
+                )
+
+            build_manifest.assert_called_once()
+            self.assertEqual(
+                build_manifest.call_args.kwargs["qualification_path"],
+                Path("docs/release-evidence/v0.3.0/qualification-record.json"),
+            )
+            self.assertEqual(outputs["manifest_sha256"], "b" * 64)
+            self.assertEqual(outputs["signed_ui_receipt_sha256"], "c" * 64)
+            self.assertEqual(
+                outputs["qualification_manifest"],
+                "docs/release-evidence/v0.3.0/qualification-manifest.json",
+            )
+            self.assertEqual(
+                outputs["qualification_record"],
+                "docs/release-evidence/v0.3.0/qualification-record.json",
+            )
 
 
 if __name__ == "__main__":

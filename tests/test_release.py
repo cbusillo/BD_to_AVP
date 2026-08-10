@@ -752,6 +752,113 @@ class ReleaseNotesBaseTests(unittest.TestCase):
         self.assertEqual(selected, "")
 
 
+class QualificationUpdateBaseTests(unittest.TestCase):
+    def test_sparkle_route_uses_candidate_channel_for_prereleases(self) -> None:
+        self.assertEqual(
+            release.qualification_sparkle_route(
+                release.parse_release_tag("v1.2.4-beta.1"),
+                release.parse_release_tag("v1.2.3"),
+            ),
+            "beta",
+        )
+        self.assertEqual(
+            release.qualification_sparkle_route(
+                release.parse_release_tag("v1.2.4-rc.1"),
+                release.parse_release_tag("v1.2.4-beta.3"),
+            ),
+            "rc",
+        )
+
+    def test_sparkle_route_uses_prior_channel_for_stable_candidates(self) -> None:
+        self.assertEqual(
+            release.qualification_sparkle_route(
+                release.parse_release_tag("v1.2.4"),
+                release.parse_release_tag("v1.2.4-rc.2"),
+            ),
+            "rc",
+        )
+        self.assertEqual(
+            release.qualification_sparkle_route(
+                release.parse_release_tag("v1.2.4"),
+                release.parse_release_tag("v1.2.3"),
+            ),
+            "stable",
+        )
+
+    def test_stable_uses_latest_same_version_prerelease_and_its_route(self) -> None:
+        history = [
+            published_release("v1.2.3"),
+            published_release("v1.2.4-beta.2", prerelease=True),
+            published_release("v1.2.4-rc.1", prerelease=True),
+            published_release("v1.2.4-rc.2", prerelease=True),
+        ]
+
+        selection = release.select_qualification_update_base(
+            "v1.2.4",
+            history,
+            "stable-head",
+            tag_exists=lambda _tag_name: True,
+            is_ancestor=lambda _tag_name, _head_ref: True,
+        )
+
+        self.assertEqual(selection.prior_tag, "v1.2.4-rc.2")
+        self.assertEqual(selection.sparkle_route, "rc")
+
+    def test_stable_patch_uses_previous_stable_release(self) -> None:
+        selection = release.select_qualification_update_base(
+            "v1.2.4",
+            [published_release("v1.2.3")],
+            "stable-head",
+            tag_exists=lambda _tag_name: True,
+            is_ancestor=lambda _tag_name, _head_ref: True,
+        )
+
+        self.assertEqual(selection.prior_tag, "v1.2.3")
+        self.assertEqual(selection.sparkle_route, "stable")
+
+    def test_prerelease_uses_candidate_route_with_latest_ancestor(self) -> None:
+        history = [
+            published_release("v1.2.3"),
+            published_release("v1.2.4-beta.1", prerelease=True),
+            published_release("v1.2.4-beta.2", prerelease=True),
+        ]
+
+        selection = release.select_qualification_update_base(
+            "v1.2.4-rc.1",
+            history,
+            "rc-head",
+            tag_exists=lambda _tag_name: True,
+            is_ancestor=lambda tag_name, _head_ref: tag_name != "v1.2.4-beta.2",
+        )
+
+        self.assertEqual(selection.prior_tag, "v1.2.4-beta.1")
+        self.assertEqual(selection.sparkle_route, "rc")
+
+    def test_first_prerelease_uses_candidate_route_after_stable(self) -> None:
+        selection = release.select_qualification_update_base(
+            "v1.2.4-beta.1",
+            [published_release("v1.2.3")],
+            "beta-head",
+            tag_exists=lambda _tag_name: True,
+            is_ancestor=lambda _tag_name, _head_ref: True,
+        )
+
+        self.assertEqual(selection.prior_tag, "v1.2.3")
+        self.assertEqual(selection.sparkle_route, "beta")
+
+    def test_missing_prior_release_returns_empty_tag_and_candidate_route(self) -> None:
+        selection = release.select_qualification_update_base(
+            "v1.0.0-alpha.1",
+            [],
+            "alpha-head",
+            tag_exists=lambda _tag_name: True,
+            is_ancestor=lambda _tag_name, _head_ref: True,
+        )
+
+        self.assertEqual(selection.prior_tag, "")
+        self.assertEqual(selection.sparkle_route, "alpha")
+
+
 class ReleasePreparationTests(unittest.TestCase):
     def test_atomic_write_preserves_existing_file_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

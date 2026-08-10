@@ -31,10 +31,11 @@ weakening the environment check. The workflow runs the same collector on the
 GitHub-hosted `macos-26` image with read-only repository and Actions access. It
 accepts only the canonical `automation/release-evidence-<tag>` branch at its
 exact remote head, rejects non-documentation differences from protected
-`main`, downloads both DMGs by the asset IDs in their checked receipts, and
-recovers the exact signed-artifact UI receipt by immutable Actions artifact ID.
-It cannot push, edit a release, approve an environment, or access release
-secrets.
+`main`, validates the checked qualification manifest by its self digest,
+downloads both DMGs by the asset IDs in their checked receipts, and uses the
+checked signed-artifact UI receipt and original one-file Actions ZIP captured
+by Release Evidence while the artifact was unexpired. It cannot push, edit a release, approve an
+environment, or access release secrets.
 
 Dispatch it only after its workflow definition is present on the canonical
 evidence branch:
@@ -42,22 +43,20 @@ evidence branch:
 ```sh
 gh workflow run milestone-qualification.yml \
   --ref main \
-  -f evidence_ref=automation/release-evidence-v0.3.0 \
   -f candidate_tag=v0.3.0 \
-  -f prior_tag=v0.3.0-rc.3 \
-  -f route=rc \
-  -f signed_ui_artifact_id=<exact-artifact-id>
+  -f manifest_sha256=<qualification-manifest-self-sha256>
 ```
 
 The successful run uploads the validated signed-artifact UI receipt, both Tier
-3 receipts, normalized evidence, artifact metadata, and a bounded run summary
-with 30-day retention. Download those outputs, validate them again, and add the
-accepted receipts to the same evidence branch. The hosted collector proves the
-real Sparkle install/relaunch path, exact appcast-bound release-notes URL, and
-installed accessibility semantics. The guarded release engine separately proves
-that the embedded Markdown and full-notes URL match the immutable release-note
-source. Targeted native-window appearance capture remains useful operational
-evidence when Sparkle or release-note rendering changes, but missing or failed
+3 receipts, normalized evidence, checked manifest digest, evidence branch SHA,
+and a bounded run summary with 30-day retention. Download those outputs,
+validate them again, and add the accepted receipts to the same evidence branch.
+The hosted collector proves the real Sparkle install/relaunch path, exact
+appcast-bound release-notes URL, and installed accessibility semantics. The
+guarded release engine separately proves that the embedded Markdown and
+full-notes URL match the immutable release-note source. Targeted native-window
+appearance capture remains useful operational evidence when Sparkle or
+release-note rendering changes, but missing or failed
 desktop capture does not block release evidence reconciliation.
 
 Homebrew may be installed on the host. The package smoke and launched app use a
