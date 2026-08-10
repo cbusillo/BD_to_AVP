@@ -120,8 +120,7 @@ def _load_json(path: Path, description: str) -> Mapping[str, Any]:
         raise QualificationScopeError(f"Invalid JSON in {description} at {path}: {error}") from error
 
 
-def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Mapping[str, Any]:
-    policy = _load_json(path, "release qualification policy")
+def validate_policy(policy: Mapping[str, Any]) -> Mapping[str, Any]:
     if policy.get("schema_version") != 1:
         raise QualificationScopeError("Release qualification policy schema_version must be 1.")
     if not isinstance(policy.get("policy_id"), str) or not policy["policy_id"]:
@@ -396,6 +395,10 @@ def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Mapping[str, Any]:
                         f"Tier 3 qualification case {case_id!r} {field} must contain unique values."
                     )
     return policy
+
+
+def load_policy(path: Path = DEFAULT_POLICY_PATH) -> Mapping[str, Any]:
+    return validate_policy(_load_json(path, "release qualification policy"))
 
 
 def _release_blocking(case: Mapping[str, Any]) -> bool:
