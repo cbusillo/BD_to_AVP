@@ -317,6 +317,60 @@ The workflow performs these ordered boundaries:
    status was computed with blocking cases, and exit `1` means validation or
    identity resolution failed. Use `--as-of YYYY-MM-DD` when a reproducible
    Tier 3 expiry boundary is required.
+
+   When blocking automated cases remain on an open canonical evidence branch,
+   run the bounded resume observer from the exact checked
+   `automation/release-evidence-<tag>` branch head:
+
+   ```sh
+   uv run python -m scripts.release_qualification_controller resume \
+     --release-tag <tag>
+   ```
+
+   The first invocation is observational. It verifies the same-repository
+   evidence PR, remote evidence head, protected `main`, manifest runner and
+   digest, docs-only branch diff, prior dispatches, job conclusion, and retained
+   artifact metadata. If dispatch is the only safe next transition, the JSON
+   response reports the exact required `main` and manifest values. Authorize
+   that one workflow dispatch by repeating the command with both values:
+
+   ```sh
+   uv run python -m scripts.release_qualification_controller resume \
+     --release-tag <tag> \
+     --expected-main-sha <full-main-sha> \
+     --expected-manifest-sha256 <manifest-sha256>
+   ```
+
+   Dispatch requires the active local GitHub identity `cbusillo`. The controller
+   writes a mode-`0600` checkpoint under the shared git directory before the
+   API call, then adopts only the exact run whose display title binds the tag
+   and full manifest digest. An unresolved prepared checkpoint prevents a
+   second dispatch after interruption. Local locking prevents concurrent
+   controller processes from dispatching the same transition. After the
+   visibility window, retrying an unresolved dispatch requires the exact
+   checkpoint self digest through `--retry-checkpoint-sha256` plus the same main
+   and manifest authorization. Failed or expired runs require the exact prior
+   run ID through `--retry-run-id`; they are never retried implicitly. If
+   protected `main` moved, rerun Release Evidence to refresh the manifest before
+   resuming.
+
+   Resume exit `0` means observation completed without an operator decision,
+   exit `20` means an exact operator action or later observation is required,
+   exit `21` means an identity or concurrency safety conflict stopped the
+   transition, and exit `1` means local validation failed. Checkpoints live at
+   `<git-common-dir>/bd-to-avp/release-qualification/<tag>.json`. If later
+   evidence reconciliation advances the evidence branch while blockers remain,
+   first verify that no exact qualification run is queued or active and that the
+   recorded run no longer needs observation; only then remove the stale local
+   checkpoint and rerun the observational command. Never remove a prepared
+   checkpoint merely because its workflow run is slow to appear.
+
+   This bounded stage does not download milestone artifacts or create commits,
+   pushes, comments, or pull requests. `artifact_available` means the exact
+   retained receipts are ready for validated reconciliation. `artifact_expired`
+   permits a new run only after explicit retry authorization; checked durable
+   receipts already accepted by `status` remain a no-op even after Actions
+   transport expires.
 15. The separate `cbusillo/homebrew-tap` repository checks the latest stable
    GitHub Release on a schedule and by manual dispatch. Homebrew opens a formula
    update pull request when the version changes; tap CI must pass formula audit,

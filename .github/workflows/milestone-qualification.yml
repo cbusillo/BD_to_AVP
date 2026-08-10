@@ -1,6 +1,6 @@
 ---
 name: Milestone Qualification
-run-name: Milestone qualification ${{ inputs.candidate_tag }}
+run-name: Milestone ${{ inputs.candidate_tag }} ${{ inputs.manifest_sha256 }}
 
 "on":
   workflow_dispatch:

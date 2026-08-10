@@ -403,6 +403,47 @@ completed without blockers, exit `2` means classification completed with
 blockers, and exit `1` means evidence or identity validation failed. The
 optional `--as-of YYYY-MM-DD` input makes expiry-sensitive reports reproducible.
 
+### Resume Blocking Automated Qualification
+
+`resume` is an observation-first state machine with one bounded mutation: an
+exact Milestone Qualification workflow dispatch. It must run from the checked
+head of `automation/release-evidence-<tag>` when `status` still reports blocking
+cases. Releases whose checked durable evidence already satisfies every blocker,
+including legacy v0.3.1, return `complete` without contacting GitHub or writing a
+checkpoint.
+
+Before offering dispatch, the controller verifies the repository identity,
+remote `main`, evidence ref and SHA, exactly one same-repository open evidence
+PR, docs-only branch diff, manifest self digest, runner SHA, candidate and
+release identities, signed UI artifact, policy/checkpoint/route/controller
+digests, and existing exact workflow runs through the same active GitHub
+identity used for dispatch. The workflow display title includes
+the release tag and full manifest digest because `workflow_dispatch` returns no
+run ID. More than one active exact run, a moved ref, a mismatched checkpoint, a
+fork PR, a skipped qualification job, partial identity, or any non-documentation
+evidence-branch change fails closed.
+
+The initial command reports `dispatch_ready` and the exact values required for
+authorization. Dispatch occurs only when both `--expected-main-sha` and
+`--expected-manifest-sha256` match the preflight identity and the active local
+GitHub login is `cbusillo`. Before the API call, the controller atomically writes
+a mode-`0600` prepared checkpoint under the shared git directory. It records the
+observed run only after exactly one newer run with the expected workflow path,
+branch, head SHA, actors, tag, and manifest digest appears. A prepared checkpoint
+with no visible run blocks redispatch, and a local checkpoint lock rejects
+concurrent controller processes. Once the visibility window expires, retrying
+that unresolved dispatch requires its exact checkpoint self digest through
+`--retry-checkpoint-sha256` and repeats every remote identity check. Retrying a
+failed or expired run also requires its exact ID through `--retry-run-id`.
+
+This stage observes successful job and artifact state but deliberately does not
+download ZIPs or mutate evidence refs, commits, comments, or pull requests.
+`artifact_available` requires validated reconciliation as the next controller
+stage. Expired milestone transport may trigger an explicitly authorized fresh
+qualification run; it never reconstructs receipts. If equivalent receipts are
+already committed and accepted, `status` reports no blockers and `resume`
+returns `complete` regardless of Actions retention.
+
 The initial evidence PR is expected to remain unmergeable while blocking
 live-artifact or automated Tier 3 receipts are absent. Collectors add validated
 receipts to that same idempotent branch. Optional physical and native-window
