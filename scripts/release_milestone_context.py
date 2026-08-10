@@ -26,6 +26,10 @@ from scripts.release_receipt import ReleaseReceiptError, load_validated_checked_
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GITHUB_CONFIG_PATH = Path(".github/github.json")
 EVIDENCE_INDEX_PATH = "docs/qualification/release-evidence-v1.json"
+RUNNER_BOUND_QUALIFICATION_PATHS = {
+    "docs/qualification/release-qualification-policy-v1.json",
+    "docs/qualification/video-quality-route-table-v2.json",
+}
 RECEIPT_PATH_PATTERN = re.compile(r"^docs/release-evidence/(v[^/]+)/release-receipt\.json$")
 MANIFEST_PATH_PATTERN = re.compile(rf"^docs/release-evidence/(v[^/]+)/{re.escape(MANIFEST_NAME)}$")
 RECOVERY_AUTHORIZATION_PATH_PATTERN = re.compile(
@@ -324,6 +328,12 @@ def discover_milestone_receipt(
     out_of_scope = [path for path in changed_paths if not path.startswith("docs/")]
     if out_of_scope:
         raise ReleaseMilestoneContextError(f"Release evidence pull requests may change only docs/: {out_of_scope!r}.")
+    runner_input_changes = sorted(RUNNER_BOUND_QUALIFICATION_PATHS.intersection(changed_paths))
+    if runner_input_changes:
+        raise ReleaseMilestoneContextError(
+            "Release evidence pull requests may not change runner-bound policy or route inputs: "
+            f"{runner_input_changes!r}."
+        )
     if evidence_index_mutation:
         _validate_append_only_evidence_index(repo_root, base_sha=base_sha)
     return repo_root / receipt_relative
@@ -369,6 +379,12 @@ def discover_milestone_manifest(
     out_of_scope = [path for path in changed_paths if not path.startswith("docs/")]
     if out_of_scope:
         raise ReleaseMilestoneContextError(f"Release evidence pull requests may change only docs/: {out_of_scope!r}.")
+    runner_input_changes = sorted(RUNNER_BOUND_QUALIFICATION_PATHS.intersection(changed_paths))
+    if runner_input_changes:
+        raise ReleaseMilestoneContextError(
+            "Release evidence pull requests may not change runner-bound policy or route inputs: "
+            f"{runner_input_changes!r}."
+        )
     if EVIDENCE_INDEX_PATH in changed_paths:
         _validate_append_only_evidence_index(repo_root, base_sha=base_sha)
     return repo_root / manifest_relative

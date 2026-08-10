@@ -341,7 +341,11 @@ is validated at the manifest's canonical evidence base SHA. A later
 protected-main advance may refresh runner-owned and evidence-baseline checkpoint
 fields, but only after the prior manifest validates and the immutable release,
 qualification snapshot, workflow, receipt, prior-release, and signed-UI
-identities remain byte-for-byte equivalent. If no checked receipt was
+identities remain byte-for-byte equivalent. Evidence pull requests may not
+modify the runner-bound policy or route table directly. A rolling qualification
+merge conflict may be resolved only in favor of protected main because the
+release-specific snapshot is immutable; every other conflict fails closed. If
+no checked receipt was
 captured before artifact expiry, qualification stops rather than reconstructing
 evidence. Absolute paths, private field
 names, conflicts, and partial manifest input state fail closed. CI validates the

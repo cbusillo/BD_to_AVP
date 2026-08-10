@@ -313,6 +313,46 @@ class ReleaseQualificationManifestTests(unittest.TestCase):
                 runner_sha=git_head(root),
                 sparkle_route="rc",
             )
+            qualification_path = root / "docs/release-evidence/v0.3.0/qualification-record.json"
+            qualification = json.loads(qualification_path.read_text(encoding="utf-8"))
+            qualification["matrix"][0]["operator_email"] = "operator@example.com"
+            qualification_path.write_text(
+                json.dumps(qualification, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ReleaseQualificationManifestError, "public-safe"):
+                build_manifest(
+                    repo_root=root,
+                    release_receipt_path=candidate_path,
+                    prior_release_receipt_path=prior_path,
+                    signed_ui=signed_ui,
+                    evidence_ref="automation/release-evidence-v0.3.0",
+                    evidence_base_sha=git_head(root),
+                    runner_sha=git_head(root),
+                    sparkle_route="rc",
+                )
+            qualification["matrix"][0].pop("operator_email")
+            qualification["matrix"][0]["operator_note"] = "not part of the canonical schema"
+            qualification_path.write_text(
+                json.dumps(qualification, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ReleaseQualificationManifestError, "keys changed"):
+                build_manifest(
+                    repo_root=root,
+                    release_receipt_path=candidate_path,
+                    prior_release_receipt_path=prior_path,
+                    signed_ui=signed_ui,
+                    evidence_ref="automation/release-evidence-v0.3.0",
+                    evidence_base_sha=git_head(root),
+                    runner_sha=git_head(root),
+                    sparkle_route="rc",
+                )
+            qualification["matrix"][0].pop("operator_note")
+            qualification_path.write_text(
+                json.dumps(qualification, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
             path = root / "docs/release-evidence/v0.3.0" / MANIFEST_NAME
             write_manifest(manifest, path)
 

@@ -212,7 +212,19 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git checkout --detach refs/remotes/origin/release-evidence-existing
-          git merge --no-edit main
+          if ! git merge --no-edit main; then
+            ROLLING_QUALIFICATION_PATH=$(jq -er .releaseOperations.qualificationRecordPath .github/github.json)
+            mapfile -t CONFLICTS < <(git diff --name-only --diff-filter=U)
+            if [ "${#CONFLICTS[@]}" = "1" ] && [ "${CONFLICTS[0]}" = "$ROLLING_QUALIFICATION_PATH" ]; then
+              git checkout --theirs -- "$ROLLING_QUALIFICATION_PATH"
+              git add "$ROLLING_QUALIFICATION_PATH"
+              git commit --no-edit
+            else
+              printf 'Existing evidence branch has unsupported merge conflicts:\n%s\n' "${CONFLICTS[*]}" >&2
+              git merge --abort
+              exit 1
+            fi
+          fi
 
       - name: Capture signed artifact UI receipt before expiry
         id: signed-ui

@@ -518,6 +518,44 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                     base_branch="main",
                 )
 
+    def test_manifest_discovery_rejects_runner_bound_policy_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            policy_path = root / "docs/qualification/release-qualification-policy-v1.json"
+            policy = json.loads(policy_path.read_text(encoding="utf-8"))
+            policy["policy_id"] = "changed-on-evidence-branch"
+            policy_path.write_text(json.dumps(policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            manifest_path = root / "docs/release-evidence/v0.3.0/qualification-manifest.json"
+            manifest_path.write_text("{}\n", encoding="utf-8")
+            subprocess.run(["git", "add", policy_path, manifest_path], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "mutate runner inputs"], cwd=root, check=True)
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "runner-bound policy or route inputs"):
+                discover_milestone_manifest(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="automation/release-evidence-v0.3.0",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
+
     def test_accepts_explicit_successful_recovery_for_failed_release_run(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

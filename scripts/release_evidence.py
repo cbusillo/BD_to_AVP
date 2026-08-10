@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import tempfile
 
 from collections.abc import Mapping, Sequence
@@ -37,6 +38,7 @@ QUALIFICATION_RECORD_KEYS = {
     "schema_version",
     "status",
 }
+QUALIFICATION_RECORD_OPTIONAL_KEYS = {"immutable_publication"}
 QUALIFICATION_CANDIDATE_KEYS = {
     "appcast_sha256",
     "build_version",
@@ -55,8 +57,68 @@ QUALIFICATION_CANDIDATE_KEYS = {
     "worker_protocol_version",
     "workflow",
 }
+QUALIFICATION_ACCEPTANCE_REQUIRED_KEYS = {
+    "blocking_case_ids",
+    "nonblocking_case_ids",
+    "passed",
+    "preregistered_matrix_case_ids",
+    "required_case_ids",
+}
+QUALIFICATION_ACCEPTANCE_ALLOWED_KEYS = QUALIFICATION_ACCEPTANCE_REQUIRED_KEYS | {
+    "carried_case_count",
+    "failed_case_count",
+    "field_case_open",
+    "milestone_complete",
+    "passed_case_count",
+    "signed_rc_complete",
+}
+QUALIFICATION_EXECUTION_POLICY_KEYS = {
+    "approval_command",
+    "approval_required_exit_code",
+    "field_qualification_timing",
+    "generic_run_waiter_is_sufficient",
+    "macos_signing_requires_fresh_explicit_run_bound_authorization",
+    "main_must_remain_fixed_while_nonterminal",
+    "release_stage",
+    "watch_command",
+}
+QUALIFICATION_MATRIX_REQUIRED_KEYS = {"id", "migration", "phase", "policy_case_id"}
+QUALIFICATION_MATRIX_ALLOWED_KEYS = QUALIFICATION_MATRIX_REQUIRED_KEYS | {
+    "evidence",
+    "result",
+    "retest_reason",
+}
+QUALIFICATION_HISTORY_RELEASE_KEYS = {
+    "appcast_sha256",
+    "build_version",
+    "dmg_sha256",
+    "must_not_rebuild",
+    "package_version",
+    "published_at",
+    "release_id",
+    "release_run_id",
+    "release_tag",
+    "signed_app_tree_sha256",
+    "source_git_sha",
+}
+QUALIFICATION_IMMUTABLE_PUBLICATION_REQUIRED_KEYS = {
+    "dmg_size_bytes",
+    "must_not_rebuild",
+    "published_at",
+    "receipt",
+    "result",
+}
+QUALIFICATION_IMMUTABLE_PUBLICATION_ALLOWED_KEYS = QUALIFICATION_IMMUTABLE_PUBLICATION_REQUIRED_KEYS | {
+    "blocking_case_ids",
+    "failed_case_ids",
+    "outstanding_case_ids",
+    "targeted_qualification",
+}
 PRIVATE_QUALIFICATION_FIELD_FRAGMENTS = {
+    "address",
     "certificate",
+    "contact",
+    "email",
     "hostname",
     "keychain",
     "password",
@@ -66,6 +128,8 @@ PRIVATE_QUALIFICATION_FIELD_FRAGMENTS = {
     "token",
     "username",
 }
+QUALIFICATION_HISTORY_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+ISSUE_REFERENCE_PATTERN = re.compile(r"^#[1-9][0-9]*$")
 
 
 class ReleaseEvidenceError(RuntimeError):
@@ -403,6 +467,170 @@ def _reject_private_qualification_fields(value: object, path: str = "qualificati
         raise ReleaseEvidenceError(f"{path} contains an absolute or home-relative path.")
 
 
+def _validate_object_keys(
+    value: Mapping[str, Any],
+    *,
+    required: set[str],
+    allowed: set[str],
+    description: str,
+) -> None:
+    actual = set(value)
+    missing = required - actual
+    extra = actual - allowed
+    if missing or extra:
+        raise ReleaseEvidenceError(f"{description} keys changed; missing={sorted(missing)}, extra={sorted(extra)}.")
+
+
+def _validate_string_list(value: object, description: str) -> None:
+    for item in _sequence(value, description):
+        _string(item, description)
+
+
+def _validate_boolean(value: object, description: str) -> None:
+    if not isinstance(value, bool):
+        raise ReleaseEvidenceError(f"{description} must be boolean.")
+
+
+def _validate_nonnegative_integer(value: object, description: str) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ReleaseEvidenceError(f"{description} must be a nonnegative integer.")
+
+
+def _validate_repository_relative_path(value: object, description: str) -> None:
+    text = _string(value, description)
+    path = Path(text)
+    if path.is_absolute() or ".." in path.parts or text.startswith("./"):
+        raise ReleaseEvidenceError(f"{description} must be a canonical repository-relative path.")
+
+
+def _validate_qualification_sections(qualification: Mapping[str, Any]) -> None:
+    acceptance = _mapping(qualification.get("acceptance"), "qualification acceptance")
+    _validate_object_keys(
+        acceptance,
+        required=QUALIFICATION_ACCEPTANCE_REQUIRED_KEYS,
+        allowed=QUALIFICATION_ACCEPTANCE_ALLOWED_KEYS,
+        description="Qualification acceptance",
+    )
+    for field in (
+        "blocking_case_ids",
+        "nonblocking_case_ids",
+        "preregistered_matrix_case_ids",
+        "required_case_ids",
+    ):
+        _validate_string_list(acceptance.get(field), f"qualification acceptance {field}")
+    for field in ("field_case_open", "milestone_complete", "passed", "signed_rc_complete"):
+        if field in acceptance:
+            _validate_boolean(acceptance[field], f"qualification acceptance {field}")
+    for field in ("carried_case_count", "failed_case_count", "passed_case_count"):
+        if field in acceptance:
+            _validate_nonnegative_integer(acceptance[field], f"qualification acceptance {field}")
+
+    execution_policy = _mapping(qualification.get("execution_policy"), "qualification execution policy")
+    _validate_object_keys(
+        execution_policy,
+        required=QUALIFICATION_EXECUTION_POLICY_KEYS,
+        allowed=QUALIFICATION_EXECUTION_POLICY_KEYS,
+        description="Qualification execution policy",
+    )
+    for field in ("approval_command", "field_qualification_timing", "release_stage", "watch_command"):
+        _string(execution_policy.get(field), f"qualification execution policy {field}")
+    _integer(
+        execution_policy.get("approval_required_exit_code"),
+        "qualification execution policy approval_required_exit_code",
+    )
+    for field in (
+        "generic_run_waiter_is_sufficient",
+        "macos_signing_requires_fresh_explicit_run_bound_authorization",
+        "main_must_remain_fixed_while_nonterminal",
+    ):
+        _validate_boolean(execution_policy.get(field), f"qualification execution policy {field}")
+
+    for index, raw_case in enumerate(_sequence(qualification.get("matrix"), "qualification matrix")):
+        case = _mapping(raw_case, f"qualification matrix case {index}")
+        _validate_object_keys(
+            case,
+            required=QUALIFICATION_MATRIX_REQUIRED_KEYS,
+            allowed=QUALIFICATION_MATRIX_ALLOWED_KEYS,
+            description=f"Qualification matrix case {index}",
+        )
+        for field in QUALIFICATION_MATRIX_REQUIRED_KEYS:
+            _string(case.get(field), f"qualification matrix case {index} {field}")
+        if "evidence" in case:
+            _validate_repository_relative_path(case["evidence"], f"qualification matrix case {index} evidence")
+        for field in ("result", "retest_reason"):
+            if field in case:
+                _string(case[field], f"qualification matrix case {index} {field}")
+
+    for index, raw_evidence in enumerate(
+        _sequence(qualification.get("prior_evidence"), "qualification prior evidence")
+    ):
+        evidence = _mapping(raw_evidence, f"qualification prior evidence {index}")
+        _validate_object_keys(
+            evidence,
+            required={"id", "scope"},
+            allowed={"id", "scope"},
+            description=f"Qualification prior evidence {index}",
+        )
+        _string(evidence.get("id"), f"qualification prior evidence {index} id")
+        _string(evidence.get("scope"), f"qualification prior evidence {index} scope")
+
+    for issue in _sequence(qualification.get("issues"), "qualification issues"):
+        if ISSUE_REFERENCE_PATTERN.fullmatch(_string(issue, "qualification issue")) is None:
+            raise ReleaseEvidenceError("Qualification issues must use canonical GitHub issue references.")
+
+    history = _mapping(qualification.get("immutable_history"), "qualification immutable history")
+    for history_key, raw_history in history.items():
+        if not isinstance(history_key, str) or QUALIFICATION_HISTORY_KEY_PATTERN.fullmatch(history_key) is None:
+            raise ReleaseEvidenceError("Qualification immutable history keys must use canonical identifiers.")
+        if isinstance(raw_history, list):
+            for build in raw_history:
+                _integer(build, f"qualification immutable history {history_key} build")
+            continue
+        release_history = _mapping(raw_history, f"qualification immutable history {history_key}")
+        _validate_object_keys(
+            release_history,
+            required=QUALIFICATION_HISTORY_RELEASE_KEYS,
+            allowed=QUALIFICATION_HISTORY_RELEASE_KEYS,
+            description=f"Qualification immutable history {history_key}",
+        )
+        for field in ("release_id", "release_run_id"):
+            _integer(release_history.get(field), f"qualification immutable history {history_key} {field}")
+        for field in QUALIFICATION_HISTORY_RELEASE_KEYS - {"release_id", "release_run_id", "must_not_rebuild"}:
+            _string(release_history.get(field), f"qualification immutable history {history_key} {field}")
+        _validate_boolean(
+            release_history.get("must_not_rebuild"),
+            f"qualification immutable history {history_key} must_not_rebuild",
+        )
+
+    if "immutable_publication" in qualification:
+        publication = _mapping(qualification["immutable_publication"], "qualification immutable publication")
+        _validate_object_keys(
+            publication,
+            required=QUALIFICATION_IMMUTABLE_PUBLICATION_REQUIRED_KEYS,
+            allowed=QUALIFICATION_IMMUTABLE_PUBLICATION_ALLOWED_KEYS,
+            description="Qualification immutable publication",
+        )
+        _integer(publication.get("dmg_size_bytes"), "qualification immutable publication dmg_size_bytes")
+        _validate_boolean(
+            publication.get("must_not_rebuild"),
+            "qualification immutable publication must_not_rebuild",
+        )
+        for field in ("published_at", "result"):
+            _string(publication.get(field), f"qualification immutable publication {field}")
+        _validate_repository_relative_path(
+            publication.get("receipt"),
+            "qualification immutable publication receipt",
+        )
+        if "targeted_qualification" in publication:
+            _validate_repository_relative_path(
+                publication["targeted_qualification"],
+                "qualification immutable publication targeted_qualification",
+            )
+        for field in ("blocking_case_ids", "failed_case_ids", "outstanding_case_ids"):
+            if field in publication:
+                _validate_string_list(publication[field], f"qualification immutable publication {field}")
+
+
 def validate_qualification_record(
     qualification_path: Path,
     receipt: Mapping[str, Any],
@@ -411,8 +639,12 @@ def validate_qualification_record(
     route_table_path: Path,
 ) -> Mapping[str, Any]:
     qualification = _load_json(qualification_path, "qualification record")
-    if set(qualification) != QUALIFICATION_RECORD_KEYS:
-        raise ReleaseEvidenceError("Qualification record must use the complete canonical schema.")
+    _validate_object_keys(
+        qualification,
+        required=QUALIFICATION_RECORD_KEYS,
+        allowed=QUALIFICATION_RECORD_KEYS | QUALIFICATION_RECORD_OPTIONAL_KEYS,
+        description="Qualification record",
+    )
     if qualification.get("schema_version") != 1:
         raise ReleaseEvidenceError("Qualification record schema_version must be 1.")
     _string(qualification.get("qualification_id"), "qualification ID")
@@ -421,6 +653,7 @@ def validate_qualification_record(
     if set(candidate) != QUALIFICATION_CANDIDATE_KEYS:
         raise ReleaseEvidenceError("Qualification record candidate must use the complete canonical schema.")
     _reject_private_qualification_fields(qualification)
+    _validate_qualification_sections(qualification)
     validate_qualification_record_identity(qualification, receipt)
 
     try:

@@ -294,7 +294,10 @@ The workflow performs these ordered boundaries:
    its immutable qualification snapshot and the controller, policy, route table,
    and case classifications stored at its recorded runner SHA, then refreshes
    only reviewed-main policy and checkpoint fields while preserving exact
-   release and artifact identity. If
+   release and artifact identity. If the rolling qualification changed on both
+   branches, the workflow resolves only that path in favor of protected main;
+   any other merge conflict fails closed while the per-release snapshot remains
+   unchanged. If
    the signed UI artifact expires before the first successful capture, the
    workflow stops explicitly because that immutable evidence cannot be
    reconstructed; it never substitutes a rebuilt or operator-authored receipt.
