@@ -324,6 +324,23 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         )
         self.assertTrue(active_auth)
 
+    def test_accepted_dispatch_without_visible_run_requires_later_observation(self) -> None:
+        client = self.configured_client()
+        client.set_sequence(RUNS_ENDPOINT, [{"workflow_runs": []}, {"workflow_runs": []}])
+        client.set("user", {"login": "cbusillo"}, active_auth=True)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkpoint = Path(temporary_directory) / "checkpoint.json"
+            result = self.run_blocked(
+                client,
+                checkpoint,
+                expected_main_sha=MAIN_SHA,
+                expected_manifest_sha256=MANIFEST_SHA,
+            )
+
+        self.assertEqual(result.exit_code, EXIT_OPERATOR_REQUIRED)
+        self.assertEqual(result.payload["state"], "dispatch_visibility_pending")
+        self.assertEqual(len(client.posts), 1)
+
     def test_prepared_checkpoint_prevents_duplicate_dispatch(self) -> None:
         client = self.configured_client()
         client.set(RUNS_ENDPOINT, {"workflow_runs": []})

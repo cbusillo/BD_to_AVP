@@ -795,7 +795,7 @@ def _dispatch_locked(
             sleep(poll_seconds)
     return _result(
         "dispatch_visibility_pending",
-        EXIT_SUCCESS,
+        EXIT_OPERATOR_REQUIRED,
         status_payload,
         identity=identity,
         checkpoint_path=checkpoint_path,
