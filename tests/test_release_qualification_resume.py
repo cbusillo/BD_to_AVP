@@ -46,7 +46,9 @@ class FakeGitHubAPI:
     def __init__(self) -> None:
         self.responses: dict[tuple[str, bool], object] = {}
         self.sequences: dict[tuple[str, bool], deque[object]] = defaultdict(deque)
+        self.byte_responses: dict[tuple[str, bool], bytes] = {}
         self.gets: list[tuple[str, bool]] = []
+        self.byte_gets: list[tuple[str, bool, int, float]] = []
         self.posts: list[tuple[str, MappingProxy, bool]] = []
 
     def set(self, endpoint: str, payload: object, *, active_auth: bool = True) -> None:
@@ -77,6 +79,20 @@ class FakeGitHubAPI:
         self.posts.append((endpoint, MappingProxy(payload), active_auth))
         return None
 
+    def get_bytes(
+        self,
+        endpoint: str,
+        *,
+        active_auth: bool = False,
+        max_bytes: int,
+        timeout_seconds: float,
+    ) -> bytes:
+        self.byte_gets.append((endpoint, active_auth, max_bytes, timeout_seconds))
+        key = (endpoint, active_auth)
+        if key not in self.byte_responses:
+            raise AssertionError(f"Unexpected GitHub byte GET: {key!r}")
+        return self.byte_responses[key]
+
 
 class MappingProxy(dict[str, object]):
     def __init__(self, payload: dict[str, object]) -> None:
@@ -95,6 +111,16 @@ class FailOnGitHubAPI:
         active_auth: bool = False,
     ) -> object:
         raise AssertionError(f"Complete qualification must not mutate GitHub: {endpoint}")
+
+    def get_bytes(
+        self,
+        endpoint: str,
+        *,
+        active_auth: bool = False,
+        max_bytes: int,
+        timeout_seconds: float,
+    ) -> bytes:
+        raise AssertionError(f"Complete qualification must not download GitHub content: {endpoint}")
 
 
 def manifest() -> dict[str, object]:
@@ -179,6 +205,7 @@ def workflow_run(
         "triggering_actor": {"login": "cbusillo"},
         "status": status,
         "conclusion": conclusion,
+        "updated_at": "2026-08-10T12:00:00Z",
         "html_url": f"https://github.example/runs/{run_id}",
     }
 
@@ -189,6 +216,7 @@ def artifact(run_id: int, *, expired: bool, run_attempt: int = 1) -> dict[str, o
         "name": f"milestone-qualification-{RELEASE_TAG}-{run_attempt}",
         "digest": "sha256:" + "7" * 64,
         "expired": expired,
+        "size_in_bytes": 1024,
         "workflow_run": {"id": run_id, "head_branch": "main", "head_sha": MAIN_SHA},
     }
 
@@ -586,12 +614,54 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             {"artifacts": [artifact(101, expired=False)]},
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
-            result = self.run_blocked(client, Path(temporary_directory) / "checkpoint.json")
+            result = self.run_blocked(
+                client,
+                Path(temporary_directory) / "checkpoint.json",
+                observe_only=True,
+            )
 
         self.assertEqual(result.exit_code, EXIT_OPERATOR_REQUIRED)
         self.assertEqual(result.payload["state"], "artifact_available")
         self.assertEqual(result.payload["artifact"]["state"], "available")
+        self.assertEqual(client.byte_gets, [])
         self.assertEqual(client.posts, [])
+
+    def test_successful_run_builds_read_only_reconciliation_plan(self) -> None:
+        client = self.configured_client()
+        succeeded = workflow_run(101, status="completed", conclusion="success")
+        available_artifact = artifact(101, expired=False)
+        client.set(RUNS_ENDPOINT, {"workflow_runs": [succeeded]})
+        client.set(
+            "repos/cbusillo/BD_to_AVP/actions/runs/101/jobs?per_page=100",
+            {
+                "jobs": [
+                    {
+                        "name": "Collect exact post-publication qualification receipts",
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ]
+            },
+        )
+        client.set(
+            "repos/cbusillo/BD_to_AVP/actions/runs/101/artifacts?per_page=100",
+            {"artifacts": [available_artifact]},
+        )
+        plan = {"plan_sha256": "8" * 64, "requires_changes": True}
+        with (
+            tempfile.TemporaryDirectory() as temporary_directory,
+            patch(
+                "scripts.release_qualification_resume.download_and_plan_reconciliation",
+                return_value=plan,
+            ) as planner,
+        ):
+            result = self.run_blocked(client, Path(temporary_directory) / "checkpoint.json")
+
+        self.assertEqual(result.exit_code, EXIT_OPERATOR_REQUIRED)
+        self.assertEqual(result.payload["state"], "reconciliation_planned")
+        self.assertEqual(result.payload["reconciliation_plan"], plan)
+        self.assertEqual(client.posts, [])
+        planner.assert_called_once()
 
     def test_expired_artifact_requires_exact_retry(self) -> None:
         client = self.configured_client()

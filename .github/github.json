@@ -136,6 +136,7 @@
       "releaseQualification": "uv run python -m unittest tests.test_qualify_release_scope",
       "releaseQualificationStatus": "uv run python -m unittest tests.test_release_qualification_controller",
       "releaseQualificationResume": "uv run python -m unittest tests.test_release_qualification_resume",
+      "releaseQualificationArtifact": "uv run python -m unittest tests.test_release_qualification_artifact",
       "releaseReceipt": "uv run python -m unittest tests.test_release_receipt",
       "signedArtifactReceipt": "uv run python -m unittest tests.test_signed_artifact_receipt",
       "signedArtifactUi": "uv run python -m unittest tests.test_signed_artifact_ui",

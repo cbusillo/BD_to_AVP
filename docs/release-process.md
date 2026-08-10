@@ -365,12 +365,18 @@ The workflow performs these ordered boundaries:
    checkpoint and rerun the observational command. Never remove a prepared
    checkpoint merely because its workflow run is slow to appear.
 
-   This bounded stage does not download milestone artifacts or create commits,
-   pushes, comments, or pull requests. `artifact_available` means the exact
-   retained receipts are ready for validated reconciliation. `artifact_expired`
-   permits a new run only after explicit retry authorization; checked durable
-   receipts already accepted by `status` remain a no-op even after Actions
-   transport expires.
+   After a successful run, `resume` automatically revalidates and downloads the
+   exact retained artifact through the active GitHub identity. The byte-bounded
+   ZIP is digest-checked, admitted without filesystem extraction, validated
+   against the runner-pinned policy and checked manifest, and converted into a
+   deterministic reconciliation plan. Use `--observe-only` to retain the prior
+   `artifact_available` behavior without downloading. `reconciliation_planned`
+   exits `20` with the canonical plan and its SHA-256; `reconciliation_current`
+   exits `0` when every proposed destination and evidence-index record is
+   already identical. This stage still creates no repository files, commits,
+   pushes, comments, or pull requests. `artifact_expired` permits a new run only
+   after explicit retry authorization; checked durable receipts already accepted
+   by `status` remain a no-op even after Actions transport expires.
 15. The separate `cbusillo/homebrew-tap` repository checks the latest stable
    GitHub Release on a schedule and by manual dispatch. Homebrew opens a formula
    update pull request when the version changes; tap CI must pass formula audit,

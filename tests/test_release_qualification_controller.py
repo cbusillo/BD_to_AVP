@@ -387,6 +387,7 @@ class ReleaseQualificationControllerTests(unittest.TestCase):
                         "b" * 64,
                         "--retry-run-id",
                         "123",
+                        "--observe-only",
                     ]
                 )
 
@@ -399,6 +400,7 @@ class ReleaseQualificationControllerTests(unittest.TestCase):
             expected_manifest_sha256="b" * 64,
             retry_run_id=123,
             retry_checkpoint_sha256=None,
+            observe_only=True,
         )
 
     @staticmethod

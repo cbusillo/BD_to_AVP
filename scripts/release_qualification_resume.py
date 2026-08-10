@@ -21,6 +21,11 @@ from urllib.parse import quote
 from scripts.github_release_run import GhAPIClient
 from scripts.qualify_release_scope import QualificationScopeError
 from scripts.release_milestone_context import ReleaseMilestoneContextError
+from scripts.release_qualification_artifact import (
+    QualificationArtifactError,
+    QualificationArtifactSafetyError,
+    download_and_plan_reconciliation,
+)
 from scripts.release_qualification_status import (
     EvidenceBinding,
     ReleaseQualificationControllerError,
@@ -71,6 +76,16 @@ class GitHubAPI(Protocol):
         *,
         active_auth: bool = False,
     ) -> object:
+        raise NotImplementedError
+
+    def get_bytes(
+        self,
+        endpoint: str,
+        *,
+        active_auth: bool = False,
+        max_bytes: int,
+        timeout_seconds: float,
+    ) -> bytes:
         raise NotImplementedError
 
 
@@ -615,6 +630,7 @@ def _result(
     checkpoint_path: Path | None = None,
     run: Mapping[str, object] | None = None,
     artifact: Mapping[str, object] | None = None,
+    reconciliation_plan: Mapping[str, object] | None = None,
     next_action: str,
     mutation: Mapping[str, object] | None = None,
 ) -> ResumeResult:
@@ -638,6 +654,7 @@ def _result(
         },
         "run": dict(run) if run is not None else None,
         "artifact": dict(artifact) if artifact is not None else None,
+        "reconciliation_plan": dict(reconciliation_plan) if reconciliation_plan is not None else None,
         "planned_mutation": dict(mutation) if mutation is not None else None,
     }
     return ResumeResult(payload=payload, exit_code=exit_code)
@@ -811,6 +828,7 @@ def resume_qualification(
     expected_manifest_sha256: str | None = None,
     retry_run_id: int | None = None,
     retry_checkpoint_sha256: str | None = None,
+    observe_only: bool = False,
     client: GitHubAPI | None = None,
     checkpoint_path: Path | None = None,
     poll_attempts: int = 10,
@@ -1049,15 +1067,47 @@ def resume_qualification(
     succeeded = run_payload["conclusion"] == "success" and _run_jobs_succeeded(github, run_id)
     artifact = _artifact_state(github, identity, selected_run) if succeeded else None
     if succeeded and artifact is not None and artifact["state"] == "available":
+        run_payload = _run_identity(selected_run, identity)
+        if observe_only:
+            return _result(
+                "artifact_available",
+                EXIT_OPERATOR_REQUIRED,
+                status_payload,
+                identity=identity,
+                checkpoint_path=resolved_checkpoint_path,
+                run=run_payload,
+                artifact=artifact,
+                next_action="Validate and reconcile the exact qualification artifact into the evidence branch.",
+            )
+        try:
+            plan = download_and_plan_reconciliation(
+                client=github,
+                repo_root=repo_root,
+                identity=identity,
+                run=selected_run,
+                artifact=artifact,
+                manifest=cast(Mapping[str, Any], binding.manifest),
+            )
+        except QualificationArtifactSafetyError as error:
+            raise QualificationResumeSafetyError(str(error)) from error
+        except QualificationArtifactError as error:
+            raise QualificationResumeError(str(error)) from error
+        _revalidate_remote_identity(github, identity)
+        requires_changes = plan.get("requires_changes") is True
         return _result(
-            "artifact_available",
-            EXIT_OPERATOR_REQUIRED,
+            "reconciliation_planned" if requires_changes else "reconciliation_current",
+            EXIT_OPERATOR_REQUIRED if requires_changes else EXIT_SUCCESS,
             status_payload,
             identity=identity,
             checkpoint_path=resolved_checkpoint_path,
             run=run_payload,
             artifact=artifact,
-            next_action="Validate and reconcile the exact qualification artifact into the evidence branch.",
+            reconciliation_plan=plan,
+            next_action=(
+                "Review the exact reconciliation plan; the write-capable apply stage is not implemented yet."
+                if requires_changes
+                else "All planned qualification evidence is already present and identical."
+            ),
         )
 
     failure_state = (
