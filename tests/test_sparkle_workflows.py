@@ -1101,8 +1101,9 @@ printf '%s' "$CODESIGN_METADATA"
 set -euo pipefail
 if ! git merge --no-edit main; then
   ROLLING_QUALIFICATION_PATH=$(jq -er .releaseOperations.qualificationRecordPath .github/github.json)
-  mapfile -t CONFLICTS < <(git diff --name-only --diff-filter=U)
-  if [ "${#CONFLICTS[@]}" = "1" ] && [ "${CONFLICTS[0]}" = "$ROLLING_QUALIFICATION_PATH" ]; then
+  CONFLICTS=$(git diff --name-only --diff-filter=U)
+  CONFLICT_COUNT=$(printf '%s\n' "$CONFLICTS" | sed '/^$/d' | wc -l | tr -d ' ')
+  if [ "$CONFLICT_COUNT" = "1" ] && [ "$CONFLICTS" = "$ROLLING_QUALIFICATION_PATH" ]; then
     git checkout --theirs -- "$ROLLING_QUALIFICATION_PATH"
     git add "$ROLLING_QUALIFICATION_PATH"
     git commit --no-edit
