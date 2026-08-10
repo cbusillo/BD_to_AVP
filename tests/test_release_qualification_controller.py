@@ -20,6 +20,7 @@ from scripts.release_qualification_controller import (
     main,
     resolve_evidence_binding,
 )
+from scripts.release_qualification_resume import ResumeResult
 from scripts.release_milestone_context import ReleaseMilestoneContext
 
 
@@ -366,6 +367,39 @@ class ReleaseQualificationControllerTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("conflicting identity", stderr.getvalue())
+
+    def test_main_delegates_resume_arguments(self) -> None:
+        result = ResumeResult(payload={"state": "dispatch_ready"}, exit_code=20)
+        stdout = io.StringIO()
+        with patch(
+            "scripts.release_qualification_resume.resume_qualification",
+            return_value=result,
+        ) as resume:
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "resume",
+                        "--release-tag",
+                        "v1.0.0",
+                        "--expected-main-sha",
+                        "a" * 40,
+                        "--expected-manifest-sha256",
+                        "b" * 64,
+                        "--retry-run-id",
+                        "123",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 20)
+        self.assertEqual(json.loads(stdout.getvalue()), result.payload)
+        resume.assert_called_once_with(
+            REPO_ROOT,
+            "v1.0.0",
+            expected_main_sha="a" * 40,
+            expected_manifest_sha256="b" * 64,
+            retry_run_id=123,
+            retry_checkpoint_sha256=None,
+        )
 
     @staticmethod
     def _context(*, runner_sha: str = "", manifest_path: str = "") -> ReleaseMilestoneContext:

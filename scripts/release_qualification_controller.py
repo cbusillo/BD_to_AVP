@@ -335,11 +335,49 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser.add_argument("--release-tag", required=True)
     status_parser.add_argument("--repo-root", type=Path, default=REPO_ROOT)
     status_parser.add_argument("--as-of", type=date.fromisoformat)
+    resume_parser = subparsers.add_parser(
+        "resume",
+        help="Observe qualification recovery and dispatch one exact milestone run when explicitly authorized.",
+    )
+    resume_parser.add_argument("--release-tag", required=True)
+    resume_parser.add_argument("--repo-root", type=Path, default=REPO_ROOT)
+    resume_parser.add_argument("--expected-main-sha")
+    resume_parser.add_argument("--expected-manifest-sha256")
+    resume_parser.add_argument("--retry-run-id", type=int)
+    resume_parser.add_argument("--retry-checkpoint-sha256")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "resume":
+        from scripts.github_release_run import ReleaseRunError
+        from scripts.release_qualification_resume import (
+            EXIT_FAILED,
+            EXIT_SAFETY_ERROR,
+            QualificationResumeError,
+            QualificationResumeSafetyError,
+            resume_qualification,
+            safety_error_payload,
+        )
+
+        try:
+            result = resume_qualification(
+                args.repo_root,
+                args.release_tag,
+                expected_main_sha=args.expected_main_sha,
+                expected_manifest_sha256=args.expected_manifest_sha256,
+                retry_run_id=args.retry_run_id,
+                retry_checkpoint_sha256=args.retry_checkpoint_sha256,
+            )
+        except QualificationResumeSafetyError as error:
+            print(json.dumps(safety_error_payload(error), indent=2, sort_keys=True))
+            return EXIT_SAFETY_ERROR
+        except (json.JSONDecodeError, OSError, QualificationResumeError, ReleaseRunError) as error:
+            print(json.dumps(safety_error_payload(error, state="error"), indent=2, sort_keys=True))
+            return EXIT_FAILED
+        print(json.dumps(result.payload, indent=2, sort_keys=True))
+        return result.exit_code
     try:
         payload = build_status(
             args.repo_root,

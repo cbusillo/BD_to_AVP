@@ -78,6 +78,7 @@
     "qualificationSnapshotPath": "docs/release-evidence/<tag>/qualification-record.json",
     "qualificationManifestCommand": "uv run python -m scripts.release_qualification_manifest",
     "qualificationStatusCommand": "uv run python -m scripts.release_qualification_controller status --release-tag <tag>",
+    "qualificationResumeCommand": "uv run python -m scripts.release_qualification_controller resume --release-tag <tag>",
     "qualificationRecordPath": "docs/qualification/stable-signed-qualification-v1.json",
     "qualificationReportArtifacts": [
       "release-qualification-preparation-<run-attempt>",
@@ -109,6 +110,7 @@
       ".github/workflows/prerelease.yml",
       ".github/workflows/release-engine.yml",
       ".github/workflows/release-evidence.yml",
+      ".github/workflows/milestone-qualification.yml",
       ".github/workflows/sparkle-pages.yml",
       ".github/workflows/manage-sparkle-pages.yml"
     ]
@@ -133,6 +135,7 @@
       "releaseQualificationPolicy": "uv run python -m scripts.qualify_release_scope --validate-policy",
       "releaseQualification": "uv run python -m unittest tests.test_qualify_release_scope",
       "releaseQualificationStatus": "uv run python -m unittest tests.test_release_qualification_controller",
+      "releaseQualificationResume": "uv run python -m unittest tests.test_release_qualification_resume",
       "releaseReceipt": "uv run python -m unittest tests.test_release_receipt",
       "signedArtifactReceipt": "uv run python -m unittest tests.test_signed_artifact_receipt",
       "signedArtifactUi": "uv run python -m unittest tests.test_signed_artifact_ui",
