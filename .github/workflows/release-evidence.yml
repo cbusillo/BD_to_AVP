@@ -24,6 +24,7 @@ jobs:
       contents: read
     outputs:
       base_main_sha: ${{ steps.base.outputs.sha }}
+      existing_branch_sha: ${{ steps.reuse.outputs.existing_branch_sha }}
       has_changes: ${{ steps.stage.outputs.has_changes }}
       manifest_sha256: ${{ steps.reconcile.outputs.manifest_sha256 }}
       receipt_file_sha256: ${{ steps.reconcile.outputs.receipt_file_sha256 }}
@@ -155,16 +156,21 @@ jobs:
               echo "artifact_id=$(jq -r .signed_ui_artifact_id existing-manifest-outputs.json)"
               echo "artifact_sha256=$(jq -r .signed_ui_artifact_sha256 existing-manifest-outputs.json)"
               echo "checkpoint_source=main"
+              echo "existing_branch_sha="
               echo "has_manifest=true"
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if ! git ls-remote --exit-code --heads origin "refs/heads/$BRANCH_NAME" >/dev/null 2>&1; then
-            echo "checkpoint_source=none" >> "$GITHUB_OUTPUT"
-            echo "has_manifest=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "checkpoint_source=none"
+              echo "existing_branch_sha="
+              echo "has_manifest=false"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git fetch --no-tags origin "refs/heads/$BRANCH_NAME:refs/remotes/origin/release-evidence-existing"
+          echo "existing_branch_sha=$(git rev-parse refs/remotes/origin/release-evidence-existing)" >> "$GITHUB_OUTPUT"
           if git diff --name-only main...refs/remotes/origin/release-evidence-existing \
             | grep -Ev '^docs/' | grep -q .; then
             echo "Existing evidence branch contains changes outside docs/." >&2
@@ -405,14 +411,19 @@ jobs:
       - name: Reject conflicting evidence on the idempotent branch
         env:
           BRANCH_NAME: automation/release-evidence-${{ needs.validate-and-prepare.outputs.release_tag }}
-          EXPECTED_MANIFEST_SHA256: ${{ needs.validate-and-prepare.outputs.manifest_sha256 }}
+          EXPECTED_EXISTING_BRANCH_SHA: ${{ needs.validate-and-prepare.outputs.existing_branch_sha }}
           EXPECTED_RECEIPT_FILE_SHA256: ${{ needs.validate-and-prepare.outputs.receipt_file_sha256 }}
           EXPECTED_SIGNED_UI_RECEIPT_SHA256: ${{ needs.validate-and-prepare.outputs.signed_ui_receipt_sha256 }}
           EXPECTED_SIGNED_UI_ARTIFACT_SHA256: ${{ needs.validate-and-prepare.outputs.signed_ui_artifact_sha256 }}
           RELEASE_TAG: ${{ needs.validate-and-prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code --heads origin "refs/heads/$BRANCH_NAME" >/dev/null 2>&1; then
+          REMOTE_BRANCH_SHA=$(git ls-remote --heads origin "refs/heads/$BRANCH_NAME" | awk '{print $1}')
+          if [ "$REMOTE_BRANCH_SHA" != "$EXPECTED_EXISTING_BRANCH_SHA" ]; then
+            echo "Evidence branch moved after evidence preparation; rerun against its current head." >&2
+            exit 1
+          fi
+          if [ -n "$REMOTE_BRANCH_SHA" ]; then
             git fetch --no-tags origin "refs/heads/$BRANCH_NAME:refs/remotes/origin/release-evidence-existing"
             RECEIPT_PATH="docs/release-evidence/$RELEASE_TAG/release-receipt.json"
             if git cat-file -e "refs/remotes/origin/release-evidence-existing:$RECEIPT_PATH" 2>/dev/null; then
@@ -439,15 +450,6 @@ jobs:
               if [ "$(sha256sum existing-signed-artifact-ui.zip | awk '{print $1}')" \
                 != "$EXPECTED_SIGNED_UI_ARTIFACT_SHA256" ]; then
                 echo "Existing evidence branch contains a conflicting signed UI artifact archive." >&2
-                exit 1
-              fi
-            fi
-            MANIFEST_PATH="docs/release-evidence/$RELEASE_TAG/qualification-manifest.json"
-            if git cat-file -e "refs/remotes/origin/release-evidence-existing:$MANIFEST_PATH" 2>/dev/null; then
-              MANIFEST_SELF_DIGEST=$(git show "refs/remotes/origin/release-evidence-existing:$MANIFEST_PATH" \
-                | jq -r .manifest_sha256)
-              if [ "$MANIFEST_SELF_DIGEST" != "$EXPECTED_MANIFEST_SHA256" ]; then
-                echo "Existing evidence branch contains a conflicting qualification manifest." >&2
                 exit 1
               fi
             fi
