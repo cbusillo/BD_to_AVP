@@ -1050,10 +1050,50 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("Evidence branch moved after evidence preparation", str(create_pr))
         self.assertNotIn("conflicting qualification manifest", str(create_pr))
         self.assertIn("automation/release-evidence-", str(create_pr))
-        self.assertIn("remains intentionally unmergeable", str(create_pr))
-        self.assertIn("blocking live-artifact and automated Tier 3 receipt", str(create_pr))
-        self.assertIn("Optional physical-hardware and native-window presentation", str(create_pr))
-        self.assertIn("peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1", str(create_pr))
+        create_pr_steps = [
+            step for step in create_pr["steps"] if step.get("uses", "").startswith("peter-evans/create-pull-request@")
+        ]
+        self.assertEqual(len(create_pr_steps), 1)
+        create_pr_step = create_pr_steps[0]
+        create_pr_inputs = create_pr_step["with"]
+        self.assertEqual(create_pr_inputs["add-paths"], "docs")
+        self.assertEqual(
+            create_pr_inputs["branch"],
+            "automation/release-evidence-${{ needs.validate-and-prepare.outputs.release_tag }}",
+        )
+        self.assertEqual(
+            create_pr_inputs["commit-message"],
+            "Record immutable evidence for ${{ needs.validate-and-prepare.outputs.release_tag }}",
+        )
+        self.assertEqual(create_pr_inputs["delete-branch"], "true")
+        self.assertEqual(
+            create_pr_inputs["title"],
+            "Record immutable evidence for ${{ needs.validate-and-prepare.outputs.release_tag }}",
+        )
+        for body_fragment in (
+            "Records the deterministic public-safe receipt and publication evidence",
+            "Release run: `${{ needs.validate-and-prepare.outputs.release_run_id }}`",
+            "Source SHA: `${{ needs.validate-and-prepare.outputs.source_sha }}`",
+            "Receipt file SHA-256: `${{ needs.validate-and-prepare.outputs.receipt_file_sha256 }}`",
+            "Qualification manifest SHA-256: `${{ needs.validate-and-prepare.outputs.manifest_sha256 }}`",
+            "Signing and deployment secrets are not available to this workflow.",
+            "remains intentionally unmergeable",
+            "blocking live-artifact and automated Tier 3 receipt",
+            "Optional physical-hardware and native-window presentation",
+        ):
+            with self.subTest(body_fragment=body_fragment):
+                self.assertIn(body_fragment, create_pr_inputs["body"])
+
+        step_names = [step["name"] for step in create_pr["steps"]]
+        create_pr_index = step_names.index("Create or update evidence pull request")
+        self.assertLess(
+            step_names.index("Reject protected-main movement during evidence transfer"),
+            create_pr_index,
+        )
+        self.assertLess(
+            step_names.index("Reject conflicting evidence on the idempotent branch"),
+            create_pr_index,
+        )
 
     def test_release_evidence_merge_preserves_snapshot_and_accepts_later_rolling_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
