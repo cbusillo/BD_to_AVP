@@ -372,6 +372,37 @@ python -m scripts.qualify_release_scope \
   --require-evidence
 ```
 
+### Inspect Checked Qualification Status
+
+The maintained read-only controller reports the current checked state for one
+explicit release tag:
+
+```sh
+uv run python -m scripts.release_qualification_controller status \
+  --release-tag v0.3.1
+```
+
+It performs no GitHub calls, dispatches, commits, pushes, comments, pull-request
+updates, or git ref/index mutations. It uses only checked repository evidence
+and fails if any controlling worktree file differs from `HEAD`. It uses the
+existing fail-closed milestone validators and scope classifier. When a canonical
+manifest exists, its recorded runner revision supplies the policy and its
+evidence-index history must remain append-only from the recorded base. When no
+manifest exists, the legacy release receipt and publication record must match
+the rolling qualification candidate exactly. A present but invalid manifest
+never falls back to legacy evidence.
+
+The JSON report preserves the classifier facts for every case and adds
+overlapping groups for `completed`, `stale`, `blocking`, `optional`, and
+`operator_required`. `stale` means previously accepted or preregistered evidence
+was invalidated, expired, explicitly retired, disallowed from carry-forward, or
+bound to a different milestone receipt. `operator_required` is emitted only
+when an applicable operator-assisted case is actually due. Optional cases remain
+visible without satisfying or bypassing blockers. Exit `0` means classification
+completed without blockers, exit `2` means classification completed with
+blockers, and exit `1` means evidence or identity validation failed. The
+optional `--as-of YYYY-MM-DD` input makes expiry-sensitive reports reproducible.
+
 The initial evidence PR is expected to remain unmergeable while blocking
 live-artifact or automated Tier 3 receipts are absent. Collectors add validated
 receipts to that same idempotent branch. Optional physical and native-window
