@@ -128,10 +128,10 @@ class ReleaseQualificationControllerTests(unittest.TestCase):
             manifest_path.write_text("{}\n", encoding="utf-8")
             with (
                 patch(
-                    "scripts.release_qualification_controller.resolve_milestone_manifest_context",
+                    "scripts.release_qualification_status.resolve_milestone_manifest_context",
                     side_effect=ReleaseMilestoneContextError("invalid manifest"),
                 ),
-                patch("scripts.release_qualification_controller.resolve_milestone_context") as legacy_resolver,
+                patch("scripts.release_qualification_status.resolve_milestone_context") as legacy_resolver,
             ):
                 with self.assertRaisesRegex(ReleaseMilestoneContextError, "invalid manifest"):
                     resolve_evidence_binding(root, "v0.3.1")
@@ -146,7 +146,7 @@ class ReleaseQualificationControllerTests(unittest.TestCase):
             receipt_path.parent.mkdir(parents=True)
             receipt_path.write_text("{}\n", encoding="utf-8")
             with patch(
-                "scripts.release_qualification_controller.resolve_milestone_context",
+                "scripts.release_qualification_status.resolve_milestone_context",
                 return_value=context,
             ) as legacy_resolver:
                 binding = resolve_evidence_binding(root, "v0.3.1")
@@ -167,11 +167,11 @@ class ReleaseQualificationControllerTests(unittest.TestCase):
             manifest_path.write_text("{}\n", encoding="utf-8")
             with (
                 patch(
-                    "scripts.release_qualification_controller.resolve_milestone_manifest_context",
+                    "scripts.release_qualification_status.resolve_milestone_manifest_context",
                     return_value=context,
                 ),
                 patch(
-                    "scripts.release_qualification_controller.load_validated_manifest",
+                    "scripts.release_qualification_status.load_validated_manifest",
                     return_value=manifest,
                 ),
             ):
@@ -180,11 +180,11 @@ class ReleaseQualificationControllerTests(unittest.TestCase):
             validated_policy = {"policy": "validated"}
             with (
                 patch(
-                    "scripts.release_qualification_controller._read_json_at_revision",
+                    "scripts.release_qualification_status._read_json_at_revision",
                     return_value=runner_policy,
                 ) as read_revision,
                 patch(
-                    "scripts.release_qualification_controller.validate_policy",
+                    "scripts.release_qualification_status.validate_policy",
                     return_value=validated_policy,
                 ) as validate,
             ):
@@ -224,16 +224,16 @@ class ReleaseQualificationControllerTests(unittest.TestCase):
             "qualification_id": "qualification",
         }
         with (
-            patch("scripts.release_qualification_controller.resolve_evidence_binding", return_value=binding),
-            patch("scripts.release_qualification_controller._require_checked_file"),
-            patch("scripts.release_qualification_controller.validate_manifest_evidence_history") as validate_history,
-            patch("scripts.release_qualification_controller._load_bound_policy", return_value=policy),
-            patch("scripts.release_qualification_controller.load_evidence", return_value={"schema_version": 1}),
+            patch("scripts.release_qualification_status.resolve_evidence_binding", return_value=binding),
+            patch("scripts.release_qualification_status._require_checked_file"),
+            patch("scripts.release_qualification_status.validate_manifest_evidence_history") as validate_history,
+            patch("scripts.release_qualification_status._load_bound_policy", return_value=policy),
+            patch("scripts.release_qualification_status.load_evidence", return_value={"schema_version": 1}),
             patch(
-                "scripts.release_qualification_controller.load_qualification_overrides",
+                "scripts.release_qualification_status.load_qualification_overrides",
                 return_value=("qualification", {}),
             ),
-            patch("scripts.release_qualification_controller.classify_release_scope", return_value=classification),
+            patch("scripts.release_qualification_status.classify_release_scope", return_value=classification),
         ):
             payload = build_status(REPO_ROOT, "v0.3.1", as_of=date(2026, 8, 10))
 

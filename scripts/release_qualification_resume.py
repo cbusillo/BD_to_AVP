@@ -21,7 +21,7 @@ from urllib.parse import quote
 from scripts.github_release_run import GhAPIClient
 from scripts.qualify_release_scope import QualificationScopeError
 from scripts.release_milestone_context import ReleaseMilestoneContextError
-from scripts.release_qualification_controller import (
+from scripts.release_qualification_status import (
     EvidenceBinding,
     ReleaseQualificationControllerError,
     build_status,
