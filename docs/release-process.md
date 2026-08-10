@@ -301,6 +301,22 @@ The workflow performs these ordered boundaries:
    the signed UI artifact expires before the first successful capture, the
    workflow stops explicitly because that immutable evidence cannot be
    reconstructed; it never substitutes a rebuilt or operator-authored receipt.
+   Inspect the checked result without dispatching workflows, changing refs, or
+   writing evidence by running:
+
+   ```sh
+   uv run python -m scripts.release_qualification_controller status \
+     --release-tag <tag>
+   ```
+
+   The command validates either the canonical manifest or the legacy checked
+   receipt/publication pair, then reports completed, stale, blocking, optional,
+   and operator-required cases as deterministic JSON. A present but invalid
+   manifest fails closed rather than falling back to legacy evidence. Exit `0`
+   means the status was computed with no blocking cases, exit `2` means the
+   status was computed with blocking cases, and exit `1` means validation or
+   identity resolution failed. Use `--as-of YYYY-MM-DD` when a reproducible
+   Tier 3 expiry boundary is required.
 15. The separate `cbusillo/homebrew-tap` repository checks the latest stable
    GitHub Release on a schedule and by manual dispatch. Homebrew opens a formula
    update pull request when the version changes; tap CI must pass formula audit,
