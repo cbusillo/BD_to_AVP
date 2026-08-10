@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, cast
 
-from scripts.release import ReleaseError, parse_release_version
+from scripts.release import ReleaseError, parse_release_version, qualification_sparkle_route
 from scripts.release_evidence import (
     QUALIFICATION_RECORD_NAME,
     ReleaseEvidenceError,
@@ -874,7 +874,7 @@ def _validate_manifest(
         prior_version = parse_release_version(_string(prior_versions.get("package"), "prior package version"))
     except ReleaseError as error:
         raise ReleaseQualificationManifestError(f"Manifest prior version is invalid: {error}") from error
-    expected_sparkle_route = "stable" if prior_version.stage == "stable" else prior_version.stage
+    expected_sparkle_route = qualification_sparkle_route(parsed_version, prior_version)
     if release.get("sparkle_route") != expected_sparkle_route:
         raise ReleaseQualificationManifestError("Manifest Sparkle route conflicts with the checked prior release.")
 

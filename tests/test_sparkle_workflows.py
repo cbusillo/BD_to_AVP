@@ -1033,6 +1033,8 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("scripts.release qualification-base", str(prepare))
         self.assertIn("prior_tag", str(prepare))
         self.assertIn("sparkle_route", str(prepare))
+        self.assertIn('--prior-tag "${{ steps.signed-ui.outputs.prior_tag }}"', str(prepare))
+        self.assertNotIn("steps.signed-ui.outputs.previous_release_tag", str(prepare))
         self.assertIn("--signed-ui-artifact-id", str(prepare))
         self.assertIn("--signed-ui-artifact-archive", str(prepare))
         self.assertIn("signed-artifact-ui.zip", str(prepare))

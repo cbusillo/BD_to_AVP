@@ -753,6 +753,38 @@ class ReleaseNotesBaseTests(unittest.TestCase):
 
 
 class QualificationUpdateBaseTests(unittest.TestCase):
+    def test_sparkle_route_uses_candidate_channel_for_prereleases(self) -> None:
+        self.assertEqual(
+            release.qualification_sparkle_route(
+                release.parse_release_tag("v1.2.4-beta.1"),
+                release.parse_release_tag("v1.2.3"),
+            ),
+            "beta",
+        )
+        self.assertEqual(
+            release.qualification_sparkle_route(
+                release.parse_release_tag("v1.2.4-rc.1"),
+                release.parse_release_tag("v1.2.4-beta.3"),
+            ),
+            "rc",
+        )
+
+    def test_sparkle_route_uses_prior_channel_for_stable_candidates(self) -> None:
+        self.assertEqual(
+            release.qualification_sparkle_route(
+                release.parse_release_tag("v1.2.4"),
+                release.parse_release_tag("v1.2.4-rc.2"),
+            ),
+            "rc",
+        )
+        self.assertEqual(
+            release.qualification_sparkle_route(
+                release.parse_release_tag("v1.2.4"),
+                release.parse_release_tag("v1.2.3"),
+            ),
+            "stable",
+        )
+
     def test_stable_uses_latest_same_version_prerelease_and_its_route(self) -> None:
         history = [
             published_release("v1.2.3"),

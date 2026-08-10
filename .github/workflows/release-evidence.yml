@@ -334,7 +334,7 @@ jobs:
             --release release.json \
             --receipt release-receipt.json \
             --live-appcast live-appcast.xml \
-            --prior-tag "${{ steps.signed-ui.outputs.previous_release_tag }}" \
+            --prior-tag "${{ steps.signed-ui.outputs.prior_tag }}" \
             --signed-ui-artifact-id "${{ steps.signed-ui.outputs.artifact_id }}" \
             --signed-ui-artifact-digest "${{ steps.signed-ui.outputs.artifact_sha256 }}" \
             --signed-ui-artifact-archive "${{ steps.signed-ui.outputs.archive_path }}" \

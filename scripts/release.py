@@ -343,6 +343,10 @@ def select_release_notes_base(
     return ""
 
 
+def qualification_sparkle_route(candidate_version: ReleaseVersion, prior_version: ReleaseVersion) -> str:
+    return candidate_version.channel if candidate_version.prerelease else prior_version.channel
+
+
 def select_qualification_update_base(
     current_tag: str,
     release_history: Any,
@@ -367,10 +371,9 @@ def select_qualification_update_base(
             raise ReleaseError(f"Published release tag is missing from the checkout: {prior_release.tag_name}")
         if not is_ancestor(prior_release.tag_name, head_ref):
             continue
-        sparkle_route = current_version.channel if current_version.prerelease else prior_release.version.channel
         return QualificationUpdateBase(
             prior_tag=prior_release.tag_name,
-            sparkle_route=sparkle_route,
+            sparkle_route=qualification_sparkle_route(current_version, prior_release.version),
         )
 
     return QualificationUpdateBase(
