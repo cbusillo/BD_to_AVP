@@ -436,13 +436,19 @@ that unresolved dispatch requires its exact checkpoint self digest through
 `--retry-checkpoint-sha256` and repeats every remote identity check. Retrying a
 failed or expired run also requires its exact ID through `--retry-run-id`.
 
-This stage observes successful job and artifact state but deliberately does not
-download ZIPs or mutate evidence refs, commits, comments, or pull requests.
-`artifact_available` requires validated reconciliation as the next controller
-stage. Expired milestone transport may trigger an explicitly authorized fresh
-qualification run; it never reconstructs receipts. If equivalent receipts are
-already committed and accepted, `status` reports no blockers and `resume`
-returns `complete` regardless of Actions retention.
+After successful job and artifact observation, `resume` automatically
+revalidates the exact artifact metadata, downloads the byte-bounded ZIP, rejects
+unsafe or unexpected members, validates its receipts against the runner-pinned
+policy and checked manifest, and emits a deterministic reconciliation plan.
+`--observe-only` stops at `artifact_available` without downloading.
+`reconciliation_planned` requires a later explicitly authorized apply stage;
+`reconciliation_current` means the checked destinations and evidence records
+are already identical. Planning deliberately does not mutate evidence refs,
+files, commits, comments, or pull requests. Expired milestone transport may
+trigger an explicitly authorized fresh qualification run; it never reconstructs
+receipts. If equivalent receipts are already committed and accepted, `status`
+reports no blockers and `resume` returns `complete` regardless of Actions
+retention.
 
 The initial evidence PR is expected to remain unmergeable while blocking
 live-artifact or automated Tier 3 receipts are absent. Collectors add validated

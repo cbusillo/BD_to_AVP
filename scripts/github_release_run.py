@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import selectors
 import subprocess
 import time
 
@@ -52,6 +53,16 @@ class GitHubAPI(Protocol):
         *,
         active_auth: bool = False,
     ) -> object:
+        raise NotImplementedError
+
+    def get_bytes(
+        self,
+        endpoint: str,
+        *,
+        active_auth: bool = False,
+        max_bytes: int,
+        timeout_seconds: float,
+    ) -> bytes:
         raise NotImplementedError
 
 
@@ -129,6 +140,102 @@ class GhAPIClient:
             ],
             active_auth=active_auth,
         )
+
+    def get_bytes(
+        self,
+        endpoint: str,
+        *,
+        active_auth: bool = False,
+        max_bytes: int,
+        timeout_seconds: float,
+    ) -> bytes:
+        if max_bytes <= 0:
+            raise ValueError("GitHub byte limit must be greater than zero.")
+        if timeout_seconds <= 0:
+            raise ValueError("GitHub byte request timeout must be greater than zero.")
+        command = [
+            self.executable,
+            "api",
+            "--hostname",
+            self.hostname,
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "X-GitHub-Api-Version: 2022-11-28",
+            endpoint,
+        ]
+        try:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=self._environment(active_auth=active_auth),
+            )
+        except OSError as error:
+            raise ReleaseRunError("GitHub CLI byte request could not start.") from error
+        if process.stdout is None:
+            process.kill()
+            process.wait()
+            raise ReleaseRunError("GitHub CLI byte request did not expose stdout.")
+        deadline = time.monotonic() + timeout_seconds
+        content = bytearray()
+        selector = selectors.DefaultSelector()
+        os.set_blocking(process.stdout.fileno(), False)
+        selector.register(process.stdout, selectors.EVENT_READ)
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    process.kill()
+                    process.wait()
+                    raise ReleaseRunError("GitHub CLI byte request timed out.")
+                events = selector.select(timeout=min(remaining, 0.25))
+                if not events:
+                    if process.poll() is not None:
+                        try:
+                            chunk = os.read(process.stdout.fileno(), max_bytes + 1 - len(content))
+                        except BlockingIOError:
+                            chunk = b""
+                        if chunk:
+                            content.extend(chunk)
+                        if len(content) > max_bytes:
+                            raise ReleaseRunError(f"GitHub CLI byte request exceeded the {max_bytes}-byte limit.")
+                        break
+                    continue
+                try:
+                    chunk = os.read(
+                        process.stdout.fileno(),
+                        min(64 * 1024, max_bytes + 1 - len(content)),
+                    )
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    break
+                content.extend(chunk)
+                if len(content) > max_bytes:
+                    process.kill()
+                    process.wait()
+                    raise ReleaseRunError(f"GitHub CLI byte request exceeded the {max_bytes}-byte limit.")
+            remaining = max(0.001, deadline - time.monotonic())
+            try:
+                returncode = process.wait(timeout=remaining)
+            except subprocess.TimeoutExpired as error:
+                process.kill()
+                process.wait()
+                raise ReleaseRunError("GitHub CLI byte request timed out.") from error
+        finally:
+            selector.close()
+            process.stdout.close()
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+        if returncode != 0:
+            raise ReleaseRunError(f"GitHub CLI byte request failed with exit status {returncode}.")
+        if len(content) > max_bytes:
+            raise ReleaseRunError(f"GitHub CLI byte request exceeded the {max_bytes}-byte limit.")
+        if not content:
+            raise ReleaseRunError("GitHub CLI byte request returned an empty response.")
+        return bytes(content)
 
     def post_json(self, endpoint: str, payload: Mapping[str, object], *, active_auth: bool = False) -> object:
         return self._run_json(

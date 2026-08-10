@@ -2,6 +2,7 @@ import io
 import json
 import os
 import subprocess
+import tempfile
 import unittest
 
 from collections import defaultdict, deque
@@ -839,6 +840,13 @@ class GitHubReleaseRunContractTests(unittest.TestCase):
 
 
 class GhAPIClientTests(unittest.TestCase):
+    @staticmethod
+    def executable(root: Path, body: str) -> Path:
+        path = root / "fake-gh"
+        path.write_text(f"#!/bin/sh\nset -eu\n{body}\n", encoding="utf-8")
+        path.chmod(0o755)
+        return path
+
     @patch("scripts.github_release_run.subprocess.run")
     def test_active_auth_scrubs_token_and_repo_overrides(self, run: Any) -> None:
         run.return_value = subprocess.CompletedProcess(
@@ -904,6 +912,44 @@ class GhAPIClientTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ReleaseRunError, "timed out"):
             client.get_json("user", active_auth=True)
+
+    def test_binary_download_uses_bounded_bytes_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            executable = self.executable(Path(temporary_directory), "printf archive")
+            client = GhAPIClient(executable=str(executable))
+
+            content = client.get_bytes(
+                "repos/cbusillo/BD_to_AVP/actions/artifacts/123/zip",
+                active_auth=True,
+                max_bytes=1024,
+                timeout_seconds=5,
+            )
+
+        self.assertEqual(content, b"archive")
+
+    def test_binary_download_stops_at_size_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            executable = self.executable(Path(temporary_directory), "while :; do printf oversized; done")
+            client = GhAPIClient(executable=str(executable))
+
+            with self.assertRaisesRegex(ReleaseRunError, "exceeded the 4-byte limit"):
+                client.get_bytes(
+                    "repos/cbusillo/BD_to_AVP/actions/artifacts/123/zip",
+                    max_bytes=4,
+                    timeout_seconds=5,
+                )
+
+    def test_binary_download_timeout_kills_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            executable = self.executable(Path(temporary_directory), "sleep 5; printf late")
+            client = GhAPIClient(executable=str(executable))
+
+            with self.assertRaisesRegex(ReleaseRunError, "timed out"):
+                client.get_bytes(
+                    "repos/cbusillo/BD_to_AVP/actions/artifacts/123/zip",
+                    max_bytes=1024,
+                    timeout_seconds=0.05,
+                )
 
 
 if __name__ == "__main__":
