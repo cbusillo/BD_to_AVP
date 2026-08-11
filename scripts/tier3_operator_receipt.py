@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,19 @@ class OperatorReceiptError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class PreparedOperatorAnswers:
+    answers: Mapping[str, Any]
+    assertions: Mapping[str, str]
+    case: Mapping[str, Any]
+    contract: Mapping[str, Any]
+    policy: Mapping[str, Any]
+    release_receipt: Mapping[str, Any]
+    release_reference: str
+    release_file_sha256: str
+    result: Mapping[str, str]
+
+
 def _mapping(value: object, description: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise OperatorReceiptError(f"{description} must be a JSON object.")
@@ -137,13 +151,12 @@ def _case(policy: Mapping[str, Any], case_id: str) -> Mapping[str, Any]:
     return matches[0]
 
 
-def build_operator_receipt(
+def _prepare_operator_answers(
     answers: Mapping[str, Any],
     *,
     repo: Path,
     release_receipt_path: Path,
-    evidence_directory: Path,
-) -> Mapping[str, Any]:
+) -> PreparedOperatorAnswers:
     _exact_keys(
         answers,
         {
@@ -171,8 +184,6 @@ def build_operator_receipt(
         raise OperatorReceiptError("disposition must be completed or skipped.")
     reason_code = _string(answers.get("reason_code"), "reason_code")
     observations = _mapping(answers.get("observations"), "observations")
-
-    evidence: list[Mapping[str, str]] = []
     if disposition == "skipped":
         if observations or reason_code not in SKIP_REASONS:
             raise OperatorReceiptError("Skipped answers require empty observations and a bounded skip reason.")
@@ -196,12 +207,99 @@ def build_operator_receipt(
             "status": "passed" if passed else "failed",
             "reason_code": "all_assertions_passed" if passed else "operator_assertion_failed",
         }
+    _string(answers.get("cleanup_status"), "cleanup_status")
+    _string(answers.get("completed_at"), "completed_at")
+    _mapping(answers.get("environment"), "environment")
+    _mapping(answers.get("hardware"), "hardware")
+    _string(answers.get("started_at"), "started_at")
+    release_receipt, release_reference, release_file_sha256 = _checked_release_receipt(repo, release_receipt_path)
+    return PreparedOperatorAnswers(
+        answers=answers,
+        assertions=assertions,
+        case=case,
+        contract=contract,
+        policy=policy,
+        release_receipt=release_receipt,
+        release_reference=release_reference,
+        release_file_sha256=release_file_sha256,
+        result=result,
+    )
+
+
+def _receipt_from_prepared(
+    prepared: PreparedOperatorAnswers,
+    *,
+    evidence: list[Mapping[str, str]],
+    repo: Path,
+) -> Mapping[str, Any]:
+    answers = prepared.answers
+    cleanup_status = _string(answers.get("cleanup_status"), "cleanup_status")
+    cleanup_digest = next((item["sha256"] for item in evidence if item["kind"] == "cleanup"), None)
+    receipt = build_receipt(
+        {
+            "assertions": prepared.assertions,
+            "cleanup": {"status": cleanup_status, "evidence_sha256": cleanup_digest},
+            "completed_at": _string(answers.get("completed_at"), "completed_at"),
+            "environment": dict(_mapping(answers.get("environment"), "environment")),
+            "evidence": evidence,
+            "evidence_source": "tier3_operator_receipt",
+            "hardware": dict(_mapping(answers.get("hardware"), "hardware")),
+            "release_receipt_file_sha256": prepared.release_file_sha256,
+            "release_receipt_reference": prepared.release_reference,
+            "result": prepared.result,
+            "started_at": _string(answers.get("started_at"), "started_at"),
+        },
+        policy_id=_string(prepared.policy.get("policy_id"), "policy_id"),
+        case=prepared.case,
+        release_receipt=prepared.release_receipt,
+    )
+    try:
+        validate_receipt(
+            receipt,
+            policy_id=_string(prepared.policy.get("policy_id"), "policy_id"),
+            case=prepared.case,
+            reference_content=lambda reference: (repo / reference).read_bytes(),
+        )
+    except Tier3ReceiptError as error:
+        raise OperatorReceiptError(f"Generated operator receipt is invalid: {error}") from error
+    return receipt
+
+
+def validate_operator_answers(
+    answers: Mapping[str, Any],
+    *,
+    repo: Path,
+    release_receipt_path: Path,
+) -> Mapping[str, Any]:
+    prepared = _prepare_operator_answers(answers, repo=repo, release_receipt_path=release_receipt_path)
+    evidence: list[Mapping[str, str]] = []
+    if answers.get("disposition") == "completed":
+        evidence = [{"kind": kind, "sha256": "0" * 64} for kind in prepared.contract["evidence"]]
+    receipt = _receipt_from_prepared(prepared, evidence=evidence, repo=repo)
+    return {
+        "case_id": receipt["case_id"],
+        "release_identity": receipt["release_identity"],
+        "result": receipt["result"],
+    }
+
+
+def build_operator_receipt(
+    answers: Mapping[str, Any],
+    *,
+    repo: Path,
+    release_receipt_path: Path,
+    evidence_directory: Path,
+) -> Mapping[str, Any]:
+    prepared = _prepare_operator_answers(answers, repo=repo, release_receipt_path=release_receipt_path)
+    observations = _mapping(answers.get("observations"), "observations")
+    evidence: list[Mapping[str, str]] = []
+    if answers.get("disposition") == "completed":
         if evidence_directory.exists():
             raise OperatorReceiptError("Evidence directory must not already exist.")
         evidence_directory.mkdir(parents=True)
         hardware = _mapping(answers.get("hardware"), "hardware")
         cleanup_status = _string(answers.get("cleanup_status"), "cleanup_status")
-        for kind, fields in contract["evidence"].items():
+        for kind, fields in prepared.contract["evidence"].items():
             payload: dict[str, Any] = {field: observations[field] for field in fields}
             if kind == "device-probe":
                 payload["hardware"] = hardware
@@ -209,38 +307,7 @@ def build_operator_receipt(
                 payload["status"] = cleanup_status
             payload["schema_version"] = 1
             evidence.append({"kind": kind, "sha256": _write_json(evidence_directory / f"{kind}.json", payload)})
-
-    release_receipt, release_reference, release_file_sha256 = _checked_release_receipt(repo, release_receipt_path)
-    cleanup_status = _string(answers.get("cleanup_status"), "cleanup_status")
-    cleanup_digest = next((item["sha256"] for item in evidence if item["kind"] == "cleanup"), None)
-    receipt = build_receipt(
-        {
-            "assertions": assertions,
-            "cleanup": {"status": cleanup_status, "evidence_sha256": cleanup_digest},
-            "completed_at": _string(answers.get("completed_at"), "completed_at"),
-            "environment": dict(_mapping(answers.get("environment"), "environment")),
-            "evidence": evidence,
-            "evidence_source": "tier3_operator_receipt",
-            "hardware": dict(_mapping(answers.get("hardware"), "hardware")),
-            "release_receipt_file_sha256": release_file_sha256,
-            "release_receipt_reference": release_reference,
-            "result": result,
-            "started_at": _string(answers.get("started_at"), "started_at"),
-        },
-        policy_id=_string(policy.get("policy_id"), "policy_id"),
-        case=case,
-        release_receipt=release_receipt,
-    )
-    try:
-        validate_receipt(
-            receipt,
-            policy_id=_string(policy.get("policy_id"), "policy_id"),
-            case=case,
-            reference_content=lambda reference: (repo / reference).read_bytes(),
-        )
-    except Tier3ReceiptError as error:
-        raise OperatorReceiptError(f"Generated operator receipt is invalid: {error}") from error
-    return receipt
+    return _receipt_from_prepared(prepared, evidence=evidence, repo=repo)
 
 
 def build_parser() -> argparse.ArgumentParser:

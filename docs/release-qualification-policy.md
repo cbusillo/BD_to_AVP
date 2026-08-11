@@ -156,10 +156,11 @@ candidate identity, and emits checked `clean-machine-signed-update` and
 `installed-ui-accessibility` receipts.
 
 Physical drive, protected-media conversion, and Vision Pro playback evidence
-uses the bounded operator-assisted helper documented in
-[`docs/tier3-operator-hardware.md`](tier3-operator-hardware.md). The helper
-derives assertion states from exact enums, binds the checked release artifact,
-and rejects private media names, paths, serials, screenshots, and raw logs.
+uses the guided collector and bounded receipt builder documented in
+[`docs/tier3-operator-hardware.md`](tier3-operator-hardware.md). They derive
+safe machine facts and assertion states from exact enums, bind the checked
+release artifact, and reject private media names, paths, serials, screenshots,
+tokens, diagnostic identifiers, and raw logs.
 These cases are visible operational evidence governed by expiry, mapped
 invalidation, environment/device-family changes, and explicit retest requests;
 they do not block release publication or evidence-PR reconciliation.

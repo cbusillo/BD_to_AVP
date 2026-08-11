@@ -1,18 +1,22 @@
 # Tier 3 Operator-Assisted Hardware Receipts
 
-`scripts/tier3_operator_receipt.py` is the maintained boundary for physical
-Tier 3 evidence that cannot be truthfully automated without an operator and the
-declared hardware. It supports:
+`scripts/tier3_operator_collect.py` is the guided collection boundary and
+`scripts/tier3_operator_receipt.py` remains the sole evidence-writing boundary
+for physical Tier 3 evidence that cannot be truthfully automated without an
+operator and the declared hardware. They support:
 
 - `usb-bluray-makemkv`;
 - `protected-real-media-conversion`; and
 - `vision-pro-physical-playback`.
 
-The helper never records disc titles, volume names, serial numbers, local file
-paths, media, screenshots, tokens, or raw logs. An answers file contains exact
-bounded outcomes, public device-class identity, the declared environment, and
-timestamps. Unknown fields and free-form observations are rejected before a
-receipt is built.
+The collector derives arm64/macOS version and build, public USB vendor/product
+IDs and transport, the installed MakeMKV version, exact committed release
+identity, and bounded native-worker conversion and cleanup outcomes where those
+machine signals are available. It prompts only for physical actions and Vision
+Pro presentation judgments. The preview and generated answers never include
+disc titles, volume names, serial numbers, local file paths, media names,
+screenshots, tokens, diagnostic identifiers, or raw logs. Unknown fields and
+free-form observations are rejected before anything is written.
 
 ## Answers Contract
 
@@ -62,9 +66,47 @@ USB IDs are four-digit public vendor/product identifiers, never serials.
 `makemkv_version` is the application version, never an executable path. Vision
 Pro identity uses only `model_family`, `chip_family`, and `visionos_major`.
 
-## Collection
+## Guided Collection
 
-The release receipt must be committed and byte-identical to repository `HEAD`:
+Run the collector from the exact release-evidence branch. The release receipt
+must be committed and byte-identical to repository `HEAD`. The collector shows
+a validated public-safe preview, including exact release identity, and writes
+the answers only after a final bounded confirmation:
+
+```sh
+uv run python -m scripts.tier3_operator_collect \
+  --case-id usb-bluray-makemkv \
+  --environment-class dedicated-hardware \
+  --release-receipt docs/release-evidence/<candidate>/release-receipt.json \
+  --output-answers /path/out/usb-bluray-makemkv-answers.json
+```
+
+For `protected-real-media-conversion`, also pass the private native-worker
+NDJSON stream with `--worker-events` and each app-owned temporary path with
+`--cleanup-path`. Those inputs are read transiently to derive only terminal,
+output-verification, and cleanup enums. Long heartbeat-heavy runs are filtered
+as a bounded stream instead of retained in memory. Input content and paths are
+never copied to the preview, answers, receipt, or evidence. Vision Pro collection requires
+the bounded public `--vision-model-family`, `--vision-chip-family`, and
+`--visionos-major` identities. USB identity and MakeMKV version overrides are
+required to record a `not-detected`/`missing` failure or a skip when those facts
+cannot be probed. A completed passing run still requires the overrides to match
+the live environment, USB, and MakeMKV probes. The matching `--architecture`,
+`--macos-version`, and `--macos-build` overrides let an explicit skip retain the
+last known public target identity when the target machine itself is unavailable.
+All overrides remain subject to the same closed public-identifier validation;
+partial override sets are rejected.
+
+USB discovery intentionally requires an optical marker in the public device
+label to avoid treating generic storage as a Blu-ray drive. If a real drive is
+not recognized, record `hardware-unavailable` with its bounded public identity
+rather than claiming a successful drive probe.
+
+Use `--skip-reason` with `environment-unavailable`, `hardware-unavailable`, or
+`operator-cancelled` when collection cannot proceed. Missing, skipped, and
+failed operator-only evidence remains visible and nonblocking.
+
+## Receipt Build
 
 For a newly published candidate, run from the idempotent
 `automation/release-evidence-<tag>` branch created by the Release Evidence
@@ -76,7 +118,7 @@ or blocking assertion.
 
 ```sh
 uv run python -m scripts.tier3_operator_receipt \
-  --answers /path/to/bounded-answers.json \
+  --answers /path/out/<case-id>-answers.json \
   --release-receipt docs/release-evidence/<candidate>/release-receipt.json \
   --output-receipt /path/out/<case-id>.json \
   --evidence-directory /path/out/<case-id>-evidence
@@ -98,10 +140,12 @@ does not block publication, the evidence PR, or milestone closeout.
 
 ```sh
 uv run python -m unittest tests.test_tier3_operator_receipt
+uv run python -m unittest tests.test_tier3_operator_collect
 uv run python -m scripts.qualify_release_scope --validate-policy
 ```
 
-Fixture receipts cover passed, failed, skipped, private-field rejection, and
-missing-hardware rejection. Real hardware collection is performed only when a
-risk trigger requires it; release closeout never requires repeated collection
-solely to refresh operator ceremony.
+Fixtures cover safe probe detection, exact prompt bounds, machine-observable
+conversion and cleanup derivation, passed/failed/skipped outcomes, privacy
+rejection, cancellation, and exclusive writes. Real hardware collection is
+performed only when a risk trigger requires it; release closeout never requires
+repeated collection solely to refresh operator ceremony.

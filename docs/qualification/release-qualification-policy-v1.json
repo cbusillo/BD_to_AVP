@@ -345,6 +345,7 @@
           "bd_to_avp/modules/config.py",
           "bd_to_avp/preflight.py",
           "docs/tier3-operator-hardware.md",
+          "scripts/tier3_operator_collect.py",
           "scripts/tier3_operator_receipt.py"
         ],
         "contracts": ["packaged-worker", "conversion-ownership", "tier3-evidence"]
@@ -386,6 +387,7 @@
           "bd_to_avp/modules/config.py",
           "bd_to_avp/modules/video*.py",
           "docs/tier3-operator-hardware.md",
+          "scripts/tier3_operator_collect.py",
           "scripts/tier3_operator_receipt.py"
         ],
         "contracts": ["packaged-worker", "conversion-ownership", "subtitle-recovery", "storage-capacity", "tier3-evidence"]
@@ -425,6 +427,7 @@
         "paths": [
           "docs/tier3-operator-hardware.md",
           "scripts/add_spatial_video_metadata.py",
+          "scripts/tier3_operator_collect.py",
           "scripts/tier3_operator_receipt.py",
           "scripts/verify_apple_media.py"
         ],
