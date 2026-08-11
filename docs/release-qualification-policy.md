@@ -149,8 +149,10 @@ entries. Only a passed receipt may be indexed as accepted release evidence.
 The maintained clean-machine, Sparkle, and installed UI/accessibility collector is documented in
 [`docs/tier3-clean-machine.md`](tier3-clean-machine.md). It uses an isolated
 synthetic home in a runner-owned disposable location, reuses the installed-app
-package smoke, verifies a real-feed update from an exact prior signed release,
-and emits checked `clean-machine-signed-update` and
+package smoke, revalidates the exact prior signed app immediately before an
+identifier-scoped bounded updater state machine, permits one clean retry only
+for classified pre-press environmental startup failures, verifies the final
+candidate identity, and emits checked `clean-machine-signed-update` and
 `installed-ui-accessibility` receipts.
 
 Physical drive, protected-media conversion, and Vision Pro playback evidence
