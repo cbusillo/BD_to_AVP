@@ -91,7 +91,7 @@ the bounded public `--vision-model-family`, `--vision-chip-family`, and
 `--visionos-major` identities. USB identity and MakeMKV version overrides are
 required to record a `not-detected`/`missing` failure or a skip when those facts
 cannot be probed. A completed passing run still requires the overrides to match
-the live USB and MakeMKV probes. The matching `--architecture`,
+the live environment, USB, and MakeMKV probes. The matching `--architecture`,
 `--macos-version`, and `--macos-build` overrides let an explicit skip retain the
 last known public target identity when the target machine itself is unavailable.
 All overrides remain subject to the same closed public-identifier validation;

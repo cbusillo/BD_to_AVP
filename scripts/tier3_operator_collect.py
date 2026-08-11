@@ -641,7 +641,11 @@ def collect_operator_answers(
                 cleanup_status = "not-applicable"
             disposition = "completed"
             reason_code = _completed_reason(case_id, observations)
-        except PromptCancelled:
+        except PromptCancelled as error:
+            if case_id == "protected-real-media-conversion" and not _paths_absent(cleanup_paths):
+                raise OperatorCollectionError(
+                    "Owned conversion cleanup could not be verified; no public state was written."
+                ) from error
             disposition = "skipped"
             reason_code = "operator-cancelled"
             observations = {}

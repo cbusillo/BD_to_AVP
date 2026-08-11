@@ -347,6 +347,41 @@ class Tier3OperatorCollectTests(unittest.TestCase):
                     cleanup_paths=[cleanup_path],
                 )
 
+    def test_protected_run_cancellation_requires_verified_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            cleanup_path = root / "owned-workspace"
+            cleanup_path.mkdir()
+            worker_events = root / "events.ndjson"
+            worker_events.write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(OperatorCollectionError, "cleanup could not be verified"):
+                collect_operator_answers(
+                    case_id="protected-real-media-conversion",
+                    environment_class="dedicated-hardware",
+                    operations=FakeOperations(),
+                    prompter=FakePrompter({"protected-run": "cancel"}),
+                    clock=clock(),
+                    worker_events=worker_events,
+                    cleanup_paths=[cleanup_path],
+                )
+
+    def test_preidentity_worker_failure_has_bounded_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            worker_events = root / "events.ndjson"
+            event = {
+                "protocol_version": PROTOCOL_VERSION,
+                "type": "job.failed",
+                "job_id": "00000000-0000-0000-0000-000000000000",
+                "sequence": 0,
+                "payload": {"error": {"details": "/Users/private/source.mkv"}},
+            }
+            worker_events.write_text(json.dumps(event) + "\n", encoding="utf-8")
+            with self.assertRaises(OperatorCollectionError) as raised:
+                derive_protected_conversion_observations(worker_events, [root / "cleanup"])
+            self.assertIn("before a qualification job identity", str(raised.exception))
+            self.assertNotIn("/Users/", str(raised.exception))
+
     def test_out_of_sequence_worker_stream_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
