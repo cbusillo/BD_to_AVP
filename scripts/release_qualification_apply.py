@@ -17,7 +17,6 @@ from scripts.release_qualification_artifact import ReconciliationBundle
 
 
 REPOSITORY = "cbusillo/BD_to_AVP"
-REPOSITORY_OWNER = "cbusillo"
 HTTPS_REPOSITORY_URL = "https://github.com/cbusillo/BD_to_AVP.git"
 APPLY_CHECKPOINT_TYPE = "bd_to_avp.release_qualification_apply_checkpoint"
 APPLY_SCHEMA_VERSION = 1
@@ -955,7 +954,7 @@ def continue_reconciliation_apply(
             actor_login=actor_login,
             actor_id=actor_id,
         )
-        checkpoint = _replace_progress(
+        _replace_progress(
             checkpoint_path,
             checkpoint,
             state="commented",
