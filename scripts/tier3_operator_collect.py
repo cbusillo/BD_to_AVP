@@ -125,15 +125,19 @@ PROMPT_SPECS = {
 
 
 class Prompter(Protocol):
-    def choose(self, spec: PromptSpec) -> str: ...
+    def choose(self, spec: PromptSpec) -> str:
+        raise NotImplementedError
 
 
 class MachineOperations(Protocol):
-    def environment(self, environment_class: str) -> Mapping[str, str]: ...
+    def environment(self, environment_class: str) -> Mapping[str, str]:
+        raise NotImplementedError
 
-    def usb_devices(self) -> tuple[PublicUSBDevice, ...]: ...
+    def usb_devices(self) -> tuple[PublicUSBDevice, ...]:
+        raise NotImplementedError
 
-    def makemkv_version(self) -> str | None: ...
+    def makemkv_version(self) -> str | None:
+        raise NotImplementedError
 
 
 class ConsolePrompter:
