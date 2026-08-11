@@ -4,6 +4,7 @@ import plistlib
 import tempfile
 import unittest
 
+from argparse import Namespace
 from contextlib import redirect_stdout
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,9 +16,11 @@ from scripts.tier3_operator_collect import (
     MacOSOperations,
     OperatorCollectionError,
     PublicUSBDevice,
+    build_parser,
     collect_operator_answers,
     derive_protected_conversion_observations,
     detect_public_usb_devices,
+    run_collection,
     write_validated_answers,
 )
 
@@ -76,6 +79,63 @@ def clock() -> Any:
 
 
 class Tier3OperatorCollectTests(unittest.TestCase):
+    def test_standalone_parser_retains_release_binding_arguments(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "--case-id",
+                "vision-pro-physical-playback",
+                "--environment-class",
+                "dedicated-hardware",
+                "--output-answers",
+                "answers.json",
+                "--release-receipt",
+                str(RELEASE_RECEIPT),
+            ]
+        )
+
+        self.assertEqual(args.release_receipt, RELEASE_RECEIPT)
+        self.assertEqual(args.repo, REPO_ROOT)
+
+    def test_run_collection_preserves_injected_collection_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory, redirect_stdout(io.StringIO()):
+            output = Path(temporary_directory) / "answers.json"
+            args = Namespace(
+                architecture=None,
+                case_id="vision-pro-physical-playback",
+                cleanup_path=[],
+                environment_class="dedicated-hardware",
+                macos_build=None,
+                macos_version=None,
+                makemkv_version=None,
+                output_answers=output,
+                release_receipt=RELEASE_RECEIPT,
+                repo=REPO_ROOT,
+                skip_reason=None,
+                usb_product_id=None,
+                usb_vendor_id=None,
+                vision_chip_family="m2",
+                vision_model_family="apple-vision-pro",
+                visionos_major="26",
+                worker_events=None,
+            )
+            exit_code = run_collection(
+                args,
+                operations=FakeOperations(),
+                prompter=FakePrompter(
+                    {
+                        "vision-transfer": "completed",
+                        "vision-stereo": "started",
+                        "vision-spatial": "verified",
+                        "vision-playback": "completed",
+                        "confirm-write": "write",
+                    }
+                ),
+                clock=clock(),
+            )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["case_id"], args.case_id)
+
     def test_detects_only_public_optical_usb_identity(self) -> None:
         payload = {
             "SPUSBDataType": [

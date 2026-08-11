@@ -161,6 +161,11 @@ uses the guided collector and bounded receipt builder documented in
 safe machine facts and assertion states from exact enums, bind the checked
 release artifact, and reject private media names, paths, serials, screenshots,
 tokens, diagnostic identifiers, and raw logs.
+Guided collection is exposed through
+`scripts.release_qualification_controller collect-operator`, which derives the
+checked release receipt and permits only cases currently classified as
+`operator_required`; the standalone collector remains the lower-level explicit
+baseline path.
 These cases are visible operational evidence governed by expiry, mapped
 invalidation, environment/device-family changes, and explicit retest requests;
 they do not block release publication or evidence-PR reconciliation.

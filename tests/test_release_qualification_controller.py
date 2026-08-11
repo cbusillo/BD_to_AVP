@@ -1,12 +1,15 @@
 import io
 import json
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import date
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from scripts.release_milestone_context import ReleaseMilestoneContextError
@@ -30,6 +33,148 @@ READ_ONLY_GIT_COMMANDS = {"diff", "ls-files", "merge-base", "show"}
 
 
 class ReleaseQualificationControllerTests(unittest.TestCase):
+    def test_collect_operator_parser_accepts_controller_and_collection_arguments(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "collect-operator",
+                "--release-tag",
+                "v1.0.0",
+                "--case-id",
+                "usb-bluray-makemkv",
+                "--environment-class",
+                "dedicated-hardware",
+                "--output-answers",
+                "answers.json",
+                "--as-of",
+                "2026-08-11",
+                "--cleanup-path",
+                "cleanup-one",
+                "--cleanup-path",
+                "cleanup-two",
+            ]
+        )
+
+        self.assertEqual(args.command, "collect-operator")
+        self.assertEqual(args.release_tag, "v1.0.0")
+        self.assertEqual(args.case_id, "usb-bluray-makemkv")
+        self.assertEqual(args.as_of, date(2026, 8, 11))
+        self.assertEqual(args.cleanup_path, [Path("cleanup-one"), Path("cleanup-two")])
+        self.assertFalse(hasattr(args, "release_receipt"))
+
+    def test_collect_operator_delegates_due_case_with_derived_receipt(self) -> None:
+        payload = {
+            "groups": {"operator_required": ["usb-bluray-makemkv"]},
+            "evidence_binding": {"release_receipt_path": "docs/release-evidence/v1.0.0/release-receipt.json"},
+        }
+        with (
+            patch("scripts.release_qualification_controller.build_status", return_value=payload) as status,
+            patch("scripts.release_qualification_controller.run_collection", return_value=3) as collect,
+        ):
+            exit_code = main(
+                [
+                    "collect-operator",
+                    "--release-tag",
+                    "v1.0.0",
+                    "--case-id",
+                    "usb-bluray-makemkv",
+                    "--environment-class",
+                    "dedicated-hardware",
+                    "--output-answers",
+                    "answers.json",
+                    "--as-of",
+                    "2026-08-11",
+                ]
+            )
+
+        self.assertEqual(exit_code, 3)
+        status.assert_called_once_with(REPO_ROOT, "v1.0.0", as_of=date(2026, 8, 11))
+        delegated = collect.call_args.args[0]
+        self.assertEqual(delegated.repo, REPO_ROOT)
+        self.assertEqual(
+            delegated.release_receipt,
+            REPO_ROOT / "docs/release-evidence/v1.0.0/release-receipt.json",
+        )
+
+    def test_collect_operator_rejects_case_that_is_not_due(self) -> None:
+        payload = {
+            "groups": {"operator_required": ["vision-pro-physical-playback"]},
+            "evidence_binding": {"release_receipt_path": "docs/release-evidence/v1.0.0/release-receipt.json"},
+        }
+        stderr = io.StringIO()
+        with (
+            patch("scripts.release_qualification_controller.build_status", return_value=payload),
+            patch("scripts.release_qualification_controller.run_collection") as collect,
+            redirect_stderr(stderr),
+        ):
+            exit_code = main(
+                [
+                    "collect-operator",
+                    "--release-tag",
+                    "v1.0.0",
+                    "--case-id",
+                    "usb-bluray-makemkv",
+                    "--environment-class",
+                    "dedicated-hardware",
+                    "--output-answers",
+                    "answers.json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("is not currently due", stderr.getvalue())
+        self.assertIn("vision-pro-physical-playback", stderr.getvalue())
+        collect.assert_not_called()
+
+    def test_collect_operator_rejects_missing_release_receipt_binding(self) -> None:
+        payload = {
+            "groups": {"operator_required": ["usb-bluray-makemkv"]},
+            "evidence_binding": {},
+        }
+        stderr = io.StringIO()
+        with (
+            patch("scripts.release_qualification_controller.build_status", return_value=payload),
+            patch("scripts.release_qualification_controller.run_collection") as collect,
+            redirect_stderr(stderr),
+        ):
+            exit_code = main(
+                [
+                    "collect-operator",
+                    "--release-tag",
+                    "v1.0.0",
+                    "--case-id",
+                    "usb-bluray-makemkv",
+                    "--environment-class",
+                    "dedicated-hardware",
+                    "--output-answers",
+                    "answers.json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("did not resolve a release receipt path", stderr.getvalue())
+        collect.assert_not_called()
+
+    def test_controller_parser_import_does_not_create_application_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            home = Path(temporary_directory)
+            environment = dict(os.environ)
+            environment["HOME"] = str(home)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "from scripts.release_qualification_controller import build_parser; build_parser()",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                env=environment,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((home / "Library/Application Support/bd_to_avp").exists())
+
     def test_resume_parser_accepts_apply_plan_digest(self) -> None:
         args = build_parser().parse_args(["resume", "--release-tag", "v1.0.0", "--apply-plan-sha256", "c" * 64])
 
@@ -74,7 +219,7 @@ class ReleaseQualificationControllerTests(unittest.TestCase):
         original_run = subprocess.run
         observed_commands: list[tuple[str, ...]] = []
 
-        def guarded_run(command: list[str], *args: object, **kwargs: object) -> subprocess.CompletedProcess[object]:
+        def guarded_run(command: list[str], *args: Any, **kwargs: Any) -> subprocess.CompletedProcess[Any]:
             observed_commands.append(tuple(command))
             self.assertEqual(command[0], "git")
             self.assertIn(command[1], READ_ONLY_GIT_COMMANDS)
@@ -290,7 +435,7 @@ class ReleaseQualificationControllerTests(unittest.TestCase):
                 resolve_evidence_binding(Path(temporary_directory), "../../v0.3.1")
 
     def test_case_categories_preserve_overlapping_status_groups(self) -> None:
-        scenarios = (
+        scenarios: tuple[Any, ...] = (
             (
                 {
                     "case_id": "complete",
