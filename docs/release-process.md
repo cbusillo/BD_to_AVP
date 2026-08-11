@@ -373,10 +373,40 @@ The workflow performs these ordered boundaries:
    `artifact_available` behavior without downloading. `reconciliation_planned`
    exits `20` with the canonical plan and its SHA-256; `reconciliation_current`
    exits `0` when every proposed destination and evidence-index record is
-   already identical. This stage still creates no repository files, commits,
-   pushes, comments, or pull requests. `artifact_expired` permits a new run only
-   after explicit retry authorization; checked durable receipts already accepted
-   by `status` remain a no-op even after Actions transport expires.
+   already identical. Planning creates no repository files, commits, pushes,
+   comments, or pull requests.
+
+   Apply an exact reviewed plan by echoing its digest:
+
+   ```sh
+   uv run python -m scripts.release_qualification_controller resume \
+     --release-tag <tag> \
+     --apply-plan-sha256 <plan-sha256>
+   ```
+
+   Apply requires the active GitHub identity `cbusillo`, the exact canonical
+   evidence worktree and pull request, an unchanged protected `main`, no active
+   exact Milestone Qualification run, and a clean worktree. Before changing
+   files it freezes the authorized plan and exact target bytes in a mode-`0600`,
+   self-digested apply checkpoint adjacent to the dispatch checkpoint. It then
+   uses per-file atomic replacement plus resumable verification for only the
+   planned qualification receipts and append-only evidence index, creates one
+   commit containing the plan and run identities,
+   performs a non-force fast-forward push, and posts one marker-bound pull-request
+   comment. Every transition is adopted rather than duplicated after an
+   interruption, including a commit or push whose response was lost. Reruns must
+   repeat the exact `--apply-plan-sha256`; `reconciliation_apply_pending` reports
+   that requirement and `reconciliation_applied` exits `0` after the commit,
+   push, and comment are all durable.
+
+   The apply checkpoint is
+   `<git-common-dir>/bd-to-avp/release-qualification/<tag>.apply.json` and shares
+   the dispatch checkpoint lock. Never delete it while an apply transition is
+   incomplete; the controller removes it only after the pushed commit and exact
+   marker comment are revalidated as durable. `artifact_expired` permits a new run only after explicit retry
+   authorization when no validated apply checkpoint or equivalent durable state
+   exists; checked receipts already accepted by `status` remain a no-op after
+   Actions transport expires.
 15. The separate `cbusillo/homebrew-tap` repository checks the latest stable
    GitHub Release on a schedule and by manual dispatch. Homebrew opens a formula
    update pull request when the version changes; tap CI must pass formula audit,

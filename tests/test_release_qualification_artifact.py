@@ -13,6 +13,7 @@ from scripts.release_qualification_artifact import (
     QualificationArtifactSafetyError,
     download_and_plan_reconciliation,
     plan_reconciliation,
+    plan_reconciliation_bundle,
 )
 from scripts.release_qualification_resume import ResumeIdentity
 from scripts.tier3_receipt import receipt_sha256
@@ -232,6 +233,63 @@ class ReleaseQualificationArtifactTests(unittest.TestCase):
             ["append", "append", "identical", "create", "create"],
         )
         self.assertNotIn("/Users/", json.dumps(first))
+
+    def test_bundle_binds_exact_materialized_file_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            identity, manifest, run, artifact, entries, archive = self.fixture(root)
+
+            bundle = plan_reconciliation_bundle(
+                repo_root=root,
+                identity=identity,
+                run=run,
+                artifact=artifact,
+                manifest=manifest,
+                archive_bytes=archive,
+            )
+
+        files = {file.path: file.content for file in bundle.files}
+        self.assertEqual(
+            files[f"docs/qualification/{RELEASE_TAG}-clean-machine-signed-update-v1.json"],
+            entries["clean-machine-signed-update.json"],
+        )
+        self.assertEqual(
+            files[f"docs/qualification/{RELEASE_TAG}-installed-ui-accessibility-v1.json"],
+            entries["installed-ui-accessibility.json"],
+        )
+        self.assertEqual(
+            {item["path"] for item in bundle.plan["files"]},
+            set(files),
+        )
+        for summary in bundle.plan["files"]:
+            content = files[summary["path"]]
+            self.assertEqual(summary["sha256"], hashlib.sha256(content).hexdigest())
+            self.assertEqual(summary["size_bytes"], len(content))
+
+    def test_plan_is_stable_when_workflow_updated_at_drifts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            identity, manifest, run, artifact, _entries, archive = self.fixture(root)
+            first = plan_reconciliation(
+                repo_root=root,
+                identity=identity,
+                run=run,
+                artifact=artifact,
+                manifest=manifest,
+                archive_bytes=archive,
+            )
+            run["updated_at"] = "2026-08-20T12:00:00Z"
+
+            second = plan_reconciliation(
+                repo_root=root,
+                identity=identity,
+                run=run,
+                artifact=artifact,
+                manifest=manifest,
+                archive_bytes=archive,
+            )
+
+        self.assertEqual(first, second)
 
     def test_existing_identical_evidence_is_current(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

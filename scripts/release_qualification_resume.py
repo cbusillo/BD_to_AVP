@@ -24,7 +24,15 @@ from scripts.release_milestone_context import ReleaseMilestoneContextError
 from scripts.release_qualification_artifact import (
     QualificationArtifactError,
     QualificationArtifactSafetyError,
-    download_and_plan_reconciliation,
+    download_reconciliation_bundle,
+)
+from scripts.release_qualification_apply import (
+    QualificationApplyError,
+    QualificationApplySafetyError,
+    continue_reconciliation_apply,
+    reconciliation_checkpoint_path,
+    reconciliation_checkpoint_summary,
+    start_reconciliation_apply,
 )
 from scripts.release_qualification_status import (
     EvidenceBinding,
@@ -50,6 +58,7 @@ EXIT_FAILED = 1
 EXIT_OPERATOR_REQUIRED = 20
 EXIT_SAFETY_ERROR = 21
 PREPARED_RETRY_AFTER_SECONDS = 600
+MAX_WORKFLOW_RUN_PAGES = 20
 ACTIVE_RUN_STATUSES = {"in_progress", "pending", "queued", "requested", "waiting"}
 TERMINAL_RUN_STATUS = "completed"
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -363,11 +372,12 @@ def _ref_endpoint(branch: str) -> str:
     return f"repos/{REPOSITORY}/git/ref/heads/{quote(branch, safe='')}"
 
 
-def _workflow_runs_endpoint() -> str:
-    return (
+def _workflow_runs_endpoint(page: int = 1) -> str:
+    endpoint = (
         f"repos/{REPOSITORY}/actions/workflows/{WORKFLOW_FILE}/runs"
         f"?event=workflow_dispatch&branch={MAIN_BRANCH}&per_page=100"
     )
+    return endpoint if page == 1 else f"{endpoint}&page={page}"
 
 
 def _workflow_dispatch_endpoint() -> str:
@@ -498,14 +508,23 @@ def _identity_from_binding(
 
 
 def _workflow_runs(client: GitHubAPI, identity: ResumeIdentity) -> tuple[list[Mapping[str, Any]], int]:
-    payload = _mapping(
-        client.get_json(_workflow_runs_endpoint(), active_auth=True),
-        "Milestone Qualification workflow runs",
-    )
-    runs = [
-        _mapping(item, "Milestone Qualification workflow run")
-        for item in _sequence(payload.get("workflow_runs"), "workflow runs")
-    ]
+    runs: list[Mapping[str, Any]] = []
+    for page in range(1, MAX_WORKFLOW_RUN_PAGES + 1):
+        payload = _mapping(
+            client.get_json(_workflow_runs_endpoint(page), active_auth=True),
+            "Milestone Qualification workflow runs",
+        )
+        page_runs = [
+            _mapping(item, "Milestone Qualification workflow run")
+            for item in _sequence(payload.get("workflow_runs"), "workflow runs")
+        ]
+        runs.extend(page_runs)
+        if len(page_runs) < 100:
+            break
+        if page == MAX_WORKFLOW_RUN_PAGES:
+            raise QualificationResumeSafetyError(
+                "Milestone Qualification workflow history exceeds the bounded identity scan."
+            )
     high_water = max((_integer(run.get("id"), "workflow run ID") for run in runs), default=0)
     matches = [run for run in runs if _run_matches(run, identity)]
     return sorted(matches, key=lambda run: cast(int, run["id"]), reverse=True), high_water
@@ -628,9 +647,11 @@ def _result(
     *,
     identity: ResumeIdentity | None = None,
     checkpoint_path: Path | None = None,
+    apply_checkpoint_path: Path | None = None,
     run: Mapping[str, object] | None = None,
     artifact: Mapping[str, object] | None = None,
     reconciliation_plan: Mapping[str, object] | None = None,
+    reconciliation_result: Mapping[str, object] | None = None,
     next_action: str,
     mutation: Mapping[str, object] | None = None,
 ) -> ResumeResult:
@@ -652,12 +673,25 @@ def _result(
         "checkpoint": {
             "present": checkpoint_path is not None and checkpoint_path.exists(),
         },
+        "apply_checkpoint": _apply_checkpoint_summary(apply_checkpoint_path)
+        if apply_checkpoint_path is not None
+        else None,
         "run": dict(run) if run is not None else None,
         "artifact": dict(artifact) if artifact is not None else None,
         "reconciliation_plan": dict(reconciliation_plan) if reconciliation_plan is not None else None,
+        "reconciliation_result": dict(reconciliation_result) if reconciliation_result is not None else None,
         "planned_mutation": dict(mutation) if mutation is not None else None,
     }
     return ResumeResult(payload=payload, exit_code=exit_code)
+
+
+def _apply_checkpoint_summary(path: Path) -> dict[str, object] | None:
+    try:
+        return reconciliation_checkpoint_summary(path)
+    except QualificationApplySafetyError as error:
+        raise QualificationResumeSafetyError(str(error)) from error
+    except QualificationApplyError as error:
+        raise QualificationResumeError(str(error)) from error
 
 
 def _validate_expected_mutation(
@@ -679,6 +713,15 @@ def _validate_expected_mutation(
     return True
 
 
+def _require_mutation_actor(client: GitHubAPI) -> tuple[str, int]:
+    user = _mapping(client.get_json("user", active_auth=True), "active GitHub user")
+    if user.get("login") != REPOSITORY_OWNER:
+        raise QualificationResumeSafetyError(
+            f"Qualification mutation requires active GitHub identity {REPOSITORY_OWNER!r}."
+        )
+    return REPOSITORY_OWNER, _integer(user.get("id"), "active GitHub user ID")
+
+
 def _require_dispatch_actor(client: GitHubAPI) -> None:
     user = _mapping(client.get_json("user", active_auth=True), "active GitHub user")
     if user.get("login") != REPOSITORY_OWNER:
@@ -687,14 +730,47 @@ def _require_dispatch_actor(client: GitHubAPI) -> None:
         )
 
 
-def _revalidate_remote_identity(client: GitHubAPI, identity: ResumeIdentity) -> None:
+def _revalidate_remote_identity(
+    client: GitHubAPI,
+    identity: ResumeIdentity,
+    *,
+    expected_evidence_sha: str | None = None,
+) -> None:
     if _ref_sha(client, MAIN_BRANCH) != identity.main_sha:
         raise QualificationResumeSafetyError("Protected main moved after qualification resume preflight.")
-    if _ref_sha(client, identity.evidence_ref) != identity.evidence_sha:
+    evidence_sha = (
+        identity.evidence_sha
+        if expected_evidence_sha is None
+        else _sha(
+            expected_evidence_sha,
+            "expected evidence SHA",
+        )
+    )
+    if _ref_sha(client, identity.evidence_ref) != evidence_sha:
         raise QualificationResumeSafetyError("Evidence branch moved after qualification resume preflight.")
-    pull = _open_evidence_pr(client, identity.evidence_ref, identity.evidence_sha)
+    pull_attempts = 5 if evidence_sha != identity.evidence_sha else 1
+    pull: Mapping[str, Any] | None = None
+    for attempt in range(pull_attempts):
+        try:
+            pull = _open_evidence_pr(client, identity.evidence_ref, evidence_sha)
+            break
+        except QualificationResumeSafetyError:
+            if attempt + 1 == pull_attempts:
+                raise
+            time.sleep(1.0)
+    if pull is None:
+        raise QualificationResumeSafetyError("Evidence pull request identity could not be revalidated.")
     if pull.get("number") != identity.evidence_pr_number:
         raise QualificationResumeSafetyError("Evidence pull request changed after qualification resume preflight.")
+
+
+def _require_no_active_exact_runs(client: GitHubAPI, identity: ResumeIdentity) -> None:
+    matches, _high_water = _workflow_runs(client, identity)
+    active = [run for run in matches if run.get("status") in ACTIVE_RUN_STATUSES]
+    if active:
+        raise QualificationResumeSafetyError(
+            "An exact Milestone Qualification run is active; evidence mutation must wait for it to finish."
+        )
 
 
 def _dispatch(
@@ -828,6 +904,7 @@ def resume_qualification(
     expected_manifest_sha256: str | None = None,
     retry_run_id: int | None = None,
     retry_checkpoint_sha256: str | None = None,
+    apply_plan_sha256: str | None = None,
     observe_only: bool = False,
     client: GitHubAPI | None = None,
     checkpoint_path: Path | None = None,
@@ -838,10 +915,16 @@ def resume_qualification(
     now: Clock = lambda: datetime.now(timezone.utc),
 ) -> ResumeResult:
     repo_root = repo_root.resolve()
+    resolved_checkpoint_path = checkpoint_path or _checkpoint_path(repo_root, release_tag)
+    resolved_apply_checkpoint_path = reconciliation_checkpoint_path(resolved_checkpoint_path)
     if retry_run_id is not None:
         retry_run_id = _integer(retry_run_id, "retry run ID")
     if retry_checkpoint_sha256 is not None:
         retry_checkpoint_sha256 = _sha256(retry_checkpoint_sha256, "retry checkpoint digest")
+    if apply_plan_sha256 is not None:
+        apply_plan_sha256 = _sha256(apply_plan_sha256, "authorized reconciliation plan digest")
+    if observe_only and apply_plan_sha256 is not None:
+        raise QualificationResumeSafetyError("Observe-only mode cannot authorize reconciliation apply.")
     if prepared_retry_after_seconds < 0:
         raise QualificationResumeError("Prepared checkpoint retry delay must be nonnegative.")
     try:
@@ -857,7 +940,7 @@ def resume_qualification(
         raise QualificationResumeError("Checked qualification status could not be resolved.") from error
     groups = _mapping(status_payload.get("groups"), "qualification status groups")
     blocking = _sequence(groups.get("blocking"), "blocking qualification cases")
-    if not blocking:
+    if not blocking and not resolved_apply_checkpoint_path.exists():
         return _result(
             "complete",
             EXIT_SUCCESS,
@@ -904,9 +987,64 @@ def resume_qualification(
             identity=identity,
             next_action="Rerun Release Evidence to refresh the manifest against the current protected main SHA.",
         )
+    if resolved_apply_checkpoint_path.exists():
+        apply_summary = _apply_checkpoint_summary(resolved_apply_checkpoint_path)
+        if apply_summary is None:
+            raise QualificationResumeSafetyError("Qualification apply checkpoint disappeared during preflight.")
+        if apply_plan_sha256 is None and apply_summary.get("state") == "commented":
+            apply_plan_sha256 = _sha256(
+                apply_summary.get("plan_sha256"),
+                "completed reconciliation plan digest",
+            )
+        if apply_plan_sha256 is None:
+            return _result(
+                "reconciliation_apply_pending",
+                EXIT_OPERATOR_REQUIRED,
+                status_payload,
+                identity=identity,
+                checkpoint_path=resolved_checkpoint_path,
+                apply_checkpoint_path=resolved_apply_checkpoint_path,
+                next_action="Rerun resume with the exact apply checkpoint plan SHA-256 to continue reconciliation.",
+            )
+        try:
+            with _checkpoint_lock(resolved_checkpoint_path):
+                outcome = continue_reconciliation_apply(
+                    repo_root=repo_root,
+                    identity=identity,
+                    expected_plan_sha256=apply_plan_sha256,
+                    client=github,
+                    checkpoint_path=resolved_apply_checkpoint_path,
+                    revalidate_remote=lambda evidence_sha: _revalidate_remote_identity(
+                        github,
+                        identity,
+                        expected_evidence_sha=evidence_sha,
+                    ),
+                    ensure_no_active_runs=lambda: _require_no_active_exact_runs(github, identity),
+                    require_actor=lambda: _require_mutation_actor(github),
+                    remote_evidence_sha=lambda: _ref_sha(github, identity.evidence_ref),
+                )
+        except QualificationApplySafetyError as error:
+            raise QualificationResumeSafetyError(str(error)) from error
+        except QualificationApplyError as error:
+            raise QualificationResumeError(str(error)) from error
+        return _result(
+            outcome.state,
+            EXIT_SUCCESS,
+            status_payload,
+            identity=identity,
+            checkpoint_path=resolved_checkpoint_path,
+            apply_checkpoint_path=resolved_apply_checkpoint_path,
+            reconciliation_plan=outcome.plan,
+            reconciliation_result={
+                "commit_sha": outcome.commit_sha,
+                "comment_id": outcome.comment_id,
+            },
+            next_action=(
+                "Qualification evidence was committed, pushed, and recorded on the canonical evidence pull request."
+            ),
+        )
     _require_local_evidence_checkout(repo_root, identity)
 
-    resolved_checkpoint_path = checkpoint_path or _checkpoint_path(repo_root, release_tag)
     if resolved_checkpoint_path.exists():
         with _checkpoint_lock(resolved_checkpoint_path):
             checkpoint = _load_checkpoint(resolved_checkpoint_path)
@@ -1080,7 +1218,7 @@ def resume_qualification(
                 next_action="Validate and reconcile the exact qualification artifact into the evidence branch.",
             )
         try:
-            plan = download_and_plan_reconciliation(
+            bundle = download_reconciliation_bundle(
                 client=github,
                 repo_root=repo_root,
                 identity=identity,
@@ -1092,24 +1230,89 @@ def resume_qualification(
             raise QualificationResumeSafetyError(str(error)) from error
         except QualificationArtifactError as error:
             raise QualificationResumeError(str(error)) from error
+        plan = bundle.plan
         _revalidate_remote_identity(github, identity)
         requires_changes = plan.get("requires_changes") is True
+        if apply_plan_sha256 is not None:
+            if plan.get("plan_sha256") != apply_plan_sha256:
+                raise QualificationResumeSafetyError(
+                    "Authorized reconciliation plan digest does not match the current exact artifact plan."
+                )
+            if not requires_changes:
+                return _result(
+                    "reconciliation_current",
+                    EXIT_SUCCESS,
+                    status_payload,
+                    identity=identity,
+                    checkpoint_path=resolved_checkpoint_path,
+                    apply_checkpoint_path=resolved_apply_checkpoint_path,
+                    run=run_payload,
+                    artifact=artifact,
+                    reconciliation_plan=plan,
+                    next_action="All planned qualification evidence is already present and identical.",
+                )
+            try:
+                with _checkpoint_lock(resolved_checkpoint_path):
+                    outcome = start_reconciliation_apply(
+                        repo_root=repo_root,
+                        identity=identity,
+                        bundle=bundle,
+                        expected_plan_sha256=apply_plan_sha256,
+                        client=github,
+                        checkpoint_path=resolved_apply_checkpoint_path,
+                        revalidate_remote=lambda evidence_sha: _revalidate_remote_identity(
+                            github,
+                            identity,
+                            expected_evidence_sha=evidence_sha,
+                        ),
+                        ensure_no_active_runs=lambda: _require_no_active_exact_runs(github, identity),
+                        require_actor=lambda: _require_mutation_actor(github),
+                        remote_evidence_sha=lambda: _ref_sha(github, identity.evidence_ref),
+                    )
+            except QualificationApplySafetyError as error:
+                raise QualificationResumeSafetyError(str(error)) from error
+            except QualificationApplyError as error:
+                raise QualificationResumeError(str(error)) from error
+            return _result(
+                outcome.state,
+                EXIT_SUCCESS,
+                status_payload,
+                identity=identity,
+                checkpoint_path=resolved_checkpoint_path,
+                apply_checkpoint_path=resolved_apply_checkpoint_path,
+                run=run_payload,
+                artifact=artifact,
+                reconciliation_plan=outcome.plan,
+                reconciliation_result={
+                    "commit_sha": outcome.commit_sha,
+                    "comment_id": outcome.comment_id,
+                },
+                next_action=(
+                    "Qualification evidence was committed, pushed, and recorded on the canonical evidence pull request."
+                ),
+            )
         return _result(
             "reconciliation_planned" if requires_changes else "reconciliation_current",
             EXIT_OPERATOR_REQUIRED if requires_changes else EXIT_SUCCESS,
             status_payload,
             identity=identity,
             checkpoint_path=resolved_checkpoint_path,
+            apply_checkpoint_path=resolved_apply_checkpoint_path,
             run=run_payload,
             artifact=artifact,
             reconciliation_plan=plan,
             next_action=(
-                "Review the exact reconciliation plan; the write-capable apply stage is not implemented yet."
+                "Review the exact reconciliation plan, then rerun resume with --apply-plan-sha256 set to its digest."
                 if requires_changes
                 else "All planned qualification evidence is already present and identical."
             ),
         )
 
+    if apply_plan_sha256 is not None:
+        raise QualificationResumeSafetyError(
+            "Reconciliation apply requires the exact successful retained qualification artifact "
+            "or an existing apply checkpoint."
+        )
     failure_state = (
         "artifact_expired" if succeeded and artifact is not None and artifact["state"] == "expired" else "failed"
     )
