@@ -84,11 +84,14 @@ uv run python -m scripts.tier3_operator_collect \
 For `protected-real-media-conversion`, also pass the private native-worker
 NDJSON stream with `--worker-events` and each app-owned temporary path with
 `--cleanup-path`. Those inputs are read transiently to derive only terminal,
-output-verification, and cleanup enums; their content and paths are never copied
-to the preview, answers, receipt, or evidence. Vision Pro collection requires
+output-verification, and cleanup enums. Long heartbeat-heavy runs are filtered
+as a bounded stream instead of retained in memory. Input content and paths are
+never copied to the preview, answers, receipt, or evidence. Vision Pro collection requires
 the bounded public `--vision-model-family`, `--vision-chip-family`, and
-`--visionos-major` identities. USB identity and MakeMKV version overrides exist
-only for an unavailable machine probe. The matching `--architecture`,
+`--visionos-major` identities. USB identity and MakeMKV version overrides are
+required to record a `not-detected`/`missing` failure or a skip when those facts
+cannot be probed. A completed passing run still requires the overrides to match
+the live USB and MakeMKV probes. The matching `--architecture`,
 `--macos-version`, and `--macos-build` overrides let an explicit skip retain the
 last known public target identity when the target machine itself is unavailable.
 All overrides remain subject to the same closed public-identifier validation;

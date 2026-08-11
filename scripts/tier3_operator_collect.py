@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from bd_to_avp.modules.config import resolve_makemkvcon_path
-from bd_to_avp.worker.protocol import PROTOCOL_VERSION, WorkerEventType, ZERO_JOB_ID
+from bd_to_avp.worker.protocol import MAX_EVENT_BYTES, PROTOCOL_VERSION, WorkerEventType, ZERO_JOB_ID
 from scripts.tier3_operator_receipt import (
     CASE_CONTRACTS,
     OperatorReceiptError,
@@ -25,7 +25,7 @@ from scripts.tier3_operator_receipt import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MAX_PROBE_BYTES = 4 * 1024 * 1024
-MAX_WORKER_EVENTS = 2_000
+MAX_WORKER_STREAM_BYTES = 512 * 1024 * 1024
 PUBLIC_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._+-]{0,63}$")
 USB_ID_PATTERN = re.compile(r"^(?:0x)?([0-9a-fA-F]{4})(?:\b|$)")
 VERSION_PATTERN = re.compile(r"\b(?:MakeMKV\s+v?)?(\d+(?:\.\d+){1,3})\b", re.IGNORECASE)
@@ -48,6 +48,14 @@ class PublicUSBDevice:
     vendor_id: str
     product_id: str
     transport: str = "usb"
+
+
+@dataclass(frozen=True)
+class USBHardwareFacts:
+    hardware: Mapping[str, Any]
+    device: PublicUSBDevice
+    drive_detected: bool
+    makemkv_installed: bool
 
 
 @dataclass(frozen=True)
@@ -169,8 +177,7 @@ def detect_public_usb_devices(payload: object) -> tuple[PublicUSBDevice, ...]:
                 if isinstance(item, str) and str(key).lower() in {"_name", "device_type", "media_type", "product_name"}
             ]
             label = " ".join(label_values).lower()
-            has_media = any(str(key).lower() == "media" for key in value)
-            if vendor_id and product_id and (has_media or any(marker in label for marker in OPTICAL_MARKERS)):
+            if vendor_id and product_id and any(marker in label for marker in OPTICAL_MARKERS):
                 devices.append(PublicUSBDevice(vendor_id=vendor_id, product_id=product_id))
             for item in value.values():
                 visit(item)
@@ -210,6 +217,10 @@ class MacOSOperations:
             raise OperatorCollectionError("Operator qualification requires an arm64 Mac.")
         version = self._runner(("/usr/bin/sw_vers", "-productVersion"), 15).decode().strip()
         build = self._runner(("/usr/bin/sw_vers", "-buildVersion"), 15).decode().strip()
+        if MACOS_VERSION_PATTERN.fullmatch(version) is None:
+            raise OperatorCollectionError("The detected macOS version is not a bounded public version.")
+        if MACOS_BUILD_PATTERN.fullmatch(build) is None:
+            raise OperatorCollectionError("The detected macOS build is not a bounded public build.")
         return {
             "architecture": architecture,
             "environment_class": _safe_identity(environment_class, "environment class"),
@@ -248,31 +259,56 @@ class MacOSOperations:
 
 def _read_worker_events(path: Path) -> tuple[Mapping[str, Any], ...]:
     try:
-        raw = path.read_bytes()
+        size = path.stat().st_size
     except OSError as error:
         raise OperatorCollectionError("The native-worker event stream could not be read.") from error
-    if not raw or len(raw) > MAX_PROBE_BYTES:
+    if size <= 0 or size > MAX_WORKER_STREAM_BYTES:
         raise OperatorCollectionError("The native-worker event stream is empty or exceeds the bounded size.")
-    events: list[Mapping[str, Any]] = []
-    job_ids: set[str] = set()
-    for line in raw.splitlines():
-        if not line.strip():
-            continue
-        if len(events) >= MAX_WORKER_EVENTS:
-            raise OperatorCollectionError("The native-worker event stream contains too many events.")
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError as error:
-            raise OperatorCollectionError("The native-worker event stream contains invalid JSON.") from error
-        if not isinstance(event, Mapping) or event.get("protocol_version") != PROTOCOL_VERSION:
-            raise OperatorCollectionError("The native-worker event stream does not match the current protocol.")
-        job_id = event.get("job_id")
-        if isinstance(job_id, str) and job_id != ZERO_JOB_ID:
-            job_ids.add(job_id)
-        events.append(event)
-    if not events or len(job_ids) != 1:
+    known_types = {event_type.value for event_type in WorkerEventType}
+    terminal_types = {event_type.value for event_type in WorkerEventType if event_type.is_terminal}
+    retained_types = {
+        WorkerEventType.JOB_STARTED.value,
+        *terminal_types,
+    }
+    retained: list[Mapping[str, Any]] = []
+    job_id: str | None = None
+    expected_sequence = 0
+    terminal_seen = False
+    try:
+        with path.open("rb") as stream:
+            for raw_line in stream:
+                if not raw_line.strip():
+                    continue
+                if len(raw_line.rstrip(b"\r\n")) > MAX_EVENT_BYTES:
+                    raise OperatorCollectionError("A native-worker event exceeds the protocol size limit.")
+                try:
+                    event = json.loads(raw_line)
+                except json.JSONDecodeError as error:
+                    raise OperatorCollectionError("The native-worker event stream contains invalid JSON.") from error
+                if not isinstance(event, Mapping) or event.get("protocol_version") != PROTOCOL_VERSION:
+                    raise OperatorCollectionError("The native-worker event stream does not match the current protocol.")
+                event_type = event.get("type")
+                event_job_id = event.get("job_id")
+                if event_type not in known_types or not isinstance(event_job_id, str):
+                    raise OperatorCollectionError("The native-worker event stream contains an unsupported event.")
+                if event_job_id == ZERO_JOB_ID:
+                    if event_type != WorkerEventType.WORKER_READY.value or job_id is not None or terminal_seen:
+                        raise OperatorCollectionError("The native-worker event stream contains an invalid ready event.")
+                    continue
+                if job_id is None:
+                    job_id = event_job_id
+                if event_job_id != job_id or event.get("sequence") != expected_sequence or terminal_seen:
+                    raise OperatorCollectionError("The native-worker event stream is ambiguous or out of sequence.")
+                expected_sequence += 1
+                if event_type in retained_types:
+                    retained.append(event)
+                if event_type in terminal_types:
+                    terminal_seen = True
+    except OSError as error:
+        raise OperatorCollectionError("The native-worker event stream could not be read.") from error
+    if job_id is None or not terminal_seen:
         raise OperatorCollectionError("The native-worker event stream must describe exactly one job.")
-    return tuple(events)
+    return tuple(retained)
 
 
 def _terminal_event(events: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
@@ -348,7 +384,9 @@ def _usb_hardware(
     vendor_id: str | None,
     product_id: str | None,
     makemkv_version: str | None,
-) -> tuple[Mapping[str, Any], PublicUSBDevice]:
+    probe: bool,
+) -> USBHardwareFacts:
+    override_device: PublicUSBDevice | None = None
     if vendor_id is not None or product_id is not None:
         if vendor_id is None or product_id is None:
             raise OperatorCollectionError("USB vendor and product overrides must be supplied together.")
@@ -356,32 +394,56 @@ def _usb_hardware(
         normalized_product = _usb_id(product_id)
         if normalized_vendor is None or normalized_product is None:
             raise OperatorCollectionError("USB vendor and product IDs must be four hexadecimal digits.")
-        device = PublicUSBDevice(normalized_vendor, normalized_product)
+        override_device = PublicUSBDevice(normalized_vendor, normalized_product)
+
+    devices = operations.usb_devices() if probe else ()
+    if len(devices) > 1:
+        raise OperatorCollectionError(
+            "Multiple USB optical drives were detected; leave only the tested drive connected."
+        )
+    detected_device = devices[0] if devices else None
+    if override_device is not None:
+        if detected_device is not None and detected_device != override_device:
+            raise OperatorCollectionError("Detected USB identity does not match the bounded override.")
+        device = override_device
+    elif detected_device is not None:
+        device = detected_device
     else:
-        devices = operations.usb_devices()
-        if len(devices) == 1:
-            device = devices[0]
-        elif not devices:
-            raise OperatorCollectionError("No public USB optical-drive identity was detected.")
-        else:
-            raise OperatorCollectionError(
-                "Multiple USB optical drives were detected; leave only the tested drive connected."
-            )
-    version = makemkv_version or operations.makemkv_version()
+        raise OperatorCollectionError(
+            "No public USB optical-drive identity was detected; "
+            "supply bounded USB overrides to record a skip or failure."
+        )
+
+    detected_version = operations.makemkv_version() if probe else None
+    normalized_detected_version = (
+        _safe_identity(detected_version, "detected MakeMKV version") if detected_version is not None else None
+    )
+    normalized_override_version = (
+        _safe_identity(makemkv_version, "MakeMKV version") if makemkv_version is not None else None
+    )
+    if normalized_detected_version is not None and normalized_override_version not in {
+        None,
+        normalized_detected_version,
+    }:
+        raise OperatorCollectionError("Detected MakeMKV version does not match the bounded override.")
+    version = normalized_detected_version or normalized_override_version
     if version is None:
-        raise OperatorCollectionError("A bounded MakeMKV version could not be detected.")
-    normalized_version = _safe_identity(version, "MakeMKV version")
-    return (
-        {
+        raise OperatorCollectionError(
+            "A bounded MakeMKV version could not be detected; supply an override to record a skip or failure."
+        )
+    return USBHardwareFacts(
+        hardware={
             "class": "usb-bluray-drive",
             "identity": {
-                "makemkv_version": normalized_version,
+                "makemkv_version": version,
                 "product_id": device.product_id,
                 "transport": device.transport,
                 "vendor_id": device.vendor_id,
             },
         },
-        device,
+        device=device,
+        drive_detected=detected_device == device,
+        makemkv_installed=normalized_detected_version is not None,
     )
 
 
@@ -467,6 +529,8 @@ def collect_operator_answers(
 ) -> Mapping[str, Any]:
     if case_id not in CASE_CONTRACTS:
         raise OperatorCollectionError(f"Unsupported operator qualification case: {case_id}")
+    if skip_reason is not None and skip_reason not in SKIP_REASONS:
+        raise OperatorCollectionError("Skip reason is not supported.")
     started_at = _timestamp(clock)
     environment = _environment(
         operations,
@@ -475,20 +539,20 @@ def collect_operator_answers(
         macos_version=macos_version,
         macos_build=macos_build,
     )
-    tested_device: PublicUSBDevice | None = None
+    usb_facts: USBHardwareFacts | None = None
     if case_id == "vision-pro-physical-playback":
         hardware = _vision_hardware(vision_model_family, vision_chip_family, visionos_major)
     else:
-        hardware, tested_device = _usb_hardware(
+        usb_facts = _usb_hardware(
             operations,
             vendor_id=usb_vendor_id,
             product_id=usb_product_id,
             makemkv_version=makemkv_version,
+            probe=skip_reason is None,
         )
+        hardware = usb_facts.hardware
 
     if skip_reason is not None:
-        if skip_reason not in SKIP_REASONS:
-            raise OperatorCollectionError("Skip reason is not supported.")
         disposition = "skipped"
         reason_code = skip_reason
         observations: Mapping[str, str] = {}
@@ -496,10 +560,21 @@ def collect_operator_answers(
     else:
         try:
             if case_id == "usb-bluray-makemkv":
-                if worker_events is None:
+                assert usb_facts is not None
+                if not usb_facts.drive_detected or not usb_facts.makemkv_installed:
+                    cancellation = "failed"
+                elif worker_events is None:
                     cancellation = _prompt(prompter, "usb-cancellation")
                 else:
+                    if not cleanup_paths:
+                        raise OperatorCollectionError(
+                            "USB cancellation event collection requires at least one owned cleanup path."
+                        )
                     cancellation_terminal = _terminal_event(_read_worker_events(worker_events)).get("type")
+                    if cancellation_terminal == WorkerEventType.JOB_DECISION_REQUIRED.value:
+                        raise OperatorCollectionError(
+                            "The native-worker job requires a decision before qualification can continue."
+                        )
                     cancellation = (
                         "recovered"
                         if cancellation_terminal == WorkerEventType.JOB_CANCELLED.value and _paths_absent(cleanup_paths)
@@ -509,15 +584,16 @@ def collect_operator_answers(
                         _prompt(prompter, "protected-cleanup")
                         if not _paths_absent(cleanup_paths):
                             raise OperatorCollectionError("Owned cancellation cleanup could not be verified.")
-                ejection_action = _prompt(prompter, "usb-ejection")
                 ejection = "failed"
-                if ejection_action == "ready" and tested_device not in operations.usb_devices():
-                    ejection = "ejected"
+                if usb_facts.drive_detected:
+                    ejection_action = _prompt(prompter, "usb-ejection")
+                    if ejection_action == "ready" and usb_facts.device not in operations.usb_devices():
+                        ejection = "ejected"
                 observations = {
                     "cancellation": cancellation,
-                    "drive_discovery": "detected",
+                    "drive_discovery": "detected" if usb_facts.drive_detected else "not-detected",
                     "ejection": ejection,
-                    "makemkv": "installed",
+                    "makemkv": "installed" if usb_facts.makemkv_installed else "missing",
                 }
                 cleanup_status = "recovered" if cancellation == "recovered" else "not-applicable"
             elif case_id == "protected-real-media-conversion":
@@ -578,6 +654,8 @@ def write_validated_answers(
         preview = validate_operator_answers(answers, repo=repo, release_receipt_path=release_receipt_path)
     except OperatorReceiptError as error:
         raise OperatorCollectionError(f"Collected answers are invalid: {error}") from error
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise OperatorCollectionError("The checked release receipt could not be validated.") from error
     public_preview = {"answers": answers, **preview}
     print(json.dumps(public_preview, indent=2, sort_keys=True))
     try:
