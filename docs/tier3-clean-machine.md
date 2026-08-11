@@ -124,17 +124,24 @@ The runner performs this bounded sequence:
    synthetic home.
 3. Run the installed-app XCUITest lane against the exact prior app, verifying
    Sparkle controls and the source-bound release-notes URL without installing.
-4. Launch the prior app again, invoke `Check for Updates…`, click Sparkle's
-   bounded install/relaunch action, and wait for the exact candidate bundle,
-   build, and signed app tree to relaunch.
-5. Verify the selected route, unrelated preference, and byte-for-byte profile
+4. Revalidate the exact prior bundle and signed app tree immediately before
+   updater interaction, invoke `Check for Updates…`, and drive Sparkle through
+   an explicit bounded state machine. Identifier-scoped observations distinguish
+   downloading, staged install, install-and-relaunch, install-on-quit,
+   cancellation, terminal failure, and unknown states.
+5. Durably record each selected action inside the owned qualification root
+   before pressing it. Install-on-quit explicitly terminates the prior app,
+   waits for the exact candidate on disk, and launches that candidate; staged
+   installs remain bounded until Sparkle exposes the final action or relaunches.
+6. Verify the final candidate bundle, build, signed app tree, and running app,
+   then verify the selected route, unrelated preference, and byte-for-byte profile
    library are preserved.
-6. Run the candidate installed-app XCUITest lane. It verifies main-window
+7. Run the candidate installed-app XCUITest lane. It verifies main-window
    readiness, profile-save accessibility and success, updater settings, the
    public releases link, and cropped light/dark app-window screenshots.
-7. Quit the app, detach every mounted DMG, verify the cleanup ownership marker,
+8. Quit the app, detach every mounted DMG, verify the cleanup ownership marker,
    and delete the qualification root with raw XCTest and build output.
-8. Emit normalized public-safe evidence and validated receipts for both policy
+9. Emit normalized public-safe evidence and validated receipts for both policy
    cases with `cleanup.status = disposed`.
 
 Every mount, subprocess, network request, GUI wait, update wait, and cleanup
@@ -143,6 +150,27 @@ root and is deleted; public evidence records only its SHA-256 digest. Raw AX
 trees, XCTest logs, `.xcresult` bundles, local paths, and full-screen captures
 are deleted. Retained screenshots contain only the app window. A failed run
 does not emit either accepted receipt.
+
+The updater state machine prefers the Sparkle `SUUpdateAlert` window and
+`SPUUserUpdateChoiceInstall` action identifiers. A title fallback is permitted
+only inside the single owned updater window and is recorded in evidence. The
+selected action, state, exact prior/candidate identities, attempt number, and
+transition history are atomically written and synced before an asynchronous
+press. That journal remains disposable; normalized `sparkle-update.json`
+retains bounded public-safe action, window-match, state, attempt, route, and
+candidate-version fields plus the journal and intent SHA-256 digests. It never
+retains window text, local paths, usernames, hostnames, or raw AX output.
+
+One clean retry is allowed only for a classified pre-press application-start,
+update-menu, or update-window timeout. The first attempt must fully dispose its
+owned root and app process before retry. Cancellation, updater-reported failure,
+unknown UI, identity mismatch, preference/profile drift, action-limit failure,
+and every failure after a press are terminal. No other implicit retry occurs.
+
+Native Sparkle-window presentation sampling remains visible operational
+evidence but is nonblocking. The state-machine result, exact release-note source,
+and installed accessibility semantics remain the automated blocking contract;
+missing or failed manual presentation capture does not alter the runner result.
 
 If the cleanup ownership marker is missing or changed, the runner refuses to
 delete the qualification root because it can no longer prove ownership. It

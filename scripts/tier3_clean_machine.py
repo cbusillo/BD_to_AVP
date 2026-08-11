@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import enum
 import hashlib
 import json
 import os
@@ -64,6 +65,16 @@ SPARKLE_INSTALL_ACTIONS = (
     "Install and Relaunch",
     "Install on Quit",
 )
+MAX_UPDATE_ACTIONS = 2
+MAX_UPDATE_TRANSITIONS = 32
+UPDATE_POLL_SECONDS = 0.5
+RETRYABLE_UPDATE_FAILURES = frozenset(
+    {
+        "application-process-timeout",
+        "update-menu-timeout",
+        "update-window-timeout",
+    }
+)
 ROUTE_CHANNELS: dict[str, set[str | None]] = {
     "stable": {None},
     "rc": {None, "rc"},
@@ -86,6 +97,43 @@ SYSTEM_TOOL_PATHS = {
 
 class CleanMachineError(RuntimeError):
     pass
+
+
+class SparkleUpdateFailure(CleanMachineError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_code: str,
+        state: SparkleUpdateState,
+        action_pressed: bool,
+    ) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.state = state
+        self.action_pressed = action_pressed
+
+    @property
+    def retryable(self) -> bool:
+        return not self.action_pressed and self.reason_code in RETRYABLE_UPDATE_FAILURES
+
+
+class SparkleUpdateState(str, enum.Enum):
+    WAITING_FOR_WINDOW = "waiting-for-window"
+    DOWNLOADING = "downloading"
+    STAGED_INSTALL = "staged-install"
+    READY_INSTALL_RELAUNCH = "ready-install-relaunch"
+    READY_INSTALL_ON_QUIT = "ready-install-on-quit"
+    INSTALLING = "installing"
+    CANCELLED = "cancelled"
+    TERMINAL_FAILURE = "terminal-failure"
+    UNKNOWN = "unknown"
+
+
+class SparkleUpdateOutcome(str, enum.Enum):
+    INSTALL_AND_RELAUNCH = "install-and-relaunch"
+    INSTALL_ON_QUIT = "install-on-quit"
+    STAGED = "staged"
 
 
 @dataclass(frozen=True)
@@ -156,8 +204,24 @@ class QualificationConfig:
 
 
 @dataclass(frozen=True)
+class UpdateObservation:
+    state: SparkleUpdateState
+    window_match: str
+    action_identifier: str
+    action_title: str
+
+
+@dataclass(frozen=True)
 class UpdateInteraction:
     clicked_button: str
+    outcome: SparkleUpdateOutcome
+    action_identifier: str
+    window_match: str
+    states_observed: tuple[str, ...]
+    intent_checkpoint_sha256: str
+    journal_sha256: str
+    attempt: int
+    retry_reason_code: str | None
 
 
 class QualificationOperations(Protocol):
@@ -179,7 +243,16 @@ class QualificationOperations(Protocol):
     def read_preference(self, synthetic_home: Path, key: str) -> str:
         raise NotImplementedError
 
-    def perform_update(self, app_path: Path, synthetic_home: Path) -> UpdateInteraction:
+    def launch_app(self, app_path: Path, synthetic_home: Path) -> None:
+        raise NotImplementedError
+
+    def open_updater(self, app_path: Path, synthetic_home: Path) -> None:
+        raise NotImplementedError
+
+    def observe_updater(self) -> UpdateObservation:
+        raise NotImplementedError
+
+    def press_updater_action(self, observation: UpdateObservation) -> None:
         raise NotImplementedError
 
     def collect_ui_evidence(
@@ -194,7 +267,7 @@ class QualificationOperations(Protocol):
     ) -> None:
         raise NotImplementedError
 
-    def app_running(self) -> bool:
+    def app_running(self, app_path: Path | None = None) -> bool:
         raise NotImplementedError
 
     def quit_app(self) -> None:
@@ -251,8 +324,97 @@ def _write_json(path: Path, value: Mapping[str, Any]) -> str:
     return hashlib.sha256(content.encode()).hexdigest()
 
 
+def _write_durable_json(path: Path, value: Mapping[str, Any]) -> str:
+    content = _canonical_json_bytes(value)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    file_descriptor = os.open(temporary_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        destination = os.fdopen(file_descriptor, "wb")
+        file_descriptor = -1
+        with destination:
+            destination.write(content)
+            destination.flush()
+            os.fsync(destination.fileno())
+        os.replace(temporary_path, path)
+        directory_descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        if file_descriptor >= 0:
+            os.close(file_descriptor)
+        temporary_path.unlink(missing_ok=True)
+    return hashlib.sha256(content).hexdigest()
+
+
 def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _parse_update_observation(output: str) -> UpdateObservation:
+    fields = output.rstrip("\n").split("\t")
+    if len(fields) != 4:
+        raise SparkleUpdateFailure(
+            "Sparkle updater observation returned an invalid field count.",
+            reason_code="updater-observation-invalid",
+            state=SparkleUpdateState.UNKNOWN,
+            action_pressed=False,
+        )
+    state_value, window_match, action_identifier, action_title = fields
+    try:
+        state = SparkleUpdateState(state_value)
+    except ValueError as error:
+        raise SparkleUpdateFailure(
+            f"Sparkle updater observation returned an unknown state: {state_value!r}.",
+            reason_code="updater-state-unknown",
+            state=SparkleUpdateState.UNKNOWN,
+            action_pressed=False,
+        ) from error
+    if window_match not in {"none", "identifier", "button-identifier", "owned-dialog"}:
+        raise SparkleUpdateFailure(
+            f"Sparkle updater observation returned an unsupported window match: {window_match!r}.",
+            reason_code="updater-observation-invalid",
+            state=SparkleUpdateState.UNKNOWN,
+            action_pressed=False,
+        )
+    for value, description in (
+        (action_identifier, "action identifier"),
+        (action_title, "action title"),
+    ):
+        if len(value) > 200 or any(character in value for character in ("\r", "\n", "\t")):
+            raise SparkleUpdateFailure(
+                f"Sparkle updater observation returned an invalid {description}.",
+                reason_code="updater-observation-invalid",
+                state=SparkleUpdateState.UNKNOWN,
+                action_pressed=False,
+            )
+    return UpdateObservation(
+        state=state,
+        window_match=window_match,
+        action_identifier=action_identifier,
+        action_title=action_title,
+    )
+
+
+def _sparkle_script_failure(error: CleanMachineError, *, action_pressed: bool) -> SparkleUpdateFailure:
+    message = str(error)
+    markers = {
+        "Timed out waiting for the application process.": "application-process-timeout",
+        "Timed out waiting for Check for Updates.": "update-menu-timeout",
+        "Updater state changed before the guarded press.": "updater-state-changed",
+    }
+    reason_code = next((code for marker, code in markers.items() if marker in message), "updater-script-failure")
+    state = SparkleUpdateState.UNKNOWN
+    if reason_code in {"application-process-timeout", "update-menu-timeout"}:
+        state = SparkleUpdateState.WAITING_FOR_WINDOW
+    return SparkleUpdateFailure(
+        message,
+        reason_code=reason_code,
+        state=state,
+        action_pressed=action_pressed,
+    )
 
 
 def _relative_checked_path(repo: Path, path: Path, description: str) -> str:
@@ -779,7 +941,7 @@ class MacOSOperations:
         )
         return result.stdout.strip()
 
-    def perform_update(self, app_path: Path, synthetic_home: Path) -> UpdateInteraction:
+    def launch_app(self, app_path: Path, synthetic_home: Path) -> None:
         env = self._synthetic_env(synthetic_home)
         self._run(
             [
@@ -794,12 +956,45 @@ class MacOSOperations:
             ],
             env=env,
         )
-        result = self._run(
-            ["osascript", "-", BUNDLE_IDENTIFIER],
-            timeout=GUI_TIMEOUT_SECONDS,
-            input_text=self._updater_script(),
-        )
-        return UpdateInteraction(clicked_button=result.stdout.strip())
+
+    def open_updater(self, app_path: Path, synthetic_home: Path) -> None:
+        self.launch_app(app_path, synthetic_home)
+        try:
+            self._run(
+                ["osascript", "-", BUNDLE_IDENTIFIER],
+                timeout=COMMAND_TIMEOUT_SECONDS * 3,
+                input_text=self._updater_open_script(),
+            )
+        except CleanMachineError as error:
+            raise _sparkle_script_failure(error, action_pressed=False) from error
+
+    def observe_updater(self) -> UpdateObservation:
+        try:
+            result = self._run(
+                ["osascript", "-", BUNDLE_IDENTIFIER],
+                timeout=COMMAND_TIMEOUT_SECONDS,
+                input_text=self._updater_observe_script(),
+            )
+        except CleanMachineError as error:
+            raise _sparkle_script_failure(error, action_pressed=False) from error
+        return _parse_update_observation(result.stdout)
+
+    def press_updater_action(self, observation: UpdateObservation) -> None:
+        try:
+            self._run(
+                [
+                    "osascript",
+                    "-",
+                    BUNDLE_IDENTIFIER,
+                    observation.window_match,
+                    observation.action_identifier,
+                    observation.action_title,
+                ],
+                timeout=COMMAND_TIMEOUT_SECONDS,
+                input_text=self._updater_press_script(),
+            )
+        except CleanMachineError as error:
+            raise _sparkle_script_failure(error, action_pressed=False) from error
 
     def collect_ui_evidence(
         self,
@@ -920,10 +1115,10 @@ class MacOSOperations:
                 raise CleanMachineError("Installed UI candidate release-link evidence is not source-bound.")
 
     @staticmethod
-    def app_running() -> bool:
+    def app_running(app_path: Path | None = None) -> bool:
         script = (
-            'tell application "System Events" to return exists '
-            f'(first application process whose bundle identifier is "{BUNDLE_IDENTIFIER}")'
+            'tell application "System Events" to return unix id of every '
+            f'application process whose bundle identifier is "{BUNDLE_IDENTIFIER}"'
         )
         result = subprocess.run(
             ["osascript", "-e", script],
@@ -931,7 +1126,38 @@ class MacOSOperations:
             text=True,
             timeout=COMMAND_TIMEOUT_SECONDS,
         )
-        return result.returncode == 0 and result.stdout.strip().lower() == "true"
+        if result.returncode != 0:
+            return False
+        output = result.stdout.strip()
+        if not output:
+            return False
+        try:
+            process_ids = tuple(int(value.strip()) for value in output.split(",") if value.strip())
+        except ValueError:
+            return False
+        if app_path is None:
+            return bool(process_ids)
+        if len(process_ids) != 1:
+            return False
+        try:
+            info = _mapping(
+                plistlib.loads((app_path / "Contents" / "Info.plist").read_bytes()),
+                "installed app Info.plist",
+            )
+            executable_name = _string(info.get("CFBundleExecutable"), "installed app executable name")
+        except (OSError, plistlib.InvalidFileException, CleanMachineError):
+            return False
+        executable_path = (app_path / "Contents" / "MacOS" / executable_name).resolve()
+        process = subprocess.run(
+            ["/bin/ps", "-p", str(process_ids[0]), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+        command = process.stdout.strip()
+        return process.returncode == 0 and (
+            command == str(executable_path) or command.startswith(f"{executable_path} ")
+        )
 
     def quit_app(self) -> None:
         script = f'''tell application "System Events"
@@ -973,17 +1199,21 @@ end tell'''
             raise CleanMachineError("Production app did not terminate during cleanup.")
 
     @staticmethod
-    def _updater_script() -> str:
+    def _updater_open_script() -> str:
         return """on run argv
     set targetBundleID to item 1 of argv
     set processDeadline to (current date) + 60
     tell application "System Events"
         repeat
-            if exists (first application process whose bundle identifier is targetBundleID) then exit repeat
+            set processMatches to every application process whose bundle identifier is targetBundleID
+            if (count of processMatches) is 1 then exit repeat
+            if (count of processMatches) > 1 then
+                error "Multiple application processes matched the qualification bundle identifier."
+            end if
             if (current date) > processDeadline then error "Timed out waiting for the application process."
             delay 0.5
         end repeat
-        set targetProcess to first application process whose bundle identifier is targetBundleID
+        set targetProcess to item 1 of processMatches
         tell targetProcess
             set frontmost to true
             set menuDeadline to (current date) + 60
@@ -993,66 +1223,187 @@ end tell'''
             end repeat
             click menu item "Check for Updates…" of menu 1 of menu bar item "Help" of menu bar 1
         end tell
-        set installStarted to false
-        set updateDeadline to (current date) + (15 * 60)
-        repeat
-            if exists (first application process whose bundle identifier is targetBundleID) then
-                set targetProcess to first application process whose bundle identifier is targetBundleID
-                tell targetProcess
-                    repeat with targetWindow in windows
-                        set identifiedButton to missing value
-                        repeat with targetButton in buttons of targetWindow
-                            try
-                                set buttonIdentifier to value of attribute "AXIdentifier" of targetButton
-                                if buttonIdentifier is "SPUUserUpdateChoiceInstall" then
-                                    set identifiedButton to targetButton
-                                    exit repeat
-                                end if
-                            end try
-                        end repeat
-                        set selectedButton to missing value
-                        set selectedTitle to ""
-                        set selectedByIdentifier to false
-                        if identifiedButton is not missing value then
-                            if enabled of identifiedButton then
-                                set selectedButton to identifiedButton
-                                set selectedTitle to name of identifiedButton as text
-                                set selectedByIdentifier to true
-                            end if
-                        else
-                            repeat with buttonTitle in {"Install and Relaunch", "Install Update", "Install on Quit"}
-                                if exists button (buttonTitle as text) of targetWindow then
-                                    set titledButton to button (buttonTitle as text) of targetWindow
-                                    if enabled of titledButton then
-                                        set selectedButton to titledButton
-                                        set selectedTitle to buttonTitle as text
-                                        exit repeat
-                                    end if
-                                end if
-                            end repeat
-                        end if
-                        if selectedButton is not missing value then
-                            if selectedTitle is "Install Update" then
-                                if installStarted is false then
-                                    perform action "AXPress" of selectedButton
-                                    set installStarted to true
-                                    delay 1
-                                end if
-                                exit repeat
-                            else
-                                perform action "AXPress" of selectedButton
-                                if selectedByIdentifier then return "SPUUserUpdateChoiceInstall"
-                                return selectedTitle
-                            end if
-                        end if
-                    end repeat
-                end tell
-            else if installStarted then
-                return "Install Update"
+    end tell
+end run"""
+
+    @staticmethod
+    def _updater_observe_script() -> str:
+        return """on run argv
+    set targetBundleID to item 1 of argv
+    tell application "System Events"
+        set processMatches to every application process whose bundle identifier is targetBundleID
+        if (count of processMatches) is 0 then
+            return "waiting-for-window" & tab & "none" & tab & "" & tab & ""
+        end if
+        if (count of processMatches) > 1 then
+            return "unknown" & tab & "none" & tab & "" & tab & ""
+        end if
+        set targetProcess to item 1 of processMatches
+        tell targetProcess
+            set identifiedWindows to {}
+            repeat with candidateWindow in windows
+                try
+                    if (value of attribute "AXIdentifier" of candidateWindow) is "SUUpdateAlert" then
+                        set end of identifiedWindows to candidateWindow
+                    end if
+                end try
+            end repeat
+            if (count of identifiedWindows) > 1 then
+                return "unknown" & tab & "identifier" & tab & "" & tab & ""
             end if
-            if (current date) > updateDeadline then error "Timed out waiting for a Sparkle install button."
-            delay 0.5
-        end repeat
+
+            set targetWindow to missing value
+            set windowMatch to "none"
+            if (count of identifiedWindows) is 1 then
+                set targetWindow to item 1 of identifiedWindows
+                set windowMatch to "identifier"
+            else
+                set fallbackWindows to {}
+                repeat with candidateWindow in windows
+                    repeat with candidateButton in buttons of candidateWindow
+                        try
+                            set candidateIdentifier to value of attribute "AXIdentifier" of candidateButton
+                            if candidateIdentifier is "SPUUserUpdateChoiceInstall" then
+                                set end of fallbackWindows to candidateWindow
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                end repeat
+                if (count of fallbackWindows) > 1 then
+                    return "unknown" & tab & "button-identifier" & tab & "" & tab & ""
+                else if (count of fallbackWindows) is 1 then
+                    set targetWindow to item 1 of fallbackWindows
+                    set windowMatch to "button-identifier"
+                end if
+            end if
+
+            if targetWindow is missing value then
+                repeat with candidateWindow in windows
+                    try
+                        set windowSubrole to value of attribute "AXSubrole" of candidateWindow
+                        if windowSubrole is "AXDialog" or windowSubrole is "AXSystemDialog" then
+                            return "terminal-failure" & tab & "owned-dialog" & tab & "" & tab & ""
+                        end if
+                    end try
+                end repeat
+                return "waiting-for-window" & tab & "none" & tab & "" & tab & ""
+            end if
+
+            set selectedButton to missing value
+            set selectedIdentifier to ""
+            repeat with candidateButton in buttons of targetWindow
+                try
+                    set buttonIdentifier to value of attribute "AXIdentifier" of candidateButton
+                    if buttonIdentifier is "SPUUserUpdateChoiceInstall" then
+                        set selectedButton to candidateButton
+                        set selectedIdentifier to buttonIdentifier
+                        exit repeat
+                    end if
+                end try
+            end repeat
+            if selectedButton is missing value then
+                repeat with buttonTitle in {"Install and Relaunch", "Install Update", "Install on Quit"}
+                    if exists button (buttonTitle as text) of targetWindow then
+                        set selectedButton to button (buttonTitle as text) of targetWindow
+                        exit repeat
+                    end if
+                end repeat
+            end if
+
+            if selectedButton is missing value then
+                if exists progress indicator 1 of targetWindow then
+                    return "downloading" & tab & windowMatch & tab & "" & tab & ""
+                end if
+                return "terminal-failure" & tab & windowMatch & tab & "" & tab & ""
+            end if
+
+            set selectedTitle to name of selectedButton as text
+            if not (enabled of selectedButton) then
+                return "downloading" & tab & windowMatch & tab & selectedIdentifier & tab & selectedTitle
+            end if
+            if selectedTitle is "Install Update" then
+                return "staged-install" & tab & windowMatch & tab & selectedIdentifier & tab & selectedTitle
+            else if selectedTitle is "Install on Quit" then
+                return "ready-install-on-quit" & tab & windowMatch & tab & selectedIdentifier & tab & selectedTitle
+            else if selectedTitle is "Install and Relaunch" then
+                return "ready-install-relaunch" & tab & windowMatch & tab & selectedIdentifier & tab & selectedTitle
+            end if
+            return "unknown" & tab & windowMatch & tab & selectedIdentifier & tab & selectedTitle
+        end tell
+    end tell
+end run"""
+
+    @staticmethod
+    def _updater_press_script() -> str:
+        return """on run argv
+    set targetBundleID to item 1 of argv
+    set expectedWindowMatch to item 2 of argv
+    set expectedIdentifier to item 3 of argv
+    set expectedTitle to item 4 of argv
+    tell application "System Events"
+        set processMatches to every application process whose bundle identifier is targetBundleID
+        if (count of processMatches) is not 1 then
+            error "Updater state changed before the guarded press."
+        end if
+        set targetProcess to item 1 of processMatches
+        tell targetProcess
+            set targetWindow to missing value
+            set actualWindowMatch to "none"
+            repeat with candidateWindow in windows
+                try
+                    if (value of attribute "AXIdentifier" of candidateWindow) is "SUUpdateAlert" then
+                        if targetWindow is not missing value then
+                            error "Updater state changed before the guarded press."
+                        end if
+                        set targetWindow to candidateWindow
+                        set actualWindowMatch to "identifier"
+                    end if
+                end try
+            end repeat
+            if targetWindow is missing value then
+                repeat with candidateWindow in windows
+                    repeat with candidateButton in buttons of candidateWindow
+                        try
+                            set candidateIdentifier to value of attribute "AXIdentifier" of candidateButton
+                            if candidateIdentifier is "SPUUserUpdateChoiceInstall" then
+                                if targetWindow is not missing value then
+                                    error "Updater state changed before the guarded press."
+                                end if
+                                set targetWindow to candidateWindow
+                                set actualWindowMatch to "button-identifier"
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                end repeat
+            end if
+            if targetWindow is missing value or actualWindowMatch is not expectedWindowMatch then
+                error "Updater state changed before the guarded press."
+            end if
+
+            set selectedButton to missing value
+            if expectedIdentifier is not "" then
+                repeat with candidateButton in buttons of targetWindow
+                    try
+                        if (value of attribute "AXIdentifier" of candidateButton) is expectedIdentifier then
+                            if selectedButton is not missing value then
+                                error "Updater state changed before the guarded press."
+                            end if
+                            set selectedButton to candidateButton
+                        end if
+                    end try
+                end repeat
+            else if exists button expectedTitle of targetWindow then
+                set selectedButton to button expectedTitle of targetWindow
+            end if
+            if selectedButton is missing value then error "Updater state changed before the guarded press."
+            if (name of selectedButton as text) is not expectedTitle then
+                error "Updater state changed before the guarded press."
+            end if
+            if not (enabled of selectedButton) then error "Updater state changed before the guarded press."
+            perform action "AXPress" of selectedButton
+        end tell
     end tell
 end run"""
 
@@ -1171,6 +1522,235 @@ def preflight_report(
     }
 
 
+def _perform_sparkle_update(
+    *,
+    app_path: Path,
+    synthetic_home: Path,
+    prior: ReleaseArtifact,
+    candidate: ReleaseArtifact,
+    operations: QualificationOperations,
+    checkpoint_path: Path,
+    run_id: str,
+    attempt: int,
+    retry_reason_code: str | None,
+) -> UpdateInteraction:
+    prior_identity = verify_installed_app(app_path, prior)
+    journal: dict[str, Any] = {
+        "attempt": attempt,
+        "candidate": {
+            "build_version": candidate.build_version,
+            "package_version": candidate.package_version,
+            "release_tag": candidate.release_tag,
+            "signed_app_tree_sha256": candidate.signed_app_tree_sha256,
+        },
+        "prior": {
+            "build_version": prior_identity.build_version,
+            "package_version": prior_identity.package_version,
+            "release_tag": prior.release_tag,
+            "signed_app_tree_sha256": prior.signed_app_tree_sha256,
+        },
+        "retry_reason_code": retry_reason_code,
+        "run_id": run_id,
+        "schema_version": 1,
+        "transitions": [],
+    }
+    journal_sha256 = _write_durable_json(checkpoint_path, journal)
+    operations.open_updater(app_path, synthetic_home)
+
+    deadline = time.monotonic() + GUI_TIMEOUT_SECONDS
+    states_observed: list[str] = []
+    last_recorded_state: SparkleUpdateState | None = None
+    saw_owned_window = False
+    staged_pressed = False
+    action_count = 0
+    last_pressed: UpdateObservation | None = None
+    intent_checkpoint_sha256 = ""
+
+    def record_transition(phase: str, observation: UpdateObservation) -> str:
+        transitions = cast(list[dict[str, Any]], journal["transitions"])
+        if len(transitions) >= MAX_UPDATE_TRANSITIONS:
+            raise SparkleUpdateFailure(
+                "Sparkle updater exceeded the bounded transition count.",
+                reason_code="updater-transition-limit",
+                state=observation.state,
+                action_pressed=action_count > 0,
+            )
+        transitions.append(
+            {
+                "action_identifier": observation.action_identifier or None,
+                "action_title": observation.action_title or None,
+                "phase": phase,
+                "sequence": len(transitions) + 1,
+                "state": observation.state.value,
+                "timestamp": _utc_timestamp(),
+                "window_match": observation.window_match,
+            }
+        )
+        return _write_durable_json(checkpoint_path, journal)
+
+    while time.monotonic() < deadline:
+        observation = operations.observe_updater()
+        state = observation.state
+        if state != last_recorded_state:
+            states_observed.append(state.value)
+            journal_sha256 = record_transition("observed", observation)
+            last_recorded_state = state
+
+        if observation.window_match in {"identifier", "button-identifier"}:
+            saw_owned_window = True
+
+        if state == SparkleUpdateState.WAITING_FOR_WINDOW:
+            if staged_pressed and not operations.app_running():
+                if last_pressed is None:
+                    raise AssertionError("staged Sparkle update lost its pressed action")
+                return UpdateInteraction(
+                    clicked_button=last_pressed.action_title,
+                    outcome=SparkleUpdateOutcome.STAGED,
+                    action_identifier=last_pressed.action_identifier,
+                    window_match=last_pressed.window_match,
+                    states_observed=tuple(states_observed),
+                    intent_checkpoint_sha256=intent_checkpoint_sha256,
+                    journal_sha256=journal_sha256,
+                    attempt=attempt,
+                    retry_reason_code=retry_reason_code,
+                )
+            if saw_owned_window and action_count == 0:
+                cancelled = UpdateObservation(
+                    state=SparkleUpdateState.CANCELLED,
+                    window_match="none",
+                    action_identifier="",
+                    action_title="",
+                )
+                states_observed.append(cancelled.state.value)
+                record_transition("terminal", cancelled)
+                raise SparkleUpdateFailure(
+                    "Sparkle update window closed before an install action was selected.",
+                    reason_code="updater-cancelled",
+                    state=cancelled.state,
+                    action_pressed=False,
+                )
+            time.sleep(UPDATE_POLL_SECONDS)
+            continue
+
+        if state in {SparkleUpdateState.DOWNLOADING, SparkleUpdateState.INSTALLING}:
+            time.sleep(UPDATE_POLL_SECONDS)
+            continue
+        if state == SparkleUpdateState.STAGED_INSTALL and staged_pressed:
+            time.sleep(UPDATE_POLL_SECONDS)
+            continue
+
+        if state == SparkleUpdateState.TERMINAL_FAILURE:
+            raise SparkleUpdateFailure(
+                "Sparkle presented a terminal updater failure before the candidate was installed.",
+                reason_code="updater-reported-failure",
+                state=state,
+                action_pressed=action_count > 0,
+            )
+        if state == SparkleUpdateState.CANCELLED:
+            raise SparkleUpdateFailure(
+                "Sparkle update was cancelled before the candidate was installed.",
+                reason_code="updater-cancelled",
+                state=state,
+                action_pressed=action_count > 0,
+            )
+        if state == SparkleUpdateState.UNKNOWN:
+            action_detail = (
+                f" unsupported install action: {observation.action_title!r}." if observation.action_title else ""
+            )
+            raise SparkleUpdateFailure(
+                f"Sparkle updater entered an unknown state; no action was taken.{action_detail}",
+                reason_code="updater-state-unknown",
+                state=state,
+                action_pressed=action_count > 0,
+            )
+
+        outcomes = {
+            SparkleUpdateState.STAGED_INSTALL: SparkleUpdateOutcome.STAGED,
+            SparkleUpdateState.READY_INSTALL_RELAUNCH: SparkleUpdateOutcome.INSTALL_AND_RELAUNCH,
+            SparkleUpdateState.READY_INSTALL_ON_QUIT: SparkleUpdateOutcome.INSTALL_ON_QUIT,
+        }
+        try:
+            outcome = outcomes[state]
+        except KeyError as error:
+            raise SparkleUpdateFailure(
+                f"Sparkle updater state is not actionable: {state.value}.",
+                reason_code="updater-state-unknown",
+                state=SparkleUpdateState.UNKNOWN,
+                action_pressed=action_count > 0,
+            ) from error
+        if observation.action_title not in {"Install and Relaunch", "Install Update", "Install on Quit"}:
+            raise SparkleUpdateFailure(
+                f"Sparkle updater exposed an unsupported action title: {observation.action_title!r}.",
+                reason_code="updater-action-unknown",
+                state=SparkleUpdateState.UNKNOWN,
+                action_pressed=action_count > 0,
+            )
+        if observation.action_identifier not in {"", SPARKLE_INSTALL_IDENTIFIER}:
+            raise SparkleUpdateFailure(
+                f"Sparkle updater exposed an unsupported action identifier: {observation.action_identifier!r}.",
+                reason_code="updater-action-unknown",
+                state=SparkleUpdateState.UNKNOWN,
+                action_pressed=action_count > 0,
+            )
+        if action_count >= MAX_UPDATE_ACTIONS:
+            raise SparkleUpdateFailure(
+                "Sparkle updater exceeded the bounded install-action count.",
+                reason_code="updater-action-limit",
+                state=state,
+                action_pressed=True,
+            )
+
+        intent_checkpoint_sha256 = record_transition("intent", observation)
+        try:
+            operations.press_updater_action(observation)
+        except SparkleUpdateFailure as error:
+            if error.reason_code != "updater-state-changed":
+                raise
+            record_transition("intent-invalidated", observation)
+            raise SparkleUpdateFailure(
+                "Sparkle updater changed after intent was durably recorded; no action was pressed.",
+                reason_code="updater-state-changed",
+                state=observation.state,
+                action_pressed=False,
+            ) from error
+        journal_sha256 = record_transition("pressed", observation)
+        action_count += 1
+        last_pressed = observation
+
+        if outcome == SparkleUpdateOutcome.STAGED:
+            staged_pressed = True
+            last_recorded_state = SparkleUpdateState.INSTALLING
+            states_observed.append(SparkleUpdateState.INSTALLING.value)
+            installing = UpdateObservation(
+                state=SparkleUpdateState.INSTALLING,
+                window_match=observation.window_match,
+                action_identifier=observation.action_identifier,
+                action_title=observation.action_title,
+            )
+            journal_sha256 = record_transition("derived", installing)
+            time.sleep(UPDATE_POLL_SECONDS)
+            continue
+
+        return UpdateInteraction(
+            clicked_button=observation.action_title,
+            outcome=outcome,
+            action_identifier=observation.action_identifier,
+            window_match=observation.window_match,
+            states_observed=tuple(states_observed),
+            intent_checkpoint_sha256=intent_checkpoint_sha256,
+            journal_sha256=journal_sha256,
+            attempt=attempt,
+            retry_reason_code=retry_reason_code,
+        )
+
+    raise SparkleUpdateFailure(
+        "Sparkle updater did not reach a bounded install state before timeout.",
+        reason_code="update-window-timeout",
+        state=last_recorded_state or SparkleUpdateState.WAITING_FOR_WINDOW,
+        action_pressed=action_count > 0,
+    )
+
+
 def _wait_for_candidate(
     app_path: Path,
     candidate: ReleaseArtifact,
@@ -1185,11 +1765,31 @@ def _wait_for_candidate(
             except CleanMachineError as error:
                 last_error = error
             else:
-                if operations.app_running():
+                if operations.app_running(app_path):
                     return identity
         time.sleep(1)
     detail = f" Last identity error: {last_error}" if last_error is not None else ""
     raise CleanMachineError(f"Sparkle did not install and relaunch the exact candidate before timeout.{detail}")
+
+
+def _wait_for_candidate_on_disk(app_path: Path, candidate: ReleaseArtifact) -> BundleIdentity:
+    deadline = time.monotonic() + UPDATE_TIMEOUT_SECONDS
+    last_error: CleanMachineError | None = None
+    previous_identity: BundleIdentity | None = None
+    while time.monotonic() < deadline:
+        if app_path.exists():
+            try:
+                identity = verify_installed_app(app_path, candidate)
+            except CleanMachineError as error:
+                last_error = error
+                previous_identity = None
+            else:
+                if identity == previous_identity:
+                    return identity
+                previous_identity = identity
+        time.sleep(1)
+    detail = f" Last identity error: {last_error}" if last_error is not None else ""
+    raise CleanMachineError(f"Sparkle did not install the exact candidate before timeout.{detail}")
 
 
 def _seed_profile(synthetic_home: Path) -> tuple[Path, str]:
@@ -1462,7 +2062,11 @@ def _build_checked_receipt(
 
 
 def _run_qualification(
-    config: QualificationConfig, operations: QualificationOperations
+    config: QualificationConfig,
+    operations: QualificationOperations,
+    *,
+    attempt: int = 1,
+    retry_reason_code: str | None = None,
 ) -> Mapping[str, Mapping[str, Any]]:
     if config.output_receipt is None or config.ui_output_receipt is None or config.evidence_directory is None:
         raise CleanMachineError("Run mode requires both output receipts and the evidence directory path.")
@@ -1516,7 +2120,21 @@ def _run_qualification(
         if operations.app_running():
             raise CleanMachineError("Installed UI updater inspection left the production app running.")
 
-        interaction = operations.perform_update(app_path, synthetic_home)
+        interaction = _perform_sparkle_update(
+            app_path=app_path,
+            synthetic_home=synthetic_home,
+            prior=prior,
+            candidate=candidate,
+            operations=operations,
+            checkpoint_path=qualification_root / ".bd-to-avp-sparkle-update.json",
+            run_id=marker["run_id"],
+            attempt=attempt,
+            retry_reason_code=retry_reason_code,
+        )
+        if interaction.outcome == SparkleUpdateOutcome.INSTALL_ON_QUIT:
+            operations.quit_app()
+            _wait_for_candidate_on_disk(app_path, candidate)
+            operations.launch_app(app_path, synthetic_home)
         candidate_identity = _wait_for_candidate(app_path, candidate, operations)
         route_after = operations.read_preference(synthetic_home, UPDATE_ROUTE_KEY)
         sentinel_after = operations.read_preference(synthetic_home, SENTINEL_KEY)
@@ -1567,6 +2185,8 @@ def _run_qualification(
         update_digest = _write_json(
             evidence_directory / "sparkle-update.json",
             {
+                "action_identifier": interaction.action_identifier or None,
+                "attempt": interaction.attempt,
                 "button": interaction.clicked_button,
                 "candidate": {
                     "build_version": candidate_identity.build_version,
@@ -1574,8 +2194,14 @@ def _run_qualification(
                     "signed_app_tree_sha256": candidate.signed_app_tree_sha256,
                 },
                 "feed_sha256": feed.feed_sha256,
+                "intent_checkpoint_sha256": interaction.intent_checkpoint_sha256,
+                "journal_sha256": interaction.journal_sha256,
+                "outcome": interaction.outcome.value,
+                "retry_reason_code": interaction.retry_reason_code,
                 "route": config.route,
+                "states_observed": list(interaction.states_observed),
                 "status": "passed",
+                "window_match": interaction.window_match,
             },
         )
         profile_digest = _write_json(
@@ -1673,16 +2299,34 @@ def _run_qualification(
 def run_qualification(
     config: QualificationConfig, operations: QualificationOperations
 ) -> Mapping[str, Mapping[str, Any]]:
-    try:
-        return _run_qualification(config, operations)
-    except BaseException:
+    def remove_partial_outputs() -> None:
         if config.output_receipt is not None and config.output_receipt.exists():
             config.output_receipt.unlink()
         if config.ui_output_receipt is not None and config.ui_output_receipt.exists():
             config.ui_output_receipt.unlink()
         if config.evidence_directory is not None and config.evidence_directory.exists():
             shutil.rmtree(config.evidence_directory)
-        raise
+
+    retry_reason_code: str | None = None
+    for attempt in (1, 2):
+        try:
+            return _run_qualification(
+                config,
+                operations,
+                attempt=attempt,
+                retry_reason_code=retry_reason_code,
+            )
+        except SparkleUpdateFailure as error:
+            remove_partial_outputs()
+            clean_retry_environment = not config.qualification_root.resolve().exists() and not operations.app_running()
+            if attempt == 1 and error.retryable and clean_retry_environment:
+                retry_reason_code = error.reason_code
+                continue
+            raise
+        except BaseException:
+            remove_partial_outputs()
+            raise
+    raise AssertionError("bounded Sparkle qualification retry loop exhausted")
 
 
 def build_parser() -> argparse.ArgumentParser:
