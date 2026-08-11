@@ -8,6 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.release_milestone_context import ReleaseMilestoneContext
+from scripts.release_qualification_apply import ApplyOutcome
+from scripts.release_qualification_artifact import ReconciliationBundle
 from scripts.release_qualification_controller import EvidenceBinding
 from scripts.release_qualification_resume import (
     EXIT_OPERATOR_REQUIRED,
@@ -18,6 +20,8 @@ from scripts.release_qualification_resume import (
     _checkpoint_lock,
     _checkpoint_payload,
     _dispatch,
+    _require_no_active_exact_runs,
+    _revalidate_remote_identity,
     _write_checkpoint,
     resume_qualification,
     safety_error_payload,
@@ -36,6 +40,7 @@ RUNS_ENDPOINT = (
     "repos/cbusillo/BD_to_AVP/actions/workflows/milestone-qualification.yml/runs"
     "?event=workflow_dispatch&branch=main&per_page=100"
 )
+RUNS_ENDPOINT_PAGE_2 = RUNS_ENDPOINT + "&page=2"
 PR_ENDPOINT = (
     "repos/cbusillo/BD_to_AVP/pulls?state=open&base=main"
     f"&head=cbusillo%3Aautomation%2Frelease-evidence-{RELEASE_TAG}&per_page=100"
@@ -315,6 +320,44 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         self.assertTrue(client.gets)
         self.assertTrue(all(active_auth for _endpoint, active_auth in client.gets))
         self.assertFalse(checkpoint.exists())
+
+    def test_active_exact_run_on_second_page_blocks_apply(self) -> None:
+        client = FakeGitHubAPI()
+        client.set(
+            RUNS_ENDPOINT,
+            {"workflow_runs": [{"id": 1_000 + index} for index in range(100)]},
+        )
+        client.set(
+            RUNS_ENDPOINT_PAGE_2,
+            {"workflow_runs": [workflow_run(101, status="in_progress", conclusion=None)]},
+        )
+
+        with self.assertRaisesRegex(QualificationResumeSafetyError, "is active"):
+            _require_no_active_exact_runs(client, identity())
+
+    def test_remote_identity_retries_transient_pull_request_head_lag(self) -> None:
+        client = self.configured_client()
+        pushed_sha = "9" * 40
+        client.set(
+            f"repos/cbusillo/BD_to_AVP/git/ref/heads/automation%2Frelease-evidence-{RELEASE_TAG}",
+            {"object": {"sha": pushed_sha}},
+        )
+        client.set_sequence(
+            PR_ENDPOINT,
+            [
+                [pull_request(evidence_sha=EVIDENCE_SHA)],
+                [pull_request(evidence_sha=pushed_sha)],
+            ],
+        )
+
+        with patch("scripts.release_qualification_resume.time.sleep") as sleep:
+            _revalidate_remote_identity(
+                client,
+                identity(),
+                expected_evidence_sha=pushed_sha,
+            )
+
+        sleep.assert_called_once_with(1.0)
 
     def test_exact_dispatch_is_checkpointed_and_adopts_visible_run(self) -> None:
         client = self.configured_client()
@@ -648,11 +691,12 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             {"artifacts": [available_artifact]},
         )
         plan = {"plan_sha256": "8" * 64, "requires_changes": True}
+        bundle = ReconciliationBundle(plan=plan, files=())
         with (
             tempfile.TemporaryDirectory() as temporary_directory,
             patch(
-                "scripts.release_qualification_resume.download_and_plan_reconciliation",
-                return_value=plan,
+                "scripts.release_qualification_resume.download_reconciliation_bundle",
+                return_value=bundle,
             ) as planner,
         ):
             result = self.run_blocked(client, Path(temporary_directory) / "checkpoint.json")
@@ -662,6 +706,181 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
         self.assertEqual(result.payload["reconciliation_plan"], plan)
         self.assertEqual(client.posts, [])
         planner.assert_called_once()
+
+    def test_successful_run_applies_exact_authorized_plan(self) -> None:
+        client = self.configured_client()
+        succeeded = workflow_run(101, status="completed", conclusion="success")
+        available_artifact = artifact(101, expired=False)
+        client.set(RUNS_ENDPOINT, {"workflow_runs": [succeeded]})
+        client.set(
+            "repos/cbusillo/BD_to_AVP/actions/runs/101/jobs?per_page=100",
+            {
+                "jobs": [
+                    {
+                        "name": "Collect exact post-publication qualification receipts",
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ]
+            },
+        )
+        client.set(
+            "repos/cbusillo/BD_to_AVP/actions/runs/101/artifacts?per_page=100",
+            {"artifacts": [available_artifact]},
+        )
+        plan = {"plan_sha256": "8" * 64, "requires_changes": True}
+        bundle = ReconciliationBundle(plan=plan, files=())
+        outcome = ApplyOutcome(
+            state="reconciliation_applied",
+            plan=plan,
+            commit_sha="9" * 40,
+            comment_id=77,
+        )
+        with (
+            tempfile.TemporaryDirectory() as temporary_directory,
+            patch(
+                "scripts.release_qualification_resume.download_reconciliation_bundle",
+                return_value=bundle,
+            ),
+            patch(
+                "scripts.release_qualification_resume.start_reconciliation_apply",
+                return_value=outcome,
+            ) as apply,
+        ):
+            result = self.run_blocked(
+                client,
+                Path(temporary_directory) / "checkpoint.json",
+                apply_plan_sha256="8" * 64,
+            )
+
+        self.assertEqual(result.exit_code, EXIT_SUCCESS)
+        self.assertEqual(result.payload["state"], "reconciliation_applied")
+        self.assertEqual(result.payload["reconciliation_result"]["commit_sha"], "9" * 40)
+        self.assertEqual(result.payload["reconciliation_result"]["comment_id"], 77)
+        apply.assert_called_once()
+
+    def test_apply_checkpoint_continues_before_complete_early_return(self) -> None:
+        client = self.configured_client()
+        plan = {"plan_sha256": "8" * 64, "requires_changes": True}
+        outcome = ApplyOutcome(
+            state="reconciliation_applied",
+            plan=plan,
+            commit_sha="9" * 40,
+            comment_id=77,
+        )
+        complete_status = status_payload()
+        complete_status["groups"] = {"blocking": []}
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkpoint = Path(temporary_directory) / "checkpoint.json"
+            apply_checkpoint = checkpoint.with_name("checkpoint.apply.json")
+            apply_checkpoint.write_text("{}", encoding="utf-8")
+            with (
+                patch("scripts.release_qualification_resume.build_status", return_value=complete_status),
+                patch("scripts.release_qualification_resume.resolve_evidence_binding", return_value=binding()),
+                patch(
+                    "scripts.release_qualification_resume.continue_reconciliation_apply",
+                    return_value=outcome,
+                ) as continuation,
+                patch(
+                    "scripts.release_qualification_resume.reconciliation_checkpoint_summary",
+                    return_value={"present": True, "state": "commented", "plan_sha256": "8" * 64},
+                ),
+            ):
+                result = resume_qualification(
+                    REPO_ROOT,
+                    RELEASE_TAG,
+                    client=client,
+                    checkpoint_path=checkpoint,
+                    apply_plan_sha256="8" * 64,
+                )
+
+        self.assertEqual(result.payload["state"], "reconciliation_applied")
+        continuation.assert_called_once()
+
+    def test_apply_checkpoint_requires_exact_plan_echo(self) -> None:
+        client = self.configured_client()
+        complete_status = status_payload()
+        complete_status["groups"] = {"blocking": []}
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkpoint = Path(temporary_directory) / "checkpoint.json"
+            apply_checkpoint = checkpoint.with_name("checkpoint.apply.json")
+            apply_checkpoint.write_text("{}", encoding="utf-8")
+            with (
+                patch("scripts.release_qualification_resume.build_status", return_value=complete_status),
+                patch("scripts.release_qualification_resume.resolve_evidence_binding", return_value=binding()),
+                patch(
+                    "scripts.release_qualification_resume.reconciliation_checkpoint_summary",
+                    return_value={"present": True, "state": "pushed", "plan_sha256": "8" * 64},
+                ),
+            ):
+                result = resume_qualification(
+                    REPO_ROOT,
+                    RELEASE_TAG,
+                    client=client,
+                    checkpoint_path=checkpoint,
+                )
+
+        self.assertEqual(result.exit_code, EXIT_OPERATOR_REQUIRED)
+        self.assertEqual(result.payload["state"], "reconciliation_apply_pending")
+
+    def test_corrupt_apply_checkpoint_is_translated_to_resume_safety_error(self) -> None:
+        client = self.configured_client()
+        complete_status = status_payload()
+        complete_status["groups"] = {"blocking": []}
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkpoint = Path(temporary_directory) / "checkpoint.json"
+            apply_checkpoint = checkpoint.with_name("checkpoint.apply.json")
+            apply_checkpoint.write_text('{"unexpected":true}\n', encoding="utf-8")
+            apply_checkpoint.chmod(0o600)
+            with (
+                patch("scripts.release_qualification_resume.build_status", return_value=complete_status),
+                patch("scripts.release_qualification_resume.resolve_evidence_binding", return_value=binding()),
+            ):
+                with self.assertRaisesRegex(QualificationResumeSafetyError, "keys changed"):
+                    resume_qualification(
+                        REPO_ROOT,
+                        RELEASE_TAG,
+                        client=client,
+                        checkpoint_path=checkpoint,
+                    )
+
+    def test_completed_apply_checkpoint_revalidates_without_plan_echo(self) -> None:
+        client = self.configured_client()
+        plan = {"plan_sha256": "8" * 64, "requires_changes": True}
+        outcome = ApplyOutcome(
+            state="reconciliation_applied",
+            plan=plan,
+            commit_sha="9" * 40,
+            comment_id=77,
+        )
+        complete_status = status_payload()
+        complete_status["groups"] = {"blocking": []}
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkpoint = Path(temporary_directory) / "checkpoint.json"
+            apply_checkpoint = checkpoint.with_name("checkpoint.apply.json")
+            apply_checkpoint.write_text("{}", encoding="utf-8")
+            with (
+                patch("scripts.release_qualification_resume.build_status", return_value=complete_status),
+                patch("scripts.release_qualification_resume.resolve_evidence_binding", return_value=binding()),
+                patch(
+                    "scripts.release_qualification_resume.continue_reconciliation_apply",
+                    return_value=outcome,
+                ) as continuation,
+                patch(
+                    "scripts.release_qualification_resume.reconciliation_checkpoint_summary",
+                    return_value={"present": True, "state": "commented", "plan_sha256": "8" * 64},
+                ),
+            ):
+                result = resume_qualification(
+                    REPO_ROOT,
+                    RELEASE_TAG,
+                    client=client,
+                    checkpoint_path=checkpoint,
+                )
+
+        self.assertEqual(result.exit_code, EXIT_SUCCESS)
+        self.assertEqual(result.payload["state"], "reconciliation_applied")
+        continuation.assert_called_once()
 
     def test_expired_artifact_requires_exact_retry(self) -> None:
         client = self.configured_client()

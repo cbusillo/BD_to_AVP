@@ -54,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument("--expected-manifest-sha256")
     resume_parser.add_argument("--retry-run-id", type=int)
     resume_parser.add_argument("--retry-checkpoint-sha256")
+    resume_parser.add_argument("--apply-plan-sha256")
     resume_parser.add_argument("--observe-only", action="store_true")
     return parser
 
@@ -79,6 +80,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 expected_manifest_sha256=args.expected_manifest_sha256,
                 retry_run_id=args.retry_run_id,
                 retry_checkpoint_sha256=args.retry_checkpoint_sha256,
+                apply_plan_sha256=args.apply_plan_sha256,
                 observe_only=args.observe_only,
             )
         except QualificationResumeSafetyError as error:

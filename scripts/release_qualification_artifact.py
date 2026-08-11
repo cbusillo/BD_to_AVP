@@ -9,6 +9,7 @@ import subprocess
 import zipfile
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol, cast
@@ -67,6 +68,18 @@ class QualificationArtifactError(RuntimeError):
 
 class QualificationArtifactSafetyError(QualificationArtifactError):
     pass
+
+
+@dataclass(frozen=True)
+class ReconciliationFile:
+    path: str
+    content: bytes
+
+
+@dataclass(frozen=True)
+class ReconciliationBundle:
+    plan: dict[str, object]
+    files: tuple[ReconciliationFile, ...]
 
 
 class QualificationIdentity(Protocol):
@@ -202,15 +215,19 @@ def _json_at_revision(repo_root: Path, revision: str, relative_path: str, descri
     return _load_json_bytes(result.stdout, f"runner-bound {description}")
 
 
-def _accepted_at(run: Mapping[str, Any]) -> str:
-    text = _string(run.get("updated_at"), "workflow run updated_at")
+def _parse_timestamp(value: object, description: str) -> datetime:
+    text = _string(value, description)
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError as error:
-        raise QualificationArtifactError("Workflow run updated_at is invalid.") from error
+        raise QualificationArtifactError(f"{description} is invalid.") from error
     if parsed.tzinfo is None:
-        raise QualificationArtifactError("Workflow run updated_at must include a timezone.")
-    return parsed.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        raise QualificationArtifactError(f"{description} must include a timezone.")
+    return parsed.astimezone(timezone.utc)
+
+
+def _format_timestamp(value: datetime) -> str:
+    return value.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _archive_entry_limit(name: str) -> int:
@@ -498,7 +515,8 @@ def _plan_index_operations(
     identity: QualificationIdentity,
     run: Mapping[str, Any],
     receipt_contents: Mapping[str, bytes],
-) -> list[dict[str, object]]:
+    accepted_at: str,
+) -> tuple[list[dict[str, object]], bytes]:
     index_content = _checked_file(repo_root, EVIDENCE_INDEX_PATH)
     if index_content is None:
         raise QualificationArtifactSafetyError("Checked release qualification evidence index is missing.")
@@ -509,7 +527,6 @@ def _plan_index_operations(
         dict(_mapping(item, "release qualification evidence record"))
         for item in _sequence(index.get("receipts"), "release qualification evidence records")
     ]
-    accepted_at = _accepted_at(run)
     run_id = _integer(run.get("id"), "workflow run ID")
     operations: list[dict[str, object]] = []
     for case_id in CASE_IDS:
@@ -539,10 +556,11 @@ def _plan_index_operations(
                 "state": "append" if len(receipts) > before else "present",
             }
         )
-    return operations
+    index["receipts"] = receipts
+    return operations, _pretty_json_bytes(index)
 
 
-def plan_reconciliation(
+def plan_reconciliation_bundle(
     *,
     repo_root: Path,
     identity: QualificationIdentity,
@@ -550,7 +568,7 @@ def plan_reconciliation(
     artifact: Mapping[str, Any],
     manifest: Mapping[str, Any],
     archive_bytes: bytes,
-) -> dict[str, object]:
+) -> ReconciliationBundle:
     repo_root = repo_root.resolve()
     entries = _admit_archive(archive_bytes)
     receipt_summaries, receipts, receipt_digests = _validate_receipts(
@@ -558,6 +576,12 @@ def plan_reconciliation(
         repo_root=repo_root,
         identity=identity,
         manifest=manifest,
+    )
+    accepted_at = _format_timestamp(
+        max(
+            _parse_timestamp(summary["completed_at"], f"{summary['case_id']} receipt completed_at")
+            for summary in receipt_summaries
+        )
     )
     qualification_run = _load_json_bytes(entries["qualification-run.json"], "qualification-run.json")
     _validate_qualification_run(
@@ -597,14 +621,14 @@ def plan_reconciliation(
             "state": "identical",
         }
     )
-    operations.extend(
-        _plan_index_operations(
-            repo_root,
-            identity=identity,
-            run=run,
-            receipt_contents=receipt_contents,
-        )
+    index_operations, index_content = _plan_index_operations(
+        repo_root,
+        identity=identity,
+        run=run,
+        receipt_contents=receipt_contents,
+        accepted_at=accepted_at,
     )
+    operations.extend(index_operations)
     sorted_operations = sorted(
         operations,
         key=lambda item: (
@@ -616,6 +640,21 @@ def plan_reconciliation(
     artifact_digest = _string(artifact.get("digest"), "Milestone Qualification artifact digest")
     if not artifact_digest.startswith("sha256:"):
         raise QualificationArtifactError("Milestone Qualification artifact digest is invalid.")
+    materialized_files = {
+        **{
+            f"docs/qualification/{identity.release_tag}-{case_id}-v1.json": receipt_contents[case_id]
+            for case_id in CASE_IDS
+        },
+        EVIDENCE_INDEX_PATH: index_content,
+    }
+    file_states = {
+        cast(str, operation["path"]): cast(str, operation["state"])
+        for operation in sorted_operations
+        if operation["kind"] == "write_file"
+    }
+    file_states[EVIDENCE_INDEX_PATH] = (
+        "append" if any(operation["state"] == "append" for operation in index_operations) else "identical"
+    )
     plan: dict[str, object] = {
         "artifact": {
             "id": _integer(artifact.get("id"), "Milestone Qualification artifact ID"),
@@ -628,6 +667,15 @@ def plan_reconciliation(
         "cases": sorted(receipt_summaries, key=lambda item: cast(str, item["case_id"])),
         "evidence_ref": identity.evidence_ref,
         "evidence_sha": _sha(identity.evidence_sha, "evidence SHA"),
+        "files": [
+            {
+                "path": path,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size_bytes": len(content),
+                "state": file_states[path],
+            }
+            for path, content in sorted(materialized_files.items())
+        ],
         "identity_sha256": _sha256(identity.digest, "resume identity digest"),
         "main_sha": _sha(identity.main_sha, "main SHA"),
         "manifest_sha256": _sha256(identity.manifest_sha256, "manifest digest"),
@@ -638,10 +686,34 @@ def plan_reconciliation(
         "schema_version": SCHEMA_VERSION,
     }
     plan["plan_sha256"] = hashlib.sha256(_canonical_json_bytes(plan)).hexdigest()
-    return plan
+    return ReconciliationBundle(
+        plan=plan,
+        files=tuple(
+            ReconciliationFile(path=path, content=content) for path, content in sorted(materialized_files.items())
+        ),
+    )
 
 
-def download_and_plan_reconciliation(
+def plan_reconciliation(
+    *,
+    repo_root: Path,
+    identity: QualificationIdentity,
+    run: Mapping[str, Any],
+    artifact: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    archive_bytes: bytes,
+) -> dict[str, object]:
+    return plan_reconciliation_bundle(
+        repo_root=repo_root,
+        identity=identity,
+        run=run,
+        artifact=artifact,
+        manifest=manifest,
+        archive_bytes=archive_bytes,
+    ).plan
+
+
+def download_reconciliation_bundle(
     *,
     client: GitHubArtifactAPI,
     repo_root: Path,
@@ -649,7 +721,7 @@ def download_and_plan_reconciliation(
     run: Mapping[str, Any],
     artifact: Mapping[str, Any],
     manifest: Mapping[str, Any],
-) -> dict[str, object]:
+) -> ReconciliationBundle:
     artifact_id = _integer(artifact.get("id"), "Milestone Qualification artifact ID")
     run_id = _integer(run.get("id"), "workflow run ID")
     run_attempt = _integer(run.get("run_attempt"), "workflow run attempt")
@@ -683,7 +755,7 @@ def download_and_plan_reconciliation(
     expected_digest = _string(artifact.get("digest"), "Milestone Qualification artifact digest")
     if hashlib.sha256(archive_bytes).hexdigest() != expected_digest.removeprefix("sha256:"):
         raise QualificationArtifactSafetyError("Milestone Qualification artifact archive digest conflicts.")
-    return plan_reconciliation(
+    return plan_reconciliation_bundle(
         repo_root=repo_root,
         identity=identity,
         run=run,
@@ -693,11 +765,34 @@ def download_and_plan_reconciliation(
     )
 
 
+def download_and_plan_reconciliation(
+    *,
+    client: GitHubArtifactAPI,
+    repo_root: Path,
+    identity: QualificationIdentity,
+    run: Mapping[str, Any],
+    artifact: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> dict[str, object]:
+    return download_reconciliation_bundle(
+        client=client,
+        repo_root=repo_root,
+        identity=identity,
+        run=run,
+        artifact=artifact,
+        manifest=manifest,
+    ).plan
+
+
 __all__ = [
     "MAX_ARCHIVE_BYTES",
     "PLAN_TYPE",
     "QualificationArtifactError",
     "QualificationArtifactSafetyError",
+    "ReconciliationBundle",
+    "ReconciliationFile",
     "download_and_plan_reconciliation",
+    "download_reconciliation_bundle",
     "plan_reconciliation",
+    "plan_reconciliation_bundle",
 ]

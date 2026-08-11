@@ -16,11 +16,12 @@ from scripts.release_qualification_controller import (
     _case_categories,
     _load_bound_policy,
     _require_checked_file,
+    build_parser,
     build_status,
     main,
     resolve_evidence_binding,
 )
-from scripts.release_qualification_resume import ResumeResult
+from scripts.release_qualification_resume import QualificationResumeSafetyError, ResumeResult
 from scripts.release_milestone_context import ReleaseMilestoneContext
 
 
@@ -29,6 +30,25 @@ READ_ONLY_GIT_COMMANDS = {"diff", "ls-files", "merge-base", "show"}
 
 
 class ReleaseQualificationControllerTests(unittest.TestCase):
+    def test_resume_parser_accepts_apply_plan_digest(self) -> None:
+        args = build_parser().parse_args(["resume", "--release-tag", "v1.0.0", "--apply-plan-sha256", "c" * 64])
+
+        self.assertEqual(args.apply_plan_sha256, "c" * 64)
+
+    def test_resume_safety_error_is_json_and_path_scrubbed(self) -> None:
+        stdout = io.StringIO()
+        with patch(
+            "scripts.release_qualification_resume.resume_qualification",
+            side_effect=QualificationResumeSafetyError("Invalid /Users/example/private/apply.json"),
+        ):
+            with redirect_stdout(stdout):
+                exit_code = main(["resume", "--release-tag", "v1.0.0"])
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 21)
+        self.assertEqual(payload["state"], "conflict")
+        self.assertNotIn("/Users/", json.dumps(payload))
+
     def test_reports_v031_legacy_evidence_without_mutation(self) -> None:
         before_status = subprocess.run(
             ["git", "status", "--porcelain=v1", "--untracked-files=all"],
@@ -400,6 +420,7 @@ class ReleaseQualificationControllerTests(unittest.TestCase):
             expected_manifest_sha256="b" * 64,
             retry_run_id=123,
             retry_checkpoint_sha256=None,
+            apply_plan_sha256=None,
             observe_only=True,
         )
 

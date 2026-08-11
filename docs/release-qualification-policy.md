@@ -441,14 +441,29 @@ revalidates the exact artifact metadata, downloads the byte-bounded ZIP, rejects
 unsafe or unexpected members, validates its receipts against the runner-pinned
 policy and checked manifest, and emits a deterministic reconciliation plan.
 `--observe-only` stops at `artifact_available` without downloading.
-`reconciliation_planned` requires a later explicitly authorized apply stage;
+`reconciliation_planned` requires an explicit rerun with
+`--apply-plan-sha256 <plan-sha256>`;
 `reconciliation_current` means the checked destinations and evidence records
 are already identical. Planning deliberately does not mutate evidence refs,
-files, commits, comments, or pull requests. Expired milestone transport may
-trigger an explicitly authorized fresh qualification run; it never reconstructs
-receipts. If equivalent receipts are already committed and accepted, `status`
-reports no blockers and `resume` returns `complete` regardless of Actions
-retention.
+files, commits, comments, or pull requests.
+
+Apply freezes the full authorized plan and exact target file bytes in a separate
+mode-`0600`, self-digested checkpoint while sharing the per-release dispatch
+lock. Before every mutation it revalidates protected `main`, the canonical
+evidence ref and same-repository pull request, the active `cbusillo` identity,
+and the absence of an active exact Milestone Qualification run. It writes only
+the planned qualification receipts and append-only evidence index, creates one
+identity-bound commit, performs a non-force fast-forward push, and posts one
+marker-bound pull-request comment. Prepared, files-written, committed, pushed,
+and commented states are adopted after interruption rather than repeated.
+Conflicting local content, unrelated worktree changes, moved refs, changed pull
+requests, duplicate markers, or a non-fast-forward push fail closed.
+
+Expired milestone transport may trigger an explicitly authorized fresh
+qualification run only when no validated apply checkpoint or equivalent durable
+commit exists; it never reconstructs receipts. If equivalent receipts are
+already committed and accepted, `status` reports no blockers and `resume`
+returns `complete` regardless of Actions retention.
 
 The initial evidence PR is expected to remain unmergeable while blocking
 live-artifact or automated Tier 3 receipts are absent. Collectors add validated
