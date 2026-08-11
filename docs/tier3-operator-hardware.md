@@ -97,6 +97,11 @@ last known public target identity when the target machine itself is unavailable.
 All overrides remain subject to the same closed public-identifier validation;
 partial override sets are rejected.
 
+USB discovery intentionally requires an optical marker in the public device
+label to avoid treating generic storage as a Blu-ray drive. If a real drive is
+not recognized, record `hardware-unavailable` with its bounded public identity
+rather than claiming a successful drive probe.
+
 Use `--skip-reason` with `environment-unavailable`, `hardware-unavailable`, or
 `operator-cancelled` when collection cannot proceed. Missing, skipped, and
 failed operator-only evidence remains visible and nonblocking.

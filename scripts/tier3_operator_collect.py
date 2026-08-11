@@ -292,6 +292,10 @@ def _read_worker_events(path: Path) -> tuple[Mapping[str, Any], ...]:
                 if event_type not in known_types or not isinstance(event_job_id, str):
                     raise OperatorCollectionError("The native-worker event stream contains an unsupported event.")
                 if event_job_id == ZERO_JOB_ID:
+                    if event_type == WorkerEventType.JOB_FAILED.value:
+                        raise OperatorCollectionError(
+                            "The native-worker stream failed before a qualification job identity was established."
+                        )
                     if event_type != WorkerEventType.WORKER_READY.value or job_id is not None or terminal_seen:
                         raise OperatorCollectionError("The native-worker event stream contains an invalid ready event.")
                     continue
@@ -469,6 +473,7 @@ def _environment(
     architecture: str | None,
     macos_version: str | None,
     macos_build: str | None,
+    probe: bool,
 ) -> Mapping[str, str]:
     overrides = (architecture, macos_version, macos_build)
     if any(value is not None for value in overrides):
@@ -485,12 +490,15 @@ def _environment(
             raise OperatorCollectionError("The macOS version override is not a bounded public version.")
         if MACOS_BUILD_PATTERN.fullmatch(normalized_build) is None:
             raise OperatorCollectionError("The macOS build override is not a bounded public build.")
-        return {
+        overridden = {
             "architecture": normalized_architecture,
             "environment_class": _safe_identity(environment_class, "environment class"),
             "macos_build": normalized_build,
             "macos_version": normalized_version,
         }
+        if probe and dict(operations.environment(environment_class)) != overridden:
+            raise OperatorCollectionError("Detected environment identity does not match the bounded overrides.")
+        return overridden
     return operations.environment(environment_class)
 
 
@@ -538,6 +546,7 @@ def collect_operator_answers(
         architecture=architecture,
         macos_version=macos_version,
         macos_build=macos_build,
+        probe=skip_reason is None,
     )
     usb_facts: USBHardwareFacts | None = None
     if case_id == "vision-pro-physical-playback":
@@ -581,7 +590,12 @@ def collect_operator_answers(
                         else "failed"
                     )
                     if not _paths_absent(cleanup_paths):
-                        _prompt(prompter, "protected-cleanup")
+                        try:
+                            _prompt(prompter, "protected-cleanup")
+                        except PromptCancelled as error:
+                            raise OperatorCollectionError(
+                                "Owned cancellation cleanup remains; no public state was written."
+                            ) from error
                         if not _paths_absent(cleanup_paths):
                             raise OperatorCollectionError("Owned cancellation cleanup could not be verified.")
                 ejection = "failed"
@@ -605,7 +619,12 @@ def collect_operator_answers(
                 observations = derive_protected_conversion_observations(worker_events, cleanup_paths)
                 cleanup_status = "restored" if observations["recovery"] == "clean" else "recovered"
                 if observations["recovery"] == "failed":
-                    _prompt(prompter, "protected-cleanup")
+                    try:
+                        _prompt(prompter, "protected-cleanup")
+                    except PromptCancelled as error:
+                        raise OperatorCollectionError(
+                            "Owned conversion cleanup remains; no public state was written."
+                        ) from error
                     if not _paths_absent(cleanup_paths):
                         raise OperatorCollectionError("Owned conversion cleanup could not be verified.")
             else:

@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from bd_to_avp.worker.protocol import PROTOCOL_VERSION, ZERO_JOB_ID
+from bd_to_avp.worker.protocol import PROTOCOL_VERSION
 from scripts.tier3_operator_collect import (
     PROMPT_SPECS,
     MacOSOperations,
@@ -189,21 +189,22 @@ class Tier3OperatorCollectTests(unittest.TestCase):
                 {
                     "protocol_version": PROTOCOL_VERSION,
                     "type": "worker.ready",
-                    "job_id": ZERO_JOB_ID,
+                    "job_id": job_id,
                     "sequence": 0,
+                    "payload": {},
                 },
                 {
                     "protocol_version": PROTOCOL_VERSION,
                     "type": "job.started",
                     "job_id": job_id,
-                    "sequence": 0,
+                    "sequence": 1,
                     "payload": {"operation": "convert_source", "source": "/Volumes/Private Disc"},
                 },
                 {
                     "protocol_version": PROTOCOL_VERSION,
                     "type": "job.completed",
                     "job_id": job_id,
-                    "sequence": 1,
+                    "sequence": 2,
                     "payload": {
                         "conversion_result": {
                             "output_path": str(output),
@@ -243,11 +244,18 @@ class Tier3OperatorCollectTests(unittest.TestCase):
             events = [
                 {
                     "protocol_version": PROTOCOL_VERSION,
-                    "type": "job.started",
+                    "type": "worker.ready",
                     "job_id": job_id,
                     "sequence": 0,
+                    "payload": {},
+                },
+                {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "type": "job.started",
+                    "job_id": job_id,
+                    "sequence": 1,
                     "payload": {"operation": "convert_source"},
-                }
+                },
             ]
             events.extend(
                 {
@@ -257,14 +265,14 @@ class Tier3OperatorCollectTests(unittest.TestCase):
                     "sequence": sequence,
                     "payload": {"elapsed_seconds": sequence, "private_path": str(root)},
                 }
-                for sequence in range(1, 2_501)
+                for sequence in range(2, 2_502)
             )
             events.append(
                 {
                     "protocol_version": PROTOCOL_VERSION,
                     "type": "job.completed",
                     "job_id": job_id,
-                    "sequence": 2_501,
+                    "sequence": 2_502,
                     "payload": {"conversion_result": {"output_path": str(output), "size_bytes": 6}},
                 }
             )
@@ -272,6 +280,97 @@ class Tier3OperatorCollectTests(unittest.TestCase):
             observations = derive_protected_conversion_observations(worker_events, [root / "cleanup"])
             self.assertEqual(observations["conversion"], "completed")
             self.assertEqual(observations["output"], "verified")
+
+    def test_completed_environment_overrides_must_match_live_probe(self) -> None:
+        with self.assertRaisesRegex(OperatorCollectionError, "environment identity does not match"):
+            collect_operator_answers(
+                case_id="vision-pro-physical-playback",
+                environment_class="dedicated-hardware",
+                operations=FakeOperations(),
+                prompter=FakePrompter({}),
+                clock=clock(),
+                vision_model_family="apple-vision-pro",
+                vision_chip_family="m2",
+                visionos_major="26",
+                architecture="arm64",
+                macos_version="26.0",
+                macos_build="25A999",
+            )
+
+    def test_usb_overrides_must_match_live_probe(self) -> None:
+        with self.assertRaisesRegex(OperatorCollectionError, "USB identity does not match"):
+            collect_operator_answers(
+                case_id="usb-bluray-makemkv",
+                environment_class="dedicated-hardware",
+                operations=FakeOperations([(PublicUSBDevice("abcd", "ef01"),)]),
+                prompter=FakePrompter({}),
+                clock=clock(),
+                usb_vendor_id="1234",
+                usb_product_id="5678",
+                makemkv_version="1.18.1",
+            )
+
+    def test_cleanup_cancellation_with_known_leftovers_writes_no_answers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output = root / "output.mov"
+            output.write_bytes(b"output")
+            cleanup_path = root / "owned-workspace"
+            cleanup_path.mkdir()
+            worker_events = root / "events.ndjson"
+            job_id = "11111111-1111-4111-8111-111111111111"
+            events = [
+                {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "type": "job.started",
+                    "job_id": job_id,
+                    "sequence": 0,
+                    "payload": {"operation": "convert_source"},
+                },
+                {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "type": "job.completed",
+                    "job_id": job_id,
+                    "sequence": 1,
+                    "payload": {"conversion_result": {"output_path": str(output), "size_bytes": 6}},
+                },
+            ]
+            worker_events.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+            with self.assertRaisesRegex(OperatorCollectionError, "cleanup remains; no public state was written"):
+                collect_operator_answers(
+                    case_id="protected-real-media-conversion",
+                    environment_class="dedicated-hardware",
+                    operations=FakeOperations(),
+                    prompter=FakePrompter({"protected-run": "ready", "protected-cleanup": "cancel"}),
+                    clock=clock(),
+                    worker_events=worker_events,
+                    cleanup_paths=[cleanup_path],
+                )
+
+    def test_out_of_sequence_worker_stream_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            worker_events = root / "events.ndjson"
+            job_id = "11111111-1111-4111-8111-111111111111"
+            events = [
+                {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "type": "job.started",
+                    "job_id": job_id,
+                    "sequence": 0,
+                    "payload": {"operation": "convert_source"},
+                },
+                {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "type": "job.failed",
+                    "job_id": job_id,
+                    "sequence": 2,
+                    "payload": {},
+                },
+            ]
+            worker_events.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+            with self.assertRaisesRegex(OperatorCollectionError, "ambiguous or out of sequence"):
+                derive_protected_conversion_observations(worker_events, [root / "cleanup"])
 
     def test_usb_missing_machine_facts_produce_explicit_failed_answers_with_overrides(self) -> None:
         answers = collect_operator_answers(
