@@ -143,6 +143,7 @@
       "signedArtifactUi": "uv run python -m unittest tests.test_signed_artifact_ui",
       "tier3Receipt": "uv run python -m unittest tests.test_tier3_receipt",
       "tier3CleanMachine": "uv run python -m unittest tests.test_tier3_clean_machine",
+      "tier3OperatorCollection": "uv run python -m unittest tests.test_tier3_operator_collect",
       "tier3OperatorHardware": "uv run python -m unittest tests.test_tier3_operator_receipt",
       "macosApp": "uv run python scripts/native_app.py test",
       "importSmoke": "uv run python -c 'import bd_to_avp; import bd_to_avp.__main__; import bd_to_avp.app'",
