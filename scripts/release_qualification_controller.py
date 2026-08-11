@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date
 from pathlib import Path
 from typing import cast
@@ -12,6 +12,7 @@ from typing import cast
 from scripts.qualify_release_scope import QualificationScopeError
 from scripts.release_milestone_context import ReleaseMilestoneContextError
 from scripts.release_qualification_manifest import ReleaseQualificationManifestError
+from scripts.tier3_operator_collect import add_collection_arguments, run_collection
 from scripts.release_qualification_status import (
     EvidenceBinding,
     ReleaseQualificationControllerError,
@@ -38,7 +39,7 @@ __all__ = [
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Inspect and resume release qualification safely.")
+    parser = argparse.ArgumentParser(description="Inspect, resume, and collect release qualification safely.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     status_parser = subparsers.add_parser("status", help="Inspect checked qualification state without mutation.")
     status_parser.add_argument("--release-tag", required=True)
@@ -56,11 +57,49 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument("--retry-checkpoint-sha256")
     resume_parser.add_argument("--apply-plan-sha256")
     resume_parser.add_argument("--observe-only", action="store_true")
+    collect_parser = subparsers.add_parser(
+        "collect-operator",
+        help="Collect one currently-due operator-assisted case through the checked release binding.",
+    )
+    collect_parser.add_argument("--release-tag", required=True)
+    collect_parser.add_argument("--repo-root", type=Path, default=REPO_ROOT)
+    collect_parser.add_argument("--as-of", type=date.fromisoformat)
+    add_collection_arguments(collect_parser)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "collect-operator":
+        try:
+            repo_root = args.repo_root.resolve()
+            payload = build_status(repo_root, args.release_tag, as_of=args.as_of)
+            groups = cast(Mapping[str, Sequence[str]], payload["groups"])
+            operator_required = tuple(groups["operator_required"])
+            if args.case_id not in operator_required:
+                due = ", ".join(operator_required) if operator_required else "none"
+                raise ReleaseQualificationControllerError(
+                    f"Operator-assisted case {args.case_id!r} is not currently due; currently due: {due}."
+                )
+            evidence_binding = cast(Mapping[str, object], payload["evidence_binding"])
+            release_receipt_path = evidence_binding.get("release_receipt_path")
+            if not isinstance(release_receipt_path, str) or not release_receipt_path:
+                raise ReleaseQualificationControllerError(
+                    "Qualification status did not resolve a release receipt path."
+                )
+            args.repo = repo_root
+            args.release_receipt = repo_root / release_receipt_path
+        except (
+            json.JSONDecodeError,
+            OSError,
+            QualificationScopeError,
+            ReleaseMilestoneContextError,
+            ReleaseQualificationControllerError,
+            ReleaseQualificationManifestError,
+        ) as error:
+            print(f"Release qualification operator collection failed: {error}", file=sys.stderr)
+            return 1
+        return run_collection(args)
     if args.command == "resume":
         from scripts.github_release_run import ReleaseRunError
         from scripts.release_qualification_resume import (

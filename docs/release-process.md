@@ -318,6 +318,26 @@ The workflow performs these ordered boundaries:
    identity resolution failed. Use `--as-of YYYY-MM-DD` when a reproducible
    Tier 3 expiry boundary is required.
 
+   When `status` reports an operator-assisted case in `operator_required`, run
+   guided collection through the same maintained controller entrypoint from the
+   exact checked evidence branch:
+
+   ```sh
+   uv run python -m scripts.release_qualification_controller collect-operator \
+     --release-tag <tag> \
+     --case-id <operator-case-id> \
+     --environment-class dedicated-hardware \
+     --output-answers /path/out/<operator-case-id>-answers.json
+   ```
+
+   The controller derives the checked release receipt, refuses cases that are
+   not currently due, and delegates to the privacy-safe guided collector. It
+   writes only the validated answers file; the separate Tier 3 receipt builder
+   remains the sole evidence writer. Collection exit `0` means answers were
+   written, exit `1` means controller preconditions failed, exit `2` means
+   bounded collection failed, and exit `3` means the operator cancelled with no
+   public state written.
+
    When blocking automated cases remain on an open canonical evidence branch,
    run the bounded resume observer from the exact checked
    `automation/release-evidence-<tag>` branch head:

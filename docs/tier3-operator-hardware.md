@@ -69,17 +69,32 @@ Pro identity uses only `model_family`, `chip_family`, and `visionos_major`.
 ## Guided Collection
 
 Run the collector from the exact release-evidence branch. The release receipt
-must be committed and byte-identical to repository `HEAD`. The collector shows
-a validated public-safe preview, including exact release identity, and writes
-the answers only after a final bounded confirmation:
+must be committed and byte-identical to repository `HEAD`. Use the maintained
+qualification controller so the release receipt is derived from the checked
+release tag and the selected case is confirmed as currently
+`operator_required`. The collector shows a validated public-safe preview,
+including exact release identity, and writes the answers only after a final
+bounded confirmation:
 
 ```sh
-uv run python -m scripts.tier3_operator_collect \
+uv run python -m scripts.release_qualification_controller collect-operator \
+  --release-tag <candidate> \
   --case-id usb-bluray-makemkv \
   --environment-class dedicated-hardware \
-  --release-receipt docs/release-evidence/<candidate>/release-receipt.json \
   --output-answers /path/out/usb-bluray-makemkv-answers.json
 ```
+
+The controller validates the same checked status used by `status`, rejects a
+case that is not currently due, and supports `--as-of YYYY-MM-DD` for a
+reproducible expiry boundary. Exit `0` means answers were written, exit `1`
+means the checked release binding or due-case precondition failed, exit `2`
+means bounded collection failed, and exit `3` means the operator cancelled and
+nothing was written.
+
+`scripts.tier3_operator_collect` remains the lower-level compatibility boundary
+for an explicitly approved baseline or diagnostic collection that is not
+currently due. It requires the checked `--release-receipt` path directly and
+does not perform the controller's due-case gate.
 
 For `protected-real-media-conversion`, also pass the private native-worker
 NDJSON stream with `--worker-events` and each app-owned temporary path with
@@ -141,6 +156,7 @@ does not block publication, the evidence PR, or milestone closeout.
 ```sh
 uv run python -m unittest tests.test_tier3_operator_receipt
 uv run python -m unittest tests.test_tier3_operator_collect
+uv run python -m unittest tests.test_release_qualification_controller
 uv run python -m scripts.qualify_release_scope --validate-policy
 ```
 

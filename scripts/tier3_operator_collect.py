@@ -14,7 +14,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from bd_to_avp.modules.config import resolve_makemkvcon_path
 from bd_to_avp.worker.protocol import MAX_EVENT_BYTES, PROTOCOL_VERSION, WorkerEventType, ZERO_JOB_ID
 from scripts.tier3_operator_receipt import (
     CASE_CONTRACTS,
@@ -203,13 +202,19 @@ def _run_stdout(command: Sequence[str], timeout: int) -> bytes:
     return result.stdout
 
 
+def _default_makemkv_path() -> Path:
+    from bd_to_avp.modules.config import resolve_makemkvcon_path
+
+    return resolve_makemkvcon_path()
+
+
 class MacOSOperations:
     def __init__(
         self,
         *,
         runner: Callable[[Sequence[str], int], bytes] = _run_stdout,
         architecture: Callable[[], str] = platform.machine,
-        makemkv_path: Callable[[], Path] = resolve_makemkvcon_path,
+        makemkv_path: Callable[[], Path] = _default_makemkv_path,
     ) -> None:
         self._runner = runner
         self._architecture = architecture
@@ -701,10 +706,8 @@ def write_validated_answers(
     return preview
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Collect bounded privacy-safe Tier 3 operator answers.")
+def add_collection_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--case-id", choices=tuple(CASE_CONTRACTS), required=True)
-    parser.add_argument("--release-receipt", type=Path, required=True)
     parser.add_argument("--output-answers", type=Path, required=True)
     parser.add_argument(
         "--environment-class",
@@ -723,20 +726,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--architecture")
     parser.add_argument("--macos-version")
     parser.add_argument("--macos-build")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Collect bounded privacy-safe Tier 3 operator answers.")
+    add_collection_arguments(parser)
+    parser.add_argument("--release-receipt", type=Path, required=True)
     parser.add_argument("--repo", type=Path, default=REPO_ROOT)
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    prompter = ConsolePrompter()
+def run_collection(
+    args: argparse.Namespace,
+    *,
+    operations: MachineOperations | None = None,
+    prompter: Prompter | None = None,
+    clock: Callable[[], datetime] | None = None,
+) -> int:
+    operations = operations if operations is not None else MacOSOperations()
+    prompter = prompter if prompter is not None else ConsolePrompter()
+    clock = clock if clock is not None else lambda: datetime.now(UTC)
     try:
         answers = collect_operator_answers(
             case_id=args.case_id,
             environment_class=args.environment_class,
-            operations=MacOSOperations(),
+            operations=operations,
             prompter=prompter,
-            clock=lambda: datetime.now(UTC),
+            clock=clock,
             worker_events=args.worker_events,
             cleanup_paths=args.cleanup_path,
             skip_reason=args.skip_reason,
@@ -767,6 +783,10 @@ def main(argv: list[str] | None = None) -> int:
     except OperatorCollectionError as error:
         print(f"tier3 operator collection error: {error}", file=sys.stderr)
         return 2
+
+
+def main(argv: list[str] | None = None) -> int:
+    return run_collection(build_parser().parse_args(argv))
 
 
 if __name__ == "__main__":
