@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftUI
 
@@ -48,6 +49,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var liveObservabilityStatus = LiveObservabilityStatus.empty
     @Published private(set) var batchQueue: SourceFolderQueueState?
     @Published private(set) var queueItems: [ConversionQueueItem] = []
+    @Published private(set) var persistentQueueItems: [PersistentQueueItem] = []
+    @Published private(set) var persistentQueueProjectionError: PersistentQueueProjectionError?
+    @Published private(set) var selectedPersistentQueueItemID: UUID?
     @Published private(set) var completedBatchResults: [ConversionResult]?
     @Published private(set) var durableQueueRuntimeDiagnostic: String?
 
@@ -77,6 +81,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private var sourceFolderQueueCompletionPending = false
     private var sourceFolderRecoveryChoices: [UUID: String] = [:]
     private var batchItemDiagnosticJobIDs: [UUID: UUID] = [:]
+    private var durableQueueSubscription: AnyCancellable?
 
     init(
         clientFactory: @escaping ClientFactory = {
@@ -95,6 +100,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             ?? DiagnosticBundleBuilder(storageProbe: diagnosticStorageProbe)
         self.observabilityEventStore = observabilityEventStore
         self.durableQueueStore = durableQueueStore ?? ConversionQueueStore.inMemory()
+        durableQueueSubscription = self.durableQueueStore.$document.sink { [weak self] document in
+            self?.publishPersistentQueueProjection(items: document.items)
+        }
     }
 
     var isRunning: Bool {
@@ -160,12 +168,52 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         durableQueueStore.items
     }
 
+    var selectedPersistentQueueItem: PersistentQueueItem? {
+        guard let selectedPersistentQueueItemID else {
+            return nil
+        }
+        return persistentQueueItems.first(where: { $0.id == selectedPersistentQueueItemID })
+    }
+
     var durableQueueLoadErrorMessage: String? {
         durableQueueStore.loadErrorMessage
     }
 
     var durableQueueWritesBlocked: Bool {
         durableQueueStore.writesBlocked
+    }
+
+    func selectPersistentQueueItem(_ itemID: UUID?) {
+        selectedPersistentQueueItemID = itemID.flatMap { selectedID in
+            persistentQueueItems.contains(where: { $0.id == selectedID }) ? selectedID : nil
+        }
+    }
+
+    func movePersistentQueueItem(_ itemID: UUID, before targetID: UUID) async throws {
+        try await durableQueueStore.moveWaitingItem(itemID, before: targetID)
+    }
+
+    func movePersistentQueueItemNext(_ itemID: UUID) async throws {
+        try await durableQueueStore.moveWaitingItemNext(itemID)
+    }
+
+    func removePersistentQueueItems(_ itemIDs: Set<UUID>) async throws -> PersistentQueueRemovalToken {
+        try await durableQueueStore.removeWaitingItems(itemIDs)
+    }
+
+    func restorePersistentQueueItems(_ token: PersistentQueueRemovalToken) async throws {
+        try await durableQueueStore.restoreRemovedItems(token)
+    }
+
+    func updatePersistentQueueItem(_ itemID: UUID, draft: ConversionDraft) async throws {
+        try await durableQueueStore.updateWaitingItemIntent(
+            itemID,
+            intent: DurableQueueItemIntent(draft: draft)
+        )
+    }
+
+    func clearCompletedPersistentQueueItems() async throws -> PersistentQueueRemovalToken {
+        try await durableQueueStore.clearCompletedItems()
     }
 
     func captureDiagnosticBundle(
@@ -377,34 +425,12 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 return
             }
             do {
-                try await self.durableQueueStore.mutateItems { items in
-                    guard let sourceIndex = items.firstIndex(where: { $0.id == itemID }),
-                          let targetIndex = items.firstIndex(where: { $0.id == targetID }),
-                          items[sourceIndex].groupID == groupID,
-                          items[targetIndex].groupID == groupID,
-                          items[sourceIndex].state == .waiting,
-                          items[targetIndex].state == .waiting
-                    else {
-                        throw ConversionQueueStoreError.invalidDocument
-                    }
-                    let item = items.remove(at: sourceIndex)
-                    let insertionIndex = items.firstIndex(where: { $0.id == targetID }) ?? targetIndex
-                    items.insert(item, at: insertionIndex)
-                    let sourceRemovalRequested = items.contains { queueItem in
-                        queueItem.groupID == groupID
-                            && queueItem.intent.options.job.removeOriginalAfterSuccess
-                    }
-                    let finalWaitingItemID = items.last(where: { queueItem in
-                        queueItem.groupID == groupID && queueItem.state == .waiting
-                    })?.id
-                    for index in items.indices {
-                        items[index].ordinal = index
-                        if items[index].groupID == groupID, items[index].state == .waiting {
-                            items[index].intent.options.job.removeOriginalAfterSuccess = sourceRemovalRequested
-                                && items[index].id == finalWaitingItemID
-                        }
-                    }
+                guard self.currentTitleQueueItems.contains(where: { $0.id == itemID && $0.groupID == groupID }),
+                      self.currentTitleQueueItems.contains(where: { $0.id == targetID && $0.groupID == groupID })
+                else {
+                    throw ConversionQueueStoreError.invalidDocument
                 }
+                try await self.durableQueueStore.moveWaitingItem(itemID, before: targetID)
                 self.publishTitleQueueProjection()
             } catch {
                 self.durableQueueRuntimeDiagnostic = "Queue order could not be saved: \(error.localizedDescription)"
@@ -2011,6 +2037,31 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
             return ConversionQueueItem(id: item.id, draft: draft, status: queueStatus(for: item))
         }
+    }
+
+    func publishPersistentQueueProjection(items: [DurableConversionQueueItem]) {
+        let projectedItems: [PersistentQueueItem]
+        do {
+            projectedItems = try items.map(PersistentQueueItem.init(item:))
+        } catch let error as PersistentQueueProjectionError {
+            persistentQueueItems = []
+            selectedPersistentQueueItemID = nil
+            persistentQueueProjectionError = error
+            return
+        } catch {
+            persistentQueueItems = []
+            selectedPersistentQueueItemID = nil
+            persistentQueueProjectionError = .unexpected
+            return
+        }
+        persistentQueueItems = projectedItems
+        persistentQueueProjectionError = nil
+        if let selectedPersistentQueueItemID,
+           persistentQueueItems.contains(where: { $0.id == selectedPersistentQueueItemID })
+        {
+            return
+        }
+        selectedPersistentQueueItemID = persistentQueueItems.first?.id
     }
 
     private func publishCompletedTitleQueueResults() {

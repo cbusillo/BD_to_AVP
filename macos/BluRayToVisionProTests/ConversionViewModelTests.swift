@@ -2179,6 +2179,120 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPersistentQueueProjectionIncludesEveryOriginAndPreservesSelection() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        let viewModel = ConversionViewModel(durableQueueStore: queueStore)
+        let groupID = UUID()
+        let items = [
+            makePersistentQueueFixture(ordinal: 0, origin: .singleSource, state: .waiting),
+            makePersistentQueueFixture(ordinal: 1, groupID: groupID, origin: .multiTitle, state: .processing),
+            makePersistentQueueFixture(ordinal: 2, groupID: UUID(), origin: .sourceFolder, state: .interrupted),
+        ]
+
+        try await queueStore.replaceItems(items)
+        viewModel.selectPersistentQueueItem(items[2].id)
+        try await queueStore.updateWaitingItemIntent(items[0].id, intent: items[0].intent)
+
+        XCTAssertEqual(viewModel.persistentQueueItems.map(\.id), items.map(\.id))
+        XCTAssertEqual(viewModel.persistentQueueItems.map(\.origin), [.singleSource, .multiTitle, .sourceFolder])
+        XCTAssertEqual(viewModel.selectedPersistentQueueItemID, items[2].id)
+        XCTAssertTrue(viewModel.selectedPersistentQueueItem?.isRestored == true)
+        XCTAssertEqual(viewModel.queueItems, [])
+        XCTAssertNil(viewModel.batchQueue)
+    }
+
+    @MainActor
+    func testPersistentQueueProjectionPreservesEveryDurableState() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        let viewModel = ConversionViewModel(durableQueueStore: queueStore)
+        let states = DurableQueueItemState.allCases
+        let items = states.enumerated().map { offset, state in
+            var item = makePersistentQueueFixture(ordinal: offset, state: state)
+            if state == .attention {
+                item.decision = DurableQueueDecision(
+                    identifier: "subtitle_decision_required",
+                    prompt: "Retry without subtitles?",
+                    choices: ["retry_without_subtitles"],
+                    staleAfterRestore: true
+                )
+            }
+            if state == .failed {
+                item.failure = DurableQueueFailure(
+                    code: "fixture_failure",
+                    message: "Fixture failure",
+                    details: nil,
+                    retryable: true
+                )
+            }
+            if state == .completed {
+                item.result = DurableQueueResult(outputPath: "/tmp/completed.mov")
+            }
+            return item
+        }
+
+        try await queueStore.replaceItems(items)
+
+        XCTAssertEqual(viewModel.persistentQueueItems.count, states.count)
+        for (projected, state) in zip(viewModel.persistentQueueItems, states) {
+            switch (projected.status, state) {
+            case (.waiting, .waiting),
+                 (.inspecting, .inspecting),
+                 (.processing, .processing),
+                 (.stopping, .stopping),
+                 (.interrupted, .interrupted),
+                 (.attention, .attention),
+                 (.failed, .failed),
+                 (.completed, .completed),
+                 (.stopped, .stopped),
+                 (.notStarted, .notStarted):
+                break
+            default:
+                XCTFail("Unexpected projection \(projected.status) for state \(state)")
+            }
+        }
+        XCTAssertTrue(viewModel.persistentQueueItems.first(where: { item in
+            if case .attention = item.status {
+                return true
+            }
+            return false
+        })?.isRestored == true)
+    }
+
+    @MainActor
+    func testPersistentQueueProjectionFailsClosedForInvalidDurableItem() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        let viewModel = ConversionViewModel(durableQueueStore: queueStore)
+        let validItem = makePersistentQueueFixture(ordinal: 0, state: .waiting)
+        var invalidItem = makePersistentQueueFixture(ordinal: 1, state: .completed)
+        invalidItem.result = nil
+
+        viewModel.publishPersistentQueueProjection(items: [validItem, invalidItem])
+
+        XCTAssertEqual(viewModel.persistentQueueItems, [])
+        XCTAssertNil(viewModel.selectedPersistentQueueItemID)
+        XCTAssertEqual(viewModel.persistentQueueProjectionError, .missingResult(invalidItem.id))
+    }
+
+    @MainActor
+    func testPersistentQueueProjectionSelectionFallsBackAfterRemoval() async throws {
+        let queueStore = ConversionQueueStore.inMemory()
+        let viewModel = ConversionViewModel(durableQueueStore: queueStore)
+        let first = makePersistentQueueFixture(ordinal: 0, state: .waiting)
+        let second = makePersistentQueueFixture(ordinal: 1, state: .waiting)
+        try await queueStore.replaceItems([first, second])
+        viewModel.selectPersistentQueueItem(second.id)
+
+        let token = try await viewModel.removePersistentQueueItems([second.id])
+
+        XCTAssertEqual(viewModel.selectedPersistentQueueItemID, first.id)
+        XCTAssertEqual(viewModel.persistentQueueItems.map(\.id), [first.id])
+
+        try await viewModel.restorePersistentQueueItems(token)
+        XCTAssertEqual(viewModel.persistentQueueItems.map(\.id), [first.id, second.id])
+        XCTAssertEqual(viewModel.selectedPersistentQueueItemID, first.id)
+    }
+
+    @MainActor
     func testDurableTitleQueuePersistsSynchronousLaunchFailure() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -2615,6 +2729,31 @@ final class ConversionViewModelTests: XCTestCase {
                 result: DurableQueueResult(outputPath: "/tmp/history-\(offset).mov")
             )
         }
+    }
+
+    private func makePersistentQueueFixture(
+        ordinal: Int,
+        groupID: UUID? = nil,
+        origin: DurableQueueItemOrigin = .singleSource,
+        state: DurableQueueItemState,
+        id: UUID = UUID()
+    ) -> DurableConversionQueueItem {
+        let sourceURL = URL(fileURLWithPath: "/tmp/persistent-\(ordinal).mkv")
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: sourceURL),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/Output"),
+            options: ConversionOptions()
+        )
+        return DurableConversionQueueItem(
+            id: id,
+            ordinal: ordinal,
+            groupID: groupID,
+            origin: origin,
+            intent: DurableQueueItemIntent(draft: draft),
+            state: state
+        )
     }
 
     private func withTemporarySource(_ operation: @MainActor (URL) async throws -> Void) async throws {
