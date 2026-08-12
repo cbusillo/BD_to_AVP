@@ -1094,7 +1094,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                         throw ConversionQueueStoreError.invalidDocument
                     }
                     return DurableConversionQueueItem(
-                        id: queueItem.id,
+                        id: UUID(),
                         ordinal: startingOrdinal + offset,
                         groupID: groupID,
                         origin: .sourceFolder,
@@ -1289,6 +1289,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 return
             }
             let conversionDraft = try conversionDraft(for: updated, preserveStoredSourceRemoval: true)
+            guard !hasActiveWorker else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
             _ = startConversion(draft: conversionDraft, mode: .batchConversion(itemID: itemID))
         } catch {
             failClosedSourceFolderQueuePersistence(error)

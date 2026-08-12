@@ -930,6 +930,69 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCompletedBatchCanStartAgainWithFreshDurableItemIDs() async throws {
+        try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, _, destinationURL in
+            let scenario = BatchWorkerScenario()
+            let queueStore = ConversionQueueStore.inMemory()
+            let viewModel = ConversionViewModel(clientFactory: { scenario.makeClient() }, durableQueueStore: queueStore)
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+            let firstRunIDs = Set(try XCTUnwrap(viewModel.batchQueue).items.map(\.id))
+
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+            let secondRunIDs = Set(try XCTUnwrap(viewModel.batchQueue).items.map(\.id))
+
+            XCTAssertTrue(firstRunIDs.isDisjoint(with: secondRunIDs))
+            XCTAssertEqual(queueStore.items.map(\.state), [.completed, .completed, .completed, .completed])
+            XCTAssertNil(viewModel.durableQueueRuntimeDiagnostic)
+            XCTAssertEqual(scenario.records.count, 8)
+        }
+    }
+
+    @MainActor
+    func testStoppedBatchCanStartAgainWithFreshDurableItemIDs() async throws {
+        try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, sourceURLs, destinationURL in
+            let scenario = BatchWorkerScenario(holdConversionForCancellation: [sourceURLs[0].path])
+            let queueStore = ConversionQueueStore.inMemory()
+            let viewModel = ConversionViewModel(clientFactory: { scenario.makeClient() }, durableQueueStore: queueStore)
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchStatus(viewModel, status: .converting)
+            viewModel.stopActiveWorker()
+            await waitForBatchCompletion(viewModel)
+            let firstRunIDs = Set(try XCTUnwrap(viewModel.batchQueue).items.map(\.id))
+
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+            let secondRunIDs = Set(try XCTUnwrap(viewModel.batchQueue).items.map(\.id))
+
+            XCTAssertTrue(firstRunIDs.isDisjoint(with: secondRunIDs))
+            XCTAssertEqual(queueStore.items.map(\.state), [.stopped, .notStarted, .completed, .completed])
+            XCTAssertNil(viewModel.durableQueueRuntimeDiagnostic)
+        }
+    }
+
+    @MainActor
     func testBatchFailureContinuesAndExplicitRetryUsesStoredDraft() async throws {
         try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, sourceURLs, destinationURL in
             var options = ConversionOptions()
@@ -2939,7 +3002,7 @@ private final class BatchWorkerScenario: @unchecked Sendable {
     private var remainingInspectionFailures: Set<String>
     private var remainingFailures: Set<String>
     private var remainingDecisions: [String: WorkerDecision]
-    private let cancellationPaths: Set<String>
+    private var remainingCancellationPaths: Set<String>
     private let inspectionNames: [String: String]
     private var inspectionResults: [String: [SourceInspection]]
     private var storedRecords: [BatchJobRecord] = []
@@ -2958,7 +3021,7 @@ private final class BatchWorkerScenario: @unchecked Sendable {
         remainingInspectionFailures = failInspectionOnceFor
         remainingFailures = failConversionOnceFor
         remainingDecisions = decisionConversionOnceFor
-        cancellationPaths = holdConversionForCancellation
+        remainingCancellationPaths = holdConversionForCancellation
         self.inspectionNames = inspectionNames
         self.inspectionResults = inspectionResults
     }
@@ -3005,7 +3068,7 @@ private final class BatchWorkerScenario: @unchecked Sendable {
             guard job.operation == "convert_source" else {
                 return .succeed
             }
-            if cancellationPaths.contains(job.source.path) {
+            if remainingCancellationPaths.remove(job.source.path) != nil {
                 return .waitForCancellation
             }
             if let decision = remainingDecisions.removeValue(forKey: job.source.path) {
