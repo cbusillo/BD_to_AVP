@@ -119,11 +119,11 @@ def skip_remote_verification(_evidence: object) -> None:
 
 
 class ReleaseMetadataTests(unittest.TestCase):
-    def test_repository_pins_uv_for_reproducible_lock_refresh(self) -> None:
+    def test_repository_requires_dependabot_compatible_uv(self) -> None:
         with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
             pyproject = tomllib.load(handle)
 
-        self.assertEqual(pyproject["tool"]["uv"]["required-version"], "==0.11.29")
+        self.assertEqual(pyproject["tool"]["uv"]["required-version"], ">=0.11.31")
 
     def test_repository_keeps_gui_dependency_out_of_cli_base(self) -> None:
         with (REPO_ROOT / "pyproject.toml").open("rb") as handle:

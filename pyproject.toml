@@ -56,7 +56,7 @@ dev = [
 ]
 
 [tool.uv]
-required-version = "==0.11.29"
+required-version = ">=0.11.31"
 default-groups = "all"
 
 [tool.hatch.build.targets.wheel]
