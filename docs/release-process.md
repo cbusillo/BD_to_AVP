@@ -60,11 +60,12 @@ bytes and target digests; a later invocation restores an interrupted prepared
 transaction or finalizes an interrupted committed transaction. A lock refresh,
 metadata failure, or detected concurrent edit fails closed.
 
-`[tool.uv].required-version` in `pyproject.toml` is the single source of truth
-for the exact uv release used locally and by `astral-sh/setup-uv`. Keep that pin
-and `uv.lock` together: changing uv may canonicalize lock data even when the
-resolved dependency graph is unchanged, and that normalization must land in a
-reviewed prerequisite change rather than during release preparation.
+`[tool.uv].required-version` in `pyproject.toml` defines the minimum supported
+uv release. `astral-sh/setup-uv` resolves the newest compatible release, while
+Dependabot can use its supported updater version. A newer uv release may
+canonicalize lock data even when the resolved dependency graph is unchanged;
+that normalization must land in a reviewed prerequisite change rather than
+during release preparation.
 
 The one-time `0.3.0rc1` build `147` to `0.3.0b3` build `148` correction used
 `scripts/release.py recover-beta3` and the exact checked-in evidence in
