@@ -24,6 +24,13 @@ private enum ActiveRunMode: Equatable {
     }
 }
 
+private struct TitleQueueTerminalSnapshot {
+    let phase: WorkerPhase
+    let decision: WorkerDecision?
+    let failure: DurableQueueFailure
+    let result: DurableQueueResult?
+}
+
 @MainActor
 final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     typealias ClientFactory = () throws -> any WorkerProcessRunning
@@ -34,6 +41,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     @Published private(set) var batchQueue: SourceFolderQueueState?
     @Published private(set) var queueItems: [ConversionQueueItem] = []
     @Published private(set) var completedBatchResults: [ConversionResult]?
+    @Published private(set) var durableQueueRuntimeDiagnostic: String?
 
     private let clientFactory: ClientFactory
     private let diagnosticClock: () -> Date
@@ -49,9 +57,11 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private var activeRunMode: ActiveRunMode?
     private var pendingBatchContinuation: Task<Void, Never>?
     private var actionsWaitingForIdle: [() -> Void] = []
-    private var pendingQueueItemIDs: [UUID] = []
     private var activeQueueItemID: UUID?
-    private var removeQueuedSourceAfterFinalSuccess = false
+    private var titleQueueGroupID: UUID?
+    private var titleQueueStopRequested = false
+    private var pendingTitleQueueTransition: Task<Void, Never>?
+    private var pendingTitleQueueTransitionID: UUID?
     private var batchItemDiagnosticJobIDs: [UUID: UUID] = [:]
 
     init(
@@ -83,6 +93,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     var hasActiveWork: Bool {
         hasActiveWorker
+            || pendingTitleQueueTransition != nil
             || pendingBatchContinuation != nil
             || isBatchRunning
             || hasQueuedWork
@@ -91,6 +102,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     var hasStoppableWork: Bool {
         hasActiveWorker
+            || pendingTitleQueueTransition != nil
             || pendingBatchContinuation != nil
             || isBatchRunning
             || (hasQueuedWork && state.phase != .decisionRequired)
@@ -109,7 +121,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     var hasQueuedWork: Bool {
-        activeQueueItemID != nil || !pendingQueueItemIDs.isEmpty
+        activeQueueItemID != nil || currentTitleQueueItems.contains { item in
+            item.state == .waiting || item.state == .processing || item.state == .stopping
+        }
     }
 
     var hasPendingWork: Bool {
@@ -284,10 +298,11 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             startConversion(draft: firstDraft)
             return
         }
-        removeQueuedSourceAfterFinalSuccess = drafts.contains { $0.options.job.removeOriginalAfterSuccess }
-        let normalizedDrafts = drafts.map { draft in
+        let groupID = UUID()
+        let removeOriginalAfterFinalSuccess = drafts.contains { $0.options.job.removeOriginalAfterSuccess }
+        let normalizedDrafts = drafts.enumerated().map { offset, draft in
             var options = draft.options
-            options.job.removeOriginalAfterSuccess = false
+            options.job.removeOriginalAfterSuccess = removeOriginalAfterFinalSuccess && offset == drafts.count - 1
             return ConversionDraft(
                 source: draft.source,
                 sourceDetails: draft.sourceDetails,
@@ -297,29 +312,87 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 selectedTitle: draft.selectedTitle
             )
         }
-        queueItems = normalizedDrafts.map { ConversionQueueItem(draft: $0) }
-        pendingQueueItemIDs = queueItems.map(\.id)
         activeQueueItemID = nil
+        titleQueueGroupID = groupID
+        titleQueueStopRequested = false
+        durableQueueRuntimeDiagnostic = nil
         completedBatchResults = nil
-        startNextQueuedConversion()
+        enqueueTitleQueueTransition { [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                try await self.durableQueueStore.mutateItems { items in
+                    let startingOrdinal = items.count
+                    items.append(contentsOf: normalizedDrafts.enumerated().map { offset, draft in
+                        DurableConversionQueueItem(
+                            ordinal: startingOrdinal + offset,
+                            groupID: groupID,
+                            origin: .multiTitle,
+                            intent: DurableQueueItemIntent(draft: draft),
+                            inspection: draft.sourceDetails
+                        )
+                    })
+                }
+                self.publishTitleQueueProjection()
+                if self.titleQueueStopRequested {
+                    try await self.stopWaitingTitleQueueItems()
+                    self.publishTitleQueueProjection()
+                    return
+                }
+                await self.startNextDurableTitleQueueItem()
+            } catch {
+                self.failClosedTitleQueuePersistence(error)
+            }
+        }
     }
 
     func moveWaitingQueueItem(_ itemID: UUID, before targetID: UUID) -> Bool {
         guard itemID != targetID,
-              pendingQueueItemIDs.contains(itemID),
-              pendingQueueItemIDs.contains(targetID),
-              let sourceIndex = queueIndex(for: itemID),
-              let targetIndex = queueIndex(for: targetID),
-              queueItems[sourceIndex].status == .waiting,
-              queueItems[targetIndex].status == .waiting
+              let groupID = titleQueueGroupID,
+              !durableQueueStore.writesBlocked,
+              currentTitleQueueItems.contains(where: { $0.id == itemID && $0.state == .waiting }),
+              currentTitleQueueItems.contains(where: { $0.id == targetID && $0.state == .waiting })
         else {
             return false
         }
-        let item = queueItems.remove(at: sourceIndex)
-        let insertionIndex = queueItems.firstIndex(where: { $0.id == targetID }) ?? targetIndex
-        queueItems.insert(item, at: insertionIndex)
-        pendingQueueItemIDs = queueItems.compactMap { queueItem in
-            pendingQueueItemIDs.contains(queueItem.id) ? queueItem.id : nil
+        enqueueTitleQueueTransition { [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                try await self.durableQueueStore.mutateItems { items in
+                    guard let sourceIndex = items.firstIndex(where: { $0.id == itemID }),
+                          let targetIndex = items.firstIndex(where: { $0.id == targetID }),
+                          items[sourceIndex].groupID == groupID,
+                          items[targetIndex].groupID == groupID,
+                          items[sourceIndex].state == .waiting,
+                          items[targetIndex].state == .waiting
+                    else {
+                        throw ConversionQueueStoreError.invalidDocument
+                    }
+                    let item = items.remove(at: sourceIndex)
+                    let insertionIndex = items.firstIndex(where: { $0.id == targetID }) ?? targetIndex
+                    items.insert(item, at: insertionIndex)
+                    let sourceRemovalRequested = items.contains { queueItem in
+                        queueItem.groupID == groupID
+                            && queueItem.intent.options.job.removeOriginalAfterSuccess
+                    }
+                    let finalWaitingItemID = items.last(where: { queueItem in
+                        queueItem.groupID == groupID && queueItem.state == .waiting
+                    })?.id
+                    for index in items.indices {
+                        items[index].ordinal = index
+                        if items[index].groupID == groupID, items[index].state == .waiting {
+                            items[index].intent.options.job.removeOriginalAfterSuccess = sourceRemovalRequested
+                                && items[index].id == finalWaitingItemID
+                        }
+                    }
+                }
+                self.publishTitleQueueProjection()
+            } catch {
+                self.durableQueueRuntimeDiagnostic = "Queue order could not be saved: \(error.localizedDescription)"
+            }
         }
         return true
     }
@@ -463,6 +536,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         guard hasStoppableWork else {
             return
         }
+        if titleQueueGroupID != nil {
+            titleQueueStopRequested = true
+        }
         if var queue = batchQueue, queue.isRunning {
             queue.stopRequested = true
             queue.markPendingItemsStopped()
@@ -471,8 +547,20 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
             batchQueue = queue
         }
-        if hasQueuedWork {
-            cancelPendingQueueItems()
+        if let activeQueueItemID {
+            state.requestStop()
+            recordDiagnosticWorkflow(name: "cancel.requested", mode: activeRunMode, jobID: state.jobID)
+            client?.cancel()
+            enqueueTitleQueueTransition { [weak self] in
+                await self?.persistTitleQueueStop(itemID: activeQueueItemID)
+            }
+            return
+        }
+        if titleQueueGroupID != nil {
+            enqueueTitleQueueTransition { [weak self] in
+                await self?.persistWaitingTitleQueueStop()
+            }
+            return
         }
         if hasActiveWorker {
             state.requestStop()
@@ -514,14 +602,12 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             state.cancelRecoveryDecision()
             recordDiagnosticWorkflow(name: "recovery.cancelled", jobID: decisionJobID)
             if let activeQueueItemID {
-                if let activeQueueIndex = queueIndex(for: activeQueueItemID) {
-                    queueItems[activeQueueIndex].status = .cancelled
+                enqueueTitleQueueTransition { [weak self] in
+                    await self?.persistTitleQueueDecisionCancellation(itemID: activeQueueItemID)
                 }
-                self.activeQueueItemID = nil
-                cancelPendingQueueItems()
-                publishCompletedQueueResults()
+            } else {
+                runDeferredActionsIfIdle()
             }
-            runDeferredActionsIfIdle()
             return true
         }
         guard let lastConversionDraft,
@@ -532,46 +618,67 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 retryable: false
             )
             if let activeQueueItemID {
-                if let activeQueueIndex = queueIndex(for: activeQueueItemID) {
-                    queueItems[activeQueueIndex].status = .failed(
-                        state.failureMessage ?? "The conversion could not be restarted."
-                    )
+                enqueueTitleQueueTransition { [weak self] in
+                    await self?.persistTitleQueueTerminalState(itemID: activeQueueItemID)
                 }
-                self.activeQueueItemID = nil
-                cancelPendingQueueItems()
-                publishCompletedQueueResults()
             }
-            runDeferredActionsIfIdle()
+            return false
+        }
+        guard FileManager.default.fileExists(atPath: retryDraft.source.url.path) else {
+            state.failTransport(
+                message: "Conversion requires an inserted Blu-ray disc or existing Blu-ray folder, ISO, MKV, MTS, or M2TS source.",
+                retryable: false
+            )
+            if let activeQueueItemID {
+                let snapshot = TitleQueueTerminalSnapshot(
+                    phase: .failed,
+                    decision: nil,
+                    failure: DurableQueueFailure(
+                        code: state.failureCode,
+                        message: state.failureMessage ?? "Conversion could not be restarted.",
+                        details: state.failureDetails,
+                        retryable: state.failureRetryable
+                    ),
+                    result: nil
+                )
+                enqueueTitleQueueTransition { [weak self] in
+                    await self?.persistTitleQueueTerminalState(itemID: activeQueueItemID, snapshot: snapshot)
+                }
+            }
             return false
         }
         state.prepareForRetry()
         if let activeQueueItemID {
-            guard let activeQueueIndex = queueIndex(for: activeQueueItemID) else {
-                state.failTransport(
-                    message: "The active queue item is no longer available.",
-                    retryable: false
-                )
-                self.activeQueueItemID = nil
-                cancelPendingQueueItems()
-                publishCompletedQueueResults()
-                runDeferredActionsIfIdle()
-                return false
+            enqueueTitleQueueTransition { [weak self] in
+                await self?.retryDurableTitleQueueItem(itemID: activeQueueItemID, draft: retryDraft, choice: choice)
             }
-            queueItems[activeQueueIndex].status = .processing
-            _ = startConversion(
-                draft: retryDraft,
-                mode: .titleQueueConversion(itemID: activeQueueItemID)
-            )
         } else {
             _ = startConversion(draft: retryDraft, mode: .singleConversion)
         }
-        return state.phase.isRunning
+        return activeQueueItemID != nil || state.phase.isRunning
     }
 
     func clearSource() {
+        if state.phase == .decisionRequired, let activeQueueItemID {
+            state.cancelRecoveryDecision()
+            let groupID = titleQueueGroupID
+            self.activeQueueItemID = nil
+            enqueueTitleQueueTransition { [weak self] in
+                await self?.persistClearedTitleQueueDecisionCancellation(
+                    itemID: activeQueueItemID,
+                    groupID: groupID
+                )
+                self?.clearSourceNow()
+            }
+            return
+        }
         guard !hasStoppableWork else {
             return
         }
+        clearSourceNow()
+    }
+
+    private func clearSourceNow() {
         source = nil
         lastConversionDraft = nil
         batchQueue = nil
@@ -608,6 +715,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         stopActiveWorker()
         if let task = runTask {
             await task.value
+        }
+        if let pendingTitleQueueTransition {
+            await pendingTitleQueueTransition.value
         }
         if let pendingBatchContinuation {
             await pendingBatchContinuation.value
@@ -839,11 +949,19 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         case .singleInspection, .singleConversion:
             return
         case let .titleQueueConversion(itemID):
-            guard activeQueueItemID == itemID else {
-                return
-            }
-            if updateQueueAfterTerminalState() {
-                startNextQueuedConversion()
+            let snapshot = TitleQueueTerminalSnapshot(
+                phase: state.phase,
+                decision: state.recoveryDecision,
+                failure: DurableQueueFailure(
+                    code: state.failureCode,
+                    message: state.failureMessage ?? "Conversion failed.",
+                    details: state.failureDetails,
+                    retryable: state.failureRetryable
+                ),
+                result: state.conversionResult.map(DurableQueueResult.init)
+            )
+            enqueueTitleQueueTransition { [weak self] in
+                await self?.persistTitleQueueTerminalState(itemID: itemID, snapshot: snapshot)
             }
         case let .batchInspection(itemID):
             completeBatchInspection(itemID: itemID)
@@ -858,15 +976,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             handleCompletedRun(mode)
             runDeferredActionsIfIdle()
         case let .titleQueueConversion(itemID):
-            if let queueIndex = queueIndex(for: itemID) {
-                queueItems[queueIndex].status = .failed(
-                    state.failureMessage ?? "Conversion could not start."
-                )
+            guard activeQueueItemID == itemID else {
+                return
             }
-            activeQueueItemID = nil
-            cancelPendingQueueItems()
-            publishCompletedQueueResults()
-            runDeferredActionsIfIdle()
         case .batchInspection, .batchConversion:
             pendingBatchContinuation = Task { @MainActor [weak self] in
                 await Task.yield()
@@ -1057,119 +1169,417 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         }
     }
 
-    private func startNextQueuedConversion() {
-        while let itemID = pendingQueueItemIDs.first {
-            pendingQueueItemIDs.removeFirst()
-            guard let queueIndex = queueIndex(for: itemID) else {
-                continue
+    private var currentTitleQueueItems: [DurableConversionQueueItem] {
+        guard let titleQueueGroupID else {
+            return []
+        }
+        return durableQueueStore.items
+            .filter { $0.groupID == titleQueueGroupID && $0.origin == .multiTitle }
+            .sorted { $0.ordinal < $1.ordinal }
+    }
+
+    private func enqueueTitleQueueTransition(_ transition: @escaping @MainActor () async -> Void) {
+        let previousTransition = pendingTitleQueueTransition
+        let transitionID = UUID()
+        pendingTitleQueueTransitionID = transitionID
+        pendingTitleQueueTransition = Task { @MainActor [weak self] in
+            await previousTransition?.value
+            guard !Task.isCancelled else {
+                return
             }
-            activeQueueItemID = itemID
-            queueItems[queueIndex].status = .processing
-            let draft = queueDraftForDispatch(
-                queueItems[queueIndex].draft,
-                isFinalPendingItem: pendingQueueItemIDs.isEmpty
-            )
-            _ = startConversion(
-                draft: draft,
-                mode: .titleQueueConversion(itemID: itemID)
-            )
+            await transition()
+            if self?.pendingTitleQueueTransitionID == transitionID {
+                self?.pendingTitleQueueTransition = nil
+                self?.pendingTitleQueueTransitionID = nil
+                self?.runDeferredActionsIfIdle()
+            }
+        }
+    }
+
+    private func startNextDurableTitleQueueItem() async {
+        guard !hasActiveWorker,
+              activeQueueItemID == nil,
+              let item = currentTitleQueueItems.first(where: { $0.state == .waiting })
+        else {
+            publishTitleQueueProjection()
+            runDeferredActionsIfIdle()
             return
         }
-        publishCompletedQueueResults()
-        runDeferredActionsIfIdle()
-    }
 
-    private func updateQueueAfterTerminalState() -> Bool {
-        guard let activeQueueItemID else {
-            return false
-        }
-        guard let activeQueueIndex = queueIndex(for: activeQueueItemID) else {
-            self.activeQueueItemID = nil
-            cancelPendingQueueItems()
-            publishCompletedQueueResults()
-            return false
-        }
-        switch state.phase {
-        case .completed:
-            guard let result = state.conversionResult else {
-                queueItems[activeQueueIndex].status = .failed("The conversion completed without an output result.")
-                self.activeQueueItemID = nil
-                cancelPendingQueueItems()
-                publishCompletedQueueResults()
-                return false
+        let isFinalWaitingItem = currentTitleQueueItems.filter { $0.state == .waiting }.count == 1
+        let draft: ConversionDraft
+        do {
+            draft = try conversionDraft(for: item, removeOriginalAfterSuccess: isFinalWaitingItem)
+            try await durableQueueStore.mutateItems { items in
+                guard let index = items.firstIndex(where: { $0.id == item.id }),
+                      items[index].state == .waiting
+                else {
+                    throw ConversionQueueStoreError.invalidDocument
+                }
+                items[index].state = .processing
+                items[index].attempts.append(DurableQueueAttempt(startedAt: diagnosticClock()))
             }
-            queueItems[activeQueueIndex].status = .completed(result)
-            self.activeQueueItemID = nil
-            if pendingQueueItemIDs.isEmpty {
-                publishCompletedQueueResults()
-                return false
-            }
-            return true
-        case .decisionRequired:
-            queueItems[activeQueueIndex].status = .attention(state.failureMessage ?? "Choose how to continue.")
-            return false
-        case .cancelled:
-            queueItems[activeQueueIndex].status = .cancelled
-            self.activeQueueItemID = nil
-            cancelPendingQueueItems()
-            publishCompletedQueueResults()
-            return false
-        case .failed:
-            queueItems[activeQueueIndex].status = .failed(state.failureMessage ?? "Conversion failed.")
-            self.activeQueueItemID = nil
-            cancelPendingQueueItems()
-            publishCompletedQueueResults()
-            return false
-        default:
-            return false
+        } catch {
+            failClosedTitleQueuePersistence(error)
+            return
+        }
+
+        activeQueueItemID = item.id
+        publishTitleQueueProjection()
+        if titleQueueStopRequested {
+            await stopDurableTitleQueueBeforeSpawn(itemID: item.id)
+            return
+        }
+        if !startConversion(draft: draft, mode: .titleQueueConversion(itemID: item.id)) {
+            await persistTitleQueueTerminalState(itemID: item.id)
         }
     }
 
-    private func cancelPendingQueueItems() {
-        for itemID in pendingQueueItemIDs {
-            if let index = queueIndex(for: itemID) {
-                queueItems[index].status = .cancelled
-            }
+    private func persistTitleQueueTerminalState(
+        itemID: UUID,
+        snapshot: TitleQueueTerminalSnapshot? = nil
+    ) async {
+        guard activeQueueItemID == itemID else {
+            return
         }
-        pendingQueueItemIDs.removeAll()
+        do {
+            let terminalSnapshot = snapshot ?? TitleQueueTerminalSnapshot(
+                phase: state.phase,
+                decision: state.recoveryDecision,
+                failure: DurableQueueFailure(
+                    code: state.failureCode,
+                    message: state.failureMessage ?? "Conversion failed.",
+                    details: state.failureDetails,
+                    retryable: state.failureRetryable
+                ),
+                result: state.conversionResult.map(DurableQueueResult.init)
+            )
+            var effectivePhase = terminalSnapshot.phase
+            try await durableQueueStore.mutateItems { items in
+                guard let index = items.firstIndex(where: { $0.id == itemID }) else {
+                    throw ConversionQueueStoreError.invalidDocument
+                }
+                if let attemptIndex = items[index].attempts.lastIndex(where: { $0.endedAt == nil }) {
+                    items[index].attempts[attemptIndex].endedAt = diagnosticClock()
+                }
+                switch terminalSnapshot.phase {
+                case .completed:
+                    guard let result = terminalSnapshot.result else {
+                        items[index].state = .failed
+                        items[index].failure = DurableQueueFailure(
+                            code: nil,
+                            message: "The conversion completed without an output result.",
+                            details: nil,
+                            retryable: false
+                        )
+                        effectivePhase = .failed
+                        return
+                    }
+                    items[index].state = .completed
+                    items[index].result = result
+                    items[index].failure = nil
+                    items[index].decision = nil
+                case .decisionRequired:
+                    guard let decision = terminalSnapshot.decision else {
+                        throw ConversionQueueStoreError.invalidDocument
+                    }
+                    items[index].state = .attention
+                    items[index].decision = DurableQueueDecision(decision: decision)
+                    items[index].failure = nil
+                case .cancelled:
+                    items[index].state = .stopped
+                    items[index].decision = nil
+                    items[index].failure = nil
+                case .failed:
+                    items[index].state = .failed
+                    items[index].failure = terminalSnapshot.failure
+                    items[index].decision = nil
+                default:
+                    throw ConversionQueueStoreError.invalidDocument
+                }
+            }
+            switch effectivePhase {
+            case .completed:
+                publishTitleQueueProjection()
+                activeQueueItemID = nil
+                if titleQueueStopRequested {
+                    try await stopWaitingTitleQueueItems()
+                    publishTitleQueueProjection()
+                    publishCompletedTitleQueueResults()
+                    runDeferredActionsIfIdle()
+                } else if currentTitleQueueItems.contains(where: { $0.state == .waiting }) {
+                    await startNextDurableTitleQueueItem()
+                } else {
+                    publishCompletedTitleQueueResults()
+                    runDeferredActionsIfIdle()
+                }
+            case .decisionRequired:
+                publishTitleQueueProjection()
+            case .cancelled, .failed:
+                try await stopWaitingTitleQueueItems()
+                publishTitleQueueProjection()
+                activeQueueItemID = nil
+                publishCompletedTitleQueueResults()
+                runDeferredActionsIfIdle()
+            default:
+                break
+            }
+        } catch {
+            durableQueueRuntimeDiagnostic = "Queue state could not be saved after the conversion finished: \(error.localizedDescription)"
+            activeQueueItemID = nil
+            publishCompletedTitleQueueResults()
+            titleQueueGroupID = nil
+            titleQueueStopRequested = false
+            state.failTransport(
+                message: durableQueueRuntimeDiagnostic ?? "Queue state could not be saved.",
+                retryable: false
+            )
+            runDeferredActionsIfIdle()
+        }
     }
 
-    private func publishCompletedQueueResults() {
-        let results = queueItems.compactMap { item in
-            if case .completed(let result) = item.status {
-                return result
+    private func persistTitleQueueStop(itemID: UUID) async {
+        guard activeQueueItemID == itemID else {
+            return
+        }
+        do {
+            try await durableQueueStore.mutateItems { items in
+                guard let index = items.firstIndex(where: { $0.id == itemID }) else {
+                    throw ConversionQueueStoreError.invalidDocument
+                }
+                items[index].state = .stopping
+                items[index].decision = nil
             }
-            return nil
+            publishTitleQueueProjection()
+        } catch {
+            durableQueueRuntimeDiagnostic = "Queue stop state could not be saved: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistTitleQueueDecisionCancellation(itemID: UUID) async {
+        guard activeQueueItemID == itemID else {
+            return
+        }
+        do {
+            try await durableQueueStore.mutateItems { items in
+                guard let index = items.firstIndex(where: { $0.id == itemID }) else {
+                    throw ConversionQueueStoreError.invalidDocument
+                }
+                items[index].state = .stopped
+                items[index].decision = nil
+                items[index].failure = nil
+                if let attemptIndex = items[index].attempts.lastIndex(where: { $0.endedAt == nil }) {
+                    items[index].attempts[attemptIndex].endedAt = diagnosticClock()
+                }
+                guard let titleQueueGroupID else {
+                    return
+                }
+                for pendingIndex in items.indices where items[pendingIndex].groupID == titleQueueGroupID && items[pendingIndex].state == .waiting {
+                    items[pendingIndex].state = .stopped
+                }
+            }
+            activeQueueItemID = nil
+            publishTitleQueueProjection()
+            runDeferredActionsIfIdle()
+        } catch {
+            failClosedTitleQueuePersistence(error)
+        }
+    }
+
+    private func persistClearedTitleQueueDecisionCancellation(itemID: UUID, groupID: UUID?) async {
+        guard let groupID else {
+            return
+        }
+        do {
+            try await durableQueueStore.mutateItems { items in
+                guard let index = items.firstIndex(where: { $0.id == itemID }) else {
+                    throw ConversionQueueStoreError.invalidDocument
+                }
+                items[index].state = .stopped
+                items[index].decision = nil
+                items[index].failure = nil
+                if let attemptIndex = items[index].attempts.lastIndex(where: { $0.endedAt == nil }) {
+                    items[index].attempts[attemptIndex].endedAt = diagnosticClock()
+                }
+                for pendingIndex in items.indices where items[pendingIndex].groupID == groupID && items[pendingIndex].state == .waiting {
+                    items[pendingIndex].state = .stopped
+                }
+            }
+        } catch {
+            durableQueueRuntimeDiagnostic = "Queue decision cancellation could not be saved: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistWaitingTitleQueueStop() async {
+        do {
+            try await stopWaitingTitleQueueItems()
+            publishTitleQueueProjection()
+            runDeferredActionsIfIdle()
+        } catch {
+            failClosedTitleQueuePersistence(error)
+        }
+    }
+
+    private func retryDurableTitleQueueItem(
+        itemID: UUID,
+        draft: ConversionDraft,
+        choice: WorkerRecoveryChoice
+    ) async {
+        guard activeQueueItemID == itemID else {
+            return
+        }
+        do {
+            try await durableQueueStore.mutateItems { items in
+                guard let index = items.firstIndex(where: { $0.id == itemID }),
+                      items[index].state == .attention
+                else {
+                    throw ConversionQueueStoreError.invalidDocument
+                }
+                items[index].intent = DurableQueueItemIntent(draft: draft)
+                items[index].state = .processing
+                items[index].decision = nil
+                items[index].failure = nil
+                items[index].attempts.append(DurableQueueAttempt(
+                    startedAt: diagnosticClock(),
+                    recoveryChoice: choice.rawValue
+                ))
+            }
+            publishTitleQueueProjection()
+            if titleQueueStopRequested {
+                await stopDurableTitleQueueBeforeSpawn(itemID: itemID)
+                return
+            }
+            guard startConversion(draft: draft, mode: .titleQueueConversion(itemID: itemID)) else {
+                await persistTitleQueueTerminalState(itemID: itemID)
+                return
+            }
+        } catch {
+            failClosedTitleQueuePersistence(error)
+        }
+    }
+
+    private func stopWaitingTitleQueueItems() async throws {
+        guard let titleQueueGroupID else {
+            return
+        }
+        try await durableQueueStore.mutateItems { items in
+            for index in items.indices where items[index].groupID == titleQueueGroupID && items[index].state == .waiting {
+                items[index].state = .stopped
+            }
+        }
+    }
+
+    private func stopDurableTitleQueueBeforeSpawn(itemID: UUID) async {
+        do {
+            try await durableQueueStore.mutateItems { items in
+                guard let activeIndex = items.firstIndex(where: { $0.id == itemID }) else {
+                    throw ConversionQueueStoreError.invalidDocument
+                }
+                items[activeIndex].state = .stopped
+                if let attemptIndex = items[activeIndex].attempts.lastIndex(where: { $0.endedAt == nil }) {
+                    items[activeIndex].attempts[attemptIndex].endedAt = diagnosticClock()
+                }
+                guard let titleQueueGroupID else {
+                    return
+                }
+                for index in items.indices where items[index].groupID == titleQueueGroupID && items[index].state == .waiting {
+                    items[index].state = .stopped
+                }
+            }
+            activeQueueItemID = nil
+            publishTitleQueueProjection()
+            runDeferredActionsIfIdle()
+        } catch {
+            failClosedTitleQueuePersistence(error)
+        }
+    }
+
+    private func conversionDraft(
+        for item: DurableConversionQueueItem,
+        removeOriginalAfterSuccess: Bool
+    ) throws -> ConversionDraft {
+        guard let sourceKind = ConversionSourceKind(rawValue: item.intent.source.kind) else {
+            throw ConversionQueueStoreError.invalidDocument
+        }
+        var options = item.intent.options
+        options.job.removeOriginalAfterSuccess = removeOriginalAfterSuccess && options.job.removeOriginalAfterSuccess
+        return ConversionDraft(
+            source: ConversionSource(
+                kind: sourceKind,
+                url: URL(fileURLWithPath: item.intent.source.path),
+                displayName: item.intent.source.displayName,
+                workerSourcePath: item.intent.source.workerSourcePath
+            ),
+            sourceDetails: item.inspection,
+            profile: EncodingProfile(
+                id: item.intent.profile.id,
+                name: item.intent.profile.name,
+                options: options.encoding,
+                kind: item.intent.profile.kind,
+                systemImage: "slider.horizontal.3"
+            ),
+            destinationURL: URL(fileURLWithPath: item.intent.destinationPath),
+            options: options,
+            selectedTitle: item.intent.selectedTitle
+        )
+    }
+
+    private func publishTitleQueueProjection() {
+        queueItems = currentTitleQueueItems.compactMap { item in
+            guard let draft = try? conversionDraft(for: item, removeOriginalAfterSuccess: false) else {
+                return nil
+            }
+            return ConversionQueueItem(id: item.id, draft: draft, status: queueStatus(for: item))
+        }
+    }
+
+    private func publishCompletedTitleQueueResults() {
+        let results = queueItems.compactMap { item -> ConversionResult? in
+            guard case let .completed(result) = item.status else {
+                return nil
+            }
+            return result
         }
         completedBatchResults = results.isEmpty ? nil : results
     }
 
+    private func queueStatus(for item: DurableConversionQueueItem) -> ConversionQueueItemStatus {
+        switch item.state {
+        case .waiting, .notStarted, .interrupted:
+            .waiting
+        case .inspecting, .processing, .stopping:
+            .processing
+        case .attention:
+            .attention(item.decision?.prompt ?? "Choose how to continue.")
+        case .completed:
+            .completed(ConversionResult(
+                outputPath: item.result?.outputPath ?? "",
+                durationSeconds: item.result?.durationSeconds,
+                sizeBytes: item.result?.sizeBytes,
+                titleID: item.result?.titleID
+            ))
+        case .failed:
+            .failed(item.failure?.message ?? "Conversion failed.")
+        case .stopped:
+            .cancelled
+        }
+    }
+
+    private func failClosedTitleQueuePersistence(_ error: Error) {
+        durableQueueRuntimeDiagnostic = "Queue changes are unavailable: \(error.localizedDescription)"
+        activeQueueItemID = nil
+        titleQueueGroupID = nil
+        state.failTransport(message: durableQueueRuntimeDiagnostic ?? "Queue changes are unavailable.", retryable: false)
+        runDeferredActionsIfIdle()
+    }
+
     private func resetQueue() {
         queueItems.removeAll()
-        pendingQueueItemIDs.removeAll()
         activeQueueItemID = nil
-        removeQueuedSourceAfterFinalSuccess = false
+        titleQueueGroupID = nil
+        titleQueueStopRequested = false
+        durableQueueRuntimeDiagnostic = nil
         completedBatchResults = nil
-    }
-
-    private func queueDraftForDispatch(
-        _ draft: ConversionDraft,
-        isFinalPendingItem: Bool
-    ) -> ConversionDraft {
-        var options = draft.options
-        options.job.removeOriginalAfterSuccess = removeQueuedSourceAfterFinalSuccess && isFinalPendingItem
-        return ConversionDraft(
-            source: draft.source,
-            sourceDetails: draft.sourceDetails,
-            profile: draft.profile,
-            destinationURL: draft.destinationURL,
-            options: options,
-            selectedTitle: draft.selectedTitle
-        )
-    }
-
-    private func queueIndex(for itemID: UUID) -> Int? {
-        queueItems.firstIndex(where: { $0.id == itemID })
     }
 
     private func resetDiagnosticSession() {
