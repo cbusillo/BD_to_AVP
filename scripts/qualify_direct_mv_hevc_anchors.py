@@ -1567,7 +1567,7 @@ def _render_checklist(receipt: Mapping[str, object], receipt_sha256: str) -> str
                 f"- File: `{candidate['artifact_filename']}`",
                 f"- SHA-256: `{artifact['sha256']}`",
                 "- Automatic validator: ready playback, Stereo · Screen presentation, "
-                "30-second sustained playback, and beginning/middle/end seeks.",
+                + "30-second sustained playback, and beginning/middle/end seeks.",
                 "- Wearer: picture remains visible without corruption or freezes.",
                 "- Wearer: depth is clearly three-dimensional, comfortable, and not inverted.",
                 "- Wearer: dialogue and visible mouth movement remain synchronized at beginning, middle, and end.",
@@ -1578,7 +1578,7 @@ def _render_checklist(receipt: Mapping[str, object], receipt_sha256: str) -> str
     lines.extend(
         [
             "A candidate is not physically qualified until its exported playback report and wearer observations "
-            "are bound to the exact artifact SHA above.",
+            + "are bound to the exact artifact SHA above.",
             "",
         ]
     )
