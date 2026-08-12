@@ -402,6 +402,273 @@ final class ConversionQueueStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testCompactionDropsOldestTerminalGroupsAndRenumbersOrdinals() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let groupIDs = (0 ..< 7).map { _ in UUID() }
+        let items = groupIDs.enumerated().flatMap { groupOffset, groupID in
+            (0 ..< 2).map { itemOffset in
+                makeItem(
+                    ordinal: groupOffset * 2 + itemOffset,
+                    groupID: groupID,
+                    sourcePath: "/tmp/group-\(groupOffset)-item-\(itemOffset).mkv",
+                    state: itemOffset == 0 ? .completed : .stopped,
+                    result: itemOffset == 0
+                        ? DurableQueueResult(outputPath: "/tmp/group-\(groupOffset).mov")
+                        : nil
+                )
+            }
+        }
+
+        try await store.replaceItems(items)
+
+        XCTAssertEqual(Set(store.items.compactMap(\.groupID)), Set(groupIDs.suffix(5)))
+        XCTAssertEqual(store.items.map(\.ordinal), Array(store.items.indices))
+        XCTAssertEqual(
+            store.items.map(\.intent.source.path),
+            items.filter { Set(groupIDs.suffix(5)).contains($0.groupID) }.map(\.intent.source.path)
+        )
+    }
+
+    @MainActor
+    func testCompactionPreservesWholeGroupsWithActionableMembers() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let protectedStates: [(DurableQueueItemState, DurableQueueDecision?, DurableQueueFailure?)] = [
+            (.waiting, nil, nil),
+            (.inspecting, nil, nil),
+            (.processing, nil, nil),
+            (.stopping, nil, nil),
+            (.interrupted, nil, nil),
+            (
+                .attention,
+                DurableQueueDecision(
+                    identifier: "subtitle_decision_required",
+                    prompt: "Retry without subtitles?",
+                    choices: ["retry_without_subtitles"]
+                ),
+                nil
+            ),
+            (
+                .failed,
+                nil,
+                DurableQueueFailure(
+                    code: "fixture_failure",
+                    message: "Fixture failure",
+                    details: nil,
+                    retryable: true
+                )
+            ),
+            (.notStarted, nil, nil),
+        ]
+        var items: [DurableConversionQueueItem] = []
+        var protectedGroupIDs = Set<UUID>()
+        for (groupOffset, stateFixture) in protectedStates.enumerated() {
+            let groupID = UUID()
+            protectedGroupIDs.insert(groupID)
+            items.append(makeItem(
+                ordinal: items.count,
+                groupID: groupID,
+                sourcePath: "/tmp/protected-\(groupOffset)-completed.mkv",
+                state: .completed,
+                result: DurableQueueResult(outputPath: "/tmp/protected-\(groupOffset).mov")
+            ))
+            items.append(makeItem(
+                ordinal: items.count,
+                groupID: groupID,
+                sourcePath: "/tmp/protected-\(groupOffset)-actionable.mkv",
+                state: stateFixture.0,
+                decision: stateFixture.1,
+                failure: stateFixture.2
+            ))
+        }
+        for terminalGroupOffset in 0 ..< 7 {
+            let groupID = UUID()
+            items.append(makeItem(
+                ordinal: items.count,
+                groupID: groupID,
+                sourcePath: "/tmp/terminal-\(terminalGroupOffset).mkv",
+                state: .completed,
+                result: DurableQueueResult(outputPath: "/tmp/terminal-\(terminalGroupOffset).mov")
+            ))
+        }
+
+        try await store.replaceItems(items)
+
+        for groupID in protectedGroupIDs {
+            XCTAssertEqual(store.items.filter { $0.groupID == groupID }.count, 2)
+        }
+        XCTAssertEqual(store.items.count, protectedStates.count * 2 + ConversionQueueStore.maxRetainedTerminalUnits)
+    }
+
+    @MainActor
+    func testCompactionTreatsUngroupedItemsAsIndependentRetentionUnits() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let items = (0 ..< 8).map { offset in
+            makeItem(
+                ordinal: offset,
+                sourcePath: "/tmp/ungrouped-\(offset).mkv",
+                state: .completed,
+                result: DurableQueueResult(outputPath: "/tmp/ungrouped-\(offset).mov")
+            )
+        }
+
+        try await store.replaceItems(items)
+
+        XCTAssertEqual(store.items.map(\.id), items.suffix(5).map(\.id))
+        XCTAssertEqual(store.items.map(\.ordinal), Array(store.items.indices))
+    }
+
+    @MainActor
+    func testCompactionEnforcesSoftItemCeilingByDroppingWholeTerminalGroups() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let groupIDs = (0 ..< 5).map { _ in UUID() }
+        let items = groupIDs.enumerated().flatMap { groupOffset, groupID in
+            (0 ..< 80).map { itemOffset in
+                makeItem(
+                    ordinal: groupOffset * 80 + itemOffset,
+                    groupID: groupID,
+                    sourcePath: "/tmp/large-\(groupOffset)-\(itemOffset).mkv",
+                    state: .completed,
+                    result: DurableQueueResult(outputPath: "/tmp/large-\(groupOffset)-\(itemOffset).mov")
+                )
+            }
+        }
+
+        try await store.replaceItems(items)
+
+        XCTAssertEqual(store.items.count, 160)
+        XCTAssertEqual(Set(store.items.compactMap(\.groupID)), Set(groupIDs.suffix(2)))
+        XCTAssertEqual(store.items.map(\.ordinal), Array(store.items.indices))
+    }
+
+    @MainActor
+    func testCompactionKeepsNewestTerminalGroupWhenItExceedsSoftItemCeiling() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let groupID = UUID()
+        let items = (0 ..< 250).map { offset in
+            makeItem(
+                ordinal: offset,
+                groupID: groupID,
+                sourcePath: "/tmp/oversized-\(offset).mkv",
+                state: .completed,
+                result: DurableQueueResult(outputPath: "/tmp/oversized-\(offset).mov")
+            )
+        }
+
+        try await store.replaceItems(items)
+
+        XCTAssertEqual(store.items.count, 250)
+        XCTAssertEqual(Set(store.items.compactMap(\.groupID)), [groupID])
+    }
+
+    @MainActor
+    func testCompactionKeepsProtectedGroupWhenItExceedsSoftItemCeiling() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let groupID = UUID()
+        let items = (0 ..< 250).map { offset in
+            makeItem(
+                ordinal: offset,
+                groupID: groupID,
+                sourcePath: "/tmp/protected-oversized-\(offset).mkv",
+                state: offset == 249 ? .interrupted : .completed,
+                result: offset == 249
+                    ? nil
+                    : DurableQueueResult(outputPath: "/tmp/protected-oversized-\(offset).mov")
+            )
+        }
+
+        try await store.replaceItems(items)
+
+        XCTAssertEqual(store.items.count, 250)
+        XCTAssertEqual(Set(store.items.compactMap(\.groupID)), [groupID])
+        XCTAssertEqual(store.items.last?.state, .interrupted)
+    }
+
+    @MainActor
+    func testOversizedDocumentLoadsWithoutWritingAndCompactsOnFirstMutation() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let items = (0 ..< 8).map { offset in
+            makeItem(
+                ordinal: offset,
+                sourcePath: "/tmp/legacy-\(offset).mkv",
+                state: .completed,
+                result: DurableQueueResult(outputPath: "/tmp/legacy-\(offset).mov")
+            )
+        }
+        try queueData(items: items).write(to: fileURL)
+        let writeCounter = LockedCounter()
+        let store = ConversionQueueStore(
+            fileURL: fileURL,
+            dataWriter: { data, url in
+                writeCounter.increment()
+                try data.write(to: url, options: .atomic)
+            }
+        )
+
+        XCTAssertEqual(store.items.count, 8)
+        XCTAssertEqual(writeCounter.value, 0)
+
+        try await store.mutateItems { _ in }
+
+        XCTAssertEqual(store.items.map(\.id), items.suffix(5).map(\.id))
+        XCTAssertEqual(writeCounter.value, 1)
+        XCTAssertEqual(ConversionQueueStore(fileURL: fileURL).items, store.items)
+    }
+
+    @MainActor
+    func testNoOpMutationStillPersistsOneGenerationWhenCompactionDoesNothing() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let writeCounter = LockedCounter()
+        let store = ConversionQueueStore(
+            fileURL: fileURL,
+            dataWriter: { data, url in
+                writeCounter.increment()
+                try data.write(to: url, options: .atomic)
+            }
+        )
+        let item = makeItem(ordinal: 0)
+
+        try await store.replaceItems([item])
+        try await store.mutateItems { _ in }
+
+        XCTAssertEqual(writeCounter.value, 2)
+        XCTAssertEqual(store.items, [item])
+    }
+
+    @MainActor
+    func testFailedWriteAfterCompactionLeavesPreviousDocumentUnchanged() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let items = (0 ..< 8).map { offset in
+            makeItem(
+                ordinal: offset,
+                sourcePath: "/tmp/failing-\(offset).mkv",
+                state: .completed,
+                result: DurableQueueResult(outputPath: "/tmp/failing-\(offset).mov")
+            )
+        }
+        let originalData = try queueData(items: items)
+        try originalData.write(to: fileURL)
+        let store = ConversionQueueStore(
+            fileURL: fileURL,
+            dataWriter: { _, _ in throw QueueStoreTestError.writeFailed }
+        )
+
+        await XCTAssertThrowsErrorAsync(try await store.mutateItems { _ in }) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .writeFailed)
+        }
+
+        XCTAssertEqual(store.items, items)
+        XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
+    }
+
+    @MainActor
     func testSaveLoadSaveProducesStableBytes() async throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
@@ -514,6 +781,13 @@ final class ConversionQueueStoreTests: XCTestCase {
     private func temporaryDirectoryURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("ConversionQueueStoreTests.\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private func queueData(items: [DurableConversionQueueItem]) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return try encoder.encode(ConversionQueueDocument(items: items))
     }
 }
 

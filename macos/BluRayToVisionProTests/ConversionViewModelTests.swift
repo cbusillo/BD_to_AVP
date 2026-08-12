@@ -930,6 +930,39 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSourceFolderBatchProjectionSurvivesHistoryCompaction() async throws {
+        try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, _, destinationURL in
+            let historyDraft = ConversionDraft(
+                source: ConversionSource(kind: .matroska, url: folderURL.appendingPathComponent("history.mkv")),
+                sourceDetails: nil,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            let queueStore = ConversionQueueStore.inMemory()
+            try await queueStore.replaceItems(makeCompletedHistoryItems(count: 5, draft: historyDraft))
+            let scenario = BatchWorkerScenario()
+            let viewModel = ConversionViewModel(
+                clientFactory: { scenario.makeClient() },
+                durableQueueStore: queueStore
+            )
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+
+            XCTAssertEqual(viewModel.batchQueue?.items.map(\.status), [.completed, .completed])
+            XCTAssertEqual(queueStore.items.filter { $0.origin == .sourceFolder }.map(\.state), [.completed, .completed])
+            XCTAssertEqual(queueStore.items.count, 6)
+            XCTAssertEqual(queueStore.items.map(\.ordinal), Array(queueStore.items.indices))
+        }
+    }
+
+    @MainActor
     func testCompletedBatchCanStartAgainWithFreshDurableItemIDs() async throws {
         try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, _, destinationURL in
             let scenario = BatchWorkerScenario()
@@ -1763,6 +1796,42 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCompletedTitleResultsSurviveHistoryCompaction() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        let source = ConversionSource(kind: .discImage, url: sourceURL)
+        let drafts = makeDiscQueueDrafts(source: source, destinationURL: directoryURL)
+        let queueStore = ConversionQueueStore.inMemory()
+        try await queueStore.replaceItems(makeCompletedHistoryItems(count: 5, draft: drafts[0]))
+        let inspectionDone = expectation(description: "inspection done")
+        let worker = TwoPhaseWorkerClient(onInspectionComplete: { inspectionDone.fulfill() })
+        let viewModel = ConversionViewModel(
+            clientFactory: { worker },
+            durableQueueStore: queueStore
+        )
+
+        viewModel.selectSource(source)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        viewModel.startConversionQueue(drafts: drafts)
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(viewModel.completedBatchResults?.count, 2)
+        XCTAssertEqual(viewModel.queueItems.count, 2)
+        XCTAssertTrue(viewModel.queueItems.allSatisfy {
+            if case .completed = $0.status { return true }
+            return false
+        })
+        XCTAssertEqual(queueStore.items.filter { $0.origin == .multiTitle }.map(\.state), [.completed, .completed])
+        XCTAssertEqual(queueStore.items.count, 6)
+        XCTAssertEqual(queueStore.items.map(\.ordinal), Array(queueStore.items.indices))
+    }
+
+    @MainActor
     func testReorderWriteFailurePreservesActiveWorkerAndDurableGroup() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -2518,6 +2587,32 @@ final class ConversionViewModelTests: XCTestCase {
                 destinationURL: destinationURL,
                 options: ConversionOptions(),
                 selectedTitle: title
+            )
+        }
+    }
+
+    private func makeCompletedHistoryItems(
+        count: Int,
+        draft: ConversionDraft
+    ) -> [DurableConversionQueueItem] {
+        (0 ..< count).map { offset in
+            let historicalDraft = ConversionDraft(
+                source: ConversionSource(
+                    kind: draft.source.kind,
+                    url: URL(fileURLWithPath: "/tmp/history-\(offset).\(draft.source.url.pathExtension)")
+                ),
+                sourceDetails: draft.sourceDetails,
+                profile: draft.profile,
+                destinationURL: draft.destinationURL,
+                options: draft.options,
+                selectedTitle: draft.selectedTitle
+            )
+            return DurableConversionQueueItem(
+                ordinal: offset,
+                origin: .singleSource,
+                intent: DurableQueueItemIntent(draft: historicalDraft),
+                state: .completed,
+                result: DurableQueueResult(outputPath: "/tmp/history-\(offset).mov")
             )
         }
     }
