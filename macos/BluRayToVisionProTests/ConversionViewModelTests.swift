@@ -1525,10 +1525,12 @@ final class ConversionViewModelTests: XCTestCase {
         remainingConversionsDone.expectedFulfillmentCount = 2
         let firstConversionGate = QueueTestGate()
         var conversionTitleIDs: [String] = []
+        var removeOriginalValues: [Bool] = []
         let worker = ReorderableQueueWorkerClient(
             inspectionDone: { inspectionDone.fulfill() },
             conversionStarted: { job, conversionNumber in
                 conversionTitleIDs.append(job.source.titleID ?? "")
+                removeOriginalValues.append(job.job?.removeOriginal ?? false)
                 if conversionNumber == 1 {
                     firstConversionStarted.fulfill()
                 } else {
@@ -1551,13 +1553,15 @@ final class ConversionViewModelTests: XCTestCase {
             interlaced: false,
             titles: titles
         )
+        var options = ConversionOptions()
+        options.job.removeOriginalAfterSuccess = true
         let drafts = titles.map { title in
             ConversionDraft(
                 source: source,
                 sourceDetails: inspection,
                 profile: BuiltInProfile.balanced.profile,
                 destinationURL: directoryURL,
-                options: ConversionOptions(),
+                options: options,
                 selectedTitle: title
             )
         }
@@ -1571,12 +1575,16 @@ final class ConversionViewModelTests: XCTestCase {
         let thirdID = viewModel.queueItems[2].id
 
         XCTAssertTrue(viewModel.moveWaitingQueueItem(thirdID, before: secondID))
-        XCTAssertEqual(viewModel.queueItems.map(\.draft.selectedTitle?.id), ["title-1", "title-3", "title-2"])
+        XCTAssertEqual(
+            viewModel.queueItems.map { $0.draft.selectedTitle?.id },
+            ["title-1", "title-3", "title-2"]
+        )
         await firstConversionGate.open()
         await fulfillment(of: [remainingConversionsDone], timeout: 2)
         while viewModel.hasActiveWorker || viewModel.hasQueuedWork { await Task.yield() }
 
         XCTAssertEqual(conversionTitleIDs, ["title-1", "title-3", "title-2"])
+        XCTAssertEqual(removeOriginalValues, [false, false, true])
         XCTAssertTrue(viewModel.queueItems.allSatisfy {
             if case .completed = $0.status { return true }
             return false
