@@ -40,6 +40,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private let diagnosticStorageProbe: any DiagnosticStorageProbing
     private let diagnosticBundleBuilder: DiagnosticBundleBuilder
     private let observabilityEventStore: any ObservabilityEventPersisting
+    private let durableQueueStore: ConversionQueueStore
     private let diagnosticRecorder = DiagnosticSessionRecorder()
     private var client: (any WorkerProcessRunning)?
     private var runTask: Task<Void, Never>?
@@ -59,7 +60,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         diagnosticClock: @escaping () -> Date = Date.init,
         diagnosticStorageProbe: any DiagnosticStorageProbing = FileSystemDiagnosticStorageProbe(),
         diagnosticBundleBuilder: DiagnosticBundleBuilder? = nil,
-        observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared
+        observabilityEventStore: any ObservabilityEventPersisting = NullObservabilityEventStore.shared,
+        durableQueueStore: ConversionQueueStore? = nil
     ) {
         self.clientFactory = clientFactory
         self.diagnosticClock = diagnosticClock
@@ -67,6 +69,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         self.diagnosticBundleBuilder = diagnosticBundleBuilder
             ?? DiagnosticBundleBuilder(storageProbe: diagnosticStorageProbe)
         self.observabilityEventStore = observabilityEventStore
+        self.durableQueueStore = durableQueueStore ?? ConversionQueueStore.inMemory()
     }
 
     var isRunning: Bool {
@@ -120,6 +123,18 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     var hasDiagnosticEvidence: Bool {
         diagnosticRecorder.currentJobContext != nil
+    }
+
+    var restoredDurableQueueItems: [DurableConversionQueueItem] {
+        durableQueueStore.items
+    }
+
+    var durableQueueLoadErrorMessage: String? {
+        durableQueueStore.loadErrorMessage
+    }
+
+    var durableQueueWritesBlocked: Bool {
+        durableQueueStore.writesBlocked
     }
 
     func captureDiagnosticBundle(

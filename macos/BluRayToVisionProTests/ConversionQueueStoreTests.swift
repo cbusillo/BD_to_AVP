@@ -1,0 +1,557 @@
+import Foundation
+import XCTest
+@testable import BluRayToVisionPro
+
+final class ConversionQueueStoreTests: XCTestCase {
+    func testRawDocumentRoundTripPreservesEveryStatusAndOmitsDerivedAvailability() throws {
+        let items = DurableQueueItemState.allCases.enumerated().map { offset, state in
+            makeItem(
+                ordinal: offset,
+                sourcePath: "/tmp/raw-source-\(offset).mkv",
+                state: state,
+                decision: state == .attention
+                    ? DurableQueueDecision(
+                        identifier: "mkv_creation_decision_required",
+                        prompt: "Choose how to continue.",
+                        choices: ["retry_continue_on_error"]
+                    )
+                    : nil,
+                result: state == .completed ? DurableQueueResult(outputPath: "/tmp/raw-output.mov") : nil
+            )
+        }
+        let document = ConversionQueueDocument(items: items)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(document)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        decoder.userInfo[.requiresVideoQualityIntent] = true
+
+        XCTAssertEqual(try decoder.decode(ConversionQueueDocument.self, from: data), document)
+        let json = String(decoding: data, as: UTF8.self)
+        XCTAssertFalse(json.contains("unavailable"))
+        XCTAssertFalse(json.contains("videoRoute"))
+    }
+
+    @MainActor
+    func testDocumentRoundTripPreservesCanonicalItemsAndFrozenSettings() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let groupID = UUID(uuidString: "A24749CB-D59A-4E55-BBF4-E6E0D92D92B2")!
+        var options = ConversionOptions()
+        options.encoding = EncodingOptions(
+            videoQuality: .custom(
+                mvHEVC: MVHEVCOptions(generatedMergeQuality: 83),
+                av1CRF: 27,
+                upscaleQuality: 83
+            ),
+            mvHEVC: MVHEVCOptions(generatedMergeQuality: 83),
+            upscaleQuality: 83
+        )
+        options.job.removeOriginalAfterSuccess = false
+        let items = [
+            makeItem(
+                id: UUID(uuidString: "551519B2-7C66-4E8F-AF04-519127511D78")!,
+                ordinal: 0,
+                groupID: groupID,
+                origin: .sourceFolder,
+                sourcePath: "/Volumes/Rips/first.iso",
+                options: options,
+                state: .waiting
+            ),
+            makeItem(
+                id: UUID(uuidString: "47B17E9C-26D9-4554-8994-CB744D97B377")!,
+                ordinal: 1,
+                groupID: groupID,
+                origin: .sourceFolder,
+                sourcePath: "/Volumes/Rips/second.mkv",
+                options: options,
+                state: .failed,
+                failure: DurableQueueFailure(
+                    code: "worker_failed",
+                    message: "Conversion failed.",
+                    details: "Fixture failure",
+                    retryable: true
+                )
+            ),
+        ]
+        let store = ConversionQueueStore(fileURL: fileURL)
+
+        try await store.replaceItems(items)
+        let restored = ConversionQueueStore(fileURL: fileURL)
+
+        XCTAssertEqual(restored.items, items)
+        XCTAssertEqual(restored.items.map(\.ordinal), [0, 1])
+        XCTAssertEqual(restored.items.map(\.groupID), [groupID, groupID])
+        XCTAssertEqual(restored.items.first?.intent.options, options)
+        XCTAssertFalse(try XCTUnwrap(restored.items.first).intent.options.job.removeOriginalAfterSuccess)
+    }
+
+    @MainActor
+    func testEphemeralStatesRestoreAsInterruptedWithoutChangingDurableStates() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let states = DurableQueueItemState.allCases
+        let items = states.enumerated().map { offset, state in
+            makeItem(
+                ordinal: offset,
+                sourcePath: "/tmp/source-\(offset).mkv",
+                state: state,
+                decision: state == .attention
+                    ? DurableQueueDecision(
+                        identifier: "subtitle_decision_required",
+                        prompt: "Retry without subtitles?",
+                        choices: ["retry_without_subtitles"]
+                    )
+                    : nil,
+                failure: state == .failed
+                    ? DurableQueueFailure(
+                        code: "fixture_failure",
+                        message: "Fixture failure",
+                        details: nil,
+                        retryable: true
+                    )
+                    : nil,
+                result: state == .completed ? DurableQueueResult(outputPath: "/tmp/output.mov") : nil
+            )
+        }
+        let store = ConversionQueueStore(fileURL: fileURL)
+        try await store.replaceItems(items)
+
+        let restored = ConversionQueueStore(fileURL: fileURL).items
+
+        for (original, item) in zip(states, restored) {
+            let expected: DurableQueueItemState = switch original {
+            case .inspecting, .processing, .stopping:
+                .interrupted
+            default:
+                original
+            }
+            XCTAssertEqual(item.state, expected)
+        }
+        let attention = try XCTUnwrap(restored.first(where: { $0.state == .attention }))
+        XCTAssertTrue(try XCTUnwrap(attention.decision).staleAfterRestore)
+    }
+
+    @MainActor
+    func testUnknownAttentionDecisionRestoresAsInterrupted() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let item = makeItem(
+            ordinal: 0,
+            state: .attention,
+            decision: DurableQueueDecision(
+                identifier: "future_decision",
+                prompt: "Choose a future option.",
+                choices: ["future_choice"]
+            )
+        )
+        let store = ConversionQueueStore(fileURL: fileURL)
+        try await store.replaceItems([item])
+
+        let restored = try XCTUnwrap(ConversionQueueStore(fileURL: fileURL).items.first)
+
+        XCTAssertEqual(restored.state, .interrupted)
+        XCTAssertNil(restored.decision)
+    }
+
+    @MainActor
+    func testMissingVideoQualityFailsClosedAndPreservesUnreadableDocument() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let sourceStore = ConversionQueueStore(fileURL: fileURL)
+        try await sourceStore.replaceItems([makeItem(ordinal: 0)])
+        var object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
+        )
+        var items = try XCTUnwrap(object["items"] as? [[String: Any]])
+        var intent = try XCTUnwrap(items[0]["intent"] as? [String: Any])
+        var options = try XCTUnwrap(intent["options"] as? [String: Any])
+        var encoding = try XCTUnwrap(options["encoding"] as? [String: Any])
+        encoding.removeValue(forKey: "videoQuality")
+        options["encoding"] = encoding
+        intent["options"] = options
+        items[0]["intent"] = intent
+        object["items"] = items
+        let invalidData = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        try invalidData.write(to: fileURL)
+
+        let restored = ConversionQueueStore(fileURL: fileURL)
+
+        XCTAssertTrue(restored.items.isEmpty)
+        XCTAssertNotNil(restored.loadErrorMessage)
+        XCTAssertFalse(restored.writesBlocked)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+        XCTAssertEqual(try Data(contentsOf: fileURL.appendingPathExtension("corrupt")), invalidData)
+    }
+
+    @MainActor
+    func testLoadingValidDocumentPerformsNoWrites() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let sourceStore = ConversionQueueStore(fileURL: fileURL)
+        try await sourceStore.replaceItems([makeItem(ordinal: 0)])
+        let counter = LockedCounter()
+
+        let restored = ConversionQueueStore(
+            fileURL: fileURL,
+            dataWriter: { _, _ in counter.increment() }
+        )
+
+        XCTAssertEqual(restored.items.count, 1)
+        XCTAssertEqual(counter.value, 0)
+    }
+
+    @MainActor
+    func testUnsupportedNewerVersionBlocksWritesWithoutMovingOriginal() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let data = Data(#"{"items":[],"version":99}"#.utf8)
+        try data.write(to: fileURL)
+
+        let store = ConversionQueueStore(fileURL: fileURL)
+
+        XCTAssertTrue(store.writesBlocked)
+        XCTAssertEqual(try Data(contentsOf: fileURL), data)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.appendingPathExtension("corrupt").path))
+        await XCTAssertThrowsErrorAsync(try await store.replaceItems([])) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .recoveryRequired)
+        }
+    }
+
+    @MainActor
+    func testOlderUnsupportedVersionBlocksWritesWithoutMovingOriginal() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let data = Data(#"{"items":[],"version":0}"#.utf8)
+        try data.write(to: fileURL)
+
+        let store = ConversionQueueStore(fileURL: fileURL)
+
+        XCTAssertTrue(store.writesBlocked)
+        XCTAssertEqual(try Data(contentsOf: fileURL), data)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.appendingPathExtension("corrupt").path))
+        await XCTAssertThrowsErrorAsync(try await store.replaceItems([])) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .recoveryRequired)
+        }
+    }
+
+    @MainActor
+    func testTransientReadFailureBlocksWritesWithoutMovingOriginal() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let data = Data(#"{"items":[],"version":1}"#.utf8)
+        try data.write(to: fileURL)
+
+        let store = ConversionQueueStore(
+            fileURL: fileURL,
+            dataReader: { _ in throw QueueStoreTestError.readFailed }
+        )
+
+        XCTAssertTrue(store.writesBlocked)
+        XCTAssertEqual(try Data(contentsOf: fileURL), data)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.appendingPathExtension("corrupt").path))
+    }
+
+    @MainActor
+    func testInvalidOrdinalOrderAndMissingFailureEvidenceAreRejected() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let misordered = makeItem(ordinal: 1)
+        let failedWithoutEvidence = makeItem(ordinal: 0, state: .failed)
+
+        await XCTAssertThrowsErrorAsync(try await store.replaceItems([misordered])) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
+        }
+        await XCTAssertThrowsErrorAsync(try await store.replaceItems([failedWithoutEvidence])) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
+        }
+    }
+
+    @MainActor
+    func testFailedCorruptFilePreservationBlocksWritesAndKeepsOriginal() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let invalidData = Data("not-json".utf8)
+        try invalidData.write(to: fileURL)
+
+        let store = ConversionQueueStore(
+            fileURL: fileURL,
+            dataMover: { _, _ in throw QueueStoreTestError.moveFailed }
+        )
+
+        XCTAssertTrue(store.writesBlocked)
+        XCTAssertEqual(try Data(contentsOf: fileURL), invalidData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.appendingPathExtension("corrupt").path))
+        await XCTAssertThrowsErrorAsync(try await store.replaceItems([])) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .recoveryRequired)
+        }
+    }
+
+    @MainActor
+    func testFailedWriteLeavesPreviousDocumentByteIdentical() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let sourceStore = ConversionQueueStore(fileURL: fileURL)
+        try await sourceStore.replaceItems([makeItem(ordinal: 0)])
+        let originalData = try Data(contentsOf: fileURL)
+        let failingStore = ConversionQueueStore(
+            fileURL: fileURL,
+            dataWriter: { _, _ in throw QueueStoreTestError.writeFailed }
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await failingStore.replaceItems([
+                makeItem(ordinal: 0),
+                makeItem(ordinal: 1, sourcePath: "/tmp/second.mkv"),
+            ])
+        ) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .writeFailed)
+        }
+
+        XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
+        XCTAssertEqual(failingStore.items.count, 1)
+    }
+
+    @MainActor
+    func testOverlappingWritesConvergeToNewestGeneration() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let firstWriteStarted = expectation(description: "first write started")
+        let releaseFirstWrite = DispatchSemaphore(value: 0)
+        let writeCounter = LockedCounter()
+        let store = ConversionQueueStore(
+            fileURL: fileURL,
+            dataWriter: { data, url in
+                if writeCounter.incrementAndReturn() == 1 {
+                    firstWriteStarted.fulfill()
+                    releaseFirstWrite.wait()
+                }
+                try data.write(to: url, options: .atomic)
+            }
+        )
+        let firstItems = [makeItem(ordinal: 0)]
+        let secondItems = [
+            makeItem(ordinal: 0),
+            makeItem(ordinal: 1, sourcePath: "/tmp/newest.mkv"),
+        ]
+
+        let first = Task { @MainActor in try await store.replaceItems(firstItems) }
+        await fulfillment(of: [firstWriteStarted], timeout: 2)
+        let second = Task { @MainActor in try await store.replaceItems(secondItems) }
+        releaseFirstWrite.signal()
+        try await first.value
+        try await second.value
+
+        XCTAssertEqual(store.items, secondItems)
+        XCTAssertEqual(ConversionQueueStore(fileURL: fileURL).items, secondItems)
+    }
+
+    @MainActor
+    func testOverlappingMutationsApplyInOrderWithoutLosingEitherChange() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let firstWriteStarted = expectation(description: "first mutation write started")
+        let releaseFirstWrite = DispatchSemaphore(value: 0)
+        let writeCounter = LockedCounter()
+        let store = ConversionQueueStore(
+            fileURL: fileURL,
+            dataWriter: { data, url in
+                if writeCounter.incrementAndReturn() == 1 {
+                    firstWriteStarted.fulfill()
+                    releaseFirstWrite.wait()
+                }
+                try data.write(to: url, options: .atomic)
+            }
+        )
+
+        let first = Task { @MainActor in
+            try await store.mutateItems { items in
+                items.append(self.makeItem(ordinal: 0, sourcePath: "/tmp/first.mkv"))
+            }
+        }
+        await fulfillment(of: [firstWriteStarted], timeout: 2)
+        let second = Task { @MainActor in
+            try await store.mutateItems { items in
+                items.append(self.makeItem(ordinal: 1, sourcePath: "/tmp/second.mkv"))
+            }
+        }
+        releaseFirstWrite.signal()
+        try await first.value
+        try await second.value
+
+        XCTAssertEqual(store.items.map(\.intent.source.path), ["/tmp/first.mkv", "/tmp/second.mkv"])
+        XCTAssertEqual(ConversionQueueStore(fileURL: fileURL).items, store.items)
+    }
+
+    @MainActor
+    func testSaveLoadSaveProducesStableBytes() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let items = [makeItem(ordinal: 0)]
+        let store = ConversionQueueStore(fileURL: fileURL)
+        try await store.replaceItems(items)
+        let firstData = try Data(contentsOf: fileURL)
+        let restored = ConversionQueueStore(fileURL: fileURL)
+
+        try await restored.replaceItems(restored.items)
+
+        XCTAssertEqual(try Data(contentsOf: fileURL), firstData)
+    }
+
+    @MainActor
+    func testInjectingRestoredStoreDoesNotLaunchWorker() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let sourceStore = ConversionQueueStore(fileURL: fileURL)
+        try await sourceStore.replaceItems([makeItem(ordinal: 0, state: .processing)])
+        let restored = ConversionQueueStore(fileURL: fileURL)
+        let counter = LockedCounter()
+
+        let viewModel = ConversionViewModel(
+            clientFactory: {
+                counter.increment()
+                throw QueueStoreTestError.workerLaunched
+            },
+            durableQueueStore: restored
+        )
+
+        XCTAssertEqual(counter.value, 0)
+        XCTAssertEqual(viewModel.restoredDurableQueueItems.first?.state, .interrupted)
+        XCTAssertNil(viewModel.durableQueueLoadErrorMessage)
+        XCTAssertFalse(viewModel.durableQueueWritesBlocked)
+    }
+
+    func testStablePreviewIdentifierDoesNotDependOnArrayPosition() {
+        let draft = makeDraft(sourcePath: "/tmp/movie.mkv", titleID: "42")
+        let first = ConversionQueueItem.stablePreviewID(for: draft)
+        let second = ConversionQueueItem.stablePreviewID(for: draft)
+        let other = ConversionQueueItem.stablePreviewID(
+            for: makeDraft(sourcePath: "/tmp/movie.mkv", titleID: "43")
+        )
+
+        XCTAssertEqual(first, second)
+        XCTAssertNotEqual(first, other)
+    }
+
+    private func makeItem(
+        id: UUID = UUID(),
+        ordinal: Int,
+        groupID: UUID? = nil,
+        origin: DurableQueueItemOrigin = .singleSource,
+        sourcePath: String = "/tmp/source.mkv",
+        options: ConversionOptions = ConversionOptions(),
+        state: DurableQueueItemState = .waiting,
+        decision: DurableQueueDecision? = nil,
+        failure: DurableQueueFailure? = nil,
+        result: DurableQueueResult? = nil
+    ) -> DurableConversionQueueItem {
+        DurableConversionQueueItem(
+            id: id,
+            ordinal: ordinal,
+            groupID: groupID,
+            origin: origin,
+            intent: DurableQueueItemIntent(
+                source: DurableQueueSource(
+                    kind: ConversionSourceKind.matroska.rawValue,
+                    path: sourcePath,
+                    displayName: URL(fileURLWithPath: sourcePath).lastPathComponent,
+                    workerSourcePath: sourcePath
+                ),
+                profile: DurableQueueProfile(
+                    id: BuiltInProfile.balanced.id,
+                    name: BuiltInProfile.balanced.name,
+                    kind: .builtIn
+                ),
+                destinationPath: "/tmp/Output",
+                options: options
+            ),
+            state: state,
+            decision: decision,
+            failure: failure,
+            result: result
+        )
+    }
+
+    private func makeDraft(sourcePath: String, titleID: String) -> ConversionDraft {
+        ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: URL(fileURLWithPath: sourcePath)),
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: URL(fileURLWithPath: "/tmp/Output"),
+            options: ConversionOptions(),
+            selectedTitle: SourceTitle(
+                id: titleID,
+                name: "Title \(titleID)",
+                outputName: "title-\(titleID)",
+                durationSeconds: 100,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: titleID == "42"
+            )
+        )
+    }
+
+    private func temporaryDirectoryURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("ConversionQueueStoreTests.\(UUID().uuidString)", isDirectory: true)
+    }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = 0
+
+    var value: Int {
+        lock.withLock { storage }
+    }
+
+    func increment() {
+        lock.withLock { storage += 1 }
+    }
+
+    func incrementAndReturn() -> Int {
+        lock.withLock {
+            storage += 1
+            return storage
+        }
+    }
+}
+
+private enum QueueStoreTestError: Error {
+    case readFailed
+    case writeFailed
+    case moveFailed
+    case workerLaunched
+}
+
+private func XCTAssertThrowsErrorAsync<T>(
+    _ expression: @autoclosure () async throws -> T,
+    _ errorHandler: (Error) -> Void = { _ in }
+) async {
+    do {
+        _ = try await expression()
+        XCTFail("Expected expression to throw")
+    } catch {
+        errorHandler(error)
+    }
+}

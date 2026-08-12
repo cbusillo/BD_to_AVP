@@ -561,7 +561,9 @@ struct ContentView: View {
         guard viewModel.queueItems.isEmpty, conversionDrafts.count > 1 else {
             return viewModel.queueItems
         }
-        return conversionDrafts.map { ConversionQueueItem(draft: $0) }
+        return conversionDrafts.map {
+            ConversionQueueItem(id: ConversionQueueItem.stablePreviewID(for: $0), draft: $0)
+        }
     }
 
     private var titleSelectionSummary: String {

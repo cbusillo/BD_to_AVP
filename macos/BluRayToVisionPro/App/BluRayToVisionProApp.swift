@@ -13,6 +13,7 @@ struct BluRayToVisionProApp: App {
     @StateObject private var updater: UpdateController
     @StateObject private var settings = AppSettings()
     @StateObject private var profileStore = ProfileStore()
+    @StateObject private var durableQueueStore: ConversionQueueStore
 
     private let capabilities = AppCapabilities.current
     private let workCoordinator: AppWorkCoordinator
@@ -21,7 +22,11 @@ struct BluRayToVisionProApp: App {
 
     init() {
         let observabilityEventStore = ObservabilityEventStore.automatic()
-        let viewModel = ConversionViewModel(observabilityEventStore: observabilityEventStore)
+        let durableQueueStore = ConversionQueueStore()
+        let viewModel = ConversionViewModel(
+            observabilityEventStore: observabilityEventStore,
+            durableQueueStore: durableQueueStore
+        )
         let previewViewModel = PreviewViewModel(observabilityEventStore: observabilityEventStore)
         let workCoordinator = AppWorkCoordinator(conversion: viewModel, preview: previewViewModel)
         let diagnosticConfiguration = DiagnosticServiceConfiguration.configured()
@@ -41,6 +46,7 @@ struct BluRayToVisionProApp: App {
         _previewViewModel = StateObject(wrappedValue: previewViewModel)
         _diagnosticReportViewModel = StateObject(wrappedValue: diagnosticReportViewModel)
         _updater = StateObject(wrappedValue: UpdateController(installPostponer: workCoordinator))
+        _durableQueueStore = StateObject(wrappedValue: durableQueueStore)
         self.workCoordinator = workCoordinator
         self.observabilityEventStore = observabilityEventStore
         suppressDefaultLaunch = AppDelegate.isAutomationSmoke(arguments: ProcessInfo.processInfo.arguments)
