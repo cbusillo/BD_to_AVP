@@ -17,6 +17,7 @@ final class ConversionQueueStore: ObservableObject {
     private let writer: ConversionQueueFileWriter?
     private let mutationLock = ConversionQueueMutationLock()
     private var nextGeneration = 0
+    private var documentRevision = 0
 
     init(
         fileURL: URL? = nil,
@@ -55,6 +56,144 @@ final class ConversionQueueStore: ObservableObject {
         document.items
     }
 
+    func moveWaitingItem(_ itemID: UUID, before targetID: UUID) async throws {
+        guard itemID != targetID else {
+            return
+        }
+        try await mutateItems { items in
+            guard let sourceIndex = items.firstIndex(where: { $0.id == itemID }),
+                  let targetIndex = items.firstIndex(where: { $0.id == targetID }),
+                  items[sourceIndex].state == .waiting,
+                  items[targetIndex].state == .waiting
+            else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            let affectedGroupIDs = Set([items[sourceIndex].groupID, items[targetIndex].groupID].compactMap { $0 })
+            let sourceRemovalRequests = Self.multiTitleSourceRemovalRequests(
+                in: items,
+                groupIDs: affectedGroupIDs
+            )
+            let item = items.remove(at: sourceIndex)
+            guard let insertionIndex = items.firstIndex(where: { $0.id == targetID }) else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            items.insert(item, at: insertionIndex)
+            Self.normalizeOrdinals(&items)
+            Self.normalizeMultiTitleSourceRemoval(
+                in: &items,
+                requests: sourceRemovalRequests
+            )
+        }
+    }
+
+    func moveWaitingItemNext(_ itemID: UUID) async throws {
+        try await mutateItems { items in
+            guard let sourceIndex = items.firstIndex(where: { $0.id == itemID }),
+                  items[sourceIndex].state == .waiting
+            else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            let groupIDs = Set(items[sourceIndex].groupID.map { [$0] } ?? [])
+            let sourceRemovalRequests = Self.multiTitleSourceRemovalRequests(in: items, groupIDs: groupIDs)
+            let item = items.remove(at: sourceIndex)
+            let insertionIndex = items.firstIndex(where: { $0.state == .waiting }) ?? min(sourceIndex, items.count)
+            items.insert(item, at: insertionIndex)
+            Self.normalizeOrdinals(&items)
+            Self.normalizeMultiTitleSourceRemoval(in: &items, requests: sourceRemovalRequests)
+        }
+    }
+
+    func removeWaitingItems(_ itemIDs: Set<UUID>) async throws -> PersistentQueueRemovalToken {
+        var removedItems: [DurableConversionQueueItem] = []
+        let revision = try await mutateItems { items in
+            let matchingItems = items.filter { itemIDs.contains($0.id) }
+            guard matchingItems.count == itemIDs.count,
+                  matchingItems.allSatisfy({ $0.state == .waiting })
+            else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            let affectedGroupIDs = Set(matchingItems.compactMap(\.groupID))
+            let sourceRemovalRequests = Self.multiTitleSourceRemovalRequests(
+                in: items,
+                groupIDs: affectedGroupIDs
+            )
+            removedItems = matchingItems
+            items.removeAll { itemIDs.contains($0.id) }
+            Self.normalizeOrdinals(&items)
+            Self.normalizeMultiTitleSourceRemoval(
+                in: &items,
+                requests: sourceRemovalRequests
+            )
+        }
+        return PersistentQueueRemovalToken(items: removedItems, revision: revision)
+    }
+
+    func restoreRemovedItems(_ token: PersistentQueueRemovalToken) async throws {
+        guard !token.isEmpty else {
+            return
+        }
+        try await mutateItems { items in
+            guard token.revision == documentRevision else {
+                throw ConversionQueueStoreError.staleRemovalToken
+            }
+            let existingIDs = Set(items.map(\.id))
+            guard token.items.allSatisfy({ !existingIDs.contains($0.id) }) else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            for item in token.items.sorted(by: { $0.ordinal < $1.ordinal }) {
+                items.insert(item, at: min(item.ordinal, items.count))
+            }
+            Self.normalizeOrdinals(&items)
+            Self.normalizeMultiTitleSourceRemoval(
+                in: &items,
+                requests: Self.multiTitleSourceRemovalRequests(
+                    in: items,
+                    groupIDs: Set(token.items.compactMap(\.groupID))
+                )
+            )
+        }
+    }
+
+    func updateWaitingItemIntent(_ itemID: UUID, intent: DurableQueueItemIntent) async throws {
+        try await mutateItems { items in
+            guard let index = items.firstIndex(where: { $0.id == itemID }),
+                  items[index].state == .waiting
+            else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            items[index].intent = intent
+            let groupIDs = Set(items[index].groupID.map { [$0] } ?? [])
+            Self.normalizeMultiTitleSourceRemoval(
+                in: &items,
+                requests: Self.multiTitleSourceRemovalRequests(in: items, groupIDs: groupIDs)
+            )
+        }
+    }
+
+    func clearCompletedItems() async throws -> PersistentQueueRemovalToken {
+        var removedItems: [DurableConversionQueueItem] = []
+        let revision = try await mutateItems { items in
+            let terminalGroupIDs = Set(items.compactMap { item -> UUID? in
+                guard item.state == .completed, let groupID = item.groupID else {
+                    return nil
+                }
+                return items.allSatisfy { candidate in
+                    candidate.groupID != groupID
+                        || candidate.state == .completed
+                        || candidate.state == .stopped
+                } ? groupID : nil
+            })
+            removedItems = items.filter { item in
+                item.state == .completed
+                    && (item.groupID == nil || item.groupID.map(terminalGroupIDs.contains) == true)
+            }
+            let removedIDs = Set(removedItems.map(\.id))
+            items.removeAll { removedIDs.contains($0.id) }
+            Self.normalizeOrdinals(&items)
+        }
+        return PersistentQueueRemovalToken(items: removedItems, revision: revision)
+    }
+
     func replaceItems(_ items: [DurableConversionQueueItem]) async throws {
         await mutationLock.lock()
         do {
@@ -69,7 +208,8 @@ final class ConversionQueueStore: ObservableObject {
         }
     }
 
-    func mutateItems(_ mutation: (inout [DurableConversionQueueItem]) throws -> Void) async throws {
+    @discardableResult
+    func mutateItems(_ mutation: (inout [DurableConversionQueueItem]) throws -> Void) async throws -> Int {
         await mutationLock.lock()
         do {
             var items = document.items
@@ -77,22 +217,24 @@ final class ConversionQueueStore: ObservableObject {
             try validate(items)
             let compactedItems = compacted(items)
             try validate(compactedItems)
-            try await persist(ConversionQueueDocument(items: compactedItems))
+            let revision = try await persist(ConversionQueueDocument(items: compactedItems))
             await mutationLock.unlock()
+            return revision
         } catch {
             await mutationLock.unlock()
             throw error
         }
     }
 
-    private func persist(_ nextDocument: ConversionQueueDocument) async throws {
+    private func persist(_ nextDocument: ConversionQueueDocument) async throws -> Int {
         guard !writesBlocked else {
             throw ConversionQueueStoreError.recoveryRequired
         }
         guard let writer else {
             document = nextDocument
             loadErrorMessage = nil
-            return
+            documentRevision += 1
+            return documentRevision
         }
 
         let encoder = Self.encoder()
@@ -109,6 +251,8 @@ final class ConversionQueueStore: ObservableObject {
             try await writer.write(data, generation: generation)
             document = nextDocument
             loadErrorMessage = nil
+            documentRevision += 1
+            return documentRevision
         } catch let error as ConversionQueueStoreError {
             throw error
         } catch {
@@ -231,6 +375,46 @@ final class ConversionQueueStore: ObservableObject {
         return units
     }
 
+    private static func normalizeOrdinals(_ items: inout [DurableConversionQueueItem]) {
+        for index in items.indices {
+            items[index].ordinal = index
+        }
+    }
+
+    private static func multiTitleSourceRemovalRequests(
+        in items: [DurableConversionQueueItem],
+        groupIDs: Set<UUID>
+    ) -> [UUID: Bool] {
+        Dictionary(uniqueKeysWithValues: groupIDs.map { groupID in
+            let requested = items.contains { item in
+                item.groupID == groupID
+                    && item.origin == .multiTitle
+                    && item.intent.options.job.removeOriginalAfterSuccess
+            }
+            return (groupID, requested)
+        })
+    }
+
+    private static func normalizeMultiTitleSourceRemoval(
+        in items: inout [DurableConversionQueueItem],
+        requests: [UUID: Bool]
+    ) {
+        for (groupID, requested) in requests {
+            let finalWaitingItemID = items.last { item in
+                item.groupID == groupID
+                    && item.origin == .multiTitle
+                    && item.state == .waiting
+            }?.id
+            for index in items.indices where items[index].groupID == groupID
+                && items[index].origin == .multiTitle
+                && items[index].state == .waiting
+            {
+                items[index].intent.options.job.removeOriginalAfterSuccess = requested
+                    && items[index].id == finalWaitingItemID
+            }
+        }
+    }
+
     private func recoverFromUnreadableFile() {
         guard let fileURL else {
             return
@@ -343,6 +527,7 @@ private actor ConversionQueueMutationLock {
 enum ConversionQueueStoreError: LocalizedError, Equatable {
     case invalidDocument
     case recoveryRequired
+    case staleRemovalToken
     case staleWrite
     case unsupportedVersion(Int)
     case writeFailed
@@ -353,6 +538,8 @@ enum ConversionQueueStoreError: LocalizedError, Equatable {
             "The queue contains invalid data."
         case .recoveryRequired:
             "Queue changes are disabled until the original queue data can be protected."
+        case .staleRemovalToken:
+            "The queue changed after these items were removed, so Undo is no longer available."
         case .staleWrite:
             "A newer queue update was already saved."
         case let .unsupportedVersion(version):

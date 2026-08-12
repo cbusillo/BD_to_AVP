@@ -402,6 +402,320 @@ final class ConversionQueueStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testPersistentQueueMoveBeforeAndMoveNextPreserveDenseOrdinals() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let completed = makeItem(
+            ordinal: 0,
+            sourcePath: "/tmp/completed.mkv",
+            state: .completed,
+            result: DurableQueueResult(outputPath: "/tmp/completed.mov")
+        )
+        let first = makeItem(ordinal: 1, sourcePath: "/tmp/first.mkv")
+        let second = makeItem(ordinal: 2, sourcePath: "/tmp/second.mkv")
+        let third = makeItem(ordinal: 3, sourcePath: "/tmp/third.mkv")
+        try await store.replaceItems([completed, first, second, third])
+
+        try await store.moveWaitingItem(third.id, before: second.id)
+        XCTAssertEqual(store.items.map(\.id), [completed.id, first.id, third.id, second.id])
+
+        try await store.moveWaitingItemNext(second.id)
+        XCTAssertEqual(store.items.map(\.id), [completed.id, second.id, first.id, third.id])
+        XCTAssertEqual(store.items.map(\.ordinal), Array(store.items.indices))
+    }
+
+    @MainActor
+    func testPersistentQueueRemovalTokenRestoresOriginalOrderAndIntents() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let items = (0 ..< 4).map { offset in
+            makeItem(ordinal: offset, sourcePath: "/tmp/source-\(offset).mkv")
+        }
+        try await store.replaceItems(items)
+
+        let token = try await store.removeWaitingItems([items[1].id, items[3].id])
+        XCTAssertEqual(store.items.map(\.id), [items[0].id, items[2].id])
+        XCTAssertEqual(store.items.map(\.ordinal), [0, 1])
+
+        try await store.restoreRemovedItems(token)
+        XCTAssertEqual(store.items, items)
+    }
+
+    @MainActor
+    func testPersistentQueueRemovalTokenRejectsRestoreAfterInterveningMutation() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let items = (0 ..< 3).map { offset in
+            makeItem(ordinal: offset, sourcePath: "/tmp/source-\(offset).mkv")
+        }
+        try await store.replaceItems(items)
+
+        let token = try await store.removeWaitingItems([items[1].id])
+        try await store.moveWaitingItemNext(items[2].id)
+
+        await XCTAssertThrowsErrorAsync(try await store.restoreRemovedItems(token)) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .staleRemovalToken)
+        }
+        XCTAssertEqual(store.items.map(\.id), [items[2].id, items[0].id])
+    }
+
+    @MainActor
+    func testPersistentQueueMutationsRejectNonWaitingItems() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let waiting = makeItem(ordinal: 0, sourcePath: "/tmp/waiting.mkv")
+        let completed = makeItem(
+            ordinal: 1,
+            sourcePath: "/tmp/completed.mkv",
+            state: .completed,
+            result: DurableQueueResult(outputPath: "/tmp/completed.mov")
+        )
+        try await store.replaceItems([waiting, completed])
+
+        await XCTAssertThrowsErrorAsync(try await store.moveWaitingItemNext(completed.id)) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
+        }
+        await XCTAssertThrowsErrorAsync(try await store.removeWaitingItems([completed.id])) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
+        }
+        await XCTAssertThrowsErrorAsync(
+            try await store.updateWaitingItemIntent(completed.id, intent: completed.intent)
+        ) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
+        }
+        XCTAssertEqual(store.items, [waiting, completed])
+    }
+
+    @MainActor
+    func testPersistentQueueIntentUpdateAndClearCompletedPersistCanonicalState() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let waiting = makeItem(ordinal: 0, sourcePath: "/tmp/waiting.mkv")
+        let completed = makeItem(
+            ordinal: 1,
+            sourcePath: "/tmp/completed.mkv",
+            state: .completed,
+            result: DurableQueueResult(outputPath: "/tmp/completed.mov")
+        )
+        try await store.replaceItems([waiting, completed])
+        var updatedIntent = waiting.intent
+        updatedIntent.destinationPath = "/tmp/New Output"
+
+        try await store.updateWaitingItemIntent(waiting.id, intent: updatedIntent)
+        let token = try await store.clearCompletedItems()
+
+        XCTAssertEqual(store.items.count, 1)
+        XCTAssertEqual(store.items[0].intent.destinationPath, "/tmp/New Output")
+        XCTAssertEqual(store.items[0].ordinal, 0)
+        XCTAssertEqual(token.items, [completed])
+    }
+
+    @MainActor
+    func testClearCompletedPreservesCompletedSiblingsInActionableGroup() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let groupID = UUID()
+        let completed = makeItem(
+            ordinal: 0,
+            groupID: groupID,
+            origin: .sourceFolder,
+            sourcePath: "/tmp/completed.mkv",
+            state: .completed,
+            result: DurableQueueResult(outputPath: "/tmp/completed.mov")
+        )
+        let failed = makeItem(
+            ordinal: 1,
+            groupID: groupID,
+            origin: .sourceFolder,
+            sourcePath: "/tmp/failed.mkv",
+            state: .failed,
+            failure: DurableQueueFailure(
+                code: "fixture_failure",
+                message: "Fixture failure",
+                details: nil,
+                retryable: true
+            )
+        )
+        let standaloneCompleted = makeItem(
+            ordinal: 2,
+            sourcePath: "/tmp/standalone.mkv",
+            state: .completed,
+            result: DurableQueueResult(outputPath: "/tmp/standalone.mov")
+        )
+        try await store.replaceItems([completed, failed, standaloneCompleted])
+
+        let token = try await store.clearCompletedItems()
+
+        XCTAssertEqual(store.items.map(\.id), [completed.id, failed.id])
+        XCTAssertEqual(store.items.map(\.ordinal), [0, 1])
+        XCTAssertEqual(token.items, [standaloneCompleted])
+    }
+
+    @MainActor
+    func testClearCompletedRemovesCompletedSiblingFromFullyTerminalGroup() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let groupID = UUID()
+        let completed = makeItem(
+            ordinal: 0,
+            groupID: groupID,
+            origin: .sourceFolder,
+            sourcePath: "/tmp/completed.mkv",
+            state: .completed,
+            result: DurableQueueResult(outputPath: "/tmp/completed.mov")
+        )
+        let stopped = makeItem(
+            ordinal: 1,
+            groupID: groupID,
+            origin: .sourceFolder,
+            sourcePath: "/tmp/stopped.mkv",
+            state: .stopped
+        )
+        try await store.replaceItems([completed, stopped])
+
+        let token = try await store.clearCompletedItems()
+
+        XCTAssertEqual(store.items.map(\.id), [stopped.id])
+        XCTAssertEqual(store.items.map(\.ordinal), [0])
+        XCTAssertEqual(token.items, [completed])
+    }
+
+    @MainActor
+    func testClearCompletedRemovalTokenRestoresCompletedItems() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let waiting = makeItem(ordinal: 0, sourcePath: "/tmp/waiting.mkv")
+        let completed = makeItem(
+            ordinal: 1,
+            sourcePath: "/tmp/completed.mkv",
+            state: .completed,
+            result: DurableQueueResult(outputPath: "/tmp/completed.mov")
+        )
+        try await store.replaceItems([waiting, completed])
+
+        let token = try await store.clearCompletedItems()
+        try await store.restoreRemovedItems(token)
+
+        XCTAssertEqual(store.items, [waiting, completed])
+    }
+
+    @MainActor
+    func testPersistentQueueMutationsPreserveFinalMultiTitleSourceRemoval() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let groupID = UUID()
+        var options = ConversionOptions()
+        options.job.removeOriginalAfterSuccess = true
+        let first = makeItem(
+            ordinal: 0,
+            groupID: groupID,
+            origin: .multiTitle,
+            sourcePath: "/tmp/feature.iso",
+            options: options
+        )
+        let second = makeItem(
+            ordinal: 1,
+            groupID: groupID,
+            origin: .multiTitle,
+            sourcePath: "/tmp/feature.iso",
+            options: options
+        )
+        let third = makeItem(
+            ordinal: 2,
+            groupID: groupID,
+            origin: .multiTitle,
+            sourcePath: "/tmp/feature.iso",
+            options: options
+        )
+        try await store.replaceItems([first, second, third])
+
+        try await store.moveWaitingItem(third.id, before: second.id)
+        XCTAssertEqual(
+            store.items.map { $0.intent.options.job.removeOriginalAfterSuccess },
+            [false, false, true]
+        )
+
+        let token = try await store.removeWaitingItems([second.id])
+        XCTAssertEqual(
+            store.items.map { $0.intent.options.job.removeOriginalAfterSuccess },
+            [false, true]
+        )
+
+        try await store.restoreRemovedItems(token)
+        XCTAssertEqual(
+            store.items.map { $0.intent.options.job.removeOriginalAfterSuccess },
+            [false, false, true]
+        )
+    }
+
+    @MainActor
+    func testPersistentQueueCrossGroupMovePreservesEachSourceRemovalOwner() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let firstGroupID = UUID()
+        let secondGroupID = UUID()
+        var options = ConversionOptions()
+        options.job.removeOriginalAfterSuccess = true
+        let firstGroup = (0 ..< 2).map { offset in
+            makeItem(
+                ordinal: offset,
+                groupID: firstGroupID,
+                origin: .multiTitle,
+                sourcePath: "/tmp/first.iso",
+                options: options
+            )
+        }
+        let secondGroup = (0 ..< 2).map { offset in
+            makeItem(
+                ordinal: 2 + offset,
+                groupID: secondGroupID,
+                origin: .multiTitle,
+                sourcePath: "/tmp/second.iso",
+                options: options
+            )
+        }
+        try await store.replaceItems(firstGroup + secondGroup)
+
+        try await store.moveWaitingItem(firstGroup[0].id, before: secondGroup[1].id)
+
+        for groupID in [firstGroupID, secondGroupID] {
+            let groupItems = store.items.filter { $0.groupID == groupID }
+            XCTAssertEqual(
+                groupItems.filter { $0.intent.options.job.removeOriginalAfterSuccess }.map(\.id),
+                [try XCTUnwrap(groupItems.last?.id)]
+            )
+        }
+        XCTAssertEqual(store.items.map(\.ordinal), Array(store.items.indices))
+    }
+
+    @MainActor
+    func testPersistentQueueRestoreRejectsTokenWhoseItemAlreadyExists() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let item = makeItem(ordinal: 0)
+        try await store.replaceItems([item])
+        let token = try await store.removeWaitingItems([item.id])
+        try await store.restoreRemovedItems(token)
+
+        await XCTAssertThrowsErrorAsync(try await store.restoreRemovedItems(token)) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .staleRemovalToken)
+        }
+        XCTAssertEqual(store.items, [item])
+    }
+
+    @MainActor
+    func testPersistentQueueMutationsFailClosedWhenWritesAreBlocked() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let originalData = Data(#"{"items":[],"version":2}"#.utf8)
+        try originalData.write(to: fileURL)
+        let store = ConversionQueueStore(fileURL: fileURL)
+
+        await XCTAssertThrowsErrorAsync(try await store.moveWaitingItemNext(UUID())) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
+        }
+        await XCTAssertThrowsErrorAsync(try await store.removeWaitingItems([UUID()])) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .invalidDocument)
+        }
+        await XCTAssertThrowsErrorAsync(try await store.clearCompletedItems()) { error in
+            XCTAssertEqual(error as? ConversionQueueStoreError, .recoveryRequired)
+        }
+        XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
+        XCTAssertTrue(store.items.isEmpty)
+    }
+
+    @MainActor
     func testCompactionDropsOldestTerminalGroupsAndRenumbersOrdinals() async throws {
         let store = ConversionQueueStore.inMemory()
         let groupIDs = (0 ..< 7).map { _ in UUID() }
