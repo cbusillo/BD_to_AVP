@@ -48,6 +48,7 @@ bd-to-avp-worker = "bd_to_avp.worker.__main__:main"
 dev = [
     "black>=26.5.1,<27",
     "briefcase==0.4.4",
+    "gitpython>=3.1.58,<4",
     "mypy>=2.1.0,<3",
     "pyside6>=6.7.1,<6.10",
     "ruff>=0.15.20,<0.16",
@@ -57,7 +58,6 @@ dev = [
 [tool.uv]
 required-version = "==0.11.29"
 default-groups = "all"
-constraint-dependencies = ["gitpython>=3.1.55,<4"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["bd_to_avp"]
