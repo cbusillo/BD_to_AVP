@@ -3,7 +3,7 @@ import SwiftUI
 
 @MainActor
 final class ConversionQueueStore: ObservableObject {
-    static let maxRetainedTerminalGroups = 5
+    static let maxRetainedTerminalUnits = 5
     static let maxRetainedItems = 200
 
     @Published private(set) var document: ConversionQueueDocument
@@ -187,12 +187,13 @@ final class ConversionQueueStore: ObservableObject {
         }
 
         var retainedUnitIndices = Set(retentionUnits.indices.filter { !retentionUnits[$0].isPrunable })
-        retainedUnitIndices.formUnion(terminalUnitIndices.suffix(Self.maxRetainedTerminalGroups))
+        retainedUnitIndices.formUnion(terminalUnitIndices.suffix(Self.maxRetainedTerminalUnits))
         let newestTerminalUnitIndex = terminalUnitIndices.last
         var retainedItemCount = retainedUnitIndices.reduce(into: 0) { count, unitIndex in
             count += retentionUnits[unitIndex].items.count
         }
 
+        // Whole retention units can make the soft item ceiling undershoot; correctness takes priority over exact size.
         for unitIndex in terminalUnitIndices where retainedItemCount > Self.maxRetainedItems {
             guard unitIndex != newestTerminalUnitIndex,
                   retainedUnitIndices.remove(unitIndex) != nil

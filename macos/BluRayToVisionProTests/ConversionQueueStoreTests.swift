@@ -496,7 +496,7 @@ final class ConversionQueueStoreTests: XCTestCase {
         for groupID in protectedGroupIDs {
             XCTAssertEqual(store.items.filter { $0.groupID == groupID }.count, 2)
         }
-        XCTAssertEqual(store.items.count, protectedStates.count * 2 + ConversionQueueStore.maxRetainedTerminalGroups)
+        XCTAssertEqual(store.items.count, protectedStates.count * 2 + ConversionQueueStore.maxRetainedTerminalUnits)
     }
 
     @MainActor
@@ -558,6 +558,29 @@ final class ConversionQueueStoreTests: XCTestCase {
 
         XCTAssertEqual(store.items.count, 250)
         XCTAssertEqual(Set(store.items.compactMap(\.groupID)), [groupID])
+    }
+
+    @MainActor
+    func testCompactionKeepsProtectedGroupWhenItExceedsSoftItemCeiling() async throws {
+        let store = ConversionQueueStore.inMemory()
+        let groupID = UUID()
+        let items = (0 ..< 250).map { offset in
+            makeItem(
+                ordinal: offset,
+                groupID: groupID,
+                sourcePath: "/tmp/protected-oversized-\(offset).mkv",
+                state: offset == 249 ? .interrupted : .completed,
+                result: offset == 249
+                    ? nil
+                    : DurableQueueResult(outputPath: "/tmp/protected-oversized-\(offset).mov")
+            )
+        }
+
+        try await store.replaceItems(items)
+
+        XCTAssertEqual(store.items.count, 250)
+        XCTAssertEqual(Set(store.items.compactMap(\.groupID)), [groupID])
+        XCTAssertEqual(store.items.last?.state, .interrupted)
     }
 
     @MainActor
