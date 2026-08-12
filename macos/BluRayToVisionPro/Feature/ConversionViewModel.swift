@@ -1060,6 +1060,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             .sorted { $0.ordinal < $1.ordinal }
     }
 
+    private func sourceFolderQueueItem(id itemID: UUID) -> DurableConversionQueueItem? {
+        currentSourceFolderQueueItems.first { $0.id == itemID }
+    }
+
     private func enqueueSourceFolderQueueTransition(_ transition: @escaping @MainActor () async -> Void) {
         let previousTransition = pendingSourceFolderQueueTransition
         let transitionID = UUID()
@@ -1187,7 +1191,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return
         }
         do {
-            guard let item = currentSourceFolderQueueItems.first(where: { $0.id == itemID }) else {
+            guard let item = sourceFolderQueueItem(id: itemID) else {
                 throw ConversionQueueStoreError.invalidDocument
             }
             if sourceFolderStopRequested || snapshot.phase == .cancelled {
@@ -1202,102 +1206,116 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 await pumpSourceFolderQueue()
                 return
             }
-            var draft = try conversionDraft(for: item, preserveStoredSourceRemoval: true)
-            draft = draft.withSourceDetails(inspection)
-            if draft.source.kind.isDiscWorkflow {
-                guard let mainTitle = inspection.mainTitle else {
-                    let failure = SourceFolderTerminalSnapshot(
-                        phase: .failed,
-                        inspection: inspection,
-                        decision: nil,
-                        failure: DurableQueueFailure(
-                            code: "no_convertible_title",
-                            message: "No convertible 3D title was found in this source.",
-                            details: "Analyze the source again after confirming it contains an MVC Blu-ray title.",
-                            retryable: true
-                        ),
-                        result: nil
-                    )
-                    try await persistSourceFolderTerminal(itemID: itemID, snapshot: failure)
-                    await pumpSourceFolderQueue()
-                    return
-                }
-                var inspectedOptions = draft.options
-                if inspection.titles.count > 1 {
-                    inspectedOptions.job.removeOriginalAfterSuccess = false
-                }
-                draft = ConversionDraft(
-                    source: draft.source,
-                    sourceDetails: inspection,
-                    profile: draft.profile,
-                    destinationURL: draft.destinationURL,
-                    options: inspectedOptions,
-                    selectedTitle: mainTitle
-                )
-            }
-            try await durableQueueStore.mutateItems { items in
-                guard let index = items.firstIndex(where: { $0.id == itemID }),
-                      items[index].groupID == groupID,
-                      items[index].state == .inspecting
-                else {
-                    throw ConversionQueueStoreError.invalidDocument
-                }
-                let outputKey = draft.proposedOutputURL.standardizedFileURL.path.lowercased()
-                let conflictingItem = items.first { candidate in
-                    candidate.id != itemID
-                        && candidate.groupID == groupID
-                        && candidate.origin == .sourceFolder
-                        && candidate.inspection != nil
-                        && candidate.state != .notStarted
-                        && candidate.state != .stopped
-                        && ((try? conversionDraft(for: candidate, preserveStoredSourceRemoval: true)
-                            .proposedOutputURL.standardizedFileURL.path.lowercased()) == outputKey)
-                }
-                if let conflictingItem {
-                    items[index].state = .failed
-                    items[index].inspection = inspection
-                    items[index].failure = DurableQueueFailure(
-                        code: "output_collision",
-                        message: "Another queued source resolves to the same output file.",
-                        details: "\(draft.proposedOutputURL.path) is already reserved by \(conflictingItem.intent.source.displayName).",
-                        retryable: false
-                    )
-                } else {
-                    if let inspectionAttempt = items[index].attempts.lastIndex(where: { $0.endedAt == nil }) {
-                        items[index].attempts[inspectionAttempt].endedAt = diagnosticClock()
-                    }
-                    items[index].inspection = inspection
-                    items[index].intent = DurableQueueItemIntent(draft: draft)
-                    items[index].state = .processing
-                    items[index].decision = nil
-                    items[index].failure = nil
-                    items[index].attempts.append(DurableQueueAttempt(startedAt: diagnosticClock()))
-                }
-                if let attemptIndex = items[index].attempts.lastIndex(where: { $0.endedAt == nil }),
-                   items[index].state != .processing
-                {
-                    items[index].attempts[attemptIndex].endedAt = diagnosticClock()
-                }
-            }
-            publishSourceFolderQueueProjection()
-            guard let updated = currentSourceFolderQueueItems.first(where: { $0.id == itemID }),
-                  updated.state == .processing
-            else {
-                await pumpSourceFolderQueue()
-                return
-            }
-            if sourceFolderStopRequested {
-                await stopSourceFolderQueueBeforeSpawn(itemID: itemID)
-                return
-            }
-            let conversionDraft = try conversionDraft(for: updated, preserveStoredSourceRemoval: true)
-            guard !hasActiveWorker else {
-                throw ConversionQueueStoreError.invalidDocument
-            }
-            _ = startConversion(draft: conversionDraft, mode: .batchConversion(itemID: itemID))
+            try await persistCompletedSourceFolderInspection(
+                itemID: itemID,
+                groupID: groupID,
+                item: item,
+                inspection: inspection
+            )
         } catch {
             failClosedSourceFolderQueuePersistence(error)
         }
+    }
+
+    private func persistCompletedSourceFolderInspection(
+        itemID: UUID,
+        groupID: UUID,
+        item: DurableConversionQueueItem,
+        inspection: SourceInspection
+    ) async throws {
+        var draft = try conversionDraft(for: item, preserveStoredSourceRemoval: true)
+        draft = draft.withSourceDetails(inspection)
+        if draft.source.kind.isDiscWorkflow {
+            guard let mainTitle = inspection.mainTitle else {
+                let failure = SourceFolderTerminalSnapshot(
+                    phase: .failed,
+                    inspection: inspection,
+                    decision: nil,
+                    failure: DurableQueueFailure(
+                        code: "no_convertible_title",
+                        message: "No convertible 3D title was found in this source.",
+                        details: "Analyze the source again after confirming it contains an MVC Blu-ray title.",
+                        retryable: true
+                    ),
+                    result: nil
+                )
+                try await persistSourceFolderTerminal(itemID: itemID, snapshot: failure)
+                await pumpSourceFolderQueue()
+                return
+            }
+            var inspectedOptions = draft.options
+            if inspection.titles.count > 1 {
+                inspectedOptions.job.removeOriginalAfterSuccess = false
+            }
+            draft = ConversionDraft(
+                source: draft.source,
+                sourceDetails: inspection,
+                profile: draft.profile,
+                destinationURL: draft.destinationURL,
+                options: inspectedOptions,
+                selectedTitle: mainTitle
+            )
+        }
+        try await durableQueueStore.mutateItems { items in
+            guard let index = items.firstIndex(where: { $0.id == itemID }),
+                  items[index].groupID == groupID,
+                  items[index].state == .inspecting
+            else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            let outputKey = draft.proposedOutputURL.standardizedFileURL.path.lowercased()
+            let conflictingItem = items.first { candidate in
+                candidate.id != itemID
+                    && candidate.groupID == groupID
+                    && candidate.origin == .sourceFolder
+                    && candidate.inspection != nil
+                    && candidate.state != .notStarted
+                    && candidate.state != .stopped
+                    && ((try? conversionDraft(for: candidate, preserveStoredSourceRemoval: true)
+                        .proposedOutputURL.standardizedFileURL.path.lowercased()) == outputKey)
+            }
+            if let conflictingItem {
+                items[index].state = .failed
+                items[index].inspection = inspection
+                items[index].failure = DurableQueueFailure(
+                    code: "output_collision",
+                    message: "Another queued source resolves to the same output file.",
+                    details: "\(draft.proposedOutputURL.path) is already reserved by \(conflictingItem.intent.source.displayName).",
+                    retryable: false
+                )
+            } else {
+                if let inspectionAttempt = items[index].attempts.lastIndex(where: { $0.endedAt == nil }) {
+                    items[index].attempts[inspectionAttempt].endedAt = diagnosticClock()
+                }
+                items[index].inspection = inspection
+                items[index].intent = DurableQueueItemIntent(draft: draft)
+                items[index].state = .processing
+                items[index].decision = nil
+                items[index].failure = nil
+                items[index].attempts.append(DurableQueueAttempt(startedAt: diagnosticClock()))
+            }
+            if let attemptIndex = items[index].attempts.lastIndex(where: { $0.endedAt == nil }),
+               items[index].state != .processing
+            {
+                items[index].attempts[attemptIndex].endedAt = diagnosticClock()
+            }
+        }
+        publishSourceFolderQueueProjection()
+        guard let updated = sourceFolderQueueItem(id: itemID),
+              updated.state == .processing
+        else {
+            await pumpSourceFolderQueue()
+            return
+        }
+        if sourceFolderStopRequested {
+            await stopSourceFolderQueueBeforeSpawn(itemID: itemID)
+            return
+        }
+        let conversionDraft = try conversionDraft(for: updated, preserveStoredSourceRemoval: true)
+        guard !hasActiveWorker else {
+            throw ConversionQueueStoreError.invalidDocument
+        }
+        _ = startConversion(draft: conversionDraft, mode: .batchConversion(itemID: itemID))
     }
 
     private func persistSourceFolderConversionTerminal(
