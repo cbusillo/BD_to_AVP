@@ -9,13 +9,16 @@ final class ConversionQueueStore: ObservableObject {
 
     private let fileURL: URL?
     private let fileManager: FileManager
+    private let dataReader: (URL) throws -> Data
     private let dataMover: (URL, URL) throws -> Void
     private let writer: ConversionQueueFileWriter?
+    private let mutationLock = ConversionQueueMutationLock()
     private var nextGeneration = 0
 
     init(
         fileURL: URL? = nil,
         fileManager: FileManager = .default,
+        dataReader: @escaping (URL) throws -> Data = { try Data(contentsOf: $0) },
         dataWriter: @escaping @Sendable (Data, URL) throws -> Void = { data, url in
             try data.write(to: url, options: .atomic)
         },
@@ -23,6 +26,7 @@ final class ConversionQueueStore: ObservableObject {
         inMemory: Bool = false
     ) {
         self.fileManager = fileManager
+        self.dataReader = dataReader
         self.dataMover = dataMover ?? { sourceURL, destinationURL in
             try fileManager.moveItem(at: sourceURL, to: destinationURL)
         }
@@ -49,15 +53,29 @@ final class ConversionQueueStore: ObservableObject {
     }
 
     func replaceItems(_ items: [DurableConversionQueueItem]) async throws {
-        try validate(items)
-        let nextDocument = ConversionQueueDocument(items: items)
-        try await persist(nextDocument)
+        await mutationLock.lock()
+        do {
+            try validate(items)
+            try await persist(ConversionQueueDocument(items: items))
+            await mutationLock.unlock()
+        } catch {
+            await mutationLock.unlock()
+            throw error
+        }
     }
 
     func mutateItems(_ mutation: (inout [DurableConversionQueueItem]) throws -> Void) async throws {
-        var items = document.items
-        try mutation(&items)
-        try await replaceItems(items)
+        await mutationLock.lock()
+        do {
+            var items = document.items
+            try mutation(&items)
+            try validate(items)
+            try await persist(ConversionQueueDocument(items: items))
+            await mutationLock.unlock()
+        } catch {
+            await mutationLock.unlock()
+            throw error
+        }
     }
 
     private func persist(_ nextDocument: ConversionQueueDocument) async throws {
@@ -81,11 +99,11 @@ final class ConversionQueueStore: ObservableObject {
         nextGeneration += 1
         let generation = nextGeneration
         do {
-            let didWrite = try await writer.write(data, generation: generation)
-            if didWrite, generation == nextGeneration {
-                document = nextDocument
-                loadErrorMessage = nil
-            }
+            try await writer.write(data, generation: generation)
+            document = nextDocument
+            loadErrorMessage = nil
+        } catch let error as ConversionQueueStoreError {
+            throw error
         } catch {
             throw ConversionQueueStoreError.writeFailed
         }
@@ -95,8 +113,15 @@ final class ConversionQueueStore: ObservableObject {
         guard fileManager.fileExists(atPath: fileURL.path) else {
             return
         }
+        let data: Data
         do {
-            let data = try Data(contentsOf: fileURL)
+            data = try dataReader(fileURL)
+        } catch {
+            writesBlocked = true
+            loadErrorMessage = "Queue data could not be read. Queue changes are disabled to protect the original file."
+            return
+        }
+        do {
             let version = try JSONDecoder().decode(ConversionQueueDocumentVersion.self, from: data).version
             guard version <= ConversionQueueDocument.currentVersion else {
                 writesBlocked = true
@@ -124,8 +149,8 @@ final class ConversionQueueStore: ObservableObject {
     private func validate(_ items: [DurableConversionQueueItem]) throws {
         var identifiers = Set<UUID>()
         var ordinals = Set<Int>()
-        for item in items {
-            guard item.ordinal >= 0,
+        for (index, item) in items.enumerated() {
+            guard item.ordinal == index,
                   identifiers.insert(item.id).inserted,
                   ordinals.insert(item.ordinal).inserted,
                   ConversionSourceKind(rawValue: item.intent.source.kind) != nil,
@@ -139,6 +164,9 @@ final class ConversionQueueStore: ObservableObject {
                 throw ConversionQueueStoreError.invalidDocument
             }
             if item.state == .completed, item.result == nil {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+            if item.state == .failed, item.failure == nil {
                 throw ConversionQueueStoreError.invalidDocument
             }
         }
@@ -207,9 +235,9 @@ private actor ConversionQueueFileWriter {
         self.dataWriter = dataWriter
     }
 
-    func write(_ data: Data, generation: Int) throws -> Bool {
-        guard generation >= latestGeneration else {
-            return false
+    func write(_ data: Data, generation: Int) throws {
+        guard generation > latestGeneration else {
+            throw ConversionQueueStoreError.staleWrite
         }
         latestGeneration = generation
         try FileManager.default.createDirectory(
@@ -217,13 +245,36 @@ private actor ConversionQueueFileWriter {
             withIntermediateDirectories: true
         )
         try dataWriter(data, fileURL)
-        return true
+    }
+}
+
+private actor ConversionQueueMutationLock {
+    private var locked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func lock() async {
+        guard locked else {
+            locked = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func unlock() {
+        guard !waiters.isEmpty else {
+            locked = false
+            return
+        }
+        waiters.removeFirst().resume()
     }
 }
 
 enum ConversionQueueStoreError: LocalizedError, Equatable {
     case invalidDocument
     case recoveryRequired
+    case staleWrite
     case unsupportedVersion(Int)
     case writeFailed
 
@@ -233,6 +284,8 @@ enum ConversionQueueStoreError: LocalizedError, Equatable {
             "The queue contains invalid data."
         case .recoveryRequired:
             "Queue changes are disabled until the original queue data can be protected."
+        case .staleWrite:
+            "A newer queue update was already saved."
         case let .unsupportedVersion(version):
             "Queue data version \(version) is not supported."
         case .writeFailed:
