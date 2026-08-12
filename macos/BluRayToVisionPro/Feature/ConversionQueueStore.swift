@@ -3,6 +3,9 @@ import SwiftUI
 
 @MainActor
 final class ConversionQueueStore: ObservableObject {
+    static let maxRetainedTerminalGroups = 5
+    static let maxRetainedItems = 200
+
     @Published private(set) var document: ConversionQueueDocument
     @Published private(set) var loadErrorMessage: String?
     @Published private(set) var writesBlocked = false
@@ -56,7 +59,9 @@ final class ConversionQueueStore: ObservableObject {
         await mutationLock.lock()
         do {
             try validate(items)
-            try await persist(ConversionQueueDocument(items: items))
+            let compactedItems = compacted(items)
+            try validate(compactedItems)
+            try await persist(ConversionQueueDocument(items: compactedItems))
             await mutationLock.unlock()
         } catch {
             await mutationLock.unlock()
@@ -70,7 +75,9 @@ final class ConversionQueueStore: ObservableObject {
             var items = document.items
             try mutation(&items)
             try validate(items)
-            try await persist(ConversionQueueDocument(items: items))
+            let compactedItems = compacted(items)
+            try validate(compactedItems)
+            try await persist(ConversionQueueDocument(items: compactedItems))
             await mutationLock.unlock()
         } catch {
             await mutationLock.unlock()
@@ -172,6 +179,57 @@ final class ConversionQueueStore: ObservableObject {
         }
     }
 
+    private func compacted(_ items: [DurableConversionQueueItem]) -> [DurableConversionQueueItem] {
+        let retentionUnits = retentionUnits(from: items)
+        let terminalUnitIndices = retentionUnits.indices.filter { retentionUnits[$0].isPrunable }
+        guard !terminalUnitIndices.isEmpty else {
+            return items
+        }
+
+        var retainedUnitIndices = Set(retentionUnits.indices.filter { !retentionUnits[$0].isPrunable })
+        retainedUnitIndices.formUnion(terminalUnitIndices.suffix(Self.maxRetainedTerminalGroups))
+        let newestTerminalUnitIndex = terminalUnitIndices.last
+        var retainedItemCount = retainedUnitIndices.reduce(into: 0) { count, unitIndex in
+            count += retentionUnits[unitIndex].items.count
+        }
+
+        for unitIndex in terminalUnitIndices where retainedItemCount > Self.maxRetainedItems {
+            guard unitIndex != newestTerminalUnitIndex,
+                  retainedUnitIndices.remove(unitIndex) != nil
+            else {
+                continue
+            }
+            retainedItemCount -= retentionUnits[unitIndex].items.count
+        }
+
+        let retainedItemIDs = Set(retentionUnits.indices
+            .filter { retainedUnitIndices.contains($0) }
+            .flatMap { retentionUnits[$0].items.map(\.id) })
+        var compactedItems = items.filter { retainedItemIDs.contains($0.id) }
+        for index in compactedItems.indices {
+            compactedItems[index].ordinal = index
+        }
+        return compactedItems
+    }
+
+    private func retentionUnits(from items: [DurableConversionQueueItem]) -> [ConversionQueueRetentionUnit] {
+        var units: [ConversionQueueRetentionUnit] = []
+        var groupedUnitIndices: [UUID: Int] = [:]
+        for item in items {
+            guard let groupID = item.groupID else {
+                units.append(ConversionQueueRetentionUnit(items: [item]))
+                continue
+            }
+            if let unitIndex = groupedUnitIndices[groupID] {
+                units[unitIndex].items.append(item)
+            } else {
+                groupedUnitIndices[groupID] = units.count
+                units.append(ConversionQueueRetentionUnit(items: [item]))
+            }
+        }
+        return units
+    }
+
     private func recoverFromUnreadableFile() {
         guard let fileURL else {
             return
@@ -222,6 +280,16 @@ final class ConversionQueueStore: ObservableObject {
         return applicationSupportURL
             .appendingPathComponent("3D Blu-ray to Vision Pro", isDirectory: true)
             .appendingPathComponent("queue.json")
+    }
+}
+
+private struct ConversionQueueRetentionUnit {
+    var items: [DurableConversionQueueItem]
+
+    var isPrunable: Bool {
+        items.allSatisfy { item in
+            item.state == .completed || item.state == .stopped
+        }
     }
 }
 
