@@ -4,7 +4,7 @@ import SwiftUI
 private enum ActiveRunMode: Equatable {
     case singleInspection
     case singleConversion
-    case titleQueueConversion(index: Int)
+    case titleQueueConversion(itemID: UUID)
     case batchInspection(itemID: UUID)
     case batchConversion(itemID: UUID)
 
@@ -49,8 +49,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     private var activeRunMode: ActiveRunMode?
     private var pendingBatchContinuation: Task<Void, Never>?
     private var actionsWaitingForIdle: [() -> Void] = []
-    private var pendingQueueIndices: [Int] = []
-    private var activeQueueIndex: Int?
+    private var pendingQueueItemIDs: [UUID] = []
+    private var activeQueueItemID: UUID?
+    private var removeQueuedSourceAfterFinalSuccess = false
     private var batchItemDiagnosticJobIDs: [UUID: UUID] = [:]
 
     init(
@@ -108,7 +109,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     var hasQueuedWork: Bool {
-        activeQueueIndex != nil || !pendingQueueIndices.isEmpty
+        activeQueueItemID != nil || !pendingQueueItemIDs.isEmpty
     }
 
     var hasPendingWork: Bool {
@@ -283,11 +284,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             startConversion(draft: firstDraft)
             return
         }
-        let normalizedDrafts = drafts.enumerated().map { index, draft in
+        removeQueuedSourceAfterFinalSuccess = drafts.contains { $0.options.job.removeOriginalAfterSuccess }
+        let normalizedDrafts = drafts.map { draft in
             var options = draft.options
-            if index < drafts.index(before: drafts.endIndex) {
-                options.job.removeOriginalAfterSuccess = false
-            }
+            options.job.removeOriginalAfterSuccess = false
             return ConversionDraft(
                 source: draft.source,
                 sourceDetails: draft.sourceDetails,
@@ -298,10 +298,30 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             )
         }
         queueItems = normalizedDrafts.map { ConversionQueueItem(draft: $0) }
-        pendingQueueIndices = Array(queueItems.indices)
-        activeQueueIndex = nil
+        pendingQueueItemIDs = queueItems.map(\.id)
+        activeQueueItemID = nil
         completedBatchResults = nil
         startNextQueuedConversion()
+    }
+
+    func moveWaitingQueueItem(_ itemID: UUID, before targetID: UUID) -> Bool {
+        guard itemID != targetID,
+              pendingQueueItemIDs.contains(itemID),
+              pendingQueueItemIDs.contains(targetID),
+              let sourceIndex = queueIndex(for: itemID),
+              let targetIndex = queueIndex(for: targetID),
+              queueItems[sourceIndex].status == .waiting,
+              queueItems[targetIndex].status == .waiting
+        else {
+            return false
+        }
+        let item = queueItems.remove(at: sourceIndex)
+        let insertionIndex = queueItems.firstIndex(where: { $0.id == targetID }) ?? targetIndex
+        queueItems.insert(item, at: insertionIndex)
+        pendingQueueItemIDs = queueItems.compactMap { queueItem in
+            pendingQueueItemIDs.contains(queueItem.id) ? queueItem.id : nil
+        }
+        return true
     }
 
     @discardableResult
@@ -493,9 +513,11 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         if choice == .cancel {
             state.cancelRecoveryDecision()
             recordDiagnosticWorkflow(name: "recovery.cancelled", jobID: decisionJobID)
-            if let activeQueueIndex {
-                queueItems[activeQueueIndex].status = .cancelled
-                self.activeQueueIndex = nil
+            if let activeQueueItemID {
+                if let activeQueueIndex = queueIndex(for: activeQueueItemID) {
+                    queueItems[activeQueueIndex].status = .cancelled
+                }
+                self.activeQueueItemID = nil
                 cancelPendingQueueItems()
                 publishCompletedQueueResults()
             }
@@ -509,11 +531,13 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 message: "This recovery option is not available for the current conversion.",
                 retryable: false
             )
-            if let activeQueueIndex {
-                queueItems[activeQueueIndex].status = .failed(
-                    state.failureMessage ?? "The conversion could not be restarted."
-                )
-                self.activeQueueIndex = nil
+            if let activeQueueItemID {
+                if let activeQueueIndex = queueIndex(for: activeQueueItemID) {
+                    queueItems[activeQueueIndex].status = .failed(
+                        state.failureMessage ?? "The conversion could not be restarted."
+                    )
+                }
+                self.activeQueueItemID = nil
                 cancelPendingQueueItems()
                 publishCompletedQueueResults()
             }
@@ -521,11 +545,22 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return false
         }
         state.prepareForRetry()
-        if let activeQueueIndex {
+        if let activeQueueItemID {
+            guard let activeQueueIndex = queueIndex(for: activeQueueItemID) else {
+                state.failTransport(
+                    message: "The active queue item is no longer available.",
+                    retryable: false
+                )
+                self.activeQueueItemID = nil
+                cancelPendingQueueItems()
+                publishCompletedQueueResults()
+                runDeferredActionsIfIdle()
+                return false
+            }
             queueItems[activeQueueIndex].status = .processing
             _ = startConversion(
                 draft: retryDraft,
-                mode: .titleQueueConversion(index: activeQueueIndex)
+                mode: .titleQueueConversion(itemID: activeQueueItemID)
             )
         } else {
             _ = startConversion(draft: retryDraft, mode: .singleConversion)
@@ -803,8 +838,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         switch mode {
         case .singleInspection, .singleConversion:
             return
-        case let .titleQueueConversion(index):
-            guard activeQueueIndex == index else {
+        case let .titleQueueConversion(itemID):
+            guard activeQueueItemID == itemID else {
                 return
             }
             if updateQueueAfterTerminalState() {
@@ -822,13 +857,13 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         case .singleInspection, .singleConversion:
             handleCompletedRun(mode)
             runDeferredActionsIfIdle()
-        case let .titleQueueConversion(index):
-            if queueItems.indices.contains(index) {
-                queueItems[index].status = .failed(
+        case let .titleQueueConversion(itemID):
+            if let queueIndex = queueIndex(for: itemID) {
+                queueItems[queueIndex].status = .failed(
                     state.failureMessage ?? "Conversion could not start."
                 )
             }
-            activeQueueIndex = nil
+            activeQueueItemID = nil
             cancelPendingQueueItems()
             publishCompletedQueueResults()
             runDeferredActionsIfIdle()
@@ -1023,36 +1058,49 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     private func startNextQueuedConversion() {
-        guard let queueIndex = pendingQueueIndices.first else {
-            publishCompletedQueueResults()
-            runDeferredActionsIfIdle()
+        while let itemID = pendingQueueItemIDs.first {
+            pendingQueueItemIDs.removeFirst()
+            guard let queueIndex = queueIndex(for: itemID) else {
+                continue
+            }
+            activeQueueItemID = itemID
+            queueItems[queueIndex].status = .processing
+            let draft = queueDraftForDispatch(
+                queueItems[queueIndex].draft,
+                isFinalPendingItem: pendingQueueItemIDs.isEmpty
+            )
+            _ = startConversion(
+                draft: draft,
+                mode: .titleQueueConversion(itemID: itemID)
+            )
             return
         }
-        pendingQueueIndices.removeFirst()
-        activeQueueIndex = queueIndex
-        queueItems[queueIndex].status = .processing
-        _ = startConversion(
-            draft: queueItems[queueIndex].draft,
-            mode: .titleQueueConversion(index: queueIndex)
-        )
+        publishCompletedQueueResults()
+        runDeferredActionsIfIdle()
     }
 
     private func updateQueueAfterTerminalState() -> Bool {
-        guard let activeQueueIndex else {
+        guard let activeQueueItemID else {
+            return false
+        }
+        guard let activeQueueIndex = queueIndex(for: activeQueueItemID) else {
+            self.activeQueueItemID = nil
+            cancelPendingQueueItems()
+            publishCompletedQueueResults()
             return false
         }
         switch state.phase {
         case .completed:
             guard let result = state.conversionResult else {
                 queueItems[activeQueueIndex].status = .failed("The conversion completed without an output result.")
-                self.activeQueueIndex = nil
+                self.activeQueueItemID = nil
                 cancelPendingQueueItems()
                 publishCompletedQueueResults()
                 return false
             }
             queueItems[activeQueueIndex].status = .completed(result)
-            self.activeQueueIndex = nil
-            if pendingQueueIndices.isEmpty {
+            self.activeQueueItemID = nil
+            if pendingQueueItemIDs.isEmpty {
                 publishCompletedQueueResults()
                 return false
             }
@@ -1062,13 +1110,13 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return false
         case .cancelled:
             queueItems[activeQueueIndex].status = .cancelled
-            self.activeQueueIndex = nil
+            self.activeQueueItemID = nil
             cancelPendingQueueItems()
             publishCompletedQueueResults()
             return false
         case .failed:
             queueItems[activeQueueIndex].status = .failed(state.failureMessage ?? "Conversion failed.")
-            self.activeQueueIndex = nil
+            self.activeQueueItemID = nil
             cancelPendingQueueItems()
             publishCompletedQueueResults()
             return false
@@ -1078,10 +1126,12 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     private func cancelPendingQueueItems() {
-        for index in pendingQueueIndices {
-            queueItems[index].status = .cancelled
+        for itemID in pendingQueueItemIDs {
+            if let index = queueIndex(for: itemID) {
+                queueItems[index].status = .cancelled
+            }
         }
-        pendingQueueIndices.removeAll()
+        pendingQueueItemIDs.removeAll()
     }
 
     private func publishCompletedQueueResults() {
@@ -1096,9 +1146,30 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
 
     private func resetQueue() {
         queueItems.removeAll()
-        pendingQueueIndices.removeAll()
-        activeQueueIndex = nil
+        pendingQueueItemIDs.removeAll()
+        activeQueueItemID = nil
+        removeQueuedSourceAfterFinalSuccess = false
         completedBatchResults = nil
+    }
+
+    private func queueDraftForDispatch(
+        _ draft: ConversionDraft,
+        isFinalPendingItem: Bool
+    ) -> ConversionDraft {
+        var options = draft.options
+        options.job.removeOriginalAfterSuccess = removeQueuedSourceAfterFinalSuccess && isFinalPendingItem
+        return ConversionDraft(
+            source: draft.source,
+            sourceDetails: draft.sourceDetails,
+            profile: draft.profile,
+            destinationURL: draft.destinationURL,
+            options: options,
+            selectedTitle: draft.selectedTitle
+        )
+    }
+
+    private func queueIndex(for itemID: UUID) -> Int? {
+        queueItems.firstIndex(where: { $0.id == itemID })
     }
 
     private func resetDiagnosticSession() {
@@ -1201,7 +1272,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         return DiagnosticBatchSummary(
             kind: "title_queue",
             totalItems: queueItems.count,
-            activeItems: activeQueueIndex == nil ? 0 : 1,
+            activeItems: activeQueueItemID == nil ? 0 : 1,
             statusCounts: counts
         )
     }

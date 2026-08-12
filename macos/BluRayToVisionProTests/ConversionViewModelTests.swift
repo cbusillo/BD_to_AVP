@@ -1511,6 +1511,87 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testMultiTitleQueueRoutesPendingReorderAndCompletionByStableItemID() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let inspectionDone = expectation(description: "inspection done")
+        let firstConversionStarted = expectation(description: "first conversion started")
+        let remainingConversionsDone = expectation(description: "remaining conversions done")
+        remainingConversionsDone.expectedFulfillmentCount = 2
+        let firstConversionGate = QueueTestGate()
+        var conversionTitleIDs: [String] = []
+        var removeOriginalValues: [Bool] = []
+        let worker = ReorderableQueueWorkerClient(
+            inspectionDone: { inspectionDone.fulfill() },
+            conversionStarted: { job, conversionNumber in
+                conversionTitleIDs.append(job.source.titleID ?? "")
+                removeOriginalValues.append(job.job?.removeOriginal ?? false)
+                if conversionNumber == 1 {
+                    firstConversionStarted.fulfill()
+                } else {
+                    remainingConversionsDone.fulfill()
+                }
+            },
+            firstConversionGate: firstConversionGate
+        )
+        let viewModel = ConversionViewModel { worker }
+        let source = ConversionSource(kind: .discImage, url: sourceURL)
+        let titles = [
+            SourceTitle(id: "title-1", name: "One", outputName: "One", durationSeconds: 100, resolution: "1920x1080", frameRate: "24/1", mainFeature: true),
+            SourceTitle(id: "title-2", name: "Two", outputName: "Two", durationSeconds: 90, resolution: "1920x1080", frameRate: "24/1", mainFeature: false),
+            SourceTitle(id: "title-3", name: "Three", outputName: "Three", durationSeconds: 80, resolution: "1920x1080", frameRate: "24/1", mainFeature: false),
+        ]
+        let inspection = SourceInspection(
+            name: "Feature",
+            resolution: "1920x1080",
+            frameRate: "24/1",
+            interlaced: false,
+            titles: titles
+        )
+        var options = ConversionOptions()
+        options.job.removeOriginalAfterSuccess = true
+        let drafts = titles.map { title in
+            ConversionDraft(
+                source: source,
+                sourceDetails: inspection,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: directoryURL,
+                options: options,
+                selectedTitle: title
+            )
+        }
+
+        viewModel.selectSource(source)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        viewModel.startConversionQueue(drafts: drafts)
+        await fulfillment(of: [firstConversionStarted], timeout: 2)
+        let secondID = viewModel.queueItems[1].id
+        let thirdID = viewModel.queueItems[2].id
+
+        XCTAssertTrue(viewModel.moveWaitingQueueItem(thirdID, before: secondID))
+        XCTAssertEqual(
+            viewModel.queueItems.map { $0.draft.selectedTitle?.id },
+            ["title-1", "title-3", "title-2"]
+        )
+        await firstConversionGate.open()
+        await fulfillment(of: [remainingConversionsDone], timeout: 2)
+        while viewModel.hasActiveWorker || viewModel.hasQueuedWork { await Task.yield() }
+
+        XCTAssertEqual(conversionTitleIDs, ["title-1", "title-3", "title-2"])
+        XCTAssertEqual(removeOriginalValues, [false, false, true])
+        XCTAssertTrue(viewModel.queueItems.allSatisfy {
+            if case .completed = $0.status { return true }
+            return false
+        })
+    }
+
+    @MainActor
     func testMultiTitleQueuePublishesPartialResultsAfterLaterFailure() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1806,6 +1887,106 @@ private struct ThreadRecordingStorageProbe: DiagnosticStorageProbing {
             errorKind: nil
         )
     }
+}
+
+private actor QueueTestGate {
+    private var openState = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !openState else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func open() {
+        openState = true
+        let continuations = waiters
+        waiters.removeAll()
+        for continuation in continuations {
+            continuation.resume()
+        }
+    }
+}
+
+private final class ReorderableQueueWorkerClient: WorkerProcessRunning, @unchecked Sendable {
+    private let lock = NSLock()
+    private let inspectionDone: () -> Void
+    private let conversionStarted: (WorkerJobSpec, Int) -> Void
+    private let firstConversionGate: QueueTestGate
+    private var conversionCount = 0
+
+    init(
+        inspectionDone: @escaping () -> Void,
+        conversionStarted: @escaping (WorkerJobSpec, Int) -> Void,
+        firstConversionGate: QueueTestGate
+    ) {
+        self.inspectionDone = inspectionDone
+        self.conversionStarted = conversionStarted
+        self.firstConversionGate = firstConversionGate
+    }
+
+    func run(
+        job: WorkerJobSpec,
+        onEvent: @escaping (WorkerEvent) async throws -> Void
+    ) async throws -> WorkerRunResult {
+        let ready = WorkerEvent(
+            protocolVersion: WorkerJobSpec.protocolVersion,
+            type: .workerReady,
+            jobID: job.jobID,
+            sequence: 0,
+            payload: WorkerEventPayload(workerVersion: "test", processGroupID: 1)
+        )
+        try await onEvent(ready)
+        if job.operation == "inspect_source" {
+            let completed = WorkerEvent(
+                protocolVersion: WorkerJobSpec.protocolVersion,
+                type: .jobCompleted,
+                jobID: job.jobID,
+                sequence: 1,
+                payload: WorkerEventPayload(
+                    result: SourceInspection(
+                        name: "Feature",
+                        resolution: "1920x1080",
+                        frameRate: "24/1",
+                        interlaced: false,
+                        sizeBytes: 10
+                    )
+                )
+            )
+            try await onEvent(completed)
+            inspectionDone()
+            return WorkerRunResult(terminalEvent: completed, exitStatus: 0, diagnostics: "")
+        }
+
+        let conversionNumber = lock.withLock {
+            conversionCount += 1
+            return conversionCount
+        }
+        conversionStarted(job, conversionNumber)
+        if conversionNumber == 1 {
+            await firstConversionGate.wait()
+        }
+        let completed = WorkerEvent(
+            protocolVersion: WorkerJobSpec.protocolVersion,
+            type: .jobCompleted,
+            jobID: job.jobID,
+            sequence: 1,
+            payload: WorkerEventPayload(
+                conversionResult: ConversionResult(
+                    outputPath: "/Movies/\(job.source.titleID ?? "movie")_AVP.mov",
+                    titleID: job.source.titleID
+                )
+            )
+        )
+        try await onEvent(completed)
+        return WorkerRunResult(terminalEvent: completed, exitStatus: 0, diagnostics: "")
+    }
+
+    func cancel() {}
 }
 
 private final class TwoPhaseWorkerClient: WorkerProcessRunning, @unchecked Sendable {
