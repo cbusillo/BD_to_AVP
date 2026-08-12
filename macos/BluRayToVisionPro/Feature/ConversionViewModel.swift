@@ -1306,7 +1306,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             try await persistSourceFolderTerminal(
                 itemID: itemID,
                 snapshot: snapshot,
-                stopped: sourceFolderStopRequested || snapshot.phase == .cancelled
+                stopped: snapshot.phase == .cancelled
+                    || (sourceFolderStopRequested && snapshot.phase != .completed)
             )
             await pumpSourceFolderQueue()
         } catch {

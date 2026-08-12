@@ -1478,6 +1478,34 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testLateStopPreservesAlreadyDeliveredBatchCompletion() async throws {
+        try await withTemporaryBatchSources(["feature.mkv"]) { folderURL, sourceURLs, destinationURL in
+            let terminalDelivered = expectation(description: "conversion terminal delivered")
+            let scenario = BatchWorkerScenario(
+                holdCompletedConversionForCancellation: [sourceURLs[0].path],
+                onCompletedConversionDelivered: { terminalDelivered.fulfill() }
+            )
+            let queueStore = ConversionQueueStore.inMemory()
+            let viewModel = ConversionViewModel(clientFactory: { scenario.makeClient() }, durableQueueStore: queueStore)
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await fulfillment(of: [terminalDelivered], timeout: 2)
+
+            viewModel.stopActiveWorker()
+            await waitForBatchCompletion(viewModel)
+
+            XCTAssertEqual(queueStore.items.map(\.state), [.completed])
+            XCTAssertNotNil(queueStore.items.first?.result)
+            XCTAssertEqual(viewModel.batchQueue?.items.map(\.status), [.completed])
+        }
+    }
+
+    @MainActor
     private func waitForBatchCompletion(_ viewModel: ConversionViewModel) async {
         await viewModel.waitForBatchQueueSettled()
         XCTAssertNotNil(viewModel.batchQueue?.completionID)
@@ -2995,6 +3023,7 @@ private enum BatchWorkerBehavior: Equatable {
     case failConversion
     case decision(WorkerDecision)
     case waitForCancellation
+    case completeThenWaitForCancellation
 }
 
 private final class BatchWorkerScenario: @unchecked Sendable {
@@ -3003,8 +3032,10 @@ private final class BatchWorkerScenario: @unchecked Sendable {
     private var remainingFailures: Set<String>
     private var remainingDecisions: [String: WorkerDecision]
     private var remainingCancellationPaths: Set<String>
+    private var remainingCompletedCancellationPaths: Set<String>
     private let inspectionNames: [String: String]
     private var inspectionResults: [String: [SourceInspection]]
+    private let completedConversionDelivered: (() -> Void)?
     private var storedRecords: [BatchJobRecord] = []
     private var storedClientCount = 0
     private var activeCount = 0
@@ -3015,15 +3046,19 @@ private final class BatchWorkerScenario: @unchecked Sendable {
         failConversionOnceFor: Set<String> = [],
         decisionConversionOnceFor: [String: WorkerDecision] = [:],
         holdConversionForCancellation: Set<String> = [],
+        holdCompletedConversionForCancellation: Set<String> = [],
         inspectionNames: [String: String] = [:],
-        inspectionResults: [String: [SourceInspection]] = [:]
+        inspectionResults: [String: [SourceInspection]] = [:],
+        onCompletedConversionDelivered: (() -> Void)? = nil
     ) {
         remainingInspectionFailures = failInspectionOnceFor
         remainingFailures = failConversionOnceFor
         remainingDecisions = decisionConversionOnceFor
         remainingCancellationPaths = holdConversionForCancellation
+        remainingCompletedCancellationPaths = holdCompletedConversionForCancellation
         self.inspectionNames = inspectionNames
         self.inspectionResults = inspectionResults
+        completedConversionDelivered = onCompletedConversionDelivered
     }
 
     var records: [BatchJobRecord] {
@@ -3071,6 +3106,9 @@ private final class BatchWorkerScenario: @unchecked Sendable {
             if remainingCancellationPaths.remove(job.source.path) != nil {
                 return .waitForCancellation
             }
+            if remainingCompletedCancellationPaths.remove(job.source.path) != nil {
+                return .completeThenWaitForCancellation
+            }
             if let decision = remainingDecisions.removeValue(forKey: job.source.path) {
                 return .decision(decision)
             }
@@ -3103,6 +3141,10 @@ private final class BatchWorkerScenario: @unchecked Sendable {
         lock.withLock {
             activeCount -= 1
         }
+    }
+
+    func didDeliverCompletedConversion() {
+        completedConversionDelivered?()
     }
 }
 
@@ -3221,6 +3263,28 @@ private final class BatchWorkerClient: WorkerProcessRunning, @unchecked Sendable
                     payload: WorkerEventPayload(message: "Conversion stopped.")
                 )
                 exitStatus = SIGTERM
+            case .completeThenWaitForCancellation:
+                let destinationPath = job.destination?.path ?? "/Movies"
+                let outputStem = URL(fileURLWithPath: job.source.path)
+                    .deletingPathExtension()
+                    .lastPathComponent
+                let completed = WorkerEvent(
+                    protocolVersion: WorkerJobSpec.protocolVersion,
+                    type: .jobCompleted,
+                    jobID: job.jobID,
+                    sequence: 1,
+                    payload: WorkerEventPayload(
+                        conversionResult: ConversionResult(
+                            outputPath: URL(fileURLWithPath: destinationPath, isDirectory: true)
+                                .appendingPathComponent("\(outputStem)_AVP.mov")
+                                .path
+                        )
+                    )
+                )
+                try await onEvent(completed)
+                scenario.didDeliverCompletedConversion()
+                await waitForCancellation()
+                return WorkerRunResult(terminalEvent: completed, exitStatus: 0, diagnostics: "")
             }
         }
 
