@@ -930,6 +930,69 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCompletedBatchCanStartAgainWithFreshDurableItemIDs() async throws {
+        try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, _, destinationURL in
+            let scenario = BatchWorkerScenario()
+            let queueStore = ConversionQueueStore.inMemory()
+            let viewModel = ConversionViewModel(clientFactory: { scenario.makeClient() }, durableQueueStore: queueStore)
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+            let firstRunIDs = Set(try XCTUnwrap(viewModel.batchQueue).items.map(\.id))
+
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+            let secondRunIDs = Set(try XCTUnwrap(viewModel.batchQueue).items.map(\.id))
+
+            XCTAssertTrue(firstRunIDs.isDisjoint(with: secondRunIDs))
+            XCTAssertEqual(queueStore.items.map(\.state), [.completed, .completed, .completed, .completed])
+            XCTAssertNil(viewModel.durableQueueRuntimeDiagnostic)
+            XCTAssertEqual(scenario.records.count, 8)
+        }
+    }
+
+    @MainActor
+    func testStoppedBatchCanStartAgainWithFreshDurableItemIDs() async throws {
+        try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, sourceURLs, destinationURL in
+            let scenario = BatchWorkerScenario(holdConversionForCancellation: [sourceURLs[0].path])
+            let queueStore = ConversionQueueStore.inMemory()
+            let viewModel = ConversionViewModel(clientFactory: { scenario.makeClient() }, durableQueueStore: queueStore)
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchStatus(viewModel, status: .converting)
+            viewModel.stopActiveWorker()
+            await waitForBatchCompletion(viewModel)
+            let firstRunIDs = Set(try XCTUnwrap(viewModel.batchQueue).items.map(\.id))
+
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+            let secondRunIDs = Set(try XCTUnwrap(viewModel.batchQueue).items.map(\.id))
+
+            XCTAssertTrue(firstRunIDs.isDisjoint(with: secondRunIDs))
+            XCTAssertEqual(queueStore.items.map(\.state), [.stopped, .notStarted, .completed, .completed])
+            XCTAssertNil(viewModel.durableQueueRuntimeDiagnostic)
+        }
+    }
+
+    @MainActor
     func testBatchFailureContinuesAndExplicitRetryUsesStoredDraft() async throws {
         try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, sourceURLs, destinationURL in
             var options = ConversionOptions()
@@ -1062,6 +1125,7 @@ final class ConversionViewModelTests: XCTestCase {
             XCTAssertEqual(queue.items.map(\.status), [.failed, .completed])
             XCTAssertEqual(queue.items[0].recoveryDecision, decision)
             XCTAssertTrue(queue.items[0].canRetry)
+            let durableItemID = queue.items[0].id
 
             viewModel.retryBatchItem(
                 queue.items[0].id,
@@ -1077,6 +1141,12 @@ final class ConversionViewModelTests: XCTestCase {
             XCTAssertEqual(conversionRecords.count, 2)
             XCTAssertEqual(conversionRecords.last?.startStage, ConversionStage.extractMVCAndAudio.rawValue)
             XCTAssertEqual(conversionRecords.last?.continueOnError, true)
+            XCTAssertTrue(
+                viewModel.restoredDurableQueueItems
+                    .first(where: { $0.id == durableItemID })?
+                    .attempts
+                    .contains(where: { $0.recoveryChoice == WorkerRecoveryChoice.retryContinueOnError.rawValue }) == true
+            )
         }
     }
 
@@ -1199,6 +1269,33 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testBatchSingleTitleSourcePreservesRemoveOriginalIntent() async throws {
+        try await withTemporaryBatchSources(["feature.mkv"]) { folderURL, _, destinationURL in
+            let scenario = BatchWorkerScenario()
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+            var options = ConversionOptions()
+            options.job.removeOriginalAfterSuccess = true
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: options
+            )
+            await waitForBatchCompletion(viewModel)
+
+            let conversionRecord = try XCTUnwrap(
+                scenario.records.first(where: { $0.operation == "convert_source" })
+            )
+            XCTAssertEqual(conversionRecord.removeOriginal, true)
+            XCTAssertTrue(
+                try XCTUnwrap(viewModel.batchQueue?.items.first?.draft)
+                    .options.job.removeOriginalAfterSuccess
+            )
+        }
+    }
+
+    @MainActor
     func testBatchISOWithoutTitlesFailsItemAndContinues() async throws {
         try await withTemporaryBatchSources(["Feature.iso", "next.mkv"]) { folderURL, sourceURLs, destinationURL in
             let emptyInspection = SourceInspection(
@@ -1315,7 +1412,7 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDeferredFactoryFailureCanBeStoppedBeforeNextItemLaunches() async throws {
+    func testStoppingDuringDurableBatchAdmissionPreventsWorkerLaunch() async throws {
         try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, _, destinationURL in
             var factoryCalls = 0
             let viewModel = ConversionViewModel {
@@ -1336,8 +1433,8 @@ final class ConversionViewModelTests: XCTestCase {
             await viewModel.stopForQuit()
 
             let queue = try XCTUnwrap(viewModel.batchQueue)
-            XCTAssertEqual(queue.items.map(\.status), [.stopped, .notStarted])
-            XCTAssertEqual(factoryCalls, 1)
+            XCTAssertEqual(queue.items.map(\.status), [.notStarted, .notStarted])
+            XCTAssertEqual(factoryCalls, 0)
             XCTAssertFalse(viewModel.hasActiveWork)
         }
     }
@@ -1381,15 +1478,38 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
-    private func waitForBatchCompletion(_ viewModel: ConversionViewModel) async {
-        let deadline = Date().addingTimeInterval(5)
-        while Date() < deadline {
-            if viewModel.batchQueue?.completionID != nil, !viewModel.hasActiveWork {
-                return
-            }
-            await Task.yield()
+    func testLateStopPreservesAlreadyDeliveredBatchCompletion() async throws {
+        try await withTemporaryBatchSources(["feature.mkv"]) { folderURL, sourceURLs, destinationURL in
+            let terminalDelivered = expectation(description: "conversion terminal delivered")
+            let scenario = BatchWorkerScenario(
+                holdCompletedConversionForCancellation: [sourceURLs[0].path],
+                onCompletedConversionDelivered: { terminalDelivered.fulfill() }
+            )
+            let queueStore = ConversionQueueStore.inMemory()
+            let viewModel = ConversionViewModel(clientFactory: { scenario.makeClient() }, durableQueueStore: queueStore)
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await fulfillment(of: [terminalDelivered], timeout: 2)
+
+            viewModel.stopActiveWorker()
+            await waitForBatchCompletion(viewModel)
+
+            XCTAssertEqual(queueStore.items.map(\.state), [.completed])
+            XCTAssertNotNil(queueStore.items.first?.result)
+            XCTAssertEqual(viewModel.batchQueue?.items.map(\.status), [.completed])
         }
-        XCTFail("Timed out waiting for the batch to finish")
+    }
+
+    @MainActor
+    private func waitForBatchCompletion(_ viewModel: ConversionViewModel) async {
+        await viewModel.waitForBatchQueueSettled()
+        XCTAssertNotNil(viewModel.batchQueue?.completionID)
+        XCTAssertFalse(viewModel.hasActiveWork)
     }
 
     @MainActor
@@ -1745,6 +1865,248 @@ final class ConversionViewModelTests: XCTestCase {
         XCTAssertTrue(processingWasPersistedBeforeSpawn)
         XCTAssertTrue(queueStore.items.allSatisfy { $0.state == .completed })
         XCTAssertTrue(queueStore.items.allSatisfy { $0.attempts.count == 1 && $0.attempts[0].endedAt != nil })
+    }
+
+    @MainActor
+    func testDurableSourceFolderQueueWritesInspectingBeforeCreatingWorker() async throws {
+        try await withTemporaryBatchSources(["feature.mkv"]) { folderURL, _, destinationURL in
+            let queueURL = folderURL.appendingPathComponent("queue.json")
+            let queueStore = ConversionQueueStore(fileURL: queueURL)
+            let scenario = BatchWorkerScenario()
+            var inspectingWasPersistedBeforeSpawn = false
+            var processingWasPersistedBeforeConversionSpawn = false
+            var factoryCalls = 0
+            let viewModel = ConversionViewModel(
+                clientFactory: {
+                    factoryCalls += 1
+                    if let data = try? Data(contentsOf: queueURL) {
+                        let decoder = JSONDecoder()
+                        decoder.dateDecodingStrategy = .iso8601
+                        decoder.userInfo[.requiresVideoQualityIntent] = true
+                        let document = try? decoder.decode(ConversionQueueDocument.self, from: data)
+                        inspectingWasPersistedBeforeSpawn = inspectingWasPersistedBeforeSpawn || document?.items.contains {
+                            $0.origin == .sourceFolder && $0.state == .inspecting && !$0.attempts.isEmpty
+                        } == true
+                        processingWasPersistedBeforeConversionSpawn = processingWasPersistedBeforeConversionSpawn
+                            || (factoryCalls > 1 && document?.items.contains {
+                                $0.origin == .sourceFolder
+                                    && $0.state == .processing
+                                    && $0.inspection != nil
+                                    && $0.attempts.count == 2
+                            } == true)
+                    }
+                    return scenario.makeClient()
+                },
+                durableQueueStore: queueStore
+            )
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+
+            XCTAssertTrue(inspectingWasPersistedBeforeSpawn)
+            XCTAssertTrue(processingWasPersistedBeforeConversionSpawn)
+            XCTAssertEqual(queueStore.items.map(\.state), [.completed])
+            XCTAssertEqual(queueStore.items[0].attempts.count, 2)
+            XCTAssertTrue(queueStore.items.allSatisfy { $0.attempts.allSatisfy { $0.endedAt != nil } })
+        }
+    }
+
+    @MainActor
+    func testDurableSourceFolderQueueFailsClosedWhenStartWritesAreBlocked() async throws {
+        try await withTemporaryBatchSources(["feature.mkv"]) { folderURL, _, destinationURL in
+            let queueURL = folderURL.appendingPathComponent("queue.json")
+            try Data(#"{"version":2,"items":[]}"#.utf8).write(to: queueURL)
+            let queueStore = ConversionQueueStore(fileURL: queueURL)
+            var factoryCalls = 0
+            let viewModel = ConversionViewModel(
+                clientFactory: {
+                    factoryCalls += 1
+                    return BatchWorkerScenario().makeClient()
+                },
+                durableQueueStore: queueStore
+            )
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+
+            XCTAssertEqual(factoryCalls, 0)
+            XCTAssertNotNil(viewModel.durableQueueRuntimeDiagnostic)
+            XCTAssertTrue(queueStore.items.isEmpty)
+            XCTAssertFalse(viewModel.batchQueue?.hasStarted == true)
+        }
+    }
+
+    @MainActor
+    func testStoppingDuringDurableInspectionWritePreventsWorkerSpawn() async throws {
+        try await withTemporaryBatchSources(["first.mkv", "second.m2ts"]) { folderURL, _, destinationURL in
+            let queueURL = folderURL.appendingPathComponent("queue.json")
+            let writeGate = RuntimePersistenceWriteGate(blockedWriteNumber: 2)
+            let queueStore = ConversionQueueStore(
+                fileURL: queueURL,
+                dataWriter: { data, url in
+                    writeGate.writeStarted()
+                    try data.write(to: url, options: .atomic)
+                }
+            )
+            var factoryCalls = 0
+            let viewModel = ConversionViewModel(
+                clientFactory: {
+                    factoryCalls += 1
+                    return BatchWorkerScenario().makeClient()
+                },
+                durableQueueStore: queueStore
+            )
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            while !writeGate.isBlockedWriteWaiting { await Task.yield() }
+
+            viewModel.stopActiveWorker()
+            writeGate.releaseBlockedWrite()
+            await viewModel.waitForBatchQueueSettled()
+
+            XCTAssertEqual(factoryCalls, 0)
+            XCTAssertEqual(queueStore.items.map(\.state), [.stopped, .notStarted])
+            XCTAssertNotNil(queueStore.items.first?.attempts.last?.endedAt)
+        }
+    }
+
+    @MainActor
+    func testStoppingDuringDurableProcessingWritePreventsConversionSpawn() async throws {
+        try await withTemporaryBatchSources(["feature.mkv"]) { folderURL, _, destinationURL in
+            let queueURL = folderURL.appendingPathComponent("queue.json")
+            let writeGate = RuntimePersistenceWriteGate(blockedWriteNumber: 3)
+            let queueStore = ConversionQueueStore(
+                fileURL: queueURL,
+                dataWriter: { data, url in
+                    writeGate.writeStarted()
+                    try data.write(to: url, options: .atomic)
+                }
+            )
+            let scenario = BatchWorkerScenario()
+            var factoryCalls = 0
+            let viewModel = ConversionViewModel(
+                clientFactory: {
+                    factoryCalls += 1
+                    return scenario.makeClient()
+                },
+                durableQueueStore: queueStore
+            )
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            while !writeGate.isBlockedWriteWaiting { await Task.yield() }
+
+            viewModel.stopActiveWorker()
+            writeGate.releaseBlockedWrite()
+            await viewModel.waitForBatchQueueSettled()
+
+            XCTAssertEqual(factoryCalls, 1)
+            XCTAssertEqual(queueStore.items.map(\.state), [.stopped])
+            XCTAssertEqual(queueStore.items.first?.attempts.count, 2)
+            XCTAssertTrue(queueStore.items.first?.attempts.allSatisfy { $0.endedAt != nil } == true)
+        }
+    }
+
+    @MainActor
+    func testStoppingDuringDurableRetryWritePreventsWorkerSpawn() async throws {
+        try await withTemporaryBatchSources(["feature.mkv"]) { folderURL, sourceURLs, destinationURL in
+            let queueURL = folderURL.appendingPathComponent("queue.json")
+            let writeGate = RuntimePersistenceWriteGate(blockedWriteNumber: 5)
+            let queueStore = ConversionQueueStore(
+                fileURL: queueURL,
+                dataWriter: { data, url in
+                    writeGate.writeStarted()
+                    try data.write(to: url, options: .atomic)
+                }
+            )
+            let scenario = BatchWorkerScenario(failConversionOnceFor: [sourceURLs[0].path])
+            let viewModel = ConversionViewModel(
+                clientFactory: { scenario.makeClient() },
+                durableQueueStore: queueStore
+            )
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+            let failedItemID = try XCTUnwrap(viewModel.batchQueue?.items.first?.id)
+            XCTAssertEqual(scenario.clientCount, 2)
+
+            viewModel.retryBatchItem(failedItemID)
+            while !writeGate.isBlockedWriteWaiting { await Task.yield() }
+            viewModel.stopActiveWorker()
+            writeGate.releaseBlockedWrite()
+            await viewModel.waitForBatchQueueSettled()
+
+            XCTAssertEqual(scenario.clientCount, 2)
+            XCTAssertEqual(queueStore.items.map(\.state), [.notStarted])
+            XCTAssertTrue(queueStore.items.first?.attempts.allSatisfy { $0.endedAt != nil } == true)
+            XCTAssertNil(viewModel.durableQueueRuntimeDiagnostic)
+        }
+    }
+
+    @MainActor
+    func testRestoredSourceFolderItemsRemainInert() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("feature.mkv")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8))
+        let queueURL = directoryURL.appendingPathComponent("queue.json")
+        let source = ConversionSource(kind: .matroska, url: sourceURL)
+        let draft = ConversionDraft(
+            source: source,
+            sourceDetails: nil,
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: directoryURL,
+            options: ConversionOptions()
+        )
+        let writer = ConversionQueueStore(fileURL: queueURL)
+        try await writer.replaceItems([
+            DurableConversionQueueItem(
+                ordinal: 0,
+                groupID: UUID(),
+                origin: .sourceFolder,
+                intent: DurableQueueItemIntent(draft: draft),
+                state: .processing,
+                attempts: [DurableQueueAttempt(startedAt: Date())]
+            ),
+        ])
+
+        var factoryCalls = 0
+        let restoredStore = ConversionQueueStore(fileURL: queueURL)
+        _ = ConversionViewModel(
+            clientFactory: {
+                factoryCalls += 1
+                return BatchWorkerScenario().makeClient()
+            },
+            durableQueueStore: restoredStore
+        )
+
+        XCTAssertEqual(factoryCalls, 0)
+        XCTAssertEqual(restoredStore.items.map(\.state), [.interrupted])
     }
 
     @MainActor
@@ -2702,6 +3064,7 @@ private enum BatchWorkerBehavior: Equatable {
     case failConversion
     case decision(WorkerDecision)
     case waitForCancellation
+    case completeThenWaitForCancellation
 }
 
 private final class BatchWorkerScenario: @unchecked Sendable {
@@ -2709,9 +3072,11 @@ private final class BatchWorkerScenario: @unchecked Sendable {
     private var remainingInspectionFailures: Set<String>
     private var remainingFailures: Set<String>
     private var remainingDecisions: [String: WorkerDecision]
-    private let cancellationPaths: Set<String>
+    private var remainingCancellationPaths: Set<String>
+    private var remainingCompletedCancellationPaths: Set<String>
     private let inspectionNames: [String: String]
     private var inspectionResults: [String: [SourceInspection]]
+    private let completedConversionDelivered: (() -> Void)?
     private var storedRecords: [BatchJobRecord] = []
     private var storedClientCount = 0
     private var activeCount = 0
@@ -2722,15 +3087,19 @@ private final class BatchWorkerScenario: @unchecked Sendable {
         failConversionOnceFor: Set<String> = [],
         decisionConversionOnceFor: [String: WorkerDecision] = [:],
         holdConversionForCancellation: Set<String> = [],
+        holdCompletedConversionForCancellation: Set<String> = [],
         inspectionNames: [String: String] = [:],
-        inspectionResults: [String: [SourceInspection]] = [:]
+        inspectionResults: [String: [SourceInspection]] = [:],
+        onCompletedConversionDelivered: (() -> Void)? = nil
     ) {
         remainingInspectionFailures = failInspectionOnceFor
         remainingFailures = failConversionOnceFor
         remainingDecisions = decisionConversionOnceFor
-        cancellationPaths = holdConversionForCancellation
+        remainingCancellationPaths = holdConversionForCancellation
+        remainingCompletedCancellationPaths = holdCompletedConversionForCancellation
         self.inspectionNames = inspectionNames
         self.inspectionResults = inspectionResults
+        completedConversionDelivered = onCompletedConversionDelivered
     }
 
     var records: [BatchJobRecord] {
@@ -2775,8 +3144,11 @@ private final class BatchWorkerScenario: @unchecked Sendable {
             guard job.operation == "convert_source" else {
                 return .succeed
             }
-            if cancellationPaths.contains(job.source.path) {
+            if remainingCancellationPaths.remove(job.source.path) != nil {
                 return .waitForCancellation
+            }
+            if remainingCompletedCancellationPaths.remove(job.source.path) != nil {
+                return .completeThenWaitForCancellation
             }
             if let decision = remainingDecisions.removeValue(forKey: job.source.path) {
                 return .decision(decision)
@@ -2810,6 +3182,10 @@ private final class BatchWorkerScenario: @unchecked Sendable {
         lock.withLock {
             activeCount -= 1
         }
+    }
+
+    func didDeliverCompletedConversion() {
+        completedConversionDelivered?()
     }
 }
 
@@ -2928,6 +3304,28 @@ private final class BatchWorkerClient: WorkerProcessRunning, @unchecked Sendable
                     payload: WorkerEventPayload(message: "Conversion stopped.")
                 )
                 exitStatus = SIGTERM
+            case .completeThenWaitForCancellation:
+                let destinationPath = job.destination?.path ?? "/Movies"
+                let outputStem = URL(fileURLWithPath: job.source.path)
+                    .deletingPathExtension()
+                    .lastPathComponent
+                let completed = WorkerEvent(
+                    protocolVersion: WorkerJobSpec.protocolVersion,
+                    type: .jobCompleted,
+                    jobID: job.jobID,
+                    sequence: 1,
+                    payload: WorkerEventPayload(
+                        conversionResult: ConversionResult(
+                            outputPath: URL(fileURLWithPath: destinationPath, isDirectory: true)
+                                .appendingPathComponent("\(outputStem)_AVP.mov")
+                                .path
+                        )
+                    )
+                )
+                try await onEvent(completed)
+                scenario.didDeliverCompletedConversion()
+                await waitForCancellation()
+                return WorkerRunResult(terminalEvent: completed, exitStatus: 0, diagnostics: "")
             }
         }
 

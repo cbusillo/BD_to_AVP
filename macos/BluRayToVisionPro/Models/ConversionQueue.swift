@@ -138,13 +138,27 @@ struct SourceFolderQueueState: Equatable {
     var hasStarted: Bool
     var completionID: UUID?
 
-    init(folderSource: ConversionSource, sources: [ConversionSource]) {
+    init(
+        folderSource: ConversionSource,
+        items: [SourceFolderQueueItem],
+        activeItemID: UUID? = nil,
+        stopRequested: Bool = false,
+        hasStarted: Bool = false,
+        completionID: UUID? = nil
+    ) {
         self.folderSource = folderSource
-        items = sources.map { SourceFolderQueueItem(source: $0) }
-        activeItemID = nil
-        stopRequested = false
-        hasStarted = false
-        completionID = nil
+        self.items = items
+        self.activeItemID = activeItemID
+        self.stopRequested = stopRequested
+        self.hasStarted = hasStarted
+        self.completionID = completionID
+    }
+
+    init(folderSource: ConversionSource, sources: [ConversionSource]) {
+        self.init(
+            folderSource: folderSource,
+            items: sources.map { SourceFolderQueueItem(source: $0) }
+        )
     }
 
     var activeItem: SourceFolderQueueItem? {
