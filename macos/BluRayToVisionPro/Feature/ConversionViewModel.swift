@@ -809,6 +809,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             projected.completionID = nil
             batchQueue = projected
         }
+        sourceFolderStopRequested = false
+        sourceFolderQueueCompletionPending = false
         enqueueSourceFolderQueueTransition { [weak self] in
             await self?.retrySourceFolderQueueItem(itemID: itemID, recoveryChoice: recoveryChoice)
         }
@@ -1463,8 +1465,6 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             if let recoveryChoice {
                 sourceFolderRecoveryChoices[itemID] = recoveryChoice.rawValue
             }
-            sourceFolderStopRequested = false
-            sourceFolderQueueCompletionPending = false
             publishSourceFolderQueueProjection()
             await pumpSourceFolderQueue()
         } catch {

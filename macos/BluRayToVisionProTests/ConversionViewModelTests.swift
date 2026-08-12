@@ -2026,6 +2026,47 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testStoppingDuringDurableRetryWritePreventsWorkerSpawn() async throws {
+        try await withTemporaryBatchSources(["feature.mkv"]) { folderURL, sourceURLs, destinationURL in
+            let queueURL = folderURL.appendingPathComponent("queue.json")
+            let writeGate = RuntimePersistenceWriteGate(blockedWriteNumber: 5)
+            let queueStore = ConversionQueueStore(
+                fileURL: queueURL,
+                dataWriter: { data, url in
+                    writeGate.writeStarted()
+                    try data.write(to: url, options: .atomic)
+                }
+            )
+            let scenario = BatchWorkerScenario(failConversionOnceFor: [sourceURLs[0].path])
+            let viewModel = ConversionViewModel(
+                clientFactory: { scenario.makeClient() },
+                durableQueueStore: queueStore
+            )
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions()
+            )
+            await waitForBatchCompletion(viewModel)
+            let failedItemID = try XCTUnwrap(viewModel.batchQueue?.items.first?.id)
+            XCTAssertEqual(scenario.clientCount, 2)
+
+            viewModel.retryBatchItem(failedItemID)
+            while !writeGate.isBlockedWriteWaiting { await Task.yield() }
+            viewModel.stopActiveWorker()
+            writeGate.releaseBlockedWrite()
+            await viewModel.waitForBatchQueueSettled()
+
+            XCTAssertEqual(scenario.clientCount, 2)
+            XCTAssertEqual(queueStore.items.map(\.state), [.notStarted])
+            XCTAssertTrue(queueStore.items.first?.attempts.allSatisfy { $0.endedAt != nil } == true)
+            XCTAssertNil(viewModel.durableQueueRuntimeDiagnostic)
+        }
+    }
+
+    @MainActor
     func testRestoredSourceFolderItemsRemainInert() async throws {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
