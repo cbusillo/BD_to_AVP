@@ -1575,6 +1575,9 @@ final class ConversionViewModelTests: XCTestCase {
         let thirdID = viewModel.queueItems[2].id
 
         XCTAssertTrue(viewModel.moveWaitingQueueItem(thirdID, before: secondID))
+        while viewModel.queueItems.map({ $0.draft.selectedTitle?.id }) != ["title-1", "title-3", "title-2"] {
+            await Task.yield()
+        }
         XCTAssertEqual(
             viewModel.queueItems.map { $0.draft.selectedTitle?.id },
             ["title-1", "title-3", "title-2"]
@@ -1589,6 +1592,257 @@ final class ConversionViewModelTests: XCTestCase {
             if case .completed = $0.status { return true }
             return false
         })
+        XCTAssertEqual(viewModel.restoredDurableQueueItems.map(\.state), [
+            .completed,
+            .completed,
+            .completed,
+        ])
+        XCTAssertEqual(viewModel.restoredDurableQueueItems.map(\.ordinal), [0, 1, 2])
+        XCTAssertEqual(
+            viewModel.restoredDurableQueueItems.map { $0.intent.options.job.removeOriginalAfterSuccess },
+            [false, false, true]
+        )
+    }
+
+    @MainActor
+    func testDurableTitleQueueWritesProcessingBeforeCreatingConversionClient() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        let queueURL = directoryURL.appendingPathComponent("queue.json")
+        let queueStore = ConversionQueueStore(fileURL: queueURL)
+        let inspectionDone = expectation(description: "inspection done")
+        let conversionDone = expectation(description: "conversion done")
+        conversionDone.expectedFulfillmentCount = 2
+        var processingWasPersistedBeforeSpawn = false
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { _ in conversionDone.fulfill() }
+        )
+        let viewModel = ConversionViewModel(
+            clientFactory: {
+                if let data = try? Data(contentsOf: queueURL) {
+                    let decoder = JSONDecoder()
+                    decoder.dateDecodingStrategy = .iso8601
+                    decoder.userInfo[.requiresVideoQualityIntent] = true
+                    if let document = try? decoder.decode(ConversionQueueDocument.self, from: data),
+                       document.items.contains(where: { $0.origin == .multiTitle && $0.state == .processing })
+                    {
+                        processingWasPersistedBeforeSpawn = true
+                    }
+                }
+                return worker
+            },
+            durableQueueStore: queueStore
+        )
+        let source = ConversionSource(kind: .discImage, url: sourceURL)
+
+        viewModel.selectSource(source)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        viewModel.startConversionQueue(drafts: makeDiscQueueDrafts(source: source, destinationURL: directoryURL))
+        await fulfillment(of: [conversionDone], timeout: 2)
+        while viewModel.hasActiveWorker || viewModel.hasQueuedWork { await Task.yield() }
+
+        XCTAssertTrue(processingWasPersistedBeforeSpawn)
+        XCTAssertTrue(queueStore.items.allSatisfy { $0.state == .completed })
+        XCTAssertTrue(queueStore.items.allSatisfy { $0.attempts.count == 1 && $0.attempts[0].endedAt != nil })
+    }
+
+    @MainActor
+    func testDurableTitleQueuePersistsSynchronousLaunchFailure() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        let queueStore = ConversionQueueStore.inMemory()
+        let inspectionDone = expectation(description: "inspection done")
+        let factoryCalls = RuntimePersistenceTestCounter()
+        let worker = TwoPhaseWorkerClient(onInspectionComplete: { inspectionDone.fulfill() })
+        let viewModel = ConversionViewModel(
+            clientFactory: {
+                guard factoryCalls.incrementAndReturn() == 1 else {
+                    throw RuntimePersistenceTestError.workerLaunchFailed
+                }
+                return worker
+            },
+            durableQueueStore: queueStore
+        )
+        let source = ConversionSource(kind: .discImage, url: sourceURL)
+
+        viewModel.selectSource(source)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        viewModel.startConversionQueue(drafts: makeDiscQueueDrafts(source: source, destinationURL: directoryURL))
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(queueStore.items.map(\.state), [.failed, .stopped])
+        XCTAssertEqual(queueStore.items.first?.failure?.message, RuntimePersistenceTestError.workerLaunchFailed.localizedDescription)
+        XCTAssertNotNil(queueStore.items.first?.attempts.last?.endedAt)
+    }
+
+    @MainActor
+    func testRestoredDurableTitleItemsRemainInert() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        let queueURL = directoryURL.appendingPathComponent("queue.json")
+        let groupID = UUID()
+        let source = ConversionSource(kind: .discImage, url: sourceURL)
+        let store = ConversionQueueStore(fileURL: queueURL)
+        try await store.replaceItems([
+            DurableConversionQueueItem(
+                ordinal: 0,
+                groupID: groupID,
+                origin: .multiTitle,
+                intent: DurableQueueItemIntent(draft: makeDiscQueueDrafts(source: source, destinationURL: directoryURL)[0]),
+                state: .processing
+            ),
+        ])
+
+        var factoryCalls = 0
+        let restoredStore = ConversionQueueStore(fileURL: queueURL)
+        _ = ConversionViewModel(
+            clientFactory: {
+                factoryCalls += 1
+                return TwoPhaseWorkerClient()
+            },
+            durableQueueStore: restoredStore
+        )
+
+        XCTAssertEqual(factoryCalls, 0)
+        XCTAssertEqual(restoredStore.items.map(\.state), [DurableQueueItemState.interrupted])
+    }
+
+    @MainActor
+    func testDurableTitleQueueFailsClosedBeforeSpawnWhenProcessingWriteFails() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        let queueURL = directoryURL.appendingPathComponent("queue.json")
+        let writeCount = RuntimePersistenceTestCounter()
+        let queueStore = ConversionQueueStore(
+            fileURL: queueURL,
+            dataWriter: { data, url in
+                if writeCount.incrementAndReturn() > 1 {
+                    throw RuntimePersistenceTestError.writeFailed
+                }
+                try data.write(to: url, options: .atomic)
+            }
+        )
+        let inspectionDone = expectation(description: "inspection done")
+        var factoryCalls = 0
+        let worker = TwoPhaseWorkerClient(onInspectionComplete: { inspectionDone.fulfill() })
+        let viewModel = ConversionViewModel(
+            clientFactory: {
+                factoryCalls += 1
+                return worker
+            },
+            durableQueueStore: queueStore
+        )
+        let source = ConversionSource(kind: .discImage, url: sourceURL)
+
+        viewModel.selectSource(source)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        viewModel.startConversionQueue(drafts: makeDiscQueueDrafts(source: source, destinationURL: directoryURL))
+        while viewModel.durableQueueRuntimeDiagnostic == nil { await Task.yield() }
+
+        XCTAssertEqual(factoryCalls, 1)
+        XCTAssertNotNil(viewModel.durableQueueRuntimeDiagnostic)
+        XCTAssertEqual(
+            queueStore.items.map(\.state),
+            [DurableQueueItemState.waiting, DurableQueueItemState.waiting]
+        )
+    }
+
+    @MainActor
+    func testStoppingDuringProcessingWritePreventsWorkerSpawn() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        let queueURL = directoryURL.appendingPathComponent("queue.json")
+        let writeGate = RuntimePersistenceWriteGate(blockedWriteNumber: 2)
+        let queueStore = ConversionQueueStore(
+            fileURL: queueURL,
+            dataWriter: { data, url in
+                writeGate.writeStarted()
+                try data.write(to: url, options: .atomic)
+            }
+        )
+        let inspectionDone = expectation(description: "inspection done")
+        var factoryCalls = 0
+        let worker = TwoPhaseWorkerClient(onInspectionComplete: { inspectionDone.fulfill() })
+        let viewModel = ConversionViewModel(
+            clientFactory: {
+                factoryCalls += 1
+                return worker
+            },
+            durableQueueStore: queueStore
+        )
+        let source = ConversionSource(kind: .discImage, url: sourceURL)
+
+        viewModel.selectSource(source)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        viewModel.startConversionQueue(drafts: makeDiscQueueDrafts(source: source, destinationURL: directoryURL))
+        while !writeGate.isBlockedWriteWaiting { await Task.yield() }
+
+        viewModel.stopActiveWorker()
+        writeGate.releaseBlockedWrite()
+        while viewModel.hasActiveWork { await Task.yield() }
+
+        XCTAssertEqual(factoryCalls, 1)
+        XCTAssertEqual(queueStore.items.map(\.state), [.stopped, .stopped])
+        XCTAssertNotNil(queueStore.items.first?.attempts.last?.endedAt)
+    }
+
+    @MainActor
+    func testDurableTitleQueueStopPersistsStoppingThenStopped() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        let inspectionDone = expectation(description: "inspection done")
+        let conversionStarted = expectation(description: "conversion started")
+        let worker = TwoPhaseWorkerClient(
+            onInspectionComplete: { inspectionDone.fulfill() },
+            onConversionJobReceived: { _ in conversionStarted.fulfill() },
+            waitsForConversionCancellation: true
+        )
+        let queueStore = ConversionQueueStore.inMemory()
+        let viewModel = ConversionViewModel(clientFactory: { worker }, durableQueueStore: queueStore)
+        let source = ConversionSource(kind: .discImage, url: sourceURL)
+
+        viewModel.selectSource(source)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        viewModel.startConversionQueue(drafts: makeDiscQueueDrafts(source: source, destinationURL: directoryURL))
+        await fulfillment(of: [conversionStarted], timeout: 2)
+        while queueStore.items.first?.state != .processing { await Task.yield() }
+        viewModel.stopActiveWorker()
+        while queueStore.items.first?.state != .stopping { await Task.yield() }
+        XCTAssertEqual(queueStore.items.map(\.state), [.stopping, .waiting])
+
+        while viewModel.hasActiveWorker || viewModel.hasQueuedWork { await Task.yield() }
+        XCTAssertEqual(queueStore.items.map(\.state), [.stopped, .stopped])
+        XCTAssertNotNil(queueStore.items[0].attempts.last?.endedAt)
     }
 
     @MainActor
@@ -1660,6 +1914,9 @@ final class ConversionViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.state.phase, .failed)
         XCTAssertEqual(viewModel.completedBatchResults?.count, 1)
+        XCTAssertEqual(viewModel.restoredDurableQueueItems.map(\.state), [.completed, .failed])
+        XCTAssertEqual(viewModel.restoredDurableQueueItems[1].failure?.code, "conversion_failed")
+        XCTAssertNotNil(viewModel.restoredDurableQueueItems[1].attempts.last?.endedAt)
         if case .completed = viewModel.queueItems[0].status {} else {
             XCTFail("The first queued conversion should remain completed.")
         }
@@ -1765,6 +2022,7 @@ final class ConversionViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.source)
         XCTAssertFalse(viewModel.hasQueuedWork)
         XCTAssertTrue(viewModel.queueItems.isEmpty)
+        XCTAssertEqual(viewModel.restoredDurableQueueItems.map(\.state), [.stopped, .stopped])
     }
 
     private func makeDiscQueueDrafts(source: ConversionSource, destinationURL: URL) -> [ConversionDraft] {
@@ -1843,6 +2101,61 @@ final class ConversionViewModelTests: XCTestCase {
                     JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
                 )
             }
+    }
+}
+
+private enum RuntimePersistenceTestError: Error {
+    case writeFailed
+    case workerLaunchFailed
+}
+
+private final class RuntimePersistenceTestCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func incrementAndReturn() -> Int {
+        lock.withLock {
+            value += 1
+            return value
+        }
+    }
+}
+
+private final class RuntimePersistenceWriteGate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private let blockedWriteNumber: Int
+    private var writeCount = 0
+    private var blockedWriteWaiting = false
+    private var blockedWriteReleased = false
+
+    init(blockedWriteNumber: Int) {
+        self.blockedWriteNumber = blockedWriteNumber
+    }
+
+    var isBlockedWriteWaiting: Bool {
+        condition.withLock { blockedWriteWaiting }
+    }
+
+    func writeStarted() {
+        condition.lock()
+        writeCount += 1
+        guard writeCount == blockedWriteNumber else {
+            condition.unlock()
+            return
+        }
+        blockedWriteWaiting = true
+        condition.broadcast()
+        while !blockedWriteReleased {
+            condition.wait()
+        }
+        condition.unlock()
+    }
+
+    func releaseBlockedWrite() {
+        condition.withLock {
+            blockedWriteReleased = true
+            condition.broadcast()
+        }
     }
 }
 
