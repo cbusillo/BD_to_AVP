@@ -1310,6 +1310,10 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
         }
         publishSourceFolderQueueProjection()
+        try await startPersistedSourceFolderConversion(itemID: itemID)
+    }
+
+    private func startPersistedSourceFolderConversion(itemID: UUID) async throws {
         let updated = sourceFolderQueueItem(id: itemID)
         guard let updated else {
             await pumpSourceFolderQueue()
