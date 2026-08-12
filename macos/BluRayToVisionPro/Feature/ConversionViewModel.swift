@@ -1061,7 +1061,15 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     private func sourceFolderQueueItem(id itemID: UUID) -> DurableConversionQueueItem? {
-        currentSourceFolderQueueItems.first { $0.id == itemID }
+        guard let groupID = sourceFolderQueueGroupID else {
+            return nil
+        }
+        for item in durableQueueStore.items
+            where item.id == itemID && item.groupID == groupID && item.origin == .sourceFolder
+        {
+            return item
+        }
+        return nil
     }
 
     private func enqueueSourceFolderQueueTransition(_ transition: @escaping @MainActor () async -> Void) {
@@ -1191,7 +1199,8 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             return
         }
         do {
-            guard let item = sourceFolderQueueItem(id: itemID) else {
+            let item = sourceFolderQueueItem(id: itemID)
+            guard let item else {
                 throw ConversionQueueStoreError.invalidDocument
             }
             if sourceFolderStopRequested || snapshot.phase == .cancelled {
@@ -1301,9 +1310,12 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
         }
         publishSourceFolderQueueProjection()
-        guard let updated = sourceFolderQueueItem(id: itemID),
-              updated.state == .processing
-        else {
+        let updated = sourceFolderQueueItem(id: itemID)
+        guard let updated else {
+            await pumpSourceFolderQueue()
+            return
+        }
+        guard updated.state == .processing else {
             await pumpSourceFolderQueue()
             return
         }
