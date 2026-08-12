@@ -1537,7 +1537,7 @@ final class ConversionViewModelTests: XCTestCase {
                     remainingConversionsDone.fulfill()
                 }
             },
-            firstConversionGate: firstConversionGate
+            conversionGate: firstConversionGate
         )
         let viewModel = ConversionViewModel { worker }
         let source = ConversionSource(kind: .discImage, url: sourceURL)
@@ -1571,6 +1571,7 @@ final class ConversionViewModelTests: XCTestCase {
         while viewModel.hasActiveWorker { await Task.yield() }
         viewModel.startConversionQueue(drafts: drafts)
         await fulfillment(of: [firstConversionStarted], timeout: 2)
+        XCTAssertNil(viewModel.completedBatchResults)
         let secondID = viewModel.queueItems[1].id
         let thirdID = viewModel.queueItems[2].id
 
@@ -1602,6 +1603,100 @@ final class ConversionViewModelTests: XCTestCase {
             viewModel.restoredDurableQueueItems.map { $0.intent.options.job.removeOriginalAfterSuccess },
             [false, false, true]
         )
+    }
+
+    @MainActor
+    func testCompletedResultsPublishOnlyAfterFinalQueuedTitle() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        let inspectionDone = expectation(description: "inspection done")
+        let secondConversionStarted = expectation(description: "second conversion started")
+        let secondConversionGate = QueueTestGate()
+        let worker = ReorderableQueueWorkerClient(
+            inspectionDone: { inspectionDone.fulfill() },
+            conversionStarted: { _, conversionNumber in
+                if conversionNumber == 2 {
+                    secondConversionStarted.fulfill()
+                }
+            },
+            blockedConversionNumber: 2,
+            conversionGate: secondConversionGate
+        )
+        let viewModel = ConversionViewModel { worker }
+        let source = ConversionSource(kind: .discImage, url: sourceURL)
+
+        viewModel.selectSource(source)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        viewModel.startConversionQueue(drafts: makeDiscQueueDrafts(source: source, destinationURL: directoryURL))
+        await fulfillment(of: [secondConversionStarted], timeout: 2)
+
+        XCTAssertNil(viewModel.completedBatchResults)
+
+        await secondConversionGate.open()
+        while viewModel.hasActiveWork { await Task.yield() }
+        XCTAssertEqual(viewModel.completedBatchResults?.count, 2)
+    }
+
+    @MainActor
+    func testReorderWriteFailurePreservesActiveWorkerAndDurableGroup() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("disc".utf8))
+        let queueURL = directoryURL.appendingPathComponent("queue.json")
+        let writeCount = RuntimePersistenceTestCounter()
+        let queueStore = ConversionQueueStore(
+            fileURL: queueURL,
+            dataWriter: { data, url in
+                if writeCount.incrementAndReturn() == 3 {
+                    throw RuntimePersistenceTestError.writeFailed
+                }
+                try data.write(to: url, options: .atomic)
+            }
+        )
+        let inspectionDone = expectation(description: "inspection done")
+        let firstConversionStarted = expectation(description: "first conversion started")
+        let conversionGate = QueueTestGate()
+        let worker = ReorderableQueueWorkerClient(
+            inspectionDone: { inspectionDone.fulfill() },
+            conversionStarted: { _, conversionNumber in
+                if conversionNumber == 1 {
+                    firstConversionStarted.fulfill()
+                }
+            },
+            blockedConversionNumber: 1,
+            conversionGate: conversionGate
+        )
+        let viewModel = ConversionViewModel(clientFactory: { worker }, durableQueueStore: queueStore)
+        let source = ConversionSource(kind: .discImage, url: sourceURL)
+
+        viewModel.selectSource(source)
+        await fulfillment(of: [inspectionDone], timeout: 2)
+        while viewModel.hasActiveWorker { await Task.yield() }
+        let drafts = makeDiscQueueDrafts(source: source, destinationURL: directoryURL) + [
+            makeDiscQueueDrafts(source: source, destinationURL: directoryURL)[0],
+        ]
+        viewModel.startConversionQueue(drafts: drafts)
+        await fulfillment(of: [firstConversionStarted], timeout: 2)
+        let secondID = viewModel.queueItems[1].id
+        let thirdID = viewModel.queueItems[2].id
+
+        XCTAssertTrue(viewModel.moveWaitingQueueItem(thirdID, before: secondID))
+        while viewModel.durableQueueRuntimeDiagnostic == nil { await Task.yield() }
+
+        XCTAssertTrue(viewModel.hasActiveWorker)
+        XCTAssertEqual(queueStore.items.map(\.state), [.processing, .waiting, .waiting])
+
+        await conversionGate.open()
+        while viewModel.hasActiveWork { await Task.yield() }
+        XCTAssertEqual(queueStore.items.map(\.state), [.completed, .completed, .completed])
     }
 
     @MainActor
@@ -2229,17 +2324,20 @@ private final class ReorderableQueueWorkerClient: WorkerProcessRunning, @uncheck
     private let lock = NSLock()
     private let inspectionDone: () -> Void
     private let conversionStarted: (WorkerJobSpec, Int) -> Void
-    private let firstConversionGate: QueueTestGate
+    private let blockedConversionNumber: Int
+    private let conversionGate: QueueTestGate
     private var conversionCount = 0
 
     init(
         inspectionDone: @escaping () -> Void,
         conversionStarted: @escaping (WorkerJobSpec, Int) -> Void,
-        firstConversionGate: QueueTestGate
+        blockedConversionNumber: Int = 1,
+        conversionGate: QueueTestGate
     ) {
         self.inspectionDone = inspectionDone
         self.conversionStarted = conversionStarted
-        self.firstConversionGate = firstConversionGate
+        self.blockedConversionNumber = blockedConversionNumber
+        self.conversionGate = conversionGate
     }
 
     func run(
@@ -2280,8 +2378,8 @@ private final class ReorderableQueueWorkerClient: WorkerProcessRunning, @uncheck
             return conversionCount
         }
         conversionStarted(job, conversionNumber)
-        if conversionNumber == 1 {
-            await firstConversionGate.wait()
+        if conversionNumber == blockedConversionNumber {
+            await conversionGate.wait()
         }
         let completed = WorkerEvent(
             protocolVersion: WorkerJobSpec.protocolVersion,

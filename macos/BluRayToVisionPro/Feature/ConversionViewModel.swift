@@ -350,6 +350,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     func moveWaitingQueueItem(_ itemID: UUID, before targetID: UUID) -> Bool {
         guard itemID != targetID,
               let groupID = titleQueueGroupID,
+              !durableQueueStore.writesBlocked,
               currentTitleQueueItems.contains(where: { $0.id == itemID && $0.state == .waiting }),
               currentTitleQueueItems.contains(where: { $0.id == targetID && $0.state == .waiting })
         else {
@@ -390,7 +391,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 }
                 self.publishTitleQueueProjection()
             } catch {
-                self.failClosedTitleQueuePersistence(error)
+                self.durableQueueRuntimeDiagnostic = "Queue order could not be saved: \(error.localizedDescription)"
             }
         }
         return true
@@ -662,12 +663,12 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             state.cancelRecoveryDecision()
             let groupID = titleQueueGroupID
             self.activeQueueItemID = nil
-            clearSourceNow()
             enqueueTitleQueueTransition { [weak self] in
                 await self?.persistClearedTitleQueueDecisionCancellation(
                     itemID: activeQueueItemID,
                     groupID: groupID
                 )
+                self?.clearSourceNow()
             }
             return
         }
@@ -1253,6 +1254,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 ),
                 result: state.conversionResult.map(DurableQueueResult.init)
             )
+            var effectivePhase = terminalSnapshot.phase
             try await durableQueueStore.mutateItems { items in
                 guard let index = items.firstIndex(where: { $0.id == itemID }) else {
                     throw ConversionQueueStoreError.invalidDocument
@@ -1270,6 +1272,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                             details: nil,
                             retryable: false
                         )
+                        effectivePhase = .failed
                         return
                     }
                     items[index].state = .completed
@@ -1295,16 +1298,20 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                     throw ConversionQueueStoreError.invalidDocument
                 }
             }
-            switch terminalSnapshot.phase {
+            switch effectivePhase {
             case .completed:
                 publishTitleQueueProjection()
                 activeQueueItemID = nil
                 if titleQueueStopRequested {
                     try await stopWaitingTitleQueueItems()
                     publishTitleQueueProjection()
+                    publishCompletedTitleQueueResults()
                     runDeferredActionsIfIdle()
-                } else {
+                } else if currentTitleQueueItems.contains(where: { $0.state == .waiting }) {
                     await startNextDurableTitleQueueItem()
+                } else {
+                    publishCompletedTitleQueueResults()
+                    runDeferredActionsIfIdle()
                 }
             case .decisionRequired:
                 publishTitleQueueProjection()
@@ -1312,6 +1319,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                 try await stopWaitingTitleQueueItems()
                 publishTitleQueueProjection()
                 activeQueueItemID = nil
+                publishCompletedTitleQueueResults()
                 runDeferredActionsIfIdle()
             default:
                 break
@@ -1319,9 +1327,13 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         } catch {
             durableQueueRuntimeDiagnostic = "Queue state could not be saved after the conversion finished: \(error.localizedDescription)"
             activeQueueItemID = nil
+            publishCompletedTitleQueueResults()
             titleQueueGroupID = nil
             titleQueueStopRequested = false
-            publishTitleQueueProjection()
+            state.failTransport(
+                message: durableQueueRuntimeDiagnostic ?? "Queue state could not be saved.",
+                retryable: false
+            )
             runDeferredActionsIfIdle()
         }
     }
@@ -1519,6 +1531,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             }
             return ConversionQueueItem(id: item.id, draft: draft, status: queueStatus(for: item))
         }
+    }
+
+    private func publishCompletedTitleQueueResults() {
         let results = queueItems.compactMap { item -> ConversionResult? in
             guard case let .completed(result) = item.status else {
                 return nil
