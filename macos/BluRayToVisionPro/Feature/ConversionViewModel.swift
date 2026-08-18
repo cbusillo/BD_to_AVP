@@ -354,7 +354,13 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     func startConversionQueue(drafts: [ConversionDraft]) {
-        guard !hasActiveWork, let firstDraft = drafts.first
+        guard !hasActiveWork,
+              !drafts.isEmpty,
+              drafts.allSatisfy({ draft in
+                  if case .failure = RouteQualityEngine.validate(draft.options) { return false }
+                  return true
+              }),
+              let firstDraft = drafts.first
         else {
             return
         }

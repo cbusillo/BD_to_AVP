@@ -49,7 +49,7 @@ struct QueueResolutionGroup: Identifiable, Equatable {
     }
 }
 
-enum QueueResolutionScope: Equatable {
+enum QueueResolutionScope: Hashable {
     case allMatching
     case item(UUID)
 }

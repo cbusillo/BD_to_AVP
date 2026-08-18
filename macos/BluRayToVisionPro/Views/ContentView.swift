@@ -32,6 +32,7 @@ struct ContentView: View {
     @State private var isShowingDiagnosticReport = false
     @State private var isRefreshingDiscs = false
     @StateObject private var routeQualityState: RouteQualityResolutionState
+    @StateObject private var setupQueue = SetupQueueAdmission()
 
     init(
         viewModel: ConversionViewModel,
@@ -123,26 +124,9 @@ struct ContentView: View {
                 )
                 .frame(minWidth: 350, idealWidth: 390, maxWidth: 450)
 
-                ConversionSetupView(
-                    selectedProfileID: $selectedProfileID,
-                    selectedTab: $selectedTab,
-                    options: $options,
-                    profiles: profileStore.profiles,
-                    selectedProfile: selectedProfile,
-                    profileModified: profileModified,
-                    isLocked: viewModel.hasActiveWork
-                        || previewViewModel.hasActiveWorker
-                        || viewModel.state.phase == .decisionRequired,
-                    sourceKind: viewModel.source?.kind,
-                    routeQualityState: routeQualityState,
-                    resolutionMemoryStore: resolutionMemoryStore,
-                    isReady: true,
-                    openEditor: beginSetupEditor,
-                    saveSelectedProfile: saveSelectedProfile,
-                    saveAsNewProfile: beginSaveAsNewProfile,
-                    resetProfile: resetProfile
-                )
-                .frame(minWidth: 570, idealWidth: 680)
+                setupColumn
+
+                queueSidebar
             }
 
             Divider()
@@ -518,6 +502,47 @@ struct ContentView: View {
 
     private var selectedProfile: EncodingProfile {
         profileStore.profile(withID: selectedProfileID)
+    }
+
+    private var setupColumn: some View {
+        ConversionSetupView(
+            selectedProfileID: $selectedProfileID,
+            selectedTab: $selectedTab,
+            options: $options,
+            profiles: profileStore.profiles,
+            selectedProfile: selectedProfile,
+            profileModified: profileModified,
+            isLocked: viewModel.hasActiveWork || previewViewModel.hasActiveWorker || viewModel.state.phase == .decisionRequired,
+            sourceKind: viewModel.source?.kind,
+            routeQualityState: routeQualityState,
+            resolutionMemoryStore: resolutionMemoryStore,
+            isReady: true,
+            openEditor: beginSetupEditor,
+            saveSelectedProfile: saveSelectedProfile,
+            saveAsNewProfile: beginSaveAsNewProfile,
+            resetProfile: resetProfile,
+            sourceName: viewModel.source?.displayName,
+            destinationName: destinationURL.path,
+            estimate: "Finished movie size and time are estimated from this source.",
+            preview: { isShowingPreview = true },
+            addToQueue: addCurrentDraftsToQueue,
+            start: startReadyConversion,
+            canPreview: previewCanStart,
+            canAddToQueue: !conversionDrafts.isEmpty && !viewModel.hasActiveWork,
+            canStart: conversionCanStart
+        )
+        .frame(minWidth: 570, idealWidth: 680)
+    }
+
+    @ViewBuilder
+    private var queueSidebar: some View {
+        if setupQueue.isBatch {
+            SetupQueueAdmissionView(
+                admission: setupQueue,
+                memoryStore: resolutionMemoryStore,
+                start: startAdmittedQueue
+            )
+        }
     }
 
     private var diagnosticActionTitle: String {
@@ -1098,6 +1123,25 @@ struct ContentView: View {
             viewModel.startConversion(draft: conversionDrafts[0])
         } else {
             viewModel.startConversionQueue(drafts: conversionDrafts)
+        }
+    }
+
+    private func addCurrentDraftsToQueue() {
+        guard !conversionDrafts.isEmpty else { return }
+        setupQueue.add(drafts: conversionDrafts)
+    }
+
+    private func startAdmittedQueue() {
+        let drafts = setupQueue.startableDrafts
+        guard !drafts.isEmpty else { return }
+        viewModel.startConversionQueue(drafts: drafts)
+    }
+
+    private func startReadyConversion() {
+        if setupQueue.isBatch {
+            startAdmittedQueue()
+        } else {
+            startSelectedConversions()
         }
     }
 }

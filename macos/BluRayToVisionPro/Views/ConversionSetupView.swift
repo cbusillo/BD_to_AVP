@@ -19,6 +19,67 @@ struct ConversionSetupView: View {
     let saveSelectedProfile: () -> Void
     let saveAsNewProfile: () -> Void
     let resetProfile: () -> Void
+    let sourceName: String?
+    let destinationName: String?
+    let estimate: String?
+    let preview: () -> Void
+    let addToQueue: () -> Void
+    let start: () -> Void
+    let canPreview: Bool
+    let canAddToQueue: Bool
+    let canStart: Bool
+
+    init(
+        selectedProfileID: Binding<String>,
+        selectedTab: Binding<ConversionSetupTab>,
+        options: Binding<ConversionOptions>,
+        profiles: [EncodingProfile],
+        selectedProfile: EncodingProfile,
+        profileModified: Bool,
+        isLocked: Bool,
+        sourceKind: ConversionSourceKind?,
+        routeQualityState: RouteQualityResolutionState,
+        resolutionMemoryStore: ResolutionMemoryStore,
+        isReady: Bool,
+        openEditor: @escaping () -> Void,
+        saveSelectedProfile: @escaping () -> Void,
+        saveAsNewProfile: @escaping () -> Void,
+        resetProfile: @escaping () -> Void,
+        sourceName: String? = nil,
+        destinationName: String? = nil,
+        estimate: String? = nil,
+        preview: @escaping () -> Void = {},
+        addToQueue: @escaping () -> Void = {},
+        start: @escaping () -> Void = {},
+        canPreview: Bool = false,
+        canAddToQueue: Bool = false,
+        canStart: Bool = false
+    ) {
+        _selectedProfileID = selectedProfileID
+        _selectedTab = selectedTab
+        _options = options
+        self.profiles = profiles
+        self.selectedProfile = selectedProfile
+        self.profileModified = profileModified
+        self.isLocked = isLocked
+        self.sourceKind = sourceKind
+        self.routeQualityState = routeQualityState
+        self.resolutionMemoryStore = resolutionMemoryStore
+        self.isReady = isReady
+        self.openEditor = openEditor
+        self.saveSelectedProfile = saveSelectedProfile
+        self.saveAsNewProfile = saveAsNewProfile
+        self.resetProfile = resetProfile
+        self.sourceName = sourceName
+        self.destinationName = destinationName
+        self.estimate = estimate
+        self.preview = preview
+        self.addToQueue = addToQueue
+        self.start = start
+        self.canPreview = canPreview
+        self.canAddToQueue = canAddToQueue
+        self.canStart = canStart
+    }
 
     var body: some View {
         Group {
@@ -31,53 +92,72 @@ struct ConversionSetupView: View {
     }
 
     private var readyBody: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Profile")
-                        .font(.title3.weight(.semibold))
-                    Text("Choose a Profile, then edit only when you need to change a setting.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
+        VStack(alignment: .leading, spacing: 14) {
+            LabeledContent("Source", value: sourceName ?? "Choose a source")
+                .accessibilityIdentifier("ready-source")
+            Divider()
+            HStack(alignment: .firstTextBaseline) {
                 Picker("Profile", selection: $selectedProfileID) {
                     ForEach(profiles) { profile in
                         Text(profile.name).tag(profile.id)
                     }
                 }
-                .frame(width: 190)
+                .frame(maxWidth: 300)
                 .disabled(isLocked)
                 .accessibilityIdentifier("ready-profile-picker")
-
-                if profileModified {
-                    Text("For this conversion")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.quaternary, in: Capsule())
-                        .accessibilityIdentifier("profile-conversion-customized")
-                }
-
+                Spacer()
                 Button("Edit…", action: openEditor)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                     .disabled(isLocked)
                     .accessibilityIdentifier("edit-conversion-settings")
             }
-
-            Divider()
-
             Text(profileOutcomeSummary)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("ready-profile-summary")
-
-            OutcomeSummaryView(options: options)
+            if profileModified {
+                HStack(spacing: 8) {
+                    Text("For this conversion")
+                        .font(.caption.weight(.medium))
+                    Text(profileOutcomeSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                    Button("Revert", action: resetProfile)
+                    Button("Save as New…", action: saveAsNewProfile)
+                }
+                .padding(8)
+                .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityIdentifier("profile-conversion-customized")
+            }
+            LabeledContent("Destination", value: destinationName ?? "Choose a destination")
+                .accessibilityIdentifier("ready-destination")
+            Text(estimate ?? "Finished movie size and time are estimated after source analysis.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("ready-estimate")
+            Divider()
+            HStack {
+                Button("Preview", action: preview)
+                    .disabled(!canPreview)
+                    .accessibilityIdentifier("ready-preview")
+                Button("Add to Queue", action: addToQueue)
+                    .disabled(!canAddToQueue)
+                    .accessibilityIdentifier("ready-add-to-queue")
+                Spacer()
+                Button("Start", action: start)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canStart)
+                    .accessibilityIdentifier("ready-start")
+            }
         }
         .padding(18)
+        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(.separator.opacity(0.7))
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
