@@ -82,52 +82,7 @@ struct ContentView: View {
             }
 
             HSplitView {
-                if setupQueue.hasItems, viewModel.state.phase != .decisionRequired {
-                    queueSidebar
-                } else {
-                    SourceWorkspaceView(
-                        source: viewModel.source,
-                        state: viewModel.state,
-                        batchQueue: viewModel.batchQueue,
-                        isBatchRunning: viewModel.isBatchRunning,
-                        insertedDiscs: insertedDiscs,
-                        makeMKVAvailable: DiscSourceDetector.makeMKVAvailable,
-                        profile: selectedProfile,
-                        options: options,
-                        profileModified: profileModified,
-                        titleSelection: titleSelection,
-                        titleSelectionSummary: titleSelectionSummary,
-                        selectedVideoCount: selectedVideoCount,
-                        queueItems: visibleQueueItems,
-                        destinationURL: $destinationURL,
-                        plannedOutputURLs: plannedOutputURLs,
-                        storageEstimate: VideoStorageEstimate(drafts: conversionDrafts),
-                        refreshDiscs: refreshDiscs,
-                        useDisc: selectSource,
-                        openDiscImage: { chooseFile(.discImage) },
-                        openBluRayFolder: { chooseFolder(.bluRayFolder) },
-                        openSourceFolder: { chooseFolder(.sourceFolder) },
-                        openMKV: { chooseFile(.matroska) },
-                        importTransportStream: { chooseFile(.transportStream) },
-                        changeSource: chooseExistingSource,
-                        chooseDestination: chooseDestination,
-                        retryAnalysis: viewModel.restartInspection,
-                        diagnosticsActionTitle: diagnosticActionTitle,
-                        canShowDiagnostics: canShowDiagnosticAction,
-                        showDiagnostics: showDiagnosticReport,
-                        resolveRecoveryChoice: { choice in
-                            _ = viewModel.resolveRecoveryChoice(choice)
-                        },
-                        retryBatchItem: { itemID, choice in
-                            viewModel.retryBatchItem(itemID, recoveryChoice: choice)
-                        },
-                        selectMainTitle: { titleSelection = .main },
-                        selectAllTitles: { titleSelection = .all },
-                        chooseTitles: { isShowingTitleChooser = true }
-                    )
-                    .frame(minWidth: 300, idealWidth: 360, maxWidth: 430)
-                }
-
+                sourceOrQueueColumn
                 setupColumn
             }
 
@@ -337,6 +292,59 @@ struct ContentView: View {
         } message: {
             Text(profileErrorMessage ?? "The profile could not be saved.")
         }
+    }
+
+    @ViewBuilder
+    private var sourceOrQueueColumn: some View {
+        if setupQueue.hasItems, viewModel.state.phase != .decisionRequired {
+            queueSidebar
+        } else {
+            sourceWorkspace
+        }
+    }
+
+    private var sourceWorkspace: some View {
+        SourceWorkspaceView(
+            source: viewModel.source,
+            state: viewModel.state,
+            batchQueue: viewModel.batchQueue,
+            isBatchRunning: viewModel.isBatchRunning,
+            insertedDiscs: insertedDiscs,
+            makeMKVAvailable: DiscSourceDetector.makeMKVAvailable,
+            profile: selectedProfile,
+            options: options,
+            profileModified: profileModified,
+            titleSelection: titleSelection,
+            titleSelectionSummary: titleSelectionSummary,
+            selectedVideoCount: selectedVideoCount,
+            queueItems: visibleQueueItems,
+            destinationURL: $destinationURL,
+            plannedOutputURLs: plannedOutputURLs,
+            storageEstimate: VideoStorageEstimate(drafts: conversionDrafts),
+            refreshDiscs: refreshDiscs,
+            useDisc: selectSource,
+            openDiscImage: { chooseFile(.discImage) },
+            openBluRayFolder: { chooseFolder(.bluRayFolder) },
+            openSourceFolder: { chooseFolder(.sourceFolder) },
+            openMKV: { chooseFile(.matroska) },
+            importTransportStream: { chooseFile(.transportStream) },
+            changeSource: chooseExistingSource,
+            chooseDestination: chooseDestination,
+            retryAnalysis: viewModel.restartInspection,
+            diagnosticsActionTitle: diagnosticActionTitle,
+            canShowDiagnostics: canShowDiagnosticAction,
+            showDiagnostics: showDiagnosticReport,
+            resolveRecoveryChoice: { choice in
+                _ = viewModel.resolveRecoveryChoice(choice)
+            },
+            retryBatchItem: { itemID, choice in
+                viewModel.retryBatchItem(itemID, recoveryChoice: choice)
+            },
+            selectMainTitle: { titleSelection = .main },
+            selectAllTitles: { titleSelection = .all },
+            chooseTitles: { isShowingTitleChooser = true }
+        )
+        .frame(minWidth: 300, idealWidth: 360, maxWidth: 430)
     }
 
     private var sourceSelectionAction: ConversionSourceSelectionAction? {
