@@ -65,8 +65,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(workflow_text.count("python -m scripts.sparkle_bundle"), 2)
         self.assertNotIn("python scripts/sparkle_bundle.py", smoke_text)
         self.assertNotIn("python scripts/briefcase_app.py", workflow_text + ci_text)
-        self.assertEqual((workflow_text + ci_text).count("python -m scripts.briefcase_app"), 2)
+        self.assertNotIn("python -m scripts.briefcase_app", workflow_text + ci_text)
         self.assertIn("python scripts/native_app.py package", workflow_text)
+        self.assertIn("python scripts/native_app.py package", ci_text)
         self.assertIn("python -m scripts.macos_release", workflow_text)
 
         result = subprocess.run(

@@ -152,8 +152,7 @@
     },
     "build": {
       "pythonPackage": "uv build",
-      "briefcaseCreate": "uv run python -m scripts.briefcase_app create --no-input",
-      "briefcaseBuild": "uv run python -m scripts.briefcase_app build --no-input",
+      "embeddedPythonBuild": "uv run python scripts/embedded_python.py",
       "macosPackage": "uv run python scripts/native_app.py package",
       "macosCurrent": "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://diagnostics.shinycomputers.com uv run python scripts/native_app.py publish-current"
     },
@@ -166,7 +165,7 @@
       "behavior changes",
       "dependency or installer changes",
       "release workflow changes",
-      "Briefcase packaging changes",
+      "Embedded Python packaging changes",
       "macOS application packaging changes",
       "runtime toolchain changes",
       "GitHub repository settings change"

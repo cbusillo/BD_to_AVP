@@ -1,4 +1,3 @@
-import concurrent.futures
 import io
 import plistlib
 import tarfile
@@ -8,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from scripts import briefcase_macos_signing, sparkle_bundle, sparkle_macos
+from scripts import sparkle_bundle, sparkle_macos
 from scripts.native_app import SUPPORT_DIAGNOSTICS_ENDPOINT_ENV, SUPPORT_DIAGNOSTICS_ENDPOINT_INFO_KEY
 from scripts.production_identity import (
     PRODUCTION_BUNDLE_IDENTIFIER,
@@ -153,137 +152,6 @@ class SparkleMacOSTests(unittest.TestCase):
 
             with self.assertRaisesRegex(sparkle_macos.SparkleBuildError, "version must be 2.9.4"):
                 sparkle_macos.verify_framework_layout(framework, expected_version="2.9.4")
-
-
-class BriefcaseSigningTests(unittest.TestCase):
-    def test_collect_sign_targets_includes_xpc_bundles(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            app_path = Path(temp_dir) / "App.app"
-            downloader = app_path / "Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
-            installer = app_path / "Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc"
-            updater = app_path / "Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
-            framework = app_path / "Contents/Frameworks/Sparkle.framework"
-            for path in (downloader, installer, updater):
-                path.mkdir(parents=True)
-            (app_path / "Contents/Resources").mkdir(parents=True)
-
-            class Command:
-                @staticmethod
-                def package_path(_app):
-                    return app_path
-
-            targets = briefcase_macos_signing.collect_sign_targets(Command(), object())
-
-        self.assertIn(downloader, targets)
-        self.assertIn(installer, targets)
-        self.assertIn(updater, targets)
-        self.assertIn(framework, targets)
-        self.assertEqual(targets[-1], app_path)
-
-    def test_sparkle_targets_do_not_receive_app_entitlements(self) -> None:
-        app_path = Path("/tmp/App.app")
-        sparkle_path = app_path / "Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
-        other_path = app_path / "Contents/Frameworks/Other.framework"
-
-        self.assertTrue(briefcase_macos_signing.is_sparkle_target(sparkle_path, app_path))
-        self.assertFalse(briefcase_macos_signing.is_sparkle_target(other_path, app_path))
-
-    def test_signing_patch_rejects_unexpected_briefcase_version(self) -> None:
-        with patch.object(briefcase_macos_signing.briefcase, "__version__", "0.0.0"):
-            with self.assertRaises(RuntimeError) as error:
-                briefcase_macos_signing.install_patch()
-        self.assertIn(
-            f"requires Briefcase {briefcase_macos_signing.EXPECTED_BRIEFCASE_VERSION}",
-            str(error.exception),
-        )
-
-    def test_signing_patch_installs_for_expected_briefcase_version(self) -> None:
-        original_sign_app = briefcase_macos_signing.macOSSigningMixin.sign_app
-        self.addCleanup(
-            setattr,
-            briefcase_macos_signing.macOSSigningMixin,
-            "sign_app",
-            original_sign_app,
-        )
-
-        briefcase_macos_signing.install_patch()
-
-        self.assertIs(
-            briefcase_macos_signing.macOSSigningMixin.sign_app,
-            briefcase_macos_signing.sign_app_with_xpc,
-        )
-
-    def test_sign_app_uses_inside_out_order_and_no_host_entitlements_for_sparkle(self) -> None:
-        app_path = Path("/tmp/App.app")
-        downloader = app_path / "Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
-        updater_app = app_path / "Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
-        framework = app_path / "Contents/Frameworks/Sparkle.framework"
-        other_framework = app_path / "Contents/Frameworks/Other.framework"
-        groups = [[downloader], [updater_app], [framework, other_framework], [app_path]]
-        signed: list[tuple[Path, object]] = []
-
-        class ProgressBar:
-            def add_task(self, _label: str, *, total: int) -> int:
-                self.total = total
-                return 1
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-            def update(self, _task_id: int, *, advance: int) -> None:
-                self.advance = advance
-
-        class Command:
-            console = Mock(is_deep_debug=False)
-            tools = Mock()
-
-            @staticmethod
-            def package_path(_app):
-                return app_path
-
-            @staticmethod
-            def entitlements_path(_app):
-                return Path("host.entitlements")
-
-            @staticmethod
-            def sign_file(path, *, entitlements, identity):
-                signed.append((path, entitlements))
-
-        command = Command()
-        command.console.progress_bar.return_value = ProgressBar()
-        command.tools.file.sorted_depth_first_groups.return_value = (iter(group) for group in groups)
-        real_executor = concurrent.futures.ThreadPoolExecutor
-        executor_workers: list[int | None] = []
-
-        def create_executor(*, max_workers=None):
-            executor_workers.append(max_workers)
-            return real_executor(max_workers=max_workers)
-
-        with (
-            patch.object(
-                briefcase_macos_signing,
-                "collect_sign_targets",
-                return_value=[path for group in groups for path in group],
-            ),
-            patch.object(
-                briefcase_macos_signing.concurrent.futures,
-                "ThreadPoolExecutor",
-                side_effect=create_executor,
-            ),
-        ):
-            briefcase_macos_signing.sign_app_with_xpc(command, object(), "Developer ID")
-
-        self.assertEqual([path for path, _ in signed], [path for group in groups for path in group])
-        self.assertEqual(executor_workers, [1, 1, 1, None])
-        entitlements_by_path = dict(signed)
-        self.assertIsNone(entitlements_by_path[downloader])
-        self.assertIsNone(entitlements_by_path[updater_app])
-        self.assertIsNone(entitlements_by_path[framework])
-        self.assertEqual(entitlements_by_path[other_framework], Path("host.entitlements"))
-        self.assertEqual(entitlements_by_path[app_path], Path("host.entitlements"))
 
 
 class SparkleBundleTests(unittest.TestCase):
@@ -511,7 +379,7 @@ class SparkleBundleTests(unittest.TestCase):
                     environment={SUPPORT_DIAGNOSTICS_ENDPOINT_ENV: "https://other-support.example"},
                 )
 
-    def test_repository_public_key_matches_briefcase_metadata(self) -> None:
+    def test_repository_public_key_matches_app_metadata(self) -> None:
         info = sparkle_bundle.load_expected_info()
 
         self.assertEqual(info["CFBundleVersion"], "163")

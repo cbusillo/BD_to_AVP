@@ -26,9 +26,9 @@ def get_pyproject_data() -> tuple[dict, dict]:
 
     project = pyproject_data.get("project", {})
     tool = pyproject_data.get("tool", {})
-    briefcase = tool.get("briefcase", {})
+    app = tool.get("bd_to_avp", {})
 
-    return project, briefcase
+    return project, app
 
 
 def load_data_from_pyproject() -> dict | None:

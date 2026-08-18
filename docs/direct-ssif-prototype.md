@@ -34,7 +34,7 @@ Homebrew formula update therefore fails CI until the recorded compatibility
 baseline is reviewed and updated.
 
 The binary is written to `build/ssif-probe/ssif_probe`, which is ignored and is
-not included in wheels, Briefcase staging, or the production macOS app.
+not included in wheels, embedded-runtime staging, or the production macOS app.
 
 ## Commands
 
@@ -154,7 +154,7 @@ target the app's supported minimum macOS, place the replaceable libraries in the
 app bundle, rewrite install names to bundle-relative paths, include LGPL notices
 and source/relinking obligations, sign every Mach-O, and pass notarization and
 Gatekeeper checks. The current Homebrew dylibs target macOS 26 and are unsuitable
-for the production macOS 14 Briefcase line.
+for the historical production macOS 14 packaging line.
 
 ## Promotion Gates
 

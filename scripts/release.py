@@ -470,8 +470,7 @@ def _replace_yaml_mapping_value(text: str, path: tuple[str, ...], key: str, valu
 def _validate_macos_project_metadata(path: Path, pyproject: dict[str, Any], version: str, build: str) -> None:
     try:
         project_text = path.read_text(encoding="utf-8")
-        briefcase = pyproject["tool"]["briefcase"]
-        app = briefcase["app"]["bd-to-avp"]
+        app = pyproject["tool"]["bd_to_avp"]
     except (OSError, KeyError, TypeError) as error:
         raise ReleaseError(f"Unable to load production macOS project metadata: {error}") from error
     base_path = ("targets", "BluRayToVisionPro", "settings", "base")
@@ -479,7 +478,7 @@ def _validate_macos_project_metadata(path: Path, pyproject: dict[str, Any], vers
     expected_values = {
         "CURRENT_PROJECT_VERSION": build,
         "MARKETING_VERSION": version,
-        "PRODUCT_BUNDLE_IDENTIFIER": f"{briefcase['bundle']}.bd-to-avp",
+        "PRODUCT_BUNDLE_IDENTIFIER": str(app["bundle_identifier"]),
         "PRODUCT_NAME": str(app["formal_name"]),
     }
     mismatches = [
@@ -507,31 +506,30 @@ def _validate_beta3_recovery_source_identity(
     pyproject = _load_toml(pyproject_path)
     try:
         project = pyproject["project"]
-        briefcase = pyproject["tool"]["briefcase"]
-        app = briefcase["app"]["bd-to-avp"]
-        info = app["macOS"]["info"]
+        app = pyproject["tool"]["bd_to_avp"]
+        sparkle = app["sparkle"]
     except (KeyError, TypeError) as error:
         raise ReleaseError("Beta 3 recovery source is missing production identity metadata.") from error
     expected_values = {
         "project.name": (project.get("name"), "bd_to_avp"),
-        "tool.briefcase.project_name": (briefcase.get("project_name"), PRODUCTION_PRODUCT_NAME),
-        "tool.briefcase.bundle": (briefcase.get("bundle"), "com.shinycomputers"),
-        "tool.briefcase.app.bd-to-avp.formal_name": (app.get("formal_name"), PRODUCTION_PRODUCT_NAME),
+        "tool.bd_to_avp.project_name": (app.get("project_name"), PRODUCTION_PRODUCT_NAME),
+        "tool.bd_to_avp.bundle_identifier": (app.get("bundle_identifier"), PRODUCTION_BUNDLE_IDENTIFIER),
+        "tool.bd_to_avp.formal_name": (app.get("formal_name"), PRODUCTION_PRODUCT_NAME),
         "BDToAVPDistributionChannel": (
-            info.get("BDToAVPDistributionChannel"),
+            app.get("distribution_channel"),
             PRODUCTION_DISTRIBUTION_CHANNEL,
         ),
-        "SUFeedURL": (info.get("SUFeedURL"), PRODUCTION_FEED_URL),
-        "SUPublicEDKey": (info.get("SUPublicEDKey"), PRODUCTION_SPARKLE_PUBLIC_KEY),
-        "SUAllowsAutomaticUpdates": (info.get("SUAllowsAutomaticUpdates"), False),
-        "SUVerifyUpdateBeforeExtraction": (info.get("SUVerifyUpdateBeforeExtraction"), True),
+        "SUFeedURL": (sparkle.get("feed_url"), PRODUCTION_FEED_URL),
+        "SUPublicEDKey": (sparkle.get("public_key"), PRODUCTION_SPARKLE_PUBLIC_KEY),
+        "SUAllowsAutomaticUpdates": (sparkle.get("allows_automatic_updates"), False),
+        "SUVerifyUpdateBeforeExtraction": (sparkle.get("verify_update_before_extraction"), True),
     }
     mismatches = [
         f"{name}: expected {expected!r}, found {actual!r}"
         for name, (actual, expected) in expected_values.items()
         if actual != expected
     ]
-    if "SUEnableAutomaticChecks" in info:
+    if "enables_automatic_checks" in sparkle:
         mismatches.append("SUEnableAutomaticChecks must remain unset")
     public_key_path = pyproject_path.parent / PUBLIC_KEY_PATH.name
     try:
@@ -661,18 +659,18 @@ def load_release_metadata(
     pyproject = _load_toml(pyproject_path)
     try:
         project = pyproject["project"]
-        briefcase = pyproject["tool"]["briefcase"]
-        info = briefcase["app"]["bd-to-avp"]["macOS"]["info"]
+        app = pyproject["tool"]["bd_to_avp"]
     except (KeyError, TypeError) as error:
-        raise ReleaseError("pyproject.toml is missing required project or Briefcase release metadata.") from error
-    if not isinstance(project, dict) or not isinstance(briefcase, dict) or not isinstance(info, dict):
-        raise ReleaseError("Project and Briefcase release metadata must be TOML tables.")
-    if "version" in briefcase:
-        raise ReleaseError("Remove duplicate [tool.briefcase].version; Briefcase must inherit [project].version.")
+        raise ReleaseError("pyproject.toml is missing required project or macOS release metadata.") from error
+    if not isinstance(project, dict) or not isinstance(app, dict):
+        raise ReleaseError("Project and macOS release metadata must be TOML tables.")
+    sparkle = app.get("sparkle")
+    if isinstance(sparkle, dict) and "enables_automatic_checks" in sparkle:
+        raise ReleaseError("SUEnableAutomaticChecks must remain unset.")
 
     version = parse_release_version(str(project.get("version", "")))
     _validate_production_version(version)
-    build_version = str(info.get("CFBundleVersion", ""))
+    build_version = str(app.get("build_version", ""))
     parse_build_version(build_version)
     locked_version = _locked_project_version(lock_path)
     if locked_version != version.text:
@@ -992,8 +990,8 @@ def _write_release_metadata(
     )
     updated_pyproject = _replace_section_value(
         updated_pyproject,
-        "tool.briefcase.app.bd-to-avp.macOS.info",
-        "CFBundleVersion",
+        "tool.bd_to_avp",
+        "build_version",
         str(next_build),
     )
     updated_macos_project: str | None = None

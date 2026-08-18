@@ -47,12 +47,15 @@ bd-to-avp-worker = "bd_to_avp.worker.__main__:main"
 [dependency-groups]
 dev = [
     "black>=26.5.1,<27",
-    "briefcase==0.4.4",
     "gitpython>=3.1.58,<4",
     "mypy>=2.1.0,<3",
     "pyside6>=6.7.1,<6.10",
     "ruff>=0.15.20,<0.17",
     "types-psutil>=5.9.5.20240516",
+]
+runtime-build = [
+    "setuptools==80.9.0",
+    "wheel==0.45.1",
 ]
 
 [tool.uv]
@@ -76,45 +79,21 @@ include = [
     "scripts/generate_language_catalog.py",
 ]
 
-[tool.briefcase]
+[tool.bd_to_avp]
 project_name = "3D Blu-ray to Vision Pro"
-bundle = "com.shinycomputers"
-architectures = ["arm64"]
+bundle_identifier = "com.shinycomputers.bd-to-avp"
 icon = "bd_to_avp/resources/app_icon"
 organization = "Shiny Computers"
-
-[tool.briefcase.app.bd-to-avp]
+organization_domain = "com.shinycomputers"
 formal_name = "3D Blu-ray to Vision Pro"
-description = "Convert 3D Blu-ray Discs (and mts) to Apple Vision Pro (MV-HEVC) files"
-categories = ["Multimedia", "Conversion"]
-copyright = "Shiny Computers 2024"
-sources = ["bd_to_avp", "pyproject.toml", "README.md"]
-requires = [
-    "babelfish>=0.6.1,<0.7",
-    "cleanit>=0.4.8,<0.5",
-    "click>=8.1.3,<9",
-    "ffmpeg-python>=0.2.0,<0.3",
-    "humanize>=4.9.0,<5",
-    "numpy>=2,<3",
-    "opencv-python==5.0.0.93",
-    "psutil>=5.9.8,<8",
-    "pyobjc-framework-vision>=11.0,<13",
-    "pysrt>=1.1.2,<2",
-    "trakit>=0.2.2,<0.4",
-    "wakepy>=0.9.1,<1.1",
-]
+build_version = "163"
+distribution_channel = "direct"
 
-[tool.briefcase.app.bd-to-avp.macOS]
-universal_build = false
-min_os_version = "14.0"
-
-[tool.briefcase.app.bd-to-avp.macOS.info]
-CFBundleVersion = "163"
-BDToAVPDistributionChannel = "direct"
-SUFeedURL = "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
-SUPublicEDKey = "nJv1BH0mc2KFORVIDLlSI2A9mvGpVWdLcxlmz++OODU="
-SUAllowsAutomaticUpdates = false
-SUVerifyUpdateBeforeExtraction = true
+[tool.bd_to_avp.sparkle]
+feed_url = "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
+public_key = "nJv1BH0mc2KFORVIDLlSI2A9mvGpVWdLcxlmz++OODU="
+allows_automatic_updates = false
+verify_update_before_extraction = true
 
 [tool.ruff]
 line-length = 120
