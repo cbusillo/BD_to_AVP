@@ -541,9 +541,9 @@ struct SourceWorkspaceView: View {
                     HStack(spacing: 6) {
                         Text(profile.name)
                         if profileModified {
-                            Text("Modified")
+                            Text("For this conversion")
                                 .font(.caption.weight(.medium))
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }

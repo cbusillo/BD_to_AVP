@@ -202,7 +202,7 @@ final class ConversionWorkflowTests: XCTestCase {
             EncodingOptions(audioHandling: .convertAAC, audioBitrate: 448).compactSummary,
             "Direct MV-HEVC when available · Balanced · Adaptive quality 0.70 · source resolution · Audio: AAC 448 kbps, English only · Subtitles: English + others"
         )
-        XCTAssertTrue(BuiltInProfile.balanced.summary.contains("English audio only"))
+        XCTAssertTrue(BuiltInProfile.balanced.summary.contains("English audio"))
     }
 
     func testVideoRoutePlanCoversDirectGeneratedAV1AndExistingRoutes() {
@@ -319,6 +319,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(route.kind, .existingArtifact)
         XCTAssertTrue(route.includesUpscale)
         XCTAssertEqual(route.title, "Existing artifact + 2× upscale")
+        XCTAssertEqual(route.qualityTitle, "Custom")
         XCTAssertEqual(route.settingsSummary, "Custom · upscale quality 66")
         XCTAssertEqual(route.speedGuidance, "Reuses the encoded artifact and runs file upscale.")
 
@@ -327,6 +328,7 @@ final class ConversionWorkflowTests: XCTestCase {
 
         XCTAssertFalse(route.includesUpscale)
         XCTAssertEqual(route.title, "Existing encoded video artifact")
+        XCTAssertEqual(route.qualityTitle, "Not applied")
         XCTAssertEqual(route.settingsSummary, "No video re-encode")
         XCTAssertEqual(route.speedGuidance, "Reuses the encoded artifact.")
     }
@@ -711,7 +713,7 @@ final class ConversionWorkflowTests: XCTestCase {
             XCTAssertEqual(queue.items.count, 2)
             for item in queue.items {
                 let draft = try XCTUnwrap(item.draft)
-                XCTAssertEqual(draft.profile.name, "Balanced")
+                XCTAssertEqual(draft.profile.name, "Standard Movie")
                 XCTAssertEqual(draft.destinationURL, destinationURL)
                 XCTAssertEqual(draft.options.encoding.mvHEVC.generatedMergeQuality, 81)
                 XCTAssertEqual(draft.options.encoding.audioLanguages.mode, .preferredOnly)
@@ -738,6 +740,32 @@ final class ConversionWorkflowTests: XCTestCase {
             XCTAssertTrue(DiscSourceDetector.isBluRayFolder(lowercaseDiscURL))
             XCTAssertEqual(ConversionSource.infer(from: discURL)?.kind, .bluRayFolder)
             XCTAssertEqual(ConversionSource.infer(from: bdmvURL)?.url, discURL)
+        }
+    }
+
+    func testMakeMKVDiscoverySupportsDirectAndNestedApplicationLocations() throws {
+        XCTAssertEqual(
+            DiscSourceDetector.makeMKVExecutablePaths,
+            [
+                "/Applications/MakeMKV.app/Contents/MacOS/makemkvcon",
+                "/Applications/MakeMKV/MakeMKV.app/Contents/MacOS/makemkvcon",
+            ]
+        )
+
+        try withTemporaryDirectory { directoryURL in
+            let missingURL = directoryURL.appendingPathComponent("missing-makemkvcon")
+            let executableURL = directoryURL.appendingPathComponent("makemkvcon")
+            try Data().write(to: executableURL)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: executableURL.path
+            )
+
+            XCTAssertTrue(
+                DiscSourceDetector.hasMakeMKVExecutable(
+                    at: [missingURL.path, executableURL.path]
+                )
+            )
         }
     }
 

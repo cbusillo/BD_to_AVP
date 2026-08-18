@@ -220,6 +220,10 @@ struct VideoRoutePlan: Equatable {
         }
     }
 
+    var qualityTitle: String {
+        resolvedQualityTitle ?? "Not applied"
+    }
+
     var systemImage: String {
         switch kind {
         case .directMVHEVC:
@@ -255,7 +259,7 @@ struct VideoRoutePlan: Equatable {
                     rateControl = "Adaptive content quality"
                 }
             }
-            let summary = "\(qualitySelection.title) · \(rateControl)"
+            let summary = "\(resolvedQualityTitle ?? "Custom") · \(rateControl)"
             return includesUpscale ? "\(summary) · 2× MetalFX" : summary
         case .generatedMVHEVC:
             return generatedSettingsSummary(
@@ -268,7 +272,7 @@ struct VideoRoutePlan: Equatable {
             return "Custom · CRF \(av1CRF ?? 32)"
         case .existingArtifact:
             if let upscaleQuality {
-                return "\(qualitySelection.title) · upscale quality \(upscaleQuality)"
+                return "\(resolvedQualityTitle ?? "Custom") · upscale quality \(upscaleQuality)"
             }
             return "No video re-encode"
         }
@@ -394,6 +398,58 @@ struct VideoRoutePlan: Equatable {
         }
     }
 
+    private var qualityTargets: [VideoQualityTarget] {
+        switch kind {
+        case .directMVHEVC:
+            [includesUpscale ? .directMVHEVCMetalFX2x : .directMVHEVC]
+        case .generatedMVHEVC:
+            includesUpscale ? [.generatedMVHEVC, .fileUpscale] : [.generatedMVHEVC]
+        case .av1Stereo:
+            [.av1Stereo]
+        case .existingArtifact:
+            includesUpscale ? [.fileUpscale] : []
+        }
+    }
+
+    private var resolvedQualityTitle: String? {
+        guard !qualityTargets.isEmpty else {
+            return nil
+        }
+        switch qualitySelection {
+        case .custom:
+            return "Custom"
+        case let .step(step):
+            guard qualityTargets.allSatisfy({ target in
+                guard let mapping = VideoQualityCatalog.mapping(for: step, target: target),
+                      VideoQualityCatalog.qualityTitle(for: .step(step), target: target) == step.title
+                else {
+                    return false
+                }
+                return mappingMatchesRoute(mapping, target: target)
+            }) else {
+                return "Custom"
+            }
+            return step.title
+        }
+    }
+
+    private func mappingMatchesRoute(
+        _ mapping: VideoQualityRouteValues,
+        target: VideoQualityTarget
+    ) -> Bool {
+        switch (target, mapping) {
+        case (.directMVHEVC, .direct), (.directMVHEVCMetalFX2x, .direct):
+            directBitrateMbps == nil
+        case let (.generatedMVHEVC, .generated(eyeBitrateMbps, mergeQuality)):
+            self.generatedEyeBitrateMbps == eyeBitrateMbps
+                && self.generatedMergeQuality == mergeQuality
+        case let (.fileUpscale, .upscale(quality)):
+            upscaleQuality == quality
+        default:
+            false
+        }
+    }
+
     private func generatedSettingsSummary(
         mode: BitrateMode?,
         bitrateMbps: Int?,
@@ -401,7 +457,7 @@ struct VideoRoutePlan: Equatable {
         upscaleQuality: Int?
     ) -> String {
         let policy = mode == .custom ? "Fixed" : "Recommended"
-        let generated = "\(qualitySelection.title) · \(policy) \(bitrateMbps ?? Self.automaticGeneratedEyeBitrateMbps) Mbps per eye · merge \(mergeQuality ?? Self.automaticGeneratedMergeQuality)"
+        let generated = "\(resolvedQualityTitle ?? "Custom") · \(policy) \(bitrateMbps ?? Self.automaticGeneratedEyeBitrateMbps) Mbps per eye · merge \(mergeQuality ?? Self.automaticGeneratedMergeQuality)"
         return upscaleQuality.map { "\(generated) · upscale \($0)" } ?? generated
     }
 }
@@ -454,22 +510,14 @@ extension VideoRouteReport {
     }
 
     var selectedSettingsSummary: String {
-        VideoRouteReport.RouteSettings(
-            route: selected,
-            bitrateMbps: bitrateMbps,
-            eyeBitrateMbps: eyeBitrateMbps,
-            mergeQuality: mergeQuality,
-            crf: crf,
-            rateControl: rateControl,
-            quality: quality,
-            upscaleMode: upscaleMode,
-            upscaleQuality: upscaleQuality
-        ).settingsSummary(qualityTitle: qualityIntentDescription)
+        selectedRouteSettings.settingsSummary(
+            qualityTitle: selectedRouteSettings.qualityTitle(for: qualityIntent)
+        )
     }
 
     var requestedSettingsSummary: String? {
         requested.map {
-            "\($0.displayTitle) · \($0.settingsSummary(qualityTitle: qualityIntentDescription))"
+            "\($0.displayTitle) · \($0.settingsSummary(qualityTitle: $0.qualityTitle(for: qualityIntent)))"
         }
     }
 
@@ -492,18 +540,21 @@ extension VideoRouteReport {
     }
 
     private var qualityIntentDescription: String? {
-        guard let qualityIntent else {
-            return nil
-        }
-        if qualityIntent.mode == QualityIntentMode.custom.rawValue {
-            return "Custom"
-        }
-        guard let rawStep = qualityIntent.step,
-              let step = QualityStep(rawValue: rawStep)
-        else {
-            return "guided"
-        }
-        return step.title
+        selectedRouteSettings.qualityTitle(for: qualityIntent)
+    }
+
+    private var selectedRouteSettings: VideoRouteReport.RouteSettings {
+        VideoRouteReport.RouteSettings(
+            route: selected,
+            bitrateMbps: bitrateMbps,
+            eyeBitrateMbps: eyeBitrateMbps,
+            mergeQuality: mergeQuality,
+            crf: crf,
+            rateControl: rateControl,
+            quality: quality,
+            upscaleMode: upscaleMode,
+            upscaleQuality: upscaleQuality
+        )
     }
 
     private static func reasonDescription(_ reason: String) -> String {
@@ -573,6 +624,49 @@ extension VideoRouteReport.RouteSettings {
         }
     }
 
+    private var qualityTargets: [VideoQualityTarget] {
+        switch kind {
+        case .directMVHEVC:
+            [upscaleMode == "metalfx" ? .directMVHEVCMetalFX2x : .directMVHEVC]
+        case .generatedMVHEVC:
+            upscaleQuality == nil ? [.generatedMVHEVC] : [.generatedMVHEVC, .fileUpscale]
+        case .existingArtifact:
+            upscaleQuality == nil ? [] : [.fileUpscale]
+        case .av1Stereo:
+            [.av1Stereo]
+        case .none:
+            []
+        }
+    }
+
+    func qualityTitle(for qualityIntent: VideoRouteReport.QualityIntent?) -> String? {
+        guard !qualityTargets.isEmpty, let qualityIntent else {
+            return nil
+        }
+        guard qualityIntent.mode != QualityIntentMode.custom.rawValue else {
+            return "Custom"
+        }
+        guard qualityIntent.mappingVersion == VideoQualityCatalog.mappingVersion else {
+            return "Custom"
+        }
+        guard let rawStep = qualityIntent.step,
+              let step = QualityStep(rawValue: rawStep)
+        else {
+            return "Custom"
+        }
+        guard qualityTargets.allSatisfy({ target in
+            guard let mapping = VideoQualityCatalog.mapping(for: step, target: target),
+                  VideoQualityCatalog.qualityTitle(for: .step(step), target: target) == step.title
+            else {
+                return false
+            }
+            return mappingMatchesReport(mapping, target: target)
+        }) else {
+            return "Custom"
+        }
+        return step.title
+    }
+
     func settingsSummary(qualityTitle: String?) -> String {
         let concrete: String
         switch kind {
@@ -621,6 +715,27 @@ extension VideoRouteReport.RouteSettings {
 
     private static func withQualityTitle(_ qualityTitle: String?, concrete: String) -> String {
         qualityTitle.map { "\($0) · \(concrete)" } ?? concrete
+    }
+
+    private func mappingMatchesReport(
+        _ mapping: VideoQualityRouteValues,
+        target: VideoQualityTarget
+    ) -> Bool {
+        switch (target, mapping) {
+        case let (.directMVHEVC, .direct(expectedQuality)),
+             let (.directMVHEVCMetalFX2x, .direct(expectedQuality)):
+            guard let quality else {
+                return false
+            }
+            return abs(quality - expectedQuality) < 0.0001
+        case let (.generatedMVHEVC, .generated(expectedEyeBitrate, expectedMergeQuality)):
+            return eyeBitrateMbps == expectedEyeBitrate
+                && mergeQuality == expectedMergeQuality
+        case let (.fileUpscale, .upscale(expectedQuality)):
+            return upscaleQuality == expectedQuality
+        default:
+            return false
+        }
     }
 }
 

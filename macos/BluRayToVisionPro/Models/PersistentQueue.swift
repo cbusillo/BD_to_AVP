@@ -21,6 +21,7 @@ struct PersistentQueueItem: Identifiable, Equatable {
     let draft: ConversionDraft
     let status: PersistentQueueItemStatus
     let attemptCount: Int
+    let resolutionTrace: DurableQueueResolutionTrace?
 
     init(item: DurableConversionQueueItem) throws {
         guard let sourceKind = ConversionSourceKind(rawValue: item.intent.source.kind) else {
@@ -83,6 +84,7 @@ struct PersistentQueueItem: Identifiable, Equatable {
         }
         status = resolvedStatus
         attemptCount = item.attempts.count
+        resolutionTrace = item.resolutionTrace
     }
 
     var displayName: String {

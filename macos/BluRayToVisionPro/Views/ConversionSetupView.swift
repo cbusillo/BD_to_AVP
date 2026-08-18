@@ -12,11 +12,176 @@ struct ConversionSetupView: View {
     let profileModified: Bool
     let isLocked: Bool
     let sourceKind: ConversionSourceKind?
+    @ObservedObject var routeQualityState: RouteQualityResolutionState
+    @ObservedObject var resolutionMemoryStore: ResolutionMemoryStore
+    let isReady: Bool
+    let openEditor: () -> Void
     let saveSelectedProfile: () -> Void
     let saveAsNewProfile: () -> Void
     let resetProfile: () -> Void
+    let sourceName: String?
+    let destinationName: String?
+    let changeDestination: (() -> Void)?
+    let estimate: String?
+    let preview: () -> Void
+    let addToQueue: () -> Void
+    let start: () -> Void
+    let canPreview: Bool
+    let canAddToQueue: Bool
+    let canStart: Bool
+    let showsStartAction: Bool
+    let queueConflictForReview: ((RouteQualityConflict) -> Void)?
+
+    init(
+        selectedProfileID: Binding<String>,
+        selectedTab: Binding<ConversionSetupTab>,
+        options: Binding<ConversionOptions>,
+        profiles: [EncodingProfile],
+        selectedProfile: EncodingProfile,
+        profileModified: Bool,
+        isLocked: Bool,
+        sourceKind: ConversionSourceKind?,
+        routeQualityState: RouteQualityResolutionState,
+        resolutionMemoryStore: ResolutionMemoryStore,
+        isReady: Bool,
+        openEditor: @escaping () -> Void,
+        saveSelectedProfile: @escaping () -> Void,
+        saveAsNewProfile: @escaping () -> Void,
+        resetProfile: @escaping () -> Void,
+        sourceName: String? = nil,
+        destinationName: String? = nil,
+        changeDestination: (() -> Void)? = nil,
+        estimate: String? = nil,
+        preview: @escaping () -> Void = {},
+        addToQueue: @escaping () -> Void = {},
+        start: @escaping () -> Void = {},
+        canPreview: Bool = false,
+        canAddToQueue: Bool = false,
+        canStart: Bool = false,
+        showsStartAction: Bool = true,
+        queueConflictForReview: ((RouteQualityConflict) -> Void)? = nil
+    ) {
+        _selectedProfileID = selectedProfileID
+        _selectedTab = selectedTab
+        _options = options
+        self.profiles = profiles
+        self.selectedProfile = selectedProfile
+        self.profileModified = profileModified
+        self.isLocked = isLocked
+        self.sourceKind = sourceKind
+        self.routeQualityState = routeQualityState
+        self.resolutionMemoryStore = resolutionMemoryStore
+        self.isReady = isReady
+        self.openEditor = openEditor
+        self.saveSelectedProfile = saveSelectedProfile
+        self.saveAsNewProfile = saveAsNewProfile
+        self.resetProfile = resetProfile
+        self.sourceName = sourceName
+        self.destinationName = destinationName
+        self.changeDestination = changeDestination
+        self.estimate = estimate
+        self.preview = preview
+        self.addToQueue = addToQueue
+        self.start = start
+        self.canPreview = canPreview
+        self.canAddToQueue = canAddToQueue
+        self.canStart = canStart
+        self.showsStartAction = showsStartAction
+        self.queueConflictForReview = queueConflictForReview
+    }
 
     var body: some View {
+        Group {
+            if isReady {
+                readyBody
+            } else {
+                editorBody
+            }
+        }
+    }
+
+    private var readyBody: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            LabeledContent("Source", value: sourceName ?? "Choose a source")
+                .accessibilityIdentifier("ready-source")
+            Divider()
+            HStack(alignment: .firstTextBaseline) {
+                Picker("Profile", selection: $selectedProfileID) {
+                    ForEach(profiles) { profile in
+                        Text(profile.name).tag(profile.id)
+                    }
+                }
+                .frame(maxWidth: 300)
+                .disabled(isLocked)
+                .accessibilityIdentifier("ready-profile-picker")
+                Spacer()
+                Button("Edit…", action: openEditor)
+                    .buttonStyle(.bordered)
+                    .disabled(isLocked)
+                    .accessibilityIdentifier("edit-conversion-settings")
+            }
+            Text(profileOutcomeSummary)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("ready-profile-summary")
+            if profileModified {
+                HStack(spacing: 8) {
+                    Text("For this conversion")
+                        .font(.caption.weight(.medium))
+                    Text(profileOutcomeSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                    Button("Revert", action: resetProfile)
+                    Button("Save as New…", action: saveAsNewProfile)
+                }
+                .padding(8)
+                .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityIdentifier("profile-conversion-customized")
+            }
+            HStack(alignment: .firstTextBaseline) {
+                LabeledContent("Destination", value: destinationName ?? "Choose a destination")
+                    .accessibilityIdentifier("ready-destination")
+                if let changeDestination {
+                    Spacer()
+                    Button("Change…", action: changeDestination)
+                        .disabled(isLocked)
+                        .accessibilityIdentifier("ready-change-destination")
+                }
+            }
+            Text(estimate ?? "Finished movie size and time are estimated after source analysis.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("ready-estimate")
+            Divider()
+            HStack {
+                Button("Preview", action: preview)
+                    .disabled(!canPreview)
+                    .accessibilityIdentifier("ready-preview")
+                Button("Add to Queue", action: addToQueue)
+                    .disabled(!canAddToQueue)
+                    .accessibilityIdentifier("ready-add-to-queue")
+                Spacer()
+                if showsStartAction {
+                    Button("Start", action: start)
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut("p", modifiers: .command)
+                        .disabled(!canStart)
+                        .accessibilityIdentifier("ready-start")
+                }
+            }
+        }
+        .padding(18)
+        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(.separator.opacity(0.7))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var editorBody: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -38,12 +203,12 @@ struct ConversionSetupView: View {
                 .disabled(isLocked)
 
                 if profileModified {
-                    Text("Modified")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.orange)
+                    Text("For this conversion")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(Color.orange.opacity(0.12), in: Capsule())
+                        .background(.quaternary, in: Capsule())
                 }
 
                 Button(action: saveAsNewProfile) {
@@ -95,13 +260,23 @@ struct ConversionSetupView: View {
 
             Divider()
 
+            OutcomeSummaryView(options: options)
+                .padding(.horizontal, 18)
+                .padding(.bottom, 12)
+
             Group {
                 switch selectedTab {
                 case .video:
                     EncodingOptionsEditor(
                         options: $options.encoding,
                         section: .video,
-                        jobOptions: options.job
+                        jobOptions: options.job,
+                        routeQualityState: routeQualityState,
+                        conversionOptions: $options,
+                        profile: selectedProfile,
+                        sourceKind: sourceKind,
+                        memoryStore: resolutionMemoryStore,
+                        queueConflictForReview: queueConflictForReview
                     )
                 case .audioAndSubtitles:
                     EncodingOptionsEditor(options: $options.encoding, section: .audioAndSubtitles)
@@ -123,20 +298,27 @@ struct ConversionSetupView: View {
             Section("Pipeline and Recovery") {
                 VideoRouteSummaryView(plan: routePlan)
 
-                Picker("Start stage", selection: $options.job.startStage) {
+                Picker("Start stage", selection: startStageBinding) {
                     ForEach(ConversionStage.allCases) { stage in
                         Text(stage.title).tag(stage)
                     }
                 }
 
-                Toggle("Create reusable intermediate files", isOn: reusableIntermediatesBinding)
-                Text(intermediatePolicyDetail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Picker("Output files", selection: reusableFileOutcomeBinding) {
+                    ForEach(ReusableFileOutcome.allCases) { outcome in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(outcome.title)
+                            Text(outcome.detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .tag(outcome)
+                    }
+                }
+                .pickerStyle(.radioGroup)
 
                 Toggle("Continue processing after recoverable errors", isOn: $options.job.continueOnError)
-                Toggle("Use software HEVC encoder", isOn: $options.job.softwareEncoder)
+                Toggle("Use software HEVC encoder", isOn: softwareEncoderBinding)
                     .disabled(!softwareEncoderIsApplicable)
                     .help(softwareEncoderHelp)
 
@@ -170,46 +352,77 @@ struct ConversionSetupView: View {
                 Toggle("Play a sound when finished", isOn: $options.job.playSound)
                 Toggle("Show generated commands in activity", isOn: $options.job.outputCommands)
             }
+
+            if let conflict = routeQualityState.conflict {
+                Section {
+                    RouteQualityConflictView(
+                        conflict: conflict,
+                        profile: selectedProfile,
+                        sourceKind: sourceKind,
+                        memoryStore: resolutionMemoryStore,
+                        queueForReview: queueConflictForReview.map { queue in { queue(conflict) } },
+                        resolve: resolveRouteQuality
+                    )
+                }
+            }
+            if let invalidMessage = routeQualityState.invalidMessage {
+                Section {
+                    Label(invalidMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
         }
         .formStyle(.grouped)
     }
 
-    private var reusableIntermediatesBinding: Binding<Bool> {
+    private var reusableFileOutcomeBinding: Binding<ReusableFileOutcome> {
         Binding(
-            get: { options.job.intermediatePolicy.createsReusableArtifacts },
-            set: { enabled in
-                options.job.intermediatePolicy = enabled ? .reusable : .automatic
+            get: { ReusableFileOutcome(policy: options.job.intermediatePolicy) },
+            set: { outcome in
+                applyRouteEdit(.reusableIntermediates(outcome == .finishedMovieAndReusableFiles))
             }
         )
+    }
+
+    private var startStageBinding: Binding<ConversionStage> {
+        Binding(
+            get: { options.job.startStage },
+            set: { stage in
+                applyRouteEdit(.restartStage(stage))
+            }
+        )
+    }
+
+    private var softwareEncoderBinding: Binding<Bool> {
+        Binding(
+            get: { options.job.softwareEncoder },
+            set: { enabled in
+                applyRouteEdit(.softwareEncoder(enabled))
+            }
+        )
+    }
+
+    private func applyRouteEdit(_ edit: RouteQualityEdit) {
+        routeQualityState.apply(edit, to: &options)
+    }
+
+    private func resolveRouteQuality(_ option: RouteQualityResolutionOption) {
+        routeQualityState.resolve(option, in: &options)
     }
 
     private var routePlan: VideoRoutePlan {
         VideoRoutePlan(options: options)
     }
 
-    private var intermediatePolicyDetail: String {
-        if options.job.intermediatePolicy.createsReusableArtifacts {
-            return switch routePlan.kind {
-            case .directMVHEVC:
-                "Creates and retains reusable stage artifacts."
-            case .generatedMVHEVC:
-                "Creates and retains generated eye files for inspection or external processing."
-            case .av1Stereo:
-                "Creates and retains reusable AV1 stage artifacts."
-            case .existingArtifact:
-                "Retains new stage artifacts created after the selected restart point; the existing video artifact is reused unchanged."
-            }
-        }
-        return switch routePlan.kind {
-        case .directMVHEVC:
-            "Direct jobs avoid eye movies. A generated fallback may create temporary eye files, which are removed after success."
-        case .generatedMVHEVC:
-            "Generated eye files are temporary and removed after a successful conversion."
-        case .av1Stereo:
-            "Temporary AV1 stage files are removed after a successful conversion."
-        case .existingArtifact:
-            "Temporary files created after the selected restart point are removed after success; the existing video artifact is preserved."
-        }
+    private var profileOutcomeSummary: String {
+        let reusableSuffix = options.job.intermediatePolicy.createsReusableArtifacts
+            ? " · reusable files kept"
+            : ""
+        let qualitySummary = routePlan.kind == .existingArtifact
+            ? "existing video kept"
+            : "\(routePlan.qualityTitle) quality"
+        return "\(qualitySummary)\(reusableSuffix)"
     }
 
     private var softwareEncoderIsApplicable: Bool {
@@ -225,6 +438,49 @@ struct ConversionSetupView: View {
             return "The selected restart stage does not encode HEVC video."
         }
         return "Use libx265 instead of the default VideoToolbox HEVC encoder."
+    }
+}
+
+private struct OutcomeSummaryView: View {
+    let options: ConversionOptions
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("What you’ll get")
+                .font(.headline)
+            LabeledContent("Finished movie", value: finishedMovieSummary)
+            LabeledContent("Reusable files", value: reusableFilesSummary)
+            LabeledContent("Temporary space", value: options.job.intermediatePolicy.createsReusableArtifacts ? "Additional space while reusable files are kept" : "Removed after success")
+            LabeledContent("Estimated time", value: options.job.intermediatePolicy.createsReusableArtifacts ? "Longer processing" : "Standard processing")
+            LabeledContent("Quality", value: qualitySummary)
+        }
+        .font(.caption)
+        .padding(12)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("What you’ll get")
+        .accessibilityIdentifier("conversion-outcome-summary")
+    }
+
+    private var finishedMovieSummary: String {
+        switch options.encoding.videoOutputMode {
+        case .mvHEVC:
+            "Vision Pro spatial movie"
+        case .av1Stereo:
+            "Stereo movie"
+        }
+    }
+
+    private var qualitySummary: String {
+        options.videoRoutePlan.kind == .existingArtifact
+            ? "Existing video kept"
+            : "\(options.videoRoutePlan.qualityTitle) quality"
+    }
+
+    private var reusableFilesSummary: String {
+        options.job.intermediatePolicy.createsReusableArtifacts
+            ? "Left- and right-eye movies kept"
+            : "None kept"
     }
 }
 
