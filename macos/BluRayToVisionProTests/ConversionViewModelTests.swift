@@ -2114,7 +2114,7 @@ final class ConversionViewModelTests: XCTestCase {
     func testDurableSourceFolderQueueFailsClosedWhenStartWritesAreBlocked() async throws {
         try await withTemporaryBatchSources(["feature.mkv"]) { folderURL, _, destinationURL in
             let queueURL = folderURL.appendingPathComponent("queue.json")
-            try Data(#"{"version":2,"items":[]}"#.utf8).write(to: queueURL)
+            try Data("{\"version\":\(ConversionQueueDocument.currentVersion + 1),\"items\":[]}".utf8).write(to: queueURL)
             let queueStore = ConversionQueueStore(fileURL: queueURL)
             var factoryCalls = 0
             let viewModel = ConversionViewModel(

@@ -1,7 +1,7 @@
 import DiskArbitration
 import Foundation
 
-enum ConversionSourceKind: String, CaseIterable, Identifiable {
+enum ConversionSourceKind: String, CaseIterable, Codable, Hashable, Identifiable {
     case physicalDisc
     case discImage
     case bluRayFolder

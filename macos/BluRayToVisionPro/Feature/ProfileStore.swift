@@ -13,6 +13,7 @@ final class ProfileStore: ObservableObject {
     private let fileURL: URL
     private let idGenerator: () -> UUID
     private let dataWriter: (Data, URL) throws -> Void
+    private let resolutionMemoryStore: ResolutionMemoryStore?
     private var writesBlocked = false
 
     init(
@@ -21,12 +22,14 @@ final class ProfileStore: ObservableObject {
         idGenerator: @escaping () -> UUID = UUID.init,
         dataWriter: @escaping (Data, URL) throws -> Void = { data, url in
             try data.write(to: url, options: .atomic)
-        }
+        },
+        resolutionMemoryStore: ResolutionMemoryStore? = nil
     ) {
         self.fileManager = fileManager
         self.fileURL = fileURL ?? Self.defaultFileURL(fileManager: fileManager)
         self.idGenerator = idGenerator
         self.dataWriter = dataWriter
+        self.resolutionMemoryStore = resolutionMemoryStore
         loadProfiles()
     }
 
@@ -118,6 +121,7 @@ final class ProfileStore: ObservableObject {
         }
         let updatedProfiles = customProfiles.filter { $0.id != identifier }
         try persist(updatedProfiles)
+        try resolutionMemoryStore?.removeProfileMemories(profileID: identifier)
         customProfiles = updatedProfiles
     }
 

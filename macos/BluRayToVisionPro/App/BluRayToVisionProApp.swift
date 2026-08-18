@@ -27,7 +27,8 @@ struct BluRayToVisionProApp: App {
     @StateObject private var diagnosticReportViewModel: DiagnosticReportViewModel
     @StateObject private var updater: UpdateController
     @StateObject private var settings = AppSettings()
-    @StateObject private var profileStore = ProfileStore()
+    @StateObject private var profileStore: ProfileStore
+    @StateObject private var resolutionMemoryStore: ResolutionMemoryStore
     @StateObject private var durableQueueStore: ConversionQueueStore
 
     private let capabilities = AppCapabilities.current
@@ -37,6 +38,8 @@ struct BluRayToVisionProApp: App {
 
     init() {
         let observabilityEventStore = ObservabilityEventStore.automatic()
+        let resolutionMemoryStore = ResolutionMemoryStore()
+        let profileStore = ProfileStore(resolutionMemoryStore: resolutionMemoryStore)
         let durableQueueStore = ConversionQueueStore()
         let viewModel = ConversionViewModel(
             observabilityEventStore: observabilityEventStore,
@@ -62,6 +65,8 @@ struct BluRayToVisionProApp: App {
         _diagnosticReportViewModel = StateObject(wrappedValue: diagnosticReportViewModel)
         _updater = StateObject(wrappedValue: UpdateController(installPostponer: workCoordinator))
         _durableQueueStore = StateObject(wrappedValue: durableQueueStore)
+        _profileStore = StateObject(wrappedValue: profileStore)
+        _resolutionMemoryStore = StateObject(wrappedValue: resolutionMemoryStore)
         self.workCoordinator = workCoordinator
         self.observabilityEventStore = observabilityEventStore
         suppressDefaultLaunch = AppDelegate.isAutomationSmoke(arguments: ProcessInfo.processInfo.arguments)
@@ -76,6 +81,7 @@ struct BluRayToVisionProApp: App {
                 diagnosticReportViewModel: diagnosticReportViewModel,
                 settings: settings,
                 profileStore: profileStore,
+                resolutionMemoryStore: resolutionMemoryStore,
                 capabilities: capabilities
             )
                 .frame(minWidth: 1_080, minHeight: 680)

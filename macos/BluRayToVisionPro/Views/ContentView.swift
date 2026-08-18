@@ -7,6 +7,7 @@ struct ContentView: View {
     @ObservedObject var diagnosticReportViewModel: DiagnosticReportViewModel
     @ObservedObject var settings: AppSettings
     @ObservedObject var profileStore: ProfileStore
+    @ObservedObject var resolutionMemoryStore: ResolutionMemoryStore
     let capabilities: AppCapabilities
 
     @State private var selectedProfileID: String
@@ -37,6 +38,7 @@ struct ContentView: View {
         diagnosticReportViewModel: DiagnosticReportViewModel,
         settings: AppSettings,
         profileStore: ProfileStore,
+        resolutionMemoryStore: ResolutionMemoryStore,
         capabilities: AppCapabilities
     ) {
         _viewModel = ObservedObject(wrappedValue: viewModel)
@@ -44,6 +46,7 @@ struct ContentView: View {
         _diagnosticReportViewModel = ObservedObject(wrappedValue: diagnosticReportViewModel)
         _settings = ObservedObject(wrappedValue: settings)
         _profileStore = ObservedObject(wrappedValue: profileStore)
+        _resolutionMemoryStore = ObservedObject(wrappedValue: resolutionMemoryStore)
         self.capabilities = capabilities
 
         let profile = profileStore.profile(withID: settings.selectedProfileID)
@@ -127,6 +130,7 @@ struct ContentView: View {
                         || viewModel.state.phase == .decisionRequired,
                     sourceKind: viewModel.source?.kind,
                     routeQualityState: routeQualityState,
+                    resolutionMemoryStore: resolutionMemoryStore,
                     saveSelectedProfile: saveSelectedProfile,
                     saveAsNewProfile: beginSaveAsNewProfile,
                     resetProfile: resetProfile
