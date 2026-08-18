@@ -12,8 +12,9 @@ burned builds `147`, `154`, and abandoned metadata build `157`. Failed Beta 9
 (`0.3.0b9`, build `154`) was never published. RC 1 (`0.3.0rc1`, build `158`),
 RC 2 (`0.3.0rc2`, build `159`), and RC 3 (`0.3.0rc3`, build `160`) are
 published and immutable. Stable `0.3.0` build `161` is also published and
-immutable. The next prepared target is Stable `0.3.1` build `162`; issue #520
-owns publication and exact-artifact qualification.
+immutable. Stable `0.3.1` build `162` is published and immutable. The next
+prepared target is Beta `0.3.2b1` build `163`; issue #584 owns publication and
+exact-artifact qualification.
 Run-bound signing approval
 remains a separate authorization boundary.
 
@@ -322,9 +323,9 @@ The reviewed metadata, release notes, publication effects, recovery history,
 and exact qualification evidence are in
 [the Stable cut packet](0.3.0-cut-packet.md).
 
-## Stable 0.3.1 Prepared Target
+## Published Stable 0.3.1
 
-The repository is prepared for review of the guarded `v0.3.1` Stable workflow:
+Stable `v0.3.1` is published and immutable:
 
 - internal and public version `0.3.1`;
 - public tag and title `v0.3.1`;
@@ -335,15 +336,38 @@ The repository is prepared for review of the guarded `v0.3.1` Stable workflow:
 - the same production product, bundle, feed, key, signing team, and diagnostics
   endpoint as Stable `0.3.0`.
 
-Publication must place Stable `0.3.1` above immutable Stable `0.3.0` build
-`161` and all earlier history. Stable, RC, Beta, and Alpha clients can all
-select the newer Stable item without changing their saved route.
+Publication placed Stable `0.3.1` above immutable Stable `0.3.0` build `161`
+and all earlier history. Stable, RC, Beta, and Alpha clients can all select the
+newer Stable item without changing their saved route. The release targets exact
+source SHA `22982d5037e3b2bd03bbc9fa25332be2c8b04c97`; its checked receipt and
+publication record remain immutable.
 
-The repository has no freeze entry for this exact tag and no conflicting tag,
-draft, release, PyPI version, Homebrew pull request, or appcast item. Dispatch
-requires explicit release authorization under a fixed-`main` merge hold. The
-reviewed metadata, release-note seed, publication effects, and post-publication
-qualification boundary are in [the 0.3.1 cut packet](0.3.1-cut-packet.md).
+The reviewed metadata, release notes, publication effects, and exact receipt are
+in [the 0.3.1 cut packet](0.3.1-cut-packet.md).
+
+## 0.3.2 Beta 1 Prepared Target
+
+The repository is prepared for review of guarded Prerelease dispatch for
+`v0.3.2-beta.1`:
+
+- internal version `0.3.2b1` and public version `0.3.2-beta.1`;
+- public tag and title `v0.3.2-beta.1`;
+- global build `163`;
+- Sparkle channel `beta`, making the item eligible only on Beta and Alpha;
+- GitHub prerelease, never Latest, PyPI, or Homebrew; and
+- the same production product, bundle, feed, key, signing team, and diagnostics
+  endpoint as Stable `0.3.1`.
+
+Publication must place Beta 1 above immutable Stable `0.3.1` build `162` and
+all earlier history. Stable and RC clients exclude the Beta item; Beta and Alpha
+clients can select it because build `163` is newer.
+
+As checked on August 18, 2026, the repository has no freeze entry for this exact
+tag and no conflicting tag, draft, release, PyPI version, Homebrew pull request,
+or appcast item. Dispatch requires explicit release authorization under a
+fixed-`main` merge hold. The reviewed metadata, release-note seed, focused Beta
+scope, and post-publication qualification boundary are in
+[the 0.3.2 Beta 1 cut packet](0.3.2-beta.1-cut-packet.md).
 
 ## Historical Boundaries
 
