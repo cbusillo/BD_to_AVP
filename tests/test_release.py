@@ -20,6 +20,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 briefcase = importlib.import_module("briefcase")
 briefcase_config = importlib.import_module("briefcase.config")
 briefcase_console = importlib.import_module("briefcase.console")
+PYSIDE_RUNTIME_PACKAGE_NAMES = frozenset({"pyside6", "pyside6-addons", "pyside6-essentials", "shiboken6"})
+
+
+def normalized_requirement_name(requirement: str) -> str:
+    package_name = re.split(r"[\[<>=!~;@\s]", requirement.strip(), maxsplit=1)[0]
+    return re.sub(r"[-_.]+", "-", package_name).lower()
 
 
 def make_release_files(root: Path, *, version: str = "1.2.3", build: str = "10") -> tuple[Path, Path]:
@@ -129,11 +135,21 @@ class ReleaseMetadataTests(unittest.TestCase):
         with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
             pyproject = tomllib.load(handle)
 
-        pyside_requirement = "pyside6>=6.7.1,<6.10"
-        self.assertNotIn(pyside_requirement, pyproject["project"]["dependencies"])
-        self.assertEqual(pyproject["project"]["optional-dependencies"]["gui"], [pyside_requirement])
-        self.assertIn(pyside_requirement, pyproject["dependency-groups"]["dev"])
-        self.assertIn(pyside_requirement, pyproject["tool"]["briefcase"]["app"]["bd-to-avp"]["requires"])
+        gui_requirements = pyproject["project"]["optional-dependencies"]["gui"]
+        gui_package_names = {normalized_requirement_name(requirement) for requirement in gui_requirements}
+        base_package_names = {
+            normalized_requirement_name(requirement) for requirement in pyproject["project"]["dependencies"]
+        }
+        self.assertIn("pyside6", gui_package_names)
+        self.assertTrue(gui_package_names.isdisjoint(base_package_names))
+        self.assertTrue(PYSIDE_RUNTIME_PACKAGE_NAMES.isdisjoint(base_package_names))
+
+        dev_requirements = pyproject["dependency-groups"]["dev"]
+        briefcase_requirements = pyproject["tool"]["briefcase"]["app"]["bd-to-avp"]["requires"]
+        for requirement in gui_requirements:
+            self.assertIn(requirement, dev_requirements)
+        briefcase_package_names = {normalized_requirement_name(requirement) for requirement in briefcase_requirements}
+        self.assertTrue(PYSIDE_RUNTIME_PACKAGE_NAMES.isdisjoint(briefcase_package_names))
 
     def test_repository_uses_expected_briefcase_version(self) -> None:
         with (REPO_ROOT / "pyproject.toml").open("rb") as handle:

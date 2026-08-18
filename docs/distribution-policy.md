@@ -76,7 +76,8 @@ on Homebrew FFmpeg and Python 3.12, and omits the PySide6 GUI packages. The base
 PyPI package follows the same CLI-only boundary; users who intentionally want
 the legacy Python GUI may install the `gui` extra. The production DMG uses the
 SwiftUI interface while retaining Briefcase only to stage the embedded Python
-engine and its dependencies.
+worker engine and its non-GUI dependencies. Legacy Qt GUI packages are excluded
+from the production DMG runtime.
 
 The formula does not depend on a MakeMKV cask. MakeMKV is optional for existing
 MKV, MTS, and M2TS inputs, remains external for disc extraction, and should be
