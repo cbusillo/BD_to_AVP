@@ -170,6 +170,28 @@ final class ConversionQueueStore: ObservableObject {
         }
     }
 
+    func resolveWaitingItems(
+        _ itemIDs: Set<UUID>,
+        intents: [UUID: DurableQueueItemIntent],
+        trace: DurableQueueResolutionTrace
+    ) async throws {
+        guard itemIDs == Set(intents.keys), !itemIDs.isEmpty else {
+            throw ConversionQueueStoreError.invalidDocument
+        }
+        try await mutateItems { items in
+            for index in items.indices where itemIDs.contains(items[index].id) {
+                guard items[index].state == .waiting, let intent = intents[items[index].id] else {
+                    throw ConversionQueueStoreError.invalidDocument
+                }
+                items[index].intent = intent
+                items[index].resolutionTrace = trace
+            }
+            guard Set(items.filter { itemIDs.contains($0.id) }.map(\.id)) == itemIDs else {
+                throw ConversionQueueStoreError.invalidDocument
+            }
+        }
+    }
+
     func clearCompletedItems() async throws -> PersistentQueueRemovalToken {
         var removedItems: [DurableConversionQueueItem] = []
         let revision = try await mutateItems { items in
@@ -278,9 +300,6 @@ final class ConversionQueueStore: ObservableObject {
                 writesBlocked = true
                 loadErrorMessage = "Queue data version \(version) is newer than this app. Queue changes are disabled to protect it."
                 return
-            }
-            guard version == ConversionQueueDocument.currentVersion else {
-                throw ConversionQueueStoreError.unsupportedVersion(version)
             }
             let loadedDocument = try Self.decoder().decode(ConversionQueueDocument.self, from: data)
             try validate(loadedDocument.items)

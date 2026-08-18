@@ -134,6 +134,17 @@ struct RouteQualityConflict: Equatable {
     let mappingVersion: Int
     var selectedResolutionID: String?
 
+    /// A durable identity for a held decision. It deliberately excludes display copy.
+    var stableID: String {
+        [
+            trigger.rawValue,
+            priorRoute.kind.rawValue,
+            proposedRoute.kind.rawValue,
+            proposedRoute.generatedRequirement?.identifier ?? "none",
+            resolutions.filter(\.isAvailable).map(\.choice.rawValue).sorted().joined(separator: ","),
+        ].joined(separator: "|")
+    }
+
     var blockReason: String {
         "Resolve \(trigger.title.lowercased()) before starting, previewing, or adding this conversion to the queue."
     }

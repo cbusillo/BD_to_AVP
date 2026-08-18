@@ -31,6 +31,7 @@ struct SetupEditSheet: View {
     let initialOptions: ConversionOptions
     let profiles: [EncodingProfile]
     @ObservedObject var profileStore: ProfileStore
+    @ObservedObject var resolutionMemoryStore: ResolutionMemoryStore
     let applyToConversion: (String, ConversionOptions) -> Void
 
     @State private var session: SetupEditSession
@@ -47,12 +48,14 @@ struct SetupEditSheet: View {
         initialOptions: ConversionOptions,
         profiles: [EncodingProfile],
         profileStore: ProfileStore,
+        resolutionMemoryStore: ResolutionMemoryStore,
         applyToConversion: @escaping (String, ConversionOptions) -> Void
     ) {
         self.initialProfile = initialProfile
         self.initialOptions = initialOptions
         self.profiles = profiles
         self.profileStore = profileStore
+        self.resolutionMemoryStore = resolutionMemoryStore
         self.applyToConversion = applyToConversion
         _session = State(initialValue: SetupEditSession(profile: initialProfile, options: initialOptions))
     }
@@ -130,6 +133,7 @@ struct SetupEditSheet: View {
                 isLocked: false,
                 sourceKind: nil,
                 routeQualityState: routeQualityState,
+                resolutionMemoryStore: resolutionMemoryStore,
                 isReady: false,
                 openEditor: {},
                 saveSelectedProfile: updateProfile,

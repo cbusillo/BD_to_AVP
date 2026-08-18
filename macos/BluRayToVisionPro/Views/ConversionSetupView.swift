@@ -13,6 +13,7 @@ struct ConversionSetupView: View {
     let isLocked: Bool
     let sourceKind: ConversionSourceKind?
     @ObservedObject var routeQualityState: RouteQualityResolutionState
+    @ObservedObject var resolutionMemoryStore: ResolutionMemoryStore
     let isReady: Bool
     let openEditor: () -> Void
     let saveSelectedProfile: () -> Void
@@ -258,9 +259,13 @@ struct ConversionSetupView: View {
 
             if let conflict = routeQualityState.conflict {
                 Section {
-                    RouteQualityConflictView(conflict: conflict) { option in
-                        resolveRouteQuality(option)
-                    }
+                    RouteQualityConflictView(
+                        conflict: conflict,
+                        profile: selectedProfile,
+                        sourceKind: sourceKind,
+                        memoryStore: resolutionMemoryStore,
+                        resolve: resolveRouteQuality
+                    )
                 }
             }
             if let invalidMessage = routeQualityState.invalidMessage {

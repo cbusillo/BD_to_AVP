@@ -698,7 +698,7 @@ final class ConversionQueueStoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         let fileURL = directoryURL.appendingPathComponent("queue.json")
-        let originalData = Data(#"{"items":[],"version":2}"#.utf8)
+        let originalData = Data("{\"items\":[],\"version\":\(ConversionQueueDocument.currentVersion + 1)}".utf8)
         try originalData.write(to: fileURL)
         let store = ConversionQueueStore(fileURL: fileURL)
 
@@ -713,6 +713,34 @@ final class ConversionQueueStoreTests: XCTestCase {
         }
         XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
         XCTAssertTrue(store.items.isEmpty)
+    }
+
+    @MainActor
+    func testResolutionTraceMigratesFromV1AndSurvivesRestoration() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("queue.json")
+        let trace = DurableQueueResolutionTrace(
+            conflictID: "generated_route_requirement|direct_mv_hevc|generated_mv_hevc|reusable_intermediates_requested|keep_requested_workflow:v1",
+            resolutionID: "keep_requested_workflow:v1",
+            qualityOutcome: "Balanced quality",
+            fileOutcome: "Reusable files retained"
+        )
+        let item = makeItem(ordinal: 0, state: .waiting)
+        let v1Data = try JSONEncoder().encode(ConversionQueueDocument(version: 1, items: [item]))
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        try v1Data.write(to: fileURL)
+
+        let store = ConversionQueueStore(fileURL: fileURL)
+        try await store.resolveWaitingItems(
+            [item.id],
+            intents: [item.id: item.intent],
+            trace: trace
+        )
+        let restored = ConversionQueueStore(fileURL: fileURL)
+
+        XCTAssertEqual(restored.document.version, ConversionQueueDocument.currentVersion)
+        XCTAssertEqual(restored.items.first?.resolutionTrace, trace)
     }
 
     @MainActor

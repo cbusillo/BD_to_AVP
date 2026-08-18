@@ -2,7 +2,37 @@ import SwiftUI
 
 struct RouteQualityConflictView: View {
     let conflict: RouteQualityConflict
+    let profile: EncodingProfile?
+    let sourceKind: ConversionSourceKind?
+    let memoryStore: ResolutionMemoryStore?
     let resolve: (RouteQualityResolutionOption) -> Void
+    @State private var selectedResolutionID: String?
+    @State private var shouldSuggest = false
+    @State private var scope: ResolutionMemoryScope
+
+    init(
+        conflict: RouteQualityConflict,
+        profile: EncodingProfile? = nil,
+        sourceKind: ConversionSourceKind? = nil,
+        memoryStore: ResolutionMemoryStore? = nil,
+        resolve: @escaping (RouteQualityResolutionOption) -> Void
+    ) {
+        self.conflict = conflict
+        self.profile = profile
+        self.sourceKind = sourceKind
+        self.memoryStore = memoryStore
+        self.resolve = resolve
+        let suggestion = profile.flatMap { profile in sourceKind.flatMap {
+            memoryStore?.suggestion(
+                conflictID: conflict.stableID,
+                profileID: profile.id,
+                sourceKind: $0,
+                mappingVersion: conflict.mappingVersion
+            )
+        } }
+        _selectedResolutionID = State(initialValue: suggestion?.isStale == false ? suggestion?.entry.resolutionID : nil)
+        _scope = State(initialValue: profile.map { .profile($0.id) } ?? .global)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -12,10 +42,15 @@ struct RouteQualityConflictView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Picker("Resolution", selection: $selectedResolutionID) {
+                Text("Choose a resolution").tag(String?.none)
+                ForEach(conflict.resolutions) { option in
+                    Text(option.title).tag(Optional(option.id))
+                }
+            }
+            .pickerStyle(.radioGroup)
             ForEach(conflict.resolutions) { option in
-                Button {
-                    resolve(option)
-                } label: {
+                if selectedResolutionID == option.id {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
                             Text(option.title)
@@ -35,11 +70,43 @@ struct RouteQualityConflictView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("route-quality-resolution-\(option.id)")
                 }
-                .buttonStyle(.bordered)
-                .disabled(!option.isAvailable)
-                .accessibilityIdentifier("route-quality-resolution-\(option.id)")
             }
+            if let suggestion, let memoryStore {
+                Text(suggestion.staleExplanation ?? "Suggested from \(suggestion.entry.scope.id). You’ll still be asked, with this choice already filled in.")
+                    .font(.caption)
+                    .foregroundStyle(suggestion.isStale ? .orange : .secondary)
+                Button("Forget suggestion") {
+                    try? memoryStore.forget(conflictID: conflict.stableID, scope: suggestion.entry.scope)
+                    selectedResolutionID = nil
+                }
+                .buttonStyle(.borderless)
+            }
+            if let profile, let memoryStore {
+                Toggle("Suggest this next time for \(profile.name)", isOn: $shouldSuggest)
+            }
+            if shouldSuggest, let profile {
+                Picker("Suggestion scope", selection: $scope) {
+                    Text(profile.name).tag(ResolutionMemoryScope.profile(profile.id))
+                    if let sourceKind { Text(sourceKind.rawValue).tag(ResolutionMemoryScope.sourceKind(sourceKind)) }
+                    Text("All sources").tag(ResolutionMemoryScope.global)
+                }
+            }
+            Button("Apply Choice") {
+                guard let option = conflict.resolutions.first(where: { $0.id == selectedResolutionID }) else { return }
+                if shouldSuggest, let memoryStore {
+                    try? memoryStore.store(
+                        resolutionID: option.id,
+                        for: conflict.stableID,
+                        scope: scope,
+                        mappingVersion: conflict.mappingVersion
+                    )
+                }
+                resolve(option)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(selectedResolutionID == nil)
         }
         .padding(12)
         .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
@@ -47,5 +114,15 @@ struct RouteQualityConflictView: View {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(.orange.opacity(0.35))
         }
+    }
+
+    private var suggestion: ResolutionMemorySuggestion? {
+        guard let sourceKind, let profile, let memoryStore else { return nil }
+        return memoryStore.suggestion(
+            conflictID: conflict.stableID,
+            profileID: profile.id,
+            sourceKind: sourceKind,
+            mappingVersion: conflict.mappingVersion
+        )
     }
 }
