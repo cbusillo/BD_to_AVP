@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var isShowingActivity = false
     @State private var isDropTargeted = false
     @State private var isShowingSaveProfile = false
+    @State private var isShowingSetupEditor = false
     @State private var newProfileName = ""
     @State private var profileErrorMessage: String?
     @State private var preserveEncodingOnNextProfileChange = false
@@ -70,6 +71,10 @@ struct ContentView: View {
                     .foregroundStyle(.orange)
                     .padding(.horizontal)
                     .padding(.vertical, 10)
+            }
+
+            if !settings.hasAcknowledgedStandardMovieRenameNotice {
+                StandardMovieRenameNoticeView(settings: settings)
             }
 
             HSplitView {
@@ -127,6 +132,8 @@ struct ContentView: View {
                         || viewModel.state.phase == .decisionRequired,
                     sourceKind: viewModel.source?.kind,
                     routeQualityState: routeQualityState,
+                    isReady: true,
+                    openEditor: beginSetupEditor,
                     saveSelectedProfile: saveSelectedProfile,
                     saveAsNewProfile: beginSaveAsNewProfile,
                     resetProfile: resetProfile
@@ -281,6 +288,15 @@ struct ContentView: View {
             SaveProfileSheet(name: $newProfileName) {
                 saveAsNewProfile()
             }
+        }
+        .sheet(isPresented: $isShowingSetupEditor) {
+            SetupEditSheet(
+                initialProfile: selectedProfile,
+                initialOptions: options,
+                profiles: profileStore.profiles,
+                profileStore: profileStore,
+                applyToConversion: applyEditedConversion
+            )
         }
         .sheet(isPresented: $isShowingPreview, onDismiss: previewDidDismiss) {
             if let draft {
@@ -874,6 +890,23 @@ struct ContentView: View {
         options.encoding = selectedProfile.options
         options.job = defaultJobOptions
         options.job.applyProfilePipelineDefaults(profilePipelineDefaults(for: selectedProfile))
+    }
+
+    private func beginSetupEditor() {
+        guard !viewModel.hasActiveWork,
+              !previewViewModel.hasActiveWorker,
+              viewModel.state.phase != .decisionRequired
+        else {
+            return
+        }
+        isShowingSetupEditor = true
+    }
+
+    private func applyEditedConversion(_ profileID: String, _ editedOptions: ConversionOptions) {
+        routeQualityState.reset()
+        preserveEncodingOnNextProfileChange = true
+        selectedProfileID = profileID
+        options = editedOptions
     }
 
     private func profilePipelineDefaults(for profile: EncodingProfile) -> ProfilePipelineDefaults {

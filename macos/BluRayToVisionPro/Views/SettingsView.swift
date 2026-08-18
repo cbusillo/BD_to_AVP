@@ -114,6 +114,10 @@ private struct ProfilesSettingsPane: View {
                     .foregroundStyle(.orange)
             }
 
+            if !settings.hasAcknowledgedStandardMovieRenameNotice {
+                StandardMovieRenameNoticeView(settings: settings)
+            }
+
             HSplitView {
                 profileList
                     .frame(minWidth: 220, idealWidth: 240, maxWidth: 280)
@@ -654,6 +658,7 @@ private struct ProfileEditorSheet: View {
     @State private var options: EncodingOptions
     @State private var selectedSection = EncodingOptionsSection.video
     @State private var errorMessage: String?
+    @State private var isShowingDiscardConfirmation = false
     @StateObject private var routeQualityState = RouteQualityResolutionState()
 
     init(
@@ -697,7 +702,6 @@ private struct ProfileEditorSheet: View {
                 Button("Cancel") {
                     dismiss()
                 }
-                .keyboardShortcut(.cancelAction)
 
                 Button("Save") {
                     do {
@@ -724,6 +728,21 @@ private struct ProfileEditorSheet: View {
             idealHeight: 620,
             maxHeight: 760
         )
+        .onExitCommand {
+            if isDirty {
+                isShowingDiscardConfirmation = true
+            } else {
+                dismiss()
+            }
+        }
+        .alert("Discard Unsaved Changes?", isPresented: $isShowingDiscardConfirmation) {
+            Button("Discard Changes", role: .destructive) {
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your unsaved settings will be discarded.")
+        }
         .alert(
             "Profile Could Not Be Saved",
             isPresented: Binding(
@@ -744,6 +763,10 @@ private struct ProfileEditorSheet: View {
         case .update:
             "Edit Profile"
         }
+    }
+
+    private var isDirty: Bool {
+        name != request.name || options != request.options
     }
 }
 
@@ -815,7 +838,15 @@ private struct AdvancedSettingsPane: View {
 
             Section("Defaults for New Jobs") {
                 Toggle("Default to the software encoder", isOn: $settings.useSoftwareEncoder)
-                Toggle("Create reusable intermediate files by default", isOn: reusableIntermediatesBinding)
+                Picker("Output files", selection: reusableFileOutcomeBinding) {
+                    ForEach(ReusableFileOutcome.allCases) { outcome in
+                        Text(outcome.title).tag(outcome)
+                    }
+                }
+                Text(ReusableFileOutcome(policy: settings.intermediatePolicy).detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Diagnostics") {
@@ -831,11 +862,11 @@ private struct AdvancedSettingsPane: View {
         .formStyle(.grouped)
     }
 
-    private var reusableIntermediatesBinding: Binding<Bool> {
+    private var reusableFileOutcomeBinding: Binding<ReusableFileOutcome> {
         Binding(
-            get: { settings.intermediatePolicy.createsReusableArtifacts },
-            set: { enabled in
-                settings.intermediatePolicy = enabled ? .reusable : .automatic
+            get: { ReusableFileOutcome(policy: settings.intermediatePolicy) },
+            set: { outcome in
+                settings.intermediatePolicy = outcome.policy
             }
         )
     }

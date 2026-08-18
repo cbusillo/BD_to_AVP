@@ -13,11 +13,86 @@ struct ConversionSetupView: View {
     let isLocked: Bool
     let sourceKind: ConversionSourceKind?
     @ObservedObject var routeQualityState: RouteQualityResolutionState
+    let isReady: Bool
+    let openEditor: () -> Void
     let saveSelectedProfile: () -> Void
     let saveAsNewProfile: () -> Void
     let resetProfile: () -> Void
 
     var body: some View {
+        Group {
+            if isReady {
+                readyBody
+            } else {
+                editorBody
+            }
+        }
+    }
+
+    private var readyBody: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Profile")
+                        .font(.title3.weight(.semibold))
+                    Text("Choose a Profile, then edit only when you need to change a setting.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Picker("Profile", selection: $selectedProfileID) {
+                    ForEach(profiles) { profile in
+                        Text(profile.name).tag(profile.id)
+                    }
+                }
+                .frame(width: 190)
+                .disabled(isLocked)
+                .accessibilityIdentifier("ready-profile-picker")
+
+                if profileModified {
+                    Text("For this conversion")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.quaternary, in: Capsule())
+                        .accessibilityIdentifier("profile-conversion-customized")
+                }
+
+                Button("Edit…", action: openEditor)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isLocked)
+                    .accessibilityIdentifier("edit-conversion-settings")
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(selectedProfile.name)
+                    .font(.headline)
+                Text(selectedProfile.summary)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Quality: \(options.encoding.videoSummary(for: options.videoRoutePlan))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Files: \(ReusableFileOutcome(policy: options.job.intermediatePolicy).title)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("ready-profile-summary")
+
+            OutcomeSummaryView(options: options)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var editorBody: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -39,12 +114,12 @@ struct ConversionSetupView: View {
                 .disabled(isLocked)
 
                 if profileModified {
-                    Text("Modified")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.orange)
+                    Text("For this conversion")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(Color.orange.opacity(0.12), in: Capsule())
+                        .background(.quaternary, in: Capsule())
                 }
 
                 Button(action: saveAsNewProfile) {
@@ -131,11 +206,19 @@ struct ConversionSetupView: View {
                     }
                 }
 
-                Toggle("Create reusable intermediate files", isOn: reusableIntermediatesBinding)
-                Text(intermediatePolicyDetail)
+                Picker("Output files", selection: reusableFileOutcomeBinding) {
+                    ForEach(ReusableFileOutcome.allCases) { outcome in
+                        Text(outcome.title).tag(outcome)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+
+                Text(reusableFileOutcomeDetail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                OutcomeSummaryView(options: options)
 
                 Toggle("Continue processing after recoverable errors", isOn: $options.job.continueOnError)
                 Toggle("Use software HEVC encoder", isOn: softwareEncoderBinding)
@@ -191,11 +274,11 @@ struct ConversionSetupView: View {
         .formStyle(.grouped)
     }
 
-    private var reusableIntermediatesBinding: Binding<Bool> {
+    private var reusableFileOutcomeBinding: Binding<ReusableFileOutcome> {
         Binding(
-            get: { options.job.intermediatePolicy.createsReusableArtifacts },
-            set: { enabled in
-                applyRouteEdit(.reusableIntermediates(enabled))
+            get: { ReusableFileOutcome(policy: options.job.intermediatePolicy) },
+            set: { outcome in
+                applyRouteEdit(.reusableIntermediates(outcome == .finishedMovieAndReusableFiles))
             }
         )
     }
@@ -230,29 +313,8 @@ struct ConversionSetupView: View {
         VideoRoutePlan(options: options)
     }
 
-    private var intermediatePolicyDetail: String {
-        if options.job.intermediatePolicy.createsReusableArtifacts {
-            return switch routePlan.kind {
-            case .directMVHEVC:
-                "Creates and retains reusable stage artifacts."
-            case .generatedMVHEVC:
-                "Creates and retains generated eye files for inspection or external processing."
-            case .av1Stereo:
-                "Creates and retains reusable AV1 stage artifacts."
-            case .existingArtifact:
-                "Retains new stage artifacts created after the selected restart point; the existing video artifact is reused unchanged."
-            }
-        }
-        return switch routePlan.kind {
-        case .directMVHEVC:
-            "Direct jobs avoid eye movies. A generated fallback may create temporary eye files, which are removed after success."
-        case .generatedMVHEVC:
-            "Generated eye files are temporary and removed after a successful conversion."
-        case .av1Stereo:
-            "Temporary AV1 stage files are removed after a successful conversion."
-        case .existingArtifact:
-            "Temporary files created after the selected restart point are removed after success; the existing video artifact is preserved."
-        }
+    private var reusableFileOutcomeDetail: String {
+        ReusableFileOutcome(policy: options.job.intermediatePolicy).detail
     }
 
     private var softwareEncoderIsApplicable: Bool {
@@ -268,6 +330,28 @@ struct ConversionSetupView: View {
             return "The selected restart stage does not encode HEVC video."
         }
         return "Use libx265 instead of the default VideoToolbox HEVC encoder."
+    }
+}
+
+private struct OutcomeSummaryView: View {
+    let options: ConversionOptions
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("What you’ll get")
+                .font(.headline)
+            LabeledContent("Finished movie", value: options.encoding.videoSummary(for: options.videoRoutePlan))
+            LabeledContent("Temporary space", value: options.job.intermediatePolicy.createsReusableArtifacts ? "More space while keeping reusable files" : "Removed after success")
+            LabeledContent("Reusable files", value: ReusableFileOutcome(policy: options.job.intermediatePolicy).title)
+            LabeledContent("Estimated time", value: options.job.intermediatePolicy.createsReusableArtifacts ? "Longer processing" : "Standard processing")
+            LabeledContent("Quality", value: options.encoding.videoSummary(for: options.videoRoutePlan))
+        }
+        .font(.caption)
+        .padding(12)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("What you’ll get")
+        .accessibilityIdentifier("conversion-outcome-summary")
     }
 }
 

@@ -713,7 +713,7 @@ final class ConversionWorkflowTests: XCTestCase {
             XCTAssertEqual(queue.items.count, 2)
             for item in queue.items {
                 let draft = try XCTUnwrap(item.draft)
-                XCTAssertEqual(draft.profile.name, "Balanced")
+                XCTAssertEqual(draft.profile.name, "Standard Movie")
                 XCTAssertEqual(draft.destinationURL, destinationURL)
                 XCTAssertEqual(draft.options.encoding.mvHEVC.generatedMergeQuality, 81)
                 XCTAssertEqual(draft.options.encoding.audioLanguages.mode, .preferredOnly)
