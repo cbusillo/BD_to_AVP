@@ -2,13 +2,13 @@ import XCTest
 @testable import BluRayToVisionPro
 
 final class RouteResolutionTests: XCTestCase {
-    func testEveryTriggerAndQualityStepProducesAValidDraftOrConflict() throws {
+    func testEveryRouteForcingTriggerAndQualityStepProducesAValidExit() throws {
         let edits: [(RouteQualityTrigger, RouteQualityEdit)] = [
-            (.generatedRouteRequirement, .qualityStep(.maximumDetail)),
             (.reusableIntermediates, .reusableIntermediates(true)),
             (.softwareEncoder, .softwareEncoder(true)),
             (.restartStage, .restartStage(.createLeftRightFiles)),
             (.upscaleCrop, .upscaleEnabled(true)),
+            (.upscaleCrop, .cropBlackBars(true)),
             (.fieldOfView, .fieldOfView(0)),
             (.resolutionOverride, .resolutionOverride("1280x720")),
             (.outputMode, .outputMode(.av1Stereo)),
@@ -19,7 +19,11 @@ final class RouteResolutionTests: XCTestCase {
             try options.encoding.selectQualityStep(qualityStep)
 
             for (expectedTrigger, edit) in edits {
-                let proposal = RouteQualityEngine.propose(options: options, edit: edit)
+                var startingOptions = options
+                if edit == .cropBlackBars(true) || edit == .resolutionOverride("1280x720") {
+                    startingOptions.encoding.upscaleEnabled = true
+                }
+                let proposal = RouteQualityEngine.propose(options: startingOptions, edit: edit)
                 switch proposal {
                 case let .resolved(draft):
                     XCTAssertEqual(
@@ -51,6 +55,56 @@ final class RouteResolutionTests: XCTestCase {
                 }
             }
         }
+    }
+
+    func testGeneratedRouteRejectsUnsupportedGuidedStepWithCompleteExits() throws {
+        var options = ConversionOptions()
+        options.job.intermediatePolicy = .reusable
+        try options.encoding.selectQualityStep(.balanced)
+
+        guard case let .conflict(conflict) = RouteQualityEngine.propose(
+            options: options,
+            edit: .qualityStep(.maximumDetail)
+        ) else {
+            return XCTFail("Expected unsupported generated-route quality conflict")
+        }
+
+        XCTAssertEqual(conflict.trigger, .generatedRouteRequirement)
+        XCTAssertEqual(conflict.proposedRoute.generatedRequirement, .reusableIntermediates)
+        XCTAssertNil(conflict.selectedResolutionID)
+        XCTAssertTrue(conflict.resolutions.contains { $0.choice == .preservePriorIntent && $0.isAvailable })
+        XCTAssertTrue(conflict.resolutions.contains { $0.choice == .keepRequestedWorkflow && $0.isAvailable })
+        XCTAssertTrue(conflict.resolutions.contains { $0.choice == .useCustomExactSettings && $0.isAvailable })
+    }
+
+    func testCustomQualityAndLinkEditsAreValidatedAtomically() throws {
+        var options = ConversionOptions()
+        let original = options
+        var values = options.encoding.videoQuality.custom
+        values.generatedMergeQuality = 82
+
+        guard case let .resolved(customDraft) = RouteQualityEngine.propose(
+            options: options,
+            edit: .customQuality(values)
+        ) else {
+            return XCTFail("Expected a valid Custom quality draft")
+        }
+        XCTAssertEqual(options, original)
+        XCTAssertEqual(customDraft.options.encoding.videoQuality.mode, .custom)
+        XCTAssertEqual(customDraft.options.encoding.mvHEVC.generatedMergeQuality, 82)
+
+        options = customDraft.options
+        guard case let .resolved(linkedDraft) = RouteQualityEngine.propose(
+            options: options,
+            edit: .linkGeneratedAndUpscaleQuality(true)
+        ) else {
+            return XCTFail("Expected a valid linked quality draft")
+        }
+        XCTAssertEqual(
+            linkedDraft.options.encoding.upscaleQuality,
+            linkedDraft.options.encoding.mvHEVC.generatedMergeQuality
+        )
+        XCTAssertEqual(RouteQualityEngine.validate(linkedDraft.options), .success(linkedDraft))
     }
 
     func testConflictDoesNotMutateLiveOptionsAndStartsUnselected() throws {
@@ -91,6 +145,52 @@ final class RouteResolutionTests: XCTestCase {
         XCTAssertEqual(customDraft.options.encoding.videoQuality.mode, .custom)
         XCTAssertEqual(customDraft.options.encoding.mvHEVC.generatedMergeQuality, options.encoding.mvHEVC.generatedMergeQuality)
         XCTAssertEqual(try XCTUnwrap(try? RouteQualityEngine.resolve(custom, conflict: conflict).get()).options, customDraft.options)
+    }
+
+    func testPendingConflictCannotOverwriteExternallyReplacedOptions() throws {
+        var options = ConversionOptions()
+        try options.encoding.selectQualityStep(.maximumDetail)
+        let state = RouteQualityResolutionState()
+        state.apply(.reusableIntermediates(true), to: &options)
+        let option = try XCTUnwrap(
+            state.conflict?.resolutions.first { $0.choice == .keepRequestedWorkflow }
+        )
+
+        var replacement = ConversionOptions()
+        replacement.encoding.fieldOfView = 110
+        options = replacement
+        state.resolve(option, in: &options)
+
+        XCTAssertEqual(options, replacement)
+        XCTAssertNil(state.conflict)
+        XCTAssertNotNil(state.invalidMessage)
+    }
+
+    func testResetDiscardsPendingConflictAndValidationMessage() throws {
+        var options = ConversionOptions()
+        try options.encoding.selectQualityStep(.maximumDetail)
+        let state = RouteQualityResolutionState()
+        state.apply(.reusableIntermediates(true), to: &options)
+        XCTAssertNotNil(state.conflict)
+
+        state.reset()
+
+        XCTAssertNil(state.conflict)
+        XCTAssertNil(state.invalidMessage)
+        XCTAssertNil(state.blockReason)
+    }
+
+    func testValidRouteChangeExplainsConsequenceRatherThanClaimingInvalidState() {
+        let options = ConversionOptions()
+        guard case let .conflict(conflict) = RouteQualityEngine.propose(
+            options: options,
+            edit: .reusableIntermediates(true)
+        ) else {
+            return XCTFail("Expected generated-route consequence conflict")
+        }
+
+        XCTAssertTrue(conflict.reason.contains("generated left- and right-eye files"))
+        XCTAssertFalse(conflict.reason.contains("not compatible"))
     }
 
     func testRendererCoversAllResolutionChoices() throws {

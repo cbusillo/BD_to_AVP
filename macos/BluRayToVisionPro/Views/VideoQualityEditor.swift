@@ -65,17 +65,6 @@ struct VideoQualityEditor: View {
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let conflict = routeQualityState.conflict {
-                RouteQualityConflictView(conflict: conflict) { option in
-                    resolveRouteQuality(option)
-                }
-            }
-            if let invalidMessage = routeQualityState.invalidMessage {
-                Label(invalidMessage, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         }
         .onChange(of: options.videoQuality.mode) { _, mode in
             if mode == .custom {
@@ -398,16 +387,6 @@ struct VideoQualityEditor: View {
         var values = options.videoQuality.custom
         edit(&values)
         applyRouteEdit(.customQuality(values))
-        selectionError = routeQualityState.invalidMessage
-    }
-
-    private func resolveRouteQuality(_ option: RouteQualityResolutionOption) {
-        var conversionOptions = ConversionOptions(
-            encoding: options,
-            job: context.jobOptions
-        )
-        routeQualityState.resolve(option, in: &conversionOptions)
-        options = conversionOptions.encoding
         selectionError = routeQualityState.invalidMessage
     }
 

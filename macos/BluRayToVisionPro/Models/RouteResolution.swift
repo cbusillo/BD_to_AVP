@@ -1,5 +1,5 @@
-import Foundation
 import Combine
+import Foundation
 
 enum RouteQualityTrigger: String, CaseIterable, Codable, Identifiable {
     case generatedRouteRequirement = "generated_route_requirement"
@@ -190,7 +190,11 @@ enum RouteQualityEngine {
             proposed: proposed,
             proposedRoute: proposedRoute
         )
-        let reason = validationReason(for: proposed, route: proposedRoute)
+        let reason = conflictReason(
+            for: proposed,
+            priorRoute: priorRoute,
+            proposedRoute: proposedRoute
+        )
         return .conflict(
             RouteQualityConflict(
                 trigger: trigger(for: edit, priorRoute: priorRoute, proposedRoute: proposedRoute),
@@ -363,6 +367,28 @@ enum RouteQualityEngine {
         return "The selected route and quality settings are not compatible."
     }
 
+    private static func conflictReason(
+        for options: ConversionOptions,
+        priorRoute: VideoRoutePlan,
+        proposedRoute: VideoRoutePlan
+    ) -> String {
+        guard isValid(options, route: proposedRoute) else {
+            return validationReason(for: options, route: proposedRoute)
+        }
+        switch proposedRoute.kind {
+        case .generatedMVHEVC:
+            return "This change requires generated left- and right-eye files. Choose how the current quality choice should carry over."
+        case .directMVHEVC:
+            return "This change returns to direct video processing. Choose how the current quality choice should carry over."
+        case .av1Stereo:
+            return "AV1 uses exact Custom quality settings. Choose whether to keep the current workflow or continue with AV1."
+        case .existingArtifact:
+            return priorRoute.kind == .existingArtifact
+                ? "This restart changes which retained quality settings are applied. Choose how to continue."
+                : "This restart reuses an existing encoded video. Choose how retained quality settings should be handled."
+        }
+    }
+
     private static func resolutionOptions(
         prior: ConversionOptions,
         proposed: ConversionOptions,
@@ -476,6 +502,11 @@ final class RouteQualityResolutionState: ObservableObject {
         guard let conflict else {
             return
         }
+        guard options == conflict.priorOptions else {
+            reset()
+            invalidMessage = "Conversion settings changed while this choice was waiting. Review the current settings and try the change again."
+            return
+        }
         var selectedConflict = conflict
         selectedConflict.selectedResolutionID = option.id
         switch RouteQualityEngine.resolve(option, conflict: selectedConflict) {
@@ -497,5 +528,10 @@ final class RouteQualityResolutionState: ObservableObject {
         } else {
             invalidMessage = nil
         }
+    }
+
+    func reset() {
+        conflict = nil
+        invalidMessage = nil
     }
 }

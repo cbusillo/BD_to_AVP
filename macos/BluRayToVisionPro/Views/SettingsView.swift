@@ -654,6 +654,7 @@ private struct ProfileEditorSheet: View {
     @State private var options: EncodingOptions
     @State private var selectedSection = EncodingOptionsSection.video
     @State private var errorMessage: String?
+    @StateObject private var routeQualityState = RouteQualityResolutionState()
 
     init(
         request: ProfileEditorRequest,
@@ -685,7 +686,11 @@ private struct ProfileEditorSheet: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            EncodingOptionsEditor(options: $options, section: selectedSection)
+            EncodingOptionsEditor(
+                options: $options,
+                section: selectedSection,
+                routeQualityState: routeQualityState
+            )
 
             HStack {
                 Spacer()
@@ -704,7 +709,10 @@ private struct ProfileEditorSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(
+                    name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || routeQualityState.blockReason != nil
+                )
             }
         }
         .padding(24)

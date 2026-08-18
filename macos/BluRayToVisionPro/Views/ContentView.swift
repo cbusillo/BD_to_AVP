@@ -170,17 +170,6 @@ struct ContentView: View {
             }
         }
         .onAppear(perform: refreshDiscs)
-        .onReceive(NotificationCenter.default.publisher(for: .conversionSourceSelectionRequested)) { notification in
-            guard let sourceURL = notification.object as? URL else {
-                return
-            }
-            sourceResetMessage = nil
-            if let source = ConversionSource.infer(from: sourceURL) {
-                selectSource(source)
-            } else {
-                viewModel.selectSource(sourceURL)
-            }
-        }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didMountNotification)) { _ in
             refreshDiscs()
         }
@@ -219,6 +208,7 @@ struct ContentView: View {
         }
         .onChange(of: defaultJobOptions) { _, newValue in
             if viewModel.source == nil, !viewModel.hasActiveWork {
+                routeQualityState.reset()
                 if selectedProfile.pipelineDefaults == nil {
                     options.job = newValue
                 } else {
@@ -283,6 +273,7 @@ struct ContentView: View {
             else {
                 return
             }
+            routeQualityState.reset()
             options.encoding = currentProfile.options
             options.job.applyProfilePipelineDefaults(profilePipelineDefaults(for: currentProfile))
         }
@@ -879,6 +870,7 @@ struct ContentView: View {
     }
 
     private func resetProfile() {
+        routeQualityState.reset()
         options.encoding = selectedProfile.options
         options.job = defaultJobOptions
         options.job.applyProfilePipelineDefaults(profilePipelineDefaults(for: selectedProfile))
@@ -965,6 +957,7 @@ struct ContentView: View {
         guard canSelectSource else {
             return
         }
+        routeQualityState.reset()
         sourceResetMessage = nil
         if isNewSource(source) {
             sourceResetMessage = options.resetSourceScopedState(

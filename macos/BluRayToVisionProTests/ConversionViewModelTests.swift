@@ -56,15 +56,15 @@ final class ConversionViewModelTests: XCTestCase {
             XCTAssertEqual(summary.choices, SourceScopedResetSummary.Choice.allCases, sourceKind.rawValue)
             XCTAssertEqual(
                 summary.message,
-                "New source: reset restart stage, overwrite output, delete source after success, recovery choices, title selection, and source-derived exact overrides.",
+                "New source: reset restart stage, overwrite output, delete source after success, recovery choices, and title selection.",
                 sourceKind.rawValue
             )
             XCTAssertEqual(options.job.startStage, .createMKV, sourceKind.rawValue)
             XCTAssertFalse(options.job.overwriteExisting, sourceKind.rawValue)
             XCTAssertFalse(options.job.removeOriginalAfterSuccess, sourceKind.rawValue)
             XCTAssertFalse(options.job.continueOnError, sourceKind.rawValue)
-            XCTAssertEqual(options.encoding.frameRateOverride, "", sourceKind.rawValue)
-            XCTAssertEqual(options.encoding.resolutionOverride, "", sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.frameRateOverride, encoding.frameRateOverride, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.resolutionOverride, encoding.resolutionOverride, sourceKind.rawValue)
             XCTAssertEqual(titleSelection, .main, sourceKind.rawValue)
 
             XCTAssertEqual(options.encoding.videoOutputMode, encoding.videoOutputMode, sourceKind.rawValue)
