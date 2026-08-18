@@ -6,10 +6,10 @@ import unittest
 
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime, timezone
 from io import StringIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from scripts.qualify_release_scope import (
     DEFAULT_POLICY_PATH,
@@ -47,6 +47,16 @@ APP_TREE_SHA256 = "f" * 64
 class ReleaseQualificationScopeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.policy = load_policy(DEFAULT_POLICY_PATH)
+
+    def checked_evidence_as_of(self, cutoff: date) -> dict[str, Any]:
+        evidence = json.loads((REPO_ROOT / "docs/qualification/release-evidence-v1.json").read_text(encoding="utf-8"))
+        evidence["receipts"] = [
+            receipt
+            for receipt in evidence["receipts"]
+            if datetime.fromisoformat(receipt["accepted_at"].replace("Z", "+00:00")).astimezone(timezone.utc).date()
+            <= cutoff
+        ]
+        return evidence
 
     def test_milestone_tier1_receipt_accepts_explicit_successful_recovery(self) -> None:
         release_receipt = {"source_sha": CANDIDATE_SHA, "workflow": {"run_id": 12345}}
@@ -116,6 +126,7 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         root: Path,
         *,
         changed: set[str] | None = None,
+        is_ancestor: Callable[[str, str], bool] | None = None,
         fresh: dict[str, bool] | None = None,
         workflow_phase: str = "preparation",
         artifact_receipt_path: Path | None = None,
@@ -132,6 +143,7 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
             evidence,
             candidate_sha=CANDIDATE_SHA,
             changed_paths=lambda _base, _candidate: changed or set(),
+            is_ancestor=is_ancestor or (lambda _source_sha, _candidate_sha: True),
             repo=root,
             reference_content=lambda reference: (root / reference).read_bytes(),
             fresh_retest=fresh,
@@ -505,6 +517,25 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
         self.assertEqual(result["status"], "carry")
         self.assertEqual(result["evidence"]["receipt_id"], "overwrite-and-conversion-cancel-receipt-v1")
 
+    def test_descendant_receipt_is_not_treated_as_prior_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            evidence = self.evidence(root, "overwrite-and-conversion-cancel")
+            descendant = dict(evidence["receipts"][0])
+            descendant["receipt_id"] = "overwrite-and-conversion-cancel-descendant-v1"
+            descendant["source_sha"] = "c" * 40
+            descendant["accepted_at"] = "2026-08-02T00:00:00Z"
+            evidence["receipts"].append(descendant)
+            report = self.classify(
+                evidence,
+                root,
+                is_ancestor=lambda source_sha, _candidate_sha: source_sha == PRIOR_SHA,
+            )
+
+        result = self.result_for(report, "overwrite-and-conversion-cancel")
+        self.assertEqual(result["status"], "carry")
+        self.assertEqual(result["evidence"]["receipt_id"], "overwrite-and-conversion-cancel-receipt-v1")
+
     def test_missing_evidence_is_a_blocking_retest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             report = self.classify({"schema_version": 1, "receipts": []}, Path(temporary_directory))
@@ -671,6 +702,7 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                     {"schema_version": 1, "receipts": []},
                     candidate_sha=CANDIDATE_SHA,
                     changed_paths=lambda _base, _candidate: set(),
+                    is_ancestor=lambda _source_sha, _candidate_sha: True,
                     repo=root,
                     reference_content=lambda reference: (root / reference).read_bytes(),
                     workflow_phase="artifact",
@@ -936,6 +968,7 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
             evidence,
             candidate_sha=candidate_sha,
             changed_paths=lambda _base, _candidate: set(),
+            is_ancestor=lambda _source_sha, _candidate_sha: True,
             repo=REPO_ROOT,
             reference_content=lambda path: reference_bytes if path == reference else (REPO_ROOT / path).read_bytes(),
             fresh_retest={"native-sparkle-release-notes": True},
@@ -1176,6 +1209,7 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                         evidence,
                         candidate_sha="0b06582a83a45bb38d851e62ccf38cd148c7bb95",
                         changed_paths=lambda _base, _candidate: set(),
+                        is_ancestor=lambda _source_sha, _candidate_sha: True,
                         repo=REPO_ROOT,
                         reference_content=lambda path, content=reference_bytes: (
                             content
@@ -1186,12 +1220,13 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                     )
 
     def test_checked_rc3_live_publication_evidence_matches_milestone_receipt(self) -> None:
-        evidence = json.loads((REPO_ROOT / "docs/qualification/release-evidence-v1.json").read_text(encoding="utf-8"))
+        evidence = self.checked_evidence_as_of(date(2026, 8, 9))
         report = classify_release_scope(
             self.policy,
             evidence,
             candidate_sha="0b06582a83a45bb38d851e62ccf38cd148c7bb95",
             changed_paths=lambda _base, _candidate: set(),
+            is_ancestor=lambda _source_sha, _candidate_sha: True,
             repo=REPO_ROOT,
             workflow_phase="milestone",
             milestone_receipt_path=REPO_ROOT / "docs/release-evidence/v0.3.0-rc.3/release-receipt.json",
@@ -1236,6 +1271,7 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                     evidence,
                     candidate_sha=CANDIDATE_SHA,
                     changed_paths=lambda _base, _candidate: set(),
+                    is_ancestor=lambda _source_sha, _candidate_sha: True,
                     repo=root,
                     workflow_phase="preparation",
                     as_of=date(2026, 8, 5),

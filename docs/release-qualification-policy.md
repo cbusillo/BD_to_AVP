@@ -205,11 +205,21 @@ configured qualification record and every immutable candidate field remains
 present with an explicit JSON `null`. The candidate must advance from the bound
 published Stable identity to a newer derived Stable version and global build,
 and the evidence index may only
-append receipts without modifying or deleting accepted history. Any mutation
-under `docs/release-evidence/`, any evidence-index change without that validated
-preparation transition, or any qualification record carrying release IDs, run
-IDs, source SHA, artifact digests, or appcast digest still requires exactly one
-canonical checked release receipt on the idempotent
+append receipts without modifying or deleting accepted history.
+
+A Beta preparation remediation may also append change-scoped Tier 2 receipts
+without resetting the Stable qualification record. This lane requires the exact
+`qualify/<beta-tag>` branch, one new public-safe
+`docs/qualification/<beta-tag>-change-scoped-evidence-v1.json` document, receipts
+bound to the pull-request base SHA and that document's digest, and policy cases
+owned by the `release_candidate` phase. It rejects artifact-owned, live
+publication, milestone, Tier 1, and Tier 3 evidence, and it cannot claim
+Developer ID signing, notarization, or a created release identity.
+
+Any mutation under `docs/release-evidence/`, any other evidence-index change
+without a validated preparation transition, or any qualification record carrying
+release IDs, run IDs, source SHA, artifact digests, or appcast digest still
+requires exactly one canonical checked release receipt on the idempotent
 `automation/release-evidence-<tag>` branch.
 
 **Early gate (`qualify-preparation`)** runs after `prepare` and before `package`

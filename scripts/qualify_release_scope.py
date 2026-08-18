@@ -80,6 +80,7 @@ class QualificationScopeError(RuntimeError):
 
 
 ChangedPaths = Callable[[str, str], set[str]]
+IsAncestor = Callable[[str, str], bool]
 ReferenceContent = Callable[[str], bytes]
 
 
@@ -554,6 +555,30 @@ def git_changed_paths(repo: Path) -> ChangedPaths:
         return cache[key]
 
     return changed
+
+
+def git_is_ancestor(repo: Path) -> IsAncestor:
+    cache: dict[tuple[str, str], bool] = {}
+
+    def is_ancestor(ancestor_sha: str, candidate_sha: str) -> bool:
+        key = (ancestor_sha, candidate_sha)
+        if key not in cache:
+            result = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", ancestor_sha, candidate_sha],
+                cwd=repo,
+                check=False,
+                capture_output=True,
+            )
+            if result.returncode not in {0, 1}:
+                detail = result.stderr.decode("utf-8", errors="replace").strip() or "git merge-base failed"
+                raise QualificationScopeError(
+                    f"Unable to verify evidence SHA {ancestor_sha} is an ancestor of candidate "
+                    f"{candidate_sha}: {detail}"
+                )
+            cache[key] = result.returncode == 0
+        return cache[key]
+
+    return is_ancestor
 
 
 def git_checked_reference_content(repo: Path) -> ReferenceContent:
@@ -1189,6 +1214,7 @@ def classify_release_scope(
     *,
     candidate_sha: str,
     changed_paths: ChangedPaths,
+    is_ancestor: IsAncestor | None = None,
     repo: Path = REPO_ROOT,
     reference_content: ReferenceContent | None = None,
     qualification_id: str | None = None,
@@ -1205,6 +1231,8 @@ def classify_release_scope(
 ) -> dict[str, Any]:
     if SHA_PATTERN.fullmatch(candidate_sha) is None:
         raise QualificationScopeError("Candidate SHA must be a full lowercase Git SHA.")
+    if is_ancestor is None:
+        raise QualificationScopeError("Evidence ancestry validation is required.")
     if release_stage not in {"alpha", "beta", "rc", "stable"}:
         raise QualificationScopeError("Release stage must be alpha, beta, rc, or stable.")
     if workflow_phase not in WORKFLOW_PHASES:
@@ -1339,7 +1367,15 @@ def classify_release_scope(
         release_blocking = _release_blocking(case)
         accepted = receipt_map.get(case_id, [])
         exact = next((receipt for receipt in reversed(accepted) if receipt["source_sha"] == candidate_sha), None)
-        prior = next((receipt for receipt in reversed(accepted) if receipt["source_sha"] != candidate_sha), None)
+        prior = next(
+            (
+                receipt
+                for receipt in reversed(accepted)
+                if receipt["source_sha"] != candidate_sha
+                and is_ancestor(cast(str, receipt["source_sha"]), candidate_sha)
+            ),
+            None,
+        )
         status: str
         reason: str
         invalidating_paths: list[str] = []
@@ -1686,6 +1722,7 @@ def main(argv: list[str] | None = None) -> int:
                 evidence,
                 candidate_sha=args.candidate_sha,
                 changed_paths=git_changed_paths(args.repo),
+                is_ancestor=git_is_ancestor(args.repo),
                 repo=args.repo,
                 qualification_id=qualification_id,
                 fresh_retest=fresh_retest,

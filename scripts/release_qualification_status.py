@@ -5,13 +5,15 @@ import subprocess
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
 from scripts.qualify_release_scope import (
+    RECORDED_NONBLOCKING_STATUSES,
     classify_release_scope,
     git_changed_paths,
+    git_is_ancestor,
     load_evidence,
     load_policy,
     load_qualification_overrides,
@@ -69,6 +71,35 @@ def _string(value: object, description: str) -> str:
     if not isinstance(value, str) or not value:
         raise ReleaseQualificationControllerError(f"{description} must be a non-empty string.")
     return value
+
+
+def _evidence_as_of(evidence: Mapping[str, Any], cutoff: date | None) -> Mapping[str, Any]:
+    if cutoff is None:
+        return evidence
+    snapshot = dict(evidence)
+    receipts: list[Any] = []
+    for index, raw_receipt in enumerate(_sequence(evidence.get("receipts"), "release qualification receipts")):
+        receipt = _mapping(raw_receipt, f"release qualification receipt {index}")
+        if receipt.get("status") not in {"accepted", *RECORDED_NONBLOCKING_STATUSES}:
+            receipts.append(raw_receipt)
+            continue
+        accepted_at = receipt.get("accepted_at")
+        if not isinstance(accepted_at, str) or not accepted_at:
+            raise ReleaseQualificationControllerError(f"Release qualification receipt {index} requires accepted_at.")
+        try:
+            accepted_timestamp = datetime.fromisoformat(accepted_at.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ReleaseQualificationControllerError(
+                f"Release qualification receipt {index} has invalid accepted_at {accepted_at!r}."
+            ) from error
+        if accepted_timestamp.tzinfo is None:
+            raise ReleaseQualificationControllerError(
+                f"Release qualification receipt {index} accepted_at must include a timezone."
+            )
+        if accepted_timestamp.astimezone(timezone.utc).date() <= cutoff:
+            receipts.append(raw_receipt)
+    snapshot["receipts"] = receipts
+    return snapshot
 
 
 def _canonical_release_tag(value: str) -> str:
@@ -249,7 +280,7 @@ def build_status(
             base_revision=_string(canonical_evidence.get("base_sha"), "manifest evidence base SHA"),
         )
     policy = _load_bound_policy(repo_root, binding)
-    evidence = load_evidence(repo_root / context.evidence_path)
+    evidence = _evidence_as_of(load_evidence(repo_root / context.evidence_path), as_of)
     qualification_id, fresh_retest = load_qualification_overrides(
         repo_root / context.qualification_path,
         policy,
@@ -259,6 +290,7 @@ def build_status(
         evidence,
         candidate_sha=context.candidate_sha,
         changed_paths=git_changed_paths(repo_root),
+        is_ancestor=git_is_ancestor(repo_root),
         repo=repo_root,
         qualification_id=qualification_id,
         fresh_retest=fresh_retest,
