@@ -21,17 +21,32 @@ struct EncodingOptionsEditor: View {
     let section: EncodingOptionsSection
     let jobOptions: JobOptions?
     @ObservedObject var routeQualityState: RouteQualityResolutionState
+    let conversionOptions: Binding<ConversionOptions>?
+    let profile: EncodingProfile?
+    let sourceKind: ConversionSourceKind?
+    let memoryStore: ResolutionMemoryStore?
+    let queueConflictForReview: ((RouteQualityConflict) -> Void)?
 
     init(
         options: Binding<EncodingOptions>,
         section: EncodingOptionsSection,
         jobOptions: JobOptions? = nil,
-        routeQualityState: RouteQualityResolutionState = RouteQualityResolutionState()
+        routeQualityState: RouteQualityResolutionState = RouteQualityResolutionState(),
+        conversionOptions: Binding<ConversionOptions>? = nil,
+        profile: EncodingProfile? = nil,
+        sourceKind: ConversionSourceKind? = nil,
+        memoryStore: ResolutionMemoryStore? = nil,
+        queueConflictForReview: ((RouteQualityConflict) -> Void)? = nil
     ) {
         _options = options
         self.section = section
         self.jobOptions = jobOptions
         self.routeQualityState = routeQualityState
+        self.conversionOptions = conversionOptions
+        self.profile = profile
+        self.sourceKind = sourceKind
+        self.memoryStore = memoryStore
+        self.queueConflictForReview = queueConflictForReview
     }
 
     var body: some View {
@@ -40,9 +55,7 @@ struct EncodingOptionsEditor: View {
             VStack(alignment: .leading, spacing: 12) {
                 videoForm
                 if let conflict = routeQualityState.conflict {
-                    RouteQualityConflictView(conflict: conflict) { option in
-                        resolveRouteQuality(option)
-                    }
+                    routeQualityConflictView(conflict)
                 }
                 if let invalidMessage = routeQualityState.invalidMessage {
                     Label(invalidMessage, systemImage: "exclamationmark.triangle.fill")
@@ -237,6 +250,12 @@ struct EncodingOptionsEditor: View {
     }
 
     private func applyRouteEdit(_ edit: RouteQualityEdit) {
+        if let conversionOptions {
+            var updated = conversionOptions.wrappedValue
+            routeQualityState.apply(edit, to: &updated)
+            conversionOptions.wrappedValue = updated
+            return
+        }
         var conversionOptions = ConversionOptions(
             encoding: options,
             job: jobOptions ?? JobOptions()
@@ -246,6 +265,12 @@ struct EncodingOptionsEditor: View {
     }
 
     private func resolveRouteQuality(_ option: RouteQualityResolutionOption) {
+        if let conversionOptions {
+            var updated = conversionOptions.wrappedValue
+            routeQualityState.resolve(option, in: &updated)
+            conversionOptions.wrappedValue = updated
+            return
+        }
         var conversionOptions = ConversionOptions(
             encoding: options,
             job: jobOptions ?? JobOptions()
@@ -255,7 +280,10 @@ struct EncodingOptionsEditor: View {
     }
 
     private var routePlan: VideoRoutePlan {
-        VideoRoutePlan(
+        if let conversionOptions {
+            return conversionOptions.wrappedValue.videoRoutePlan
+        }
+        return VideoRoutePlan(
             encoding: options,
             job: jobOptions ?? JobOptions()
         )
@@ -263,5 +291,21 @@ struct EncodingOptionsEditor: View {
 
     private var qualityEditorContext: VideoQualityEditor.Context {
         jobOptions.map(VideoQualityEditor.Context.conversion) ?? .profile
+    }
+
+    @ViewBuilder
+    private func routeQualityConflictView(_ conflict: RouteQualityConflict) -> some View {
+        if let profile, let sourceKind, let memoryStore {
+            RouteQualityConflictView(
+                conflict: conflict,
+                profile: profile,
+                sourceKind: sourceKind,
+                memoryStore: memoryStore,
+                queueForReview: queueConflictForReview.map { queue in { queue(conflict) } },
+                resolve: resolveRouteQuality
+            )
+        } else {
+            RouteQualityConflictView(conflict: conflict, resolve: resolveRouteQuality)
+        }
     }
 }

@@ -202,7 +202,7 @@ final class ConversionWorkflowTests: XCTestCase {
             EncodingOptions(audioHandling: .convertAAC, audioBitrate: 448).compactSummary,
             "Direct MV-HEVC when available · Balanced · Adaptive quality 0.70 · source resolution · Audio: AAC 448 kbps, English only · Subtitles: English + others"
         )
-        XCTAssertTrue(BuiltInProfile.balanced.summary.contains("English audio only"))
+        XCTAssertTrue(BuiltInProfile.balanced.summary.contains("English audio"))
     }
 
     func testVideoRoutePlanCoversDirectGeneratedAV1AndExistingRoutes() {

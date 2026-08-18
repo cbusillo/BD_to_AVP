@@ -21,6 +21,7 @@ struct ConversionSetupView: View {
     let resetProfile: () -> Void
     let sourceName: String?
     let destinationName: String?
+    let changeDestination: (() -> Void)?
     let estimate: String?
     let preview: () -> Void
     let addToQueue: () -> Void
@@ -28,6 +29,8 @@ struct ConversionSetupView: View {
     let canPreview: Bool
     let canAddToQueue: Bool
     let canStart: Bool
+    let showsStartAction: Bool
+    let queueConflictForReview: ((RouteQualityConflict) -> Void)?
 
     init(
         selectedProfileID: Binding<String>,
@@ -47,13 +50,16 @@ struct ConversionSetupView: View {
         resetProfile: @escaping () -> Void,
         sourceName: String? = nil,
         destinationName: String? = nil,
+        changeDestination: (() -> Void)? = nil,
         estimate: String? = nil,
         preview: @escaping () -> Void = {},
         addToQueue: @escaping () -> Void = {},
         start: @escaping () -> Void = {},
         canPreview: Bool = false,
         canAddToQueue: Bool = false,
-        canStart: Bool = false
+        canStart: Bool = false,
+        showsStartAction: Bool = true,
+        queueConflictForReview: ((RouteQualityConflict) -> Void)? = nil
     ) {
         _selectedProfileID = selectedProfileID
         _selectedTab = selectedTab
@@ -72,6 +78,7 @@ struct ConversionSetupView: View {
         self.resetProfile = resetProfile
         self.sourceName = sourceName
         self.destinationName = destinationName
+        self.changeDestination = changeDestination
         self.estimate = estimate
         self.preview = preview
         self.addToQueue = addToQueue
@@ -79,6 +86,8 @@ struct ConversionSetupView: View {
         self.canPreview = canPreview
         self.canAddToQueue = canAddToQueue
         self.canStart = canStart
+        self.showsStartAction = showsStartAction
+        self.queueConflictForReview = queueConflictForReview
     }
 
     var body: some View {
@@ -131,8 +140,16 @@ struct ConversionSetupView: View {
                 .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
                 .accessibilityIdentifier("profile-conversion-customized")
             }
-            LabeledContent("Destination", value: destinationName ?? "Choose a destination")
-                .accessibilityIdentifier("ready-destination")
+            HStack(alignment: .firstTextBaseline) {
+                LabeledContent("Destination", value: destinationName ?? "Choose a destination")
+                    .accessibilityIdentifier("ready-destination")
+                if let changeDestination {
+                    Spacer()
+                    Button("Change…", action: changeDestination)
+                        .disabled(isLocked)
+                        .accessibilityIdentifier("ready-change-destination")
+                }
+            }
             Text(estimate ?? "Finished movie size and time are estimated after source analysis.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -146,10 +163,13 @@ struct ConversionSetupView: View {
                     .disabled(!canAddToQueue)
                     .accessibilityIdentifier("ready-add-to-queue")
                 Spacer()
-                Button("Start", action: start)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canStart)
-                    .accessibilityIdentifier("ready-start")
+                if showsStartAction {
+                    Button("Start", action: start)
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut("p", modifiers: .command)
+                        .disabled(!canStart)
+                        .accessibilityIdentifier("ready-start")
+                }
             }
         }
         .padding(18)
@@ -251,7 +271,12 @@ struct ConversionSetupView: View {
                         options: $options.encoding,
                         section: .video,
                         jobOptions: options.job,
-                        routeQualityState: routeQualityState
+                        routeQualityState: routeQualityState,
+                        conversionOptions: $options,
+                        profile: selectedProfile,
+                        sourceKind: sourceKind,
+                        memoryStore: resolutionMemoryStore,
+                        queueConflictForReview: queueConflictForReview
                     )
                 case .audioAndSubtitles:
                     EncodingOptionsEditor(options: $options.encoding, section: .audioAndSubtitles)
@@ -335,6 +360,7 @@ struct ConversionSetupView: View {
                         profile: selectedProfile,
                         sourceKind: sourceKind,
                         memoryStore: resolutionMemoryStore,
+                        queueForReview: queueConflictForReview.map { queue in { queue(conflict) } },
                         resolve: resolveRouteQuality
                     )
                 }
@@ -393,7 +419,10 @@ struct ConversionSetupView: View {
         let reusableSuffix = options.job.intermediatePolicy.createsReusableArtifacts
             ? " · reusable files kept"
             : ""
-        return "\(routePlan.qualityTitle) quality\(reusableSuffix)"
+        let qualitySummary = routePlan.kind == .existingArtifact
+            ? "existing video kept"
+            : "\(routePlan.qualityTitle) quality"
+        return "\(qualitySummary)\(reusableSuffix)"
     }
 
     private var softwareEncoderIsApplicable: Bool {
@@ -423,7 +452,7 @@ private struct OutcomeSummaryView: View {
             LabeledContent("Reusable files", value: reusableFilesSummary)
             LabeledContent("Temporary space", value: options.job.intermediatePolicy.createsReusableArtifacts ? "Additional space while reusable files are kept" : "Removed after success")
             LabeledContent("Estimated time", value: options.job.intermediatePolicy.createsReusableArtifacts ? "Longer processing" : "Standard processing")
-            LabeledContent("Quality", value: "\(options.videoRoutePlan.qualityTitle) quality")
+            LabeledContent("Quality", value: qualitySummary)
         }
         .font(.caption)
         .padding(12)
@@ -440,6 +469,12 @@ private struct OutcomeSummaryView: View {
         case .av1Stereo:
             "Stereo movie"
         }
+    }
+
+    private var qualitySummary: String {
+        options.videoRoutePlan.kind == .existingArtifact
+            ? "Existing video kept"
+            : "\(options.videoRoutePlan.qualityTitle) quality"
     }
 
     private var reusableFilesSummary: String {

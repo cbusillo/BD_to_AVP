@@ -282,7 +282,12 @@ class NativeAppPackagingTests(unittest.TestCase):
         conversion_options = (MACOS_ROOT / "BluRayToVisionPro" / "Models" / "ConversionOptions.swift").read_text(
             encoding="utf-8"
         )
-        conversion_ui = setup_view + encoding_editor + quality_editor + language_picker + conversion_options
+        conversion_workflow = (MACOS_ROOT / "BluRayToVisionPro" / "Models" / "ConversionWorkflow.swift").read_text(
+            encoding="utf-8"
+        )
+        conversion_ui = (
+            setup_view + encoding_editor + quality_editor + language_picker + conversion_options + conversion_workflow
+        )
 
         self.assertIn('.accessibilityLabel("\\(purpose.label): \\(selection.displayName)")', language_picker)
         self.assertNotIn('.accessibilityLabel("Preferred language:', language_picker)
@@ -319,7 +324,7 @@ class NativeAppPackagingTests(unittest.TestCase):
             "Subtitle handling",
             "Subtitle language",
             "Start stage",
-            "Create reusable intermediate files",
+            "The finished movie plus reusable files",
             "Continue processing after recoverable errors",
             "Use software HEVC encoder",
             "Overwrite an existing output file",

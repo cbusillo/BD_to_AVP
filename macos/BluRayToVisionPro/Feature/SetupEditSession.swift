@@ -30,10 +30,12 @@ struct SetupEditSheet: View {
     let initialProfile: EncodingProfile
     let initialOptions: ConversionOptions
     let fallbackPipelineDefaults: ProfilePipelineDefaults
+    let sourceKind: ConversionSourceKind?
     let profiles: [EncodingProfile]
     @ObservedObject var profileStore: ProfileStore
     @ObservedObject var resolutionMemoryStore: ResolutionMemoryStore
     let applyToConversion: (String, ConversionOptions) -> Void
+    let queueConflictForReview: ((String, RouteQualityConflict) -> Void)?
 
     @State private var session: SetupEditSession
     @State private var selectedTab = ConversionSetupTab.video
@@ -48,18 +50,22 @@ struct SetupEditSheet: View {
         initialProfile: EncodingProfile,
         initialOptions: ConversionOptions,
         fallbackPipelineDefaults: ProfilePipelineDefaults,
+        sourceKind: ConversionSourceKind?,
         profiles: [EncodingProfile],
         profileStore: ProfileStore,
         resolutionMemoryStore: ResolutionMemoryStore,
-        applyToConversion: @escaping (String, ConversionOptions) -> Void
+        applyToConversion: @escaping (String, ConversionOptions) -> Void,
+        queueConflictForReview: ((String, RouteQualityConflict) -> Void)? = nil
     ) {
         self.initialProfile = initialProfile
         self.initialOptions = initialOptions
         self.fallbackPipelineDefaults = fallbackPipelineDefaults
+        self.sourceKind = sourceKind
         self.profiles = profiles
         self.profileStore = profileStore
         self.resolutionMemoryStore = resolutionMemoryStore
         self.applyToConversion = applyToConversion
+        self.queueConflictForReview = queueConflictForReview
         _session = State(initialValue: SetupEditSession(profile: initialProfile, options: initialOptions))
     }
 
@@ -134,14 +140,15 @@ struct SetupEditSheet: View {
                 selectedProfile: selectedProfile,
                 profileModified: session.isDirty,
                 isLocked: false,
-                sourceKind: nil,
+                sourceKind: sourceKind,
                 routeQualityState: routeQualityState,
                 resolutionMemoryStore: resolutionMemoryStore,
                 isReady: false,
                 openEditor: {},
                 saveSelectedProfile: updateProfile,
                 saveAsNewProfile: beginSaveAsNew,
-                resetProfile: discardChanges
+                resetProfile: discardChanges,
+                queueConflictForReview: queueConflictForReview == nil ? nil : enqueueHeldConflict
             )
 
             Divider()
@@ -171,7 +178,7 @@ struct SetupEditSheet: View {
             }
             .padding(16)
         }
-        .frame(minWidth: 760, idealWidth: 980, minHeight: 620, idealHeight: 760)
+        .frame(minWidth: 640, idealWidth: 720, minHeight: 620, idealHeight: 760)
         .onExitCommand(perform: requestDismissal)
         .alert(
             "Discard Unsaved Changes?",
@@ -264,6 +271,12 @@ struct SetupEditSheet: View {
 
     private func apply() {
         applyToConversion(session.profileID, session.draftOptions)
+        dismiss()
+    }
+
+    private func enqueueHeldConflict(_ conflict: RouteQualityConflict) {
+        guard let queueConflictForReview else { return }
+        queueConflictForReview(session.profileID, conflict)
         dismiss()
     }
 

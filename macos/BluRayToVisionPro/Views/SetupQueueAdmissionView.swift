@@ -3,7 +3,9 @@ import SwiftUI
 struct SetupQueueAdmissionView: View {
     @ObservedObject var admission: SetupQueueAdmission
     @ObservedObject var memoryStore: ResolutionMemoryStore
+    let canStart: Bool
     let start: () -> Void
+    let clear: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -32,10 +34,17 @@ struct SetupQueueAdmissionView: View {
                 }
             }
             Divider()
-            Button("Start Queue", action: start)
-                .buttonStyle(.borderedProminent)
-                .disabled(!admission.canStart)
-                .accessibilityIdentifier("queue-start")
+            HStack {
+                Button("Clear Queue", role: .destructive, action: clear)
+                    .disabled(!admission.canClear)
+                    .accessibilityIdentifier("queue-clear")
+                Spacer()
+                Button("Start Queue", action: start)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut("p", modifiers: .command)
+                    .disabled(!canStart)
+                    .accessibilityIdentifier("queue-start")
+            }
         }
         .padding(14)
         .frame(minWidth: 260, idealWidth: 300, maxWidth: 340)
@@ -60,7 +69,7 @@ private struct SetupQueueConflictGroupView: View {
                 .foregroundStyle(.secondary)
             Picker("Resolution", selection: $selection.resolutionID) {
                 Text("Choose a resolution").tag(String?.none)
-                ForEach(group.conflict.resolutions) { option in
+                ForEach(group.conflict.resolutions.filter(\.isAvailable)) { option in
                     Text(option.title).tag(Optional(option.id))
                 }
             }
@@ -133,7 +142,9 @@ private struct SetupQueueConflictGroupView: View {
             guard !loadedSuggestion else { return }
             loadedSuggestion = true
             if let suggestion, !suggestion.isStale {
-                selection.resolutionID = suggestion.entry.resolutionID
+                selection.resolutionID = group.conflict.resolutions.contains(where: {
+                    $0.id == suggestion.entry.resolutionID && $0.isAvailable
+                }) ? suggestion.entry.resolutionID : nil
             }
         }
     }

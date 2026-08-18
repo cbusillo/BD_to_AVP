@@ -84,7 +84,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 20) { !nameField.exists })
 
         let profileSummary = try readProfileSummary(syntheticHome: context.syntheticHome)
-        XCTAssertEqual(profileSummary.version, 5)
+        XCTAssertEqual(profileSummary.version, 6)
         XCTAssertEqual(profileSummary.count, 1)
         XCTAssertEqual(profileSummary.name, Self.profileName)
 
@@ -130,6 +130,49 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         let darkWindow = darkApp.windows.firstMatch
         XCTAssertTrue(darkWindow.waitForExistence(timeout: 30))
         attachScreenshot(darkWindow.screenshot(), name: "screenshot-dark.png")
+    }
+
+    func testDevelopmentSetupShell() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["BD_TO_AVP_UI_PHASE"] == "setup" else {
+            throw XCTSkip("Development setup-shell smoke is not requested.")
+        }
+        let appPath = try XCTUnwrap(environment["BD_TO_AVP_UI_APP_PATH"])
+        let syntheticHome = try XCTUnwrap(environment["BD_TO_AVP_UI_HOME"])
+        let app = XCUIApplication(url: URL(fileURLWithPath: appPath))
+        app.launchEnvironment = [
+            "HOME": syntheticHome,
+            "CFFIXED_USER_HOME": syntheticHome,
+        ]
+        app.launchArguments = QualificationAppearance.light.launchArguments
+        app.launch()
+        defer { app.terminate() }
+
+        let mainContent = app.descendants(matching: .any)["main-window-content"]
+        XCTAssertTrue(mainContent.waitForExistence(timeout: 30))
+        XCTAssertTrue(app.descendants(matching: .any)["ready-source"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["ready-profile-picker"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["ready-destination"].exists)
+        XCTAssertTrue(app.buttons["ready-change-destination"].exists)
+        XCTAssertTrue(app.buttons["ready-preview"].exists)
+        XCTAssertTrue(app.buttons["ready-add-to-queue"].exists)
+        XCTAssertEqual(app.buttons.matching(identifier: "ready-start").count, 1)
+
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.exists)
+        XCTAssertGreaterThanOrEqual(window.frame.width, 820)
+        attachScreenshot(window.screenshot(), name: "setup-ready-light.png")
+
+        let edit = app.buttons["edit-conversion-settings"]
+        XCTAssertTrue(edit.isEnabled)
+        edit.click()
+        XCTAssertTrue(app.buttons["setup-editor-cancel"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["setup-editor-apply"].exists)
+        XCTAssertTrue(app.buttons["setup-editor-save-as-new"].exists)
+        let sheet = app.sheets.firstMatch
+        XCTAssertTrue(sheet.exists)
+        XCTAssertGreaterThanOrEqual(sheet.frame.width, 640)
+        attachScreenshot(window.screenshot(), name: "setup-editor-light.png")
     }
 
     private func launchInstalledApp(

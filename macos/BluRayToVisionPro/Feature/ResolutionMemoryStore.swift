@@ -57,6 +57,7 @@ struct ResolutionMemoryEntry: Codable, Equatable, Identifiable {
     let resolutionID: String
     let scope: ResolutionMemoryScope
     let mappingVersion: Int
+    let storedAt: Date
 
     var id: String { "\(conflictID)|\(scope.id)" }
 }
@@ -71,7 +72,7 @@ struct ResolutionMemorySuggestion: Equatable {
 }
 
 struct ResolutionMemoryDocument: Codable, Equatable {
-    static let currentVersion = 1
+    static let currentVersion = 2
 
     let version: Int
     var entries: [ResolutionMemoryEntry]
@@ -80,10 +81,45 @@ struct ResolutionMemoryDocument: Codable, Equatable {
         self.version = version
         self.entries = entries
     }
+
+    private enum CodingKeys: String, CodingKey { case version, entries }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        if version == 1 {
+            entries = try values.decode([LegacyResolutionMemoryEntry].self, forKey: .entries).map {
+                ResolutionMemoryEntry(
+                    conflictID: $0.conflictID,
+                    resolutionID: $0.resolutionID,
+                    scope: $0.scope,
+                    mappingVersion: $0.mappingVersion,
+                    storedAt: .distantPast
+                )
+            }
+        } else {
+            entries = try values.decode([ResolutionMemoryEntry].self, forKey: .entries)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(version, forKey: .version)
+        try values.encode(entries, forKey: .entries)
+    }
+}
+
+private struct LegacyResolutionMemoryEntry: Decodable {
+    let conflictID: String
+    let resolutionID: String
+    let scope: ResolutionMemoryScope
+    let mappingVersion: Int
 }
 
 @MainActor
 final class ResolutionMemoryStore: ObservableObject {
+    static let suggestionLifetime: TimeInterval = 14 * 24 * 60 * 60
+
     @Published private(set) var entries: [ResolutionMemoryEntry]
     @Published private(set) var loadErrorMessage: String?
     @Published private(set) var writesBlocked = false
@@ -92,6 +128,7 @@ final class ResolutionMemoryStore: ObservableObject {
     private let fileManager: FileManager
     private let dataReader: (URL) throws -> Data
     private let dataWriter: (Data, URL) throws -> Void
+    private let now: () -> Date
 
     init(
         fileURL: URL? = nil,
@@ -100,11 +137,13 @@ final class ResolutionMemoryStore: ObservableObject {
         dataWriter: @escaping (Data, URL) throws -> Void = { data, url in
             try data.write(to: url, options: .atomic)
         },
+        now: @escaping () -> Date = Date.init,
         inMemory: Bool = false
     ) {
         self.fileManager = fileManager
         self.dataReader = dataReader
         self.dataWriter = dataWriter
+        self.now = now
         self.fileURL = inMemory ? nil : fileURL ?? Self.defaultFileURL(fileManager: fileManager)
         entries = []
         if let fileURL = self.fileURL {
@@ -112,8 +151,8 @@ final class ResolutionMemoryStore: ObservableObject {
         }
     }
 
-    static func inMemory() -> ResolutionMemoryStore {
-        ResolutionMemoryStore(inMemory: true)
+    static func inMemory(now: @escaping () -> Date = Date.init) -> ResolutionMemoryStore {
+        ResolutionMemoryStore(now: now, inMemory: true)
     }
 
     func suggestion(
@@ -126,7 +165,11 @@ final class ResolutionMemoryStore: ObservableObject {
             .profile(profileID), .sourceKind(sourceKind), .global,
         ]
         guard let entry = entries
-            .filter({ $0.conflictID == conflictID && applicableScopes.contains($0.scope) })
+            .filter({
+                $0.conflictID == conflictID
+                    && applicableScopes.contains($0.scope)
+                    && !isExpired($0)
+            })
             .max(by: { $0.scope.precedence < $1.scope.precedence })
         else {
             return nil
@@ -143,13 +186,16 @@ final class ResolutionMemoryStore: ObservableObject {
         guard !resolutionID.isEmpty, !conflictID.isEmpty else {
             throw ResolutionMemoryStoreError.invalidDocument
         }
-        var updated = entries.filter { !($0.conflictID == conflictID && $0.scope == scope) }
+        var updated = entries.filter {
+            !isExpired($0) && !($0.conflictID == conflictID && $0.scope == scope)
+        }
         updated.append(
             ResolutionMemoryEntry(
                 conflictID: conflictID,
                 resolutionID: resolutionID,
                 scope: scope,
-                mappingVersion: mappingVersion
+                mappingVersion: mappingVersion,
+                storedAt: now()
             )
         )
         try persist(updated)
@@ -190,13 +236,33 @@ final class ResolutionMemoryStore: ObservableObject {
                 loadErrorMessage = "Resolution suggestions are newer than this app. Changes are disabled to protect them."
                 return
             }
-            guard document.version == ResolutionMemoryDocument.currentVersion,
+            guard document.version >= 1,
+                  document.version <= ResolutionMemoryDocument.currentVersion,
                   Set(document.entries.map(\.id)).count == document.entries.count,
                   document.entries.allSatisfy({ !$0.conflictID.isEmpty && !$0.resolutionID.isEmpty })
             else {
                 throw ResolutionMemoryStoreError.invalidDocument
             }
-            entries = document.entries
+            let loadedEntries = document.version == 1
+                ? document.entries.map {
+                    ResolutionMemoryEntry(
+                        conflictID: $0.conflictID,
+                        resolutionID: $0.resolutionID,
+                        scope: $0.scope,
+                        mappingVersion: $0.mappingVersion,
+                        storedAt: now()
+                    )
+                }
+                : document.entries
+            entries = loadedEntries.filter { !isExpired($0) }
+            if document.version != ResolutionMemoryDocument.currentVersion || entries.count != loadedEntries.count {
+                do {
+                    try persist(entries)
+                } catch {
+                    writesBlocked = true
+                    loadErrorMessage = "Resolution suggestions were loaded safely, but their migration could not be saved. Changes are disabled until the file is writable."
+                }
+            }
         } catch {
             recoverFromUnreadableFile()
         }
@@ -210,6 +276,10 @@ final class ResolutionMemoryStore: ObservableObject {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try dataWriter(encoder.encode(ResolutionMemoryDocument(entries: entries)), fileURL)
         loadErrorMessage = nil
+    }
+
+    private func isExpired(_ entry: ResolutionMemoryEntry) -> Bool {
+        now().timeIntervalSince(entry.storedAt) > Self.suggestionLifetime
     }
 
     private func recoverFromUnreadableFile() {

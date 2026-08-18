@@ -95,6 +95,35 @@ final class SetupQueueAdmissionTests: XCTestCase {
         XCTAssertEqual(admission.items[0].resolutionTrace, durable.resolutionTrace)
     }
 
+    func testClearQueueIsAvailableForAttentionButNotRunningItems() throws {
+        let admission = SetupQueueAdmission()
+        let draft = makeDraft()
+        admission.add(drafts: [draft])
+        let itemID = admission.items[0].id
+        admission.markRunning(itemID)
+
+        XCTAssertFalse(admission.canClear)
+
+        let failedItem = DurableConversionQueueItem(
+            id: itemID,
+            ordinal: 0,
+            origin: .singleSource,
+            intent: DurableQueueItemIntent(draft: draft),
+            inspection: draft.sourceDetails,
+            state: .failed,
+            failure: DurableQueueFailure(
+                code: "conversion_failed",
+                message: "Conversion failed",
+                details: nil,
+                retryable: true
+            )
+        )
+        admission.synchronize(with: [try PersistentQueueItem(item: failedItem)])
+        XCTAssertTrue(admission.canClear)
+        admission.removeAll()
+        XCTAssertTrue(admission.items.isEmpty)
+    }
+
     private func makeDraft() -> ConversionDraft {
         let source = ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/Movie.mkv"))
         return ConversionDraft(

@@ -21,11 +21,11 @@ enum BuiltInProfile: String, CaseIterable, Identifiable {
     var summary: String {
         switch self {
         case .balanced:
-            "HEVC 75, source resolution, automatic audio, English audio only, and subtitles."
+            "Source resolution with automatic audio, English audio, and subtitles."
         case .originalResolution:
             "Higher quality while preserving the source resolution."
         case .fourKUpscale:
-            "2× AI upscale with linked HEVC and upscale quality."
+            "Twice the source resolution with quality kept consistent through upscaling."
         }
     }
 

@@ -113,7 +113,7 @@ struct VideoQualityEditor: View {
     private func retainedQualityStatus(detail: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             LabeledContent("Video quality") {
-                Text("\(routePlan.qualityTitle) · retained, not applied")
+                Text("Retained for an earlier restart stage")
                     .foregroundStyle(.secondary)
             }
             Text(detail)
@@ -124,7 +124,7 @@ struct VideoQualityEditor: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Video quality")
-        .accessibilityValue("\(routePlan.qualityTitle), retained, not applied")
+        .accessibilityValue("Retained for an earlier restart stage")
         .accessibilityHint(detail)
     }
 
@@ -540,6 +540,7 @@ private struct QualitySelectionControl: View {
             .accessibilityLabel("Custom video quality")
             .accessibilityValue(isCustomSelected ? "Selected" : "Not selected")
             .accessibilityHint("Restores retained expert values and reveals route-specific controls.")
+            .accessibilityAddTraits(isCustomSelected ? .isSelected : [])
 
             Text(selectionDetail)
                 .font(.caption)
@@ -568,7 +569,8 @@ private struct QualitySelectionControl: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel(step.title)
                     .accessibilityValue(stepAccessibilityValue(step, available: true))
-                    .accessibilityHint("Uses the checked route mappings.")
+                    .accessibilityHint("Uses the checked values for this output.")
+                    .accessibilityAddTraits(selection == .step(step) ? .isSelected : [])
                 } else {
                     QualityStepCell(
                         step: step,

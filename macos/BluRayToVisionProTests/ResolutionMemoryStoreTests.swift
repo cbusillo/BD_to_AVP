@@ -64,6 +64,64 @@ final class ResolutionMemoryStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testSuggestionsExpireAfterFourteenDays() throws {
+        let storedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        var currentDate = storedAt
+        let store = ResolutionMemoryStore.inMemory(now: { currentDate })
+        try store.store(resolutionID: "choice", for: "conflict", scope: .global, mappingVersion: 1)
+
+        currentDate = storedAt.addingTimeInterval(ResolutionMemoryStore.suggestionLifetime)
+        XCTAssertNotNil(store.suggestion(
+            conflictID: "conflict",
+            profileID: "builtin.balanced",
+            sourceKind: .matroska,
+            mappingVersion: 1
+        ))
+
+        currentDate.addTimeInterval(1)
+        XCTAssertNil(store.suggestion(
+            conflictID: "conflict",
+            profileID: "builtin.balanced",
+            sourceKind: .matroska,
+            mappingVersion: 1
+        ))
+        XCTAssertEqual(store.entries.count, 1)
+    }
+
+    @MainActor
+    func testVersionOneDocumentMigratesWithFreshTimestamp() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileURL = directory.appendingPathComponent("resolution-memory.json")
+        let data = Data("""
+        {
+          "version": 1,
+          "entries": [
+            {
+              "conflictID": "conflict",
+              "resolutionID": "choice",
+              "scope": { "kind": "global" },
+              "mappingVersion": 1
+            }
+          ]
+        }
+        """.utf8)
+        try data.write(to: fileURL)
+        let migrationDate = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let store = ResolutionMemoryStore(fileURL: fileURL, now: { migrationDate })
+
+        XCTAssertEqual(store.entries.first?.storedAt, migrationDate)
+        let migrated = try JSONDecoder().decode(
+            ResolutionMemoryDocument.self,
+            from: Data(contentsOf: fileURL)
+        )
+        XCTAssertEqual(migrated.version, ResolutionMemoryDocument.currentVersion)
+        XCTAssertEqual(migrated.entries.first?.storedAt, migrationDate)
+    }
+
+    @MainActor
     func testCorruptDocumentIsPreserved() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

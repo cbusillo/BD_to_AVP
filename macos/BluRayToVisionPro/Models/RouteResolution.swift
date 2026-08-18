@@ -17,9 +17,9 @@ enum RouteQualityTrigger: String, CaseIterable, Codable, Identifiable {
     var title: String {
         switch self {
         case .generatedRouteRequirement:
-            "Generated route requirement"
+            "Selected quality"
         case .reusableIntermediates:
-            "Reusable intermediates"
+            "Reusable files"
         case .softwareEncoder:
             "Software encoder"
         case .restartStage:
@@ -29,9 +29,9 @@ enum RouteQualityTrigger: String, CaseIterable, Codable, Identifiable {
         case .fieldOfView:
             "Field of view"
         case .resolutionOverride:
-            "Resolution override"
+            "Output resolution"
         case .outputMode:
-            "Output mode"
+            "Output format"
         case .qualitySettings:
             "Quality settings"
         }
@@ -111,14 +111,14 @@ struct RouteQualityResolutionOption: Codable, Equatable, Identifiable {
     var detail: String {
         switch choice {
         case .preservePriorIntent:
-            return "Leave the current route and quality intent unchanged."
+            return "Leave the current video and quality choices unchanged."
         case .keepRequestedWorkflow:
             if let mappedStep {
-                return "Apply the requested route with the \(mappedStep.title) quality mapping."
+                return "Use the requested file outcome with \(mappedStep.title) quality."
             }
-            return "No truthful guided quality mapping is available for this route."
+            return "No guided quality choice is available for the requested file outcome."
         case .useCustomExactSettings:
-            return "Apply the requested route with the exact concrete settings already shown."
+            return "Use the requested file outcome with the exact values shown in Advanced Settings."
         }
     }
 }
@@ -230,7 +230,7 @@ enum RouteQualityEngine {
         guard option.isAvailable,
               conflict.resolutions.contains(option)
         else {
-            return .failure(.init(message: "That route-quality resolution is not available."))
+            return .failure(.init(message: "That video and quality choice is not available."))
         }
 
         var resolved: ConversionOptions
@@ -239,7 +239,7 @@ enum RouteQualityEngine {
             resolved = conflict.priorOptions
         case .keepRequestedWorkflow:
             guard let mappedStep = option.mappedStep else {
-                return .failure(.init(message: "No truthful quality mapping is available for the requested workflow."))
+                return .failure(.init(message: "No guided quality choice is available for the requested file outcome."))
             }
             resolved = conflict.proposedOptions
             do {
@@ -368,16 +368,16 @@ enum RouteQualityEngine {
         do {
             try options.encoding.validateQualityMirrors()
         } catch {
-            return "The concrete quality settings do not match the selected quality intent."
+            return "The current quality choice no longer matches its detailed values. Review it before continuing."
         }
         if options.encoding.videoQuality.mode == .ladder,
            route.kind != .existingArtifact || route.includesUpscale,
            let target = qualityTarget(for: route),
            !VideoQualityCatalog.supports(options.encoding.videoQuality.lastLadderStep, for: target)
         {
-            return "The \(options.encoding.videoQuality.lastLadderStep.title) quality step is not available for the requested route."
+            return "\(options.encoding.videoQuality.lastLadderStep.title) quality is not available with the requested file outcome."
         }
-        return "The selected route and quality settings are not compatible."
+        return "The selected video and quality choices need review before continuing."
     }
 
     private static func conflictReason(
@@ -392,13 +392,13 @@ enum RouteQualityEngine {
         case .generatedMVHEVC:
             return "This change requires generated left- and right-eye files. Choose how the current quality choice should carry over."
         case .directMVHEVC:
-            return "This change returns to direct video processing. Choose how the current quality choice should carry over."
+            return "This change uses the source video directly. Choose how the current quality choice should carry over."
         case .av1Stereo:
-            return "AV1 uses exact Custom quality settings. Choose whether to keep the current workflow or continue with AV1."
+            return "This output format uses exact Custom quality settings. Choose how to continue."
         case .existingArtifact:
             return priorRoute.kind == .existingArtifact
                 ? "This restart changes which retained quality settings are applied. Choose how to continue."
-                : "This restart reuses an existing encoded video. Choose how retained quality settings should be handled."
+                : "This restart reuses an existing video. Choose how retained quality settings should be handled."
         }
     }
 

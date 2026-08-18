@@ -5,6 +5,7 @@ struct RouteQualityConflictView: View {
     let profile: EncodingProfile?
     let sourceKind: ConversionSourceKind?
     let memoryStore: ResolutionMemoryStore?
+    let queueForReview: (() -> Void)?
     let resolve: (RouteQualityResolutionOption) -> Void
     @State private var selectedResolutionID: String?
     @State private var shouldSuggest = false
@@ -16,12 +17,14 @@ struct RouteQualityConflictView: View {
         profile: EncodingProfile? = nil,
         sourceKind: ConversionSourceKind? = nil,
         memoryStore: ResolutionMemoryStore? = nil,
+        queueForReview: (() -> Void)? = nil,
         resolve: @escaping (RouteQualityResolutionOption) -> Void
     ) {
         self.conflict = conflict
         self.profile = profile
         self.sourceKind = sourceKind
         self.memoryStore = memoryStore
+        self.queueForReview = queueForReview
         self.resolve = resolve
         let suggestion = profile.flatMap { profile in sourceKind.flatMap {
             memoryStore?.suggestion(
@@ -31,13 +34,19 @@ struct RouteQualityConflictView: View {
                 mappingVersion: conflict.mappingVersion
             )
         } }
-        _selectedResolutionID = State(initialValue: suggestion?.isStale == false ? suggestion?.entry.resolutionID : nil)
+        let suggestedResolutionID = suggestion?.isStale == false
+            && conflict.resolutions.contains(where: {
+                $0.id == suggestion?.entry.resolutionID && $0.isAvailable
+            })
+            ? suggestion?.entry.resolutionID
+            : nil
+        _selectedResolutionID = State(initialValue: suggestedResolutionID)
         _scope = State(initialValue: profile.map { .profile($0.id) } ?? .global)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Route and quality need a decision", systemImage: "arrow.triangle.branch")
+            Label("Quality and file choices need a decision", systemImage: "arrow.triangle.branch")
                 .font(.subheadline.weight(.semibold))
             Text(conflict.reason)
                 .font(.caption)
@@ -45,12 +54,12 @@ struct RouteQualityConflictView: View {
                 .fixedSize(horizontal: false, vertical: true)
             Picker("Resolution", selection: $selectedResolutionID) {
                 Text("Choose a resolution").tag(String?.none)
-                ForEach(conflict.resolutions) { option in
+                ForEach(conflict.resolutions.filter(\.isAvailable)) { option in
                     Text(option.title).tag(Optional(option.id))
                 }
             }
             .pickerStyle(.radioGroup)
-            ForEach(conflict.resolutions) { option in
+            ForEach(conflict.resolutions.filter(\.isAvailable)) { option in
                 if selectedResolutionID == option.id {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
@@ -105,26 +114,34 @@ struct RouteQualityConflictView: View {
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Button("Apply Choice") {
-                guard let option = conflict.resolutions.first(where: { $0.id == selectedResolutionID }) else { return }
-                if shouldSuggest, let memoryStore {
-                    do {
-                        try memoryStore.store(
-                            resolutionID: option.id,
-                            for: conflict.stableID,
-                            scope: scope,
-                            mappingVersion: conflict.mappingVersion
-                        )
-                        memoryErrorMessage = nil
-                    } catch {
-                        memoryErrorMessage = error.localizedDescription
-                        return
-                    }
+            HStack {
+                if let queueForReview {
+                    Button("Add to Queue for Review", action: queueForReview)
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("route-quality-add-to-queue")
+                    Spacer()
                 }
-                resolve(option)
+                Button("Apply Choice") {
+                    guard let option = conflict.resolutions.first(where: { $0.id == selectedResolutionID }) else { return }
+                    if shouldSuggest, let memoryStore {
+                        do {
+                            try memoryStore.store(
+                                resolutionID: option.id,
+                                for: conflict.stableID,
+                                scope: scope,
+                                mappingVersion: conflict.mappingVersion
+                            )
+                            memoryErrorMessage = nil
+                        } catch {
+                            memoryErrorMessage = error.localizedDescription
+                            return
+                        }
+                    }
+                    resolve(option)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedResolutionID == nil)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(selectedResolutionID == nil)
         }
         .padding(12)
         .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))

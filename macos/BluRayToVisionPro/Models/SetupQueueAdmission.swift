@@ -60,6 +60,7 @@ final class SetupQueueAdmission: ObservableObject {
 
     var isBatch: Bool { items.count > 1 }
     var hasItems: Bool { !items.isEmpty }
+    var canClear: Bool { items.allSatisfy { $0.state != .running } }
 
     var groups: [QueueResolutionGroup] {
         QueueResolutionGroup.group(
@@ -153,6 +154,17 @@ final class SetupQueueAdmission: ObservableObject {
     func markAllRunning() {
         for index in items.indices where items[index].state == .waiting {
             items[index].state = .running
+        }
+    }
+
+    func markStartFailed(_ itemIDs: Set<UUID>) {
+        for index in items.indices where itemIDs.contains(items[index].id) {
+            switch items[index].state {
+            case .waiting, .running:
+                items[index].state = .attention
+            case .held, .completed, .attention, .stopped:
+                break
+            }
         }
     }
 

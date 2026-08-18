@@ -82,7 +82,7 @@ struct ContentView: View {
             }
 
             HSplitView {
-                if setupQueue.hasItems {
+                if setupQueue.hasItems, viewModel.state.phase != .decisionRequired {
                     queueSidebar
                 } else {
                     SourceWorkspaceView(
@@ -217,7 +217,7 @@ struct ContentView: View {
         .onChange(of: viewModel.state.conversionResult) { _, result in
             guard viewModel.batchQueue == nil,
                   let result,
-                  viewModel.queueItems.count <= 1
+                  viewModel.queueItems.isEmpty
             else {
                 return
             }
@@ -253,6 +253,10 @@ struct ContentView: View {
         .onChange(of: viewModel.persistentQueueItems) { _, items in
             setupQueue.synchronize(with: items)
         }
+        .onChange(of: viewModel.setupQueueStartFailureItemIDs) { _, itemIDs in
+            guard !itemIDs.isEmpty else { return }
+            setupQueue.markStartFailed(itemIDs)
+        }
         .onChange(of: viewModel.state.result?.titles) { _, _ in
             if viewModel.source?.kind != .sourceFolder {
                 titleSelection = .main
@@ -287,10 +291,12 @@ struct ContentView: View {
                 initialProfile: selectedProfile,
                 initialOptions: options,
                 fallbackPipelineDefaults: defaultJobOptions.profilePipelineDefaults,
+                sourceKind: viewModel.source?.kind,
                 profiles: profileStore.profiles,
                 profileStore: profileStore,
                 resolutionMemoryStore: resolutionMemoryStore,
-                applyToConversion: applyEditedConversion
+                applyToConversion: applyEditedConversion,
+                queueConflictForReview: heldConflictQueueAction
             )
         }
         .sheet(isPresented: $isShowingPreview, onDismiss: previewDidDismiss) {
@@ -468,36 +474,6 @@ struct ContentView: View {
             if viewModel.hasStoppableWork {
                 Button("Stop", role: .destructive, action: viewModel.stopActiveWorker)
                     .keyboardShortcut("p", modifiers: .command)
-            } else if isBatchSource {
-                Button("Start Batch Conversion") {
-                    viewModel.startBatchConversion(
-                        profile: selectedProfile,
-                        destinationURL: destinationURL,
-                        options: options
-                    )
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut("p", modifiers: .command)
-                .disabled(!conversionCanStart)
-                .help(conversionCanStart ? "Convert the queued sources sequentially." : conversionUnavailableReason)
-            } else if viewModel.source == nil || !conversionCanStart {
-                Button(startButtonTitle) {}
-                    .buttonStyle(.bordered)
-                    .disabled(true)
-                    .help(viewModel.source == nil ? "Choose a source before processing." : conversionUnavailableReason)
-            } else {
-                Button("Preview…") {
-                    isShowingPreview = true
-                }
-                .buttonStyle(.bordered)
-                .disabled(!previewCanStart)
-                .help(previewUnavailableReason)
-
-                Button(startButtonTitle) {
-                    startSelectedConversions()
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut("p", modifiers: .command)
             }
         }
         .padding(.horizontal, 16)
@@ -528,6 +504,7 @@ struct ContentView: View {
             resetProfile: resetProfile,
             sourceName: viewModel.source?.displayName,
             destinationName: destinationURL.path,
+            changeDestination: chooseDestination,
             estimate: "Finished movie size and time are estimated from this source.",
             preview: { isShowingPreview = true },
             addToQueue: addCurrentDraftsToQueue,
@@ -536,7 +513,8 @@ struct ContentView: View {
             canAddToQueue: !conversionDrafts.isEmpty && !viewModel.hasActiveWork,
             canStart: setupQueue.hasItems
                 ? setupQueue.canStart && !viewModel.hasActiveWork
-                : conversionCanStart
+                : conversionCanStart,
+            showsStartAction: !setupQueue.hasItems
         )
         .frame(minWidth: 500, idealWidth: 680)
     }
@@ -547,7 +525,11 @@ struct ContentView: View {
             SetupQueueAdmissionView(
                 admission: setupQueue,
                 memoryStore: resolutionMemoryStore,
-                start: startAdmittedQueue
+                canStart: setupQueue.canStart
+                    && !viewModel.hasActiveWork
+                    && !previewViewModel.hasActiveWorker,
+                start: startAdmittedQueue,
+                clear: setupQueue.removeAll
             )
         }
     }
@@ -602,6 +584,13 @@ struct ContentView: View {
         guard routeQualityBlockReason == nil else {
             return []
         }
+        return makeConversionDrafts(options: options, profile: selectedProfile)
+    }
+
+    private func makeConversionDrafts(
+        options draftOptions: ConversionOptions,
+        profile draftProfile: EncodingProfile
+    ) -> [ConversionDraft] {
         guard let source = viewModel.source,
               source.kind != .sourceFolder,
               let inspection = viewModel.state.result
@@ -613,9 +602,9 @@ struct ContentView: View {
                 ConversionDraft(
                     source: source,
                     sourceDetails: inspection,
-                    profile: selectedProfile,
+                    profile: draftProfile,
                     destinationURL: destinationURL,
-                    options: options,
+                    options: draftOptions,
                     selectedTitle: title
                 )
             }
@@ -624,11 +613,24 @@ struct ContentView: View {
             ConversionDraft(
                 source: source,
                 sourceDetails: inspection,
-                profile: selectedProfile,
+                profile: draftProfile,
                 destinationURL: destinationURL,
-                options: options
+                options: draftOptions
             )
         ]
+    }
+
+    private var heldConflictQueueAction: ((String, RouteQualityConflict) -> Void)? {
+        guard viewModel.source != nil, viewModel.state.result != nil else { return nil }
+        return { profileID, conflict in
+            let profile = profileStore.profile(withID: profileID)
+            let drafts = makeConversionDrafts(options: conflict.proposedOptions, profile: profile)
+            guard !drafts.isEmpty else { return }
+            setupQueue.add(
+                drafts: drafts,
+                conflicts: Array(repeating: conflict, count: drafts.count)
+            )
+        }
     }
 
     private var draft: ConversionDraft? {
@@ -664,10 +666,6 @@ struct ContentView: View {
             }
             return "\(selectedTitles.count) Selected Videos"
         }
-    }
-
-    private var startButtonTitle: String {
-        selectedVideoCount > 1 ? "Convert \(selectedVideoCount) Videos" : "Start Full Conversion"
     }
 
     private var statusText: String {
@@ -744,6 +742,15 @@ struct ContentView: View {
     private var secondaryStatusText: String? {
         if let warningMessage = viewModel.state.warningMessage {
             return "Warning: \(warningMessage)"
+        }
+        if let durableQueueLoadErrorMessage = viewModel.durableQueueLoadErrorMessage {
+            return durableQueueLoadErrorMessage
+        }
+        if let durableQueueRuntimeDiagnostic = viewModel.durableQueueRuntimeDiagnostic {
+            return durableQueueRuntimeDiagnostic
+        }
+        if let persistentQueueProjectionError = viewModel.persistentQueueProjectionError {
+            return "Queue display is unavailable: \(String(describing: persistentQueueProjectionError))"
         }
         if viewModel.state.operationKind == .conversion,
            let videoRoute = viewModel.state.videoRoute
@@ -858,13 +865,13 @@ struct ContentView: View {
 
     private var previewUnavailableReason: String {
         if previewCanStart {
-            return "Create a finalized representative preview with the current route policy and settings."
+            return "Create a representative preview with the current video and quality choices."
         }
         if selectedVideoCount > 1 {
             return "Choose one 3D video to create a preview."
         }
         if !requestedVideoRoute.allowsFinalizedPreview {
-            return "A late-stage restart uses an existing video artifact. Choose an earlier start stage to generate a representative preview."
+            return "A late-stage restart reuses an existing video. Choose an earlier start stage to create a representative preview."
         }
         switch viewModel.source?.kind {
         case .physicalDisc:
@@ -918,7 +925,7 @@ struct ContentView: View {
             return stateReason
         }
         if case let .failure(error) = RouteQualityEngine.validate(options) {
-            return "Resolve route and quality settings before starting, previewing, or adding this conversion to the queue. \(error.localizedDescription)"
+            return "Resolve the video and quality choices before starting, previewing, or adding this conversion to the queue. \(error.localizedDescription)"
         }
         return nil
     }
@@ -1139,21 +1146,23 @@ struct ContentView: View {
     }
 
     private func startAdmittedQueue() {
-        guard setupQueue.canStart else { return }
-        if setupQueue.items.count == 1,
-           let draft = setupQueue.items[0].currentDraft
-        {
-            viewModel.startConversion(draft: draft)
-            setupQueue.removeAll()
-            return
-        }
-        viewModel.startConversionQueue(admissionItems: setupQueue.items)
+        guard setupQueue.canStart,
+              !viewModel.hasActiveWork,
+              !previewViewModel.hasActiveWorker,
+              viewModel.startConversionQueue(admissionItems: setupQueue.items)
+        else { return }
         setupQueue.markAllRunning()
     }
 
     private func startReadyConversion() {
         if setupQueue.hasItems {
             startAdmittedQueue()
+        } else if isBatchSource {
+            viewModel.startBatchConversion(
+                profile: selectedProfile,
+                destinationURL: destinationURL,
+                options: options
+            )
         } else {
             startSelectedConversions()
         }
