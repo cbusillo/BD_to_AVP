@@ -65,7 +65,26 @@ class ToolResolutionTests(unittest.TestCase):
 
             with (
                 patch.dict(os.environ, {}, clear=True),
-                patch("bd_to_avp.modules.config.MAKEMKV_APP_BUNDLE_BIN", app_bundle_bin),
+                patch("bd_to_avp.modules.config.MAKEMKV_APP_BUNDLE_BINS", (app_bundle_bin,)),
+                patch("bd_to_avp.modules.config.shutil.which", return_value=None),
+            ):
+                self.assertEqual(resolve_makemkvcon_path(), makemkvcon)
+
+    def test_makemkv_nested_app_bundle_is_used_when_direct_bundle_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temporary_path = Path(temp_dir)
+            direct_bundle_bin = temporary_path / "direct"
+            nested_bundle_bin = temporary_path / "nested"
+            nested_bundle_bin.mkdir()
+            makemkvcon = nested_bundle_bin / "makemkvcon"
+            makemkvcon.touch()
+
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch(
+                    "bd_to_avp.modules.config.MAKEMKV_APP_BUNDLE_BINS",
+                    (direct_bundle_bin, nested_bundle_bin),
+                ),
                 patch("bd_to_avp.modules.config.shutil.which", return_value=None),
             ):
                 self.assertEqual(resolve_makemkvcon_path(), makemkvcon)

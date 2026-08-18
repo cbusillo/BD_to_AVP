@@ -60,7 +60,8 @@ smoke without requiring MKVToolNix or Tesseract.
 External dependencies must be visible to the user and recoverable without
 reinstalling BD_to_AVP.
 
-- MakeMKV is currently external and expected at `/Applications/MakeMKV.app`.
+- MakeMKV is currently external and detected at `/Applications/MakeMKV.app` or
+  `/Applications/MakeMKV/MakeMKV.app`.
 - A missing external dependency should produce a message that names the external
   app/tool and explains the next step.
 - A missing bundled dependency should be treated as a release blocker or linked
