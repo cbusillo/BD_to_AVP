@@ -86,7 +86,7 @@ struct EncodingProfile: Identifiable, Equatable {
 }
 
 enum ProfilePersistenceCopy {
-    static let summary = "Profiles save video, audio, subtitle, reusable-file, and encoder settings. Restart, overwrite, delete-source, recovery, sound, and keep-awake choices are not saved."
+    static let summary = "Profiles save video, audio, subtitle, reusable-file, and encoder settings. Restart, overwrite, delete-source, recovery, command-output, sound, and keep-awake choices are not saved."
 }
 
 enum StandardMovieRenameNotice {

@@ -170,6 +170,16 @@ final class ResolutionMemoryStore: ObservableObject {
         entries = updated
     }
 
+    func replaceEntriesForTransaction(_ updatedEntries: [ResolutionMemoryEntry]) throws {
+        guard Set(updatedEntries.map(\.id)).count == updatedEntries.count,
+              updatedEntries.allSatisfy({ !$0.conflictID.isEmpty && !$0.resolutionID.isEmpty })
+        else {
+            throw ResolutionMemoryStoreError.invalidDocument
+        }
+        try persist(updatedEntries)
+        entries = updatedEntries
+    }
+
     private func load(from fileURL: URL) {
         guard fileManager.fileExists(atPath: fileURL.path) else { return }
         do {

@@ -29,6 +29,7 @@ struct SetupEditSheet: View {
 
     let initialProfile: EncodingProfile
     let initialOptions: ConversionOptions
+    let fallbackPipelineDefaults: ProfilePipelineDefaults
     let profiles: [EncodingProfile]
     @ObservedObject var profileStore: ProfileStore
     @ObservedObject var resolutionMemoryStore: ResolutionMemoryStore
@@ -46,6 +47,7 @@ struct SetupEditSheet: View {
     init(
         initialProfile: EncodingProfile,
         initialOptions: ConversionOptions,
+        fallbackPipelineDefaults: ProfilePipelineDefaults,
         profiles: [EncodingProfile],
         profileStore: ProfileStore,
         resolutionMemoryStore: ResolutionMemoryStore,
@@ -53,6 +55,7 @@ struct SetupEditSheet: View {
     ) {
         self.initialProfile = initialProfile
         self.initialOptions = initialOptions
+        self.fallbackPipelineDefaults = fallbackPipelineDefaults
         self.profiles = profiles
         self.profileStore = profileStore
         self.resolutionMemoryStore = resolutionMemoryStore
@@ -92,7 +95,7 @@ struct SetupEditSheet: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Edit Conversion Settings")
                             .font(.title2.weight(.semibold))
-                        Text("Based on \(initialProfile.name)")
+                        Text("Based on \(selectedProfile.name)")
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -144,7 +147,7 @@ struct SetupEditSheet: View {
             Divider()
             HStack(spacing: 10) {
                 Button("Cancel") {
-                    dismiss()
+                    requestDismissal()
                 }
                     .accessibilityIdentifier("setup-editor-cancel")
 
@@ -153,15 +156,18 @@ struct SetupEditSheet: View {
                 if session.canUpdateProfile {
                     Button("Update Profile", action: updateProfile)
                         .accessibilityIdentifier("setup-editor-update-profile")
+                        .disabled(routeQualityState.blockReason != nil)
                 }
 
                 Button("Save as New Profile…", action: beginSaveAsNew)
                     .accessibilityIdentifier("setup-editor-save-as-new")
+                    .disabled(routeQualityState.blockReason != nil)
 
                 Button("Apply to This Conversion", action: apply)
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("setup-editor-apply")
+                    .disabled(routeQualityState.blockReason != nil)
             }
             .padding(16)
         }
@@ -245,7 +251,7 @@ struct SetupEditSheet: View {
         var loadedOptions = session.draftOptions
         loadedOptions.encoding = profile.options
         loadedOptions.job.applyProfilePipelineDefaults(
-            profile.pipelineDefaults ?? loadedOptions.job.profilePipelineDefaults
+            profile.pipelineDefaults ?? fallbackPipelineDefaults
         )
         routeQualityState.reset()
         session.load(profile: profile, options: loadedOptions)
@@ -273,6 +279,7 @@ struct SetupEditSheet: View {
                 options: values.options,
                 pipelineDefaults: values.pipelineDefaults
             )
+            applyToConversion(session.profileID, session.draftOptions)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription

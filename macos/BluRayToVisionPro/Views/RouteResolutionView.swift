@@ -9,6 +9,7 @@ struct RouteQualityConflictView: View {
     @State private var selectedResolutionID: String?
     @State private var shouldSuggest = false
     @State private var scope: ResolutionMemoryScope
+    @State private var memoryErrorMessage: String?
 
     init(
         conflict: RouteQualityConflict,
@@ -78,8 +79,13 @@ struct RouteQualityConflictView: View {
                     .font(.caption)
                     .foregroundStyle(suggestion.isStale ? .orange : .secondary)
                 Button("Forget suggestion") {
-                    try? memoryStore.forget(conflictID: conflict.stableID, scope: suggestion.entry.scope)
-                    selectedResolutionID = nil
+                    do {
+                        try memoryStore.forget(conflictID: conflict.stableID, scope: suggestion.entry.scope)
+                        selectedResolutionID = nil
+                        memoryErrorMessage = nil
+                    } catch {
+                        memoryErrorMessage = error.localizedDescription
+                    }
                 }
                 .buttonStyle(.borderless)
             }
@@ -93,15 +99,27 @@ struct RouteQualityConflictView: View {
                     Text("All sources").tag(ResolutionMemoryScope.global)
                 }
             }
+            if let memoryErrorMessage {
+                Label(memoryErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Button("Apply Choice") {
                 guard let option = conflict.resolutions.first(where: { $0.id == selectedResolutionID }) else { return }
                 if shouldSuggest, let memoryStore {
-                    try? memoryStore.store(
-                        resolutionID: option.id,
-                        for: conflict.stableID,
-                        scope: scope,
-                        mappingVersion: conflict.mappingVersion
-                    )
+                    do {
+                        try memoryStore.store(
+                            resolutionID: option.id,
+                            for: conflict.stableID,
+                            scope: scope,
+                            mappingVersion: conflict.mappingVersion
+                        )
+                        memoryErrorMessage = nil
+                    } catch {
+                        memoryErrorMessage = error.localizedDescription
+                        return
+                    }
                 }
                 resolve(option)
             }

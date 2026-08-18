@@ -70,22 +70,10 @@ struct ConversionSetupView: View {
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text(selectedProfile.name)
-                    .font(.headline)
-                Text(selectedProfile.summary)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("Quality: \(options.encoding.videoSummary(for: options.videoRoutePlan))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("Files: \(ReusableFileOutcome(policy: options.job.intermediatePolicy).title)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("ready-profile-summary")
+            Text(profileOutcomeSummary)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("ready-profile-summary")
 
             OutcomeSummaryView(options: options)
         }
@@ -172,6 +160,10 @@ struct ConversionSetupView: View {
 
             Divider()
 
+            OutcomeSummaryView(options: options)
+                .padding(.horizontal, 18)
+                .padding(.bottom, 12)
+
             Group {
                 switch selectedTab {
                 case .video:
@@ -209,17 +201,16 @@ struct ConversionSetupView: View {
 
                 Picker("Output files", selection: reusableFileOutcomeBinding) {
                     ForEach(ReusableFileOutcome.allCases) { outcome in
-                        Text(outcome.title).tag(outcome)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(outcome.title)
+                            Text(outcome.detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .tag(outcome)
                     }
                 }
                 .pickerStyle(.radioGroup)
-
-                Text(reusableFileOutcomeDetail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                OutcomeSummaryView(options: options)
 
                 Toggle("Continue processing after recoverable errors", isOn: $options.job.continueOnError)
                 Toggle("Use software HEVC encoder", isOn: softwareEncoderBinding)
@@ -318,8 +309,11 @@ struct ConversionSetupView: View {
         VideoRoutePlan(options: options)
     }
 
-    private var reusableFileOutcomeDetail: String {
-        ReusableFileOutcome(policy: options.job.intermediatePolicy).detail
+    private var profileOutcomeSummary: String {
+        let reusableSuffix = options.job.intermediatePolicy.createsReusableArtifacts
+            ? " · reusable files kept"
+            : ""
+        return "\(routePlan.qualityTitle) quality\(reusableSuffix)"
     }
 
     private var softwareEncoderIsApplicable: Bool {
@@ -345,11 +339,11 @@ private struct OutcomeSummaryView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("What you’ll get")
                 .font(.headline)
-            LabeledContent("Finished movie", value: options.encoding.videoSummary(for: options.videoRoutePlan))
-            LabeledContent("Temporary space", value: options.job.intermediatePolicy.createsReusableArtifacts ? "More space while keeping reusable files" : "Removed after success")
-            LabeledContent("Reusable files", value: ReusableFileOutcome(policy: options.job.intermediatePolicy).title)
+            LabeledContent("Finished movie", value: finishedMovieSummary)
+            LabeledContent("Reusable files", value: reusableFilesSummary)
+            LabeledContent("Temporary space", value: options.job.intermediatePolicy.createsReusableArtifacts ? "Additional space while reusable files are kept" : "Removed after success")
             LabeledContent("Estimated time", value: options.job.intermediatePolicy.createsReusableArtifacts ? "Longer processing" : "Standard processing")
-            LabeledContent("Quality", value: options.encoding.videoSummary(for: options.videoRoutePlan))
+            LabeledContent("Quality", value: "\(options.videoRoutePlan.qualityTitle) quality")
         }
         .font(.caption)
         .padding(12)
@@ -357,6 +351,21 @@ private struct OutcomeSummaryView: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel("What you’ll get")
         .accessibilityIdentifier("conversion-outcome-summary")
+    }
+
+    private var finishedMovieSummary: String {
+        switch options.encoding.videoOutputMode {
+        case .mvHEVC:
+            "Vision Pro spatial movie"
+        case .av1Stereo:
+            "Stereo movie"
+        }
+    }
+
+    private var reusableFilesSummary: String {
+        options.job.intermediatePolicy.createsReusableArtifacts
+            ? "Left- and right-eye movies kept"
+            : "None kept"
     }
 }
 

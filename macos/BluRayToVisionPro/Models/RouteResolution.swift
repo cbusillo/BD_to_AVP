@@ -140,8 +140,10 @@ struct RouteQualityConflict: Equatable {
             trigger.rawValue,
             priorRoute.kind.rawValue,
             proposedRoute.kind.rawValue,
+            proposedRoute.includesUpscale ? "upscale" : "no-upscale",
             proposedRoute.generatedRequirement?.identifier ?? "none",
-            resolutions.filter(\.isAvailable).map(\.choice.rawValue).sorted().joined(separator: ","),
+            "mapping-v\(mappingVersion)",
+            resolutions.filter(\.isAvailable).map(\.id).sorted().joined(separator: ","),
         ].joined(separator: "|")
     }
 

@@ -19,8 +19,10 @@ struct QueueResolutionCandidate: Identifiable, Equatable {
             draft.profile.id,
             draft.source.kind.rawValue,
             conflict.proposedRoute.kind.rawValue,
+            conflict.proposedRoute.includesUpscale ? "upscale" : "no-upscale",
+            "mapping-v\(conflict.mappingVersion)",
             String(describing: conflict.proposedRoute.qualitySelection),
-            conflict.resolutions.filter(\.isAvailable).map(\.choice.rawValue).sorted().joined(separator: ","),
+            conflict.resolutions.filter(\.isAvailable).map(\.id).sorted().joined(separator: ","),
         ].joined(separator: "|")
     }
 }

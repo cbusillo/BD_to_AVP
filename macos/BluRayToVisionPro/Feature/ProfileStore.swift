@@ -120,8 +120,16 @@ final class ProfileStore: ObservableObject {
             throw ProfileStoreError.builtInProfileIsReadOnly
         }
         let updatedProfiles = customProfiles.filter { $0.id != identifier }
-        try persist(updatedProfiles)
+        let originalMemoryEntries = resolutionMemoryStore?.entries
         try resolutionMemoryStore?.removeProfileMemories(profileID: identifier)
+        do {
+            try persist(updatedProfiles)
+        } catch {
+            if let originalMemoryEntries {
+                try? resolutionMemoryStore?.replaceEntriesForTransaction(originalMemoryEntries)
+            }
+            throw error
+        }
         customProfiles = updatedProfiles
     }
 

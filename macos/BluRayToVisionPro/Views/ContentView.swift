@@ -297,6 +297,7 @@ struct ContentView: View {
             SetupEditSheet(
                 initialProfile: selectedProfile,
                 initialOptions: options,
+                fallbackPipelineDefaults: defaultJobOptions.profilePipelineDefaults,
                 profiles: profileStore.profiles,
                 profileStore: profileStore,
                 resolutionMemoryStore: resolutionMemoryStore,

@@ -8,6 +8,7 @@ final class SetupEditorRenderTests: XCTestCase {
     func testReadyProfileSurfaceRendersOutcomeAndPicker() throws {
         let profile = BuiltInProfile.balanced.profile
         let routeState = RouteQualityResolutionState()
+        let memoryStore = ResolutionMemoryStore.inMemory()
         let view = ConversionSetupView(
             selectedProfileID: .constant(profile.id),
             selectedTab: .constant(.video),
@@ -18,6 +19,7 @@ final class SetupEditorRenderTests: XCTestCase {
             isLocked: false,
             sourceKind: nil,
             routeQualityState: routeState,
+            resolutionMemoryStore: memoryStore,
             isReady: true,
             openEditor: {},
             saveSelectedProfile: {},
