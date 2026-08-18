@@ -423,7 +423,7 @@ def get_languages_in_mkv(
     run_context: RunContext | None = None,
     cancellation_event: threading.Event | None = None,
     observability_context: ObservabilityContext | None = None,
-) -> None | list[dict[str, Any]]:
+) -> list[dict[str, Any]] | None:
     mkv_info = run_ffprobe(
         mkv_path,
         run_context=run_context,
