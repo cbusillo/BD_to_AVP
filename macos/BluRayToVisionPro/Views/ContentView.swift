@@ -68,18 +68,12 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if let migrationNoticeMessage = profileStore.migrationNoticeMessage {
-                Label(migrationNoticeMessage, systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal)
-                    .padding(.vertical, 10)
-            }
+        presentedContent
+    }
 
-            if !settings.hasAcknowledgedStandardMovieRenameNotice {
-                StandardMovieRenameNoticeView(settings: settings)
-            }
+    private var mainContent: some View {
+        VStack(spacing: 0) {
+            noticeContent
 
             HSplitView {
                 sourceOrQueueColumn
@@ -89,16 +83,40 @@ struct ContentView: View {
             Divider()
             statusFooter
 
-            if isShowingActivity {
-                Divider()
-                ActivityDrawer(
-                    state: viewModel.state,
-                    observabilityStatus: viewModel.liveObservabilityStatus,
-                    showTechnicalDetails: settings.showTechnicalDetails
-                )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
+            activityContent
         }
+    }
+
+    @ViewBuilder
+    private var noticeContent: some View {
+        if let migrationNoticeMessage = profileStore.migrationNoticeMessage {
+            Label(migrationNoticeMessage, systemImage: "exclamationmark.triangle.fill")
+                .font(.callout)
+                .foregroundStyle(.orange)
+                .padding(.horizontal)
+                .padding(.vertical, 10)
+        }
+
+        if !settings.hasAcknowledgedStandardMovieRenameNotice {
+            StandardMovieRenameNoticeView(settings: settings)
+        }
+    }
+
+    @ViewBuilder
+    private var activityContent: some View {
+        if isShowingActivity {
+            Divider()
+            ActivityDrawer(
+                state: viewModel.state,
+                observabilityStatus: viewModel.liveObservabilityStatus,
+                showTechnicalDetails: settings.showTechnicalDetails
+            )
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    private var baseContent: some View {
+        mainContent
         .accessibilityIdentifier("main-window-content")
         .focusedSceneValue(\.conversionSourceSelectionAction, sourceSelectionAction)
         .toolbar { toolbarContent }
@@ -118,9 +136,13 @@ struct ContentView: View {
                             .font(.title3.weight(.semibold))
                             .padding(14)
                             .background(.regularMaterial, in: Capsule())
-                    }
+                }
             }
         }
+    }
+
+    private var observedContent: some View {
+        baseContent
         .onAppear(perform: refreshDiscs)
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didMountNotification)) { _ in
             refreshDiscs()
@@ -236,6 +258,10 @@ struct ContentView: View {
             options.encoding = currentProfile.options
             options.job.applyProfilePipelineDefaults(profilePipelineDefaults(for: currentProfile))
         }
+    }
+
+    private var presentedContent: some View {
+        observedContent
         .sheet(isPresented: $isShowingSaveProfile) {
             SaveProfileSheet(name: $newProfileName) {
                 saveAsNewProfile()
