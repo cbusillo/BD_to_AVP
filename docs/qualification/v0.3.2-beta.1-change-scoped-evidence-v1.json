@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "qualification_id": "v0.3.2-beta.1-change-scoped-evidence-v1",
+  "recorded_at": "2026-08-18T22:06:40Z",
+  "source": {
+    "build_version": "163",
+    "package_version": "0.3.2b1",
+    "public_version": "0.3.2-beta.1",
+    "release_tag": "v0.3.2-beta.1",
+    "source_sha": "98636e5b7e413b198447954c0d67f6668c10c31e"
+  },
+  "failed_preparation_run": {
+    "run_id": 32189732991,
+    "run_attempt": 1,
+    "conclusion": "failure",
+    "failed_job": "Qualify release preparation",
+    "signing_started": false,
+    "release_identity_created": false
+  },
+  "packaged_candidate": {
+    "app_tree_sha256": "68204d4a1afba0341f40e3fc86ca0b550b7edf2a324a5357b0aa12881cf45fdf",
+    "architecture": "arm64",
+    "bundle_identifier": "com.shinycomputers.bd-to-avp",
+    "codesign_verification": "passed",
+    "package_command": "BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://diagnostics.shinycomputers.com uv run python scripts/native_app.py package",
+    "preview_presentation_smoke": "passed",
+    "signing": "ad_hoc_local",
+    "worker_cancellation_smoke": "passed"
+  },
+  "evidence_source_semantics": {
+    "developer_id_or_notarization_claimed": false,
+    "index_source": "signed_artifact_receipt",
+    "meaning": "Change-scoped evidence from the exact locally packaged, code-signed app tree; production Developer ID signing remains owned by the guarded release run.",
+    "project_precedent": "docs/qualification/v0.3.1-mkv-audio-handling-v1.json"
+  },
+  "validation": {
+    "native_tests": {
+      "command": "uv run python scripts/native_app.py test",
+      "failed": 0,
+      "passed": 473
+    },
+    "python_tests": {
+      "command": "uv run python -m unittest discover -s tests -t .",
+      "failed": 0,
+      "passed": 1763,
+      "skipped": 3
+    },
+    "subtitle_focused_tests": {
+      "command": "uv run python -m unittest tests.test_subtitles tests.test_vendor_pgsrip_edge_cases tests.test_vendor_pgsrip_cli",
+      "failed": 0,
+      "passed": 71
+    }
+  },
+  "cases": [
+    {
+      "case_id": "gui-preview-cancel-cleanup",
+      "observations": {
+        "cancelled_preview_removes_partial_workspace": true,
+        "owned_worker_and_descendant_processes_reaped": true,
+        "packaged_worker_cancellation_smoke": "passed"
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testCancelledPreviewRemovesPartialWorkspace",
+        "macos/BluRayToVisionProTests/WorkerProcessClientTests.swift:testCancellationAllowsWorkerToReapSeparateSessionChild",
+        "scripts/native_app.py:packaged worker cancellation smoke"
+      ],
+      "status": "passed"
+    },
+    {
+      "case_id": "gui-preview-failure-cleanup",
+      "observations": {
+        "destination_workspace_failure_is_actionable": true,
+        "empty_owned_destination_root_removed": true,
+        "transient_cleanup_failure_retried": true
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testDestinationWorkspacePreparationFailureIsActionable",
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testDestinationWorkspaceCleanupRemovesEmptyHiddenRoot",
+        "macos/BluRayToVisionProTests/PreviewViewModelTests.swift:testCleanupRetriesTransientRemovalFailure"
+      ],
+      "status": "passed"
+    },
+    {
+      "case_id": "network-generated-final-output",
+      "observations": {
+        "destination_snapshot_preserved_through_queue_execution": true,
+        "generated_mv_hevc_route_resolution_preserved": true,
+        "packaged_worker_and_final_output_regression_suite": "passed"
+      },
+      "proof": [
+        "macos/BluRayToVisionProTests/ConversionQueueStoreTests.swift",
+        "macos/BluRayToVisionProTests/ConversionViewModelTests.swift",
+        "macos/BluRayToVisionProTests/ConversionWorkflowTests.swift",
+        "scripts/native_app.py:packaged worker smoke"
+      ],
+      "scope": {
+        "current_change_review": "The invalidating host changes preserve destination snapshots, generated-route resolution, and worker output publication boundaries.",
+        "mounted_network_conversion_rerun": false,
+        "prior_real_network_evidence": "docs/qualification/v0.3.1-mkv-audio-handling-v1.json",
+        "qualification_kind": "exact_candidate_change_scoped_regression"
+      },
+      "status": "passed"
+    },
+    {
+      "case_id": "overwrite-and-conversion-cancel",
+      "observations": {
+        "existing_output_rejected_before_workspace_mutation": true,
+        "owned_partial_outputs_removed_after_cancellation": true,
+        "resumed_and_unowned_workspaces_preserved": true,
+        "view_model_stop_transitions_to_stopping": true
+      },
+      "proof": [
+        "tests/test_process_preflight.py:test_existing_output_aborts_before_workspace_mutation",
+        "tests/test_process_preflight.py:test_cancelled_conversion_cleans_owned_workspaces",
+        "tests/test_process_preflight.py:test_cancelled_conversion_preserves_unowned_workspaces",
+        "macos/BluRayToVisionProTests/ConversionViewModelTests.swift:testStopActiveWorkerCancelsConversionAndTransitionsToStopping"
+      ],
+      "status": "passed"
+    },
+    {
+      "case_id": "malformed-pgs-parser-recovery",
+      "observations": {
+        "declared_pixel_bounds_enforced": true,
+        "malformed_display_sets_isolated": true,
+        "truncated_and_unknown_segments_bounded": true,
+        "usable_peer_subtitles_preserved": true
+      },
+      "proof": [
+        "tests/test_subtitles.py",
+        "tests/test_vendor_pgsrip_edge_cases.py",
+        "tests/test_vendor_pgsrip_cli.py"
+      ],
+      "status": "passed"
+    },
+    {
+      "case_id": "subtitle-partial-output-diagnostics",
+      "observations": {
+        "aggregate_track_counts_recorded": true,
+        "cancelled_outcome_distinguished": true,
+        "failed_outcome_distinguished": true,
+        "partial_outcome_distinguished": true,
+        "successful_outcome_distinguished": true
+      },
+      "proof": [
+        "tests/test_subtitles.py",
+        "tests/test_vendor_pgsrip_edge_cases.py",
+        "tests/test_vendor_pgsrip_cli.py"
+      ],
+      "status": "passed"
+    }
+  ],
+  "privacy": {
+    "diagnostic_tokens_recorded": false,
+    "private_hostnames_recorded": false,
+    "private_media_identifiers_recorded": false,
+    "private_paths_recorded": false
+  },
+  "acceptance": {
+    "blocking_case_ids": [],
+    "failed_case_count": 0,
+    "passed": true,
+    "passed_case_count": 6
+  },
+  "result": "accepted_public_safe_summary"
+}

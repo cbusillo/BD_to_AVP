@@ -341,6 +341,66 @@
       "source": "tier3_automation_receipt",
       "source_sha": "22982d5037e3b2bd03bbc9fa25332be2c8b04c97",
       "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-18T22:06:40Z",
+      "case_id": "gui-preview-cancel-cleanup",
+      "receipt_id": "v0.3.2-beta.1:gui-preview-cancel-cleanup:98636e5",
+      "reference": "docs/qualification/v0.3.2-beta.1-change-scoped-evidence-v1.json",
+      "sha256": "5cc4d68088ccb32287f165b4f5d9d39315be870dc17b3363840b9ce9eb5fbdef",
+      "source": "signed_artifact_receipt",
+      "source_sha": "98636e5b7e413b198447954c0d67f6668c10c31e",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-18T22:06:40Z",
+      "case_id": "gui-preview-failure-cleanup",
+      "receipt_id": "v0.3.2-beta.1:gui-preview-failure-cleanup:98636e5",
+      "reference": "docs/qualification/v0.3.2-beta.1-change-scoped-evidence-v1.json",
+      "sha256": "5cc4d68088ccb32287f165b4f5d9d39315be870dc17b3363840b9ce9eb5fbdef",
+      "source": "signed_artifact_receipt",
+      "source_sha": "98636e5b7e413b198447954c0d67f6668c10c31e",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-18T22:06:40Z",
+      "case_id": "network-generated-final-output",
+      "receipt_id": "v0.3.2-beta.1:network-generated-final-output:98636e5",
+      "reference": "docs/qualification/v0.3.2-beta.1-change-scoped-evidence-v1.json",
+      "sha256": "5cc4d68088ccb32287f165b4f5d9d39315be870dc17b3363840b9ce9eb5fbdef",
+      "source": "signed_artifact_receipt",
+      "source_sha": "98636e5b7e413b198447954c0d67f6668c10c31e",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-18T22:06:40Z",
+      "case_id": "overwrite-and-conversion-cancel",
+      "receipt_id": "v0.3.2-beta.1:overwrite-and-conversion-cancel:98636e5",
+      "reference": "docs/qualification/v0.3.2-beta.1-change-scoped-evidence-v1.json",
+      "sha256": "5cc4d68088ccb32287f165b4f5d9d39315be870dc17b3363840b9ce9eb5fbdef",
+      "source": "signed_artifact_receipt",
+      "source_sha": "98636e5b7e413b198447954c0d67f6668c10c31e",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-18T22:06:40Z",
+      "case_id": "malformed-pgs-parser-recovery",
+      "receipt_id": "v0.3.2-beta.1:malformed-pgs-parser-recovery:98636e5",
+      "reference": "docs/qualification/v0.3.2-beta.1-change-scoped-evidence-v1.json",
+      "sha256": "5cc4d68088ccb32287f165b4f5d9d39315be870dc17b3363840b9ce9eb5fbdef",
+      "source": "signed_artifact_receipt",
+      "source_sha": "98636e5b7e413b198447954c0d67f6668c10c31e",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-18T22:06:40Z",
+      "case_id": "subtitle-partial-output-diagnostics",
+      "receipt_id": "v0.3.2-beta.1:subtitle-partial-output-diagnostics:98636e5",
+      "reference": "docs/qualification/v0.3.2-beta.1-change-scoped-evidence-v1.json",
+      "sha256": "5cc4d68088ccb32287f165b4f5d9d39315be870dc17b3363840b9ce9eb5fbdef",
+      "source": "signed_artifact_receipt",
+      "source_sha": "98636e5b7e413b198447954c0d67f6668c10c31e",
+      "status": "accepted"
     }
   ],
   "schema_version": 1
