@@ -6,12 +6,14 @@ enum SetupQueueAdmissionState: Equatable {
     case held(RouteQualityConflict)
     case running
     case completed
+    case attention
+    case stopped
 
     var acceptsChanges: Bool {
         switch self {
         case .waiting, .held:
             true
-        case .running, .completed:
+        case .running, .completed, .attention, .stopped:
             false
         }
     }
@@ -20,6 +22,7 @@ enum SetupQueueAdmissionState: Equatable {
 struct SetupQueueAdmissionItem: Identifiable, Equatable {
     let id: UUID
     let originalDraft: ConversionDraft
+    let originalConflict: RouteQualityConflict?
     var resolvedDraft: ConversionDraft?
     var state: SetupQueueAdmissionState
     var resolutionTrace: DurableQueueResolutionTrace?
@@ -31,6 +34,7 @@ struct SetupQueueAdmissionItem: Identifiable, Equatable {
     ) {
         self.id = id
         originalDraft = draft
+        originalConflict = conflict
         resolvedDraft = conflict == nil ? draft : nil
         state = conflict.map(SetupQueueAdmissionState.held) ?? .waiting
         resolutionTrace = nil
@@ -55,6 +59,7 @@ final class SetupQueueAdmission: ObservableObject {
     @Published private(set) var items: [SetupQueueAdmissionItem] = []
 
     var isBatch: Bool { items.count > 1 }
+    var hasItems: Bool { !items.isEmpty }
 
     var groups: [QueueResolutionGroup] {
         QueueResolutionGroup.group(
@@ -83,6 +88,9 @@ final class SetupQueueAdmission: ObservableObject {
 
     func add(drafts: [ConversionDraft], conflicts: [RouteQualityConflict?] = []) {
         guard !drafts.isEmpty else { return }
+        if items.allSatisfy({ $0.state == .completed || $0.state == .stopped }) {
+            items.removeAll()
+        }
         let suppliedConflicts = conflicts + Array(repeating: nil, count: max(0, drafts.count - conflicts.count))
         items.append(contentsOf: zip(drafts, suppliedConflicts).map {
             SetupQueueAdmissionItem(draft: $0.0, conflict: $0.1)
@@ -142,13 +150,58 @@ final class SetupQueueAdmission: ObservableObject {
         items[index].state = .running
     }
 
+    func markAllRunning() {
+        for index in items.indices where items[index].state == .waiting {
+            items[index].state = .running
+        }
+    }
+
+    func changeResolution(_ id: UUID) {
+        guard let index = items.firstIndex(where: { $0.id == id }),
+              items[index].state == .waiting,
+              let conflict = items[index].originalConflict
+        else {
+            return
+        }
+        items[index].resolvedDraft = nil
+        items[index].resolutionTrace = nil
+        items[index].state = .held(conflict)
+    }
+
+    func synchronize(with runtimeItems: [PersistentQueueItem]) {
+        for runtimeItem in runtimeItems {
+            guard let index = items.firstIndex(where: { $0.id == runtimeItem.id }) else {
+                continue
+            }
+            items[index].resolutionTrace = runtimeItem.resolutionTrace ?? items[index].resolutionTrace
+            switch runtimeItem.status {
+            case .waiting:
+                if items[index].currentDraft != nil {
+                    items[index].state = .waiting
+                }
+            case .inspecting, .processing, .stopping:
+                items[index].state = .running
+            case .completed:
+                items[index].state = .completed
+            case .interrupted, .attention, .failed:
+                items[index].state = .attention
+            case .stopped, .notStarted:
+                items[index].state = .stopped
+            }
+        }
+    }
+
     func durableItems() -> [DurableConversionQueueItem] {
         items.enumerated().compactMap { offset, item in
             guard let draft = item.currentDraft else { return nil }
             return DurableConversionQueueItem(
+                id: item.id,
                 ordinal: offset,
-                origin: item.originalDraft.selectedTitle == nil ? .singleSource : .multiTitle,
+                origin: item.originalDraft.source.kind == .sourceFolder
+                    ? .sourceFolder
+                    : (item.originalDraft.selectedTitle == nil ? .singleSource : .multiTitle),
                 intent: DurableQueueItemIntent(draft: draft),
+                inspection: draft.sourceDetails,
                 resolutionTrace: item.resolutionTrace
             )
         }

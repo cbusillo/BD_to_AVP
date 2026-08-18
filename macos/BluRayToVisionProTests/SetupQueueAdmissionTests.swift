@@ -55,6 +55,46 @@ final class SetupQueueAdmissionTests: XCTestCase {
         XCTAssertEqual(admission.items[1].state, .waiting)
     }
 
+    func testChangeRestoresHeldConflictAndClearsTrace() throws {
+        let draft = makeDraft()
+        let conflict = try conflict(for: draft.options)
+        let admission = SetupQueueAdmission()
+        admission.add(drafts: [draft], conflicts: [conflict])
+        let group = try XCTUnwrap(admission.groups.first)
+        var selection = QueueResolutionSelection()
+        selection.resolutionID = try XCTUnwrap(group.conflict.resolutions.first(where: \.isAvailable)?.id)
+        XCTAssertNoThrow(try admission.apply(group: group, selection: selection).get())
+        let itemID = try XCTUnwrap(admission.items.first?.id)
+
+        admission.changeResolution(itemID)
+
+        XCTAssertFalse(admission.canStart)
+        XCTAssertNil(admission.items.first?.currentDraft)
+        XCTAssertNil(admission.items.first?.resolutionTrace)
+        XCTAssertEqual(admission.groups.first?.candidates.first?.id, itemID)
+    }
+
+    func testDurableAndRuntimeProjectionPreserveIdentityTraceAndState() throws {
+        let draft = makeDraft()
+        let conflict = try conflict(for: draft.options)
+        let admission = SetupQueueAdmission()
+        admission.add(drafts: [draft, draft], conflicts: [conflict, conflict])
+        let group = try XCTUnwrap(admission.groups.first)
+        var selection = QueueResolutionSelection()
+        selection.resolutionID = try XCTUnwrap(group.conflict.resolutions.first(where: \.isAvailable)?.id)
+        XCTAssertNoThrow(try admission.apply(group: group, selection: selection).get())
+
+        var durable = try XCTUnwrap(admission.durableItems().first)
+        XCTAssertEqual(durable.id, admission.items[0].id)
+        XCTAssertEqual(durable.resolutionTrace, admission.items[0].resolutionTrace)
+        durable.state = .processing
+        let projected = try PersistentQueueItem(item: durable)
+        admission.synchronize(with: [projected])
+
+        XCTAssertEqual(admission.items[0].state, .running)
+        XCTAssertEqual(admission.items[0].resolutionTrace, durable.resolutionTrace)
+    }
+
     private func makeDraft() -> ConversionDraft {
         let source = ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/Movie.mkv"))
         return ConversionDraft(

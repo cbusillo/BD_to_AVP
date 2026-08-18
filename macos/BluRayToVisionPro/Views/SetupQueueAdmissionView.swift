@@ -25,7 +25,9 @@ struct SetupQueueAdmissionView: View {
                         )
                     }
                     ForEach(admission.items) { item in
-                        SetupQueueRow(item: item)
+                        SetupQueueRow(item: item) {
+                            admission.changeResolution(item.id)
+                        }
                     }
                 }
             }
@@ -47,6 +49,7 @@ private struct SetupQueueConflictGroupView: View {
     @ObservedObject var memoryStore: ResolutionMemoryStore
     @State private var selection = QueueResolutionSelection()
     @State private var message: String?
+    @State private var loadedSuggestion = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -71,6 +74,24 @@ private struct SetupQueueConflictGroupView: View {
             .pickerStyle(.menu)
             Toggle("Suggest this next time for \(group.profileName)", isOn: $selection.shouldSuggest)
                 .font(.caption)
+            if let suggestion {
+                Text(suggestion.staleExplanation ?? "Suggested for this Profile. You’ll still confirm it with Apply Choice.")
+                    .font(.caption)
+                    .foregroundStyle(suggestion.isStale ? .orange : .secondary)
+                Button("Forget suggestion") {
+                    do {
+                        try memoryStore.forget(
+                            conflictID: group.conflict.stableID,
+                            scope: suggestion.entry.scope
+                        )
+                        selection.resolutionID = nil
+                        message = nil
+                    } catch {
+                        message = error.localizedDescription
+                    }
+                }
+                .buttonStyle(.borderless)
+            }
             HStack {
                 if let message {
                     Text(message)
@@ -108,11 +129,29 @@ private struct SetupQueueConflictGroupView: View {
         .padding(10)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
         .accessibilityIdentifier("queue-conflict-group")
+        .onAppear {
+            guard !loadedSuggestion else { return }
+            loadedSuggestion = true
+            if let suggestion, !suggestion.isStale {
+                selection.resolutionID = suggestion.entry.resolutionID
+            }
+        }
+    }
+
+    private var suggestion: ResolutionMemorySuggestion? {
+        let candidate = group.candidates[0]
+        return memoryStore.suggestion(
+            conflictID: group.conflict.stableID,
+            profileID: candidate.draft.profile.id,
+            sourceKind: candidate.draft.source.kind,
+            mappingVersion: group.conflict.mappingVersion
+        )
     }
 }
 
 private struct SetupQueueRow: View {
     let item: SetupQueueAdmissionItem
+    let change: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -133,8 +172,8 @@ private struct SetupQueueRow: View {
                 }
             }
             Spacer()
-            if item.state.acceptsChanges {
-                Button("Change…") {}
+            if item.state == .waiting, item.originalConflict != nil {
+                Button("Change…", action: change)
                     .buttonStyle(.borderless)
                     .accessibilityIdentifier("queue-row-change")
             }
@@ -148,6 +187,8 @@ private struct SetupQueueRow: View {
         case .held: "Needs a choice · \(item.originalDraft.profile.name)"
         case .running: "Running · \(item.originalDraft.profile.name)"
         case .completed: "Finished · \(item.originalDraft.profile.name)"
+        case .attention: "Needs attention · \(item.originalDraft.profile.name)"
+        case .stopped: "Stopped · \(item.originalDraft.profile.name)"
         }
     }
 
@@ -157,6 +198,8 @@ private struct SetupQueueRow: View {
         case .held: "exclamationmark.circle"
         case .running: "gearshape"
         case .completed: "checkmark.circle"
+        case .attention: "exclamationmark.triangle"
+        case .stopped: "stop.circle"
         }
     }
 }

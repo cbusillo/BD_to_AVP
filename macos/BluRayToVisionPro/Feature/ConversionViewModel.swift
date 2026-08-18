@@ -354,33 +354,59 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
     }
 
     func startConversionQueue(drafts: [ConversionDraft]) {
+        startConversionQueue(
+            entries: drafts.map { QueueStartEntry(id: UUID(), draft: $0, resolutionTrace: nil) }
+        )
+    }
+
+    func startConversionQueue(admissionItems: [SetupQueueAdmissionItem]) {
+        let entries = admissionItems.compactMap { item -> QueueStartEntry? in
+            guard item.state == .waiting, let draft = item.currentDraft else {
+                return nil
+            }
+            return QueueStartEntry(id: item.id, draft: draft, resolutionTrace: item.resolutionTrace)
+        }
+        guard entries.count == admissionItems.count else {
+            return
+        }
+        startConversionQueue(entries: entries)
+    }
+
+    private struct QueueStartEntry {
+        let id: UUID
+        let draft: ConversionDraft
+        let resolutionTrace: DurableQueueResolutionTrace?
+    }
+
+    private func startConversionQueue(entries: [QueueStartEntry]) {
         guard !hasActiveWork,
-              !drafts.isEmpty,
-              drafts.allSatisfy({ draft in
-                  if case .failure = RouteQualityEngine.validate(draft.options) { return false }
+              !entries.isEmpty,
+              entries.allSatisfy({ entry in
+                  if case .failure = RouteQualityEngine.validate(entry.draft.options) { return false }
                   return true
               }),
-              let firstDraft = drafts.first
+              let firstEntry = entries.first
         else {
             return
         }
-        if drafts.count == 1 {
-            startConversion(draft: firstDraft)
+        if entries.count == 1 {
+            startConversion(draft: firstEntry.draft)
             return
         }
         let groupID = UUID()
-        let removeOriginalAfterFinalSuccess = drafts.contains { $0.options.job.removeOriginalAfterSuccess }
-        let normalizedDrafts = drafts.enumerated().map { offset, draft in
-            var options = draft.options
-            options.job.removeOriginalAfterSuccess = removeOriginalAfterFinalSuccess && offset == drafts.count - 1
-            return ConversionDraft(
-                source: draft.source,
-                sourceDetails: draft.sourceDetails,
-                profile: draft.profile,
-                destinationURL: draft.destinationURL,
+        let removeOriginalAfterFinalSuccess = entries.contains { $0.draft.options.job.removeOriginalAfterSuccess }
+        let normalizedEntries = entries.enumerated().map { offset, entry in
+            var options = entry.draft.options
+            options.job.removeOriginalAfterSuccess = removeOriginalAfterFinalSuccess && offset == entries.count - 1
+            let draft = ConversionDraft(
+                source: entry.draft.source,
+                sourceDetails: entry.draft.sourceDetails,
+                profile: entry.draft.profile,
+                destinationURL: entry.draft.destinationURL,
                 options: options,
-                selectedTitle: draft.selectedTitle
+                selectedTitle: entry.draft.selectedTitle
             )
+            return QueueStartEntry(id: entry.id, draft: draft, resolutionTrace: entry.resolutionTrace)
         }
         activeQueueItemID = nil
         titleQueueGroupID = groupID
@@ -394,13 +420,17 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             do {
                 try await self.durableQueueStore.mutateItems { items in
                     let startingOrdinal = items.count
-                    items.append(contentsOf: normalizedDrafts.enumerated().map { offset, draft in
+                    items.append(contentsOf: normalizedEntries.enumerated().map { offset, entry in
                         DurableConversionQueueItem(
+                            id: entry.id,
                             ordinal: startingOrdinal + offset,
                             groupID: groupID,
-                            origin: .multiTitle,
-                            intent: DurableQueueItemIntent(draft: draft),
-                            inspection: draft.sourceDetails
+                            origin: entry.draft.source.kind == .sourceFolder
+                                ? .sourceFolder
+                                : (entry.draft.selectedTitle == nil ? .singleSource : .multiTitle),
+                            intent: DurableQueueItemIntent(draft: entry.draft),
+                            inspection: entry.draft.sourceDetails,
+                            resolutionTrace: entry.resolutionTrace
                         )
                     })
                 }

@@ -82,51 +82,53 @@ struct ContentView: View {
             }
 
             HSplitView {
-                SourceWorkspaceView(
-                    source: viewModel.source,
-                    state: viewModel.state,
-                    batchQueue: viewModel.batchQueue,
-                    isBatchRunning: viewModel.isBatchRunning,
-                    insertedDiscs: insertedDiscs,
-                    makeMKVAvailable: DiscSourceDetector.makeMKVAvailable,
-                    profile: selectedProfile,
-                    options: options,
-                    profileModified: profileModified,
-                    titleSelection: titleSelection,
-                    titleSelectionSummary: titleSelectionSummary,
-                    selectedVideoCount: selectedVideoCount,
-                    queueItems: visibleQueueItems,
-                    destinationURL: $destinationURL,
-                    plannedOutputURLs: plannedOutputURLs,
-                    storageEstimate: VideoStorageEstimate(drafts: conversionDrafts),
-                    refreshDiscs: refreshDiscs,
-                    useDisc: selectSource,
-                    openDiscImage: { chooseFile(.discImage) },
-                    openBluRayFolder: { chooseFolder(.bluRayFolder) },
-                    openSourceFolder: { chooseFolder(.sourceFolder) },
-                    openMKV: { chooseFile(.matroska) },
-                    importTransportStream: { chooseFile(.transportStream) },
-                    changeSource: chooseExistingSource,
-                    chooseDestination: chooseDestination,
-                    retryAnalysis: viewModel.restartInspection,
-                    diagnosticsActionTitle: diagnosticActionTitle,
-                    canShowDiagnostics: canShowDiagnosticAction,
-                    showDiagnostics: showDiagnosticReport,
-                    resolveRecoveryChoice: { choice in
-                        _ = viewModel.resolveRecoveryChoice(choice)
-                    },
-                    retryBatchItem: { itemID, choice in
-                        viewModel.retryBatchItem(itemID, recoveryChoice: choice)
-                    },
-                    selectMainTitle: { titleSelection = .main },
-                    selectAllTitles: { titleSelection = .all },
-                    chooseTitles: { isShowingTitleChooser = true }
-                )
-                .frame(minWidth: 350, idealWidth: 390, maxWidth: 450)
+                if setupQueue.hasItems {
+                    queueSidebar
+                } else {
+                    SourceWorkspaceView(
+                        source: viewModel.source,
+                        state: viewModel.state,
+                        batchQueue: viewModel.batchQueue,
+                        isBatchRunning: viewModel.isBatchRunning,
+                        insertedDiscs: insertedDiscs,
+                        makeMKVAvailable: DiscSourceDetector.makeMKVAvailable,
+                        profile: selectedProfile,
+                        options: options,
+                        profileModified: profileModified,
+                        titleSelection: titleSelection,
+                        titleSelectionSummary: titleSelectionSummary,
+                        selectedVideoCount: selectedVideoCount,
+                        queueItems: visibleQueueItems,
+                        destinationURL: $destinationURL,
+                        plannedOutputURLs: plannedOutputURLs,
+                        storageEstimate: VideoStorageEstimate(drafts: conversionDrafts),
+                        refreshDiscs: refreshDiscs,
+                        useDisc: selectSource,
+                        openDiscImage: { chooseFile(.discImage) },
+                        openBluRayFolder: { chooseFolder(.bluRayFolder) },
+                        openSourceFolder: { chooseFolder(.sourceFolder) },
+                        openMKV: { chooseFile(.matroska) },
+                        importTransportStream: { chooseFile(.transportStream) },
+                        changeSource: chooseExistingSource,
+                        chooseDestination: chooseDestination,
+                        retryAnalysis: viewModel.restartInspection,
+                        diagnosticsActionTitle: diagnosticActionTitle,
+                        canShowDiagnostics: canShowDiagnosticAction,
+                        showDiagnostics: showDiagnosticReport,
+                        resolveRecoveryChoice: { choice in
+                            _ = viewModel.resolveRecoveryChoice(choice)
+                        },
+                        retryBatchItem: { itemID, choice in
+                            viewModel.retryBatchItem(itemID, recoveryChoice: choice)
+                        },
+                        selectMainTitle: { titleSelection = .main },
+                        selectAllTitles: { titleSelection = .all },
+                        chooseTitles: { isShowingTitleChooser = true }
+                    )
+                    .frame(minWidth: 300, idealWidth: 360, maxWidth: 430)
+                }
 
                 setupColumn
-
-                queueSidebar
             }
 
             Divider()
@@ -247,6 +249,9 @@ struct ContentView: View {
             if settings.playSound {
                 NSSound(named: "Glass")?.play()
             }
+        }
+        .onChange(of: viewModel.persistentQueueItems) { _, items in
+            setupQueue.synchronize(with: items)
         }
         .onChange(of: viewModel.state.result?.titles) { _, _ in
             if viewModel.source?.kind != .sourceFolder {
@@ -529,14 +534,16 @@ struct ContentView: View {
             start: startReadyConversion,
             canPreview: previewCanStart,
             canAddToQueue: !conversionDrafts.isEmpty && !viewModel.hasActiveWork,
-            canStart: conversionCanStart
+            canStart: setupQueue.hasItems
+                ? setupQueue.canStart && !viewModel.hasActiveWork
+                : conversionCanStart
         )
-        .frame(minWidth: 570, idealWidth: 680)
+        .frame(minWidth: 500, idealWidth: 680)
     }
 
     @ViewBuilder
     private var queueSidebar: some View {
-        if setupQueue.isBatch {
+        if setupQueue.hasItems {
             SetupQueueAdmissionView(
                 admission: setupQueue,
                 memoryStore: resolutionMemoryStore,
@@ -1132,13 +1139,20 @@ struct ContentView: View {
     }
 
     private func startAdmittedQueue() {
-        let drafts = setupQueue.startableDrafts
-        guard !drafts.isEmpty else { return }
-        viewModel.startConversionQueue(drafts: drafts)
+        guard setupQueue.canStart else { return }
+        if setupQueue.items.count == 1,
+           let draft = setupQueue.items[0].currentDraft
+        {
+            viewModel.startConversion(draft: draft)
+            setupQueue.removeAll()
+            return
+        }
+        viewModel.startConversionQueue(admissionItems: setupQueue.items)
+        setupQueue.markAllRunning()
     }
 
     private func startReadyConversion() {
-        if setupQueue.isBatch {
+        if setupQueue.hasItems {
             startAdmittedQueue()
         } else {
             startSelectedConversions()

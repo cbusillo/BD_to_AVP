@@ -4,6 +4,38 @@ import XCTest
 
 final class ProfileStoreTests: XCTestCase {
     @MainActor
+    func testDeleteRollsBackProfileMemoriesWhenProfileWriteFails() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("profiles.json")
+        var failWrites = false
+        let memoryStore = ResolutionMemoryStore.inMemory()
+        let store = ProfileStore(
+            fileURL: fileURL,
+            dataWriter: { data, url in
+                if failWrites {
+                    throw TestWriteError.failed
+                }
+                try data.write(to: url, options: .atomic)
+            },
+            resolutionMemoryStore: memoryStore
+        )
+        let identifier = try store.createProfile(name: "Rollback", options: EncodingOptions())
+        try memoryStore.store(
+            resolutionID: "keep_requested_workflow:v2",
+            for: "conflict",
+            scope: .profile(identifier),
+            mappingVersion: 2
+        )
+        failWrites = true
+
+        XCTAssertThrowsError(try store.deleteProfile(identifier))
+
+        XCTAssertNotNil(store.customProfiles.first(where: { $0.id == identifier }))
+        XCTAssertNotNil(memoryStore.entries.first(where: { $0.scope == .profile(identifier) }))
+    }
+
+    @MainActor
     func testLegacyBuiltInIdentifiersMigrate() {
         let store = ProfileStore(fileURL: temporaryProfileURL())
 
