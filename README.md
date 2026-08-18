@@ -202,6 +202,15 @@ but this feature does not establish the cause of the output-size report in
 issue #202 and does not claim to fix any separately reported media-specific
 stall. Those observations remain separate diagnostic work.
 
+The native app keeps conversion setup centered on the selected source,
+Profile, destination, and estimated result. Use **Edit…** for per-conversion
+changes, then either apply them to the current conversion, update a custom
+Profile, or save a new Profile. If a source and Profile require a choice before
+they can run together, resolve it inline or use **Add to Queue for Review**;
+the queue preserves those decisions for each source and will not start while
+any item still needs attention. Remembered choices are scoped to the matching
+source and Profile and can be forgotten from the resolution prompt.
+
 ## Terminal Usage
 
 Navigate to the tool's directory in your terminal and execute the command with the required and optional parameters:

@@ -152,6 +152,13 @@ struct WorkerLifecycleState: Equatable {
         resetJobState()
     }
 
+    mutating func prepareQueuedConversion(sourceURL: URL, inspection: SourceInspection) {
+        self.sourceURL = sourceURL
+        phase = .ready
+        resetJobState()
+        result = inspection
+    }
+
     mutating func begin(jobID: UUID, operationKind: WorkerOperationKind = .inspection) throws {
         guard sourceURL != nil else {
             throw WorkerLifecycleError.noSource

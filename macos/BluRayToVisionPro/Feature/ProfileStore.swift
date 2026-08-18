@@ -7,11 +7,13 @@ final class ProfileStore: ObservableObject {
 
     @Published private(set) var customProfiles: [EncodingProfile] = []
     @Published private(set) var loadErrorMessage: String?
+    @Published private(set) var migrationNoticeMessage: String?
 
     private let fileManager: FileManager
     private let fileURL: URL
     private let idGenerator: () -> UUID
     private let dataWriter: (Data, URL) throws -> Void
+    private let resolutionMemoryStore: ResolutionMemoryStore?
     private var writesBlocked = false
 
     init(
@@ -20,12 +22,14 @@ final class ProfileStore: ObservableObject {
         idGenerator: @escaping () -> UUID = UUID.init,
         dataWriter: @escaping (Data, URL) throws -> Void = { data, url in
             try data.write(to: url, options: .atomic)
-        }
+        },
+        resolutionMemoryStore: ResolutionMemoryStore? = nil
     ) {
         self.fileManager = fileManager
         self.fileURL = fileURL ?? Self.defaultFileURL(fileManager: fileManager)
         self.idGenerator = idGenerator
         self.dataWriter = dataWriter
+        self.resolutionMemoryStore = resolutionMemoryStore
         loadProfiles()
     }
 
@@ -54,7 +58,7 @@ final class ProfileStore: ObservableObject {
     func createProfile(
         name: String,
         options: EncodingOptions,
-        jobDefaults: ProfileJobDefaults? = nil
+        pipelineDefaults: ProfilePipelineDefaults? = nil
     ) throws -> String {
         let normalizedName = try validatedName(name)
         let normalizedOptions = try normalizedQualityOptions(options)
@@ -62,7 +66,7 @@ final class ProfileStore: ObservableObject {
             id: "custom.\(idGenerator().uuidString.lowercased())",
             name: normalizedName,
             options: normalizedOptions,
-            jobDefaults: jobDefaults,
+            pipelineDefaults: pipelineDefaults,
             kind: .custom,
             systemImage: "slider.horizontal.3"
         )
@@ -78,7 +82,7 @@ final class ProfileStore: ObservableObject {
         return try createProfile(
             name: suggestedDuplicateName(for: source.name),
             options: source.options,
-            jobDefaults: source.jobDefaults
+            pipelineDefaults: source.pipelineDefaults
         )
     }
 
@@ -90,14 +94,14 @@ final class ProfileStore: ObservableObject {
         guard let profile = customProfiles.first(where: { $0.id == identifier }) else {
             throw ProfileStoreError.builtInProfileIsReadOnly
         }
-        try updateProfile(identifier, name: name, options: options, jobDefaults: profile.jobDefaults)
+        try updateProfile(identifier, name: name, options: options, pipelineDefaults: profile.pipelineDefaults)
     }
 
     func updateProfile(
         _ identifier: String,
         name: String,
         options: EncodingOptions,
-        jobDefaults: ProfileJobDefaults?
+        pipelineDefaults: ProfilePipelineDefaults?
     ) throws {
         guard let index = customProfiles.firstIndex(where: { $0.id == identifier }) else {
             throw ProfileStoreError.builtInProfileIsReadOnly
@@ -106,7 +110,7 @@ final class ProfileStore: ObservableObject {
         var updatedProfiles = customProfiles
         updatedProfiles[index].name = normalizedName
         updatedProfiles[index].options = try normalizedQualityOptions(options)
-        updatedProfiles[index].jobDefaults = jobDefaults
+        updatedProfiles[index].pipelineDefaults = pipelineDefaults
         try persist(updatedProfiles)
         customProfiles = updatedProfiles
     }
@@ -116,7 +120,16 @@ final class ProfileStore: ObservableObject {
             throw ProfileStoreError.builtInProfileIsReadOnly
         }
         let updatedProfiles = customProfiles.filter { $0.id != identifier }
-        try persist(updatedProfiles)
+        let originalMemoryEntries = resolutionMemoryStore?.entries
+        try resolutionMemoryStore?.removeProfileMemories(profileID: identifier)
+        do {
+            try persist(updatedProfiles)
+        } catch {
+            if let originalMemoryEntries {
+                try? resolutionMemoryStore?.replaceEntriesForTransaction(originalMemoryEntries)
+            }
+            throw error
+        }
         customProfiles = updatedProfiles
     }
 
@@ -174,6 +187,7 @@ final class ProfileStore: ObservableObject {
             let version = try decoder.decode(ProfileDocumentVersion.self, from: data).version
             let storedProfiles: [StoredProfile]
             let needsMigration: Bool
+            var affectedLegacyProfileIDs = Set<UUID>()
             switch version {
             case 1:
                 let legacyDocument = try decoder.decode(LegacyProfileDocumentV1.self, from: data)
@@ -189,7 +203,23 @@ final class ProfileStore: ObservableObject {
                 needsMigration = true
             case 4:
                 decoder.userInfo[.requiresVideoQualityIntent] = false
-                storedProfiles = try decoder.decode(ProfileDocument.self, from: data).profiles
+                let legacyDocument = try decoder.decode(LegacyProfileDocumentV4V5.self, from: data)
+                storedProfiles = legacyDocument.profiles.map { $0.migrated() }
+                affectedLegacyProfileIDs = Set(
+                    legacyDocument.profiles
+                        .filter(\.containsUnsafeRunDefaults)
+                        .map(\.id)
+                )
+                needsMigration = true
+            case 5:
+                decoder.userInfo[.requiresVideoQualityIntent] = true
+                let legacyDocument = try decoder.decode(LegacyProfileDocumentV4V5.self, from: data)
+                storedProfiles = legacyDocument.profiles.map { $0.migrated() }
+                affectedLegacyProfileIDs = Set(
+                    legacyDocument.profiles
+                        .filter(\.containsUnsafeRunDefaults)
+                        .map(\.id)
+                )
                 needsMigration = true
             case ProfileDocument.currentVersion:
                 decoder.userInfo[.requiresVideoQualityIntent] = true
@@ -203,17 +233,20 @@ final class ProfileStore: ObservableObject {
                 normalizedProfile.options = try normalizedQualityOptions(profile.options)
                 return normalizedProfile
             }
+            let migrationNotice = migrationNotice(for: loadedProfiles, affectedIDs: affectedLegacyProfileIDs)
             if needsMigration {
                 do {
                     try persist(loadedProfiles)
                 } catch {
                     writesBlocked = true
                     customProfiles = loadedProfiles
+                    migrationNoticeMessage = migrationNotice
                     loadErrorMessage = "Custom profiles were loaded but could not be upgraded. Profile changes are disabled to protect the original library."
                     return
                 }
             }
             customProfiles = loadedProfiles
+            migrationNoticeMessage = migrationNotice
         } catch let error as ProfileStoreError {
             if case let .unsupportedVersion(version) = error {
                 writesBlocked = true
@@ -253,7 +286,7 @@ final class ProfileStore: ObservableObject {
                 id: identifier,
                 name: normalizedName,
                 options: storedProfile.options,
-                jobDefaults: storedProfile.jobDefaults,
+                pipelineDefaults: storedProfile.pipelineDefaults,
                 kind: .custom,
                 systemImage: "slider.horizontal.3"
             )
@@ -276,7 +309,7 @@ final class ProfileStore: ObservableObject {
                 id: identifier,
                 name: profile.name,
                 options: profile.options,
-                jobDefaults: profile.jobDefaults
+                pipelineDefaults: profile.pipelineDefaults
             )
         }
         let document = ProfileDocument(version: ProfileDocument.currentVersion, profiles: storedProfiles)
@@ -285,6 +318,21 @@ final class ProfileStore: ObservableObject {
         let data = try encoder.encode(document)
         try dataWriter(data, fileURL)
         loadErrorMessage = nil
+    }
+
+    private func migrationNotice(for profiles: [EncodingProfile], affectedIDs: Set<UUID>) -> String? {
+        let affectedNames = profiles.compactMap { profile -> String? in
+            guard let identifier = UUID(uuidString: profile.id.replacingOccurrences(of: "custom.", with: "")),
+                  affectedIDs.contains(identifier)
+            else {
+                return nil
+            }
+            return profile.name
+        }
+        guard !affectedNames.isEmpty else {
+            return nil
+        }
+        return "Unsafe saved run defaults were reset for \(affectedNames.joined(separator: ", ")). Restart, overwrite, source removal, error recovery, and command output now apply per conversion."
     }
 
     private func preserveUnreadableFile() -> URL? {
@@ -340,7 +388,7 @@ enum ProfileStoreError: LocalizedError, Equatable {
 }
 
 private struct ProfileDocument: Codable {
-    static let currentVersion = 5
+    static let currentVersion = 6
 
     let version: Int
     let profiles: [StoredProfile]
@@ -354,19 +402,66 @@ private struct StoredProfile: Codable {
     let id: UUID
     let name: String
     let options: EncodingOptions
-    let jobDefaults: ProfileJobDefaults?
+    let pipelineDefaults: ProfilePipelineDefaults?
 
     init(
         id: UUID,
         name: String,
         options: EncodingOptions,
-        jobDefaults: ProfileJobDefaults? = nil
+        pipelineDefaults: ProfilePipelineDefaults? = nil
     ) {
         self.id = id
         self.name = name
         self.options = options
-        self.jobDefaults = jobDefaults
+        self.pipelineDefaults = pipelineDefaults
     }
+}
+
+private struct LegacyProfileDocumentV4V5: Decodable {
+    let version: Int
+    let profiles: [LegacyStoredProfileV4V5]
+}
+
+private struct LegacyStoredProfileV4V5: Decodable {
+    let id: UUID
+    let name: String
+    let options: EncodingOptions
+    let jobDefaults: LegacyProfileJobDefaults?
+
+    var containsUnsafeRunDefaults: Bool {
+        guard let jobDefaults else {
+            return false
+        }
+        return jobDefaults.startStage != .createMKV
+            || jobDefaults.overwriteExisting
+            || jobDefaults.removeOriginalAfterSuccess
+            || jobDefaults.continueOnError
+            || jobDefaults.outputCommands
+    }
+
+    func migrated() -> StoredProfile {
+        StoredProfile(
+            id: id,
+            name: name,
+            options: options,
+            pipelineDefaults: jobDefaults.map {
+                ProfilePipelineDefaults(
+                    intermediatePolicy: $0.intermediatePolicy,
+                    softwareEncoder: $0.softwareEncoder
+                )
+            }
+        )
+    }
+}
+
+private struct LegacyProfileJobDefaults: Decodable {
+    let startStage: ConversionStage
+    let intermediatePolicy: IntermediatePolicy
+    let overwriteExisting: Bool
+    let removeOriginalAfterSuccess: Bool
+    let continueOnError: Bool
+    let softwareEncoder: Bool
+    let outputCommands: Bool
 }
 
 private struct LegacyProfileDocumentV3: Decodable {
