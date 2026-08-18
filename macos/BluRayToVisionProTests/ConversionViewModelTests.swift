@@ -5,6 +5,131 @@ import XCTest
 
 final class ConversionViewModelTests: XCTestCase {
     @MainActor
+    func testSourceScopedResetMatrixResetsOnlySourceState() {
+        let encoding = EncodingOptions(
+            videoOutputMode: .av1Stereo,
+            videoQuality: .custom(
+                mvHEVC: MVHEVCOptions(generatedMergeQuality: 82),
+                av1CRF: 28,
+                upscaleQuality: 88
+            ),
+            av1CRF: 28,
+            upscaleEnabled: true,
+            upscaleQuality: 88,
+            fieldOfView: 110,
+            frameRateOverride: "24000/1001",
+            resolutionOverride: "3840x2160",
+            cropBlackBars: true,
+            swapEyes: true,
+            audioHandling: .pcm,
+            audioBitrate: 512,
+            audioLanguages: AudioLanguagePolicy(
+                mode: .allLanguages,
+                preferredLanguage: .japanese
+            ),
+            subtitles: SubtitlePolicy(
+                mode: .preferredOnly,
+                preferredLanguage: .french
+            )
+        )
+        let job = JobOptions(
+            startStage: .upscaleVideo,
+            intermediatePolicy: .reusable,
+            overwriteExisting: true,
+            removeOriginalAfterSuccess: true,
+            continueOnError: true,
+            softwareEncoder: true,
+            outputCommands: true,
+            keepAwake: false,
+            playSound: false
+        )
+
+        for sourceKind in ConversionSourceKind.allCases {
+            var options = ConversionOptions(encoding: encoding, job: job)
+            var titleSelection = DiscTitleSelection.all
+            let summary = options.resetSourceScopedState(
+                for: sourceKind,
+                titleSelection: &titleSelection,
+                recoveryDecisionPresent: true
+            )
+
+            XCTAssertEqual(summary.choices, SourceScopedResetSummary.Choice.allCases, sourceKind.rawValue)
+            XCTAssertEqual(
+                summary.message,
+                "New source: reset restart stage, overwrite output, delete source after success, recovery choices, and title selection.",
+                sourceKind.rawValue
+            )
+            XCTAssertEqual(options.job.startStage, .createMKV, sourceKind.rawValue)
+            XCTAssertFalse(options.job.overwriteExisting, sourceKind.rawValue)
+            XCTAssertFalse(options.job.removeOriginalAfterSuccess, sourceKind.rawValue)
+            XCTAssertFalse(options.job.continueOnError, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.frameRateOverride, encoding.frameRateOverride, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.resolutionOverride, encoding.resolutionOverride, sourceKind.rawValue)
+            XCTAssertEqual(titleSelection, .main, sourceKind.rawValue)
+
+            XCTAssertEqual(options.encoding.videoOutputMode, encoding.videoOutputMode, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.videoQuality, encoding.videoQuality, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.cropBlackBars, encoding.cropBlackBars, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.swapEyes, encoding.swapEyes, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.audioHandling, encoding.audioHandling, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.audioLanguages, encoding.audioLanguages, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.subtitles, encoding.subtitles, sourceKind.rawValue)
+            XCTAssertEqual(options.job.intermediatePolicy, job.intermediatePolicy, sourceKind.rawValue)
+            XCTAssertEqual(options.job.softwareEncoder, job.softwareEncoder, sourceKind.rawValue)
+            XCTAssertEqual(options.job.outputCommands, job.outputCommands, sourceKind.rawValue)
+            XCTAssertEqual(options.job.keepAwake, job.keepAwake, sourceKind.rawValue)
+            XCTAssertEqual(options.job.playSound, job.playSound, sourceKind.rawValue)
+        }
+    }
+
+    @MainActor
+    func testSourceScopedResetIsSilentWhenNothingChanged() {
+        var options = ConversionOptions()
+        var titleSelection = DiscTitleSelection.main
+
+        let summary = options.resetSourceScopedState(
+            for: .matroska,
+            titleSelection: &titleSelection,
+            recoveryDecisionPresent: false
+        )
+
+        XCTAssertFalse(summary.didReset)
+        XCTAssertNil(summary.message)
+        XCTAssertEqual(options, ConversionOptions())
+        XCTAssertEqual(titleSelection, .main)
+    }
+
+    @MainActor
+    func testPhysicalDiscResetKeepsRemoveOriginalFalse() {
+        var options = ConversionOptions()
+        options.job.removeOriginalAfterSuccess = true
+
+        _ = options.resetSourceScopedState(for: .physicalDisc)
+
+        XCTAssertFalse(options.job.removeOriginalAfterSuccess)
+    }
+
+    @MainActor
+    func testSourceFolderSelectionTransitionsResetLifecycleState() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let firstFolderURL = rootURL.appendingPathComponent("first", isDirectory: true)
+        let secondFolderURL = rootURL.appendingPathComponent("second", isDirectory: true)
+        try FileManager.default.createDirectory(at: firstFolderURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondFolderURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        let viewModel = ConversionViewModel()
+        viewModel.selectSource(ConversionSource(kind: .sourceFolder, url: firstFolderURL))
+        viewModel.selectSource(ConversionSource(kind: .sourceFolder, url: secondFolderURL))
+
+        XCTAssertEqual(viewModel.source?.url, secondFolderURL.standardizedFileURL)
+        XCTAssertEqual(viewModel.batchQueue?.folderSource.url, secondFolderURL.standardizedFileURL)
+        XCTAssertEqual(viewModel.state.phase, .empty)
+        XCTAssertNil(viewModel.state.recoveryDecision)
+    }
+
+    @MainActor
     func testCanonicalObservabilityUpdatesLiveStatusAndPersists() async throws {
         let terminalDelivered = expectation(description: "terminal delivered")
         let observabilityEvent = try makeTestObservabilityEvent(kind: "tool.started")
@@ -796,6 +921,202 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAdmissionQueueRunsMultipleSingleSourceDrafts() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURLs = ["One.mkv", "Two.mkv"].map { directoryURL.appendingPathComponent($0) }
+        for sourceURL in sourceURLs {
+            _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8))
+        }
+        let scenario = BatchWorkerScenario()
+        let queueStore = ConversionQueueStore.inMemory()
+        let viewModel = ConversionViewModel(
+            clientFactory: { scenario.makeClient() },
+            durableQueueStore: queueStore
+        )
+        let admission = SetupQueueAdmission()
+        admission.add(drafts: sourceURLs.map { sourceURL in
+            let inspection = SourceInspection(
+                name: sourceURL.deletingPathExtension().lastPathComponent,
+                resolution: "1920x1080",
+                frameRate: "24/1",
+                interlaced: false,
+                sizeBytes: 10
+            )
+            return ConversionDraft(
+                source: ConversionSource(kind: .matroska, url: sourceURL),
+                sourceDetails: inspection,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: directoryURL,
+                options: ConversionOptions()
+            )
+        })
+
+        viewModel.startConversionQueue(admissionItems: admission.items)
+
+        while queueStore.items.count < sourceURLs.count { await Task.yield() }
+        while viewModel.hasActiveWorker || viewModel.hasQueuedWork { await Task.yield() }
+        XCTAssertEqual(
+            scenario.records.filter { $0.operation == "convert_source" }.map(\.sourcePath),
+            sourceURLs.map(\.path)
+        )
+        XCTAssertEqual(queueStore.items.map(\.origin), [.singleSource, .singleSource])
+        XCTAssertEqual(queueStore.items.map(\.state), [.completed, .completed])
+    }
+
+    @MainActor
+    func testSingleAdmissionQueuePreservesIdentityAndResolutionTrace() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("Movie.mkv")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8))
+        let scenario = BatchWorkerScenario()
+        let queueStore = ConversionQueueStore.inMemory()
+        let viewModel = ConversionViewModel(
+            clientFactory: { scenario.makeClient() },
+            durableQueueStore: queueStore
+        )
+        var options = ConversionOptions()
+        try options.encoding.selectQualityStep(.maximumDetail)
+        let draft = ConversionDraft(
+            source: ConversionSource(kind: .matroska, url: sourceURL),
+            sourceDetails: SourceInspection(
+                name: "Movie",
+                resolution: "1920x1080",
+                frameRate: "24/1",
+                interlaced: false,
+                sizeBytes: 10
+            ),
+            profile: BuiltInProfile.balanced.profile,
+            destinationURL: directoryURL,
+            options: options
+        )
+        guard case let .conflict(conflict) = RouteQualityEngine.propose(
+            options: options,
+            edit: .reusableIntermediates(true)
+        ) else {
+            return XCTFail("Expected reusable-file conflict")
+        }
+        let admission = SetupQueueAdmission()
+        admission.add(drafts: [draft], conflicts: [conflict])
+        let group = try XCTUnwrap(admission.groups.first)
+        var selection = QueueResolutionSelection()
+        selection.resolutionID = try XCTUnwrap(
+            group.conflict.resolutions.first(where: {
+                $0.choice == .keepRequestedWorkflow && $0.isAvailable
+            })?.id
+        )
+        try admission.apply(group: group, selection: selection).get()
+        let admittedItem = try XCTUnwrap(admission.items.first)
+        let trace = try XCTUnwrap(admittedItem.resolutionTrace)
+
+        viewModel.startConversionQueue(admissionItems: admission.items)
+
+        while queueStore.items.isEmpty { await Task.yield() }
+        while viewModel.hasActiveWorker || viewModel.hasQueuedWork { await Task.yield() }
+        let storedItem = try XCTUnwrap(queueStore.items.first)
+        XCTAssertEqual(storedItem.id, admittedItem.id)
+        XCTAssertEqual(storedItem.resolutionTrace, trace)
+        XCTAssertEqual(storedItem.origin, .singleSource)
+        XCTAssertEqual(storedItem.state, .completed)
+    }
+
+    @MainActor
+    func testAdmissionQueueWriteFailureReturnsRowsToClearableAttention() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("Movie.mkv")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8))
+        let queueStore = ConversionQueueStore(
+            fileURL: directoryURL.appendingPathComponent("queue.json"),
+            dataWriter: { _, _ in throw RuntimePersistenceTestError.writeFailed }
+        )
+        let viewModel = ConversionViewModel(durableQueueStore: queueStore)
+        let admission = SetupQueueAdmission()
+        admission.add(drafts: [
+            ConversionDraft(
+                source: ConversionSource(kind: .matroska, url: sourceURL),
+                sourceDetails: SourceInspection(
+                    name: "Movie",
+                    resolution: "1920x1080",
+                    frameRate: "24/1",
+                    interlaced: false,
+                    sizeBytes: 10
+                ),
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: directoryURL,
+                options: ConversionOptions()
+            ),
+        ])
+
+        XCTAssertTrue(viewModel.startConversionQueue(admissionItems: admission.items))
+        admission.markAllRunning()
+        while viewModel.setupQueueStartFailureItemIDs.isEmpty { await Task.yield() }
+        admission.markStartFailed(viewModel.setupQueueStartFailureItemIDs)
+
+        XCTAssertEqual(admission.items.map(\.state), [.attention])
+        XCTAssertTrue(admission.canClear)
+        XCTAssertNotNil(viewModel.durableQueueRuntimeDiagnostic)
+    }
+
+    @MainActor
+    func testAdmissionQueueTerminalWriteFailureReturnsRowsToClearableAttention() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let sourceURL = directoryURL.appendingPathComponent("Movie.mkv")
+        _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data("video".utf8))
+        let writeCount = RuntimePersistenceTestCounter()
+        let queueStore = ConversionQueueStore(
+            fileURL: directoryURL.appendingPathComponent("queue.json"),
+            dataWriter: { data, url in
+                if writeCount.incrementAndReturn() == 3 {
+                    throw RuntimePersistenceTestError.writeFailed
+                }
+                try data.write(to: url, options: .atomic)
+            }
+        )
+        let scenario = BatchWorkerScenario()
+        let viewModel = ConversionViewModel(
+            clientFactory: { scenario.makeClient() },
+            durableQueueStore: queueStore
+        )
+        let admission = SetupQueueAdmission()
+        admission.add(drafts: [
+            ConversionDraft(
+                source: ConversionSource(kind: .matroska, url: sourceURL),
+                sourceDetails: SourceInspection(
+                    name: "Movie",
+                    resolution: "1920x1080",
+                    frameRate: "24/1",
+                    interlaced: false,
+                    sizeBytes: 10
+                ),
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: directoryURL,
+                options: ConversionOptions()
+            ),
+        ])
+
+        XCTAssertTrue(viewModel.startConversionQueue(admissionItems: admission.items))
+        admission.markAllRunning()
+        while viewModel.setupQueueStartFailureItemIDs.isEmpty { await Task.yield() }
+        admission.markStartFailed(viewModel.setupQueueStartFailureItemIDs)
+
+        XCTAssertEqual(admission.items.map(\.state), [.attention])
+        XCTAssertTrue(admission.canClear)
+        XCTAssertEqual(queueStore.items.map(\.state), [.processing])
+        XCTAssertNotNil(viewModel.durableQueueRuntimeDiagnostic)
+    }
+
+    @MainActor
     func testStopActiveWorkerCancelsConversionAndTransitionsToStopping() async throws {
         let inspectionDone = expectation(description: "inspection done")
         let conversionStarted = expectation(description: "conversion started")
@@ -820,6 +1141,12 @@ final class ConversionViewModelTests: XCTestCase {
             )
             viewModel.startConversion(draft: draft)
             await fulfillment(of: [conversionStarted], timeout: 2)
+
+            let admission = SetupQueueAdmission()
+            admission.add(drafts: [draft])
+            XCTAssertFalse(viewModel.startConversionQueue(admissionItems: admission.items))
+            XCTAssertEqual(admission.items.map(\.state), [.waiting])
+            XCTAssertTrue(admission.canClear)
 
             viewModel.stopActiveWorker()
 
@@ -1989,7 +2316,7 @@ final class ConversionViewModelTests: XCTestCase {
     func testDurableSourceFolderQueueFailsClosedWhenStartWritesAreBlocked() async throws {
         try await withTemporaryBatchSources(["feature.mkv"]) { folderURL, _, destinationURL in
             let queueURL = folderURL.appendingPathComponent("queue.json")
-            try Data(#"{"version":2,"items":[]}"#.utf8).write(to: queueURL)
+            try Data("{\"version\":\(ConversionQueueDocument.currentVersion + 1),\"items\":[]}".utf8).write(to: queueURL)
             let queueStore = ConversionQueueStore(fileURL: queueURL)
             var factoryCalls = 0
             let viewModel = ConversionViewModel(

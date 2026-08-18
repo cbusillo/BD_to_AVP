@@ -153,6 +153,18 @@ enum VideoQualityCatalog {
         mapping(for: step, target: target) != nil
     }
 
+    static func qualityTitle(
+        for selection: VideoQualitySelection,
+        target: VideoQualityTarget
+    ) -> String {
+        switch selection {
+        case let .step(step):
+            supports(step, for: target) ? step.title : "Custom"
+        case .custom:
+            "Custom"
+        }
+    }
+
     static func supportsProfileMVHEVCIntent(_ step: QualityStep) -> Bool {
         supports(step, for: .directMVHEVC)
             && supports(step, for: .directMVHEVCMetalFX2x)

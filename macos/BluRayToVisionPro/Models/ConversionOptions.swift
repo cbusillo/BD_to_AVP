@@ -602,37 +602,22 @@ struct JobOptions: Codable, Equatable {
     }
 }
 
-struct ProfileJobDefaults: Codable, Equatable {
-    var startStage = ConversionStage.createMKV
+struct ProfilePipelineDefaults: Codable, Equatable {
     var intermediatePolicy = IntermediatePolicy.automatic
-    var overwriteExisting = false
-    var removeOriginalAfterSuccess = false
-    var continueOnError = false
     var softwareEncoder = false
-    var outputCommands = false
 }
 
 extension JobOptions {
-    var profileDefaults: ProfileJobDefaults {
-        ProfileJobDefaults(
-            startStage: startStage,
+    var profilePipelineDefaults: ProfilePipelineDefaults {
+        ProfilePipelineDefaults(
             intermediatePolicy: intermediatePolicy,
-            overwriteExisting: overwriteExisting,
-            removeOriginalAfterSuccess: removeOriginalAfterSuccess,
-            continueOnError: continueOnError,
-            softwareEncoder: softwareEncoder,
-            outputCommands: outputCommands
+            softwareEncoder: softwareEncoder
         )
     }
 
-    mutating func applyProfileDefaults(_ defaults: ProfileJobDefaults) {
-        startStage = defaults.startStage
+    mutating func applyProfilePipelineDefaults(_ defaults: ProfilePipelineDefaults) {
         intermediatePolicy = defaults.intermediatePolicy
-        overwriteExisting = defaults.overwriteExisting
-        removeOriginalAfterSuccess = defaults.removeOriginalAfterSuccess
-        continueOnError = defaults.continueOnError
         softwareEncoder = defaults.softwareEncoder
-        outputCommands = defaults.outputCommands
     }
 }
 
@@ -650,6 +635,100 @@ struct ConversionOptions: Codable, Equatable {
 
     var compactSummary: String {
         "\(videoSummary) · Audio: \(encoding.audioSummary) · Subtitles: \(encoding.subtitleSummary)"
+    }
+
+    @discardableResult
+    mutating func resetSourceScopedState(
+        for sourceKind: ConversionSourceKind,
+        titleSelection: inout DiscTitleSelection,
+        recoveryDecisionPresent: Bool
+    ) -> SourceScopedResetSummary {
+        SourceScopedResetPolicy.apply(
+            to: &self,
+            sourceKind: sourceKind,
+            titleSelection: &titleSelection,
+            recoveryDecisionPresent: recoveryDecisionPresent
+        )
+    }
+
+    @discardableResult
+    mutating func resetSourceScopedState(
+        for sourceKind: ConversionSourceKind
+    ) -> SourceScopedResetSummary {
+        var titleSelection = DiscTitleSelection.main
+        return resetSourceScopedState(
+            for: sourceKind,
+            titleSelection: &titleSelection,
+            recoveryDecisionPresent: false
+        )
+    }
+}
+
+struct SourceScopedResetSummary: Equatable {
+    enum Choice: String, CaseIterable, Equatable {
+        case restartStage = "restart stage"
+        case overwrite = "overwrite output"
+        case removeOriginal = "delete source after success"
+        case recovery = "recovery choices"
+        case titleSelection = "title selection"
+    }
+
+    let choices: [Choice]
+
+    var didReset: Bool {
+        !choices.isEmpty
+    }
+
+    var message: String? {
+        guard didReset else {
+            return nil
+        }
+        let labels = choices.map(\.rawValue)
+        let choicesText: String
+        if labels.count == 1 {
+            choicesText = labels[0]
+        } else if labels.count == 2 {
+            choicesText = labels.joined(separator: " and ")
+        } else {
+            choicesText = labels.dropLast().joined(separator: ", ") + ", and " + labels.last!
+        }
+        return "New source: reset \(choicesText)."
+    }
+}
+
+private enum SourceScopedResetPolicy {
+    static func apply(
+        to options: inout ConversionOptions,
+        sourceKind: ConversionSourceKind,
+        titleSelection: inout DiscTitleSelection,
+        recoveryDecisionPresent: Bool
+    ) -> SourceScopedResetSummary {
+        var choices: [SourceScopedResetSummary.Choice] = []
+
+        if options.job.startStage != .createMKV {
+            options.job.startStage = .createMKV
+            choices.append(.restartStage)
+        }
+        if options.job.overwriteExisting {
+            options.job.overwriteExisting = false
+            choices.append(.overwrite)
+        }
+        let removeOriginalWasEnabled = options.job.removeOriginalAfterSuccess
+        if removeOriginalWasEnabled || sourceKind == .physicalDisc {
+            options.job.removeOriginalAfterSuccess = false
+            if removeOriginalWasEnabled {
+                choices.append(.removeOriginal)
+            }
+        }
+        if options.job.continueOnError || recoveryDecisionPresent {
+            options.job.continueOnError = false
+            choices.append(.recovery)
+        }
+        if titleSelection != .main {
+            titleSelection = .main
+            choices.append(.titleSelection)
+        }
+        return SourceScopedResetSummary(choices: choices)
     }
 }
 
