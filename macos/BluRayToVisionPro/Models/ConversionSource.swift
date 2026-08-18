@@ -144,11 +144,21 @@ struct ConversionSource: Equatable {
 }
 
 enum DiscSourceDetector {
-    private static let makeMKVPath = "/Applications/MakeMKV.app/Contents/MacOS/makemkvcon"
+    static let makeMKVExecutablePaths = [
+        "/Applications/MakeMKV.app/Contents/MacOS/makemkvcon",
+        "/Applications/MakeMKV/MakeMKV.app/Contents/MacOS/makemkvcon",
+    ]
     static let makeMKVDownloadURL = URL(string: "https://www.makemkv.com/download/")
 
     static var makeMKVAvailable: Bool {
-        FileManager.default.isExecutableFile(atPath: makeMKVPath)
+        hasMakeMKVExecutable(at: makeMKVExecutablePaths)
+    }
+
+    static func hasMakeMKVExecutable(
+        at paths: [String],
+        fileManager: FileManager = .default
+    ) -> Bool {
+        paths.contains(where: fileManager.isExecutableFile(atPath:))
     }
 
     static func insertedDiscs(fileManager: FileManager = .default) -> [ConversionSource] {

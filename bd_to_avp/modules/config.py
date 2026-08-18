@@ -21,7 +21,10 @@ SCRIPT_PATH = Path(__file__).parent.parent
 SCRIPT_PATH_BIN = SCRIPT_PATH / "bin"
 HOMEBREW_PREFIX = Path("/opt/homebrew")
 HOMEBREW_PREFIX_BIN = HOMEBREW_PREFIX / "bin"
-MAKEMKV_APP_BUNDLE_BIN = Path("/Applications/MakeMKV.app/Contents/MacOS")
+MAKEMKV_APP_BUNDLE_BINS = (
+    Path("/Applications/MakeMKV.app/Contents/MacOS"),
+    Path("/Applications/MakeMKV/MakeMKV.app/Contents/MacOS"),
+)
 
 
 def tool_env_var(tool_name: str) -> str:
@@ -58,8 +61,8 @@ def resolve_tool_path(
 
 
 def resolve_makemkvcon_path() -> Path:
-    app_bundle_tool = MAKEMKV_APP_BUNDLE_BIN / "makemkvcon"
-    return resolve_tool_path("makemkvcon", extra_paths=[app_bundle_tool])
+    app_bundle_tools = [bundle_bin / "makemkvcon" for bundle_bin in MAKEMKV_APP_BUNDLE_BINS]
+    return resolve_tool_path("makemkvcon", extra_paths=app_bundle_tools)
 
 
 class Stage(Enum):

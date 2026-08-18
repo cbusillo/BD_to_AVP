@@ -741,6 +741,32 @@ final class ConversionWorkflowTests: XCTestCase {
         }
     }
 
+    func testMakeMKVDiscoverySupportsDirectAndNestedApplicationLocations() throws {
+        XCTAssertEqual(
+            DiscSourceDetector.makeMKVExecutablePaths,
+            [
+                "/Applications/MakeMKV.app/Contents/MacOS/makemkvcon",
+                "/Applications/MakeMKV/MakeMKV.app/Contents/MacOS/makemkvcon",
+            ]
+        )
+
+        try withTemporaryDirectory { directoryURL in
+            let missingURL = directoryURL.appendingPathComponent("missing-makemkvcon")
+            let executableURL = directoryURL.appendingPathComponent("makemkvcon")
+            try Data().write(to: executableURL)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: executableURL.path
+            )
+
+            XCTAssertTrue(
+                DiscSourceDetector.hasMakeMKVExecutable(
+                    at: [missingURL.path, executableURL.path]
+                )
+            )
+        }
+    }
+
     func testInsertedDiscDetectionCarriesResolvedDevicePath() throws {
         try withTemporaryDirectory { volumeURL in
             try FileManager.default.createDirectory(
