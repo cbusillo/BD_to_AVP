@@ -148,9 +148,10 @@ def download_archive(asset: RuntimeAsset, cache_root: Path = CACHE_ROOT) -> Path
     temporary_path.unlink(missing_ok=True)
     request = urllib.request.Request(asset.url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response, temporary_path.open(
-            "wb"
-        ) as output:
+        with (
+            urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response,
+            temporary_path.open("wb") as output,
+        ):
             shutil.copyfileobj(response, output)
         verify_archive(temporary_path, asset)
         os.replace(temporary_path, archive_path)
