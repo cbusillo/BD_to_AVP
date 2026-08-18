@@ -4,6 +4,21 @@ enum AppWindowID {
     static let settings = "settings"
 }
 
+struct ConversionSourceSelectionAction {
+    let perform: () -> Void
+}
+
+private struct ConversionSourceSelectionActionKey: FocusedValueKey {
+    typealias Value = ConversionSourceSelectionAction
+}
+
+extension FocusedValues {
+    var conversionSourceSelectionAction: ConversionSourceSelectionAction? {
+        get { self[ConversionSourceSelectionActionKey.self] }
+        set { self[ConversionSourceSelectionActionKey.self] = newValue }
+    }
+}
+
 @main
 struct BluRayToVisionProApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -82,14 +97,7 @@ struct BluRayToVisionProApp: App {
         .commands {
             SettingsWindowCommands()
             UpdateCommands(updater: updater)
-
-            CommandGroup(replacing: .newItem) {
-                Button("Add Source…") {
-                    chooseSource()
-                }
-                .keyboardShortcut("o")
-                .disabled(!viewModel.canSelectSource || previewViewModel.hasActiveWorker)
-            }
+            SourceCommands()
         }
 
         Window("Settings", id: AppWindowID.settings) {
@@ -103,15 +111,19 @@ struct BluRayToVisionProApp: App {
         .windowResizability(.contentMinSize)
     }
 
-    @MainActor
-    private func chooseSource() {
-        guard viewModel.canSelectSource, !previewViewModel.hasActiveWorker else {
-            return
+}
+
+private struct SourceCommands: Commands {
+    @FocusedValue(\.conversionSourceSelectionAction) private var sourceSelectionAction
+
+    var body: some Commands {
+        CommandGroup(replacing: .newItem) {
+            Button("Add Source…") {
+                sourceSelectionAction?.perform()
+            }
+            .keyboardShortcut("o")
+            .disabled(sourceSelectionAction == nil)
         }
-        guard let sourceURL = SourcePicker.chooseExistingSource() else {
-            return
-        }
-        viewModel.selectSource(sourceURL)
     }
 }
 

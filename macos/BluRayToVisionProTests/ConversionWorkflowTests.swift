@@ -319,6 +319,7 @@ final class ConversionWorkflowTests: XCTestCase {
         XCTAssertEqual(route.kind, .existingArtifact)
         XCTAssertTrue(route.includesUpscale)
         XCTAssertEqual(route.title, "Existing artifact + 2× upscale")
+        XCTAssertEqual(route.qualityTitle, "Custom")
         XCTAssertEqual(route.settingsSummary, "Custom · upscale quality 66")
         XCTAssertEqual(route.speedGuidance, "Reuses the encoded artifact and runs file upscale.")
 
@@ -327,6 +328,7 @@ final class ConversionWorkflowTests: XCTestCase {
 
         XCTAssertFalse(route.includesUpscale)
         XCTAssertEqual(route.title, "Existing encoded video artifact")
+        XCTAssertEqual(route.qualityTitle, "Not applied")
         XCTAssertEqual(route.settingsSummary, "No video re-encode")
         XCTAssertEqual(route.speedGuidance, "Reuses the encoded artifact.")
     }

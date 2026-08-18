@@ -54,67 +54,73 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testCustomProfilePersistsFilesAndRecoveryDefaults() throws {
+    func testCustomProfilePersistsPipelineDefaultsOnly() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         let fileURL = directoryURL.appendingPathComponent("profiles.json")
         let identifier = UUID(uuidString: "6C02DFB0-2B6A-4F6D-9335-3703487FB9D7")!
-        let jobDefaults = ProfileJobDefaults(
-            startStage: .extractMVCAndAudio,
+        let pipelineDefaults = ProfilePipelineDefaults(
             intermediatePolicy: .reusable,
-            overwriteExisting: true,
-            removeOriginalAfterSuccess: true,
-            continueOnError: true,
-            softwareEncoder: true,
-            outputCommands: true
+            softwareEncoder: true
         )
         let store = ProfileStore(fileURL: fileURL, idGenerator: { identifier })
 
         let profileID = try store.createProfile(
-            name: "Recovery",
+            name: "Reusable",
             options: EncodingOptions(),
-            jobDefaults: jobDefaults
+            pipelineDefaults: pipelineDefaults
         )
         let restoredProfile = ProfileStore(fileURL: fileURL).profile(withID: profileID)
 
-        XCTAssertEqual(restoredProfile.jobDefaults, jobDefaults)
+        XCTAssertEqual(restoredProfile.pipelineDefaults, pipelineDefaults)
     }
 
-    func testApplyingProfileJobDefaultsPreservesGlobalPreferences() {
-        var job = JobOptions(keepAwake: false, playSound: false)
-        job.applyProfileDefaults(
-            ProfileJobDefaults(
+    func testApplyingProfilePipelineDefaultsLeavesRunScopedOptionsUntouched() {
+        var job = JobOptions(
+            startStage: .extractMVCAndAudio,
+            overwriteExisting: true,
+            removeOriginalAfterSuccess: true,
+            continueOnError: true,
+            outputCommands: true,
+            keepAwake: false,
+            playSound: false
+        )
+        job.applyProfilePipelineDefaults(
+            ProfilePipelineDefaults(
                 intermediatePolicy: .reusable,
-                overwriteExisting: true,
                 softwareEncoder: true
             )
         )
 
+        XCTAssertEqual(job.startStage, .extractMVCAndAudio)
         XCTAssertEqual(job.intermediatePolicy, .reusable)
         XCTAssertTrue(job.overwriteExisting)
+        XCTAssertTrue(job.removeOriginalAfterSuccess)
+        XCTAssertTrue(job.continueOnError)
         XCTAssertTrue(job.softwareEncoder)
+        XCTAssertTrue(job.outputCommands)
         XCTAssertFalse(job.keepAwake)
         XCTAssertFalse(job.playSound)
     }
 
     @MainActor
-    func testUpdatingProfileWithoutJobDefaultsPreservesSavedFilesAndRecoveryDefaults() throws {
+    func testUpdatingProfileWithoutPipelineDefaultsPreservesPipelineDefaults() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         let fileURL = directoryURL.appendingPathComponent("profiles.json")
         let identifier = UUID(uuidString: "9B58E388-CB38-46ED-ADE4-F690F6A40D81")!
-        let jobDefaults = ProfileJobDefaults(overwriteExisting: true, continueOnError: true)
+        let pipelineDefaults = ProfilePipelineDefaults(intermediatePolicy: .reusable, softwareEncoder: true)
         let store = ProfileStore(fileURL: fileURL, idGenerator: { identifier })
         let profileID = try store.createProfile(
-            name: "Preserve Recovery",
+            name: "Preserve Pipeline",
             options: EncodingOptions(),
-            jobDefaults: jobDefaults
+            pipelineDefaults: pipelineDefaults
         )
 
-        try store.updateProfile(profileID, name: "Renamed Recovery", options: EncodingOptions())
+        try store.updateProfile(profileID, name: "Renamed Pipeline", options: EncodingOptions())
 
-        XCTAssertEqual(store.profile(withID: profileID).jobDefaults, jobDefaults)
-        XCTAssertEqual(ProfileStore(fileURL: fileURL).profile(withID: profileID).jobDefaults, jobDefaults)
+        XCTAssertEqual(store.profile(withID: profileID).pipelineDefaults, pipelineDefaults)
+        XCTAssertEqual(ProfileStore(fileURL: fileURL).profile(withID: profileID).pipelineDefaults, pipelineDefaults)
     }
 
     @MainActor
@@ -214,7 +220,7 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testVersionFourPersistenceWritesCurrentIntentAndStableMirrorKeys() throws {
+    func testVersionSixPersistenceWritesCurrentIntentAndStableMirrorKeys() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         let fileURL = directoryURL.appendingPathComponent("profiles.json")
@@ -230,7 +236,7 @@ final class ProfileStoreTests: XCTestCase {
         let document = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
         )
-        XCTAssertEqual(document["version"] as? Int, 5)
+        XCTAssertEqual(document["version"] as? Int, 6)
         let profiles = try XCTUnwrap(document["profiles"] as? [[String: Any]])
         let persistedOptions = try XCTUnwrap(profiles.first?["options"] as? [String: Any])
         let currentMVHEVC = try XCTUnwrap(persistedOptions["mvHEVC"] as? [String: Any])
@@ -316,6 +322,149 @@ final class ProfileStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fileURL.appendingPathExtension("corrupt")), data)
     }
 
+    @MainActor
+    func testVersionFiveMigrationPreservesEncodingAndPipelineButDropsEveryUnsafeDefault() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        var options = EncodingOptions()
+        options.mvHEVC.generatedMergeQuality = 84
+        options.audioLanguages = AudioLanguagePolicy(mode: .preferredOnly, preferredLanguage: .japanese)
+        let expectedOptions = try options.normalizedQualityState()
+        let document: [String: Any] = [
+            "version": 5,
+            "profiles": [
+                [
+                    "id": "A4CC523E-72FA-4F36-A38D-1FB0D6A84742",
+                    "name": "Risky Library",
+                    "options": try encodedOptions(options),
+                    "jobDefaults": [
+                        "startStage": ConversionStage.extractMVCAndAudio.rawValue,
+                        "intermediatePolicy": IntermediatePolicy.reusable.rawValue,
+                        "overwriteExisting": true,
+                        "removeOriginalAfterSuccess": true,
+                        "continueOnError": true,
+                        "softwareEncoder": true,
+                        "outputCommands": true,
+                    ],
+                ]
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]).write(to: fileURL)
+
+        let store = ProfileStore(fileURL: fileURL)
+        let profile = try XCTUnwrap(store.customProfiles.first)
+
+        XCTAssertEqual(profile.id, "custom.a4cc523e-72fa-4f36-a38d-1fb0d6a84742")
+        XCTAssertEqual(profile.name, "Risky Library")
+        XCTAssertEqual(profile.options, expectedOptions)
+        XCTAssertEqual(
+            profile.pipelineDefaults,
+            ProfilePipelineDefaults(intermediatePolicy: .reusable, softwareEncoder: true)
+        )
+        XCTAssertTrue(store.migrationNoticeMessage?.contains("Risky Library") == true)
+
+        let migratedDocument = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
+        )
+        XCTAssertEqual(migratedDocument["version"] as? Int, 6)
+        let migratedProfile = try XCTUnwrap(
+            (migratedDocument["profiles"] as? [[String: Any]])?.first
+        )
+        let pipelineDefaults = try XCTUnwrap(migratedProfile["pipelineDefaults"] as? [String: Any])
+        XCTAssertEqual(pipelineDefaults["intermediatePolicy"] as? String, "reusable")
+        XCTAssertEqual(pipelineDefaults["softwareEncoder"] as? Bool, true)
+        XCTAssertNil(migratedProfile["jobDefaults"])
+        XCTAssertNil(pipelineDefaults["startStage"])
+        XCTAssertNil(pipelineDefaults["overwriteExisting"])
+        XCTAssertNil(pipelineDefaults["removeOriginalAfterSuccess"])
+        XCTAssertNil(pipelineDefaults["continueOnError"])
+        XCTAssertNil(pipelineDefaults["outputCommands"])
+    }
+
+    @MainActor
+    func testVersionFiveMigrationIsIdempotentAfterWritingVersionSix() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        let document: [String: Any] = [
+            "version": 5,
+            "profiles": [
+                [
+                    "id": "A4CC523E-72FA-4F36-A38D-1FB0D6A84742",
+                    "name": "Idempotent",
+                    "options": try encodedOptions(EncodingOptions()),
+                    "jobDefaults": [
+                        "startStage": ConversionStage.createMKV.rawValue,
+                        "intermediatePolicy": IntermediatePolicy.automatic.rawValue,
+                        "overwriteExisting": false,
+                        "removeOriginalAfterSuccess": false,
+                        "continueOnError": false,
+                        "softwareEncoder": false,
+                        "outputCommands": false,
+                    ],
+                ]
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]).write(to: fileURL)
+
+        let migratedStore = ProfileStore(fileURL: fileURL)
+        let migratedData = try Data(contentsOf: fileURL)
+        let reopenedStore = ProfileStore(fileURL: fileURL)
+
+        XCTAssertEqual(reopenedStore.customProfiles, migratedStore.customProfiles)
+        XCTAssertNil(reopenedStore.migrationNoticeMessage)
+        XCTAssertEqual(try Data(contentsOf: fileURL), migratedData)
+    }
+
+    @MainActor
+    func testVersionFiveMigrationWriteFailureKeepsOriginalAndSafeInMemoryProfiles() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        let document: [String: Any] = [
+            "version": 5,
+            "profiles": [
+                [
+                    "id": "A4CC523E-72FA-4F36-A38D-1FB0D6A84742",
+                    "name": "Read Only",
+                    "options": try encodedOptions(EncodingOptions()),
+                    "jobDefaults": [
+                        "startStage": ConversionStage.extractSubtitles.rawValue,
+                        "intermediatePolicy": IntermediatePolicy.reusable.rawValue,
+                        "overwriteExisting": true,
+                        "removeOriginalAfterSuccess": true,
+                        "continueOnError": true,
+                        "softwareEncoder": true,
+                        "outputCommands": true,
+                    ],
+                ]
+            ],
+        ]
+        let originalData = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
+        try originalData.write(to: fileURL)
+
+        let store = ProfileStore(
+            fileURL: fileURL,
+            dataWriter: { _, _ in throw TestWriteError.failed }
+        )
+        let profile = try XCTUnwrap(store.customProfiles.first)
+
+        XCTAssertEqual(
+            profile.pipelineDefaults,
+            ProfilePipelineDefaults(intermediatePolicy: .reusable, softwareEncoder: true)
+        )
+        XCTAssertTrue(store.migrationNoticeMessage?.contains("Read Only") == true)
+        XCTAssertNotNil(store.loadErrorMessage)
+        XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
+        XCTAssertThrowsError(try store.createProfile(name: "Blocked", options: EncodingOptions())) { error in
+            XCTAssertEqual(error as? ProfileStoreError, .recoveryRequired)
+        }
+    }
+
     func testEncodingOptionsRejectMismatchedCompatibilityKeys() throws {
         var encoded = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: JSONEncoder().encode(EncodingOptions())) as? [String: Any]
@@ -370,7 +519,7 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testVersionTwoProfilesMigrateAllAudioHandlingRawValuesToVersionFive() throws {
+    func testVersionTwoProfilesMigrateAllAudioHandlingRawValuesToVersionSix() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -411,7 +560,7 @@ final class ProfileStoreTests: XCTestCase {
         let persistedDocument = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
         )
-        XCTAssertEqual(persistedDocument["version"] as? Int, 5)
+        XCTAssertEqual(persistedDocument["version"] as? Int, 6)
         let persistedProfiles = try XCTUnwrap(persistedDocument["profiles"] as? [[String: Any]])
         let persistedRawValues = try persistedProfiles.map { profile in
             let options = try XCTUnwrap(profile["options"] as? [String: Any])
@@ -421,7 +570,7 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testVersionThreeProfilesMigrateToAllAudioLanguagesInVersionFive() throws {
+    func testVersionThreeProfilesMigrateToAllAudioLanguagesInVersionSix() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -451,7 +600,7 @@ final class ProfileStoreTests: XCTestCase {
         let persistedDocument = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
         )
-        XCTAssertEqual(persistedDocument["version"] as? Int, 5)
+        XCTAssertEqual(persistedDocument["version"] as? Int, 6)
         let persistedProfiles = try XCTUnwrap(persistedDocument["profiles"] as? [[String: Any]])
         let persistedOptions = try XCTUnwrap(persistedProfiles.first?["options"] as? [String: Any])
         let audioLanguages = try XCTUnwrap(persistedOptions["audioLanguages"] as? [String: Any])
@@ -460,7 +609,7 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testVersionOneProfilesMigrateAtomicallyToCanonicalVersionFiveData() throws {
+    func testVersionOneProfilesMigrateAtomicallyToCanonicalVersionSixData() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -530,7 +679,7 @@ final class ProfileStoreTests: XCTestCase {
         let migratedJSON = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
         )
-        XCTAssertEqual(migratedJSON["version"] as? Int, 5)
+        XCTAssertEqual(migratedJSON["version"] as? Int, 6)
         let profiles = try XCTUnwrap(migratedJSON["profiles"] as? [[String: Any]])
         let options = try XCTUnwrap(profiles.first?["options"] as? [String: Any])
         let subtitles = try XCTUnwrap(options["subtitles"] as? [String: Any])
@@ -635,6 +784,35 @@ final class ProfileStoreTests: XCTestCase {
         XCTAssertFalse(store.customProfiles.contains { $0.id == firstID })
         XCTAssertEqual(store.profile(withID: firstID).id, BuiltInProfile.balanced.id)
         XCTAssertEqual(store.normalizedProfileID(firstID), BuiltInProfile.balanced.id)
+    }
+
+    @MainActor
+    func testDuplicateProfilePreservesEncodingAndPipelineDefaults() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        var identifiers = [
+            UUID(uuidString: "6C02DFB0-2B6A-4F6D-9335-3703487FB9D7")!,
+            UUID(uuidString: "9B58E388-CB38-46ED-ADE4-F690F6A40D81")!,
+        ].makeIterator()
+        let store = ProfileStore(fileURL: fileURL, idGenerator: { identifiers.next()! })
+        var options = EncodingOptions()
+        options.mvHEVC.generatedMergeQuality = 84
+        let pipelineDefaults = ProfilePipelineDefaults(intermediatePolicy: .reusable, softwareEncoder: true)
+
+        let originalID = try store.createProfile(
+            name: "Theater",
+            options: options,
+            pipelineDefaults: pipelineDefaults
+        )
+        let duplicateID = try store.duplicateProfile(originalID)
+
+        XCTAssertEqual(store.profile(withID: duplicateID).name, "Theater Copy")
+        XCTAssertEqual(store.profile(withID: duplicateID).options, store.profile(withID: originalID).options)
+        XCTAssertEqual(
+            store.profile(withID: duplicateID).pipelineDefaults,
+            store.profile(withID: originalID).pipelineDefaults
+        )
     }
 
     @MainActor
@@ -745,6 +923,12 @@ final class ProfileStoreTests: XCTestCase {
 
     private func legacyDocument(profiles: [[String: Any]]) throws -> Data {
         try JSONSerialization.data(withJSONObject: ["version": 1, "profiles": profiles], options: [.sortedKeys])
+    }
+
+    private func encodedOptions(_ options: EncodingOptions) throws -> [String: Any] {
+        try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(options)) as? [String: Any]
+        )
     }
 
     private func optionsJSON(audioHandlingRawValue: String) throws -> [String: Any] {

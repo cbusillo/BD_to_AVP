@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var isShowingPreview = false
     @State private var pendingReviewedPreview: PreviewDraft?
     @State private var titleSelection = DiscTitleSelection.main
+    @State private var sourceResetMessage: String?
     @State private var isShowingTitleChooser = false
     @State private var isShowingDiagnosticReport = false
     @State private var isRefreshingDiscs = false
@@ -46,8 +47,8 @@ struct ContentView: View {
 
         let profile = profileStore.profile(withID: settings.selectedProfileID)
         var initialJobOptions = Self.jobOptions(from: settings)
-        if let jobDefaults = profile.jobDefaults {
-            initialJobOptions.applyProfileDefaults(jobDefaults)
+        if let pipelineDefaults = profile.pipelineDefaults {
+            initialJobOptions.applyProfilePipelineDefaults(pipelineDefaults)
         }
         let initialOptions = ConversionOptions(
             encoding: profile.options,
@@ -61,6 +62,14 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let migrationNoticeMessage = profileStore.migrationNoticeMessage {
+                Label(migrationNoticeMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal)
+                    .padding(.vertical, 10)
+            }
+
             HSplitView {
                 SourceWorkspaceView(
                     source: viewModel.source,
@@ -136,6 +145,7 @@ struct ContentView: View {
             }
         }
         .accessibilityIdentifier("main-window-content")
+        .focusedSceneValue(\.conversionSourceSelectionAction, sourceSelectionAction)
         .toolbar { toolbarContent }
         .animation(.easeInOut(duration: 0.18), value: isShowingActivity)
         .dropDestination(for: URL.self, action: acceptDrop) { targeted in
@@ -195,7 +205,7 @@ struct ContentView: View {
         }
         .onChange(of: defaultJobOptions) { _, newValue in
             if viewModel.source == nil, !viewModel.hasActiveWork {
-                if selectedProfile.jobDefaults == nil {
+                if selectedProfile.pipelineDefaults == nil {
                     options.job = newValue
                 } else {
                     options.job.keepAwake = newValue.keepAwake
@@ -255,12 +265,12 @@ struct ContentView: View {
                   let currentProfile = currentProfiles.first(where: { $0.id == selectedProfileID }),
                   !viewModel.hasActiveWork,
                   options.encoding == previousProfile.options,
-                  options.job.profileDefaults == profileJobDefaults(for: previousProfile)
+                  options.job.profilePipelineDefaults == profilePipelineDefaults(for: previousProfile)
             else {
                 return
             }
             options.encoding = currentProfile.options
-            options.job.applyProfileDefaults(profileJobDefaults(for: currentProfile))
+            options.job.applyProfilePipelineDefaults(profilePipelineDefaults(for: currentProfile))
         }
         .sheet(isPresented: $isShowingSaveProfile) {
             SaveProfileSheet(name: $newProfileName) {
@@ -305,6 +315,13 @@ struct ContentView: View {
         } message: {
             Text(profileErrorMessage ?? "The profile could not be saved.")
         }
+    }
+
+    private var sourceSelectionAction: ConversionSourceSelectionAction? {
+        guard canSelectSource else {
+            return nil
+        }
+        return ConversionSourceSelectionAction(perform: chooseExistingSource)
     }
 
     @ToolbarContentBuilder
@@ -375,6 +392,13 @@ struct ContentView: View {
                     Text(secondaryStatusText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+                if let sourceResetMessage {
+                    Label(sourceResetMessage, systemImage: "arrow.uturn.backward.circle")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .help(sourceResetMessage)
                 }
             }
             .accessibilityElement(children: .combine)
@@ -501,7 +525,7 @@ struct ContentView: View {
 
     private var profileModified: Bool {
         options.encoding != selectedProfile.options
-            || options.job.profileDefaults != profileJobDefaults(for: selectedProfile)
+            || options.job.profilePipelineDefaults != profilePipelineDefaults(for: selectedProfile)
     }
 
     private var defaultJobOptions: JobOptions {
@@ -642,6 +666,9 @@ struct ContentView: View {
         var components = ["Status: \(statusText)"]
         if let secondaryStatusText {
             components.append(secondaryStatusText)
+        }
+        if let sourceResetMessage {
+            components.append(sourceResetMessage)
         }
         if let elapsedText = viewModel.state.elapsedText, viewModel.hasActiveWorker {
             components.append("Elapsed time \(elapsedText)")
@@ -823,11 +850,11 @@ struct ContentView: View {
     private func resetProfile() {
         options.encoding = selectedProfile.options
         options.job = defaultJobOptions
-        options.job.applyProfileDefaults(profileJobDefaults(for: selectedProfile))
+        options.job.applyProfilePipelineDefaults(profilePipelineDefaults(for: selectedProfile))
     }
 
-    private func profileJobDefaults(for profile: EncodingProfile) -> ProfileJobDefaults {
-        profile.jobDefaults ?? defaultJobOptions.profileDefaults
+    private func profilePipelineDefaults(for profile: EncodingProfile) -> ProfilePipelineDefaults {
+        profile.pipelineDefaults ?? defaultJobOptions.profilePipelineDefaults
     }
 
     private static func jobOptions(from settings: AppSettings) -> JobOptions {
@@ -848,7 +875,7 @@ struct ContentView: View {
                 selectedProfile.id,
                 name: selectedProfile.name,
                 options: options.encoding,
-                jobDefaults: options.job.profileDefaults
+                pipelineDefaults: options.job.profilePipelineDefaults
             )
         } catch {
             profileErrorMessage = error.localizedDescription
@@ -865,7 +892,7 @@ struct ContentView: View {
             let identifier = try profileStore.createProfile(
                 name: newProfileName,
                 options: options.encoding,
-                jobDefaults: options.job.profileDefaults
+                pipelineDefaults: options.job.profilePipelineDefaults
             )
             selectedProfileID = identifier
             isShowingSaveProfile = false
@@ -907,11 +934,28 @@ struct ContentView: View {
         guard canSelectSource else {
             return
         }
+        sourceResetMessage = nil
+        if isNewSource(source) {
+            sourceResetMessage = options.resetSourceScopedState(
+                for: source.kind,
+                titleSelection: &titleSelection,
+                recoveryDecisionPresent: viewModel.state.recoveryDecision != nil
+                    || viewModel.state.phase == .decisionRequired
+            ).message
+        }
         if source.kind == .physicalDisc {
             options.job.removeOriginalAfterSuccess = false
         }
-        titleSelection = .main
         viewModel.selectSource(source)
+    }
+
+    private func isNewSource(_ source: ConversionSource) -> Bool {
+        guard let currentSource = viewModel.source else {
+            return true
+        }
+        return currentSource.kind != source.kind
+            || currentSource.url.standardizedFileURL != source.url.standardizedFileURL
+            || currentSource.workerSourcePath != source.workerSourcePath
     }
 
     private func chooseExistingSource() {
@@ -1005,7 +1049,7 @@ private struct SaveProfileSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Save New Profile")
                     .font(.title2.weight(.semibold))
-                Text("Video, audio, subtitle, pipeline, recovery, and output-file settings will be saved. Sound and awake preferences stay global.")
+                Text(ProfilePersistenceCopy.summary)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

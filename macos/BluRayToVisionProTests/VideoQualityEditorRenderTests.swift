@@ -111,6 +111,62 @@ final class VideoQualityEditorRenderTests: XCTestCase {
         }
     }
 
+    func testRouteSummaryRendersUnsupportedQualityAsCustom() throws {
+        let reports = [
+            (
+                "generated-unsupported",
+                VideoRouteReport(
+                    intent: "generated",
+                    selected: "generated_mv_hevc",
+                    reason: "generated_route_requested",
+                    bitrateMbps: nil,
+                    eyeBitrateMbps: 33,
+                    mergeQuality: 88,
+                    crf: nil,
+                    fallbackReason: nil,
+                    fallbackTiming: nil,
+                    upscaleQuality: 66,
+                    qualityIntent: VideoRouteReport.QualityIntent(
+                        mode: "ladder",
+                        step: QualityStep.maximumDetail.rawValue,
+                        mappingVersion: VideoQualityCatalog.mappingVersion
+                    )
+                )
+            ),
+            (
+                "existing-unsupported",
+                VideoRouteReport(
+                    intent: "existing_artifact",
+                    selected: "existing_artifact",
+                    reason: "resume_uses_existing_video_artifact",
+                    bitrateMbps: nil,
+                    eyeBitrateMbps: nil,
+                    mergeQuality: nil,
+                    crf: nil,
+                    fallbackReason: nil,
+                    fallbackTiming: nil,
+                    upscaleQuality: 66,
+                    qualityIntent: VideoRouteReport.QualityIntent(
+                        mode: "ladder",
+                        step: QualityStep.maximumDetail.rawValue,
+                        mappingVersion: VideoQualityCatalog.mappingVersion
+                    )
+                )
+            ),
+        ]
+        for (name, report) in reports {
+            for (colorScheme, appearanceName) in [(ColorScheme.light, NSAppearance.Name.aqua), (.dark, .darkAqua)] {
+                try attachRender(
+                    VideoRouteSummaryView(report: report),
+                    name: "route-\(name)",
+                    width: 760,
+                    colorScheme: colorScheme,
+                    appearanceName: appearanceName
+                )
+            }
+        }
+    }
+
     private func attachRender<Content: View>(
         _ view: Content,
         name: String,

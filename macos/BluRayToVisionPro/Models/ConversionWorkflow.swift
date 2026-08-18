@@ -60,7 +60,7 @@ struct EncodingProfile: Identifiable, Equatable {
     let id: String
     var name: String
     var options: EncodingOptions
-    var jobDefaults: ProfileJobDefaults? = nil
+    var pipelineDefaults: ProfilePipelineDefaults? = nil
     let kind: Kind
     let systemImage: String
 
@@ -68,14 +68,14 @@ struct EncodingProfile: Identifiable, Equatable {
         id: String,
         name: String,
         options: EncodingOptions,
-        jobDefaults: ProfileJobDefaults? = nil,
+        pipelineDefaults: ProfilePipelineDefaults? = nil,
         kind: Kind,
         systemImage: String
     ) {
         self.id = id
         self.name = name
         self.options = options
-        self.jobDefaults = jobDefaults
+        self.pipelineDefaults = pipelineDefaults
         self.kind = kind
         self.systemImage = systemImage
     }
@@ -83,6 +83,10 @@ struct EncodingProfile: Identifiable, Equatable {
     var isBuiltIn: Bool { kind == .builtIn }
     var isCustom: Bool { kind == .custom }
     var summary: String { options.compactSummary }
+}
+
+enum ProfilePersistenceCopy {
+    static let summary = "Profiles save video, audio, subtitle, reusable-file, and encoder settings. Restart, overwrite, delete-source, recovery, sound, and keep-awake choices are not saved."
 }
 
 enum OutputLength: String, CaseIterable, Identifiable {

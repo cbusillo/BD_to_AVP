@@ -5,6 +5,131 @@ import XCTest
 
 final class ConversionViewModelTests: XCTestCase {
     @MainActor
+    func testSourceScopedResetMatrixResetsOnlySourceState() {
+        let encoding = EncodingOptions(
+            videoOutputMode: .av1Stereo,
+            videoQuality: .custom(
+                mvHEVC: MVHEVCOptions(generatedMergeQuality: 82),
+                av1CRF: 28,
+                upscaleQuality: 88
+            ),
+            av1CRF: 28,
+            upscaleEnabled: true,
+            upscaleQuality: 88,
+            fieldOfView: 110,
+            frameRateOverride: "24000/1001",
+            resolutionOverride: "3840x2160",
+            cropBlackBars: true,
+            swapEyes: true,
+            audioHandling: .pcm,
+            audioBitrate: 512,
+            audioLanguages: AudioLanguagePolicy(
+                mode: .allLanguages,
+                preferredLanguage: .japanese
+            ),
+            subtitles: SubtitlePolicy(
+                mode: .preferredOnly,
+                preferredLanguage: .french
+            )
+        )
+        let job = JobOptions(
+            startStage: .upscaleVideo,
+            intermediatePolicy: .reusable,
+            overwriteExisting: true,
+            removeOriginalAfterSuccess: true,
+            continueOnError: true,
+            softwareEncoder: true,
+            outputCommands: true,
+            keepAwake: false,
+            playSound: false
+        )
+
+        for sourceKind in ConversionSourceKind.allCases {
+            var options = ConversionOptions(encoding: encoding, job: job)
+            var titleSelection = DiscTitleSelection.all
+            let summary = options.resetSourceScopedState(
+                for: sourceKind,
+                titleSelection: &titleSelection,
+                recoveryDecisionPresent: true
+            )
+
+            XCTAssertEqual(summary.choices, SourceScopedResetSummary.Choice.allCases, sourceKind.rawValue)
+            XCTAssertEqual(
+                summary.message,
+                "New source: reset restart stage, overwrite output, delete source after success, recovery choices, and title selection.",
+                sourceKind.rawValue
+            )
+            XCTAssertEqual(options.job.startStage, .createMKV, sourceKind.rawValue)
+            XCTAssertFalse(options.job.overwriteExisting, sourceKind.rawValue)
+            XCTAssertFalse(options.job.removeOriginalAfterSuccess, sourceKind.rawValue)
+            XCTAssertFalse(options.job.continueOnError, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.frameRateOverride, encoding.frameRateOverride, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.resolutionOverride, encoding.resolutionOverride, sourceKind.rawValue)
+            XCTAssertEqual(titleSelection, .main, sourceKind.rawValue)
+
+            XCTAssertEqual(options.encoding.videoOutputMode, encoding.videoOutputMode, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.videoQuality, encoding.videoQuality, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.cropBlackBars, encoding.cropBlackBars, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.swapEyes, encoding.swapEyes, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.audioHandling, encoding.audioHandling, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.audioLanguages, encoding.audioLanguages, sourceKind.rawValue)
+            XCTAssertEqual(options.encoding.subtitles, encoding.subtitles, sourceKind.rawValue)
+            XCTAssertEqual(options.job.intermediatePolicy, job.intermediatePolicy, sourceKind.rawValue)
+            XCTAssertEqual(options.job.softwareEncoder, job.softwareEncoder, sourceKind.rawValue)
+            XCTAssertEqual(options.job.outputCommands, job.outputCommands, sourceKind.rawValue)
+            XCTAssertEqual(options.job.keepAwake, job.keepAwake, sourceKind.rawValue)
+            XCTAssertEqual(options.job.playSound, job.playSound, sourceKind.rawValue)
+        }
+    }
+
+    @MainActor
+    func testSourceScopedResetIsSilentWhenNothingChanged() {
+        var options = ConversionOptions()
+        var titleSelection = DiscTitleSelection.main
+
+        let summary = options.resetSourceScopedState(
+            for: .matroska,
+            titleSelection: &titleSelection,
+            recoveryDecisionPresent: false
+        )
+
+        XCTAssertFalse(summary.didReset)
+        XCTAssertNil(summary.message)
+        XCTAssertEqual(options, ConversionOptions())
+        XCTAssertEqual(titleSelection, .main)
+    }
+
+    @MainActor
+    func testPhysicalDiscResetKeepsRemoveOriginalFalse() {
+        var options = ConversionOptions()
+        options.job.removeOriginalAfterSuccess = true
+
+        _ = options.resetSourceScopedState(for: .physicalDisc)
+
+        XCTAssertFalse(options.job.removeOriginalAfterSuccess)
+    }
+
+    @MainActor
+    func testSourceFolderSelectionTransitionsResetLifecycleState() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let firstFolderURL = rootURL.appendingPathComponent("first", isDirectory: true)
+        let secondFolderURL = rootURL.appendingPathComponent("second", isDirectory: true)
+        try FileManager.default.createDirectory(at: firstFolderURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondFolderURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+
+        let viewModel = ConversionViewModel()
+        viewModel.selectSource(ConversionSource(kind: .sourceFolder, url: firstFolderURL))
+        viewModel.selectSource(ConversionSource(kind: .sourceFolder, url: secondFolderURL))
+
+        XCTAssertEqual(viewModel.source?.url, secondFolderURL.standardizedFileURL)
+        XCTAssertEqual(viewModel.batchQueue?.folderSource.url, secondFolderURL.standardizedFileURL)
+        XCTAssertEqual(viewModel.state.phase, .empty)
+        XCTAssertNil(viewModel.state.recoveryDecision)
+    }
+
+    @MainActor
     func testCanonicalObservabilityUpdatesLiveStatusAndPersists() async throws {
         let terminalDelivered = expectation(description: "terminal delivered")
         let observabilityEvent = try makeTestObservabilityEvent(kind: "tool.started")

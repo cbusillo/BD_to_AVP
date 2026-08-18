@@ -107,7 +107,7 @@ struct VideoQualityEditor: View {
     private func retainedQualityStatus(detail: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             LabeledContent("Video quality") {
-                Text("\(options.videoQuality.displayTitle) · retained, not applied")
+                Text("\(routePlan.qualityTitle) · retained, not applied")
                     .foregroundStyle(.secondary)
             }
             Text(detail)
@@ -118,7 +118,7 @@ struct VideoQualityEditor: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Video quality")
-        .accessibilityValue("\(options.videoQuality.displayTitle), retained, not applied")
+        .accessibilityValue("\(routePlan.qualityTitle), retained, not applied")
         .accessibilityHint(detail)
     }
 
@@ -574,7 +574,7 @@ private struct QualitySelectionControl: View {
             Button("Custom", action: selectCustom)
         } label: {
             HStack {
-                Text(selection.title)
+                Text(selectionTitle)
                     .fontWeight(.medium)
                 Spacer()
                 Text(isCustomSelected ? "Exact settings" : "Guided")
@@ -598,7 +598,18 @@ private struct QualitySelectionControl: View {
     private var selectionValue: String {
         switch selection {
         case let .step(step):
-            "\(step.title), step \(step.ordinal) of \(QualityStep.allCases.count)"
+            availableSteps.contains(step)
+                ? "\(step.title), step \(step.ordinal) of \(QualityStep.allCases.count)"
+                : "Custom, retained values; previous guided step is unavailable"
+        case .custom:
+            "Custom"
+        }
+    }
+
+    private var selectionTitle: String {
+        switch selection {
+        case let .step(step):
+            availableSteps.contains(step) ? step.title : "Custom"
         case .custom:
             "Custom"
         }
@@ -609,7 +620,7 @@ private struct QualitySelectionControl: View {
         case let .step(step):
             availableSteps.contains(step)
                 ? step.detail
-                : "\(step.detail) This step is unavailable for the active route; choose another step or Custom."
+                : "The retained guided choice is unavailable for the active route; choose another step or Custom."
         case .custom:
             "Exact direct, generated, AV1, and upscale values are retained independently from the guided ladder."
         }
