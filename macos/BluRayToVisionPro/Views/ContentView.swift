@@ -29,6 +29,7 @@ struct ContentView: View {
     @State private var isShowingTitleChooser = false
     @State private var isShowingDiagnosticReport = false
     @State private var isRefreshingDiscs = false
+    @StateObject private var routeQualityState: RouteQualityResolutionState
 
     init(
         viewModel: ConversionViewModel,
@@ -58,6 +59,7 @@ struct ContentView: View {
         _selectedProfileID = State(initialValue: profile.id)
         _options = State(initialValue: initialOptions)
         _destinationURL = State(initialValue: settings.destinationURL)
+        _routeQualityState = StateObject(wrappedValue: RouteQualityResolutionState())
     }
 
     var body: some View {
@@ -124,6 +126,7 @@ struct ContentView: View {
                         || previewViewModel.hasActiveWorker
                         || viewModel.state.phase == .decisionRequired,
                     sourceKind: viewModel.source?.kind,
+                    routeQualityState: routeQualityState,
                     saveSelectedProfile: saveSelectedProfile,
                     saveAsNewProfile: beginSaveAsNewProfile,
                     resetProfile: resetProfile
@@ -167,6 +170,17 @@ struct ContentView: View {
             }
         }
         .onAppear(perform: refreshDiscs)
+        .onReceive(NotificationCenter.default.publisher(for: .conversionSourceSelectionRequested)) { notification in
+            guard let sourceURL = notification.object as? URL else {
+                return
+            }
+            sourceResetMessage = nil
+            if let source = ConversionSource.infer(from: sourceURL) {
+                selectSource(source)
+            } else {
+                viewModel.selectSource(sourceURL)
+            }
+        }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didMountNotification)) { _ in
             refreshDiscs()
         }
@@ -540,6 +554,9 @@ struct ContentView: View {
     }
 
     private var conversionDrafts: [ConversionDraft] {
+        guard routeQualityBlockReason == nil else {
+            return []
+        }
         guard let source = viewModel.source,
               source.kind != .sourceFolder,
               let inspection = viewModel.state.result
@@ -759,6 +776,7 @@ struct ContentView: View {
 
     private var conversionCanStart: Bool {
         guard capabilities.conversionAvailable,
+              routeQualityBlockReason == nil,
               !viewModel.hasActiveWork,
               !previewViewModel.hasActiveWorker,
               viewModel.state.phase != .decisionRequired
@@ -824,6 +842,9 @@ struct ContentView: View {
     }
 
     private var conversionUnavailableReason: String {
+        if let routeQualityBlockReason {
+            return routeQualityBlockReason
+        }
         guard capabilities.conversionAvailable else {
             return capabilities.conversionUnavailableReason
         }
@@ -845,6 +866,16 @@ struct ContentView: View {
         case .none:
             return capabilities.conversionUnavailableReason
         }
+    }
+
+    private var routeQualityBlockReason: String? {
+        if let stateReason = routeQualityState.blockReason {
+            return stateReason
+        }
+        if case let .failure(error) = RouteQualityEngine.validate(options) {
+            return "Resolve route and quality settings before starting, previewing, or adding this conversion to the queue. \(error.localizedDescription)"
+        }
+        return nil
     }
 
     private func resetProfile() {

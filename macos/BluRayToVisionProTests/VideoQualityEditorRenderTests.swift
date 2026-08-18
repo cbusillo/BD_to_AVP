@@ -167,6 +167,39 @@ final class VideoQualityEditorRenderTests: XCTestCase {
         }
     }
 
+    func testRouteQualityConflictRendererCoversEveryTrigger() throws {
+        let edits: [(String, RouteQualityEdit)] = [
+            ("generated", .qualityStep(.maximumDetail)),
+            ("reusable", .reusableIntermediates(true)),
+            ("software", .softwareEncoder(true)),
+            ("restart", .restartStage(.createLeftRightFiles)),
+            ("upscale-crop", .upscaleEnabled(false)),
+            ("field-of-view", .fieldOfView(180)),
+            ("resolution", .resolutionOverride("1920x1080")),
+            ("output-mode", .outputMode(.av1Stereo)),
+        ]
+        var base = ConversionOptions()
+        base.encoding.upscaleEnabled = true
+        base.encoding.cropBlackBars = true
+        try base.encoding.selectQualityStep(.maximumDetail)
+
+        for (name, edit) in edits {
+            let proposal = RouteQualityEngine.propose(options: base, edit: edit)
+            guard case let .conflict(conflict) = proposal else {
+                return XCTFail("Expected conflict for \(name)")
+            }
+            for (colorScheme, appearanceName) in [(ColorScheme.light, NSAppearance.Name.aqua), (.dark, .darkAqua)] {
+                try attachRender(
+                    RouteQualityConflictView(conflict: conflict, resolve: { _ in }),
+                    name: "route-quality-\(name)",
+                    width: 760,
+                    colorScheme: colorScheme,
+                    appearanceName: appearanceName
+                )
+            }
+        }
+    }
+
     private func attachRender<Content: View>(
         _ view: Content,
         name: String,

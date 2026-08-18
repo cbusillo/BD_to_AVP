@@ -1,6 +1,12 @@
 import DiskArbitration
 import Foundation
 
+extension Notification.Name {
+    static let conversionSourceSelectionRequested = Notification.Name(
+        "BluRayToVisionPro.conversionSourceSelectionRequested"
+    )
+}
+
 enum ConversionSourceKind: String, CaseIterable, Identifiable {
     case physicalDisc
     case discImage

@@ -12,6 +12,7 @@ struct ConversionSetupView: View {
     let profileModified: Bool
     let isLocked: Bool
     let sourceKind: ConversionSourceKind?
+    @ObservedObject var routeQualityState: RouteQualityResolutionState
     let saveSelectedProfile: () -> Void
     let saveAsNewProfile: () -> Void
     let resetProfile: () -> Void
@@ -101,7 +102,8 @@ struct ConversionSetupView: View {
                     EncodingOptionsEditor(
                         options: $options.encoding,
                         section: .video,
-                        jobOptions: options.job
+                        jobOptions: options.job,
+                        routeQualityState: routeQualityState
                     )
                 case .audioAndSubtitles:
                     EncodingOptionsEditor(options: $options.encoding, section: .audioAndSubtitles)
@@ -123,7 +125,7 @@ struct ConversionSetupView: View {
             Section("Pipeline and Recovery") {
                 VideoRouteSummaryView(plan: routePlan)
 
-                Picker("Start stage", selection: $options.job.startStage) {
+                Picker("Start stage", selection: startStageBinding) {
                     ForEach(ConversionStage.allCases) { stage in
                         Text(stage.title).tag(stage)
                     }
@@ -136,7 +138,7 @@ struct ConversionSetupView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 Toggle("Continue processing after recoverable errors", isOn: $options.job.continueOnError)
-                Toggle("Use software HEVC encoder", isOn: $options.job.softwareEncoder)
+                Toggle("Use software HEVC encoder", isOn: softwareEncoderBinding)
                     .disabled(!softwareEncoderIsApplicable)
                     .help(softwareEncoderHelp)
 
@@ -170,6 +172,21 @@ struct ConversionSetupView: View {
                 Toggle("Play a sound when finished", isOn: $options.job.playSound)
                 Toggle("Show generated commands in activity", isOn: $options.job.outputCommands)
             }
+
+            if let conflict = routeQualityState.conflict {
+                Section {
+                    RouteQualityConflictView(conflict: conflict) { option in
+                        resolveRouteQuality(option)
+                    }
+                }
+            }
+            if let invalidMessage = routeQualityState.invalidMessage {
+                Section {
+                    Label(invalidMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
         }
         .formStyle(.grouped)
     }
@@ -178,9 +195,35 @@ struct ConversionSetupView: View {
         Binding(
             get: { options.job.intermediatePolicy.createsReusableArtifacts },
             set: { enabled in
-                options.job.intermediatePolicy = enabled ? .reusable : .automatic
+                applyRouteEdit(.reusableIntermediates(enabled))
             }
         )
+    }
+
+    private var startStageBinding: Binding<ConversionStage> {
+        Binding(
+            get: { options.job.startStage },
+            set: { stage in
+                applyRouteEdit(.restartStage(stage))
+            }
+        )
+    }
+
+    private var softwareEncoderBinding: Binding<Bool> {
+        Binding(
+            get: { options.job.softwareEncoder },
+            set: { enabled in
+                applyRouteEdit(.softwareEncoder(enabled))
+            }
+        )
+    }
+
+    private func applyRouteEdit(_ edit: RouteQualityEdit) {
+        routeQualityState.apply(edit, to: &options)
+    }
+
+    private func resolveRouteQuality(_ option: RouteQualityResolutionOption) {
+        routeQualityState.resolve(option, in: &options)
     }
 
     private var routePlan: VideoRoutePlan {

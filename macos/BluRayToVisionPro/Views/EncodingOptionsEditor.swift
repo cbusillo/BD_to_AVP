@@ -20,21 +20,37 @@ struct EncodingOptionsEditor: View {
     @Binding var options: EncodingOptions
     let section: EncodingOptionsSection
     let jobOptions: JobOptions?
+    @ObservedObject var routeQualityState: RouteQualityResolutionState
 
     init(
         options: Binding<EncodingOptions>,
         section: EncodingOptionsSection,
-        jobOptions: JobOptions? = nil
+        jobOptions: JobOptions? = nil,
+        routeQualityState: RouteQualityResolutionState = RouteQualityResolutionState()
     ) {
         _options = options
         self.section = section
         self.jobOptions = jobOptions
+        self.routeQualityState = routeQualityState
     }
 
     var body: some View {
         switch section {
         case .video:
-            videoForm
+            VStack(alignment: .leading, spacing: 12) {
+                videoForm
+                if let conflict = routeQualityState.conflict {
+                    RouteQualityConflictView(conflict: conflict) { option in
+                        resolveRouteQuality(option)
+                    }
+                }
+                if let invalidMessage = routeQualityState.invalidMessage {
+                    Label(invalidMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         case .audioAndSubtitles:
             audioAndSubtitlesForm
         }
@@ -67,14 +83,18 @@ struct EncodingOptionsEditor: View {
 
                     Divider()
                     VideoRouteSummaryView(plan: routePlan)
-                    VideoQualityEditor(options: $options, context: qualityEditorContext)
+                    VideoQualityEditor(
+                        options: $options,
+                        context: qualityEditorContext,
+                        routeQualityState: routeQualityState
+                    )
                 }
 
                 if routePlan.kind != .existingArtifact {
                     Section("Picture") {
                         if options.videoOutputMode == .mvHEVC {
                             LabeledContent("Field of view") {
-                                Stepper(value: $options.fieldOfView, in: 0 ... 360) {
+                                Stepper(value: fieldOfViewBinding, in: 0 ... 360) {
                                     Text("\(options.fieldOfView)°")
                                         .monospacedDigit()
                                         .frame(width: 48, alignment: .trailing)
@@ -82,7 +102,7 @@ struct EncodingOptionsEditor: View {
                             }
 
                             LabeledContent("Resolution override") {
-                                TextField("", text: $options.resolutionOverride, prompt: Text("Use source"))
+                                TextField("", text: resolutionOverrideBinding, prompt: Text("Use source"))
                                     .textFieldStyle(.roundedBorder)
                                     .frame(width: 170)
                             }
@@ -101,7 +121,7 @@ struct EncodingOptionsEditor: View {
                     }
 
                     Section("Stereo Corrections") {
-                        Toggle("Crop black bars", isOn: $options.cropBlackBars)
+                        Toggle("Crop black bars", isOn: cropBlackBarsBinding)
                         Toggle("Swap left and right eyes", isOn: $options.swapEyes)
                     }
                 }
@@ -184,9 +204,54 @@ struct EncodingOptionsEditor: View {
         Binding(
             get: { options.videoOutputMode },
             set: { mode in
-                options.selectVideoOutputMode(mode)
+                applyRouteEdit(.outputMode(mode))
             }
         )
+    }
+
+    private var fieldOfViewBinding: Binding<Int> {
+        Binding(
+            get: { options.fieldOfView },
+            set: { value in
+                applyRouteEdit(.fieldOfView(value))
+            }
+        )
+    }
+
+    private var resolutionOverrideBinding: Binding<String> {
+        Binding(
+            get: { options.resolutionOverride },
+            set: { value in
+                applyRouteEdit(.resolutionOverride(value))
+            }
+        )
+    }
+
+    private var cropBlackBarsBinding: Binding<Bool> {
+        Binding(
+            get: { options.cropBlackBars },
+            set: { value in
+                applyRouteEdit(.cropBlackBars(value))
+            }
+        )
+    }
+
+    private func applyRouteEdit(_ edit: RouteQualityEdit) {
+        var conversionOptions = ConversionOptions(
+            encoding: options,
+            job: jobOptions ?? JobOptions()
+        )
+        routeQualityState.apply(edit, to: &conversionOptions)
+        options = conversionOptions.encoding
+    }
+
+    private func resolveRouteQuality(_ option: RouteQualityResolutionOption) {
+        var conversionOptions = ConversionOptions(
+            encoding: options,
+            job: jobOptions ?? JobOptions()
+        )
+        routeQualityState.resolve(option, in: &conversionOptions)
+        options = conversionOptions.encoding
     }
 
     private var routePlan: VideoRoutePlan {

@@ -21,15 +21,21 @@ struct VideoQualityEditor: View {
 
     @Binding var options: EncodingOptions
     let context: Context
+    @ObservedObject var routeQualityState: RouteQualityResolutionState
 
     @State private var showsExpertControls: Bool
     @State private var showsDirectRateControl: Bool
     @State private var showsGeneratedRateControl: Bool
     @State private var selectionError: String?
 
-    init(options: Binding<EncodingOptions>, context: Context) {
+    init(
+        options: Binding<EncodingOptions>,
+        context: Context,
+        routeQualityState: RouteQualityResolutionState = RouteQualityResolutionState()
+    ) {
         _options = options
         self.context = context
+        self.routeQualityState = routeQualityState
         _showsExpertControls = State(initialValue: options.wrappedValue.videoQuality.mode == .custom)
         _showsDirectRateControl = State(
             initialValue: options.wrappedValue.videoQuality.custom.directFinalBitrate.mode == .custom
@@ -49,12 +55,23 @@ struct VideoQualityEditor: View {
                 expertControls
             case .directMVHEVC, .generatedMVHEVC:
                 qualitySelectionControl
-                Toggle("AI FX upscale to 2× resolution", isOn: $options.upscaleEnabled)
+                Toggle("AI FX upscale to 2× resolution", isOn: upscaleBinding)
                 expertControls
             }
 
             if let selectionError {
                 Label(selectionError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let conflict = routeQualityState.conflict {
+                RouteQualityConflictView(conflict: conflict) { option in
+                    resolveRouteQuality(option)
+                }
+            }
+            if let invalidMessage = routeQualityState.invalidMessage {
+                Label(invalidMessage, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
@@ -78,7 +95,7 @@ struct VideoQualityEditor: View {
         if options.videoOutputMode == .mvHEVC,
            routePlan.startStage == ConversionStage.upscaleVideo.rawValue
         {
-            Toggle("AI FX upscale to 2× resolution", isOn: $options.upscaleEnabled)
+            Toggle("AI FX upscale to 2× resolution", isOn: upscaleBinding)
             if options.upscaleEnabled {
                 qualitySelectionControl
                 expertControls
@@ -345,25 +362,60 @@ struct VideoQualityEditor: View {
         guard availableSteps.contains(step) else {
             return
         }
-        do {
-            try options.selectQualityStep(step)
-            selectionError = nil
-        } catch {
-            selectionError = error.localizedDescription
-        }
+        applyRouteEdit(.qualityStep(step))
+        selectionError = routeQualityState.invalidMessage
     }
 
     private func selectCustomQuality() {
-        options.selectCustomQuality()
-        selectionError = nil
-        showsExpertControls = true
+        applyRouteEdit(.customQuality(options.videoQuality.custom))
+        selectionError = routeQualityState.invalidMessage
+        if routeQualityState.conflict == nil, routeQualityState.invalidMessage == nil {
+            showsExpertControls = true
+        }
+    }
+
+    private var upscaleBinding: Binding<Bool> {
+        Binding(
+            get: { options.upscaleEnabled },
+            set: { enabled in
+                applyRouteEdit(.upscaleEnabled(enabled))
+            }
+        )
+    }
+
+    private func applyRouteEdit(_ edit: RouteQualityEdit) {
+        var conversionOptions = ConversionOptions(
+            encoding: options,
+            job: context.jobOptions
+        )
+        routeQualityState.apply(edit, to: &conversionOptions)
+        options = conversionOptions.encoding
+    }
+
+    private func editCustomQuality(
+        _ edit: (inout VideoQualityCustomValues) -> Void
+    ) {
+        var values = options.videoQuality.custom
+        edit(&values)
+        applyRouteEdit(.customQuality(values))
+        selectionError = routeQualityState.invalidMessage
+    }
+
+    private func resolveRouteQuality(_ option: RouteQualityResolutionOption) {
+        var conversionOptions = ConversionOptions(
+            encoding: options,
+            job: context.jobOptions
+        )
+        routeQualityState.resolve(option, in: &conversionOptions)
+        options = conversionOptions.encoding
+        selectionError = routeQualityState.invalidMessage
     }
 
     private var directRateModeBinding: Binding<BitrateMode> {
         Binding(
             get: { customValues.directFinalBitrate.mode },
             set: { mode in
-                options.editCustomQuality { custom in
+                editCustomQuality { custom in
                     custom.directFinalBitrate.mode = mode
                     if mode == .custom, custom.directFinalBitrate.customMbps == nil {
                         custom.directFinalBitrate.customMbps = VideoQualityCatalog.defaultDirectCustomBitrateMbps
@@ -377,7 +429,7 @@ struct VideoQualityEditor: View {
         Binding(
             get: { directCustomMbps },
             set: { newValue in
-                options.editCustomQuality { custom in
+                editCustomQuality { custom in
                     custom.directFinalBitrate.mode = .custom
                     custom.directFinalBitrate.customMbps = newValue
                 }
@@ -389,7 +441,7 @@ struct VideoQualityEditor: View {
         Binding(
             get: { customValues.generatedEyeBitrate.mode },
             set: { mode in
-                options.editCustomQuality { custom in
+                editCustomQuality { custom in
                     custom.generatedEyeBitrate.mode = mode
                     if mode == .custom, custom.generatedEyeBitrate.customMbps == nil {
                         custom.generatedEyeBitrate.customMbps = VideoQualityCatalog.balancedGeneratedEyeBitrateMbps
@@ -403,7 +455,7 @@ struct VideoQualityEditor: View {
         Binding(
             get: { generatedCustomMbps },
             set: { newValue in
-                options.editCustomQuality { custom in
+                editCustomQuality { custom in
                     custom.generatedEyeBitrate.mode = .custom
                     custom.generatedEyeBitrate.customMbps = newValue
                 }
@@ -416,7 +468,7 @@ struct VideoQualityEditor: View {
             get: { customValues.generatedMergeQuality },
             set: { newValue in
                 let linked = options.mvHEVC.linkGeneratedAndUpscaleQuality
-                options.editCustomQuality { custom in
+                editCustomQuality { custom in
                     custom.generatedMergeQuality = newValue
                     if linked {
                         custom.upscaleQuality = newValue
@@ -431,7 +483,7 @@ struct VideoQualityEditor: View {
             get: { customValues.upscaleQuality },
             set: { newValue in
                 let linked = options.mvHEVC.linkGeneratedAndUpscaleQuality
-                options.editCustomQuality { custom in
+                editCustomQuality { custom in
                     custom.upscaleQuality = newValue
                     if linked {
                         custom.generatedMergeQuality = newValue
@@ -445,13 +497,7 @@ struct VideoQualityEditor: View {
         Binding(
             get: { options.mvHEVC.linkGeneratedAndUpscaleQuality },
             set: { linked in
-                options.selectCustomQuality()
-                options.mvHEVC.linkGeneratedAndUpscaleQuality = linked
-                if linked {
-                    options.editCustomQuality { custom in
-                        custom.upscaleQuality = custom.generatedMergeQuality
-                    }
-                }
+                applyRouteEdit(.linkGeneratedAndUpscaleQuality(linked))
             }
         )
     }
@@ -460,7 +506,7 @@ struct VideoQualityEditor: View {
         Binding(
             get: { customValues.av1CRF },
             set: { newValue in
-                options.editCustomQuality { custom in
+                editCustomQuality { custom in
                     custom.av1CRF = newValue
                 }
             }

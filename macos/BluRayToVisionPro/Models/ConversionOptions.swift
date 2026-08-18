@@ -671,6 +671,7 @@ struct SourceScopedResetSummary: Equatable {
         case removeOriginal = "delete source after success"
         case recovery = "recovery choices"
         case titleSelection = "title selection"
+        case exactOverrides = "source-derived exact overrides"
     }
 
     let choices: [Choice]
@@ -728,6 +729,14 @@ private enum SourceScopedResetPolicy {
             titleSelection = .main
             choices.append(.titleSelection)
         }
+        if !options.encoding.frameRateOverride.isEmpty
+            || !options.encoding.resolutionOverride.isEmpty
+        {
+            options.encoding.frameRateOverride = ""
+            options.encoding.resolutionOverride = ""
+            choices.append(.exactOverrides)
+        }
+
         return SourceScopedResetSummary(choices: choices)
     }
 }
