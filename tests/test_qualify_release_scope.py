@@ -48,6 +48,13 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.policy = load_policy(DEFAULT_POLICY_PATH)
 
+    def checked_evidence_as_of(self, cutoff: date) -> dict[str, Any]:
+        evidence = json.loads((REPO_ROOT / "docs/qualification/release-evidence-v1.json").read_text(encoding="utf-8"))
+        evidence["receipts"] = [
+            receipt for receipt in evidence["receipts"] if date.fromisoformat(receipt["accepted_at"][:10]) <= cutoff
+        ]
+        return evidence
+
     def test_milestone_tier1_receipt_accepts_explicit_successful_recovery(self) -> None:
         release_receipt = {"source_sha": CANDIDATE_SHA, "workflow": {"run_id": 12345}}
         evidence_receipt = {
@@ -1186,7 +1193,7 @@ class ReleaseQualificationScopeTests(unittest.TestCase):
                     )
 
     def test_checked_rc3_live_publication_evidence_matches_milestone_receipt(self) -> None:
-        evidence = json.loads((REPO_ROOT / "docs/qualification/release-evidence-v1.json").read_text(encoding="utf-8"))
+        evidence = self.checked_evidence_as_of(date(2026, 8, 9))
         report = classify_release_scope(
             self.policy,
             evidence,
