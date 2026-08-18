@@ -71,7 +71,14 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                             "id": "profile-save-action-accessibility",
                             "invalidates_on": {"contracts": ["profile-storage"], "paths": []},
                             "tier": 2,
-                        }
+                        },
+                        {
+                            "allowed_evidence_sources": ["signed_artifact_receipt"],
+                            "blocking_phase": "release_candidate",
+                            "id": "beta-change-scoped-case",
+                            "invalidates_on": {"contracts": [], "paths": []},
+                            "tier": 2,
+                        },
                     ],
                     "policy_id": "release-qualification-policy-v1",
                     "result_states": ["covered", "carry", "retest", "external"],
@@ -227,6 +234,85 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         subprocess.run(["git", "add", "."], cwd=root, check=True)
         subprocess.run(["git", "commit", "-qm", "evidence"], cwd=root, check=True)
         return receipt_path
+
+    @staticmethod
+    def append_beta_change_scoped_evidence(
+        root: Path,
+        *,
+        case_id: str = "beta-change-scoped-case",
+        source_sha: str | None = None,
+        receipt_digest: str | None = None,
+    ) -> tuple[str, str]:
+        base_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        release_tag = "v0.3.1-beta.1"
+        evidence_relative = f"docs/qualification/{release_tag}-change-scoped-evidence-v1.json"
+        evidence_path = root / evidence_relative
+        evidence = {
+            "schema_version": 1,
+            "qualification_id": "beta-change-scoped-v1",
+            "result": "accepted_public_safe_summary",
+            "source": {
+                "package_version": "0.3.1b1",
+                "public_version": "0.3.1-beta.1",
+                "build_version": "162",
+                "release_tag": release_tag,
+                "source_sha": source_sha or base_sha,
+            },
+            "failed_preparation_run": {
+                "signing_started": False,
+                "release_identity_created": False,
+            },
+            "evidence_source_semantics": {
+                "developer_id_or_notarization_claimed": False,
+                "index_source": "signed_artifact_receipt",
+            },
+            "privacy": {
+                "private_paths_recorded": False,
+                "private_hostnames_recorded": False,
+                "private_media_identifiers_recorded": False,
+                "diagnostic_tokens_recorded": False,
+            },
+            "acceptance": {
+                "passed": True,
+                "passed_case_count": 1,
+                "failed_case_count": 0,
+                "blocking_case_ids": [],
+            },
+            "cases": [{"case_id": case_id, "status": "passed"}],
+        }
+        evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        digest = receipt_digest or hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+        evidence_index_path = root / EVIDENCE_INDEX_PATH
+        evidence_index = json.loads(evidence_index_path.read_text(encoding="utf-8"))
+        evidence_index["receipts"].append(
+            {
+                "case_id": case_id,
+                "receipt_id": f"{release_tag}:{case_id}:{base_sha[:7]}",
+                "source": "signed_artifact_receipt",
+                "status": "accepted",
+                "source_sha": source_sha or base_sha,
+                "accepted_at": "2026-08-18T20:00:00Z",
+                "reference": evidence_relative,
+                "sha256": digest,
+            }
+        )
+        evidence_index_path.write_text(json.dumps(evidence_index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        subprocess.run(["git", "add", evidence_path, evidence_index_path], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "append beta evidence"], cwd=root, check=True)
+        head_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        return base_sha, head_sha
 
     def test_resolves_checked_stable_milestone_context(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -766,6 +852,176 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             )
 
         self.assertIsNone(discovered)
+
+    def test_allows_beta_change_scoped_evidence_append_without_checked_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.append_beta_change_scoped_evidence(root)
+
+            discovered = discover_milestone_receipt(
+                root,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                head_branch="qualify/v0.3.1-beta.1",
+                base_repo="cbusillo/BD_to_AVP",
+                head_repo="cbusillo/BD_to_AVP",
+                base_branch="main",
+            )
+
+        self.assertIsNone(discovered)
+
+    def test_rejects_beta_change_scoped_evidence_on_wrong_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.append_beta_change_scoped_evidence(root)
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "qualify/v0.3.1-beta.1"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="feature/beta-evidence",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
+
+    def test_rejects_beta_change_scoped_evidence_digest_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.append_beta_change_scoped_evidence(root, receipt_digest="0" * 64)
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "receipt identity"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="qualify/v0.3.1-beta.1",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
+
+    def test_rejects_beta_change_scoped_evidence_for_artifact_owned_case(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.append_beta_change_scoped_evidence(
+                root,
+                case_id="profile-save-action-accessibility",
+            )
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "release-candidate Tier 2"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="qualify/v0.3.1-beta.1",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
+
+    def test_rejects_beta_change_scoped_evidence_for_non_base_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.append_beta_change_scoped_evidence(root, source_sha="f" * 40)
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "base SHA"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="qualify/v0.3.1-beta.1",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
+
+    def test_rejects_beta_change_scoped_evidence_with_policy_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, _head_sha = self.append_beta_change_scoped_evidence(root)
+            policy_path = root / "docs/qualification/release-qualification-policy-v1.json"
+            policy = json.loads(policy_path.read_text(encoding="utf-8"))
+            policy["policy_id"] = "self-authorized-policy"
+            policy_path.write_text(json.dumps(policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            subprocess.run(["git", "add", policy_path], cwd=root, check=True)
+            subprocess.run(["git", "commit", "--amend", "-qm", "append beta evidence and policy"], cwd=root, check=True)
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "runner-bound policy"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="qualify/v0.3.1-beta.1",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
+
+    def test_rejects_beta_change_scoped_evidence_with_stable_reset(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, _head_sha = self.append_beta_change_scoped_evidence(root)
+            qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
+            qualification = json.loads(qualification_path.read_text(encoding="utf-8"))
+            for field in (
+                "source_git_sha",
+                "release_run_id",
+                "release_id",
+                "dmg_sha256",
+                "appcast_sha256",
+                "signed_app_tree_sha256",
+            ):
+                qualification["candidate"][field] = None
+            qualification["candidate"].update(
+                {
+                    "package_version": "0.3.1",
+                    "public_version": "0.3.1",
+                    "build_version": "162",
+                    "release_tag": "v0.3.1",
+                    "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.1.dmg",
+                }
+            )
+            qualification_path.write_text(json.dumps(qualification) + "\n", encoding="utf-8")
+            subprocess.run(["git", "add", qualification_path], cwd=root, check=True)
+            subprocess.run(
+                ["git", "commit", "--amend", "-qm", "combine beta evidence and stable reset"],
+                cwd=root,
+                check=True,
+            )
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "may not be combined"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="qualify/v0.3.1-beta.1",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
 
     def test_rejects_same_version_prepublication_reset(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
