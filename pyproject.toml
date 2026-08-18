@@ -25,7 +25,7 @@ dependencies = [
     "psutil>=5.9.8,<8",
     "pyobjc-framework-vision>=11.0,<13",
     "pysrt>=1.1.2,<2",
-    "trakit>=0.2.2,<0.3",
+    "trakit>=0.2.2,<0.4",
     "wakepy>=0.9.1,<1.1",
 ]
 
@@ -51,7 +51,7 @@ dev = [
     "gitpython>=3.1.58,<4",
     "mypy>=2.1.0,<3",
     "pyside6>=6.7.1,<6.10",
-    "ruff>=0.15.20,<0.16",
+    "ruff>=0.15.20,<0.17",
     "types-psutil>=5.9.5.20240516",
 ]
 
@@ -100,7 +100,7 @@ requires = [
     "psutil>=5.9.8,<8",
     "pyobjc-framework-vision>=11.0,<13",
     "pysrt>=1.1.2,<2",
-    "trakit>=0.2.2,<0.3",
+    "trakit>=0.2.2,<0.4",
     "wakepy>=0.9.1,<1.1",
 ]
 
