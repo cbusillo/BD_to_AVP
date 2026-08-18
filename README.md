@@ -88,6 +88,11 @@ release artifact and dependency policy.
 See [Production Release Routes](docs/release-routes.md) for Stable, RC, Beta,
 and Alpha update eligibility, version mapping, and publication policy.
 
+Prerelease testers evaluating the new repetition-first setup workflow should use
+the [Conversion Setup Beta Test Guide](docs/conversion-setup-beta-test-guide.md)
+so feedback covers the same setup, repeat-run, editing, conflict, queue, and
+rollback scenarios.
+
 See [Direct Pipeline Contracts](docs/direct-pipeline-contracts.md) for the
 automatic minimum-materialization behavior and the durable `--keep-files`
 stage contracts.
@@ -153,7 +158,8 @@ and install MakeMKV from the [MakeMKV] website.
 brew install ffmpeg python@3.12
 
 # Install the current macOS MakeMKV build from https://www.makemkv.com/.
-# The app bundle is detected automatically from /Applications/MakeMKV.app.
+# The app bundle is detected automatically from /Applications/MakeMKV.app
+# or /Applications/MakeMKV/MakeMKV.app.
 
 # Ensure Python 3.12 is correctly installed then create a virtual environment
 python3.12 -m pip install --upgrade pip
