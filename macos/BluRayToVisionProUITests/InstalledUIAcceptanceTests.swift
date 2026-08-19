@@ -66,10 +66,15 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         let mainContent = lightApp.descendants(matching: .any)["main-window-content"]
         XCTAssertTrue(mainContent.waitForExistence(timeout: 30))
 
-        let saveAction = lightApp.buttons["save-profile-action"]
+        let editAction = lightApp.buttons["edit-conversion-settings"]
+        XCTAssertTrue(editAction.waitForExistence(timeout: 20))
+        XCTAssertTrue(editAction.isEnabled)
+        editAction.click()
+
+        let saveAction = lightApp.buttons["setup-editor-save-as-new"]
         XCTAssertTrue(saveAction.waitForExistence(timeout: 20))
         XCTAssertEqual(saveAction.elementType, .button)
-        XCTAssertEqual(saveAction.label, "Save current settings as new profile")
+        XCTAssertEqual(saveAction.label, "Save as New Profile…")
         XCTAssertTrue(saveAction.isEnabled)
 
         saveAction.click()
