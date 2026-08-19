@@ -346,6 +346,7 @@ private struct ProfileNameSheet: View {
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("setup-editor-new-profile-confirm")
             }
         }
         .padding(24)

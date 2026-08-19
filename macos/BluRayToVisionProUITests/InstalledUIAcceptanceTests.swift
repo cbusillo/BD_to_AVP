@@ -78,12 +78,12 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertTrue(saveAction.isEnabled)
 
         saveAction.click()
-        let nameField = lightApp.textFields["save-profile-name-field"]
+        let nameField = lightApp.textFields["setup-editor-new-profile-name"]
         XCTAssertTrue(nameField.waitForExistence(timeout: 20))
         nameField.click()
         nameField.typeKey("a", modifierFlags: .command)
         nameField.typeText(Self.profileName)
-        let confirmButton = lightApp.buttons["save-profile-confirm"]
+        let confirmButton = lightApp.buttons["setup-editor-new-profile-confirm"]
         XCTAssertTrue(confirmButton.isEnabled)
         confirmButton.click()
         XCTAssertTrue(waitUntil(timeout: 20) { !nameField.exists })
