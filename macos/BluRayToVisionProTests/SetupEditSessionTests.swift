@@ -143,10 +143,10 @@ final class SetupEditSessionTests: XCTestCase {
         )
     }
 
-    func testStandardMovieKeepsBalancedIdentifierAndNoticeCopy() {
+    func testRecommendedKeepsBalancedIdentifier() {
         XCTAssertEqual(BuiltInProfile.balanced.id, "builtin.balanced")
-        XCTAssertEqual(BuiltInProfile.balanced.name, "Standard Movie")
-        XCTAssertTrue(StandardMovieRenameNotice.message.contains("saved profiles are unchanged"))
+        XCTAssertEqual(BuiltInProfile.balanced.name, "Recommended")
+        XCTAssertEqual(BuiltInProfile.originalResolution.name, "Higher Quality")
     }
 
     func testUIInventoryKeepsReadyActionsAndAdvancedControlsReachable() throws {
@@ -175,7 +175,9 @@ final class SetupEditSessionTests: XCTestCase {
         for marker in [
             "ready-profile-picker",
             "edit-conversion-settings",
-            "conversion-outcome-summary",
+            "setup-editor-section-video",
+            "setup-editor-section-audioAndSubtitles",
+            "setup-editor-section-filesAndRecovery",
             "Audio & Subtitles",
             "Files & Recovery",
             "Start stage",

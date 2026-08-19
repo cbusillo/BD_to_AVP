@@ -2,6 +2,7 @@ import Foundation
 
 enum BuiltInProfile: String, CaseIterable, Identifiable {
     case balanced = "builtin.balanced"
+    case smallerFile = "builtin.smaller-file"
     case originalResolution = "builtin.original-resolution"
     case fourKUpscale = "builtin.4k-upscale"
 
@@ -10,9 +11,11 @@ enum BuiltInProfile: String, CaseIterable, Identifiable {
     var name: String {
         switch self {
         case .balanced:
-            "Standard Movie"
+            "Recommended"
+        case .smallerFile:
+            "Smaller File"
         case .originalResolution:
-            "Original Resolution"
+            "Higher Quality"
         case .fourKUpscale:
             "4K Upscale"
         }
@@ -21,11 +24,13 @@ enum BuiltInProfile: String, CaseIterable, Identifiable {
     var summary: String {
         switch self {
         case .balanced:
-            "Source resolution with automatic audio, English audio, and subtitles."
+            "The best starting point for most movies, with source resolution and automatic audio and subtitles."
+        case .smallerFile:
+            "Uses less storage with a modest reduction in fine detail."
         case .originalResolution:
-            "Higher quality while preserving the source resolution."
+            "More detail at the source resolution, with a slower conversion and larger file."
         case .fourKUpscale:
-            "Twice the source resolution with quality kept consistent through upscaling."
+            "Upscale the source to 4K for a slower conversion and larger file."
         }
     }
 
@@ -33,6 +38,8 @@ enum BuiltInProfile: String, CaseIterable, Identifiable {
         switch self {
         case .balanced:
             "slider.horizontal.3"
+        case .smallerFile:
+            "externaldrive.badge.minus"
         case .originalResolution:
             "rectangle.inset.filled"
         case .fourKUpscale:
@@ -87,10 +94,6 @@ struct EncodingProfile: Identifiable, Equatable {
 
 enum ProfilePersistenceCopy {
     static let summary = "Profiles save video, audio, subtitle, reusable-file, and encoder settings. Restart, overwrite, delete-source, recovery, command-output, sound, and keep-awake choices are not saved."
-}
-
-enum StandardMovieRenameNotice {
-    static let message = "The Balanced profile is now called Standard Movie. Balanced is still a video quality choice. Your saved profiles are unchanged."
 }
 
 enum ReusableFileOutcome: String, CaseIterable, Identifiable {

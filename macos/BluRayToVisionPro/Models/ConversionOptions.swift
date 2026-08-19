@@ -17,6 +17,28 @@ enum ConversionSetupTab: String, CaseIterable, Identifiable {
             "Files & Recovery"
         }
     }
+
+    var systemImage: String {
+        switch self {
+        case .video:
+            "film"
+        case .audioAndSubtitles:
+            "captions.bubble"
+        case .filesAndRecovery:
+            "folder.badge.gearshape"
+        }
+    }
+
+    var accessibilityIdentifier: String {
+        switch self {
+        case .video:
+            "setup-editor-section-video"
+        case .audioAndSubtitles:
+            "setup-editor-section-audioAndSubtitles"
+        case .filesAndRecovery:
+            "setup-editor-section-filesAndRecovery"
+        }
+    }
 }
 
 enum AudioHandling: String, CaseIterable, Codable, Identifiable {
@@ -737,6 +759,14 @@ extension BuiltInProfile {
         switch self {
         case .balanced:
             return EncodingOptions(videoQuality: .balanced)
+        case .smallerFile:
+            return EncodingOptions(
+                videoQuality: VideoQualityIntent(
+                    mode: .ladder,
+                    lastLadderStep: .compact,
+                    custom: .defaults
+                )
+            )
         case .originalResolution:
             let mvHEVC = MVHEVCOptions(
                 generatedMergeQuality: 85,
