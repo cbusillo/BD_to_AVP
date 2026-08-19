@@ -21,9 +21,11 @@ records immutable publication plus its targeted qualification result. Stable
 `0.3.0` build `161` is published and immutable; its publication and bounded
 PyPI recovery are recorded in [the Stable cut packet](0.3.0-cut-packet.md).
 Stable `0.3.1` build `162` is published and immutable; its publication is
-recorded in [the 0.3.1 cut packet](0.3.1-cut-packet.md). The next prepared
-identity is Beta `0.3.2b1` build `163`, tracked in
-[the 0.3.2 Beta 1 cut packet](0.3.2-beta.1-cut-packet.md) and issue #584.
+recorded in [the 0.3.1 cut packet](0.3.1-cut-packet.md). Beta `0.3.2b1` build
+`163` is published and immutable, tracked in
+[the 0.3.2 Beta 1 cut packet](0.3.2-beta.1-cut-packet.md) and issue #584. The
+next prepared identity is Beta `0.3.2b2` build `164`, tracked in
+[the 0.3.2 Beta 2 cut packet](0.3.2-beta.2-cut-packet.md) and issue #593.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
