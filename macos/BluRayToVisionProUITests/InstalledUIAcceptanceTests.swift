@@ -71,10 +71,10 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertTrue(editAction.isEnabled)
         editAction.click()
 
-        let saveAction = lightApp.buttons["setup-editor-save-as-new"]
+        let saveAction = lightApp.buttons["save-profile-action"]
         XCTAssertTrue(saveAction.waitForExistence(timeout: 20))
         XCTAssertEqual(saveAction.elementType, .button)
-        XCTAssertEqual(saveAction.label, "Save as New Profile…")
+        XCTAssertEqual(saveAction.label, "Save current settings as new profile")
         XCTAssertTrue(saveAction.isEnabled)
 
         saveAction.click()
