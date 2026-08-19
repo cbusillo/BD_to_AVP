@@ -303,7 +303,7 @@ class FakeOperations(QualificationOperations):
             json.dumps(
                 {
                     "main_window_ready": True,
-                    "profile_document_version": 5,
+                    "profile_document_version": 6,
                     "profile_save_accessible": True,
                     "profile_save_succeeded": True,
                     "profiles_after": 1,
