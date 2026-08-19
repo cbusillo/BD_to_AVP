@@ -987,6 +987,21 @@ class QualificationUpdateBaseTests(unittest.TestCase):
         self.assertEqual(selection.prior_tag, "v1.2.3")
         self.assertEqual(selection.sparkle_route, "beta")
 
+    def test_qualification_base_cli_defaults_to_checked_release_evidence(self) -> None:
+        args = release.build_parser().parse_args(
+            [
+                "qualification-base",
+                "--release-tag",
+                "v1.2.4-beta.2",
+                "--releases-json",
+                "releases.json",
+                "--head-ref",
+                "candidate-head",
+            ]
+        )
+
+        self.assertEqual(args.checked_receipts_root, Path("docs/release-evidence"))
+
     def test_first_prerelease_uses_candidate_route_after_stable(self) -> None:
         selection = release.select_qualification_update_base(
             "v1.2.4-beta.1",

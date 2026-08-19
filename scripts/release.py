@@ -1283,7 +1283,7 @@ def build_parser() -> argparse.ArgumentParser:
     qualification_base.add_argument("--release-tag", required=True)
     qualification_base.add_argument("--releases-json", type=Path, required=True)
     qualification_base.add_argument("--head-ref", required=True)
-    qualification_base.add_argument("--checked-receipts-root", type=Path)
+    qualification_base.add_argument("--checked-receipts-root", type=Path, default=Path("docs/release-evidence"))
     qualification_base.add_argument("--github-output", type=Path)
 
     prepare = commands.add_parser("prepare", help="Atomically prepare a newer committed release version and build.")
