@@ -293,7 +293,9 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertNotIn('.accessibilityLabel("Preferred language:', language_picker)
 
         self.assertIn("Convert a 3D Blu-ray Disc", source_view)
-        self.assertIn("Import MTS or M2TS transport stream", source_view)
+        self.assertIn("MTS or M2TS…", source_view)
+        self.assertIn("Add Folder of Movies…", source_view)
+        self.assertIn("Adds every supported ISO, MKV, MTS, and M2TS movie", source_view)
         self.assertIn('Label("Save current settings as new profile", systemImage: "plus.square.on.square")', setup_view)
         self.assertIn('.accessibilityLabel("Save current settings as new profile")', setup_view)
         self.assertNotIn('Button("Save Current Settings as New Profile…", action: saveAsNewProfile)', setup_view)
@@ -301,7 +303,7 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn("state.phase.isRunning || state.phase == .decisionRequired", source_view)
         self.assertLess(
             source_view.index("Convert a 3D Blu-ray Disc"),
-            source_view.index("Import MTS or M2TS transport stream"),
+            source_view.index("MTS or M2TS…"),
         )
         for label in (
             "Video quality",

@@ -114,10 +114,6 @@ private struct ProfilesSettingsPane: View {
                     .foregroundStyle(.orange)
             }
 
-            if !settings.hasAcknowledgedStandardMovieRenameNotice {
-                StandardMovieRenameNoticeView(settings: settings)
-            }
-
             HSplitView {
                 profileList
                     .frame(minWidth: 220, idealWidth: 240, maxWidth: 280)

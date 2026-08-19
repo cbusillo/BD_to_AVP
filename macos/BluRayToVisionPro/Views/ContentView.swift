@@ -97,9 +97,6 @@ struct ContentView: View {
                 .padding(.vertical, 10)
         }
 
-        if !settings.hasAcknowledgedStandardMovieRenameNotice {
-            StandardMovieRenameNoticeView(settings: settings)
-        }
     }
 
     @ViewBuilder
@@ -415,7 +412,7 @@ struct ContentView: View {
             Divider()
             Button("Open Disc Image…") { chooseFile(.discImage) }
             Button("Open Blu-ray Folder…") { chooseFolder(.bluRayFolder) }
-            Button("Open Source Folder…") { chooseFolder(.sourceFolder) }
+            Button("Add Folder of Movies…") { chooseFolder(.sourceFolder) }
             Button("Open 3D MKV…") { chooseFile(.matroska) }
 
             Divider()

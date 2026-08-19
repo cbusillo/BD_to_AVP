@@ -106,7 +106,7 @@ struct ConversionSetupView: View {
                 .accessibilityIdentifier("ready-source")
             Divider()
             HStack(alignment: .firstTextBaseline) {
-                Picker("Profile", selection: $selectedProfileID) {
+                Picker("Result", selection: $selectedProfileID) {
                     ForEach(profiles) { profile in
                         Text(profile.name).tag(profile.id)
                     }
@@ -115,7 +115,7 @@ struct ConversionSetupView: View {
                 .disabled(isLocked)
                 .accessibilityIdentifier("ready-profile-picker")
                 Spacer()
-                Button("Edit…", action: openEditor)
+                Button("Advanced Settings…", action: openEditor)
                     .buttonStyle(.bordered)
                     .disabled(isLocked)
                     .accessibilityIdentifier("edit-conversion-settings")
@@ -185,16 +185,16 @@ struct ConversionSetupView: View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Conversion Setup")
+                    Text("Advanced Settings")
                         .font(.title3.weight(.semibold))
-                    Text("These choices apply to the current disc or source.")
+                    Text("Change only what you need for this conversion.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
 
-                Picker("Profile", selection: $selectedProfileID) {
+                Picker("Start with", selection: $selectedProfileID) {
                     ForEach(profiles) { profile in
                         Text(profile.name).tag(profile.id)
                     }
@@ -247,42 +247,62 @@ struct ConversionSetupView: View {
 
             Divider()
 
-            Picker("Conversion settings", selection: $selectedTab) {
-                ForEach(ConversionSetupTab.allCases) { tab in
-                    Text(tab.title).tag(tab)
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Settings")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 2)
+
+                    ForEach(ConversionSetupTab.allCases) { tab in
+                        Button {
+                            selectedTab = tab
+                        } label: {
+                            Label(tab.title, systemImage: tab.systemImage)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .background(
+                            selectedTab == tab ? Color.accentColor.opacity(0.14) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 7)
+                        )
+                        .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.primary)
+                        .accessibilityIdentifier(tab.accessibilityIdentifier)
+                    }
+
+                    Spacer()
                 }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-            .disabled(isLocked)
+                .padding(12)
+                .frame(width: 190)
+                .background(.bar)
 
-            Divider()
+                Divider()
 
-            OutcomeSummaryView(options: options)
-                .padding(.horizontal, 18)
-                .padding(.bottom, 12)
-
-            Group {
-                switch selectedTab {
-                case .video:
-                    EncodingOptionsEditor(
-                        options: $options.encoding,
-                        section: .video,
-                        jobOptions: options.job,
-                        routeQualityState: routeQualityState,
-                        conversionOptions: $options,
-                        profile: selectedProfile,
-                        sourceKind: sourceKind,
-                        memoryStore: resolutionMemoryStore,
-                        queueConflictForReview: queueConflictForReview
-                    )
-                case .audioAndSubtitles:
-                    EncodingOptionsEditor(options: $options.encoding, section: .audioAndSubtitles)
-                case .filesAndRecovery:
-                    filesAndRecoveryForm
+                Group {
+                    switch selectedTab {
+                    case .video:
+                        EncodingOptionsEditor(
+                            options: $options.encoding,
+                            section: .video,
+                            jobOptions: options.job,
+                            routeQualityState: routeQualityState,
+                            conversionOptions: $options,
+                            profile: selectedProfile,
+                            sourceKind: sourceKind,
+                            memoryStore: resolutionMemoryStore,
+                            queueConflictForReview: queueConflictForReview
+                        )
+                    case .audioAndSubtitles:
+                        EncodingOptionsEditor(options: $options.encoding, section: .audioAndSubtitles)
+                    case .filesAndRecovery:
+                        filesAndRecoveryForm
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .disabled(isLocked)
         }
@@ -416,6 +436,9 @@ struct ConversionSetupView: View {
     }
 
     private var profileOutcomeSummary: String {
+        if !profileModified, let builtInProfile = BuiltInProfile(rawValue: selectedProfile.id) {
+            return builtInProfile.summary
+        }
         let reusableSuffix = options.job.intermediatePolicy.createsReusableArtifacts
             ? " · reusable files kept"
             : ""
@@ -438,49 +461,6 @@ struct ConversionSetupView: View {
             return "The selected restart stage does not encode HEVC video."
         }
         return "Use libx265 instead of the default VideoToolbox HEVC encoder."
-    }
-}
-
-private struct OutcomeSummaryView: View {
-    let options: ConversionOptions
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("What you’ll get")
-                .font(.headline)
-            LabeledContent("Finished movie", value: finishedMovieSummary)
-            LabeledContent("Reusable files", value: reusableFilesSummary)
-            LabeledContent("Temporary space", value: options.job.intermediatePolicy.createsReusableArtifacts ? "Additional space while reusable files are kept" : "Removed after success")
-            LabeledContent("Estimated time", value: options.job.intermediatePolicy.createsReusableArtifacts ? "Longer processing" : "Standard processing")
-            LabeledContent("Quality", value: qualitySummary)
-        }
-        .font(.caption)
-        .padding(12)
-        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("What you’ll get")
-        .accessibilityIdentifier("conversion-outcome-summary")
-    }
-
-    private var finishedMovieSummary: String {
-        switch options.encoding.videoOutputMode {
-        case .mvHEVC:
-            "Vision Pro spatial movie"
-        case .av1Stereo:
-            "Stereo movie"
-        }
-    }
-
-    private var qualitySummary: String {
-        options.videoRoutePlan.kind == .existingArtifact
-            ? "Existing video kept"
-            : "\(options.videoRoutePlan.qualityTitle) quality"
-    }
-
-    private var reusableFilesSummary: String {
-        options.job.intermediatePolicy.createsReusableArtifacts
-            ? "Left- and right-eye movies kept"
-            : "None kept"
     }
 }
 

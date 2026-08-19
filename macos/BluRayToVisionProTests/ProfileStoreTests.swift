@@ -875,12 +875,12 @@ final class ProfileStoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         let fileURL = directoryURL.appendingPathComponent("profiles.json")
         let store = ProfileStore(fileURL: fileURL)
-        _ = try store.createProfile(name: "Standard Movie Copy", options: EncodingOptions())
-        _ = try store.createProfile(name: "Standard Movie Copy 2", options: EncodingOptions())
+        _ = try store.createProfile(name: "Recommended Copy", options: EncodingOptions())
+        _ = try store.createProfile(name: "Recommended Copy 2", options: EncodingOptions())
 
         let identifier = try store.duplicateProfile(BuiltInProfile.balanced.id)
 
-        XCTAssertEqual(store.profile(withID: identifier).name, "Standard Movie Copy 3")
+        XCTAssertEqual(store.profile(withID: identifier).name, "Recommended Copy 3")
     }
 
     @MainActor
