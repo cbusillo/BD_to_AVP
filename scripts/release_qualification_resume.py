@@ -533,8 +533,9 @@ def _workflow_runs(client: GitHubAPI, identity: ResumeIdentity) -> tuple[list[Ma
 def _run_matches(run: Mapping[str, Any], identity: ResumeIdentity) -> bool:
     actor = run.get("actor")
     triggering_actor = run.get("triggering_actor")
+    run_name = run.get("name")
     return (
-        run.get("name") == WORKFLOW_NAME
+        run_name in {WORKFLOW_NAME, identity.workflow_display_title}
         and run.get("path") == WORKFLOW_PATH
         and run.get("display_title") == identity.workflow_display_title
         and run.get("event") == "workflow_dispatch"
