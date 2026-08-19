@@ -385,6 +385,20 @@ def _repository_path(repo_root: Path, value: object, description: str) -> tuple[
     return repo_root / relative, relative.as_posix()
 
 
+def _qualification_path_for_release(repo_root: Path, release_tag: str) -> tuple[Path, str]:
+    matches: list[Path] = []
+    for path in sorted((repo_root / "docs" / "qualification").glob("*-signed-qualification-v1.json")):
+        qualification = _load_json(path, "signed qualification record")
+        candidate = qualification.get("candidate")
+        if isinstance(candidate, Mapping) and candidate.get("release_tag") == release_tag:
+            matches.append(path)
+    if len(matches) != 1:
+        raise ReleaseMilestoneContextError(
+            f"Expected exactly one signed qualification record for {release_tag}; found {len(matches)}."
+        )
+    return matches[0], matches[0].relative_to(repo_root).as_posix()
+
+
 def _require_tracked_path(repo_root: Path, relative_path: str, description: str) -> None:
     tracked = subprocess.run(
         ["git", "ls-files", "--error-unmatch", relative_path],
@@ -675,11 +689,7 @@ def resolve_milestone_context(repo_root: Path, receipt_path: Path) -> ReleaseMil
         operations.get("qualificationEvidencePath"),
         "qualificationEvidencePath",
     )
-    qualification_path, qualification_relative = _repository_path(
-        repo_root,
-        operations.get("qualificationRecordPath"),
-        "qualificationRecordPath",
-    )
+    qualification_path, qualification_relative = _qualification_path_for_release(repo_root, release_tag)
     for path, description in (
         (policy_path, "qualification policy"),
         (evidence_path, "qualification evidence"),

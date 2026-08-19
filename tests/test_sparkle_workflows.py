@@ -846,13 +846,21 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertEqual(
             workflow["env"]["RELEASE_QUALIFICATION_POLICY"], "docs/qualification/release-qualification-policy-v1.json"
         )
-        self.assertEqual(
-            workflow["env"]["RELEASE_QUALIFICATION_RECORD"],
-            "docs/qualification/stable-signed-qualification-v1.json",
-        )
+        self.assertNotIn("RELEASE_QUALIFICATION_RECORD", workflow["env"])
         self.assertIn("--candidate-sha", str(qualify_prep))
         self.assertIn("--release-stage", str(qualify_prep))
         self.assertIn("first_candidate_of_cycle", jobs["prepare"]["outputs"])
+        self.assertEqual(
+            jobs["prepare"]["outputs"]["qualification_record"],
+            "${{ steps.metadata.outputs.qualification_record }}",
+        )
+        self.assertEqual(
+            next(step for step in qualify_prep["steps"] if step.get("id") == "qualification")["env"][
+                "RELEASE_QUALIFICATION_RECORD"
+            ],
+            "${{ needs.prepare.outputs.qualification_record }}",
+        )
+        self.assertIn("needs.prepare.outputs.qualification_record", str(qualify_artifact))
         self.assertIn("--first-candidate-of-cycle", str(qualify_prep))
         self.assertIn("GITHUB_SHA", str(qualify_prep))
         self.assertIn("needs.prepare.outputs.channel", str(qualify_prep))
@@ -964,7 +972,7 @@ printf '%s' "$CODESIGN_METADATA"
         )
         self.assertEqual(
             release_operations["qualificationRecordPath"],
-            "docs/qualification/stable-signed-qualification-v1.json",
+            "docs/qualification/v0.3.2-beta.2-signed-qualification-v1.json",
         )
         self.assertEqual(len(release_operations["qualificationReportArtifacts"]), 3)
         self.assertIn(
@@ -1032,6 +1040,7 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("scripts.release_qualification_manifest validate", str(prepare))
         self.assertIn("scripts.signed_artifact_receipt validate", str(prepare))
         self.assertIn("scripts.release qualification-base", str(prepare))
+        self.assertIn("--checked-receipts-root docs/release-evidence", str(prepare))
         self.assertIn("prior_tag", str(prepare))
         self.assertIn("sparkle_route", str(prepare))
         self.assertIn('--prior-tag "${{ steps.signed-ui.outputs.prior_tag }}"', str(prepare))

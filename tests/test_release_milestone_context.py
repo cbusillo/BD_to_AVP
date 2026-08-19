@@ -325,6 +325,26 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         self.assertFalse(context.first_candidate_of_cycle)
         self.assertEqual(context.qualification_path, "docs/qualification/stable-signed-qualification-v1.json")
 
+    def test_resolves_legacy_release_record_by_tag_when_current_config_advances(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt_path = self.build_repository(root)
+            current_path = root / "docs/qualification/current-signed-qualification-v1.json"
+            current = json.loads(
+                (root / "docs/qualification/stable-signed-qualification-v1.json").read_text(encoding="utf-8")
+            )
+            current["candidate"]["release_tag"] = "v1.0.1-beta.1"
+            current_path.write_text(json.dumps(current) + "\n", encoding="utf-8")
+            config_path = root / ".github/github.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["releaseOperations"]["qualificationRecordPath"] = current_path.relative_to(root).as_posix()
+            config_path.write_text(json.dumps(config) + "\n", encoding="utf-8")
+
+            context = resolve_milestone_context(root, receipt_path)
+
+        self.assertEqual(context.release_tag, "v0.3.0")
+        self.assertEqual(context.qualification_path, "docs/qualification/stable-signed-qualification-v1.json")
+
     def test_resolves_manifest_milestone_context_without_migrating_receipts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

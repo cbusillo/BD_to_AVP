@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import tomllib
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -42,6 +42,8 @@ PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 LOCK_PATH = REPO_ROOT / "uv.lock"
 MACOS_PROJECT_PATH = REPO_ROOT / "macos" / "project.yml"
 PUBLIC_KEY_PATH = REPO_ROOT / "sparkle-public-ed-key.txt"
+GITHUB_CONFIG_PATH = REPO_ROOT / ".github" / "github.json"
+SIGNED_QUALIFICATION_GLOB = "*-signed-qualification-v1.json"
 TRANSACTION_JOURNAL_NAME = ".bd-to-avp-release-transaction.json"
 TRANSACTION_SCHEMA = "bd_to_avp.release_metadata_transaction"
 TRANSACTION_SCHEMA_VERSION = 1
@@ -74,6 +76,9 @@ BETA3_RECOVERY_SOURCE_VERSION = "0.3.0rc1"
 BETA3_RECOVERY_SOURCE_BUILD = "147"
 BETA3_RECOVERY_TARGET_VERSION = "0.3.0b3"
 BETA3_RECOVERY_TARGET_BUILD = "148"
+CUT_PACKET_PREPARED = "**Prepared metadata; publication pending.**"
+CUT_PACKET_RECOVERY_PENDING = "**Published and immutable; PyPI recovery pending.**"
+CUT_PACKET_PUBLISHED = "**Published and immutable.**"
 
 
 class ReleaseError(RuntimeError):
@@ -352,6 +357,7 @@ def select_qualification_update_base(
     release_history: Any,
     head_ref: str,
     *,
+    eligible_prior_tags: Collection[str] | None = None,
     tag_exists: TagExists = _git_tag_exists,
     is_ancestor: AncestorCheck = _git_tag_is_ancestor,
 ) -> QualificationUpdateBase:
@@ -361,6 +367,7 @@ def select_qualification_update_base(
             release
             for release in _published_releases(release_history)
             if release.version.order_key < current_version.order_key
+            and (eligible_prior_tags is None or release.tag_name in eligible_prior_tags)
         ),
         key=lambda release: release.version.order_key,
         reverse=True,
@@ -697,6 +704,84 @@ def load_release_metadata(
         make_latest=not version.prerelease,
         publish_pypi=not version.prerelease,
     )
+
+
+def validate_configured_qualification_record(
+    metadata: ReleaseMetadata,
+    *,
+    github_config_path: Path = GITHUB_CONFIG_PATH,
+) -> Path:
+    try:
+        config = json.loads(github_config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ReleaseError(f"Unable to load GitHub release configuration from {github_config_path}: {error}") from error
+    if not isinstance(config, dict) or not isinstance(config.get("releaseOperations"), dict):
+        raise ReleaseError("GitHub release configuration must define releaseOperations.")
+    configured_value = config["releaseOperations"].get("qualificationRecordPath")
+    if not isinstance(configured_value, str) or not configured_value:
+        raise ReleaseError("GitHub release configuration must define qualificationRecordPath.")
+    configured_relative = Path(configured_value)
+    if configured_relative.is_absolute() or ".." in configured_relative.parts or configured_value.startswith("./"):
+        raise ReleaseError("qualificationRecordPath must be a canonical repository-relative path.")
+
+    repo_root = github_config_path.parent.parent
+    qualification_directory = repo_root / "docs" / "qualification"
+    matches: list[Path] = []
+    configured_document: Mapping[str, Any] | None = None
+    for path in sorted(qualification_directory.glob(SIGNED_QUALIFICATION_GLOB)):
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ReleaseError(f"Unable to load signed qualification record from {path}: {error}") from error
+        if not isinstance(document, dict):
+            raise ReleaseError(f"Signed qualification record must be a JSON object: {path}")
+        candidate = document.get("candidate")
+        if isinstance(candidate, dict) and candidate.get("release_tag") == metadata.release_tag:
+            matches.append(path)
+        if path == repo_root / configured_relative:
+            configured_document = document
+
+    if len(matches) != 1:
+        raise ReleaseError(
+            f"Expected exactly one signed qualification record for {metadata.release_tag}; found {len(matches)}."
+        )
+    configured_path = repo_root / configured_relative
+    if matches[0] != configured_path or configured_document is None:
+        raise ReleaseError(
+            "qualificationRecordPath must select the unique signed qualification record for the committed release."
+        )
+
+    candidate = configured_document.get("candidate")
+    execution_policy = configured_document.get("execution_policy")
+    if not isinstance(candidate, dict) or not isinstance(execution_policy, dict):
+        raise ReleaseError("Configured signed qualification record must define candidate and execution_policy objects.")
+    expected_candidate = {
+        "build_version": metadata.build_version,
+        "dmg_name": metadata.dmg_name,
+        "package_version": metadata.package_version,
+        "public_version": metadata.public_version,
+        "release_tag": metadata.release_tag,
+        "workflow": "Prerelease" if metadata.prerelease else "Stable",
+    }
+    mismatches = [field for field, expected in expected_candidate.items() if candidate.get(field) != expected]
+    if mismatches:
+        raise ReleaseError(f"Configured signed qualification candidate identity differs for fields: {mismatches}.")
+    if execution_policy.get("release_stage") != metadata.channel:
+        raise ReleaseError("Configured signed qualification release_stage differs from committed release metadata.")
+    return configured_relative
+
+
+def validate_release_cut_packet(metadata: ReleaseMetadata, *, repo_root: Path = REPO_ROOT) -> Path:
+    relative = Path("docs") / f"{metadata.public_version}-cut-packet.md"
+    path = repo_root / relative
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ReleaseError(f"Unable to load release cut packet from {path}: {error}") from error
+    recognized_states = (CUT_PACKET_PREPARED, CUT_PACKET_RECOVERY_PENDING, CUT_PACKET_PUBLISHED)
+    if sum(state in text for state in recognized_states) != 1:
+        raise ReleaseError("Release cut packet must declare exactly one prepared-pending or published immutable state.")
+    return relative
 
 
 def _replace_section_value(text: str, section: str, key: str, value: str) -> str:
@@ -1198,6 +1283,7 @@ def build_parser() -> argparse.ArgumentParser:
     qualification_base.add_argument("--release-tag", required=True)
     qualification_base.add_argument("--releases-json", type=Path, required=True)
     qualification_base.add_argument("--head-ref", required=True)
+    qualification_base.add_argument("--checked-receipts-root", type=Path)
     qualification_base.add_argument("--github-output", type=Path)
 
     prepare = commands.add_parser("prepare", help="Atomically prepare a newer committed release version and build.")
@@ -1242,10 +1328,18 @@ def main(argv: list[str] | None = None) -> int:
             release_history = json.loads(args.releases_json.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise ReleaseError(f"Unable to load GitHub release history from {args.releases_json}: {error}") from error
+        eligible_prior_tags = None
+        if args.checked_receipts_root is not None:
+            eligible_prior_tags = {
+                path.parent.name
+                for path in args.checked_receipts_root.glob("v*/release-receipt.json")
+                if path.is_file()
+            }
         selection = select_qualification_update_base(
             args.release_tag,
             release_history,
             args.head_ref,
+            eligible_prior_tags=eligible_prior_tags,
         )
         if args.github_output:
             with args.github_output.open("a", encoding="utf-8") as handle:
@@ -1253,6 +1347,7 @@ def main(argv: list[str] | None = None) -> int:
                 handle.write(f"sparkle_route={selection.sparkle_route}\n")
         print(json.dumps(asdict(selection), sort_keys=True))
         return 0
+    qualification_record: Path | None = None
     if args.command == "prepare":
         metadata = prepare_release(
             args.version,
@@ -1266,10 +1361,15 @@ def main(argv: list[str] | None = None) -> int:
         metadata = recover_beta3(evidence_path=args.evidence)
     else:
         metadata = load_release_metadata(args.pyproject, args.lock, args.macos_project)
+        qualification_record = validate_configured_qualification_record(metadata)
+        validate_release_cut_packet(metadata)
     if args.command == "metadata" and args.github_output:
+        if qualification_record is None:
+            raise ReleaseError("Release metadata did not resolve a configured qualification record.")
         with args.github_output.open("a", encoding="utf-8") as handle:
             for key, value in metadata.github_outputs().items():
                 handle.write(f"{key}={value}\n")
+            handle.write(f"qualification_record={qualification_record.as_posix()}\n")
     print(json.dumps(asdict(metadata), sort_keys=True))
     return 0
 

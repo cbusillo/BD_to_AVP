@@ -318,6 +318,7 @@ jobs:
             --release-tag "$CANDIDATE_TAG" \
             --releases-json releases-pages.json \
             --head-ref "$CANDIDATE_SHA" \
+            --checked-receipts-root docs/release-evidence \
             --github-output "$GITHUB_OUTPUT"
           PRIOR_TAG=$(sed -n 's/^prior_tag=//p' "$GITHUB_OUTPUT" | tail -1)
           if [ -z "$PRIOR_TAG" ]; then
