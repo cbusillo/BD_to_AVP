@@ -336,14 +336,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         self.assertEqual(
             {field: qualification["candidate"][field] for field in candidate_identity_fields},
-            {
-                "source_git_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19",
-                "dmg_sha256": "72b7cba55948804724eca39f67359ee1f295fc57c9640f4c4f1a9fd1006bb774",
-                "signed_app_tree_sha256": "87a36f1a7c474fd408c0569afc4430e5cea79387f40b67e08ada65780c2dd24f",
-                "release_run_id": 32277548249,
-                "release_id": 373212973,
-                "appcast_sha256": "d9e589452cbcc0147170dcdfa0cfdc520b761075ccde929fec64dee82c528073",
-            },
+            {field: None for field in candidate_identity_fields},
         )
         self.assertEqual(qualification["status"], "preregistered_pending_exact_candidate")
         self.assertEqual(qualification["execution_policy"]["release_stage"], "beta")
