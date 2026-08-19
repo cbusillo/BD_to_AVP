@@ -61,7 +61,10 @@ class FakeOperations(QualificationOperations):
         tamper_prior_before_update: bool = False,
         wrong_running_path: bool = False,
         staged_repeats_after_press: int = 0,
-        press_state_changed: bool = False,
+        press_state_change_failures: int = 0,
+        press_state_change_after_actions: int = 0,
+        staged_relaunches_directly: bool = False,
+        staged_candidate_installed_before_final_action: bool = False,
         oscillate_non_actionable: bool = False,
         sentinel_failure: bool = False,
         tamper_marker: bool = False,
@@ -78,7 +81,10 @@ class FakeOperations(QualificationOperations):
         self.tamper_prior_before_update = tamper_prior_before_update
         self.wrong_running_path = wrong_running_path
         self.staged_repeats_after_press = staged_repeats_after_press
-        self.press_state_changed = press_state_changed
+        self.press_state_change_failures = press_state_change_failures
+        self.press_state_change_after_actions = press_state_change_after_actions
+        self.staged_relaunches_directly = staged_relaunches_directly
+        self.staged_candidate_installed_before_final_action = staged_candidate_installed_before_final_action
         self.oscillate_non_actionable = oscillate_non_actionable
         self.sentinel_failure = sentinel_failure
         self.tamper_marker = tamper_marker
@@ -94,6 +100,8 @@ class FakeOperations(QualificationOperations):
         self.launch_calls = 0
         self.quit_calls = 0
         self.running_app_path: Path | None = None
+        self.running_process_id: int | None = None
+        self.next_process_id = 1000
         self.post_staged_observations = 0
         self.observation_calls = 0
 
@@ -135,6 +143,8 @@ class FakeOperations(QualificationOperations):
         self.launch_calls += 1
         self.running = True
         self.running_app_path = app_path
+        self.running_process_id = self.next_process_id
+        self.next_process_id += 1
 
     def open_updater(self, app_path: Path, synthetic_home: Path) -> None:
         self.launch_app(app_path, synthetic_home)
@@ -212,7 +222,14 @@ class FakeOperations(QualificationOperations):
                 action_identifier="SPUUserUpdateChoiceInstall",
                 action_title="Install Update",
             )
-            if not self.pressed_actions:
+            if self.staged_relaunches_directly and self.pressed_actions:
+                observation = UpdateObservation(
+                    state=SparkleUpdateState.WAITING_FOR_WINDOW,
+                    window_match="none",
+                    action_identifier="",
+                    action_title="",
+                )
+            elif not self.pressed_actions:
                 observation = staged_observation
             elif self.post_staged_observations < self.staged_repeats_after_press:
                 self.post_staged_observations += 1
@@ -248,7 +265,8 @@ class FakeOperations(QualificationOperations):
         checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
         transitions = checkpoint["transitions"]
         self.intent_seen_before_press = bool(transitions and transitions[-1]["phase"] == "intent")
-        if self.press_state_changed:
+        if self.press_state_change_failures > 0 and len(self.pressed_actions) >= self.press_state_change_after_actions:
+            self.press_state_change_failures -= 1
             raise SparkleUpdateFailure(
                 "simulated updater state change",
                 reason_code="updater-state-changed",
@@ -257,6 +275,14 @@ class FakeOperations(QualificationOperations):
             )
         self.pressed_actions.append(observation)
         if observation.state == SparkleUpdateState.STAGED_INSTALL:
+            if self.staged_relaunches_directly or self.staged_candidate_installed_before_final_action:
+                app_path = self.current_app_path
+                shutil.rmtree(app_path)
+                shutil.copytree(self.candidate_source, app_path, symlinks=True)
+                self.running = True
+                self.running_app_path = app_path
+                self.running_process_id = self.next_process_id
+                self.next_process_id += 1
             return
         if self.tamper_marker:
             marker_path = self.current_synthetic_home.parent / ".bd-to-avp-tier3-owned.json"
@@ -266,6 +292,8 @@ class FakeOperations(QualificationOperations):
         shutil.copytree(self.candidate_source, app_path, symlinks=True)
         self.running = True
         self.running_app_path = self.candidate_source if self.wrong_running_path else app_path
+        self.running_process_id = self.next_process_id
+        self.next_process_id += 1
 
     def collect_ui_evidence(
         self,
@@ -366,10 +394,16 @@ class FakeOperations(QualificationOperations):
             return False
         return app_path is None or self.running_app_path == app_path
 
+    def app_process_id(self, app_path: Path | None = None) -> int | None:
+        if not self.app_running(app_path):
+            return None
+        return self.running_process_id
+
     def quit_app(self) -> None:
         self.quit_calls += 1
         self.running = False
         self.running_app_path = None
+        self.running_process_id = None
 
 
 class Tier3CleanMachineTests(unittest.TestCase):
@@ -910,6 +944,42 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 ["staged-install", "installing", "ready-install-relaunch"],
             )
 
+    def test_run_detects_candidate_relaunch_after_staged_action(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.install_action = "Install Update"
+            operations.staged_relaunches_directly = True
+
+            run_qualification(config, operations)
+
+            update_evidence = json.loads(
+                (config.evidence_directory / "sparkle-update.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                [observation.state for observation in operations.pressed_actions],
+                [SparkleUpdateState.STAGED_INSTALL],
+            )
+            self.assertEqual(update_evidence["outcome"], "staged")
+            self.assertEqual(
+                update_evidence["states_observed"],
+                ["staged-install", "installing", "waiting-for-window"],
+            )
+
+    def test_run_does_not_skip_visible_final_action_when_candidate_is_on_disk(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.install_action = "Install Update"
+            operations.staged_candidate_installed_before_final_action = True
+
+            run_qualification(config, operations)
+
+            self.assertEqual(
+                [observation.state for observation in operations.pressed_actions],
+                [SparkleUpdateState.STAGED_INSTALL, SparkleUpdateState.READY_INSTALL_RELAUNCH],
+            )
+
     def test_run_does_not_press_a_repeated_staged_action(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -953,18 +1023,52 @@ class Tier3CleanMachineTests(unittest.TestCase):
             self.assertEqual(len(operations.pressed_actions), 1)
             self.assertFalse(config.evidence_directory.exists())
 
-    def test_run_fails_closed_when_updater_changes_after_intent_recording(self) -> None:
+    def test_run_retries_when_updater_changes_after_intent_recording(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             config, operations = self.fixture(root)
-            operations.press_state_changed = True
+            operations.press_state_change_failures = 1
+
+            run_qualification(config, operations)
+
+            update_evidence = json.loads(
+                (config.evidence_directory / "sparkle-update.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(operations.update_attempts, 2)
+            self.assertTrue(operations.intent_seen_before_press)
+            self.assertEqual(update_evidence["attempt"], 2)
+            self.assertEqual(update_evidence["retry_reason_code"], "updater-state-changed")
+
+    def test_run_fails_closed_after_repeated_updater_state_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.press_state_change_failures = 2
+
+            with self.assertRaisesRegex(CleanMachineError, "changed after intent"):
+                run_qualification(config, operations)
+
+            self.assertEqual(operations.update_attempts, 2)
+            self.assertTrue(operations.intent_seen_before_press)
+            self.assertFalse(operations.pressed_actions)
+            self.assertFalse(config.evidence_directory.exists())
+
+    def test_run_does_not_retry_state_change_after_staged_action(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.install_action = "Install Update"
+            operations.press_state_change_failures = 1
+            operations.press_state_change_after_actions = 1
 
             with self.assertRaisesRegex(CleanMachineError, "changed after intent"):
                 run_qualification(config, operations)
 
             self.assertEqual(operations.update_attempts, 1)
-            self.assertTrue(operations.intent_seen_before_press)
-            self.assertFalse(operations.pressed_actions)
+            self.assertEqual(
+                [observation.state for observation in operations.pressed_actions],
+                [SparkleUpdateState.STAGED_INSTALL],
+            )
             self.assertFalse(config.evidence_directory.exists())
 
     def test_run_classifies_terminal_failure_without_retry(self) -> None:

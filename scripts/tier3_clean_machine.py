@@ -72,6 +72,7 @@ RETRYABLE_UPDATE_FAILURES = frozenset(
     {
         "application-process-timeout",
         "update-menu-timeout",
+        "updater-state-changed",
         "update-window-timeout",
     }
 )
@@ -222,6 +223,7 @@ class UpdateInteraction:
     journal_sha256: str
     attempt: int
     retry_reason_code: str | None
+    prior_process_id: int
 
 
 class QualificationOperations(Protocol):
@@ -268,6 +270,9 @@ class QualificationOperations(Protocol):
         raise NotImplementedError
 
     def app_running(self, app_path: Path | None = None) -> bool:
+        raise NotImplementedError
+
+    def app_process_id(self, app_path: Path | None = None) -> int | None:
         raise NotImplementedError
 
     def quit_app(self) -> None:
@@ -1115,7 +1120,7 @@ class MacOSOperations:
                 raise CleanMachineError("Installed UI candidate release-link evidence is not source-bound.")
 
     @staticmethod
-    def app_running(app_path: Path | None = None) -> bool:
+    def _application_process_ids() -> tuple[int, ...]:
         script = (
             'tell application "System Events" to return unix id of every '
             f'application process whose bundle identifier is "{BUNDLE_IDENTIFIER}"'
@@ -1127,18 +1132,22 @@ class MacOSOperations:
             timeout=COMMAND_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
-            return False
+            return ()
         output = result.stdout.strip()
         if not output:
-            return False
+            return ()
         try:
-            process_ids = tuple(int(value.strip()) for value in output.split(",") if value.strip())
+            return tuple(int(value.strip()) for value in output.split(",") if value.strip())
         except ValueError:
-            return False
+            return ()
+
+    @classmethod
+    def app_process_id(cls, app_path: Path | None = None) -> int | None:
+        process_ids = cls._application_process_ids()
         if app_path is None:
-            return bool(process_ids)
+            return process_ids[0] if len(process_ids) == 1 else None
         if len(process_ids) != 1:
-            return False
+            return None
         try:
             info = _mapping(
                 plistlib.loads((app_path / "Contents" / "Info.plist").read_bytes()),
@@ -1146,7 +1155,7 @@ class MacOSOperations:
             )
             executable_name = _string(info.get("CFBundleExecutable"), "installed app executable name")
         except (OSError, plistlib.InvalidFileException, CleanMachineError):
-            return False
+            return None
         executable_path = (app_path / "Contents" / "MacOS" / executable_name).resolve()
         process = subprocess.run(
             ["/bin/ps", "-p", str(process_ids[0]), "-o", "command="],
@@ -1155,9 +1164,17 @@ class MacOSOperations:
             timeout=COMMAND_TIMEOUT_SECONDS,
         )
         command = process.stdout.strip()
-        return process.returncode == 0 and (
+        if process.returncode != 0 or not (
             command == str(executable_path) or command.startswith(f"{executable_path} ")
-        )
+        ):
+            return None
+        return process_ids[0]
+
+    @classmethod
+    def app_running(cls, app_path: Path | None = None) -> bool:
+        if app_path is None:
+            return bool(cls._application_process_ids())
+        return cls.app_process_id(app_path) is not None
 
     def quit_app(self) -> None:
         script = f'''tell application "System Events"
@@ -1556,6 +1573,14 @@ def _perform_sparkle_update(
     }
     journal_sha256 = _write_durable_json(checkpoint_path, journal)
     operations.open_updater(app_path, synthetic_home)
+    prior_process_id = operations.app_process_id(app_path)
+    if prior_process_id is None:
+        raise SparkleUpdateFailure(
+            "Sparkle updater did not retain the exact prior application process after opening.",
+            reason_code="application-process-timeout",
+            state=SparkleUpdateState.WAITING_FOR_WINDOW,
+            action_pressed=False,
+        )
 
     deadline = time.monotonic() + GUI_TIMEOUT_SECONDS
     states_observed: list[str] = []
@@ -1588,6 +1613,25 @@ def _perform_sparkle_update(
         )
         return _write_durable_json(checkpoint_path, journal)
 
+    def exact_candidate_installed() -> bool:
+        if not staged_pressed or not app_path.exists():
+            return False
+        try:
+            identity = read_bundle_identity(app_path)
+        except CleanMachineError:
+            return False
+        if (
+            identity.bundle_identifier != BUNDLE_IDENTIFIER
+            or identity.package_version != candidate.package_version
+            or identity.build_version != candidate.build_version
+        ):
+            return False
+        try:
+            verify_installed_app(app_path, candidate)
+        except CleanMachineError:
+            return False
+        return True
+
     while time.monotonic() < deadline:
         observation = operations.observe_updater()
         state = observation.state
@@ -1600,7 +1644,10 @@ def _perform_sparkle_update(
             saw_owned_window = True
 
         if state == SparkleUpdateState.WAITING_FOR_WINDOW:
-            if staged_pressed and not operations.app_running():
+            current_process_id = operations.app_process_id(app_path)
+            if staged_pressed and (
+                current_process_id is None or (current_process_id != prior_process_id and exact_candidate_installed())
+            ):
                 if last_pressed is None:
                     raise AssertionError("staged Sparkle update lost its pressed action")
                 return UpdateInteraction(
@@ -1613,6 +1660,7 @@ def _perform_sparkle_update(
                     journal_sha256=journal_sha256,
                     attempt=attempt,
                     retry_reason_code=retry_reason_code,
+                    prior_process_id=prior_process_id,
                 )
             if saw_owned_window and action_count == 0:
                 cancelled = UpdateObservation(
@@ -1711,7 +1759,7 @@ def _perform_sparkle_update(
                 "Sparkle updater changed after intent was durably recorded; no action was pressed.",
                 reason_code="updater-state-changed",
                 state=observation.state,
-                action_pressed=False,
+                action_pressed=action_count > 0,
             ) from error
         journal_sha256 = record_transition("pressed", observation)
         action_count += 1
@@ -1741,6 +1789,7 @@ def _perform_sparkle_update(
             journal_sha256=journal_sha256,
             attempt=attempt,
             retry_reason_code=retry_reason_code,
+            prior_process_id=prior_process_id,
         )
 
     raise SparkleUpdateFailure(
@@ -1755,6 +1804,7 @@ def _wait_for_candidate(
     app_path: Path,
     candidate: ReleaseArtifact,
     operations: QualificationOperations,
+    prior_process_id: int,
 ) -> BundleIdentity:
     deadline = time.monotonic() + UPDATE_TIMEOUT_SECONDS
     last_error: CleanMachineError | None = None
@@ -1765,7 +1815,8 @@ def _wait_for_candidate(
             except CleanMachineError as error:
                 last_error = error
             else:
-                if operations.app_running(app_path):
+                current_process_id = operations.app_process_id(app_path)
+                if current_process_id is not None and current_process_id != prior_process_id:
                     return identity
         time.sleep(1)
     detail = f" Last identity error: {last_error}" if last_error is not None else ""
@@ -2135,7 +2186,12 @@ def _run_qualification(
             operations.quit_app()
             _wait_for_candidate_on_disk(app_path, candidate)
             operations.launch_app(app_path, synthetic_home)
-        candidate_identity = _wait_for_candidate(app_path, candidate, operations)
+        candidate_identity = _wait_for_candidate(
+            app_path,
+            candidate,
+            operations,
+            interaction.prior_process_id,
+        )
         route_after = operations.read_preference(synthetic_home, UPDATE_ROUTE_KEY)
         sentinel_after = operations.read_preference(synthetic_home, SENTINEL_KEY)
         profile_after_sha256 = file_sha256(profile_path)
