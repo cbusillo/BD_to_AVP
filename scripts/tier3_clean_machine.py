@@ -1886,7 +1886,7 @@ def normalize_installed_ui_candidate_evidence(
     )
     expected_candidate = {
         "main_window_ready": True,
-        "profile_document_version": 5,
+        "profile_document_version": 6,
         "profile_save_accessible": True,
         "profile_save_succeeded": True,
         "profiles_after": 1,
@@ -1981,7 +1981,7 @@ def normalize_installed_ui_candidate_evidence(
         evidence_directory / "ui-result.json",
         {
             "main_window_ready": True,
-            "profile_document_version": 5,
+            "profile_document_version": 6,
             "profile_save_accessible": True,
             "profile_save_succeeded": True,
             "release_notes_url_sha256": hashlib.sha256(release_notes_url.encode()).hexdigest(),
