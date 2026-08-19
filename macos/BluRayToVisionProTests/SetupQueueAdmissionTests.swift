@@ -38,9 +38,10 @@ final class SetupQueueAdmissionTests: XCTestCase {
 
     func testOneScopeNeverMutatesAnotherWaitingItemOrRunningSnapshot() throws {
         let draft = makeDraft()
+        let secondDraft = makeDraft(path: "/tmp/Second Movie.mkv")
         let conflict = try conflict(for: draft.options)
         let admission = SetupQueueAdmission()
-        admission.add(drafts: [draft, draft], conflicts: [conflict, conflict])
+        admission.add(drafts: [draft, secondDraft], conflicts: [conflict, conflict])
         let group = try XCTUnwrap(admission.groups.first)
         var selection = QueueResolutionSelection()
         selection.resolutionID = try XCTUnwrap(group.conflict.resolutions.first(where: \.isAvailable)?.id)
@@ -76,9 +77,10 @@ final class SetupQueueAdmissionTests: XCTestCase {
 
     func testDurableAndRuntimeProjectionPreserveIdentityTraceAndState() throws {
         let draft = makeDraft()
+        let secondDraft = makeDraft(path: "/tmp/Second Movie.mkv")
         let conflict = try conflict(for: draft.options)
         let admission = SetupQueueAdmission()
-        admission.add(drafts: [draft, draft], conflicts: [conflict, conflict])
+        admission.add(drafts: [draft, secondDraft], conflicts: [conflict, conflict])
         let group = try XCTUnwrap(admission.groups.first)
         var selection = QueueResolutionSelection()
         selection.resolutionID = try XCTUnwrap(group.conflict.resolutions.first(where: \.isAvailable)?.id)
@@ -124,14 +126,85 @@ final class SetupQueueAdmissionTests: XCTestCase {
         XCTAssertTrue(admission.items.isEmpty)
     }
 
-    private func makeDraft() -> ConversionDraft {
-        let source = ConversionSource(kind: .matroska, url: URL(fileURLWithPath: "/tmp/Movie.mkv"))
+    func testDuplicateDraftIsRejectedAcrossAddCalls() {
+        let draft = makeDraft()
+        let admission = SetupQueueAdmission()
+
+        let firstResult = admission.add(drafts: [draft])
+        let duplicateResult = admission.add(drafts: [draft])
+
+        XCTAssertEqual(firstResult, SetupQueueAddResult(addedCount: 1, duplicateDisplayNames: []))
+        XCTAssertEqual(
+            duplicateResult,
+            SetupQueueAddResult(addedCount: 0, duplicateDisplayNames: ["Movie.mkv"])
+        )
+        XCTAssertEqual(admission.items.count, 1)
+        XCTAssertFalse(admission.canAdd(drafts: [draft]))
+    }
+
+    func testDuplicateDraftIsRejectedWithinIncomingBatch() {
+        let draft = makeDraft()
+        let admission = SetupQueueAdmission()
+
+        let result = admission.add(drafts: [draft, draft])
+
+        XCTAssertEqual(result.addedCount, 1)
+        XCTAssertEqual(result.duplicateDisplayNames, ["Movie.mkv"])
+        XCTAssertEqual(admission.items.count, 1)
+    }
+
+    func testDifferentTitlesFromSameSourceCanBothBeAdded() {
+        let firstDraft = makeDraft(selectedTitle: makeTitle(id: "title:1", name: "First Feature"))
+        let secondDraft = makeDraft(selectedTitle: makeTitle(id: "title:2", name: "Second Feature"))
+        let admission = SetupQueueAdmission()
+
+        let result = admission.add(drafts: [firstDraft, secondDraft])
+
+        XCTAssertEqual(result.addedCount, 2)
+        XCTAssertTrue(result.duplicateDisplayNames.isEmpty)
+        XCTAssertEqual(admission.items.count, 2)
+    }
+
+    func testChangedSettingsDoNotPermitDuplicateSourceTitle() {
+        let draft = makeDraft()
+        var changedOptions = draft.options
+        changedOptions.encoding.audioBitrate = 512
+        let changedDraft = makeDraft(options: changedOptions)
+        let admission = SetupQueueAdmission()
+        admission.add(drafts: [draft])
+
+        let result = admission.add(drafts: [changedDraft])
+
+        XCTAssertEqual(result.addedCount, 0)
+        XCTAssertEqual(result.duplicateCount, 1)
+        XCTAssertEqual(admission.items.count, 1)
+    }
+
+    private func makeDraft(
+        path: String = "/tmp/Movie.mkv",
+        options: ConversionOptions = ConversionOptions(),
+        selectedTitle: SourceTitle? = nil
+    ) -> ConversionDraft {
+        let source = ConversionSource(kind: .matroska, url: URL(fileURLWithPath: path))
         return ConversionDraft(
             source: source,
             sourceDetails: nil,
             profile: BuiltInProfile.balanced.profile,
             destinationURL: URL(fileURLWithPath: "/tmp"),
-            options: ConversionOptions()
+            options: options,
+            selectedTitle: selectedTitle
+        )
+    }
+
+    private func makeTitle(id: String, name: String) -> SourceTitle {
+        SourceTitle(
+            id: id,
+            name: name,
+            outputName: name,
+            durationSeconds: 7_200,
+            resolution: "1920x1080",
+            frameRate: "24000/1001",
+            mainFeature: false
         )
     }
 

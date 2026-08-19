@@ -2,6 +2,7 @@ import Foundation
 
 enum BuiltInProfile: String, CaseIterable, Identifiable {
     case balanced = "builtin.balanced"
+    case smallerFile = "builtin.smaller-file"
     case originalResolution = "builtin.original-resolution"
     case fourKUpscale = "builtin.4k-upscale"
 
@@ -11,6 +12,8 @@ enum BuiltInProfile: String, CaseIterable, Identifiable {
         switch self {
         case .balanced:
             "Recommended"
+        case .smallerFile:
+            "Smaller File"
         case .originalResolution:
             "Higher Quality"
         case .fourKUpscale:
@@ -22,6 +25,8 @@ enum BuiltInProfile: String, CaseIterable, Identifiable {
         switch self {
         case .balanced:
             "The best starting point for most movies, with source resolution and automatic audio and subtitles."
+        case .smallerFile:
+            "Uses less storage with a modest reduction in fine detail."
         case .originalResolution:
             "More detail at the source resolution, with a slower conversion and larger file."
         case .fourKUpscale:
@@ -33,6 +38,8 @@ enum BuiltInProfile: String, CaseIterable, Identifiable {
         switch self {
         case .balanced:
             "slider.horizontal.3"
+        case .smallerFile:
+            "externaldrive.badge.minus"
         case .originalResolution:
             "rectangle.inset.filled"
         case .fourKUpscale:

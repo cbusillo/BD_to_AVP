@@ -54,6 +54,13 @@ struct SetupQueueAdmissionItem: Identifiable, Equatable {
     }
 }
 
+struct SetupQueueAddResult: Equatable {
+    let addedCount: Int
+    let duplicateDisplayNames: [String]
+
+    var duplicateCount: Int { duplicateDisplayNames.count }
+}
+
 @MainActor
 final class SetupQueueAdmission: ObservableObject {
     @Published private(set) var items: [SetupQueueAdmissionItem] = []
@@ -87,15 +94,43 @@ final class SetupQueueAdmission: ObservableObject {
         return items.compactMap(\.currentDraft)
     }
 
-    func add(drafts: [ConversionDraft], conflicts: [RouteQualityConflict?] = []) {
-        guard !drafts.isEmpty else { return }
+    func canAdd(drafts: [ConversionDraft]) -> Bool {
+        guard !drafts.isEmpty else { return false }
+        if items.allSatisfy({ $0.state == .completed || $0.state == .stopped }) {
+            return true
+        }
+        let existingIDs = Set(items.map { ConversionQueueItem.stablePreviewID(for: $0.originalDraft) })
+        return drafts.contains { !existingIDs.contains(ConversionQueueItem.stablePreviewID(for: $0)) }
+    }
+
+    @discardableResult
+    func add(drafts: [ConversionDraft], conflicts: [RouteQualityConflict?] = []) -> SetupQueueAddResult {
+        guard !drafts.isEmpty else {
+            return SetupQueueAddResult(addedCount: 0, duplicateDisplayNames: [])
+        }
         if items.allSatisfy({ $0.state == .completed || $0.state == .stopped }) {
             items.removeAll()
         }
         let suppliedConflicts = conflicts + Array(repeating: nil, count: max(0, drafts.count - conflicts.count))
-        items.append(contentsOf: zip(drafts, suppliedConflicts).map {
-            SetupQueueAdmissionItem(draft: $0.0, conflict: $0.1)
-        })
+        var admittedIDs = Set(items.map { ConversionQueueItem.stablePreviewID(for: $0.originalDraft) })
+        var admittedItems: [SetupQueueAdmissionItem] = []
+        var duplicateDisplayNames: [String] = []
+
+        for (index, draft) in drafts.enumerated() {
+            let identity = ConversionQueueItem.stablePreviewID(for: draft)
+            guard admittedIDs.insert(identity).inserted else {
+                duplicateDisplayNames.append(draft.selectedTitle?.name ?? draft.source.displayName)
+                continue
+            }
+            admittedItems.append(
+                SetupQueueAdmissionItem(draft: draft, conflict: suppliedConflicts[index])
+            )
+        }
+        items.append(contentsOf: admittedItems)
+        return SetupQueueAddResult(
+            addedCount: admittedItems.count,
+            duplicateDisplayNames: duplicateDisplayNames
+        )
     }
 
     func apply(

@@ -759,6 +759,14 @@ extension BuiltInProfile {
         switch self {
         case .balanced:
             return EncodingOptions(videoQuality: .balanced)
+        case .smallerFile:
+            return EncodingOptions(
+                videoQuality: VideoQualityIntent(
+                    mode: .ladder,
+                    lastLadderStep: .compact,
+                    custom: .defaults
+                )
+            )
         case .originalResolution:
             let mvHEVC = MVHEVCOptions(
                 generatedMergeQuality: 85,

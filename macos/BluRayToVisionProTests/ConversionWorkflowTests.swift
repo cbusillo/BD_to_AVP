@@ -156,6 +156,9 @@ final class ConversionWorkflowTests: XCTestCase {
 
         XCTAssertEqual(Set(identifiers).count, profiles.count)
         XCTAssertFalse(BuiltInProfile.balanced.options.upscaleEnabled)
+        XCTAssertEqual(BuiltInProfile.smallerFile.id, "builtin.smaller-file")
+        XCTAssertEqual(BuiltInProfile.smallerFile.name, "Smaller File")
+        XCTAssertEqual(BuiltInProfile.smallerFile.options.videoQuality.selectedStep, .compact)
         XCTAssertTrue(BuiltInProfile.fourKUpscale.options.upscaleEnabled)
         XCTAssertTrue(BuiltInProfile.fourKUpscale.options.resolutionOverride.isEmpty)
         XCTAssertEqual(BuiltInProfile.originalResolution.options.mvHEVC.generatedMergeQuality, 85)
