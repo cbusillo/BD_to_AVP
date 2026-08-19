@@ -334,9 +334,25 @@ class ReleaseMetadataTests(unittest.TestCase):
             "release_id",
             "appcast_sha256",
         )
+        receipt_path = (
+            REPO_ROOT / "docs/release-evidence" / qualification["candidate"]["release_tag"] / "release-receipt.json"
+        )
+        if receipt_path.exists():
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            artifacts_by_kind = {artifact["kind"]: artifact for artifact in receipt["artifacts"]}
+            expected_candidate_identity = {
+                "source_git_sha": receipt["source_sha"],
+                "dmg_sha256": artifacts_by_kind["dmg"]["sha256"],
+                "signed_app_tree_sha256": receipt["signed_app_tree_sha256"],
+                "release_run_id": receipt["workflow"]["run_id"],
+                "release_id": receipt["release"]["id"],
+                "appcast_sha256": artifacts_by_kind["appcast"]["sha256"],
+            }
+        else:
+            expected_candidate_identity = {field: None for field in candidate_identity_fields}
         self.assertEqual(
             {field: qualification["candidate"][field] for field in candidate_identity_fields},
-            {field: None for field in candidate_identity_fields},
+            expected_candidate_identity,
         )
         self.assertEqual(qualification["status"], "preregistered_pending_exact_candidate")
         self.assertEqual(qualification["execution_policy"]["release_stage"], "beta")
