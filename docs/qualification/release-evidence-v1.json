@@ -401,6 +401,96 @@
       "source": "signed_artifact_receipt",
       "source_sha": "98636e5b7e413b198447954c0d67f6668c10c31e",
       "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "gui-preview-low-local-ample-destination",
+      "receipt_id": "v0.3.2-beta.2:gui-preview-low-local-ample-destination:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "gui-preview-cancel-cleanup",
+      "receipt_id": "v0.3.2-beta.2:gui-preview-cancel-cleanup:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "gui-preview-failure-cleanup",
+      "receipt_id": "v0.3.2-beta.2:gui-preview-failure-cleanup:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "capacity-known-low",
+      "receipt_id": "v0.3.2-beta.2:capacity-known-low:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "capacity-unknown-and-conflicting",
+      "receipt_id": "v0.3.2-beta.2:capacity-unknown-and-conflicting:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "network-generated-final-output",
+      "receipt_id": "v0.3.2-beta.2:network-generated-final-output:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "overwrite-and-conversion-cancel",
+      "receipt_id": "v0.3.2-beta.2:overwrite-and-conversion-cancel:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "malformed-pgs-parser-recovery",
+      "receipt_id": "v0.3.2-beta.2:malformed-pgs-parser-recovery:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-19T16:13:41Z",
+      "case_id": "subtitle-partial-output-diagnostics",
+      "receipt_id": "v0.3.2-beta.2:subtitle-partial-output-diagnostics:e24bc4d",
+      "reference": "docs/qualification/v0.3.2-beta.2-change-scoped-evidence-v1.json",
+      "sha256": "bcc73631e26333a9566c0538178696421a575da07603860c06f3e4965a399e66",
+      "source": "signed_artifact_receipt",
+      "source_sha": "e24bc4d88aa9fda221b44fde0c065356bb69d324",
+      "status": "accepted"
     }
   ],
   "schema_version": 1
