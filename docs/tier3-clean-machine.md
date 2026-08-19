@@ -134,7 +134,8 @@ The runner performs this bounded sequence:
    waits for the exact candidate on disk, and launches that candidate; staged
    installs remain bounded until Sparkle exposes the final action or the exact
    candidate appears on disk with a replacement application process, including
-   relaunches completed between UI polls.
+   relaunches completed between UI polls while Accessibility still reports a
+   stale downloading, installing, or staged state.
 6. Verify the final candidate bundle, build, signed app tree, and replacement
    running process, then verify the selected route, unrelated preference, and
    byte-for-byte profile library are preserved.
@@ -152,6 +153,11 @@ root and is deleted; public evidence records only its SHA-256 digest. Raw AX
 trees, XCTest logs, `.xcresult` bundles, local paths, and full-screen captures
 are deleted. Retained screenshots contain only the app window. A failed run
 does not emit either accepted receipt.
+
+Timeout failures include only bounded public-safe state context: the final
+state, staged/action counts, process relation, exact-candidate result, and the
+ordered state enum history. They do not retain raw Accessibility output, paths,
+process IDs, usernames, or hostnames.
 
 The updater state machine prefers the Sparkle `SUUpdateAlert` window and
 `SPUUserUpdateChoiceInstall` action identifiers. A title fallback is permitted
