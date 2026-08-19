@@ -325,6 +325,26 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         self.assertFalse(context.first_candidate_of_cycle)
         self.assertEqual(context.qualification_path, "docs/qualification/stable-signed-qualification-v1.json")
 
+    def test_resolves_legacy_release_record_by_tag_when_current_config_advances(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt_path = self.build_repository(root)
+            current_path = root / "docs/qualification/current-signed-qualification-v1.json"
+            current = json.loads(
+                (root / "docs/qualification/stable-signed-qualification-v1.json").read_text(encoding="utf-8")
+            )
+            current["candidate"]["release_tag"] = "v1.0.1-beta.1"
+            current_path.write_text(json.dumps(current) + "\n", encoding="utf-8")
+            config_path = root / ".github/github.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["releaseOperations"]["qualificationRecordPath"] = current_path.relative_to(root).as_posix()
+            config_path.write_text(json.dumps(config) + "\n", encoding="utf-8")
+
+            context = resolve_milestone_context(root, receipt_path)
+
+        self.assertEqual(context.release_tag, "v0.3.0")
+        self.assertEqual(context.qualification_path, "docs/qualification/stable-signed-qualification-v1.json")
+
     def test_resolves_manifest_milestone_context_without_migrating_receipts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -846,6 +866,68 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                 base_sha=base_sha,
                 head_sha=head_sha,
                 head_branch="release/v0.3.1",
+                base_repo="cbusillo/BD_to_AVP",
+                head_repo="cbusillo/BD_to_AVP",
+                base_branch="main",
+            )
+
+        self.assertIsNone(discovered)
+
+    def test_allows_configured_prepublication_prerelease_record_to_advance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            base_qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
+            qualification = json.loads(base_qualification_path.read_text(encoding="utf-8"))
+            for field in (
+                "source_git_sha",
+                "release_run_id",
+                "release_id",
+                "dmg_sha256",
+                "appcast_sha256",
+                "signed_app_tree_sha256",
+            ):
+                qualification["candidate"][field] = None
+            qualification["candidate"].update(
+                {
+                    "package_version": "0.3.1b1",
+                    "public_version": "0.3.1-beta.1",
+                    "build_version": "162",
+                    "release_tag": "v0.3.1-beta.1",
+                    "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.1-beta.1.dmg",
+                    "workflow": "Prerelease",
+                }
+            )
+            next_qualification_path = root / "docs/qualification/v0.3.1-beta.1-signed-qualification-v1.json"
+            next_qualification_path.write_text(json.dumps(qualification) + "\n", encoding="utf-8")
+            config_path = root / ".github/github.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["releaseOperations"]["qualificationRecordPath"] = next_qualification_path.relative_to(
+                root
+            ).as_posix()
+            config_path.write_text(json.dumps(config) + "\n", encoding="utf-8")
+            subprocess.run(["git", "add", next_qualification_path, config_path], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "prepare prerelease qualification"], cwd=root, check=True)
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            discovered = discover_milestone_receipt(
+                root,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                head_branch="release/v0.3.1-beta.1",
                 base_repo="cbusillo/BD_to_AVP",
                 head_repo="cbusillo/BD_to_AVP",
                 base_branch="main",

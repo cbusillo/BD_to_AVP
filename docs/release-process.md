@@ -210,11 +210,14 @@ The workflow performs these ordered boundaries:
    and newest durable snapshot are both checked.
 3. Run the secret-free `qualify-preparation` gate. Classify the candidate
    against the checked `docs/qualification/release-evidence-v1.json` evidence
-   and `docs/qualification/stable-signed-qualification-v1.json` qualification file
+   and the exact `qualificationRecordPath` selected in `.github/github.json`
    for the `preparation` phase, using the exact `github.sha` and committed
-   Sparkle channel as the release stage. The preparation report is uploaded as
-   an Actions artifact with 30-day retention before enforcement. macOS signing
-   approval cannot be requested until this gate passes.
+   Sparkle channel as the release stage. `scripts.release validate` requires
+   that path to identify the unique `*-signed-qualification-v1.json` record for
+   the committed tag, version, build, DMG, workflow, and release stage. The
+   preparation report is uploaded as an Actions artifact with 30-day retention
+   before enforcement. macOS signing approval cannot be requested until this
+   gate passes.
 4. After the single release approval, build, sign, notarize, and
    Gatekeeper-validate the SwiftUI macOS app and DMG without a write-capable
    repository token. Record its exact name, byte size, SHA-256, and
@@ -302,7 +305,10 @@ The workflow performs these ordered boundaries:
    release and artifact identity. If the rolling qualification changed on both
    branches, the workflow resolves only that path in favor of protected main;
    any other merge conflict fails closed while the per-release snapshot remains
-   unchanged. If
+   unchanged. Manifest preparation selects the newest prior published ancestor
+   that already has a checked immutable release receipt; an unreconciled prior
+   release remains immutable history but cannot serve as a qualification base.
+   If
    the signed UI artifact expires before the first successful capture, the
    workflow stops explicitly because that immutable evidence cannot be
    reconstructed; it never substitutes a rebuilt or operator-authored receipt.

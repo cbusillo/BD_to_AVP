@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
+from scripts.release import CUT_PACKET_PREPARED, CUT_PACKET_PUBLISHED, CUT_PACKET_RECOVERY_PENDING
 from scripts.release_receipt import (
     EXPECTED_BRANCH,
     EXPECTED_REPOSITORY,
@@ -720,14 +721,11 @@ def _update_cut_packet(repo_root: Path, receipt: Mapping[str, Any], publication:
         text = path.read_text(encoding="utf-8")
     except OSError as error:
         raise ReleaseEvidenceError(f"Unable to read release cut packet at {path}: {error}") from error
-    pending = "**Prepared metadata; publication pending.**"
-    recovery_pending = "**Published and immutable; PyPI recovery pending.**"
-    published = "**Published and immutable.**"
-    if pending in text:
-        text = text.replace(pending, published, 1)
-    elif recovery_pending in text:
-        text = text.replace(recovery_pending, published, 1)
-    elif published not in text:
+    if CUT_PACKET_PREPARED in text:
+        text = text.replace(CUT_PACKET_PREPARED, CUT_PACKET_PUBLISHED, 1)
+    elif CUT_PACKET_RECOVERY_PENDING in text:
+        text = text.replace(CUT_PACKET_RECOVERY_PENDING, CUT_PACKET_PUBLISHED, 1)
+    elif CUT_PACKET_PUBLISHED not in text:
         raise ReleaseEvidenceError("Release cut packet has no recognized publication state.")
     marker = "<!-- release-evidence-receipt-v1 -->"
     release = _mapping(receipt.get("release"), "receipt release")

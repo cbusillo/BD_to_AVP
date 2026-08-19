@@ -152,13 +152,29 @@ def _validate_prepublication_candidate_transition(
     repo_root: Path,
     *,
     base_sha: str,
-    qualification_relative: str,
     candidate: Mapping[str, Any],
 ) -> None:
+    base_config = _load_json_at_revision(
+        repo_root,
+        base_sha,
+        GITHUB_CONFIG_PATH.as_posix(),
+        "base GitHub repository config",
+    )
+    base_operations = _mapping(base_config.get("releaseOperations"), "base releaseOperations")
+    base_qualification_value = base_operations.get("qualificationRecordPath")
+    if not isinstance(base_qualification_value, str) or not base_qualification_value:
+        raise ReleaseMilestoneContextError("Base qualificationRecordPath must be a repository-relative path.")
+    base_qualification_relative = Path(base_qualification_value)
+    if (
+        base_qualification_relative.is_absolute()
+        or ".." in base_qualification_relative.parts
+        or base_qualification_value.startswith("./")
+    ):
+        raise ReleaseMilestoneContextError("Base qualificationRecordPath must be canonical.")
     base_qualification = _load_json_at_revision(
         repo_root,
         base_sha,
-        qualification_relative,
+        base_qualification_relative.as_posix(),
         "base qualification record",
     )
     base_candidate = _mapping(base_qualification.get("candidate"), "base qualification candidate")
@@ -173,9 +189,9 @@ def _validate_prepublication_candidate_transition(
         next_build = parse_build_version(cast(str, candidate.get("build_version")))
     except (ReleaseError, TypeError) as error:
         raise ReleaseMilestoneContextError(f"Prepublication qualification identity is invalid: {error}") from error
-    if next_version.stage != "stable" or next_version.order_key <= base_version.order_key or next_build <= base_build:
+    if next_version.order_key <= base_version.order_key or next_build <= base_build:
         raise ReleaseMilestoneContextError(
-            "Prepublication qualification must advance to a newer Stable version and global build."
+            "Prepublication qualification must advance to a newer Stable or prerelease version and global build."
         )
     expected_identity = {
         "package_version": next_version.text,
@@ -183,7 +199,7 @@ def _validate_prepublication_candidate_transition(
         "build_version": str(next_build),
         "release_tag": next_version.release_tag,
         "dmg_name": f"3D-Blu-ray-to-Vision-Pro-{next_version.public_version}.dmg",
-        "workflow": "Stable",
+        "workflow": "Prerelease" if next_version.prerelease else "Stable",
     }
     for field, expected in expected_identity.items():
         if candidate.get(field) != expected:
@@ -385,6 +401,20 @@ def _repository_path(repo_root: Path, value: object, description: str) -> tuple[
     return repo_root / relative, relative.as_posix()
 
 
+def _qualification_path_for_release(repo_root: Path, release_tag: str) -> tuple[Path, str]:
+    matches: list[Path] = []
+    for path in sorted((repo_root / "docs" / "qualification").glob("*-signed-qualification-v1.json")):
+        qualification = _load_json(path, "signed qualification record")
+        candidate = qualification.get("candidate")
+        if isinstance(candidate, Mapping) and candidate.get("release_tag") == release_tag:
+            matches.append(path)
+    if len(matches) != 1:
+        raise ReleaseMilestoneContextError(
+            f"Expected exactly one signed qualification record for {release_tag}; found {len(matches)}."
+        )
+    return matches[0], matches[0].relative_to(repo_root).as_posix()
+
+
 def _require_tracked_path(repo_root: Path, relative_path: str, description: str) -> None:
     tracked = subprocess.run(
         ["git", "ls-files", "--error-unmatch", relative_path],
@@ -482,7 +512,6 @@ def discover_milestone_receipt(
             _validate_prepublication_candidate_transition(
                 repo_root,
                 base_sha=base_sha,
-                qualification_relative=qualification_relative,
                 candidate=candidate,
             )
             unbound_candidate = True
@@ -675,11 +704,7 @@ def resolve_milestone_context(repo_root: Path, receipt_path: Path) -> ReleaseMil
         operations.get("qualificationEvidencePath"),
         "qualificationEvidencePath",
     )
-    qualification_path, qualification_relative = _repository_path(
-        repo_root,
-        operations.get("qualificationRecordPath"),
-        "qualificationRecordPath",
-    )
+    qualification_path, qualification_relative = _qualification_path_for_release(repo_root, release_tag)
     for path, description in (
         (policy_path, "qualification policy"),
         (evidence_path, "qualification evidence"),
