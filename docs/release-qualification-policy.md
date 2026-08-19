@@ -151,9 +151,11 @@ The maintained clean-machine, Sparkle, and installed UI/accessibility collector 
 synthetic home in a runner-owned disposable location, reuses the installed-app
 package smoke, revalidates the exact prior signed app immediately before an
 identifier-scoped bounded updater state machine, permits one clean retry only
-for classified pre-press environmental startup failures, verifies the final
-candidate identity, and emits checked `clean-machine-signed-update` and
-`installed-ui-accessibility` receipts.
+for classified pre-press environmental startup failures or a guarded state
+change before any action is pressed, detects exact candidate relaunches and
+application-process turnover between UI polls, verifies the final candidate
+identity, and emits checked
+`clean-machine-signed-update` and `installed-ui-accessibility` receipts.
 
 Physical drive, protected-media conversion, and Vision Pro playback evidence
 uses the guided collector and bounded receipt builder documented in

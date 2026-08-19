@@ -132,10 +132,12 @@ The runner performs this bounded sequence:
 5. Durably record each selected action inside the owned qualification root
    before pressing it. Install-on-quit explicitly terminates the prior app,
    waits for the exact candidate on disk, and launches that candidate; staged
-   installs remain bounded until Sparkle exposes the final action or relaunches.
-6. Verify the final candidate bundle, build, signed app tree, and running app,
-   then verify the selected route, unrelated preference, and byte-for-byte profile
-   library are preserved.
+   installs remain bounded until Sparkle exposes the final action or the exact
+   candidate appears on disk with a replacement application process, including
+   relaunches completed between UI polls.
+6. Verify the final candidate bundle, build, signed app tree, and replacement
+   running process, then verify the selected route, unrelated preference, and
+   byte-for-byte profile library are preserved.
 7. Run the candidate installed-app XCUITest lane. It verifies main-window
    readiness, profile-save accessibility and success, updater settings, the
    public releases link, and cropped light/dark app-window screenshots.
@@ -162,10 +164,12 @@ candidate-version fields plus the journal and intent SHA-256 digests. It never
 retains window text, local paths, usernames, hostnames, or raw AX output.
 
 One clean retry is allowed only for a classified pre-press application-start,
-update-menu, or update-window timeout. The first attempt must fully dispose its
-owned root and app process before retry. Cancellation, updater-reported failure,
-unknown UI, identity mismatch, preference/profile drift, action-limit failure,
-and every failure after a press are terminal. No other implicit retry occurs.
+update-menu, update-window timeout, or guarded state-change race where the
+updater changed after durable intent but before any action was pressed. The
+first attempt must fully dispose its owned root and app process before retry.
+Cancellation, updater-reported failure, unknown UI, identity mismatch,
+preference/profile drift, action-limit failure, and every failure after a press
+are terminal. No other implicit retry occurs.
 
 Native Sparkle-window presentation sampling remains visible operational
 evidence but is nonblocking. The state-machine result, exact release-note source,
