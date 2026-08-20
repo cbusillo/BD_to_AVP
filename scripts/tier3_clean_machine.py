@@ -1790,7 +1790,7 @@ def _perform_sparkle_update(
         "schema_version": 1,
         "transitions": [],
     }
-    journal_sha256 = _write_durable_json(checkpoint_path, journal)
+    _write_durable_json(checkpoint_path, journal)
     operations.open_updater(app_path, synthetic_home)
     prior_process_id = operations.app_process_id(app_path)
     if prior_process_id is None:
@@ -1836,7 +1836,7 @@ def _perform_sparkle_update(
         state = observation.state
         if state != last_recorded_state:
             states_observed.append(state.value)
-            journal_sha256 = record_transition("observed", observation)
+            record_transition("observed", observation)
             last_recorded_state = state
 
         if observation.window_match in {"identifier", "button-identifier"}:
@@ -1956,7 +1956,7 @@ def _perform_sparkle_update(
                 state=observation.state,
                 action_pressed=action_count > 0,
             ) from error
-        journal_sha256 = record_transition("pressed", observation)
+        pressed_journal_sha256 = record_transition("pressed", observation)
         action_count += 1
 
         if state == SparkleUpdateState.READY_INSTALL_UPDATE:
@@ -1968,7 +1968,7 @@ def _perform_sparkle_update(
                 action_title=observation.action_title,
             )
             states_observed.append(downloading.state.value)
-            journal_sha256 = record_transition("derived", downloading)
+            record_transition("derived", downloading)
             last_recorded_state = downloading.state
             time.sleep(UPDATE_POLL_SECONDS)
             continue
@@ -1983,7 +1983,7 @@ def _perform_sparkle_update(
             window_match=observation.window_match,
             states_observed=tuple(states_observed),
             intent_checkpoint_sha256=intent_checkpoint_sha256,
-            journal_sha256=journal_sha256,
+            journal_sha256=pressed_journal_sha256,
             attempt=attempt,
             retry_reason_code=retry_reason_code,
             prior_process_id=prior_process_id,
