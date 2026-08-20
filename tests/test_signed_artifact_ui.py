@@ -19,6 +19,8 @@ APPCAST_SHA256 = "e" * 64
 class FakeOperations:
     def __init__(self, app_source: Path) -> None:
         self.app_source = app_source
+        self.profiles_after = 1
+        self.profiles_before = 0
         self.running = False
 
     def install_app(self, _dmg_path: Path, destination: Path) -> None:
@@ -51,7 +53,8 @@ class FakeOperations:
                     "profile_document_version": 6,
                     "profile_save_accessible": True,
                     "profile_save_succeeded": True,
-                    "profiles_after": 1,
+                    "profiles_after": self.profiles_after,
+                    "profiles_before": self.profiles_before,
                     "release_page_url": RELEASES_URL,
                     "release_page_url_observed": True,
                     "schema_version": 1,
@@ -274,6 +277,37 @@ class SignedArtifactUITests(unittest.TestCase):
             self.assertEqual(receipt["case_id"], "profile-save-action-accessibility")
             self.assertEqual(receipt["release_receipt"]["asset_id"], 4)
             self.assertEqual(receipt["dmg"]["name"], dmg.name)
+
+    def test_runner_rejects_profile_save_without_exactly_one_new_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            app = make_app(root / "source")
+            dmg = root / "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.3.dmg"
+            dmg.write_bytes(b"candidate-dmg")
+            release_receipt, release_receipt_sha256 = self._make_release_receipt(root, app, dmg)
+            config = SignedArtifactUIConfig(
+                repo=Path.cwd(),
+                policy=Path.cwd() / "docs/qualification/release-qualification-policy-v1.json",
+                release_receipt=release_receipt,
+                dmg=dmg,
+                qualification_root=root / "workspace",
+                evidence_directory=root / "evidence",
+                output_receipt=root / "signed-artifact-ui-receipt.json",
+                case_id="profile-save-action-accessibility",
+                release_notes_url=RELEASES_URL,
+                workflow_run_id=12345,
+                workflow_run_attempt=2,
+                release_receipt_asset_id=4,
+                release_receipt_file_sha256=release_receipt_sha256,
+            )
+            operations = FakeOperations(app)
+            operations.profiles_after = 2
+
+            with self.assertRaisesRegex(CleanMachineError, "did not add exactly one profile"):
+                run(config, operations)
+
+            self.assertFalse(config.output_receipt.exists())
+            self.assertFalse(config.evidence_directory.exists())
 
     def test_runner_removes_partial_outputs_on_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
