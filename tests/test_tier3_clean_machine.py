@@ -66,6 +66,8 @@ class FakeOperations(QualificationOperations):
         staged_relaunches_directly: bool = False,
         staged_relaunch_stays_installing: bool = False,
         staged_relaunch_repeats_action: bool = False,
+        staged_window_closes_after_press: bool = False,
+        staged_installs_on_quit: bool = False,
         staged_candidate_installed_before_final_action: bool = False,
         oscillate_non_actionable: bool = False,
         sentinel_failure: bool = False,
@@ -88,6 +90,8 @@ class FakeOperations(QualificationOperations):
         self.staged_relaunches_directly = staged_relaunches_directly
         self.staged_relaunch_stays_installing = staged_relaunch_stays_installing
         self.staged_relaunch_repeats_action = staged_relaunch_repeats_action
+        self.staged_window_closes_after_press = staged_window_closes_after_press
+        self.staged_installs_on_quit = staged_installs_on_quit
         self.staged_candidate_installed_before_final_action = staged_candidate_installed_before_final_action
         self.oscillate_non_actionable = oscillate_non_actionable
         self.sentinel_failure = sentinel_failure
@@ -108,6 +112,7 @@ class FakeOperations(QualificationOperations):
         self.next_process_id = 1000
         self.post_staged_observations = 0
         self.observation_calls = 0
+        self.staged_quit_triggered = False
 
     def inspect_environment(self, qualification_root: Path, environment_class: str) -> EnvironmentFacts:
         return EnvironmentFacts(
@@ -243,6 +248,13 @@ class FakeOperations(QualificationOperations):
                         action_identifier="",
                         action_title="",
                     )
+            elif self.staged_window_closes_after_press and self.pressed_actions:
+                observation = UpdateObservation(
+                    state=SparkleUpdateState.WAITING_FOR_WINDOW,
+                    window_match="none",
+                    action_identifier="",
+                    action_title="",
+                )
             elif not self.pressed_actions:
                 observation = staged_observation
             elif self.post_staged_observations < self.staged_repeats_after_press:
@@ -415,6 +427,17 @@ class FakeOperations(QualificationOperations):
 
     def quit_app(self) -> None:
         self.quit_calls += 1
+        if (
+            self.staged_installs_on_quit
+            and self.pressed_actions
+            and self.pressed_actions[-1].state == SparkleUpdateState.STAGED_INSTALL
+            and not self.staged_quit_triggered
+        ):
+            if self.current_app_path is None:
+                raise AssertionError("fake staged install was quit before the updater opened")
+            shutil.rmtree(self.current_app_path)
+            shutil.copytree(self.candidate_source, self.current_app_path, symlinks=True)
+            self.staged_quit_triggered = True
         self.running = False
         self.running_app_path = None
         self.running_process_id = None
@@ -1014,6 +1037,28 @@ class Tier3CleanMachineTests(unittest.TestCase):
             self.assertEqual(update_evidence["outcome"], "staged")
             self.assertEqual(update_evidence["states_observed"], ["staged-install", "installing", "staged-install"])
 
+    def test_run_quits_prior_app_to_complete_staged_install(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.install_action = "Install Update"
+            operations.staged_window_closes_after_press = True
+            operations.staged_installs_on_quit = True
+
+            run_qualification(config, operations)
+
+            update_evidence = json.loads(
+                (config.evidence_directory / "sparkle-update.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(operations.pressed_actions), 1)
+            self.assertTrue(operations.staged_quit_triggered)
+            self.assertEqual(operations.launch_calls, 2)
+            self.assertEqual(update_evidence["outcome"], "staged")
+            self.assertEqual(
+                update_evidence["states_observed"],
+                ["staged-install", "installing", "waiting-for-window"],
+            )
+
     def test_run_does_not_skip_visible_final_action_when_candidate_is_on_disk(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1055,7 +1100,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(
                     CleanMachineError,
-                    "last_state=staged-install, staged_pressed=true, action_count=1, "
+                    "last_state=staged-install, staged_pressed=true, staged_quit_requested=false, action_count=1, "
                     "process_relation=same-prior, candidate_exact=false",
                 ):
                     run_qualification(config, operations)
