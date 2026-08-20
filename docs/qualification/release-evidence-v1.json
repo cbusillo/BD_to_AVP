@@ -535,6 +535,26 @@
       "source": "tier3_automation_receipt",
       "source_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19",
       "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-20T21:38:16Z",
+      "case_id": "profile-save-action-accessibility",
+      "receipt_id": "v0.3.2-beta.2:profile-save-action-accessibility:32277548249",
+      "reference": "docs/release-evidence/v0.3.2-beta.2/signed-artifact-ui-receipt.json",
+      "sha256": "3dfe3230c0fec7f1e0e6066e4dacde02d355b51e1074507cfb276c9ef278fec0",
+      "source": "signed_artifact_receipt",
+      "source_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-20T21:38:16Z",
+      "case_id": "sparkle-update-route",
+      "receipt_id": "v0.3.2-beta.2:sparkle-update-route:32420026539",
+      "reference": "docs/qualification/v0.3.2-beta.2-live-qualification-v1.json",
+      "sha256": "758d71ba804c2e5fa058e1b6c6ab8fc5ac67f868ca41509b4b071727071e9b2a",
+      "source": "signed_artifact_receipt",
+      "source_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19",
+      "status": "accepted"
     }
   ],
   "schema_version": 1
