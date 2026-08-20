@@ -50,7 +50,8 @@ AUTOMATIC_CHECKS_KEY = "SUEnableAutomaticChecks"
 SENTINEL_VALUE = "tier3-preserve"
 LIVE_FEED_URL = "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
 RELEASES_URL = "https://github.com/cbusillo/BD_to_AVP/releases"
-PROFILE_DOCUMENT = {"version": 5, "profiles": []}
+PROFILE_FIXTURE_V5_PATH = REPO_ROOT / "tests/fixtures/profile_library_v5.json"
+PROFILE_FIXTURE_V6_PATH = REPO_ROOT / "tests/fixtures/profile_library_v6.json"
 PROFILE_RELATIVE_PATH = Path("Library/Application Support/3D Blu-ray to Vision Pro/profiles.json")
 MAX_FEED_BYTES = 5 * 1024 * 1024
 BASE_FREE_SPACE_BYTES = 2 * 1024 * 1024 * 1024
@@ -2052,11 +2053,47 @@ def _wait_for_candidate_on_disk(app_path: Path, candidate: ReleaseArtifact) -> B
     raise CleanMachineError(f"Sparkle did not install the exact candidate before timeout.{detail}")
 
 
-def _seed_profile(synthetic_home: Path) -> tuple[Path, str]:
+def _load_profile_document(path: Path, description: str) -> dict[str, Any]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise CleanMachineError(f"{description} is missing or invalid JSON.") from error
+    if not isinstance(document, dict):
+        raise CleanMachineError(f"{description} must be a JSON object.")
+    if set(document) != {"profiles", "version"}:
+        raise CleanMachineError(f"{description} has unexpected top-level fields.")
+    if isinstance(document["version"], bool) or not isinstance(document["version"], int):
+        raise CleanMachineError(f"{description} has an invalid version.")
+    if not isinstance(document["profiles"], list):
+        raise CleanMachineError(f"{description} has an invalid profile list.")
+    return document
+
+
+def _semantic_json_sha256(value: Any) -> str:
+    return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+
+
+def _seed_profile(synthetic_home: Path) -> tuple[Path, dict[str, Any]]:
+    profile_document = _load_profile_document(PROFILE_FIXTURE_V5_PATH, "Seed profile fixture")
     profile_path = synthetic_home / PROFILE_RELATIVE_PATH
     profile_path.parent.mkdir(parents=True, exist_ok=True)
-    profile_path.write_bytes(_canonical_json_bytes(PROFILE_DOCUMENT))
-    return profile_path, file_sha256(profile_path)
+    profile_path.write_bytes(PROFILE_FIXTURE_V5_PATH.read_bytes())
+    return profile_path, profile_document
+
+
+def _validate_profile_migration(
+    profile_path: Path,
+    profile_before: Mapping[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    expected_after = _load_profile_document(PROFILE_FIXTURE_V6_PATH, "Expected migrated profile fixture")
+    profile_after = _load_profile_document(profile_path, "Profile library after Sparkle relaunch")
+    if profile_before.get("version") != 5 or expected_after.get("version") != 6:
+        raise CleanMachineError("Profile migration fixtures do not describe the expected version 5-to-6 transition.")
+    if profile_after != expected_after:
+        raise CleanMachineError(
+            "Profile library did not match the expected version 5-to-6 migration across Sparkle relaunch."
+        )
+    return file_sha256(profile_path), profile_after
 
 
 def _reset_runtime_workspace(app_path: Path, synthetic_home: Path, installed_release: ReleaseArtifact) -> None:
@@ -2444,7 +2481,7 @@ def _run_qualification(
         synthetic_home.mkdir(parents=True, exist_ok=True)
         operations.install_app(prior.dmg_path, app_path, qualification_root / "Mount")
         prior_identity = verify_installed_app(app_path, prior)
-        profile_path, profile_before_sha256 = _seed_profile(synthetic_home)
+        profile_path, seeded_profile = _seed_profile(synthetic_home)
         operations.write_preferences(synthetic_home, config.route)
         if operations.read_preference(synthetic_home, UPDATE_ROUTE_KEY) != config.route:
             raise CleanMachineError("Update route did not persist before launching the prior release.")
@@ -2462,6 +2499,10 @@ def _run_qualification(
         operations.quit_app()
         if operations.app_running():
             raise CleanMachineError("Installed UI updater inspection left the production app running.")
+        profile_before = _load_profile_document(profile_path, "Profile library before Sparkle update")
+        if profile_before != seeded_profile:
+            raise CleanMachineError("Profile library changed before the Sparkle update began.")
+        profile_before_sha256 = file_sha256(profile_path)
 
         failure_stage = "updater-state-machine"
         try:
@@ -2517,11 +2558,9 @@ def _run_qualification(
             raise CleanMachineError(f"{error} {diagnostic_summary}") from error
         route_after = operations.read_preference(synthetic_home, UPDATE_ROUTE_KEY)
         sentinel_after = operations.read_preference(synthetic_home, SENTINEL_KEY)
-        profile_after_sha256 = file_sha256(profile_path)
+        profile_after_sha256, profile_after = _validate_profile_migration(profile_path, profile_before)
         if route_after != config.route or sentinel_after != SENTINEL_VALUE:
             raise CleanMachineError("Update route or unrelated preference changed across Sparkle relaunch.")
-        if profile_after_sha256 != profile_before_sha256:
-            raise CleanMachineError("Profile library changed across Sparkle relaunch.")
 
         operations.quit_app()
         operations.collect_ui_evidence(
@@ -2587,11 +2626,20 @@ def _run_qualification(
             evidence_directory / "profile-snapshot.json",
             {
                 "profile_after_sha256": profile_after_sha256,
+                "profile_after_semantic_sha256": _semantic_json_sha256(profile_after),
                 "profile_before_sha256": profile_before_sha256,
-                "profile_preserved": True,
+                "profile_before_semantic_sha256": _semantic_json_sha256(profile_before),
+                "profile_encoding_options_preserved": True,
+                "profile_identity_preserved": True,
+                "profile_migration": "v5-to-v6",
+                "profile_migration_matched": True,
+                "profile_safe_pipeline_defaults_preserved": True,
+                "profile_version_after": profile_after["version"],
+                "profile_version_before": profile_before["version"],
                 "route_after": route_after,
                 "route_preserved": True,
                 "sentinel_preserved": sentinel_after == SENTINEL_VALUE,
+                "unsafe_legacy_run_defaults_removed": True,
             },
         )
         ui_evidence_digests = _normalize_installed_ui_evidence(raw_ui_directory, evidence_directory, feed)

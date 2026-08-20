@@ -452,6 +452,31 @@ final class ProfileStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testQualificationProfileFixtureMigratesToExpectedVersionSixDocument() throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent("profiles.json")
+        try qualificationFixtureData("profile_library_v5.json").write(to: fileURL)
+
+        let store = ProfileStore(fileURL: fileURL)
+
+        XCTAssertEqual(store.customProfiles.count, 1)
+        let actualDocument = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any]
+        )
+        let expectedDocument = try XCTUnwrap(
+            try JSONSerialization.jsonObject(
+                with: qualificationFixtureData("profile_library_v6.json")
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(
+            try JSONSerialization.data(withJSONObject: actualDocument, options: [.sortedKeys]),
+            try JSONSerialization.data(withJSONObject: expectedDocument, options: [.sortedKeys])
+        )
+    }
+
+    @MainActor
     func testVersionFiveMigrationWriteFailureKeepsOriginalAndSafeInMemoryProfiles() throws {
         let directoryURL = temporaryDirectoryURL()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
@@ -951,6 +976,15 @@ final class ProfileStoreTests: XCTestCase {
 
     private func temporaryProfileURL() -> URL {
         temporaryDirectoryURL().appendingPathComponent("profiles.json")
+    }
+
+    private func qualificationFixtureData(_ name: String) throws -> Data {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("tests/fixtures/\(name)")
+        return try Data(contentsOf: fixtureURL)
     }
 
     private func legacyDocument(profiles: [[String: Any]]) throws -> Data {
