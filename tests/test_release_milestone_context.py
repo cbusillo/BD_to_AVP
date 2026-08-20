@@ -245,7 +245,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         publication_path = root / "docs/release-evidence/v0.3.0/publication-record.json"
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         publication = json.loads(publication_path.read_text(encoding="utf-8"))
-        return {
+        record = {
             "publication_record": publication_path.relative_to(root).as_posix(),
             "published_at": publication["published_at"],
             "receipt": receipt_path.relative_to(root).as_posix(),
@@ -255,6 +255,9 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             "tag": receipt["release"]["tag"],
             "workflow_run_id": receipt["workflow"]["run_id"],
         }
+        if "recovery_workflow_run" in publication:
+            record["recovery_workflow_run"] = publication["recovery_workflow_run"]
+        return record
 
     @staticmethod
     def append_beta_change_scoped_evidence(
@@ -1530,6 +1533,55 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                     head_repo="cbusillo/BD_to_AVP",
                     base_branch="main",
                 )
+
+    def test_manifest_discovery_allows_recovered_release_ledger_append(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            publication_path = root / "docs/release-evidence/v0.3.0/publication-record.json"
+            publication = json.loads(publication_path.read_text(encoding="utf-8"))
+            publication["workflow_conclusion"] = "failure"
+            publication["recovery_workflow_run"] = {
+                "operation": "pypi_recovery",
+                "workflow_conclusion": "success",
+                "workflow_run_id": 12346,
+            }
+            publication_path.write_text(json.dumps(publication) + "\n", encoding="utf-8")
+            manifest_path = root / "docs/release-evidence/v0.3.0/qualification-manifest.json"
+            manifest_path.write_text("{}\n", encoding="utf-8")
+            ledger_path = root / RELEASE_LEDGER_PATH
+            ledger_path.write_text(
+                json.dumps({"schema_version": 1, "releases": [self.release_ledger_record(root)]}) + "\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", manifest_path, publication_path, ledger_path], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "append recovered release ledger"], cwd=root, check=True)
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            discovered = discover_milestone_manifest(
+                root,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                head_branch="automation/release-evidence-v0.3.0",
+                base_repo="cbusillo/BD_to_AVP",
+                head_repo="cbusillo/BD_to_AVP",
+                base_branch="main",
+            )
+
+        self.assertEqual(discovered, manifest_path)
 
     def test_receipt_discovery_validates_release_ledger_append(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

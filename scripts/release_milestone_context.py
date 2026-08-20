@@ -445,7 +445,6 @@ def _validate_append_only_release_ledger(repo_root: Path, *, base_sha: str, rele
         "release_id": release.get("id"),
         "release_tag": release_tag,
         "source_sha": receipt.get("source_sha"),
-        "workflow_conclusion": "success",
         "workflow_run_id": workflow.get("run_id"),
     }
     for field, expected in expected_publication.items():
@@ -453,6 +452,10 @@ def _validate_append_only_release_ledger(repo_root: Path, *, base_sha: str, rele
             raise ReleaseMilestoneContextError(
                 f"Release evidence ledger publication record {field} must match the checked release receipt."
             )
+    if effective_successful_workflow_run_id(publication) is None:
+        raise ReleaseMilestoneContextError(
+            "Release evidence ledger publication record must identify a successful publication workflow."
+        )
     expected_record: dict[str, Any] = {
         "publication_record": publication_relative,
         "published_at": _string(publication.get("published_at"), "release publication timestamp"),
