@@ -1632,6 +1632,31 @@ def _perform_sparkle_update(
             return False
         return True
 
+    def staged_candidate_replacement_detected() -> bool:
+        current_process_id = operations.app_process_id(app_path)
+        return (
+            staged_pressed
+            and current_process_id is not None
+            and current_process_id != prior_process_id
+            and exact_candidate_installed()
+        )
+
+    def staged_interaction() -> UpdateInteraction:
+        if last_pressed is None:
+            raise AssertionError("staged Sparkle update lost its pressed action")
+        return UpdateInteraction(
+            clicked_button=last_pressed.action_title,
+            outcome=SparkleUpdateOutcome.STAGED,
+            action_identifier=last_pressed.action_identifier,
+            window_match=last_pressed.window_match,
+            states_observed=tuple(states_observed),
+            intent_checkpoint_sha256=intent_checkpoint_sha256,
+            journal_sha256=journal_sha256,
+            attempt=attempt,
+            retry_reason_code=retry_reason_code,
+            prior_process_id=prior_process_id,
+        )
+
     while time.monotonic() < deadline:
         observation = operations.observe_updater()
         state = observation.state
@@ -1645,23 +1670,8 @@ def _perform_sparkle_update(
 
         if state == SparkleUpdateState.WAITING_FOR_WINDOW:
             current_process_id = operations.app_process_id(app_path)
-            if staged_pressed and (
-                current_process_id is None or (current_process_id != prior_process_id and exact_candidate_installed())
-            ):
-                if last_pressed is None:
-                    raise AssertionError("staged Sparkle update lost its pressed action")
-                return UpdateInteraction(
-                    clicked_button=last_pressed.action_title,
-                    outcome=SparkleUpdateOutcome.STAGED,
-                    action_identifier=last_pressed.action_identifier,
-                    window_match=last_pressed.window_match,
-                    states_observed=tuple(states_observed),
-                    intent_checkpoint_sha256=intent_checkpoint_sha256,
-                    journal_sha256=journal_sha256,
-                    attempt=attempt,
-                    retry_reason_code=retry_reason_code,
-                    prior_process_id=prior_process_id,
-                )
+            if staged_pressed and (current_process_id is None or staged_candidate_replacement_detected()):
+                return staged_interaction()
             if saw_owned_window and action_count == 0:
                 cancelled = UpdateObservation(
                     state=SparkleUpdateState.CANCELLED,
@@ -1681,9 +1691,13 @@ def _perform_sparkle_update(
             continue
 
         if state in {SparkleUpdateState.DOWNLOADING, SparkleUpdateState.INSTALLING}:
+            if staged_candidate_replacement_detected():
+                return staged_interaction()
             time.sleep(UPDATE_POLL_SECONDS)
             continue
         if state == SparkleUpdateState.STAGED_INSTALL and staged_pressed:
+            if staged_candidate_replacement_detected():
+                return staged_interaction()
             time.sleep(UPDATE_POLL_SECONDS)
             continue
 
@@ -1792,8 +1806,19 @@ def _perform_sparkle_update(
             prior_process_id=prior_process_id,
         )
 
+    current_process_id = operations.app_process_id(app_path)
+    if current_process_id is None:
+        process_relation = "none"
+    elif current_process_id == prior_process_id:
+        process_relation = "same-prior"
+    else:
+        process_relation = "replacement"
     raise SparkleUpdateFailure(
-        "Sparkle updater did not reach a bounded install state before timeout.",
+        "Sparkle updater did not reach a bounded install state before timeout "
+        f"(last_state={(last_recorded_state or SparkleUpdateState.WAITING_FOR_WINDOW).value}, "
+        f"staged_pressed={str(staged_pressed).lower()}, action_count={action_count}, "
+        f"process_relation={process_relation}, candidate_exact={str(exact_candidate_installed()).lower()}, "
+        f"states_observed={','.join(states_observed)}).",
         reason_code="update-window-timeout",
         state=last_recorded_state or SparkleUpdateState.WAITING_FOR_WINDOW,
         action_pressed=action_count > 0,

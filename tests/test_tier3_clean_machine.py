@@ -64,6 +64,8 @@ class FakeOperations(QualificationOperations):
         press_state_change_failures: int = 0,
         press_state_change_after_actions: int = 0,
         staged_relaunches_directly: bool = False,
+        staged_relaunch_stays_installing: bool = False,
+        staged_relaunch_repeats_action: bool = False,
         staged_candidate_installed_before_final_action: bool = False,
         oscillate_non_actionable: bool = False,
         sentinel_failure: bool = False,
@@ -84,6 +86,8 @@ class FakeOperations(QualificationOperations):
         self.press_state_change_failures = press_state_change_failures
         self.press_state_change_after_actions = press_state_change_after_actions
         self.staged_relaunches_directly = staged_relaunches_directly
+        self.staged_relaunch_stays_installing = staged_relaunch_stays_installing
+        self.staged_relaunch_repeats_action = staged_relaunch_repeats_action
         self.staged_candidate_installed_before_final_action = staged_candidate_installed_before_final_action
         self.oscillate_non_actionable = oscillate_non_actionable
         self.sentinel_failure = sentinel_failure
@@ -223,12 +227,22 @@ class FakeOperations(QualificationOperations):
                 action_title="Install Update",
             )
             if self.staged_relaunches_directly and self.pressed_actions:
-                observation = UpdateObservation(
-                    state=SparkleUpdateState.WAITING_FOR_WINDOW,
-                    window_match="none",
-                    action_identifier="",
-                    action_title="",
-                )
+                if self.staged_relaunch_stays_installing:
+                    observation = UpdateObservation(
+                        state=SparkleUpdateState.INSTALLING,
+                        window_match="identifier",
+                        action_identifier="SPUUserUpdateChoiceInstall",
+                        action_title="Install Update",
+                    )
+                elif self.staged_relaunch_repeats_action:
+                    observation = staged_observation
+                else:
+                    observation = UpdateObservation(
+                        state=SparkleUpdateState.WAITING_FOR_WINDOW,
+                        window_match="none",
+                        action_identifier="",
+                        action_title="",
+                    )
             elif not self.pressed_actions:
                 observation = staged_observation
             elif self.post_staged_observations < self.staged_repeats_after_press:
@@ -966,6 +980,40 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 ["staged-install", "installing", "waiting-for-window"],
             )
 
+    def test_run_detects_candidate_relaunch_while_updater_stays_installing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.install_action = "Install Update"
+            operations.staged_relaunches_directly = True
+            operations.staged_relaunch_stays_installing = True
+
+            run_qualification(config, operations)
+
+            update_evidence = json.loads(
+                (config.evidence_directory / "sparkle-update.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(operations.pressed_actions), 1)
+            self.assertEqual(update_evidence["outcome"], "staged")
+            self.assertEqual(update_evidence["states_observed"], ["staged-install", "installing"])
+
+    def test_run_detects_candidate_relaunch_while_staged_action_repeats(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.install_action = "Install Update"
+            operations.staged_relaunches_directly = True
+            operations.staged_relaunch_repeats_action = True
+
+            run_qualification(config, operations)
+
+            update_evidence = json.loads(
+                (config.evidence_directory / "sparkle-update.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(operations.pressed_actions), 1)
+            self.assertEqual(update_evidence["outcome"], "staged")
+            self.assertEqual(update_evidence["states_observed"], ["staged-install", "installing", "staged-install"])
+
     def test_run_does_not_skip_visible_final_action_when_candidate_is_on_disk(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -993,6 +1041,28 @@ class Tier3CleanMachineTests(unittest.TestCase):
                 [observation.state for observation in operations.pressed_actions],
                 [SparkleUpdateState.STAGED_INSTALL, SparkleUpdateState.READY_INSTALL_RELAUNCH],
             )
+
+    def test_run_reports_bounded_post_press_timeout_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.install_action = "Install Update"
+            operations.staged_repeats_after_press = 1_000_000
+
+            with (
+                patch("scripts.tier3_clean_machine.GUI_TIMEOUT_SECONDS", 0.01),
+                patch("scripts.tier3_clean_machine.UPDATE_POLL_SECONDS", 0),
+            ):
+                with self.assertRaisesRegex(
+                    CleanMachineError,
+                    "last_state=staged-install, staged_pressed=true, action_count=1, "
+                    "process_relation=same-prior, candidate_exact=false",
+                ):
+                    run_qualification(config, operations)
+
+            self.assertEqual(operations.update_attempts, 1)
+            self.assertEqual(len(operations.pressed_actions), 1)
+            self.assertFalse(config.evidence_directory.exists())
 
     def test_run_retries_one_clean_attempt_for_pre_press_environmental_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
