@@ -31,7 +31,7 @@
     "source_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19"
   },
   "canonical_evidence": {
-    "base_sha": "1ac844be957bddec275ad360c85a04cf9bfe65c5",
+    "base_sha": "646d48c39f86e74246488db5afd0c9f256296b4b",
     "ref": "automation/release-evidence-v0.3.2-beta.2"
   },
   "case_classifications": [
@@ -301,14 +301,14 @@
     }
   ],
   "input_digests": {
-    "controller_runner": "6fed3b2b85b3cb739193c10fdda768ee98397ffe8ba7c8b17c816264d1964d47",
+    "controller_runner": "7d4c5a096bf7fd1956a90bc4827cd09befbaa634b7a0a4acadb04b13303a6626",
     "evidence_index_base": "bed0d8bb5e041766263a6a845d59e95322197b30d084846d49c55175c60cdf09",
     "policy": "ed3b46ba047ff3d6d1778500314ce79a83660cd3ef59fa101a73fb7e277ca94c",
     "policy_checkpoint": "08ed612be96bd754c28b655a7398780a43d5cfdc35d2af60a7e8789f72907d47",
     "qualification_record": "ee82c63ffb6accdc7de5712f1e581efe32b7e6cd51d43a78c48c8791d599ea57",
     "route_table": "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214"
   },
-  "manifest_sha256": "8c6a843faef91be06f3523fe346a74b2278a3333377974a560fbf7e4d5723dd9",
+  "manifest_sha256": "902034c209ddf1edb00e1f6c1f34ca9f9b329ff7054a1d02daa3db6a650b5d3c",
   "manifest_type": "bd-to-avp-release-qualification",
   "paths": {
     "controller_runner": ".github/workflows/milestone-qualification.yml",
@@ -337,7 +337,7 @@
     "path": "docs/release-evidence/v0.3.2-beta.2/release-receipt.json",
     "receipt_sha256": "1655c12e01577308cc5b989fcec9465aeffe34e4630d52f197cb4261662a0da8"
   },
-  "runner_sha": "1ac844be957bddec275ad360c85a04cf9bfe65c5",
+  "runner_sha": "646d48c39f86e74246488db5afd0c9f256296b4b",
   "schema_version": 1,
   "signed_ui_artifact": {
     "archive_path": "docs/release-evidence/v0.3.2-beta.2/signed-artifact-ui.zip",
