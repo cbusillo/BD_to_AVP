@@ -8,18 +8,22 @@ environment, or changes the live appcast.
 
 ## Maintained Environment
 
-The first maintained lane is `restorable-location` on Apple Silicon macOS 26.
-The qualification root must not exist before the run and must be a dedicated
-location under the current user's home directory. The runner creates an
-isolated synthetic home with `HOME` and `CFFIXED_USER_HOME`, installs the app
-under that owned root, and deletes the complete root after bounded cleanup.
+Two maintained layouts run on Apple Silicon macOS 26. The local
+`restorable-location` lane requires a dedicated qualification root under the
+current user's home, creates an isolated synthetic home, installs the app under
+that owned root, and deletes the complete root after bounded cleanup. The
+workflow-only `resettable-vm` lane runs on GitHub-hosted macOS, keeps the
+runner's real account home unchanged, installs the signed app in normal
+`/Applications`, and keeps scratch data under `RUNNER_TEMP`. It fails before
+mutation on local or self-hosted machines, when the app destination already
+exists, or when app-owned state is already present in the runner home.
 
 The host must provide:
 
 - macOS 26 on `arm64`;
 - Accessibility control for the terminal or automation host;
-- Xcode with `xcodebuild`, plus `defaults`, `ditto`, `hdiutil`, `open`, and
-  `osascript`;
+- Xcode with `xcodebuild`, plus `defaults`, `ditto`, `hdiutil`, `log`, `open`,
+  and `osascript`;
 - enough free space for both DMGs, two candidate copies, and 2 GiB of working
   headroom;
 - no running production app process; and
@@ -27,8 +31,9 @@ The host must provide:
 
 When the operator workstation is not running the policy-required macOS major
 version, use the owner-dispatched `Milestone Qualification` workflow instead of
-weakening the environment check. The workflow runs the same collector on the
-GitHub-hosted `macos-26` image with read-only repository and Actions access. It
+weakening the environment check. The workflow runs the collector in the
+`resettable-vm` layout on the GitHub-hosted `macos-26` image with read-only
+repository and Actions access. It
 accepts only the canonical `automation/release-evidence-<tag>` branch at its
 exact remote head, rejects non-documentation differences from protected
 `main`, validates the checked qualification manifest by its self digest,
@@ -49,7 +54,12 @@ gh workflow run milestone-qualification.yml \
 
 The successful run uploads the validated signed-artifact UI receipt, both Tier
 3 receipts, normalized evidence, checked manifest digest, evidence branch SHA,
-and a bounded run summary with 30-day retention. Download those outputs,
+and a bounded run summary with 30-day retention. A failed Sparkle installation
+uploads a separate `sparkle-install-diagnostics.json` artifact containing only
+fixed classifications, runtime-layout enums, directory-state enums, process
+state, and installed-build state; it excludes raw unified logs, paths,
+usernames, hostnames, process IDs, Accessibility output, and exception text.
+Download successful outputs,
 validate them again, and add the accepted receipts to the same evidence branch.
 The hosted collector proves the real Sparkle install/relaunch path, exact
 appcast-bound release-notes URL, and installed accessibility semantics. The
@@ -119,9 +129,10 @@ The runner performs this bounded sequence:
 
 1. Install the exact candidate from its DMG, verify bundle and signed app-tree
    identity, and run `scripts/smoke_release_app.py` from the installed copy.
-2. Clear the owned runtime location, install the exact prior release, and seed a
+2. Clear the owned smoke location, install the exact prior release, and seed a
    valid profile library plus route and unrelated preference sentinels in the
-   synthetic home.
+   selected runtime home. The hosted lane uses the real runner home; the local
+   lane uses its synthetic home.
 3. Run the installed-app XCUITest lane against the exact prior app, verifying
    Sparkle controls and the source-bound release-notes URL without installing.
 4. Revalidate the exact prior bundle and signed app tree immediately before
@@ -146,7 +157,10 @@ The runner performs this bounded sequence:
    readiness, profile-save accessibility and success, updater settings, the
    public releases link, and cropped light/dark app-window screenshots.
 8. Quit the app, detach every mounted DMG, verify the cleanup ownership marker,
-   and delete the qualification root with raw XCTest and build output.
+   and delete the qualification root with raw XCTest and build output. The
+   hosted lane additionally removes only the exact verified prior/candidate app
+   and allowlisted app-owned home state. It refuses to delete an unknown or
+   partially replaced bundle and relies on VM teardown for containment.
 9. Emit normalized public-safe evidence and validated receipts for both policy
    cases with `cleanup.status = disposed`.
 

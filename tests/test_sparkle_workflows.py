@@ -1184,6 +1184,8 @@ fi
         steps = qualify["steps"]
         checkout = steps[0]
         upload = steps[-1]
+        by_name = {step["name"]: step for step in steps}
+        diagnostics_upload = by_name["Retain bounded Sparkle installer diagnostics"]
         workflow_text = str(workflow)
 
         self.assertEqual(
@@ -1214,6 +1216,12 @@ fi
         self.assertIn("scripts.signed_artifact_receipt validate", workflow_text)
         self.assertIn("scripts.tier3_clean_machine preflight", workflow_text)
         self.assertIn("scripts.tier3_clean_machine run", workflow_text)
+        self.assertIn("BD_TO_AVP_TIER3_RUNNER_ENVIRONMENT", workflow_text)
+        self.assertIn("runner.environment", workflow_text)
+        self.assertIn("$RUNNER_TEMP/Tier3-BD-to-AVP-Qualification", workflow_text)
+        self.assertNotIn("$HOME/Tier3-BD-to-AVP-Qualification", workflow_text)
+        self.assertEqual(workflow_text.count("--environment-class resettable-vm"), 2)
+        self.assertIn("--diagnostics-output qualification-output/sparkle-install-diagnostics.json", workflow_text)
         self.assertIn("scripts.tier3_receipt", workflow_text)
         self.assertIn("Blocking automated milestone qualification", workflow_text)
         self.assertIn("Qualification manifest", workflow_text)
@@ -1226,6 +1234,16 @@ fi
         self.assertNotRegex(workflow_text, r"\b(git push|git commit|gh release (upload|edit|delete))\b")
         self.assertRegex(upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
         self.assertEqual(upload["with"]["retention-days"], "30")
+        self.assertRegex(diagnostics_upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
+        self.assertEqual(
+            diagnostics_upload["if"],
+            "${{ failure() && hashFiles('qualification-output/sparkle-install-diagnostics.json') != '' }}",
+        )
+        self.assertEqual(
+            diagnostics_upload["with"]["path"],
+            "qualification-output/sparkle-install-diagnostics.json",
+        )
+        self.assertEqual(diagnostics_upload["with"]["retention-days"], "30")
 
         config = load_github_config()
         self.assertIn("Milestone Qualification", config["importantWorkflows"])
