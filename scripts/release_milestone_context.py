@@ -406,12 +406,17 @@ def _validate_append_only_release_ledger(repo_root: Path, *, base_sha: str, rele
 
     def records_by_tag(ledger: Mapping[str, Any], description: str) -> dict[str, Mapping[str, Any]]:
         records: dict[str, Mapping[str, Any]] = {}
-        for index, raw_record in enumerate(_sequence(ledger.get("releases"), f"{description} releases")):
+        raw_records = _sequence(ledger.get("releases"), f"{description} releases")
+        tags: list[str] = []
+        for index, raw_record in enumerate(raw_records):
             record = _mapping(raw_record, f"{description} release {index}")
             tag = _string(record.get("tag"), f"{description} release tag")
             if tag in records:
                 raise ReleaseMilestoneContextError(f"{description.capitalize()} may not contain duplicate tags.")
             records[tag] = record
+            tags.append(tag)
+        if tags != sorted(tags):
+            raise ReleaseMilestoneContextError(f"{description.capitalize()} releases must remain sorted by tag.")
         return records
 
     base_records = records_by_tag(base_ledger, "base release evidence ledger")
@@ -425,6 +430,44 @@ def _validate_append_only_release_ledger(repo_root: Path, *, base_sha: str, rele
         raise ReleaseMilestoneContextError(
             "Release evidence ledger must append exactly the pull request release tag: "
             f"expected {release_tag!r}, added={sorted(added_tags)!r}."
+        )
+    receipt_relative = f"docs/release-evidence/{release_tag}/release-receipt.json"
+    publication_relative = f"docs/release-evidence/{release_tag}/publication-record.json"
+    try:
+        receipt, receipt_file_sha256 = load_validated_checked_receipt(repo_root / receipt_relative)
+    except ReleaseReceiptError as error:
+        raise ReleaseMilestoneContextError(f"Release evidence ledger receipt is invalid: {error}") from error
+    release = _mapping(receipt.get("release"), "release evidence ledger receipt release")
+    workflow = _mapping(receipt.get("workflow"), "release evidence ledger receipt workflow")
+    publication = _load_json(repo_root / publication_relative, "release evidence ledger publication record")
+    expected_publication = {
+        "receipt_file_sha256": receipt_file_sha256,
+        "release_id": release.get("id"),
+        "release_tag": release_tag,
+        "source_sha": receipt.get("source_sha"),
+        "workflow_conclusion": "success",
+        "workflow_run_id": workflow.get("run_id"),
+    }
+    for field, expected in expected_publication.items():
+        if publication.get(field) != expected:
+            raise ReleaseMilestoneContextError(
+                f"Release evidence ledger publication record {field} must match the checked release receipt."
+            )
+    expected_record: dict[str, Any] = {
+        "publication_record": publication_relative,
+        "published_at": _string(publication.get("published_at"), "release publication timestamp"),
+        "receipt": receipt_relative,
+        "receipt_file_sha256": receipt_file_sha256,
+        "release_id": release.get("id"),
+        "source_sha": receipt.get("source_sha"),
+        "tag": release_tag,
+        "workflow_run_id": workflow.get("run_id"),
+    }
+    if "recovery_workflow_run" in publication:
+        expected_record["recovery_workflow_run"] = publication["recovery_workflow_run"]
+    if head_records[release_tag] != expected_record:
+        raise ReleaseMilestoneContextError(
+            "Release evidence ledger record must match the checked release receipt and publication record."
         )
 
 
