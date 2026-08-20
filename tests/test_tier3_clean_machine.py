@@ -24,6 +24,8 @@ from scripts.tier3_clean_machine import (
     CleanMachineError,
     EnvironmentFacts,
     MacOSOperations,
+    PROFILE_FIXTURE_V6_PATH,
+    PROFILE_RELATIVE_PATH,
     QualificationConfig,
     QualificationOperations,
     RELEASES_URL,
@@ -107,6 +109,8 @@ class FakeOperations(QualificationOperations):
         self.observation_calls = 0
         self.post_install_update_observations = 0
         self.checkpoint_root: Path | None = None
+        self.profile_after_relaunch = PROFILE_FIXTURE_V6_PATH.read_bytes()
+        self.tamper_profile_before_update = False
 
     def inspect_environment(self, qualification_root: Path, environment_class: str) -> EnvironmentFacts:
         return EnvironmentFacts(
@@ -299,6 +303,8 @@ class FakeOperations(QualificationOperations):
         self.running_app_path = self.candidate_source if self.wrong_running_path else app_path
         self.running_process_id = self.next_process_id
         self.next_process_id += 1
+        profile_path = self.current_synthetic_home / PROFILE_RELATIVE_PATH
+        profile_path.write_bytes(self.profile_after_relaunch)
 
     def collect_ui_evidence(
         self,
@@ -312,6 +318,11 @@ class FakeOperations(QualificationOperations):
     ) -> None:
         if phase == "updater" and self.tamper_prior_before_update:
             (app_path / "tampered-before-updater").write_text("changed\n", encoding="utf-8")
+        if phase == "updater" and self.tamper_profile_before_update:
+            profile_path = synthetic_home / PROFILE_RELATIVE_PATH
+            profile_document = json.loads(profile_path.read_text(encoding="utf-8"))
+            profile_document["profiles"][0]["name"] = "Changed Before Update"
+            profile_path.write_text(json.dumps(profile_document, sort_keys=True), encoding="utf-8")
         del repo, app_path, synthetic_home
         output_directory.mkdir(parents=True, exist_ok=True)
         if phase == "updater":
@@ -1065,8 +1076,70 @@ class Tier3CleanMachineTests(unittest.TestCase):
             self.assertIn("ready-install-relaunch", update_evidence["states_observed"])
             self.assertRegex(update_evidence["intent_checkpoint_sha256"], r"^[0-9a-f]{64}$")
             self.assertRegex(update_evidence["journal_sha256"], r"^[0-9a-f]{64}$")
+            profile_evidence = json.loads(
+                (config.evidence_directory / "profile-snapshot.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(profile_evidence["profile_migration"], "v5-to-v6")
+            self.assertTrue(profile_evidence["profile_migration_matched"])
+            self.assertTrue(profile_evidence["profile_identity_preserved"])
+            self.assertTrue(profile_evidence["profile_encoding_options_preserved"])
+            self.assertTrue(profile_evidence["profile_safe_pipeline_defaults_preserved"])
+            self.assertTrue(profile_evidence["unsafe_legacy_run_defaults_removed"])
+            self.assertEqual(profile_evidence["profile_version_before"], 5)
+            self.assertEqual(profile_evidence["profile_version_after"], 6)
+            self.assertNotEqual(
+                profile_evidence["profile_before_sha256"],
+                profile_evidence["profile_after_sha256"],
+            )
+            self.assertRegex(profile_evidence["profile_before_semantic_sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(profile_evidence["profile_after_semantic_sha256"], r"^[0-9a-f]{64}$")
             self.assertTrue(operations.intent_seen_before_press)
             self.assertFalse(operations.app_running())
+
+    def test_run_rejects_profile_mutation_beyond_expected_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            mutated_document = json.loads(PROFILE_FIXTURE_V6_PATH.read_text(encoding="utf-8"))
+            mutated_document["profiles"][0]["name"] = "Changed"
+            operations.profile_after_relaunch = json.dumps(mutated_document, sort_keys=True).encode()
+
+            with self.assertRaisesRegex(
+                CleanMachineError,
+                "did not match the expected version 5-to-6 migration",
+            ):
+                run_qualification(config, operations)
+
+            self.assertFalse(config.evidence_directory.exists())
+
+    def test_run_rejects_profile_mutation_before_sparkle_update(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.tamper_profile_before_update = True
+
+            with self.assertRaisesRegex(
+                CleanMachineError,
+                "Profile library changed before the Sparkle update began",
+            ):
+                run_qualification(config, operations)
+
+            self.assertFalse(operations.pressed_actions)
+            self.assertFalse(config.evidence_directory.exists())
+
+    def test_run_rejects_invalid_profile_document_after_relaunch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.profile_after_relaunch = b"not-json\n"
+
+            with self.assertRaisesRegex(
+                CleanMachineError,
+                "Profile library after Sparkle relaunch is missing or invalid JSON",
+            ):
+                run_qualification(config, operations)
+
+            self.assertFalse(config.evidence_directory.exists())
 
     def test_run_accepts_supported_sparkle_install_actions(self) -> None:
         for install_action in SPARKLE_INSTALL_ACTIONS:
