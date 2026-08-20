@@ -14,7 +14,7 @@ from scripts.native_app import (
 )
 
 
-APP_PATH = Path("build/bd-to-avp/macos/app/3D Blu-ray to Vision Pro.app")
+APP_PATH = Path("macos/build/package/3D Blu-ray to Vision Pro.app")
 APP_TOOL_DIR = APP_PATH / "Contents" / "Resources" / "app" / "bd_to_avp" / "bin"
 CORE_TOOLS = {
     "ffmpeg": ["-hide_banner", "-version"],
@@ -89,7 +89,9 @@ def verify_mach_o_minimum_versions(app_path: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Verify app-local command-line tools in the Briefcase app bundle.")
+    parser = argparse.ArgumentParser(
+        description="Verify app-local command-line tools in the packaged macOS app bundle."
+    )
     parser.add_argument("--app-path", type=Path, default=APP_PATH)
     parser.add_argument("--profile", choices=["core", "release"], default="core")
     args = parser.parse_args()

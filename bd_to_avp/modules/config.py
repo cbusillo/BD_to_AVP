@@ -121,8 +121,8 @@ class Config:
     class App:
         def __init__(self) -> None:
             try:
-                project, briefcase = get_pyproject_data()
-                self.fullname = briefcase.get("project_name", "3D Blu-ray to Vision Pro")
+                project, app_metadata = get_pyproject_data()
+                self.fullname = app_metadata.get("project_name", "3D Blu-ray to Vision Pro")
                 self.shortname = project.get("name", "bd_to_avp")
             except FileNotFoundError:
                 self.fullname = "3D Blu-ray to Vision Pro"

@@ -42,19 +42,19 @@ def normalize_authors(authors: object) -> list[str]:
 
 def load_app_info_from_pyproject(app: QApplication) -> None:
     try:
-        project, briefcase = get_pyproject_data()
+        project, app_metadata = get_pyproject_data()
     except FileNotFoundError:
         project = {}
-        briefcase = {}
+        app_metadata = {}
 
     app.setApplicationName(project.get("name", DEFAULT_APP_NAME))
-    app.setOrganizationName(briefcase.get("organization", DEFAULT_ORGANIZATION))
+    app.setOrganizationName(app_metadata.get("organization", DEFAULT_ORGANIZATION))
     app.setApplicationVersion(config.app.code_version)
-    app.setOrganizationDomain(briefcase.get("bundle", DEFAULT_DOMAIN))
-    app.setApplicationDisplayName(briefcase.get("project_name", DEFAULT_DISPLAY_NAME))
+    app.setOrganizationDomain(app_metadata.get("organization_domain", DEFAULT_DOMAIN))
+    app.setApplicationDisplayName(app_metadata.get("project_name", DEFAULT_DISPLAY_NAME))
 
-    briefcase_icon_path = Path(briefcase.get("icon", "bd_to_avp/resources/app_icon"))
-    icon_path = Path(*briefcase_icon_path.parts[1:]).with_suffix(".icns")
+    configured_icon_path = Path(app_metadata.get("icon", "bd_to_avp/resources/app_icon"))
+    icon_path = Path(*configured_icon_path.parts[1:]).with_suffix(".icns")
     icon_absolute_path = Path(__file__).parent.parent / icon_path
     if icon_absolute_path.exists():
         app.setWindowIcon(QIcon(icon_absolute_path.as_posix()))

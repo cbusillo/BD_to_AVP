@@ -90,7 +90,7 @@ must continue increasing `CFBundleVersion` from this sequence.
 
 Review and commit all resulting changes. CI runs
 `scripts/release.py validate`, the unit suite, Python package builds, and the
-Briefcase create/build smoke. Do not dispatch a release from an unmerged branch
+embedded-runtime and native-package smoke. Do not dispatch a release from an unmerged branch
 or from a stale main commit.
 
 ## Release Orchestration
@@ -459,9 +459,9 @@ or embedded HTML for information required in the Sparkle dialog.
 
 The accepted SwiftUI/AppKit interface is packaged by the reusable
 `.github/workflows/release-engine.yml` production engine, called by the Stable
-`.github/workflows/briefcase.yml` operator entry. Briefcase remains the staging
-mechanism for the embedded Python engine, but its Python GUI is not the shipping
-interface. The Xcode `Release` configuration owns the production name, bundle
+`.github/workflows/briefcase.yml` operator entry. The repository-owned runtime
+builder stages the embedded Python engine; the workflow filename remains the
+Stable/PyPI identity. The Xcode `Release` configuration owns the production name, bundle
 identifier, macOS 26 deployment target, and Sparkle metadata.
 
 The signing job runs on GitHub's Apple-Silicon `macos-26` image, selects Xcode

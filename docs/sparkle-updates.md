@@ -59,7 +59,7 @@ behavior, permission prompting, and final rendered-note appearance remain
 release-cycle validation for #197.
 
 The Xcode Release target writes the direct-distribution metadata and canonical
-repository build counter. Briefcase stages only the embedded Python engine. The
+repository build counter. `scripts/embedded_python.py` stages the embedded Python engine. The
 manual main-only release workflow validates the final notarized app and DMG on
 the release host and again on macOS 26, creates a draft release, signs it with
 the protected environment key, attaches a cumulative appcast snapshot,
@@ -89,10 +89,9 @@ Research for #120 used Briefcase 0.4.3 and Sparkle 2.9.4.
   `ce89daf967db1e1893ed3ebd67575ed82d3902563e3191ca92aaec9164fbdef9`.
 - PyObjC successfully loaded the official framework with `objc.loadBundle()`
   and resolved `SPUStandardUpdaterController` in a local feasibility probe.
-- Briefcase 0.4.4 signs Mach-O files, embedded frameworks, and embedded apps,
-  but does not treat Sparkle's nested `.xpc` services as bundle-signing targets.
-  `scripts/briefcase_macos_signing.py` adds `.xpc` targets to the same
-  depth-first signing pass and is guarded to Briefcase 0.4.4.
+- Historical Briefcase 0.4.4 packaging did not treat Sparkle's nested `.xpc`
+  services as bundle-signing targets. The current native packager signs nested
+  Mach-O content and bundles inside-out without that compatibility patch.
 - Briefcase 0.4.4 supports arbitrary macOS Info.plist entries through its
   `macOS.info` map. Its v0.4.4 app template hard-codes `CFBundleVersion = 1`
   and does not consume a `build` value, so the macOS `info` map overrides that
@@ -156,17 +155,16 @@ update smoke for every stage form.
 canonical value remains in the macOS Info.plist map used by runtime staging:
 
 ```toml
-[tool.briefcase.app.bd-to-avp.macOS.info]
-CFBundleVersion = "<next-global-build>"
+[tool.bd_to_avp]
+build_version = "<next-global-build>"
 ```
 
 It must increment globally for every production-identity build across Alpha,
 Beta, RC, and Stable, including failed unpublished attempts. The Xcode Release
 target and Sparkle `sparkle:version` must use the same value.
 
-Briefcase staging and the Xcode package both inherit the internal version from
-`[project].version`; the duplicate `[tool.briefcase].version` key is
-intentionally absent. Full release metadata is committed before release.
+The embedded runtime and Xcode package both inherit the internal version from
+`[project].version`; no duplicate version key is maintained. Full release metadata is committed before release.
 Prepare the internal version, monotonic build counter, `uv.lock`, and Xcode Release
 metadata with:
 
@@ -314,7 +312,7 @@ the App Store.
 
 The synchronous PyGithub update check and About-dialog prerelease checkbox are
 removed. PyGithub and the now-unused direct `packaging` dependency are also
-removed from application and Briefcase requirements.
+removed from application and embedded-runtime requirements.
 
 ## Failure and Recovery
 

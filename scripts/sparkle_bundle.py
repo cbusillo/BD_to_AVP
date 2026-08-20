@@ -55,18 +55,27 @@ def load_expected_info(
 ) -> dict[str, object]:
     with pyproject_path.open("rb") as handle:
         pyproject = tomllib.load(handle)
-    info = dict(pyproject["tool"]["briefcase"]["app"]["bd-to-avp"]["macOS"]["info"])
+    app = pyproject["tool"]["bd_to_avp"]
+    sparkle = app["sparkle"]
+    info = {
+        "CFBundleVersion": str(app["build_version"]),
+        "BDToAVPDistributionChannel": str(app["distribution_channel"]),
+        "SUFeedURL": str(sparkle["feed_url"]),
+        "SUPublicEDKey": str(sparkle["public_key"]),
+        "SUAllowsAutomaticUpdates": bool(sparkle["allows_automatic_updates"]),
+        "SUVerifyUpdateBeforeExtraction": bool(sparkle["verify_update_before_extraction"]),
+    }
     public_key = public_key_path.read_text(encoding="utf-8").strip()
     try:
         validate_production_public_key(public_key)
     except ValueError as error:
         raise SparkleBundleError(str(error)) from error
     if info.get("SUPublicEDKey") != public_key:
-        raise SparkleBundleError("The Briefcase SUPublicEDKey does not match sparkle-public-ed-key.txt.")
+        raise SparkleBundleError("The configured SUPublicEDKey does not match sparkle-public-ed-key.txt.")
     if info.get("SUFeedURL") != PRODUCTION_FEED_URL:
-        raise SparkleBundleError("The Briefcase SUFeedURL does not match the production feed identity.")
+        raise SparkleBundleError("The configured SUFeedURL does not match the production feed identity.")
     if info.get("BDToAVPDistributionChannel") != PRODUCTION_DISTRIBUTION_CHANNEL:
-        raise SparkleBundleError("The Briefcase distribution channel does not match the production identity.")
+        raise SparkleBundleError("The configured distribution channel does not match the production identity.")
     return info
 
 

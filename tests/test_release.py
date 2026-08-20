@@ -1,5 +1,4 @@
 import hashlib
-import importlib
 import json
 import re
 import stat
@@ -11,15 +10,12 @@ import unittest
 
 from pathlib import Path
 
-from scripts import briefcase_macos_signing, release
+from scripts import embedded_python, release
 from scripts.beta3_recovery_evidence import BETA3_RECOVERY_EVIDENCE_PATH, Beta3RecoveryEvidenceError
 from scripts.production_identity import PRODUCTION_SPARKLE_PUBLIC_KEY
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-briefcase = importlib.import_module("briefcase")
-briefcase_config = importlib.import_module("briefcase.config")
-briefcase_console = importlib.import_module("briefcase.console")
 PYSIDE_RUNTIME_PACKAGE_NAMES = frozenset({"pyside6", "pyside6-addons", "pyside6-essentials", "shiboken6"})
 
 
@@ -37,20 +33,18 @@ def make_release_files(root: Path, *, version: str = "1.2.3", build: str = "10")
 name = "bd_to_avp"
 version = "{version}"
 
-[tool.briefcase]
+[tool.bd_to_avp]
 project_name = "3D Blu-ray to Vision Pro"
-bundle = "com.shinycomputers"
-
-[tool.briefcase.app.bd-to-avp]
+bundle_identifier = "com.shinycomputers.bd-to-avp"
 formal_name = "3D Blu-ray to Vision Pro"
+build_version = "{build}"
+distribution_channel = "direct"
 
-[tool.briefcase.app.bd-to-avp.macOS.info]
-CFBundleVersion = "{build}"
-BDToAVPDistributionChannel = "direct"
-SUFeedURL = "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
-SUPublicEDKey = "{PRODUCTION_SPARKLE_PUBLIC_KEY}"
-SUAllowsAutomaticUpdates = false
-SUVerifyUpdateBeforeExtraction = true
+[tool.bd_to_avp.sparkle]
+feed_url = "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
+public_key = "{PRODUCTION_SPARKLE_PUBLIC_KEY}"
+allows_automatic_updates = false
+verify_update_before_extraction = true
 """,
         encoding="utf-8",
     )
@@ -189,32 +183,21 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertTrue(PYSIDE_RUNTIME_PACKAGE_NAMES.isdisjoint(base_package_names))
 
         dev_requirements = pyproject["dependency-groups"]["dev"]
-        briefcase_requirements = pyproject["tool"]["briefcase"]["app"]["bd-to-avp"]["requires"]
         for requirement in gui_requirements:
             self.assertIn(requirement, dev_requirements)
-        briefcase_package_names = {normalized_requirement_name(requirement) for requirement in briefcase_requirements}
-        self.assertTrue(PYSIDE_RUNTIME_PACKAGE_NAMES.isdisjoint(briefcase_package_names))
+        self.assertNotIn("briefcase", {normalized_requirement_name(requirement) for requirement in dev_requirements})
 
-    def test_repository_uses_expected_briefcase_version(self) -> None:
+    def test_repository_pins_embedded_python_runtime(self) -> None:
         with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
             pyproject = tomllib.load(handle)
 
-        expected_version = briefcase_macos_signing.EXPECTED_BRIEFCASE_VERSION
-        self.assertEqual(briefcase.__version__, expected_version)
-        self.assertIn(f"briefcase=={expected_version}", pyproject["dependency-groups"]["dev"])
-        self.assertNotIn("version", pyproject["tool"]["briefcase"])
-        _, apps = briefcase_config.parse_config(
-            REPO_ROOT / "pyproject.toml",
-            "macOS",
-            "dmg",
-            briefcase_console.Console(input_enabled=False),
-        )
-        self.assertEqual(str(apps["bd-to-avp"]["version"]), pyproject["project"]["version"])
-        self.assertEqual(
-            apps["bd-to-avp"]["info"]["CFBundleVersion"],
-            pyproject["tool"]["briefcase"]["app"]["bd-to-avp"]["macOS"]["info"]["CFBundleVersion"],
-        )
-        self.assertEqual(apps["bd-to-avp"]["min_os_version"], "14.0")
+        manifest = embedded_python.load_manifest()
+        app = pyproject["tool"]["bd_to_avp"]
+        self.assertEqual(manifest.python_version, "3.12.10")
+        self.assertEqual(manifest.architecture, "arm64")
+        self.assertEqual(app["formal_name"], "3D Blu-ray to Vision Pro")
+        self.assertEqual(app["bundle_identifier"], "com.shinycomputers.bd-to-avp")
+        self.assertNotIn("briefcase", pyproject["tool"])
 
     def test_repository_is_prepared_for_beta(self) -> None:
         metadata = release.load_release_metadata()
@@ -1075,7 +1058,7 @@ class ReleasePreparationTests(unittest.TestCase):
         self.assertEqual(metadata.build_version, "11")
         self.assertEqual(pyproject["project"]["version"], "1.2.4rc1")
         self.assertEqual(
-            pyproject["tool"]["briefcase"]["app"]["bd-to-avp"]["macOS"]["info"]["CFBundleVersion"],
+            pyproject["tool"]["bd_to_avp"]["build_version"],
             "11",
         )
         self.assertEqual(lock["package"][0]["version"], "1.2.4rc1")
@@ -1312,7 +1295,7 @@ class Beta3RecoveryTests(unittest.TestCase):
         self.assertEqual(metadata.channel, "beta")
         self.assertEqual(pyproject["project"]["version"], "0.3.0b3")
         self.assertEqual(
-            pyproject["tool"]["briefcase"]["app"]["bd-to-avp"]["macOS"]["info"]["CFBundleVersion"],
+            pyproject["tool"]["bd_to_avp"]["build_version"],
             "148",
         )
         self.assertEqual(lock["package"][0]["version"], "0.3.0b3")

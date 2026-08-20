@@ -41,8 +41,8 @@ including the legacy `releaseCandidate` spelling, migrate to the canonical
 preference. Selecting a safer route applies only to future newer builds;
 Sparkle never downgrades the currently installed version.
 
-Create an ad-hoc signed package containing the Briefcase-managed Python
-runtime and conversion engine with:
+Create an ad-hoc signed package containing the pinned embedded Python runtime
+and conversion engine with:
 
 ```sh
 uv run python scripts/native_app.py package

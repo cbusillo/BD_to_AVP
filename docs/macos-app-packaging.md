@@ -9,7 +9,7 @@ enable App Sandbox, or create a second release pipeline.
 
 `macos/project.yml` is the checked-in Xcode source of truth. The generated
 project is intentionally ignored. `scripts/native_app.py` coordinates XcodeGen,
-Xcode, the Briefcase-managed Python runtime staging path, signing, and real
+Xcode, the digest-pinned embedded Python runtime, signing, and real
 startup and worker smokes.
 
 ```text
@@ -23,14 +23,13 @@ startup and worker smokes.
     │   └── Python.framework
     └── Resources/
         ├── app/                bd_to_avp source and bundled tools
-        ├── app_packages/       Python dependencies
-        └── support/
+        └── app_packages/       lock-derived Python dependencies
 ```
 
 The containing `Info.plist` keeps the Swift executable as
 `CFBundleExecutable` and supplies `MainModule=bd_to_avp.worker` for the
-secondary launcher. Repository-only `README.md` and `pyproject.toml` files are
-removed from the copied runtime.
+secondary launcher. `scripts/embedded_python.py` stages only the application
+package and its locked runtime dependencies.
 
 ## Commands
 
@@ -43,8 +42,8 @@ BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT=https://diagnostics.shinycomputers.com \
   uv run python scripts/native_app.py publish-current
 ```
 
-`package` builds or updates the Briefcase staging app, builds the Xcode
-`Release` configuration, copies the Python runtime into the production bundle,
+`package` builds the pinned embedded Python runtime, builds the Xcode `Release`
+configuration, copies the runtime into the production bundle,
 signs nested Mach-O content from the inside out, verifies the complete
 signature, launches the packaged app through `--startup-smoke`, and runs a real
 `inspect_source` request through the embedded worker. The worker smoke also
@@ -53,8 +52,6 @@ package cannot pass while silently falling back to a legacy child-process path.
 Layout verification also checks the shipping Swift executable's direct platform
 framework links, including AVKit for the embedded preview player, so dead-linking
 cannot defer a missing superclass failure until the player is presented.
-Briefcase remains a runtime assembler; its Python GUI is no longer the shipping
-interface.
 
 Ad-hoc packaging is the default for local validation. Developer ID packaging
 passes `--sign-identity` and `--sign-keychain`. Ad-hoc packages omit Hardened
@@ -97,7 +94,7 @@ contains no Sparkle distribution metadata. It cannot enroll in a production
 update route.
 
 The project version and repository build counter come from `pyproject.toml`.
-`scripts/release.py prepare` updates the package version, `uv.lock`, Briefcase
+`scripts/release.py prepare` updates the package version, `uv.lock`, the app
 build counter, and Xcode Release metadata atomically. The package command also
 passes those canonical values directly to Xcode and rejects a bundle whose
 identity differs. Release metadata separately derives the dotted public tag,

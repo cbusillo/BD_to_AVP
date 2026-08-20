@@ -212,9 +212,15 @@ class NativeAppPackagingTests(unittest.TestCase):
         debug_settings = target_settings["configs"]["Debug"]
         release_settings = target_settings["configs"]["Release"]
         sparkle_manifest = tomllib.loads((REPO_ROOT / "vendor" / "sparkle-macos.toml").read_text(encoding="utf-8"))
-        briefcase_info = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["briefcase"][
-            "app"
-        ]["bd-to-avp"]["macOS"]["info"]
+        app_metadata = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["bd_to_avp"]
+        sparkle_metadata = app_metadata["sparkle"]
+        expected_update_info = {
+            "BDToAVPDistributionChannel": app_metadata["distribution_channel"],
+            "SUAllowsAutomaticUpdates": sparkle_metadata["allows_automatic_updates"],
+            "SUFeedURL": sparkle_metadata["feed_url"],
+            "SUPublicEDKey": sparkle_metadata["public_key"],
+            "SUVerifyUpdateBeforeExtraction": sparkle_metadata["verify_update_before_extraction"],
+        }
         debug_info = plistlib.loads((MACOS_ROOT / "BluRayToVisionPro" / "Info.plist").read_bytes())
         release_info = plistlib.loads((MACOS_ROOT / "BluRayToVisionPro" / "Info-Release.plist").read_bytes())
         app_source = (MACOS_ROOT / "BluRayToVisionPro" / "App" / "BluRayToVisionProApp.swift").read_text(
@@ -258,7 +264,7 @@ class NativeAppPackagingTests(unittest.TestCase):
         }
         for key in update_keys:
             self.assertNotIn(key, debug_info)
-            self.assertEqual(release_info[key], briefcase_info[key])
+            self.assertEqual(release_info[key], expected_update_info[key])
         self.assertEqual(debug_info, {key: value for key, value in release_info.items() if key not in update_keys})
         self.assertEqual(release_settings["INFOPLIST_FILE"], "BluRayToVisionPro/Info-Release.plist")
         self.assertNotIn("SUEnableAutomaticChecks", release_info)
@@ -557,7 +563,7 @@ Load command 3
         app_path = Path("/tmp") / NATIVE_APP_NAME
         with (
             patch("scripts.native_app.build_packaged_mv_hevc_encoder", return_value=encoder_path) as build_encoder,
-            patch("scripts.native_app.prepare_briefcase_runtime") as prepare_runtime,
+            patch("scripts.native_app.prepare_embedded_python_runtime") as prepare_runtime,
             patch("scripts.native_app.xcodebuild") as xcodebuild_mock,
             patch("scripts.native_app.assemble_package", return_value=app_path) as assemble,
             patch("scripts.native_app.sign_package") as sign,

@@ -14,7 +14,7 @@ class VerifyAppToolsTests(unittest.TestCase):
         self.assertIn("MP4Box", verify_app_tools.REQUIRED_TOOLS)
         self.assertEqual(verify_app_tools.REQUIRED_TOOLS["MP4Box"], ["-version"])
 
-    def test_core_tools_match_ci_briefcase_smoke_scope(self) -> None:
+    def test_core_tools_match_ci_package_smoke_scope(self) -> None:
         self.assertEqual(set(verify_app_tools.CORE_TOOLS), {"ffmpeg", "ffprobe", "MP4Box"})
 
     def test_required_tools_cover_gui_runtime_dependencies(self) -> None:

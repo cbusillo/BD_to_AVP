@@ -1058,7 +1058,6 @@ jobs:
           name: macos-release-diagnostics
           path: |
             dist/notary/*.json
-            logs/briefcase.*.log
           if-no-files-found: ignore
           retention-days: 7
 
