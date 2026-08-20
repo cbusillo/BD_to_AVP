@@ -138,18 +138,19 @@ The runner performs this bounded sequence:
 4. Revalidate the exact prior bundle and signed app tree immediately before
    updater interaction, invoke `Check for Updates…`, and drive Sparkle through
    an explicit bounded state machine. Identifier-scoped observations distinguish
-   downloading, staged install, install-and-relaunch, install-on-quit,
-   cancellation, terminal failure, and unknown states.
+   downloading, install-and-relaunch, install-on-quit, cancellation, terminal
+   failure, and unknown states. Sparkle 2.9.4's initial `Install Update` action
+   begins download/extraction and must not be mistaken for an already-staged
+   install or the final relaunch confirmation.
 5. Durably record each selected action inside the owned qualification root
-   before pressing it. Install-on-quit explicitly terminates the prior app,
-   waits for the exact candidate on disk, and launches that candidate; staged
-   installs remain bounded until Sparkle exposes the final action or the exact
-   candidate appears on disk with a replacement application process, including
-   relaunches completed between UI polls while Accessibility still reports a
-   stale downloading, installing, or staged state. If Sparkle closes the updater
-   window after `Install Update` while the exact prior process remains active,
-   the runner gracefully quits that process to trigger the staged installation,
-   waits for the exact candidate on disk, and launches it.
+   before pressing it. After the initial `Install Update`, tolerate the alert
+   closing while the exact prior app remains running, wait through download and
+   extraction, then require and press Sparkle's
+   `SUStatusInstallAndRelaunch` final action. Only then wait for the exact
+   candidate and replacement process. Install-on-quit explicitly terminates the
+   prior app, waits for the exact candidate on disk, and launches that
+   candidate. The harness never quits the app merely because the initial alert
+   disappeared.
 6. Verify the final candidate bundle, build, signed app tree, and replacement
    running process, then verify the selected route, unrelated preference, and
    byte-for-byte profile library are preserved.
@@ -172,13 +173,14 @@ are deleted. Retained screenshots contain only the app window. A failed run
 does not emit either accepted receipt.
 
 Timeout failures include only bounded public-safe state context: the final
-state, staged/quit/action counts, process relation, exact-candidate result, and
-the ordered state enum history. They do not retain raw Accessibility output,
-paths, process IDs, usernames, or hostnames.
+state, action count, process relation, and ordered state enum history. They do
+not retain raw Accessibility output, paths, process IDs, usernames, or
+hostnames.
 
-The updater state machine prefers the Sparkle `SUUpdateAlert` window and
-`SPUUserUpdateChoiceInstall` action identifiers. A title fallback is permitted
-only inside the single owned updater window and is recorded in evidence. The
+The updater state machine prefers Sparkle's `SUUpdateAlert`,
+`SPUUserUpdateChoiceInstall`, and `SUStatusInstallAndRelaunch` identifiers. A
+title fallback is permitted only inside the single owned updater window and is
+recorded in evidence. The
 selected action, state, exact prior/candidate identities, attempt number, and
 transition history are atomically written and synced before an asynchronous
 press. That journal remains disposable; normalized `sparkle-update.json`

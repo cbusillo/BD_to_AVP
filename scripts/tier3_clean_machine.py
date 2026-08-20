@@ -63,6 +63,7 @@ UI_TEST_TIMEOUT_SECONDS = 15 * 60
 ACCESSIBILITY_COLLECTOR_FINISH_TIMEOUT_SECONDS = 15
 MAX_UI_SCREENSHOT_BYTES = 20 * 1024 * 1024
 SPARKLE_INSTALL_IDENTIFIER = "SPUUserUpdateChoiceInstall"
+SPARKLE_STATUS_INSTALL_IDENTIFIER = "SUStatusInstallAndRelaunch"
 SPARKLE_INSTALL_ACTIONS = (
     SPARKLE_INSTALL_IDENTIFIER,
     "Install Update",
@@ -127,7 +128,7 @@ class SparkleUpdateFailure(CleanMachineError):
 class SparkleUpdateState(str, enum.Enum):
     WAITING_FOR_WINDOW = "waiting-for-window"
     DOWNLOADING = "downloading"
-    STAGED_INSTALL = "staged-install"
+    READY_INSTALL_UPDATE = "ready-install-update"
     READY_INSTALL_RELAUNCH = "ready-install-relaunch"
     READY_INSTALL_ON_QUIT = "ready-install-on-quit"
     INSTALLING = "installing"
@@ -139,7 +140,6 @@ class SparkleUpdateState(str, enum.Enum):
 class SparkleUpdateOutcome(str, enum.Enum):
     INSTALL_AND_RELAUNCH = "install-and-relaunch"
     INSTALL_ON_QUIT = "install-on-quit"
-    STAGED = "staged"
 
 
 @dataclass(frozen=True)
@@ -1469,7 +1469,9 @@ end run"""
                     repeat with candidateButton in buttons of candidateWindow
                         try
                             set candidateIdentifier to value of attribute "AXIdentifier" of candidateButton
-                            if candidateIdentifier is "SPUUserUpdateChoiceInstall" then
+                            set isInstallChoice to candidateIdentifier is "SPUUserUpdateChoiceInstall"
+                            set isFinalInstallChoice to candidateIdentifier is "SUStatusInstallAndRelaunch"
+                            if isInstallChoice or isFinalInstallChoice then
                                 set end of fallbackWindows to candidateWindow
                                 exit repeat
                             end if
@@ -1501,7 +1503,9 @@ end run"""
             repeat with candidateButton in buttons of targetWindow
                 try
                     set buttonIdentifier to value of attribute "AXIdentifier" of candidateButton
-                    if buttonIdentifier is "SPUUserUpdateChoiceInstall" then
+                    set isInstallChoice to buttonIdentifier is "SPUUserUpdateChoiceInstall"
+                    set isFinalInstallChoice to buttonIdentifier is "SUStatusInstallAndRelaunch"
+                    if isInstallChoice or isFinalInstallChoice then
                         set selectedButton to candidateButton
                         set selectedIdentifier to buttonIdentifier
                         exit repeat
@@ -1529,7 +1533,7 @@ end run"""
                 return "downloading" & tab & windowMatch & tab & selectedIdentifier & tab & selectedTitle
             end if
             if selectedTitle is "Install Update" then
-                return "staged-install" & tab & windowMatch & tab & selectedIdentifier & tab & selectedTitle
+                return "ready-install-update" & tab & windowMatch & tab & selectedIdentifier & tab & selectedTitle
             else if selectedTitle is "Install on Quit" then
                 return "ready-install-on-quit" & tab & windowMatch & tab & selectedIdentifier & tab & selectedTitle
             else if selectedTitle is "Install and Relaunch" then
@@ -1572,7 +1576,9 @@ end run"""
                     repeat with candidateButton in buttons of candidateWindow
                         try
                             set candidateIdentifier to value of attribute "AXIdentifier" of candidateButton
-                            if candidateIdentifier is "SPUUserUpdateChoiceInstall" then
+                            set isInstallChoice to candidateIdentifier is "SPUUserUpdateChoiceInstall"
+                            set isFinalInstallChoice to candidateIdentifier is "SUStatusInstallAndRelaunch"
+                            if isInstallChoice or isFinalInstallChoice then
                                 if targetWindow is not missing value then
                                     error "Updater state changed before the guarded press."
                                 end if
@@ -1799,10 +1805,8 @@ def _perform_sparkle_update(
     states_observed: list[str] = []
     last_recorded_state: SparkleUpdateState | None = None
     saw_owned_window = False
-    staged_pressed = False
-    staged_quit_requested = False
+    install_update_pressed = False
     action_count = 0
-    last_pressed: UpdateObservation | None = None
     intent_checkpoint_sha256 = ""
 
     def record_transition(phase: str, observation: UpdateObservation) -> str:
@@ -1827,50 +1831,6 @@ def _perform_sparkle_update(
         )
         return _write_durable_json(checkpoint_path, journal)
 
-    def exact_candidate_installed() -> bool:
-        if not staged_pressed or not app_path.exists():
-            return False
-        try:
-            identity = read_bundle_identity(app_path)
-        except CleanMachineError:
-            return False
-        if (
-            identity.bundle_identifier != BUNDLE_IDENTIFIER
-            or identity.package_version != candidate.package_version
-            or identity.build_version != candidate.build_version
-        ):
-            return False
-        try:
-            verify_installed_app(app_path, candidate)
-        except CleanMachineError:
-            return False
-        return True
-
-    def staged_candidate_replacement_detected() -> bool:
-        current_process_id = operations.app_process_id(app_path)
-        return (
-            staged_pressed
-            and current_process_id is not None
-            and current_process_id != prior_process_id
-            and exact_candidate_installed()
-        )
-
-    def staged_interaction() -> UpdateInteraction:
-        if last_pressed is None:
-            raise AssertionError("staged Sparkle update lost its pressed action")
-        return UpdateInteraction(
-            clicked_button=last_pressed.action_title,
-            outcome=SparkleUpdateOutcome.STAGED,
-            action_identifier=last_pressed.action_identifier,
-            window_match=last_pressed.window_match,
-            states_observed=tuple(states_observed),
-            intent_checkpoint_sha256=intent_checkpoint_sha256,
-            journal_sha256=journal_sha256,
-            attempt=attempt,
-            retry_reason_code=retry_reason_code,
-            prior_process_id=prior_process_id,
-        )
-
     while time.monotonic() < deadline:
         observation = operations.observe_updater()
         state = observation.state
@@ -1883,18 +1843,15 @@ def _perform_sparkle_update(
             saw_owned_window = True
 
         if state == SparkleUpdateState.WAITING_FOR_WINDOW:
-            current_process_id = operations.app_process_id(app_path)
-            if staged_pressed and (current_process_id is None or staged_candidate_replacement_detected()):
-                return staged_interaction()
-            if (
-                staged_pressed
-                and not staged_quit_requested
-                and current_process_id == prior_process_id
-                and not exact_candidate_installed()
-            ):
-                journal_sha256 = record_transition("staged-quit", observation)
-                operations.quit_app()
-                staged_quit_requested = True
+            if install_update_pressed:
+                if operations.app_process_id(app_path) is None:
+                    raise SparkleUpdateFailure(
+                        "The prior application terminated before Sparkle exposed the final install action.",
+                        reason_code="application-terminated-before-install-ready",
+                        state=state,
+                        action_pressed=True,
+                    )
+                time.sleep(UPDATE_POLL_SECONDS)
                 continue
             if saw_owned_window and action_count == 0:
                 cancelled = UpdateObservation(
@@ -1915,13 +1872,9 @@ def _perform_sparkle_update(
             continue
 
         if state in {SparkleUpdateState.DOWNLOADING, SparkleUpdateState.INSTALLING}:
-            if staged_candidate_replacement_detected():
-                return staged_interaction()
             time.sleep(UPDATE_POLL_SECONDS)
             continue
-        if state == SparkleUpdateState.STAGED_INSTALL and staged_pressed:
-            if staged_candidate_replacement_detected():
-                return staged_interaction()
+        if state == SparkleUpdateState.READY_INSTALL_UPDATE and install_update_pressed:
             time.sleep(UPDATE_POLL_SECONDS)
             continue
 
@@ -1950,8 +1903,8 @@ def _perform_sparkle_update(
                 action_pressed=action_count > 0,
             )
 
-        outcomes = {
-            SparkleUpdateState.STAGED_INSTALL: SparkleUpdateOutcome.STAGED,
+        outcomes: dict[SparkleUpdateState, SparkleUpdateOutcome | None] = {
+            SparkleUpdateState.READY_INSTALL_UPDATE: None,
             SparkleUpdateState.READY_INSTALL_RELAUNCH: SparkleUpdateOutcome.INSTALL_AND_RELAUNCH,
             SparkleUpdateState.READY_INSTALL_ON_QUIT: SparkleUpdateOutcome.INSTALL_ON_QUIT,
         }
@@ -1971,7 +1924,11 @@ def _perform_sparkle_update(
                 state=SparkleUpdateState.UNKNOWN,
                 action_pressed=action_count > 0,
             )
-        if observation.action_identifier not in {"", SPARKLE_INSTALL_IDENTIFIER}:
+        if observation.action_identifier not in {
+            "",
+            SPARKLE_INSTALL_IDENTIFIER,
+            SPARKLE_STATUS_INSTALL_IDENTIFIER,
+        }:
             raise SparkleUpdateFailure(
                 f"Sparkle updater exposed an unsupported action identifier: {observation.action_identifier!r}.",
                 reason_code="updater-action-unknown",
@@ -2001,21 +1958,23 @@ def _perform_sparkle_update(
             ) from error
         journal_sha256 = record_transition("pressed", observation)
         action_count += 1
-        last_pressed = observation
 
-        if outcome == SparkleUpdateOutcome.STAGED:
-            staged_pressed = True
-            last_recorded_state = SparkleUpdateState.INSTALLING
-            states_observed.append(SparkleUpdateState.INSTALLING.value)
-            installing = UpdateObservation(
-                state=SparkleUpdateState.INSTALLING,
+        if state == SparkleUpdateState.READY_INSTALL_UPDATE:
+            install_update_pressed = True
+            downloading = UpdateObservation(
+                state=SparkleUpdateState.DOWNLOADING,
                 window_match=observation.window_match,
                 action_identifier=observation.action_identifier,
                 action_title=observation.action_title,
             )
-            journal_sha256 = record_transition("derived", installing)
+            states_observed.append(downloading.state.value)
+            journal_sha256 = record_transition("derived", downloading)
+            last_recorded_state = downloading.state
             time.sleep(UPDATE_POLL_SECONDS)
             continue
+
+        if outcome is None:
+            raise AssertionError("non-terminal Sparkle action reached terminal interaction")
 
         return UpdateInteraction(
             clicked_button=observation.action_title,
@@ -2040,9 +1999,9 @@ def _perform_sparkle_update(
     raise SparkleUpdateFailure(
         "Sparkle updater did not reach a bounded install state before timeout "
         f"(last_state={(last_recorded_state or SparkleUpdateState.WAITING_FOR_WINDOW).value}, "
-        f"staged_pressed={str(staged_pressed).lower()}, staged_quit_requested={str(staged_quit_requested).lower()}, "
+        f"install_update_pressed={str(install_update_pressed).lower()}, "
         f"action_count={action_count}, "
-        f"process_relation={process_relation}, candidate_exact={str(exact_candidate_installed()).lower()}, "
+        f"process_relation={process_relation}, "
         f"states_observed={','.join(states_observed)}).",
         reason_code="update-window-timeout",
         state=last_recorded_state or SparkleUpdateState.WAITING_FOR_WINDOW,
@@ -2517,9 +2476,7 @@ def _run_qualification(
                 attempt=attempt,
                 retry_reason_code=retry_reason_code,
             )
-            if interaction.outcome == SparkleUpdateOutcome.INSTALL_ON_QUIT or (
-                interaction.outcome == SparkleUpdateOutcome.STAGED and not operations.app_running(app_path)
-            ):
+            if interaction.outcome == SparkleUpdateOutcome.INSTALL_ON_QUIT:
                 failure_stage = "install-on-quit-wait"
                 operations.quit_app()
                 _wait_for_candidate_on_disk(app_path, candidate)
