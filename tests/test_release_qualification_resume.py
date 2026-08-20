@@ -22,6 +22,7 @@ from scripts.release_qualification_resume import (
     _dispatch,
     _require_no_active_exact_runs,
     _revalidate_remote_identity,
+    _run_matches,
     _write_checkpoint,
     resume_qualification,
     safety_error_payload,
@@ -953,6 +954,12 @@ class ReleaseQualificationResumeTests(unittest.TestCase):
             "run-name: Milestone ${{ inputs.candidate_tag }} ${{ inputs.manifest_sha256 }}",
             workflow,
         )
+
+    def test_dynamic_workflow_run_name_matches_the_bound_display_title(self) -> None:
+        run = workflow_run(101, status="completed", conclusion="failure")
+        run["name"] = f"Milestone {RELEASE_TAG} {MANIFEST_SHA}"
+
+        self.assertTrue(_run_matches(run, identity()))
 
 
 if __name__ == "__main__":

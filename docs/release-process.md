@@ -21,9 +21,11 @@ records immutable publication plus its targeted qualification result. Stable
 `0.3.0` build `161` is published and immutable; its publication and bounded
 PyPI recovery are recorded in [the Stable cut packet](0.3.0-cut-packet.md).
 Stable `0.3.1` build `162` is published and immutable; its publication is
-recorded in [the 0.3.1 cut packet](0.3.1-cut-packet.md). The next prepared
-identity is Beta `0.3.2b1` build `163`, tracked in
-[the 0.3.2 Beta 1 cut packet](0.3.2-beta.1-cut-packet.md) and issue #584.
+recorded in [the 0.3.1 cut packet](0.3.1-cut-packet.md). Beta `0.3.2b1` build
+`163` is published and immutable, tracked in
+[the 0.3.2 Beta 1 cut packet](0.3.2-beta.1-cut-packet.md) and issue #584. The
+next prepared identity is Beta `0.3.2b2` build `164`, tracked in
+[the 0.3.2 Beta 2 cut packet](0.3.2-beta.2-cut-packet.md) and issue #593.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
@@ -208,11 +210,14 @@ The workflow performs these ordered boundaries:
    and newest durable snapshot are both checked.
 3. Run the secret-free `qualify-preparation` gate. Classify the candidate
    against the checked `docs/qualification/release-evidence-v1.json` evidence
-   and `docs/qualification/stable-signed-qualification-v1.json` qualification file
+   and the exact `qualificationRecordPath` selected in `.github/github.json`
    for the `preparation` phase, using the exact `github.sha` and committed
-   Sparkle channel as the release stage. The preparation report is uploaded as
-   an Actions artifact with 30-day retention before enforcement. macOS signing
-   approval cannot be requested until this gate passes.
+   Sparkle channel as the release stage. `scripts.release validate` requires
+   that path to identify the unique `*-signed-qualification-v1.json` record for
+   the committed tag, version, build, DMG, workflow, and release stage. The
+   preparation report is uploaded as an Actions artifact with 30-day retention
+   before enforcement. macOS signing approval cannot be requested until this
+   gate passes.
 4. After the single release approval, build, sign, notarize, and
    Gatekeeper-validate the SwiftUI macOS app and DMG without a write-capable
    repository token. Record its exact name, byte size, SHA-256, and
@@ -300,7 +305,10 @@ The workflow performs these ordered boundaries:
    release and artifact identity. If the rolling qualification changed on both
    branches, the workflow resolves only that path in favor of protected main;
    any other merge conflict fails closed while the per-release snapshot remains
-   unchanged. If
+   unchanged. Manifest preparation selects the newest prior published ancestor
+   that already has a checked immutable release receipt; an unreconciled prior
+   release remains immutable history but cannot serve as a qualification base.
+   If
    the signed UI artifact expires before the first successful capture, the
    workflow stops explicitly because that immutable evidence cannot be
    reconstructed; it never substitutes a rebuilt or operator-authored receipt.

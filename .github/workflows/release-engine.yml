@@ -134,7 +134,6 @@ env:
   GH_REPO: ${{ github.repository }}
   RELEASE_QUALIFICATION_EVIDENCE: docs/qualification/release-evidence-v1.json
   RELEASE_QUALIFICATION_POLICY: docs/qualification/release-qualification-policy-v1.json
-  RELEASE_QUALIFICATION_RECORD: docs/qualification/stable-signed-qualification-v1.json
   XCODEGEN_VERSION: 2.45.4
   XCODEGEN_SHA256: 090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef
   XCODE_VERSION: "26.5"
@@ -247,6 +246,7 @@ jobs:
       first_candidate_of_cycle: ${{ steps.metadata.outputs.first_candidate_of_cycle }}
       make_latest: ${{ steps.metadata.outputs.make_latest }}
       publish_pypi: ${{ steps.metadata.outputs.publish_pypi }}
+      qualification_record: ${{ steps.metadata.outputs.qualification_record }}
       previous_release_tag: ${{ steps.release_history.outputs.previous_release_tag }}
       base_snapshot_tag: ${{ steps.feed_state.outputs.base_snapshot_tag }}
     steps:
@@ -563,6 +563,7 @@ jobs:
         id: qualification
         env:
           FIRST_CANDIDATE_OF_CYCLE: ${{ needs.prepare.outputs.first_candidate_of_cycle }}
+          RELEASE_QUALIFICATION_RECORD: ${{ needs.prepare.outputs.qualification_record }}
           RELEASE_STAGE: ${{ needs.prepare.outputs.channel }}
         run: |
           set -euo pipefail
@@ -2369,6 +2370,7 @@ jobs:
           FIRST_CANDIDATE_OF_CYCLE: ${{ needs.prepare.outputs.first_candidate_of_cycle }}
           PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
           PUBLIC_VERSION: ${{ needs.prepare.outputs.public_version }}
+          RELEASE_QUALIFICATION_RECORD: ${{ needs.prepare.outputs.qualification_record }}
           RECEIPT_ASSET_ID: ${{ needs.build-receipt.outputs.receipt_asset_id }}
           RECEIPT_FILE_SHA256: ${{ needs.build-receipt.outputs.receipt_file_sha256 }}
           RECEIPT_SELF_SHA256: ${{ needs.build-receipt.outputs.receipt_sha256 }}

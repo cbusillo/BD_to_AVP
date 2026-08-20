@@ -129,8 +129,8 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertEqual(NATIVE_APP_NAME, "3D Blu-ray to Vision Pro.app")
         self.assertEqual(NATIVE_EXECUTABLE_NAME, NATIVE_PRODUCT_NAME)
         self.assertEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp")
-        self.assertEqual(NATIVE_SHORT_VERSION, "0.3.2b1")
-        self.assertEqual(NATIVE_BUILD_VERSION, "163")
+        self.assertEqual(NATIVE_SHORT_VERSION, "0.3.2b2")
+        self.assertEqual(NATIVE_BUILD_VERSION, "164")
         self.assertEqual(NATIVE_MINIMUM_SYSTEM_VERSION, "26.0")
         self.assertEqual(MV_HEVC_ENCODER_NAME, "mv-hevc-encoder")
 
@@ -299,7 +299,9 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertNotIn('.accessibilityLabel("Preferred language:', language_picker)
 
         self.assertIn("Convert a 3D Blu-ray Disc", source_view)
-        self.assertIn("Import MTS or M2TS transport stream", source_view)
+        self.assertIn("MTS or M2TS…", source_view)
+        self.assertIn("Add Folder of Movies…", source_view)
+        self.assertIn("Adds every supported ISO, MKV, MTS, and M2TS movie", source_view)
         self.assertIn('Label("Save current settings as new profile", systemImage: "plus.square.on.square")', setup_view)
         self.assertIn('.accessibilityLabel("Save current settings as new profile")', setup_view)
         self.assertNotIn('Button("Save Current Settings as New Profile…", action: saveAsNewProfile)', setup_view)
@@ -307,7 +309,7 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertIn("state.phase.isRunning || state.phase == .decisionRequired", source_view)
         self.assertLess(
             source_view.index("Convert a 3D Blu-ray Disc"),
-            source_view.index("Import MTS or M2TS transport stream"),
+            source_view.index("MTS or M2TS…"),
         )
         for label in (
             "Video quality",

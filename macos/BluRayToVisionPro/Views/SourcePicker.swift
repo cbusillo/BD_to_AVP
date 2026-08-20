@@ -40,11 +40,11 @@ enum SourcePicker {
     @MainActor
     static func chooseFolder(kind: ConversionSourceKind) -> ConversionSource? {
         let panel = NSOpenPanel()
-        panel.title = kind == .bluRayFolder ? "Open a Blu-ray Folder" : "Open a Source Folder"
-        panel.prompt = "Open Folder"
+        panel.title = kind == .bluRayFolder ? "Open a Blu-ray Folder" : "Add a Folder of Movies"
+        panel.prompt = kind == .bluRayFolder ? "Open Folder" : "Add Folder"
         panel.message = kind == .bluRayFolder
             ? "Choose a folder containing a BDMV directory."
-            : "Choose a folder containing disc images, MKV, MTS, or M2TS sources."
+            : "Choose a folder containing ISO disc images, MKV, MTS, or M2TS movies. Each supported movie will be added to the conversion queue."
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false

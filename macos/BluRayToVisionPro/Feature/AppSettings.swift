@@ -11,7 +11,6 @@ final class AppSettings: ObservableObject {
         static let showTechnicalDetails = "native.showTechnicalDetails"
         static let keepIntermediateFiles = "native.keepIntermediateFiles"
         static let useSoftwareEncoder = "native.useSoftwareEncoder"
-        static let standardMovieRenameNoticeAcknowledged = "native.standardMovieRenameNoticeAcknowledged"
     }
 
     private let defaults: UserDefaults
@@ -54,8 +53,6 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(useSoftwareEncoder, forKey: Key.useSoftwareEncoder) }
     }
 
-    @Published private(set) var hasAcknowledgedStandardMovieRenameNotice: Bool
-
     init(
         defaults: UserDefaults = .standard,
         homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -75,9 +72,6 @@ final class AppSettings: ObservableObject {
             legacyKeepStageFiles: defaults.object(forKey: Key.keepIntermediateFiles) as? Bool ?? false
         )
         useSoftwareEncoder = defaults.object(forKey: Key.useSoftwareEncoder) as? Bool ?? false
-        hasAcknowledgedStandardMovieRenameNotice = defaults.bool(
-            forKey: Key.standardMovieRenameNoticeAcknowledged
-        )
     }
 
     func resetAdvancedSettings() {
@@ -90,8 +84,4 @@ final class AppSettings: ObservableObject {
         destinationURL = fallbackDestinationURL
     }
 
-    func acknowledgeStandardMovieRenameNotice() {
-        hasAcknowledgedStandardMovieRenameNotice = true
-        defaults.set(true, forKey: Key.standardMovieRenameNoticeAcknowledged)
-    }
 }

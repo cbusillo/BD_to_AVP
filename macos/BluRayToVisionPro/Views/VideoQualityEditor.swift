@@ -511,9 +511,8 @@ private struct QualitySelectionControl: View {
                     .foregroundStyle(.secondary)
             }
 
-            ViewThatFits(in: .horizontal) {
+            ScrollView(.horizontal, showsIndicators: false) {
                 wideLadder
-                narrowMenu
             }
 
             Button(action: selectCustom) {
@@ -554,7 +553,7 @@ private struct QualitySelectionControl: View {
     }
 
     private var wideLadder: some View {
-        HStack(alignment: .top, spacing: 6) {
+        HStack(alignment: .top, spacing: 5) {
             ForEach(QualityStep.allCases) { step in
                 if availableSteps.contains(step) {
                     Button {
@@ -585,37 +584,6 @@ private struct QualitySelectionControl: View {
             }
         }
         .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private var narrowMenu: some View {
-        Menu {
-            ForEach(QualityStep.allCases) { step in
-                Button {
-                    selectStep(step)
-                } label: {
-                    Text(menuTitle(step))
-                }
-                .disabled(!availableSteps.contains(step))
-            }
-            Divider()
-            Button("Custom", action: selectCustom)
-        } label: {
-            HStack {
-                Text(selectionTitle)
-                    .fontWeight(.medium)
-                Spacer()
-                Text(isCustomSelected ? "Exact settings" : "Guided")
-                    .foregroundStyle(.secondary)
-                Image(systemName: "chevron.up.chevron.down")
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
-        }
-        .menuStyle(.borderlessButton)
-        .accessibilityLabel("Video quality")
-        .accessibilityValue(selectionValue)
     }
 
     private var isCustomSelected: Bool {
@@ -672,9 +640,6 @@ private struct QualitySelectionControl: View {
         return parts.joined(separator: ", ")
     }
 
-    private func menuTitle(_ step: QualityStep) -> String {
-        availableSteps.contains(step) ? step.title : "\(step.title) — Unavailable"
-    }
 }
 
 private struct QualityStepCell: View {
@@ -703,7 +668,7 @@ private struct QualityStepCell: View {
                 .font(.caption2)
                 .foregroundStyle(available ? Color.secondary : Color.secondary.opacity(0.75))
         }
-        .frame(width: 82, height: 84)
+        .frame(width: 72, height: 84)
         .padding(.vertical, 6)
         .background(background, in: RoundedRectangle(cornerRadius: 9))
         .overlay {

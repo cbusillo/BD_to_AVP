@@ -156,6 +156,9 @@ final class ConversionWorkflowTests: XCTestCase {
 
         XCTAssertEqual(Set(identifiers).count, profiles.count)
         XCTAssertFalse(BuiltInProfile.balanced.options.upscaleEnabled)
+        XCTAssertEqual(BuiltInProfile.smallerFile.id, "builtin.smaller-file")
+        XCTAssertEqual(BuiltInProfile.smallerFile.name, "Smaller File")
+        XCTAssertEqual(BuiltInProfile.smallerFile.options.videoQuality.selectedStep, .compact)
         XCTAssertTrue(BuiltInProfile.fourKUpscale.options.upscaleEnabled)
         XCTAssertTrue(BuiltInProfile.fourKUpscale.options.resolutionOverride.isEmpty)
         XCTAssertEqual(BuiltInProfile.originalResolution.options.mvHEVC.generatedMergeQuality, 85)
@@ -202,7 +205,7 @@ final class ConversionWorkflowTests: XCTestCase {
             EncodingOptions(audioHandling: .convertAAC, audioBitrate: 448).compactSummary,
             "Direct MV-HEVC when available · Balanced · Adaptive quality 0.70 · source resolution · Audio: AAC 448 kbps, English only · Subtitles: English + others"
         )
-        XCTAssertTrue(BuiltInProfile.balanced.summary.contains("English audio"))
+        XCTAssertTrue(BuiltInProfile.balanced.summary.contains("automatic audio"))
     }
 
     func testVideoRoutePlanCoversDirectGeneratedAV1AndExistingRoutes() {
@@ -713,7 +716,7 @@ final class ConversionWorkflowTests: XCTestCase {
             XCTAssertEqual(queue.items.count, 2)
             for item in queue.items {
                 let draft = try XCTUnwrap(item.draft)
-                XCTAssertEqual(draft.profile.name, "Standard Movie")
+                XCTAssertEqual(draft.profile.name, "Recommended")
                 XCTAssertEqual(draft.destinationURL, destinationURL)
                 XCTAssertEqual(draft.options.encoding.mvHEVC.generatedMergeQuality, 81)
                 XCTAssertEqual(draft.options.encoding.audioLanguages.mode, .preferredOnly)

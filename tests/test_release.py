@@ -119,6 +119,50 @@ def skip_remote_verification(_evidence: object) -> None:
 
 
 class ReleaseMetadataTests(unittest.TestCase):
+    def write_qualification_contract(
+        self,
+        root: Path,
+        metadata: release.ReleaseMetadata,
+        *,
+        configured_name: str = "candidate-signed-qualification-v1.json",
+        matching_names: tuple[str, ...] = ("candidate-signed-qualification-v1.json",),
+        candidate_overrides: dict[str, object] | None = None,
+    ) -> Path:
+        config_path = root / ".github" / "github.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            json.dumps(
+                {
+                    "releaseOperations": {
+                        "qualificationRecordPath": f"docs/qualification/{configured_name}",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        qualification_directory = root / "docs" / "qualification"
+        qualification_directory.mkdir(parents=True, exist_ok=True)
+        candidate = {
+            "build_version": metadata.build_version,
+            "dmg_name": metadata.dmg_name,
+            "package_version": metadata.package_version,
+            "public_version": metadata.public_version,
+            "release_tag": metadata.release_tag,
+            "workflow": "Prerelease" if metadata.prerelease else "Stable",
+        }
+        candidate.update(candidate_overrides or {})
+        for name in matching_names:
+            (qualification_directory / name).write_text(
+                json.dumps(
+                    {
+                        "candidate": candidate,
+                        "execution_policy": {"release_stage": metadata.channel},
+                    }
+                ),
+                encoding="utf-8",
+            )
+        return config_path
+
     def test_repository_requires_dependabot_compatible_uv(self) -> None:
         with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
             pyproject = tomllib.load(handle)
@@ -158,38 +202,44 @@ class ReleaseMetadataTests(unittest.TestCase):
     def test_repository_is_prepared_for_beta(self) -> None:
         metadata = release.load_release_metadata()
 
-        self.assertEqual(metadata.package_version, "0.3.2b1")
-        self.assertEqual(metadata.public_version, "0.3.2-beta.1")
-        self.assertEqual(metadata.build_version, "163")
-        self.assertEqual(metadata.release_tag, "v0.3.2-beta.1")
-        self.assertEqual(metadata.release_name, "v0.3.2-beta.1")
-        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.2-beta.1.dmg")
+        self.assertEqual(metadata.package_version, "0.3.2b2")
+        self.assertEqual(metadata.public_version, "0.3.2-beta.2")
+        self.assertEqual(metadata.build_version, "164")
+        self.assertEqual(metadata.release_tag, "v0.3.2-beta.2")
+        self.assertEqual(metadata.release_name, "v0.3.2-beta.2")
+        self.assertEqual(metadata.dmg_name, "3D-Blu-ray-to-Vision-Pro-0.3.2-beta.2.dmg")
         self.assertEqual(metadata.channel, "beta")
         self.assertTrue(metadata.prerelease)
-        self.assertTrue(metadata.first_candidate_of_cycle)
+        self.assertFalse(metadata.first_candidate_of_cycle)
         self.assertFalse(metadata.make_latest)
         self.assertFalse(metadata.publish_pypi)
 
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
-        self.assertNotIn("v0.3.2-beta.1", freeze_policy["frozen_release_tags"])
+        self.assertNotIn("v0.3.2-beta.2", freeze_policy["frozen_release_tags"])
 
-        cut_packet = (REPO_ROOT / "docs" / "0.3.2-beta.1-cut-packet.md").read_text(encoding="utf-8")
-        self.assertIn("`0.3.2b1`", cut_packet)
-        self.assertIn("Build `163`", cut_packet)
-        self.assertIn("#584", cut_packet)
+        cut_packet = (REPO_ROOT / "docs" / "0.3.2-beta.2-cut-packet.md").read_text(encoding="utf-8")
+        self.assertIn("`0.3.2b2`", cut_packet)
+        self.assertIn("Build `164`", cut_packet)
+        self.assertIn("#593", cut_packet)
         self.assertIn("Privacy rules version `5`", cut_packet)
-        receipt_exists = (REPO_ROOT / "docs" / "release-evidence" / "v0.3.2-beta.1" / "release-receipt.json").exists()
-        expected_state = "Published and immutable." if receipt_exists else "not yet authorized or published."
-        self.assertIn(expected_state, cut_packet)
+        self.assertIn("Published and immutable.", cut_packet)
         self.assertIn("post-publication", cut_packet)
         self.assertIn("PyPI", cut_packet)
         self.assertIn("Homebrew", cut_packet)
 
-        qualification = json.loads(
-            (REPO_ROOT / "docs" / "qualification" / "stable-signed-qualification-v1.json").read_text(encoding="utf-8")
+        github_config = json.loads((REPO_ROOT / ".github" / "github.json").read_text(encoding="utf-8"))
+        qualification_relative = Path(github_config["releaseOperations"]["qualificationRecordPath"])
+        self.assertEqual(
+            qualification_relative,
+            Path("docs/qualification/v0.3.2-beta.2-signed-qualification-v1.json"),
         )
-        self.assertEqual(qualification["candidate"]["package_version"], "0.3.1")
-        self.assertEqual(qualification["candidate"]["build_version"], "162")
+        self.assertEqual(release.validate_configured_qualification_record(metadata), qualification_relative)
+        qualification = json.loads((REPO_ROOT / qualification_relative).read_text(encoding="utf-8"))
+        self.assertEqual(qualification["candidate"]["package_version"], "0.3.2b2")
+        self.assertEqual(qualification["candidate"]["public_version"], "0.3.2-beta.2")
+        self.assertEqual(qualification["candidate"]["build_version"], "164")
+        self.assertEqual(qualification["candidate"]["release_tag"], "v0.3.2-beta.2")
+        self.assertEqual(qualification["candidate"]["workflow"], "Prerelease")
         self.assertEqual(qualification["candidate"]["worker_protocol_version"], 12)
         self.assertEqual(qualification["candidate"]["mapping_version"], 2)
         self.assertEqual(
@@ -198,8 +248,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         expected_case_ids = {
             "release-workflow-identity",
-            "updater-route-v0.3.0-to-v0.3.1",
-            "native-sparkle-notes-stable",
+            "updater-route-v0.3.1-to-v0.3.2-beta.2",
+            "native-sparkle-notes-beta2",
             "profile-save-action-accessibility",
             "signed-packaged-route-parity",
             "gui-preview-low-local-ample-destination",
@@ -267,27 +317,28 @@ class ReleaseMetadataTests(unittest.TestCase):
             "release_id",
             "appcast_sha256",
         )
-        stable_receipt_path = (
-            REPO_ROOT / "docs" / "release-evidence" / qualification["candidate"]["release_tag"] / "release-receipt.json"
+        receipt_path = (
+            REPO_ROOT / "docs/release-evidence" / qualification["candidate"]["release_tag"] / "release-receipt.json"
         )
-        if stable_receipt_path.exists():
-            stable_receipt = json.loads(stable_receipt_path.read_text(encoding="utf-8"))
-            artifacts_by_kind = {artifact["kind"]: artifact for artifact in stable_receipt["artifacts"]}
-            self.assertEqual(
-                {field: qualification["candidate"][field] for field in candidate_identity_fields},
-                {
-                    "source_git_sha": stable_receipt["source_sha"],
-                    "dmg_sha256": artifacts_by_kind["dmg"]["sha256"],
-                    "signed_app_tree_sha256": stable_receipt["signed_app_tree_sha256"],
-                    "release_run_id": stable_receipt["workflow"]["run_id"],
-                    "release_id": stable_receipt["release"]["id"],
-                    "appcast_sha256": artifacts_by_kind["appcast"]["sha256"],
-                },
-            )
+        if receipt_path.exists():
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            artifacts_by_kind = {artifact["kind"]: artifact for artifact in receipt["artifacts"]}
+            expected_candidate_identity = {
+                "source_git_sha": receipt["source_sha"],
+                "dmg_sha256": artifacts_by_kind["dmg"]["sha256"],
+                "signed_app_tree_sha256": receipt["signed_app_tree_sha256"],
+                "release_run_id": receipt["workflow"]["run_id"],
+                "release_id": receipt["release"]["id"],
+                "appcast_sha256": artifacts_by_kind["appcast"]["sha256"],
+            }
         else:
-            for field in candidate_identity_fields:
-                self.assertIsNone(qualification["candidate"][field])
+            expected_candidate_identity = {field: None for field in candidate_identity_fields}
+        self.assertEqual(
+            {field: qualification["candidate"][field] for field in candidate_identity_fields},
+            expected_candidate_identity,
+        )
         self.assertEqual(qualification["status"], "preregistered_pending_exact_candidate")
+        self.assertEqual(qualification["execution_policy"]["release_stage"], "beta")
         self.assertEqual(
             set(qualification["acceptance"]["blocking_case_ids"]),
             {"sparkle-update-route", "clean-machine-signed-update", "installed-ui-accessibility"},
@@ -328,6 +379,90 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(sparkle_qualification["status"], "passed_exact_signed_artifacts")
         self.assertEqual(sparkle_qualification["candidate"]["to"]["build_version"], "159")
         self.assertEqual(sparkle_qualification["result"], "passed")
+
+    def test_configured_qualification_record_requires_unique_matching_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            pyproject_path, lock_path = make_release_files(root, version="1.2.3b2", build="10")
+            metadata = release.load_release_metadata(pyproject_path, lock_path)
+            config_path = self.write_qualification_contract(root, metadata)
+
+            self.assertEqual(
+                release.validate_configured_qualification_record(metadata, github_config_path=config_path),
+                Path("docs/qualification/candidate-signed-qualification-v1.json"),
+            )
+
+            (root / "docs/qualification/duplicate-signed-qualification-v1.json").write_text(
+                (root / "docs/qualification/candidate-signed-qualification-v1.json").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(release.ReleaseError, "found 2"):
+                release.validate_configured_qualification_record(metadata, github_config_path=config_path)
+
+    def test_configured_qualification_record_rejects_missing_or_stale_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            pyproject_path, lock_path = make_release_files(root, version="1.2.3b2", build="10")
+            metadata = release.load_release_metadata(pyproject_path, lock_path)
+            config_path = self.write_qualification_contract(root, metadata, matching_names=())
+            with self.assertRaisesRegex(release.ReleaseError, "found 0"):
+                release.validate_configured_qualification_record(metadata, github_config_path=config_path)
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            pyproject_path, lock_path = make_release_files(root, version="1.2.3b2", build="10")
+            metadata = release.load_release_metadata(pyproject_path, lock_path)
+            config_path = self.write_qualification_contract(
+                root,
+                metadata,
+                configured_name="stale-signed-qualification-v1.json",
+            )
+            (root / "docs/qualification/stale-signed-qualification-v1.json").write_text(
+                json.dumps(
+                    {
+                        "candidate": {"release_tag": "v1.2.3-beta.1"},
+                        "execution_policy": {"release_stage": "beta"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(release.ReleaseError, "qualificationRecordPath must select"):
+                release.validate_configured_qualification_record(metadata, github_config_path=config_path)
+
+    def test_configured_qualification_record_rejects_candidate_identity_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            pyproject_path, lock_path = make_release_files(root, version="1.2.3b2", build="10")
+            metadata = release.load_release_metadata(pyproject_path, lock_path)
+            config_path = self.write_qualification_contract(
+                root,
+                metadata,
+                candidate_overrides={"build_version": "11"},
+            )
+
+            with self.assertRaisesRegex(release.ReleaseError, "build_version"):
+                release.validate_configured_qualification_record(metadata, github_config_path=config_path)
+
+    def test_release_cut_packet_requires_reconciliation_compatible_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            pyproject_path, lock_path = make_release_files(root, version="1.2.3b2", build="10")
+            metadata = release.load_release_metadata(pyproject_path, lock_path)
+            cut_packet = root / "docs/1.2.3-beta.2-cut-packet.md"
+            cut_packet.parent.mkdir(parents=True, exist_ok=True)
+            cut_packet.write_text(f"> {release.CUT_PACKET_PREPARED}\n", encoding="utf-8")
+
+            self.assertEqual(
+                release.validate_release_cut_packet(metadata, repo_root=root),
+                Path("docs/1.2.3-beta.2-cut-packet.md"),
+            )
+
+            cut_packet.write_text(
+                "> **Prepared for guarded Prerelease dispatch; not yet authorized or published.**\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(release.ReleaseError, "prepared-pending or published"):
+                release.validate_release_cut_packet(metadata, repo_root=root)
 
     def test_rc2_records_immutable_published_identity(self) -> None:
         cut_packet = (REPO_ROOT / "docs" / "0.3.0-rc.2-cut-packet.md").read_text(encoding="utf-8")
@@ -832,6 +967,39 @@ class QualificationUpdateBaseTests(unittest.TestCase):
 
         self.assertEqual(selection.prior_tag, "v1.2.4-beta.1")
         self.assertEqual(selection.sparkle_route, "rc")
+
+    def test_qualification_base_skips_prior_releases_without_checked_receipts(self) -> None:
+        history = [
+            published_release("v1.2.3"),
+            published_release("v1.2.4-beta.1", prerelease=True),
+        ]
+
+        selection = release.select_qualification_update_base(
+            "v1.2.4-beta.2",
+            history,
+            "beta-head",
+            eligible_prior_tags={"v1.2.3"},
+            tag_exists=lambda _tag_name: True,
+            is_ancestor=lambda _tag_name, _head_ref: True,
+        )
+
+        self.assertEqual(selection.prior_tag, "v1.2.3")
+        self.assertEqual(selection.sparkle_route, "beta")
+
+    def test_qualification_base_cli_defaults_to_checked_release_evidence(self) -> None:
+        args = release.build_parser().parse_args(
+            [
+                "qualification-base",
+                "--release-tag",
+                "v1.2.4-beta.2",
+                "--releases-json",
+                "releases.json",
+                "--head-ref",
+                "candidate-head",
+            ]
+        )
+
+        self.assertEqual(args.checked_receipts_root, Path("docs/release-evidence"))
 
     def test_first_prerelease_uses_candidate_route_after_stable(self) -> None:
         selection = release.select_qualification_update_base(

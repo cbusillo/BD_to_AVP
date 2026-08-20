@@ -847,13 +847,21 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertEqual(
             workflow["env"]["RELEASE_QUALIFICATION_POLICY"], "docs/qualification/release-qualification-policy-v1.json"
         )
-        self.assertEqual(
-            workflow["env"]["RELEASE_QUALIFICATION_RECORD"],
-            "docs/qualification/stable-signed-qualification-v1.json",
-        )
+        self.assertNotIn("RELEASE_QUALIFICATION_RECORD", workflow["env"])
         self.assertIn("--candidate-sha", str(qualify_prep))
         self.assertIn("--release-stage", str(qualify_prep))
         self.assertIn("first_candidate_of_cycle", jobs["prepare"]["outputs"])
+        self.assertEqual(
+            jobs["prepare"]["outputs"]["qualification_record"],
+            "${{ steps.metadata.outputs.qualification_record }}",
+        )
+        self.assertEqual(
+            next(step for step in qualify_prep["steps"] if step.get("id") == "qualification")["env"][
+                "RELEASE_QUALIFICATION_RECORD"
+            ],
+            "${{ needs.prepare.outputs.qualification_record }}",
+        )
+        self.assertIn("needs.prepare.outputs.qualification_record", str(qualify_artifact))
         self.assertIn("--first-candidate-of-cycle", str(qualify_prep))
         self.assertIn("GITHUB_SHA", str(qualify_prep))
         self.assertIn("needs.prepare.outputs.channel", str(qualify_prep))
@@ -965,7 +973,7 @@ printf '%s' "$CODESIGN_METADATA"
         )
         self.assertEqual(
             release_operations["qualificationRecordPath"],
-            "docs/qualification/stable-signed-qualification-v1.json",
+            "docs/qualification/v0.3.2-beta.2-signed-qualification-v1.json",
         )
         self.assertEqual(len(release_operations["qualificationReportArtifacts"]), 3)
         self.assertIn(
@@ -1033,6 +1041,7 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("scripts.release_qualification_manifest validate", str(prepare))
         self.assertIn("scripts.signed_artifact_receipt validate", str(prepare))
         self.assertIn("scripts.release qualification-base", str(prepare))
+        self.assertIn("--checked-receipts-root docs/release-evidence", str(prepare))
         self.assertIn("prior_tag", str(prepare))
         self.assertIn("sparkle_route", str(prepare))
         self.assertIn('--prior-tag "${{ steps.signed-ui.outputs.prior_tag }}"', str(prepare))
@@ -1176,6 +1185,8 @@ fi
         steps = qualify["steps"]
         checkout = steps[0]
         upload = steps[-1]
+        by_name = {step["name"]: step for step in steps}
+        diagnostics_upload = by_name["Retain bounded Sparkle installer diagnostics"]
         workflow_text = str(workflow)
 
         self.assertEqual(
@@ -1206,6 +1217,12 @@ fi
         self.assertIn("scripts.signed_artifact_receipt validate", workflow_text)
         self.assertIn("scripts.tier3_clean_machine preflight", workflow_text)
         self.assertIn("scripts.tier3_clean_machine run", workflow_text)
+        self.assertIn("BD_TO_AVP_TIER3_RUNNER_ENVIRONMENT", workflow_text)
+        self.assertIn("runner.environment", workflow_text)
+        self.assertIn("$RUNNER_TEMP/Tier3-BD-to-AVP-Qualification", workflow_text)
+        self.assertNotIn("$HOME/Tier3-BD-to-AVP-Qualification", workflow_text)
+        self.assertEqual(workflow_text.count("--environment-class resettable-vm"), 2)
+        self.assertIn("--diagnostics-output qualification-output/sparkle-install-diagnostics.json", workflow_text)
         self.assertIn("scripts.tier3_receipt", workflow_text)
         self.assertIn("Blocking automated milestone qualification", workflow_text)
         self.assertIn("Qualification manifest", workflow_text)
@@ -1218,6 +1235,16 @@ fi
         self.assertNotRegex(workflow_text, r"\b(git push|git commit|gh release (upload|edit|delete))\b")
         self.assertRegex(upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
         self.assertEqual(upload["with"]["retention-days"], "30")
+        self.assertRegex(diagnostics_upload["uses"], r"^actions/upload-artifact@[0-9a-f]{40}$")
+        self.assertEqual(
+            diagnostics_upload["if"],
+            "${{ failure() && hashFiles('qualification-output/sparkle-install-diagnostics.json') != '' }}",
+        )
+        self.assertEqual(
+            diagnostics_upload["with"]["path"],
+            "qualification-output/sparkle-install-diagnostics.json",
+        )
+        self.assertEqual(diagnostics_upload["with"]["retention-days"], "30")
 
         config = load_github_config()
         self.assertIn("Milestone Qualification", config["importantWorkflows"])

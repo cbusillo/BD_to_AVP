@@ -26,6 +26,7 @@ from scripts.release_receipt import ReleaseReceiptError, load_validated_checked_
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GITHUB_CONFIG_PATH = Path(".github/github.json")
 EVIDENCE_INDEX_PATH = "docs/qualification/release-evidence-v1.json"
+RELEASE_LEDGER_PATH = "docs/release-evidence/index-v1.json"
 RUNNER_BOUND_QUALIFICATION_PATHS = {
     "docs/qualification/release-qualification-policy-v1.json",
     "docs/qualification/video-quality-route-table-v2.json",
@@ -152,13 +153,29 @@ def _validate_prepublication_candidate_transition(
     repo_root: Path,
     *,
     base_sha: str,
-    qualification_relative: str,
     candidate: Mapping[str, Any],
 ) -> None:
+    base_config = _load_json_at_revision(
+        repo_root,
+        base_sha,
+        GITHUB_CONFIG_PATH.as_posix(),
+        "base GitHub repository config",
+    )
+    base_operations = _mapping(base_config.get("releaseOperations"), "base releaseOperations")
+    base_qualification_value = base_operations.get("qualificationRecordPath")
+    if not isinstance(base_qualification_value, str) or not base_qualification_value:
+        raise ReleaseMilestoneContextError("Base qualificationRecordPath must be a repository-relative path.")
+    base_qualification_relative = Path(base_qualification_value)
+    if (
+        base_qualification_relative.is_absolute()
+        or ".." in base_qualification_relative.parts
+        or base_qualification_value.startswith("./")
+    ):
+        raise ReleaseMilestoneContextError("Base qualificationRecordPath must be canonical.")
     base_qualification = _load_json_at_revision(
         repo_root,
         base_sha,
-        qualification_relative,
+        base_qualification_relative.as_posix(),
         "base qualification record",
     )
     base_candidate = _mapping(base_qualification.get("candidate"), "base qualification candidate")
@@ -173,9 +190,9 @@ def _validate_prepublication_candidate_transition(
         next_build = parse_build_version(cast(str, candidate.get("build_version")))
     except (ReleaseError, TypeError) as error:
         raise ReleaseMilestoneContextError(f"Prepublication qualification identity is invalid: {error}") from error
-    if next_version.stage != "stable" or next_version.order_key <= base_version.order_key or next_build <= base_build:
+    if next_version.order_key <= base_version.order_key or next_build <= base_build:
         raise ReleaseMilestoneContextError(
-            "Prepublication qualification must advance to a newer Stable version and global build."
+            "Prepublication qualification must advance to a newer Stable or prerelease version and global build."
         )
     expected_identity = {
         "package_version": next_version.text,
@@ -183,7 +200,7 @@ def _validate_prepublication_candidate_transition(
         "build_version": str(next_build),
         "release_tag": next_version.release_tag,
         "dmg_name": f"3D-Blu-ray-to-Vision-Pro-{next_version.public_version}.dmg",
-        "workflow": "Stable",
+        "workflow": "Prerelease" if next_version.prerelease else "Stable",
     }
     for field, expected in expected_identity.items():
         if candidate.get(field) != expected:
@@ -367,12 +384,93 @@ def _validate_release_evidence_tag_scope(changed_paths: Sequence[str], release_t
         for path in changed_paths
         if path.startswith("docs/release-evidence/")
         and not path.startswith(expected_prefix)
+        and path != RELEASE_LEDGER_PATH
         and not _is_recovery_authorization_path(path)
     )
     if unrelated_paths:
         raise ReleaseMilestoneContextError(
             "Release evidence pull requests may change only one release tag: "
             f"expected {release_tag!r}, unrelated={unrelated_paths!r}."
+        )
+
+
+def _validate_append_only_release_ledger(repo_root: Path, *, base_sha: str, release_tag: str) -> None:
+    base_ledger = _load_json_at_revision(repo_root, base_sha, RELEASE_LEDGER_PATH, "base release evidence ledger")
+    head_ledger = _load_json(repo_root / RELEASE_LEDGER_PATH, "release evidence ledger")
+    if base_ledger.get("schema_version") != 1 or head_ledger.get("schema_version") != 1:
+        raise ReleaseMilestoneContextError("Release evidence ledger schema_version must remain 1.")
+    if {key: value for key, value in base_ledger.items() if key != "releases"} != {
+        key: value for key, value in head_ledger.items() if key != "releases"
+    }:
+        raise ReleaseMilestoneContextError("Release evidence ledger metadata may not change.")
+
+    def records_by_tag(ledger: Mapping[str, Any], description: str) -> dict[str, Mapping[str, Any]]:
+        records: dict[str, Mapping[str, Any]] = {}
+        raw_records = _sequence(ledger.get("releases"), f"{description} releases")
+        tags: list[str] = []
+        for index, raw_record in enumerate(raw_records):
+            record = _mapping(raw_record, f"{description} release {index}")
+            tag = _string(record.get("tag"), f"{description} release tag")
+            if tag in records:
+                raise ReleaseMilestoneContextError(f"{description.capitalize()} may not contain duplicate tags.")
+            records[tag] = record
+            tags.append(tag)
+        if tags != sorted(tags):
+            raise ReleaseMilestoneContextError(f"{description.capitalize()} releases must remain sorted by tag.")
+        return records
+
+    base_records = records_by_tag(base_ledger, "base release evidence ledger")
+    head_records = records_by_tag(head_ledger, "release evidence ledger")
+    if any(head_records.get(tag) != record for tag, record in base_records.items()):
+        raise ReleaseMilestoneContextError(
+            "Release evidence ledger may only append a release without changing accepted history."
+        )
+    added_tags = set(head_records) - set(base_records)
+    if added_tags != {release_tag}:
+        raise ReleaseMilestoneContextError(
+            "Release evidence ledger must append exactly the pull request release tag: "
+            f"expected {release_tag!r}, added={sorted(added_tags)!r}."
+        )
+    receipt_relative = f"docs/release-evidence/{release_tag}/release-receipt.json"
+    publication_relative = f"docs/release-evidence/{release_tag}/publication-record.json"
+    try:
+        receipt, receipt_file_sha256 = load_validated_checked_receipt(repo_root / receipt_relative)
+    except ReleaseReceiptError as error:
+        raise ReleaseMilestoneContextError(f"Release evidence ledger receipt is invalid: {error}") from error
+    release = _mapping(receipt.get("release"), "release evidence ledger receipt release")
+    workflow = _mapping(receipt.get("workflow"), "release evidence ledger receipt workflow")
+    publication = _load_json(repo_root / publication_relative, "release evidence ledger publication record")
+    expected_publication = {
+        "receipt_file_sha256": receipt_file_sha256,
+        "release_id": release.get("id"),
+        "release_tag": release_tag,
+        "source_sha": receipt.get("source_sha"),
+        "workflow_run_id": workflow.get("run_id"),
+    }
+    for field, expected in expected_publication.items():
+        if publication.get(field) != expected:
+            raise ReleaseMilestoneContextError(
+                f"Release evidence ledger publication record {field} must match the checked release receipt."
+            )
+    if effective_successful_workflow_run_id(publication) is None:
+        raise ReleaseMilestoneContextError(
+            "Release evidence ledger publication record must identify a successful publication workflow."
+        )
+    expected_record: dict[str, Any] = {
+        "publication_record": publication_relative,
+        "published_at": _string(publication.get("published_at"), "release publication timestamp"),
+        "receipt": receipt_relative,
+        "receipt_file_sha256": receipt_file_sha256,
+        "release_id": release.get("id"),
+        "source_sha": receipt.get("source_sha"),
+        "tag": release_tag,
+        "workflow_run_id": workflow.get("run_id"),
+    }
+    if "recovery_workflow_run" in publication:
+        expected_record["recovery_workflow_run"] = publication["recovery_workflow_run"]
+    if head_records[release_tag] != expected_record:
+        raise ReleaseMilestoneContextError(
+            "Release evidence ledger record must match the checked release receipt and publication record."
         )
 
 
@@ -383,6 +481,20 @@ def _repository_path(repo_root: Path, value: object, description: str) -> tuple[
     if relative.is_absolute() or ".." in relative.parts or value.startswith("./"):
         raise ReleaseMilestoneContextError(f"{description} must be a canonical repository-relative path.")
     return repo_root / relative, relative.as_posix()
+
+
+def _qualification_path_for_release(repo_root: Path, release_tag: str) -> tuple[Path, str]:
+    matches: list[Path] = []
+    for path in sorted((repo_root / "docs" / "qualification").glob("*-signed-qualification-v1.json")):
+        qualification = _load_json(path, "signed qualification record")
+        candidate = qualification.get("candidate")
+        if isinstance(candidate, Mapping) and candidate.get("release_tag") == release_tag:
+            matches.append(path)
+    if len(matches) != 1:
+        raise ReleaseMilestoneContextError(
+            f"Expected exactly one signed qualification record for {release_tag}; found {len(matches)}."
+        )
+    return matches[0], matches[0].relative_to(repo_root).as_posix()
 
 
 def _require_tracked_path(repo_root: Path, relative_path: str, description: str) -> None:
@@ -482,7 +594,6 @@ def discover_milestone_receipt(
             _validate_prepublication_candidate_transition(
                 repo_root,
                 base_sha=base_sha,
-                qualification_relative=qualification_relative,
                 candidate=candidate,
             )
             unbound_candidate = True
@@ -524,6 +635,8 @@ def discover_milestone_receipt(
         )
     if evidence_index_mutation:
         _validate_append_only_evidence_index(repo_root, base_sha=base_sha)
+    if RELEASE_LEDGER_PATH in changed_paths:
+        _validate_append_only_release_ledger(repo_root, base_sha=base_sha, release_tag=release_tag)
     return repo_root / receipt_relative
 
 
@@ -587,6 +700,8 @@ def discover_milestone_manifest(
         )
     if EVIDENCE_INDEX_PATH in changed_paths:
         _validate_append_only_evidence_index(repo_root, base_sha=base_sha)
+    if RELEASE_LEDGER_PATH in changed_paths:
+        _validate_append_only_release_ledger(repo_root, base_sha=base_sha, release_tag=release_tag)
     return repo_root / manifest_relative
 
 
@@ -675,11 +790,7 @@ def resolve_milestone_context(repo_root: Path, receipt_path: Path) -> ReleaseMil
         operations.get("qualificationEvidencePath"),
         "qualificationEvidencePath",
     )
-    qualification_path, qualification_relative = _repository_path(
-        repo_root,
-        operations.get("qualificationRecordPath"),
-        "qualificationRecordPath",
-    )
+    qualification_path, qualification_relative = _qualification_path_for_release(repo_root, release_tag)
     for path, description in (
         (policy_path, "qualification policy"),
         (evidence_path, "qualification evidence"),

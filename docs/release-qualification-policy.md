@@ -147,13 +147,18 @@ satisfy a blocking assertion. Blocking cases reject failed or skipped index
 entries. Only a passed receipt may be indexed as accepted release evidence.
 
 The maintained clean-machine, Sparkle, and installed UI/accessibility collector is documented in
-[`docs/tier3-clean-machine.md`](tier3-clean-machine.md). It uses an isolated
-synthetic home in a runner-owned disposable location, reuses the installed-app
-package smoke, revalidates the exact prior signed app immediately before an
-identifier-scoped bounded updater state machine, permits one clean retry only
-for classified pre-press environmental startup failures, verifies the final
-candidate identity, and emits checked `clean-machine-signed-update` and
-`installed-ui-accessibility` receipts.
+[`docs/tier3-clean-machine.md`](tier3-clean-machine.md). Its local
+`restorable-location` lane uses an isolated synthetic home in a runner-owned
+location. Its GitHub-hosted `resettable-vm` lane uses the runner's real home and
+normal `/Applications`, with strict hosted-runner, clean-state, exact-bundle
+cleanup, and bounded diagnostic guards. Both reuse the installed-app package
+smoke, revalidate the exact prior signed app immediately before an
+identifier-scoped bounded updater state machine, permit one clean retry only
+for classified pre-press environmental startup failures or a guarded state
+change before any action is pressed, detects exact candidate relaunches and
+application-process turnover between UI polls, verifies the final candidate
+identity, and emits checked
+`clean-machine-signed-update` and `installed-ui-accessibility` receipts.
 
 Physical drive, protected-media conversion, and Vision Pro playback evidence
 uses the guided collector and bounded receipt builder documented in

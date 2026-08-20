@@ -23,6 +23,7 @@ struct ContentView: View {
     @State private var isShowingSetupEditor = false
     @State private var newProfileName = ""
     @State private var profileErrorMessage: String?
+    @State private var queueAdmissionNoticeMessage: String?
     @State private var preserveEncodingOnNextProfileChange = false
     @State private var isShowingPreview = false
     @State private var pendingReviewedPreview: PreviewDraft?
@@ -97,9 +98,6 @@ struct ContentView: View {
                 .padding(.vertical, 10)
         }
 
-        if !settings.hasAcknowledgedStandardMovieRenameNotice {
-            StandardMovieRenameNoticeView(settings: settings)
-        }
     }
 
     @ViewBuilder
@@ -318,6 +316,17 @@ struct ContentView: View {
         } message: {
             Text(profileErrorMessage ?? "The profile could not be saved.")
         }
+        .alert(
+            "Already in Queue",
+            isPresented: Binding(
+                get: { queueAdmissionNoticeMessage != nil },
+                set: { if !$0 { queueAdmissionNoticeMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(queueAdmissionNoticeMessage ?? "This movie is already in the queue.")
+        }
     }
 
     @ViewBuilder
@@ -415,7 +424,7 @@ struct ContentView: View {
             Divider()
             Button("Open Disc Image…") { chooseFile(.discImage) }
             Button("Open Blu-ray Folder…") { chooseFolder(.bluRayFolder) }
-            Button("Open Source Folder…") { chooseFolder(.sourceFolder) }
+            Button("Add Folder of Movies…") { chooseFolder(.sourceFolder) }
             Button("Open 3D MKV…") { chooseFile(.matroska) }
 
             Divider()
@@ -544,7 +553,7 @@ struct ContentView: View {
             addToQueue: addCurrentDraftsToQueue,
             start: startReadyConversion,
             canPreview: previewCanStart,
-            canAddToQueue: !conversionDrafts.isEmpty && !viewModel.hasActiveWork,
+            canAddToQueue: setupQueue.canAdd(drafts: conversionDrafts) && !viewModel.hasActiveWork,
             canStart: setupQueue.hasItems
                 ? setupQueue.canStart && !viewModel.hasActiveWork
                 : conversionCanStart,
@@ -1176,7 +1185,24 @@ struct ContentView: View {
 
     private func addCurrentDraftsToQueue() {
         guard !conversionDrafts.isEmpty else { return }
-        setupQueue.add(drafts: conversionDrafts)
+        let result = setupQueue.add(drafts: conversionDrafts)
+        queueAdmissionNoticeMessage = queueAdmissionMessage(for: result)
+    }
+
+    private func queueAdmissionMessage(for result: SetupQueueAddResult) -> String? {
+        guard result.duplicateCount > 0 else { return nil }
+
+        let skippedMessage: String
+        if result.duplicateCount == 1 {
+            let name = result.duplicateDisplayNames[0]
+            skippedMessage = "\(name) is already in the queue, so it wasn’t added again."
+        } else {
+            skippedMessage = "\(result.duplicateCount) movies are already in the queue, so they weren’t added again."
+        }
+
+        guard result.addedCount > 0 else { return skippedMessage }
+        let noun = result.addedCount == 1 ? "movie was" : "movies were"
+        return "\(skippedMessage) \(result.addedCount) other \(noun) added."
     }
 
     private func startAdmittedQueue() {

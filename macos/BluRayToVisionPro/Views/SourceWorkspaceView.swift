@@ -127,23 +127,32 @@ struct SourceWorkspaceView: View {
 
                 Divider()
 
-                Text("Other Sources")
+                Text("Add a Source")
                     .font(.headline)
 
                 VStack(spacing: 8) {
                     HStack(spacing: 8) {
-                        sourceButton("Open Disc Image…", systemImage: "opticaldiscdrive", action: openDiscImage)
-                        sourceButton("Open Blu-ray Folder…", systemImage: "folder.badge.gearshape", action: openBluRayFolder)
+                        sourceButton("Disc Image…", systemImage: "opticaldiscdrive", action: openDiscImage)
+                        sourceButton("Blu-ray Folder…", systemImage: "folder.badge.gearshape", action: openBluRayFolder)
                     }
                     HStack(spacing: 8) {
-                        sourceButton("Open 3D MKV…", systemImage: "film.stack", action: openMKV)
-                        sourceButton("Open Source Folder…", systemImage: "folder", action: openSourceFolder)
+                        sourceButton("3D MKV…", systemImage: "film.stack", action: openMKV)
+                        sourceButton("MTS or M2TS…", systemImage: "film", action: importTransportStream)
                     }
                 }
 
-                Button("Import MTS or M2TS transport stream…", action: importTransportStream)
-                    .buttonStyle(.link)
-                    .font(.callout)
+                Divider()
+
+                Text("Folder of Movies")
+                    .font(.headline)
+
+                sourceButton("Add Folder of Movies…", systemImage: "folder.badge.plus", action: openSourceFolder)
+                    .controlSize(.large)
+
+                Text("Adds every supported ISO, MKV, MTS, and M2TS movie in the folder to the conversion queue.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(4)
         } label: {

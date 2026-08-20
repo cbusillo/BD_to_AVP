@@ -66,27 +66,38 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         let mainContent = lightApp.descendants(matching: .any)["main-window-content"]
         XCTAssertTrue(mainContent.waitForExistence(timeout: 30))
 
+        let editAction = lightApp.buttons["edit-conversion-settings"]
+        XCTAssertTrue(editAction.waitForExistence(timeout: 20))
+        XCTAssertTrue(editAction.isEnabled)
+        editAction.click()
+
         let saveAction = lightApp.buttons["save-profile-action"]
         XCTAssertTrue(saveAction.waitForExistence(timeout: 20))
         XCTAssertEqual(saveAction.elementType, .button)
         XCTAssertEqual(saveAction.label, "Save current settings as new profile")
         XCTAssertTrue(saveAction.isEnabled)
 
+        let profileSummaryBefore = try readProfileSummary(syntheticHome: context.syntheticHome)
+        XCTAssertEqual(profileSummaryBefore.version, 6)
         saveAction.click()
-        let nameField = lightApp.textFields["save-profile-name-field"]
+        let nameField = lightApp.textFields["setup-editor-new-profile-name"]
         XCTAssertTrue(nameField.waitForExistence(timeout: 20))
         nameField.click()
         nameField.typeKey("a", modifierFlags: .command)
         nameField.typeText(Self.profileName)
-        let confirmButton = lightApp.buttons["save-profile-confirm"]
+        let confirmButton = lightApp.buttons["Save"].firstMatch
+        XCTAssertTrue(confirmButton.waitForExistence(timeout: 20))
         XCTAssertTrue(confirmButton.isEnabled)
         confirmButton.click()
         XCTAssertTrue(waitUntil(timeout: 20) { !nameField.exists })
 
         let profileSummary = try readProfileSummary(syntheticHome: context.syntheticHome)
         XCTAssertEqual(profileSummary.version, 6)
-        XCTAssertEqual(profileSummary.count, 1)
-        XCTAssertEqual(profileSummary.name, Self.profileName)
+        XCTAssertEqual(profileSummary.count, profileSummaryBefore.count + 1)
+        XCTAssertEqual(profileSummary.names.filter { $0 == Self.profileName }.count, 1)
+        for existingName in profileSummaryBefore.names {
+            XCTAssertTrue(profileSummary.names.contains(existingName))
+        }
 
         let lightWindow = lightApp.windows.firstMatch
         XCTAssertTrue(lightWindow.exists)
@@ -112,6 +123,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
                 "profile_save_accessible": true,
                 "profile_save_succeeded": true,
                 "profiles_after": profileSummary.count,
+                "profiles_before": profileSummaryBefore.count,
                 "release_page_url": context.releasesURL,
                 "release_page_url_observed": true,
                 "schema_version": 1,
@@ -356,7 +368,7 @@ private enum QualificationError: LocalizedError {
 
 private struct ProfileSummary {
     let count: Int
-    let name: String
+    let names: [String]
     let version: Int
 }
 
@@ -367,11 +379,13 @@ private func readProfileSummary(syntheticHome: URL) throws -> ProfileSummary {
     let data = try Data(contentsOf: profileURL)
     guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
           let version = root["version"] as? Int,
-          let profiles = root["profiles"] as? [[String: Any]],
-          let first = profiles.first,
-          let name = first["name"] as? String
+          let profiles = root["profiles"] as? [[String: Any]]
     else {
         throw QualificationError.missingProfileDocument
     }
-    return ProfileSummary(count: profiles.count, name: name, version: version)
+    let names = profiles.compactMap { $0["name"] as? String }
+    guard names.count == profiles.count else {
+        throw QualificationError.missingProfileDocument
+    }
+    return ProfileSummary(count: profiles.count, names: names, version: version)
 }

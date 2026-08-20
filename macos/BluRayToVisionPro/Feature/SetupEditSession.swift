@@ -1,29 +1,5 @@
 import SwiftUI
 
-struct StandardMovieRenameNoticeView: View {
-    @ObservedObject var settings: AppSettings
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Label(StandardMovieRenameNotice.message, systemImage: "info.circle")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
-            Button("Got it") {
-                settings.acknowledgeStandardMovieRenameNotice()
-            }
-            .buttonStyle(.borderless)
-            .accessibilityIdentifier("standard-movie-rename-notice-dismiss")
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.quaternary.opacity(0.45))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("standard-movie-rename-notice")
-    }
-}
-
 struct SetupEditSheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -73,13 +49,6 @@ struct SetupEditSheet: View {
         profiles.first(where: { $0.id == session.profileID }) ?? initialProfile
     }
 
-    private var nameBinding: Binding<String> {
-        Binding(
-            get: { session.profileName },
-            set: { session.updateName($0) }
-        )
-    }
-
     private var optionsBinding: Binding<ConversionOptions> {
         Binding(
             get: { session.draftOptions },
@@ -96,42 +65,6 @@ struct SetupEditSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Edit Conversion Settings")
-                            .font(.title2.weight(.semibold))
-                        Text("Based on \(selectedProfile.name)")
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if session.isDirty {
-                        Text("Unsaved changes")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Text(ProfilePersistenceCopy.summary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if selectedProfile.isCustom {
-                    TextField("Profile name", text: nameBinding)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityIdentifier("edit-profile-name-field")
-                } else {
-                    Label("\(selectedProfile.name) is built in and read-only. Use Save as New Profile… to keep changes as a custom Profile.", systemImage: "lock")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 18)
-            .padding(.bottom, 12)
-
             ConversionSetupView(
                 selectedProfileID: selectedProfileBinding,
                 selectedTab: $selectedTab,
@@ -178,7 +111,7 @@ struct SetupEditSheet: View {
             }
             .padding(16)
         }
-        .frame(minWidth: 640, idealWidth: 720, minHeight: 620, idealHeight: 760)
+        .frame(minWidth: 820, idealWidth: 920, minHeight: 680, idealHeight: 800)
         .onExitCommand(perform: requestDismissal)
         .alert(
             "Discard Unsaved Changes?",

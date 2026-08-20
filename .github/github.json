@@ -80,7 +80,7 @@
     "qualificationStatusCommand": "uv run python -m scripts.release_qualification_controller status --release-tag <tag>",
     "qualificationResumeCommand": "uv run python -m scripts.release_qualification_controller resume --release-tag <tag>",
     "qualificationCollectOperatorCommand": "uv run python -m scripts.release_qualification_controller collect-operator --release-tag <tag> --case-id <case-id> --environment-class <class> --output-answers <path>",
-    "qualificationRecordPath": "docs/qualification/stable-signed-qualification-v1.json",
+    "qualificationRecordPath": "docs/qualification/v0.3.2-beta.2-signed-qualification-v1.json",
     "qualificationReportArtifacts": [
       "release-qualification-preparation-<run-attempt>",
       "release-qualification-final-<run-attempt>",

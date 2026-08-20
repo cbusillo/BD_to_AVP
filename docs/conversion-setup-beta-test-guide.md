@@ -2,10 +2,11 @@
 
 ## Purpose
 
-This Beta is a focused test of the repetition-first Conversion Setup experience.
-It asks whether the selected Profile is obvious, repeated conversions feel like
-one action, conflicts are understandable, and settings never appear to change
-without consent. It is not a test of the future first-class persistent queue.
+This Beta is a focused test of the source-first Conversion Setup experience. It
+asks whether adding one movie or a folder is obvious, the selected Result makes
+sense, Advanced Settings remain understandable, and the same movie cannot be
+queued accidentally more than once. It is not a test of the future first-class
+persistent queue.
 
 Recruit three to five testers when possible:
 
@@ -43,34 +44,40 @@ Recruit three to five testers when possible:
 ### 1. First Conversion
 
 1. Choose a supported source.
-2. Confirm the Ready view clearly identifies the source, selected Profile,
-   destination, and expected result.
-3. Change the destination once, then restore the intended destination.
-4. Run Preview if practical.
-5. Start one short conversion and confirm the finished movie is created.
+2. Confirm the setup clearly identifies the source, selected Result,
+   destination, and expected outcome.
+3. Open the Result menu and confirm `Recommended`, `Smaller File`,
+   `Higher Quality`, and `4K Upscale` are understandable choices.
+4. Change the destination once, then restore the intended destination.
+5. Run Preview if practical.
+6. Start one short conversion and confirm the finished movie is created.
 
 Record whether the primary action was obvious and whether any technical wording
 required explanation.
 
 ### 2. Repeated Conversion
 
-1. Choose a second source that should use the same unchanged Profile.
-2. Confirm the app returns to a calm Ready state without requiring every option
+1. Choose a second source that should use the same unchanged Result.
+2. Confirm the app returns to a calm setup state without requiring every option
    to be reviewed again.
 3. Start the conversion without opening the editor.
 
 Record whether the repeated run felt like one action and whether the retained
-Profile choice was expected.
+Result choice was expected.
 
-### 3. Transactional Editing
+### 3. Advanced Settings
 
-1. Open **Edit…**, change at least one setting, then Cancel or press Escape.
-2. Confirm the Ready summary returns to its original state.
-3. Open **Edit…** again, make a change, and apply it only to the current
+1. Open **Advanced Settings…**, change at least one setting, then Cancel or
+   press Escape.
+2. Confirm the main setup summary returns to its original state.
+3. Open **Advanced Settings…** again, make a change, and apply it only to the current
    conversion.
-4. Confirm the Ready view identifies the conversion as customized.
+4. Confirm the main setup identifies the conversion as customized.
 5. If using a custom Profile, test **Update Profile**. Otherwise test
    **Save as New Profile…**.
+6. On Video, confirm all seven quality choices from **Space Saver** through
+   **Maximum Detail** remain visible and that **Smaller File** starts on
+   **Compact**.
 
 Record whether Cancel, Apply, Update, and Save as New matched their labels and
 whether any change appeared to escape the editor unexpectedly.
@@ -84,8 +91,11 @@ whether any change appeared to escape the editor unexpectedly.
 3. Resolve the conflict and optionally enable the suggestion for the selected
    Profile.
 4. Exercise **Forget suggestion**, then repeat the conflict once if practical.
-5. Use **Add to Queue for Review**, confirm the queued source retains its
-   resolved result, and start the queue.
+5. Use **Add to Queue**, confirm the queued source retains its resolved result,
+   and confirm **Add to Queue** becomes unavailable for the same source/title.
+6. Attempt to add the same source/title again if practical and confirm the queue
+   remains at one item. Different titles from the same disc should remain valid.
+7. Start the queue.
 
 Record whether the consequence of each choice was clear and whether the queue
 made it obvious which item needed attention.
@@ -113,10 +123,10 @@ companion planned separately.
 
 Every tester should answer these four questions:
 
-1. Was the selected Profile obvious before starting?
+1. Was the selected Result obvious before starting?
 2. Did the repeated run feel like one action?
 3. Was the conflict understandable without technical help?
-4. Did any setting appear to change without consent?
+4. Could the same movie be queued accidentally more than once?
 
 Also include the app version, macOS version, source kind, and whether the test
 used a built-in or custom Profile. Do not include the source title or full path.
