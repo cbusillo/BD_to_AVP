@@ -515,6 +515,26 @@
       "source_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19",
       "status": "accepted",
       "workflow_conclusion": "success"
+    },
+    {
+      "accepted_at": "2026-08-20T21:38:16Z",
+      "case_id": "clean-machine-signed-update",
+      "receipt_id": "v0.3.2-beta.2:clean-machine-signed-update:32420026539",
+      "reference": "docs/qualification/v0.3.2-beta.2-clean-machine-signed-update-v1.json",
+      "sha256": "f881a94b400fc438a46bb4214f2f6bec4d626a7d7955c506996704fec6604810",
+      "source": "tier3_automation_receipt",
+      "source_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-20T21:38:16Z",
+      "case_id": "installed-ui-accessibility",
+      "receipt_id": "v0.3.2-beta.2:installed-ui-accessibility:32420026539",
+      "reference": "docs/qualification/v0.3.2-beta.2-installed-ui-accessibility-v1.json",
+      "sha256": "0ab883dfa0a7899cf55b6bd4590b6a7c18758811e377dbbc52e1d34c00ae5ba9",
+      "source": "tier3_automation_receipt",
+      "source_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19",
+      "status": "accepted"
     }
   ],
   "schema_version": 1
