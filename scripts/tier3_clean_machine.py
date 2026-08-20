@@ -1587,6 +1587,7 @@ def _perform_sparkle_update(
     last_recorded_state: SparkleUpdateState | None = None
     saw_owned_window = False
     staged_pressed = False
+    staged_quit_requested = False
     action_count = 0
     last_pressed: UpdateObservation | None = None
     intent_checkpoint_sha256 = ""
@@ -1672,6 +1673,16 @@ def _perform_sparkle_update(
             current_process_id = operations.app_process_id(app_path)
             if staged_pressed and (current_process_id is None or staged_candidate_replacement_detected()):
                 return staged_interaction()
+            if (
+                staged_pressed
+                and not staged_quit_requested
+                and current_process_id == prior_process_id
+                and not exact_candidate_installed()
+            ):
+                journal_sha256 = record_transition("staged-quit", observation)
+                operations.quit_app()
+                staged_quit_requested = True
+                continue
             if saw_owned_window and action_count == 0:
                 cancelled = UpdateObservation(
                     state=SparkleUpdateState.CANCELLED,
@@ -1816,7 +1827,8 @@ def _perform_sparkle_update(
     raise SparkleUpdateFailure(
         "Sparkle updater did not reach a bounded install state before timeout "
         f"(last_state={(last_recorded_state or SparkleUpdateState.WAITING_FOR_WINDOW).value}, "
-        f"staged_pressed={str(staged_pressed).lower()}, action_count={action_count}, "
+        f"staged_pressed={str(staged_pressed).lower()}, staged_quit_requested={str(staged_quit_requested).lower()}, "
+        f"action_count={action_count}, "
         f"process_relation={process_relation}, candidate_exact={str(exact_candidate_installed()).lower()}, "
         f"states_observed={','.join(states_observed)}).",
         reason_code="update-window-timeout",
@@ -2207,7 +2219,9 @@ def _run_qualification(
             attempt=attempt,
             retry_reason_code=retry_reason_code,
         )
-        if interaction.outcome == SparkleUpdateOutcome.INSTALL_ON_QUIT:
+        if interaction.outcome == SparkleUpdateOutcome.INSTALL_ON_QUIT or (
+            interaction.outcome == SparkleUpdateOutcome.STAGED and not operations.app_running(app_path)
+        ):
             operations.quit_app()
             _wait_for_candidate_on_disk(app_path, candidate)
             operations.launch_app(app_path, synthetic_home)
