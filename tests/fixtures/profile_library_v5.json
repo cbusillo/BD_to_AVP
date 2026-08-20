@@ -1,0 +1,71 @@
+{
+  "profiles": [
+    {
+      "id": "A4CC523E-72FA-4F36-A38D-1FB0D6A84742",
+      "jobDefaults": {
+        "continueOnError": true,
+        "intermediatePolicy": "reusable",
+        "outputCommands": true,
+        "overwriteExisting": true,
+        "removeOriginalAfterSuccess": true,
+        "softwareEncoder": true,
+        "startStage": 2
+      },
+      "name": "Qualification Sentinel",
+      "options": {
+        "audioBitrate": 384,
+        "audioHandling": "automatic",
+        "audioLanguages": {
+          "mode": "preferred_only",
+          "preferredLanguage": "eng"
+        },
+        "av1CRF": 32,
+        "cropBlackBars": false,
+        "fieldOfView": 90,
+        "frameRateOverride": "",
+        "hevcQuality": 75,
+        "leftRightBitrate": 20,
+        "linkQuality": true,
+        "mvHEVC": {
+          "directFinalBitrate": {
+            "customMbps": 40,
+            "mode": "automatic"
+          },
+          "generatedEyeBitrate": {
+            "customMbps": 20,
+            "mode": "automatic"
+          },
+          "generatedMergeQuality": 75,
+          "linkGeneratedAndUpscaleQuality": true
+        },
+        "resolutionOverride": "",
+        "subtitles": {
+          "mode": "preferred_plus_others",
+          "preferredLanguage": "eng"
+        },
+        "swapEyes": false,
+        "upscaleEnabled": false,
+        "upscaleQuality": 75,
+        "videoOutputMode": "mv_hevc",
+        "videoQuality": {
+          "custom": {
+            "av1CRF": 32,
+            "directFinalBitrate": {
+              "customMbps": 40,
+              "mode": "automatic"
+            },
+            "generatedEyeBitrate": {
+              "customMbps": 20,
+              "mode": "automatic"
+            },
+            "generatedMergeQuality": 75,
+            "upscaleQuality": 75
+          },
+          "lastLadderStep": "balanced",
+          "mode": "ladder"
+        }
+      }
+    }
+  ],
+  "version": 5
+}

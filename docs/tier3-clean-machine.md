@@ -152,8 +152,11 @@ The runner performs this bounded sequence:
    candidate. The harness never quits the app merely because the initial alert
    disappeared.
 6. Verify the final candidate bundle, build, signed app tree, and replacement
-   running process, then verify the selected route, unrelated preference, and
-   byte-for-byte profile library are preserved.
+   running process, then verify the selected route and unrelated preference are
+   preserved and the seeded profile library matches the exact expected
+   semantic migration from schema version 5 to version 6. The migration must
+   preserve profile identity, encoding options, and safe pipeline defaults while
+   removing legacy per-run defaults that version 6 intentionally no longer stores.
 7. Run the candidate installed-app XCUITest lane. It verifies main-window
    readiness, profile-save accessibility and success, updater settings, the
    public releases link, and cropped light/dark app-window screenshots.
