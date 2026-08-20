@@ -1,0 +1,16 @@
+{
+  "live_pages": {
+    "sha256": "d9e589452cbcc0147170dcdfa0cfdc520b761075ccde929fec64dee82c528073",
+    "state": "verified",
+    "url": "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
+  },
+  "published_at": "2026-08-19T17:04:11Z",
+  "receipt_asset_id": 521108665,
+  "receipt_file_sha256": "f88259e5f82f5885f087adf1a284f47bda97741e99ad982ccbcd758efe829f19",
+  "release_id": 373212973,
+  "release_tag": "v0.3.2-beta.2",
+  "schema_version": 1,
+  "source_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19",
+  "workflow_conclusion": "success",
+  "workflow_run_id": 32277548249
+}
