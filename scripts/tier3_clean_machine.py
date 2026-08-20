@@ -2255,6 +2255,7 @@ def normalize_installed_ui_candidate_evidence(
             "profile_save_accessible",
             "profile_save_succeeded",
             "profiles_after",
+            "profiles_before",
             "release_page_url",
             "release_page_url_observed",
             "schema_version",
@@ -2262,12 +2263,24 @@ def normalize_installed_ui_candidate_evidence(
             "updater_controls_accessible",
         },
     )
+    profiles_before = candidate.get("profiles_before")
+    profiles_after = candidate.get("profiles_after")
+    if (
+        isinstance(profiles_before, bool)
+        or not isinstance(profiles_before, int)
+        or profiles_before < 0
+        or isinstance(profiles_after, bool)
+        or not isinstance(profiles_after, int)
+        or profiles_after != profiles_before + 1
+    ):
+        raise CleanMachineError("Installed UI profile save did not add exactly one profile.")
     expected_candidate = {
         "main_window_ready": True,
         "profile_document_version": 6,
         "profile_save_accessible": True,
         "profile_save_succeeded": True,
-        "profiles_after": 1,
+        "profiles_after": profiles_after,
+        "profiles_before": profiles_before,
         "release_page_url": RELEASES_URL,
         "release_page_url_observed": True,
         "schema_version": 1,
@@ -2362,6 +2375,8 @@ def normalize_installed_ui_candidate_evidence(
             "profile_document_version": 6,
             "profile_save_accessible": True,
             "profile_save_succeeded": True,
+            "profiles_after": profiles_after,
+            "profiles_before": profiles_before,
             "release_notes_url_sha256": hashlib.sha256(release_notes_url.encode()).hexdigest(),
             "release_page_url_sha256": hashlib.sha256(RELEASES_URL.encode()).hexdigest(),
             "schema_version": 1,
