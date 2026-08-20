@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import platform
 import plistlib
 import shutil
@@ -27,10 +28,14 @@ from scripts.tier3_clean_machine import (
     QualificationOperations,
     RELEASES_URL,
     ReleaseArtifact,
+    RESETTABLE_VM_ENVIRONMENT_CLASS,
+    RuntimeLayout,
+    SparkleDiagnosticFacts,
     SparkleUpdateFailure,
     SparkleUpdateState,
     SPARKLE_INSTALL_ACTIONS,
     UpdateObservation,
+    classify_sparkle_log_output,
     file_sha256,
     parse_feed_candidate,
     preflight_report,
@@ -113,6 +118,7 @@ class FakeOperations(QualificationOperations):
         self.post_staged_observations = 0
         self.observation_calls = 0
         self.staged_quit_triggered = False
+        self.checkpoint_root: Path | None = None
 
     def inspect_environment(self, qualification_root: Path, environment_class: str) -> EnvironmentFacts:
         return EnvironmentFacts(
@@ -130,7 +136,8 @@ class FakeOperations(QualificationOperations):
     def fetch_live_feed(self) -> bytes:
         return self.feed_bytes
 
-    def install_app(self, dmg_path: Path, destination: Path) -> None:
+    def install_app(self, dmg_path: Path, destination: Path, mount_point: Path) -> None:
+        del mount_point
         shutil.copytree(self.app_sources[dmg_path], destination, symlinks=True)
 
     def smoke_app(self, app_path: Path, synthetic_home: Path, log_path: Path) -> str:
@@ -147,6 +154,10 @@ class FakeOperations(QualificationOperations):
 
     def read_preference(self, synthetic_home: Path, key: str) -> str:
         return self.preferences[key]
+
+    def clear_preferences(self, runtime_home: Path) -> None:
+        del runtime_home
+        self.preferences.clear()
 
     def launch_app(self, app_path: Path, synthetic_home: Path) -> None:
         self.launch_calls += 1
@@ -287,7 +298,8 @@ class FakeOperations(QualificationOperations):
     def press_updater_action(self, observation: UpdateObservation) -> None:
         if self.current_app_path is None or self.current_synthetic_home is None:
             raise AssertionError("fake updater was pressed before it was opened")
-        checkpoint_path = self.current_synthetic_home.parent / ".bd-to-avp-sparkle-update.json"
+        checkpoint_root = self.checkpoint_root or self.current_synthetic_home.parent
+        checkpoint_path = checkpoint_root / ".bd-to-avp-sparkle-update.json"
         checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
         transitions = checkpoint["transitions"]
         self.intent_seen_before_press = bool(transitions and transitions[-1]["phase"] == "intent")
@@ -442,8 +454,96 @@ class FakeOperations(QualificationOperations):
         self.running_app_path = None
         self.running_process_id = None
 
+    def collect_sparkle_diagnostics(self, runtime_home: Path) -> SparkleDiagnosticFacts:
+        del runtime_home
+        return SparkleDiagnosticFacts(
+            cache_root_state="writable",
+            classifications=("installation-cache-create-failed",),
+            home_library_state="writable",
+            log_event_count=1,
+            log_query_status="passed",
+        )
+
 
 class Tier3CleanMachineTests(unittest.TestCase):
+    def test_classify_sparkle_log_output_is_bounded_to_public_categories(self) -> None:
+        output = (
+            "Failed to create installation cache directory: Operation not permitted\n"
+            "Couldn't access its bundle info for app-bound domains"
+        )
+
+        self.assertEqual(
+            classify_sparkle_log_output(output),
+            (
+                "app-bound-domain-provenance-failed",
+                "installation-cache-create-failed",
+                "permission-denied",
+            ),
+        )
+
+    def test_install_app_refuses_to_replace_existing_destination(self) -> None:
+        operations = MacOSOperations()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            destination = root / "Install" / "Applications" / APP_NAME
+            destination.mkdir(parents=True)
+            mount_point = root / "SourceMount"
+            candidate = mount_point / APP_NAME
+            (candidate / "Contents").mkdir(parents=True)
+            (candidate / "Contents" / "Info.plist").write_bytes(
+                plistlib.dumps(
+                    {
+                        "BDToAVPDistributionChannel": "direct",
+                        "CFBundleIdentifier": BUNDLE_IDENTIFIER,
+                        "CFBundleShortVersionString": "1.0",
+                        "CFBundleVersion": "1",
+                        "SUFeedURL": "https://example.test/appcast.xml",
+                    }
+                )
+            )
+            with (
+                patch.object(MacOSOperations, "_mount_dmg", return_value=mount_point),
+                patch.object(MacOSOperations, "_detach_mounts"),
+            ):
+                with self.assertRaisesRegex(CleanMachineError, "destination already exists"):
+                    operations.install_app(root / "release.dmg", destination, root / "Mount")
+
+    def test_install_app_uses_explicit_owned_mount_point(self) -> None:
+        operations = MacOSOperations()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            destination = root / "Applications" / APP_NAME
+            mount_point = root / "Qualification" / "Mount"
+
+            def mount(dmg_path: Path, requested_mount_point: Path) -> Path:
+                del dmg_path
+                self.assertEqual(requested_mount_point, mount_point)
+                candidate = requested_mount_point / APP_NAME
+                (candidate / "Contents").mkdir(parents=True)
+                (candidate / "Contents" / "Info.plist").write_bytes(
+                    plistlib.dumps(
+                        {
+                            "BDToAVPDistributionChannel": "direct",
+                            "CFBundleIdentifier": BUNDLE_IDENTIFIER,
+                            "CFBundleShortVersionString": "1.0",
+                            "CFBundleVersion": "1",
+                            "SUFeedURL": "https://example.test/appcast.xml",
+                        }
+                    )
+                )
+                return requested_mount_point
+
+            with (
+                patch.object(MacOSOperations, "_mount_dmg", side_effect=mount),
+                patch.object(MacOSOperations, "_detach_mounts"),
+                patch.object(
+                    MacOSOperations,
+                    "_run",
+                    return_value=subprocess.CompletedProcess([], 0, "", ""),
+                ),
+            ):
+                operations.install_app(root / "release.dmg", destination, mount_point)
+
     def test_extract_ui_attachments_accepts_xcresult_generated_names(self) -> None:
         operations = MacOSOperations()
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -860,6 +960,119 @@ class Tier3CleanMachineTests(unittest.TestCase):
         self.assertEqual(report["feed"]["route"], "rc")
         self.assertNotIn("hostname", json.dumps(report).lower())
 
+    def test_resettable_vm_preflight_requires_github_hosted_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            runner_temp = root / "RunnerTemp"
+            runner_temp.mkdir()
+            applications = root / "Applications"
+            applications.mkdir()
+            config = replace(
+                config,
+                environment_class=RESETTABLE_VM_ENVIRONMENT_CLASS,
+                qualification_root=runner_temp / "Qualification",
+            )
+            with (
+                patch.dict(os.environ, {"RUNNER_TEMP": str(runner_temp)}, clear=False),
+                patch("scripts.tier3_clean_machine.SYSTEM_APPLICATIONS_DIRECTORY", applications),
+            ):
+                with self.assertRaisesRegex(CleanMachineError, "requires an ephemeral GitHub-hosted"):
+                    preflight_report(config, operations)
+
+    def test_resettable_vm_preflight_uses_real_home_and_system_applications(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            runner_temp = root / "RunnerTemp"
+            runner_temp.mkdir()
+            applications = root / "Applications"
+            applications.mkdir()
+            config = replace(
+                config,
+                environment_class=RESETTABLE_VM_ENVIRONMENT_CLASS,
+                qualification_root=runner_temp / "Qualification",
+            )
+            runner_environment = {
+                "BD_TO_AVP_TIER3_RUNNER_ENVIRONMENT": "github-hosted",
+                "CI": "true",
+                "GITHUB_ACTIONS": "true",
+                "HOME": str(Path.home()),
+                "RUNNER_OS": "macOS",
+                "RUNNER_TEMP": str(runner_temp),
+            }
+            with (
+                patch.dict(os.environ, runner_environment, clear=False),
+                patch("scripts.tier3_clean_machine.SYSTEM_APPLICATIONS_DIRECTORY", applications),
+                patch("scripts.tier3_clean_machine._managed_real_home_paths", return_value=()),
+            ):
+                report = preflight_report(config, operations)
+
+        self.assertEqual(report["environment"]["environment_class"], RESETTABLE_VM_ENVIRONMENT_CLASS)
+        self.assertEqual(report["developer_state"]["runtime_layout"], "system-applications-real-home")
+
+    def test_resettable_vm_preflight_rejects_overridden_home(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            runner_temp = root / "RunnerTemp"
+            runner_temp.mkdir()
+            applications = root / "Applications"
+            applications.mkdir()
+            config = replace(
+                config,
+                environment_class=RESETTABLE_VM_ENVIRONMENT_CLASS,
+                qualification_root=runner_temp / "Qualification",
+            )
+            runner_environment = {
+                "BD_TO_AVP_TIER3_RUNNER_ENVIRONMENT": "github-hosted",
+                "CI": "true",
+                "GITHUB_ACTIONS": "true",
+                "HOME": str(root / "SyntheticHome"),
+                "RUNNER_OS": "macOS",
+                "RUNNER_TEMP": str(runner_temp),
+            }
+            with (
+                patch.dict(os.environ, runner_environment, clear=False),
+                patch("scripts.tier3_clean_machine.SYSTEM_APPLICATIONS_DIRECTORY", applications),
+            ):
+                with self.assertRaisesRegex(CleanMachineError, "unchanged real home"):
+                    preflight_report(config, operations)
+
+    def test_preflight_rejects_diagnostics_inside_evidence_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            config = replace(config, diagnostics_output=config.evidence_directory / "diagnostics.json")
+
+            with self.assertRaisesRegex(CleanMachineError, "outside the evidence directory"):
+                preflight_report(config, operations)
+
+    def test_resettable_vm_run_preserves_unrelated_home_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            config = replace(config, environment_class=RESETTABLE_VM_ENVIRONMENT_CLASS)
+            operations.checkpoint_root = config.qualification_root
+            runner_home = root / "RunnerHome"
+            runner_home.mkdir()
+            unrelated = runner_home / "unrelated.txt"
+            unrelated.write_text("preserve\n", encoding="utf-8")
+            system_applications = root / "SystemApplications"
+            system_applications.mkdir()
+            layout = RuntimeLayout(
+                app_path=system_applications / APP_NAME,
+                home=runner_home,
+                kind="system-applications-real-home",
+                smoke_home=config.qualification_root / "SmokeHome",
+            )
+            with patch("scripts.tier3_clean_machine._runtime_layout", return_value=layout):
+                run_qualification(config, operations)
+
+            self.assertEqual(unrelated.read_text(encoding="utf-8"), "preserve\n")
+            self.assertFalse(layout.app_path.exists())
+            self.assertFalse(config.qualification_root.exists())
+
     def test_run_emits_valid_receipt_and_disposes_owned_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1128,6 +1341,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             config, operations = self.fixture(root)
+            config = replace(config, diagnostics_output=root / "sparkle-install-diagnostics.json")
             operations.install_action = "Install Update"
             operations.post_press_failure = True
 
@@ -1137,6 +1351,11 @@ class Tier3CleanMachineTests(unittest.TestCase):
             self.assertEqual(operations.update_attempts, 1)
             self.assertEqual(len(operations.pressed_actions), 1)
             self.assertFalse(config.evidence_directory.exists())
+            diagnostics = json.loads(config.diagnostics_output.read_text(encoding="utf-8"))
+            self.assertEqual(diagnostics["failure_stage"], "updater-state-machine")
+            self.assertEqual(diagnostics["reason_code"], "updater-script-failure")
+            self.assertEqual(diagnostics["classifications"], ["installation-cache-create-failed"])
+            self.assertNotIn(str(root), json.dumps(diagnostics))
 
     def test_run_retries_when_updater_changes_after_intent_recording(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

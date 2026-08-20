@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import plistlib
+import pwd
 import re
 import shutil
 import subprocess
@@ -39,6 +40,9 @@ CLEAN_MACHINE_CASE_ID = "clean-machine-signed-update"
 INSTALLED_UI_CASE_ID = "installed-ui-accessibility"
 APP_NAME = "3D Blu-ray to Vision Pro.app"
 BUNDLE_IDENTIFIER = "com.shinycomputers.bd-to-avp"
+RESTORABLE_LOCATION_ENVIRONMENT_CLASS = "restorable-location"
+RESETTABLE_VM_ENVIRONMENT_CLASS = "resettable-vm"
+SYSTEM_APPLICATIONS_DIRECTORY = Path("/Applications")
 PREFERENCES_DOMAIN = BUNDLE_IDENTIFIER
 UPDATE_ROUTE_KEY = "BDToAVPUpdateChannel"
 SENTINEL_KEY = "BDToAVPTier3Sentinel"
@@ -89,6 +93,7 @@ SYSTEM_TOOL_PATHS = {
     "defaults": Path("/usr/bin/defaults"),
     "ditto": Path("/usr/bin/ditto"),
     "hdiutil": Path("/usr/bin/hdiutil"),
+    "log": Path("/usr/bin/log"),
     "open": Path("/usr/bin/open"),
     "osascript": Path("/usr/bin/osascript"),
     "xcrun": Path("/usr/bin/xcrun"),
@@ -178,6 +183,23 @@ class EnvironmentFacts:
 
 
 @dataclass(frozen=True)
+class RuntimeLayout:
+    app_path: Path
+    home: Path
+    kind: str
+    smoke_home: Path
+
+
+@dataclass(frozen=True)
+class SparkleDiagnosticFacts:
+    cache_root_state: str
+    classifications: tuple[str, ...]
+    home_library_state: str
+    log_event_count: int
+    log_query_status: str
+
+
+@dataclass(frozen=True)
 class FeedCandidate:
     feed_sha256: str
     build_version: str
@@ -202,6 +224,7 @@ class QualificationConfig:
     output_receipt: Path | None = None
     ui_output_receipt: Path | None = None
     evidence_directory: Path | None = None
+    diagnostics_output: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -233,7 +256,7 @@ class QualificationOperations(Protocol):
     def fetch_live_feed(self) -> bytes:
         raise NotImplementedError
 
-    def install_app(self, dmg_path: Path, destination: Path) -> None:
+    def install_app(self, dmg_path: Path, destination: Path, mount_point: Path) -> None:
         raise NotImplementedError
 
     def smoke_app(self, app_path: Path, synthetic_home: Path, log_path: Path) -> str:
@@ -276,6 +299,12 @@ class QualificationOperations(Protocol):
         raise NotImplementedError
 
     def quit_app(self) -> None:
+        raise NotImplementedError
+
+    def clear_preferences(self, runtime_home: Path) -> None:
+        raise NotImplementedError
+
+    def collect_sparkle_diagnostics(self, runtime_home: Path) -> SparkleDiagnosticFacts:
         raise NotImplementedError
 
 
@@ -356,6 +385,117 @@ def _write_durable_json(path: Path, value: Mapping[str, Any]) -> str:
 
 def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _uses_real_runner_home(home: Path) -> bool:
+    return home.resolve() == _account_home()
+
+
+def _account_home() -> Path:
+    return Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+
+
+def _runtime_layout(config: QualificationConfig) -> RuntimeLayout:
+    qualification_root = config.qualification_root.resolve()
+    smoke_home = qualification_root / "SmokeHome"
+    if config.environment_class == RESTORABLE_LOCATION_ENVIRONMENT_CLASS:
+        return RuntimeLayout(
+            app_path=qualification_root / "Applications" / APP_NAME,
+            home=qualification_root / "Home",
+            kind="owned-root-synthetic-home",
+            smoke_home=smoke_home,
+        )
+    if config.environment_class != RESETTABLE_VM_ENVIRONMENT_CLASS:
+        raise CleanMachineError("This runner does not support the requested qualification environment class.")
+    required_environment = {
+        "BD_TO_AVP_TIER3_RUNNER_ENVIRONMENT": "github-hosted",
+        "CI": "true",
+        "GITHUB_ACTIONS": "true",
+        "RUNNER_OS": "macOS",
+    }
+    if any(os.environ.get(key) != value for key, value in required_environment.items()):
+        raise CleanMachineError("The resettable-vm lane requires an ephemeral GitHub-hosted macOS runner.")
+    environment_home = os.environ.get("HOME")
+    account_home = _account_home()
+    if environment_home is None or Path(environment_home).resolve() != account_home:
+        raise CleanMachineError("The resettable-vm lane requires the runner's unchanged real home directory.")
+    runner_temp = os.environ.get("RUNNER_TEMP")
+    if runner_temp is None:
+        raise CleanMachineError("The resettable-vm lane requires the GitHub runner temporary directory.")
+    try:
+        qualification_root.relative_to(Path(runner_temp).resolve())
+    except ValueError as error:
+        raise CleanMachineError(
+            "The resettable-vm qualification root must be inside the runner temporary directory."
+        ) from error
+    if not SYSTEM_APPLICATIONS_DIRECTORY.is_dir():
+        raise CleanMachineError("The resettable-vm lane requires the normal system Applications directory.")
+    return RuntimeLayout(
+        app_path=SYSTEM_APPLICATIONS_DIRECTORY / APP_NAME,
+        home=account_home,
+        kind="system-applications-real-home",
+        smoke_home=smoke_home,
+    )
+
+
+def _directory_state(path: Path) -> str:
+    if not path.exists():
+        return "missing"
+    if not path.is_dir():
+        return "not-directory"
+    return "writable" if os.access(path, os.W_OK | os.X_OK) else "read-only"
+
+
+def _managed_real_home_paths(home: Path) -> tuple[Path, ...]:
+    return (
+        home / "Library" / "Application Support" / "3D Blu-ray to Vision Pro",
+        home / "Library" / "Preferences" / f"{BUNDLE_IDENTIFIER}.plist",
+        home / "Library" / "Caches" / BUNDLE_IDENTIFIER,
+        home / "Library" / "HTTPStorages" / BUNDLE_IDENTIFIER,
+        home / "Library" / "Saved Application State" / f"{BUNDLE_IDENTIFIER}.savedState",
+        home / "Library" / "WebKit" / BUNDLE_IDENTIFIER,
+    )
+
+
+def _remove_managed_real_home_state(home: Path) -> None:
+    for path in _managed_real_home_paths(home):
+        if path.is_symlink():
+            raise CleanMachineError("Refusing to remove symlinked application state from the runner home.")
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
+            path.unlink()
+
+
+def classify_sparkle_log_output(output: str) -> tuple[str, ...]:
+    normalized = output.lower()
+    classifications: set[str] = set()
+    if (
+        "failed to create installation cache directory" in normalized
+        or "failed to create cache directory" in normalized
+    ):
+        classifications.add("installation-cache-create-failed")
+    if "couldn't access its bundle info for app-bound domains" in normalized:
+        classifications.add("app-bound-domain-provenance-failed")
+    if "operation not permitted" in normalized or "permission denied" in normalized:
+        classifications.add("permission-denied")
+    if ("signature" in normalized or "code sign" in normalized) and any(
+        marker in normalized for marker in ("failed", "invalid", "rejected")
+    ):
+        classifications.add("candidate-signature-validation-failed")
+    if any(marker in normalized for marker in ("failed to extract", "extraction failed", "unarchive failed")):
+        classifications.add("archive-extraction-failed")
+    if any(marker in normalized for marker in ("failed to launch installer", "installer launch failed")):
+        classifications.add("installer-launch-failed")
+    if any(marker in normalized for marker in ("failed to replace", "could not replace", "replacement failed")):
+        classifications.add("bundle-replacement-failed")
+    if "install on quit" in normalized:
+        classifications.add("install-on-quit-observed")
+    if not output.strip():
+        classifications.add("no-sparkle-log-events")
+    elif not classifications:
+        classifications.add("unclassified-sparkle-events")
+    return tuple(sorted(classifications))
 
 
 def _parse_update_observation(output: str) -> UpdateObservation:
@@ -637,8 +777,11 @@ def validate_environment(
     environment = _mapping(case.get("environment"), "Tier 3 case environment")
     if facts.environment_class not in set(cast(Sequence[str], environment.get("classes", []))):
         raise CleanMachineError("Qualification environment class is not allowed by policy.")
-    if facts.environment_class != "restorable-location":
-        raise CleanMachineError("This runner currently supports the fully disposable restorable-location lane.")
+    if facts.environment_class not in {
+        RESTORABLE_LOCATION_ENVIRONMENT_CLASS,
+        RESETTABLE_VM_ENVIRONMENT_CLASS,
+    }:
+        raise CleanMachineError("This runner does not support the requested qualification environment class.")
     if facts.architecture not in set(cast(Sequence[str], environment.get("architectures", []))):
         raise CleanMachineError("Qualification architecture is not allowed by policy.")
     try:
@@ -666,7 +809,7 @@ def validate_environment(
 
 
 class MacOSOperations:
-    required_tools = ("defaults", "ditto", "hdiutil", "open", "osascript", "xcrun", "xcodebuild")
+    required_tools = ("defaults", "ditto", "hdiutil", "log", "open", "osascript", "xcrun", "xcodebuild")
 
     @staticmethod
     def _run(
@@ -814,10 +957,11 @@ class MacOSOperations:
             shutil.copyfile(source, output_directory / expected_name)
 
     @staticmethod
-    def _synthetic_env(synthetic_home: Path) -> dict[str, str]:
+    def _runtime_env(synthetic_home: Path) -> dict[str, str]:
         env = dict(os.environ)
-        env["HOME"] = str(synthetic_home)
-        env["CFFIXED_USER_HOME"] = str(synthetic_home)
+        if not _uses_real_runner_home(synthetic_home):
+            env["HOME"] = str(synthetic_home)
+            env["CFFIXED_USER_HOME"] = str(synthetic_home)
         env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
         return env
 
@@ -893,8 +1037,9 @@ class MacOSOperations:
         if failures:
             raise CleanMachineError(f"Unable to detach qualification mounts: {'; '.join(failures)}")
 
-    def install_app(self, dmg_path: Path, destination: Path) -> None:
-        mount_point = destination.parent.parent / "Mount"
+    def install_app(self, dmg_path: Path, destination: Path, mount_point: Path) -> None:
+        if destination.exists():
+            raise CleanMachineError("Qualification app destination already exists before DMG installation.")
         if mount_point.exists():
             raise CleanMachineError("Qualification mount point already exists before DMG installation.")
         self._mount_dmg(dmg_path, mount_point)
@@ -908,14 +1053,14 @@ class MacOSOperations:
             if len(candidates) != 1:
                 raise CleanMachineError("Mounted release DMG must contain exactly one production app bundle.")
             if destination.exists():
-                shutil.rmtree(destination)
+                raise CleanMachineError("Qualification app destination appeared before DMG installation.")
             destination.parent.mkdir(parents=True, exist_ok=True)
             self._run(["ditto", str(candidates[0]), str(destination)], timeout=SMOKE_TIMEOUT_SECONDS)
         finally:
             self._detach_mounts([mount_point])
 
     def smoke_app(self, app_path: Path, synthetic_home: Path, log_path: Path) -> str:
-        env = self._synthetic_env(synthetic_home)
+        env = self._runtime_env(synthetic_home)
         result = subprocess.run(
             [sys.executable, str(REPO_ROOT / "scripts" / "smoke_release_app.py"), "--app-path", str(app_path)],
             capture_output=True,
@@ -931,7 +1076,7 @@ class MacOSOperations:
 
     def write_preferences(self, synthetic_home: Path, route: str) -> None:
         synthetic_home.mkdir(parents=True, exist_ok=True)
-        env = self._synthetic_env(synthetic_home)
+        env = self._runtime_env(synthetic_home)
         self._run(["defaults", "write", PREFERENCES_DOMAIN, UPDATE_ROUTE_KEY, route], env=env)
         self._run(["defaults", "write", PREFERENCES_DOMAIN, SENTINEL_KEY, SENTINEL_VALUE], env=env)
         self._run(
@@ -942,25 +1087,32 @@ class MacOSOperations:
     def read_preference(self, synthetic_home: Path, key: str) -> str:
         result = self._run(
             ["defaults", "read", PREFERENCES_DOMAIN, key],
-            env=self._synthetic_env(synthetic_home),
+            env=self._runtime_env(synthetic_home),
         )
         return result.stdout.strip()
 
-    def launch_app(self, app_path: Path, synthetic_home: Path) -> None:
-        env = self._synthetic_env(synthetic_home)
-        self._run(
-            [
-                "open",
-                "-n",
-                "-F",
-                "--env",
-                f"HOME={synthetic_home}",
-                "--env",
-                f"CFFIXED_USER_HOME={synthetic_home}",
-                str(app_path),
-            ],
-            env=env,
+    def clear_preferences(self, runtime_home: Path) -> None:
+        subprocess.run(
+            [str(SYSTEM_TOOL_PATHS["defaults"]), "delete", PREFERENCES_DOMAIN],
+            capture_output=True,
+            env=self._runtime_env(runtime_home),
+            timeout=COMMAND_TIMEOUT_SECONDS,
         )
+
+    def launch_app(self, app_path: Path, synthetic_home: Path) -> None:
+        env = self._runtime_env(synthetic_home)
+        command = ["open", "-n", "-F"]
+        if not _uses_real_runner_home(synthetic_home):
+            command.extend(
+                [
+                    "--env",
+                    f"HOME={synthetic_home}",
+                    "--env",
+                    f"CFFIXED_USER_HOME={synthetic_home}",
+                ]
+            )
+        command.append(str(app_path))
+        self._run(command, env=env)
 
     def open_updater(self, app_path: Path, synthetic_home: Path) -> None:
         self.launch_app(app_path, synthetic_home)
@@ -1214,6 +1366,43 @@ end tell'''
             time.sleep(0.5)
         if self.app_running():
             raise CleanMachineError("Production app did not terminate during cleanup.")
+
+    def collect_sparkle_diagnostics(self, runtime_home: Path) -> SparkleDiagnosticFacts:
+        predicate = (
+            'subsystem == "org.sparkle-project.Sparkle" OR '
+            'process == "InstallerLauncher" OR process == "Autoupdate" OR process == "Updater"'
+        )
+        result = subprocess.run(
+            [
+                str(SYSTEM_TOOL_PATHS["log"]),
+                "show",
+                "--style",
+                "compact",
+                "--last",
+                "15m",
+                "--predicate",
+                predicate,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+        if result.returncode == 0:
+            output = result.stdout[-200_000:]
+            classifications = classify_sparkle_log_output(output)
+            log_query_status = "passed"
+            log_event_count = min(sum(1 for line in output.splitlines() if line.strip()), 10_000)
+        else:
+            classifications = ("log-query-failed",)
+            log_query_status = "failed"
+            log_event_count = 0
+        return SparkleDiagnosticFacts(
+            cache_root_state=_directory_state(runtime_home / "Library" / "Caches"),
+            classifications=classifications,
+            home_library_state=_directory_state(runtime_home / "Library"),
+            log_event_count=log_event_count,
+            log_query_status=log_query_status,
+        )
 
     @staticmethod
     def _updater_open_script() -> str:
@@ -1470,7 +1659,9 @@ def prepare_qualification(
     qualification_root = config.qualification_root.resolve()
     if qualification_root.exists():
         raise CleanMachineError("Qualification root must not exist before the runner starts.")
-    if qualification_root == Path.home().resolve() or Path.home().resolve() not in qualification_root.parents:
+    if config.environment_class == RESTORABLE_LOCATION_ENVIRONMENT_CLASS and (
+        qualification_root == Path.home().resolve() or Path.home().resolve() not in qualification_root.parents
+    ):
         raise CleanMachineError("Qualification root must be a dedicated location inside the current home directory.")
     if config.output_receipt is not None and qualification_root in config.output_receipt.resolve().parents:
         raise CleanMachineError("Output receipt must be outside the disposable qualification root.")
@@ -1484,6 +1675,26 @@ def prepare_qualification(
         raise CleanMachineError("Clean-machine and installed UI receipts must use different output paths.")
     if config.evidence_directory is not None and qualification_root in config.evidence_directory.resolve().parents:
         raise CleanMachineError("Evidence directory must be outside the disposable qualification root.")
+    if config.diagnostics_output is not None and qualification_root in config.diagnostics_output.resolve().parents:
+        raise CleanMachineError("Diagnostics output must be outside the disposable qualification root.")
+    file_output_paths = [
+        path.resolve()
+        for path in (config.output_receipt, config.ui_output_receipt, config.diagnostics_output)
+        if path is not None
+    ]
+    if len(file_output_paths) != len(set(file_output_paths)):
+        raise CleanMachineError("Qualification receipt and diagnostics outputs must use distinct paths.")
+    if config.evidence_directory is not None:
+        evidence_directory = config.evidence_directory.resolve()
+        if any(path == evidence_directory or evidence_directory in path.parents for path in file_output_paths):
+            raise CleanMachineError("Qualification file outputs must be outside the evidence directory.")
+    runtime_layout = _runtime_layout(config)
+    if runtime_layout.app_path.exists():
+        raise CleanMachineError("The qualification app destination must not exist before the runner starts.")
+    if config.environment_class == RESETTABLE_VM_ENVIRONMENT_CLASS and any(
+        path.exists() or path.is_symlink() for path in _managed_real_home_paths(runtime_layout.home)
+    ):
+        raise CleanMachineError("The resettable-vm runner has preexisting managed application state.")
     required_free_bytes = BASE_FREE_SPACE_BYTES + prior.dmg_size + (candidate.dmg_size * 2)
     environment = operations.inspect_environment(qualification_root, config.environment_class)
     validate_environment(environment, clean_machine_case, required_free_bytes=required_free_bytes)
@@ -1502,6 +1713,7 @@ def preflight_report(
     operations: QualificationOperations,
 ) -> Mapping[str, Any]:
     _, _, _, prior, candidate, environment, feed = prepare_qualification(config, operations)
+    runtime_layout = _runtime_layout(config)
     return {
         "candidate": {
             "build_version": candidate.build_version,
@@ -1512,6 +1724,7 @@ def preflight_report(
         },
         "developer_state": {
             "homebrew_present": environment.homebrew_present,
+            "runtime_layout": runtime_layout.kind,
             "runtime_path": "sanitized-system-only",
         },
         "environment": {
@@ -1887,12 +2100,93 @@ def _seed_profile(synthetic_home: Path) -> tuple[Path, str]:
     return profile_path, file_sha256(profile_path)
 
 
-def _reset_runtime_workspace(app_path: Path, synthetic_home: Path) -> None:
+def _reset_runtime_workspace(app_path: Path, synthetic_home: Path, installed_release: ReleaseArtifact) -> None:
     if app_path.exists():
+        verify_installed_app(app_path, installed_release)
         shutil.rmtree(app_path)
     if synthetic_home.exists():
         shutil.rmtree(synthetic_home)
     synthetic_home.mkdir(parents=True)
+
+
+def _diagnostic_app_state(app_path: Path, prior: ReleaseArtifact, candidate: ReleaseArtifact) -> str:
+    if not app_path.exists():
+        return "missing"
+    try:
+        identity = read_bundle_identity(app_path)
+    except CleanMachineError:
+        return "unreadable"
+    if identity.package_version == candidate.package_version and identity.build_version == candidate.build_version:
+        return "candidate"
+    if identity.package_version == prior.package_version and identity.build_version == prior.build_version:
+        return "prior"
+    if identity.bundle_identifier == BUNDLE_IDENTIFIER:
+        return "other-production-build"
+    return "unexpected-bundle"
+
+
+def _record_sparkle_failure_diagnostics(
+    *,
+    config: QualificationConfig,
+    operations: QualificationOperations,
+    runtime_layout: RuntimeLayout,
+    prior: ReleaseArtifact,
+    candidate: ReleaseArtifact,
+    failure_stage: str,
+    reason_code: str,
+) -> str:
+    try:
+        facts = operations.collect_sparkle_diagnostics(runtime_layout.home)
+    except (CleanMachineError, OSError, subprocess.TimeoutExpired):
+        facts = SparkleDiagnosticFacts(
+            cache_root_state="unknown",
+            classifications=("diagnostic-collection-failed",),
+            home_library_state="unknown",
+            log_event_count=0,
+            log_query_status="failed",
+        )
+    payload: Mapping[str, Any] = {
+        "app_state": _diagnostic_app_state(runtime_layout.app_path, prior, candidate),
+        "cache_root_state": facts.cache_root_state,
+        "classifications": list(facts.classifications),
+        "environment_class": config.environment_class,
+        "failure_stage": failure_stage,
+        "home_library_state": facts.home_library_state,
+        "log_event_count": facts.log_event_count,
+        "log_query_status": facts.log_query_status,
+        "process_state": "running" if operations.app_running(runtime_layout.app_path) else "not-running",
+        "reason_code": reason_code,
+        "runtime_layout": runtime_layout.kind,
+        "schema_version": 1,
+        "status": "failed",
+    }
+    if config.diagnostics_output is not None:
+        _write_json(config.diagnostics_output.resolve(), payload)
+    return (
+        "Sparkle diagnostics: "
+        f"stage={failure_stage}, reason={reason_code}, app_state={payload['app_state']}, "
+        f"process_state={payload['process_state']}, home_library={facts.home_library_state}, "
+        f"cache_root={facts.cache_root_state}, log_query={facts.log_query_status}, "
+        f"classifications={','.join(facts.classifications)}."
+    )
+
+
+def _remove_resettable_vm_app(
+    app_path: Path,
+    prior: ReleaseArtifact,
+    candidate: ReleaseArtifact,
+) -> None:
+    if not app_path.exists():
+        return
+    for release in (prior, candidate):
+        try:
+            verify_installed_app(app_path, release)
+        except CleanMachineError:
+            continue
+        break
+    else:
+        raise CleanMachineError("Refusing to remove an unverified bundle from the system Applications directory.")
+    shutil.rmtree(app_path)
 
 
 def _load_ui_json(path: Path, expected_keys: set[str]) -> Mapping[str, Any]:
@@ -2169,8 +2463,9 @@ def _run_qualification(
     )
     started_at = _utc_timestamp()
     qualification_root = config.qualification_root.resolve()
-    synthetic_home = qualification_root / "Home"
-    app_path = qualification_root / "Applications" / APP_NAME
+    runtime_layout = _runtime_layout(config)
+    synthetic_home = runtime_layout.home
+    app_path = runtime_layout.app_path
     log_path = qualification_root / "Logs" / "package-smoke.log"
     raw_ui_directory = qualification_root / "InstalledUIEvidence"
     marker_path = qualification_root / ".bd-to-avp-tier3-owned.json"
@@ -2178,16 +2473,17 @@ def _run_qualification(
     marker = {"owner": "bd-to-avp-tier3-clean-machine", "run_id": str(uuid.uuid4())}
     marker_path.write_text(json.dumps(marker, sort_keys=True) + "\n", encoding="utf-8")
     try:
-        synthetic_home.mkdir(parents=True)
-        operations.install_app(candidate.dmg_path, app_path)
+        runtime_layout.smoke_home.mkdir(parents=True)
+        operations.install_app(candidate.dmg_path, app_path, qualification_root / "Mount")
         candidate_install_identity = verify_installed_app(app_path, candidate)
-        package_smoke_log_sha256 = operations.smoke_app(app_path, synthetic_home, log_path)
+        package_smoke_log_sha256 = operations.smoke_app(app_path, runtime_layout.smoke_home, log_path)
         operations.quit_app()
         if operations.app_running():
             raise CleanMachineError("Candidate package smoke left the production app running.")
 
-        _reset_runtime_workspace(app_path, synthetic_home)
-        operations.install_app(prior.dmg_path, app_path)
+        _reset_runtime_workspace(app_path, runtime_layout.smoke_home, candidate)
+        synthetic_home.mkdir(parents=True, exist_ok=True)
+        operations.install_app(prior.dmg_path, app_path, qualification_root / "Mount")
         prior_identity = verify_installed_app(app_path, prior)
         profile_path, profile_before_sha256 = _seed_profile(synthetic_home)
         operations.write_preferences(synthetic_home, config.route)
@@ -2208,29 +2504,60 @@ def _run_qualification(
         if operations.app_running():
             raise CleanMachineError("Installed UI updater inspection left the production app running.")
 
-        interaction = _perform_sparkle_update(
-            app_path=app_path,
-            synthetic_home=synthetic_home,
-            prior=prior,
-            candidate=candidate,
-            operations=operations,
-            checkpoint_path=qualification_root / ".bd-to-avp-sparkle-update.json",
-            run_id=marker["run_id"],
-            attempt=attempt,
-            retry_reason_code=retry_reason_code,
-        )
-        if interaction.outcome == SparkleUpdateOutcome.INSTALL_ON_QUIT or (
-            interaction.outcome == SparkleUpdateOutcome.STAGED and not operations.app_running(app_path)
-        ):
-            operations.quit_app()
-            _wait_for_candidate_on_disk(app_path, candidate)
-            operations.launch_app(app_path, synthetic_home)
-        candidate_identity = _wait_for_candidate(
-            app_path,
-            candidate,
-            operations,
-            interaction.prior_process_id,
-        )
+        failure_stage = "updater-state-machine"
+        try:
+            interaction = _perform_sparkle_update(
+                app_path=app_path,
+                synthetic_home=synthetic_home,
+                prior=prior,
+                candidate=candidate,
+                operations=operations,
+                checkpoint_path=qualification_root / ".bd-to-avp-sparkle-update.json",
+                run_id=marker["run_id"],
+                attempt=attempt,
+                retry_reason_code=retry_reason_code,
+            )
+            if interaction.outcome == SparkleUpdateOutcome.INSTALL_ON_QUIT or (
+                interaction.outcome == SparkleUpdateOutcome.STAGED and not operations.app_running(app_path)
+            ):
+                failure_stage = "install-on-quit-wait"
+                operations.quit_app()
+                _wait_for_candidate_on_disk(app_path, candidate)
+                operations.launch_app(app_path, synthetic_home)
+            failure_stage = "candidate-relaunch-wait"
+            candidate_identity = _wait_for_candidate(
+                app_path,
+                candidate,
+                operations,
+                interaction.prior_process_id,
+            )
+        except SparkleUpdateFailure as error:
+            diagnostic_summary = _record_sparkle_failure_diagnostics(
+                config=config,
+                operations=operations,
+                runtime_layout=runtime_layout,
+                prior=prior,
+                candidate=candidate,
+                failure_stage=failure_stage,
+                reason_code=error.reason_code,
+            )
+            raise SparkleUpdateFailure(
+                f"{error} {diagnostic_summary}",
+                reason_code=error.reason_code,
+                state=error.state,
+                action_pressed=error.action_pressed,
+            ) from error
+        except (CleanMachineError, OSError, subprocess.TimeoutExpired) as error:
+            diagnostic_summary = _record_sparkle_failure_diagnostics(
+                config=config,
+                operations=operations,
+                runtime_layout=runtime_layout,
+                prior=prior,
+                candidate=candidate,
+                failure_stage=failure_stage,
+                reason_code="post-action-verification-failed",
+            )
+            raise CleanMachineError(f"{error} {diagnostic_summary}") from error
         route_after = operations.read_preference(synthetic_home, UPDATE_ROUTE_KEY)
         sentinel_after = operations.read_preference(synthetic_home, SENTINEL_KEY)
         profile_after_sha256 = file_sha256(profile_path)
@@ -2315,23 +2642,39 @@ def _run_qualification(
         try:
             operations.quit_app()
         finally:
-            if qualification_root.exists():
-                try:
-                    observed_marker = json.loads(marker_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError) as error:
-                    raise CleanMachineError("Qualification cleanup ownership marker is missing or invalid.") from error
-                if observed_marker != marker:
-                    raise CleanMachineError("Qualification cleanup ownership marker changed during the run.")
-                shutil.rmtree(qualification_root)
-            cleanup_status = "disposed"
+            try:
+                if config.environment_class == RESETTABLE_VM_ENVIRONMENT_CLASS:
+                    try:
+                        _remove_resettable_vm_app(app_path, prior, candidate)
+                    finally:
+                        operations.clear_preferences(synthetic_home)
+                        _remove_managed_real_home_state(synthetic_home)
+            finally:
+                if qualification_root.exists():
+                    try:
+                        observed_marker = json.loads(marker_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError) as error:
+                        raise CleanMachineError(
+                            "Qualification cleanup ownership marker is missing or invalid."
+                        ) from error
+                    if observed_marker != marker:
+                        raise CleanMachineError("Qualification cleanup ownership marker changed during the run.")
+                    shutil.rmtree(qualification_root)
+                cleanup_status = "disposed"
 
-    if operations.app_running() or qualification_root.exists():
-        raise CleanMachineError("Qualification cleanup did not remove the app process and disposable location.")
+    managed_state_exists = config.environment_class == RESETTABLE_VM_ENVIRONMENT_CLASS and any(
+        path.exists() or path.is_symlink() for path in _managed_real_home_paths(synthetic_home)
+    )
+    if operations.app_running() or app_path.exists() or managed_state_exists or qualification_root.exists():
+        raise CleanMachineError("Qualification cleanup did not remove every runner-owned runtime surface.")
     cleanup_digest = _write_json(
         evidence_directory / "cleanup.json",
         {
             "app_running": False,
+            "app_target_exists": False,
+            "managed_home_state_exists": False,
             "qualification_root_exists": False,
+            "runtime_layout": runtime_layout.kind,
             "status": cleanup_status,
         },
     )
@@ -2402,6 +2745,9 @@ def run_qualification(
         if config.evidence_directory is not None and config.evidence_directory.exists():
             shutil.rmtree(config.evidence_directory)
 
+    if config.diagnostics_output is not None and config.diagnostics_output.exists():
+        raise CleanMachineError("Diagnostics output must not already exist.")
+
     retry_reason_code: str | None = None
     for attempt in (1, 2):
         try:
@@ -2413,8 +2759,19 @@ def run_qualification(
             )
         except SparkleUpdateFailure as error:
             remove_partial_outputs()
-            clean_retry_environment = not config.qualification_root.resolve().exists() and not operations.app_running()
+            runtime_layout = _runtime_layout(config)
+            managed_state_exists = config.environment_class == RESETTABLE_VM_ENVIRONMENT_CLASS and any(
+                path.exists() or path.is_symlink() for path in _managed_real_home_paths(runtime_layout.home)
+            )
+            clean_retry_environment = (
+                not config.qualification_root.resolve().exists()
+                and not runtime_layout.app_path.exists()
+                and not managed_state_exists
+                and not operations.app_running()
+            )
             if attempt == 1 and error.retryable and clean_retry_environment:
+                if config.diagnostics_output is not None:
+                    config.diagnostics_output.unlink(missing_ok=True)
                 retry_reason_code = error.reason_code
                 continue
             raise
@@ -2436,11 +2793,16 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--prior-dmg", type=Path, required=True)
         subparser.add_argument("--qualification-root", type=Path, required=True)
         subparser.add_argument("--route", choices=tuple(ROUTE_CHANNELS), required=True)
-        subparser.add_argument("--environment-class", choices=("restorable-location",), required=True)
+        subparser.add_argument(
+            "--environment-class",
+            choices=(RESTORABLE_LOCATION_ENVIRONMENT_CLASS, RESETTABLE_VM_ENVIRONMENT_CLASS),
+            required=True,
+        )
         if command == "run":
             subparser.add_argument("--output-receipt", type=Path, required=True)
             subparser.add_argument("--ui-output-receipt", type=Path, required=True)
             subparser.add_argument("--evidence-directory", type=Path, required=True)
+            subparser.add_argument("--diagnostics-output", type=Path)
     return parser
 
 
@@ -2457,6 +2819,7 @@ def _config_from_args(args: argparse.Namespace) -> QualificationConfig:
         output_receipt=getattr(args, "output_receipt", None),
         ui_output_receipt=getattr(args, "ui_output_receipt", None),
         evidence_directory=getattr(args, "evidence_directory", None),
+        diagnostics_output=getattr(args, "diagnostics_output", None),
     )
 
 
