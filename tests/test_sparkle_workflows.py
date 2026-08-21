@@ -1276,6 +1276,7 @@ fi
         enforce = by_name["Enforce post-publication milestone evidence"]
 
         self.assertEqual(context["if"], "github.event_name == 'pull_request'")
+        self.assertEqual(context["env"], {"GH_TOKEN": "${{ github.token }}"})
         for step in (classify, upload, summarize, enforce):
             self.assertIn("steps.milestone-context.outputs.required == 'true'", step["if"])
         self.assertIn("scripts.release_milestone_context", context["run"])
