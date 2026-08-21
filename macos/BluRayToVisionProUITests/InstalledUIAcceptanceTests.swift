@@ -17,6 +17,13 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCUIApplication(bundleIdentifier: bundleIdentifier).terminate()
     }
 
+    func testMissingProfileDocumentIsValidFreshInstallState() throws {
+        let syntheticHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: syntheticHome) }
+
+        XCTAssertNil(try readProfileSummaryIfPresent(syntheticHome: syntheticHome))
+    }
+
     func testPriorUpdaterControlsAndReleaseLinks() throws {
         let context = try QualificationContext.load(expectedPhase: "updater")
         let app = try launchInstalledApp(context: context, appearance: .light)
@@ -77,8 +84,11 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertEqual(saveAction.label, "Save current settings as new profile")
         XCTAssertTrue(saveAction.isEnabled)
 
-        let profileSummaryBefore = try readProfileSummary(syntheticHome: context.syntheticHome)
-        XCTAssertEqual(profileSummaryBefore.version, 6)
+        let profileSummaryBefore = try readProfileSummaryIfPresent(syntheticHome: context.syntheticHome)
+        if let profileSummaryBefore {
+            XCTAssertEqual(profileSummaryBefore.version, 6)
+        }
+        let profilesBefore = profileSummaryBefore?.count ?? 0
         saveAction.click()
         let nameField = lightApp.textFields["setup-editor-new-profile-name"]
         XCTAssertTrue(nameField.waitForExistence(timeout: 20))
@@ -93,9 +103,9 @@ final class InstalledUIAcceptanceTests: XCTestCase {
 
         let profileSummary = try readProfileSummary(syntheticHome: context.syntheticHome)
         XCTAssertEqual(profileSummary.version, 6)
-        XCTAssertEqual(profileSummary.count, profileSummaryBefore.count + 1)
+        XCTAssertEqual(profileSummary.count, profilesBefore + 1)
         XCTAssertEqual(profileSummary.names.filter { $0 == Self.profileName }.count, 1)
-        for existingName in profileSummaryBefore.names {
+        for existingName in profileSummaryBefore?.names ?? [] {
             XCTAssertTrue(profileSummary.names.contains(existingName))
         }
 
@@ -123,7 +133,7 @@ final class InstalledUIAcceptanceTests: XCTestCase {
                 "profile_save_accessible": true,
                 "profile_save_succeeded": true,
                 "profiles_after": profileSummary.count,
-                "profiles_before": profileSummaryBefore.count,
+                "profiles_before": profilesBefore,
                 "release_page_url": context.releasesURL,
                 "release_page_url_observed": true,
                 "schema_version": 1,
@@ -373,9 +383,19 @@ private struct ProfileSummary {
 }
 
 private func readProfileSummary(syntheticHome: URL) throws -> ProfileSummary {
+    guard let summary = try readProfileSummaryIfPresent(syntheticHome: syntheticHome) else {
+        throw QualificationError.missingProfileDocument
+    }
+    return summary
+}
+
+private func readProfileSummaryIfPresent(syntheticHome: URL) throws -> ProfileSummary? {
     let profileURL = syntheticHome
         .appendingPathComponent("Library/Application Support/3D Blu-ray to Vision Pro", isDirectory: true)
         .appendingPathComponent("profiles.json")
+    guard FileManager.default.fileExists(atPath: profileURL.path) else {
+        return nil
+    }
     let data = try Data(contentsOf: profileURL)
     guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
           let version = root["version"] as? Int,
