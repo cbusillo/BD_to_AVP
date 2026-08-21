@@ -1629,6 +1629,218 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testBatchAllTitlesConvertsEveryDiscTitleBeforeNextSource() async throws {
+        try await withTemporaryBatchSources(["Feature.iso", "next.mkv"]) { folderURL, sourceURLs, destinationURL in
+            let mainTitle = SourceTitle(
+                id: "makemkv:0",
+                name: "Main Feature",
+                outputName: "Feature",
+                durationSeconds: 7_200,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: true
+            )
+            let extraTitle = SourceTitle(
+                id: "makemkv:2",
+                name: "3D Video 1",
+                outputName: "Feature - 3D Video 1",
+                durationSeconds: 600,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: false
+            )
+            let inspection = SourceInspection(
+                name: "Feature",
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                interlaced: false,
+                titles: [mainTitle, extraTitle]
+            )
+            let scenario = BatchWorkerScenario(
+                inspectionResults: [sourceURLs[0].path: [inspection]]
+            )
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+            var options = ConversionOptions()
+            options.job.removeOriginalAfterSuccess = true
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: options,
+                titleSelection: .all
+            )
+            await waitForBatchCompletion(viewModel)
+
+            let queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.completed, .completed, .completed])
+            XCTAssertEqual(queue.items.map { $0.draft?.selectedTitle?.id }, [mainTitle.id, extraTitle.id, nil])
+            XCTAssertEqual(queue.items.map(\.displayName), [
+                "Feature.iso — Main Feature",
+                "Feature.iso — 3D Video 1",
+                "next.mkv",
+            ])
+            XCTAssertEqual(
+                scenario.records.map {
+                    "\($0.operation):\(URL(fileURLWithPath: $0.sourcePath).lastPathComponent):\($0.titleID ?? "none")"
+                },
+                [
+                    "inspect_source:Feature.iso:none",
+                    "convert_source:Feature.iso:makemkv:0",
+                    "convert_source:Feature.iso:makemkv:2",
+                    "inspect_source:next.mkv:none",
+                    "convert_source:next.mkv:none",
+                ]
+            )
+            let conversionRecords = scenario.records.filter { $0.operation == "convert_source" }
+            XCTAssertEqual(conversionRecords.map(\.removeOriginal), [false, false, true])
+            XCTAssertEqual(
+                viewModel.restoredDurableQueueItems.map(\.ordinal),
+                Array(viewModel.restoredDurableQueueItems.indices)
+            )
+        }
+    }
+
+    @MainActor
+    func testBatchAllTitlesRetryDoesNotFanOutAgain() async throws {
+        try await withTemporaryBatchSources(["Feature.iso"]) { folderURL, sourceURLs, destinationURL in
+            let originalTitles = [
+                SourceTitle(
+                    id: "makemkv:0",
+                    name: "Main Feature",
+                    outputName: "Feature",
+                    durationSeconds: 7_200,
+                    resolution: "1920x1080",
+                    frameRate: "24000/1001",
+                    mainFeature: true
+                ),
+                SourceTitle(
+                    id: "makemkv:2",
+                    name: "3D Video 1",
+                    outputName: "Feature - 3D Video 1",
+                    durationSeconds: 600,
+                    resolution: "1920x1080",
+                    frameRate: "24000/1001",
+                    mainFeature: false
+                ),
+            ]
+            let refreshedTitles = [
+                SourceTitle(
+                    id: "makemkv:5",
+                    name: "3D Video 1",
+                    outputName: "Feature - 3D Video 1",
+                    durationSeconds: 600,
+                    resolution: "1920x1080",
+                    frameRate: "24000/1001",
+                    mainFeature: false
+                ),
+                SourceTitle(
+                    id: "makemkv:3",
+                    name: "Main Feature",
+                    outputName: "Feature",
+                    durationSeconds: 7_200,
+                    resolution: "1920x1080",
+                    frameRate: "24000/1001",
+                    mainFeature: true
+                ),
+            ]
+            let originalInspection = SourceInspection(
+                name: "Feature",
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                interlaced: false,
+                titles: originalTitles
+            )
+            let refreshedInspection = SourceInspection(
+                name: "Feature",
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                interlaced: false,
+                titles: refreshedTitles
+            )
+            let sourcePath = sourceURLs[0].path
+            let scenario = BatchWorkerScenario(
+                failConversionOnceFor: [sourcePath],
+                inspectionResults: [sourcePath: [originalInspection, refreshedInspection]]
+            )
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions(),
+                titleSelection: .all
+            )
+            await waitForBatchCompletion(viewModel)
+
+            var queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.failed, .completed])
+            viewModel.retryBatchItem(queue.items[0].id)
+            await waitForBatchCompletion(viewModel)
+
+            queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.count, 2)
+            XCTAssertEqual(queue.items.map(\.status), [.completed, .completed])
+            XCTAssertEqual(
+                scenario.records.filter { $0.operation == "convert_source" }.map(\.titleID),
+                [originalTitles[0].id, originalTitles[1].id, refreshedTitles[1].id]
+            )
+        }
+    }
+
+    @MainActor
+    func testBatchAllTitlesRerunRediscoversSourcesInsteadOfProjectedRows() async throws {
+        try await withTemporaryBatchSources(["Feature.iso"]) { folderURL, sourceURLs, destinationURL in
+            let inspection = SourceInspection(
+                name: "Feature",
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                interlaced: false,
+                titles: [
+                    SourceTitle(
+                        id: "makemkv:0",
+                        name: "Main Feature",
+                        outputName: "Feature",
+                        durationSeconds: 7_200,
+                        resolution: "1920x1080",
+                        frameRate: "24000/1001",
+                        mainFeature: true
+                    ),
+                    SourceTitle(
+                        id: "makemkv:2",
+                        name: "3D Video 1",
+                        outputName: "Feature - 3D Video 1",
+                        durationSeconds: 600,
+                        resolution: "1920x1080",
+                        frameRate: "24000/1001",
+                        mainFeature: false
+                    ),
+                ]
+            )
+            let scenario = BatchWorkerScenario(
+                inspectionResults: [sourceURLs[0].path: [inspection, inspection]]
+            )
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+
+            viewModel.selectSource(folderURL)
+            for _ in 0 ..< 2 {
+                viewModel.startBatchConversion(
+                    profile: BuiltInProfile.balanced.profile,
+                    destinationURL: destinationURL,
+                    options: ConversionOptions(),
+                    titleSelection: .all
+                )
+                await waitForBatchCompletion(viewModel)
+                XCTAssertEqual(viewModel.batchQueue?.items.count, 2)
+            }
+
+            XCTAssertEqual(scenario.records.filter { $0.operation == "inspect_source" }.count, 2)
+            XCTAssertEqual(scenario.records.filter { $0.operation == "convert_source" }.count, 4)
+        }
+    }
+
+    @MainActor
     func testBatchSingleTitleSourcePreservesRemoveOriginalIntent() async throws {
         try await withTemporaryBatchSources(["feature.mkv"]) { folderURL, _, destinationURL in
             let scenario = BatchWorkerScenario()

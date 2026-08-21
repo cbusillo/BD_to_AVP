@@ -1221,7 +1221,8 @@ struct ContentView: View {
             viewModel.startBatchConversion(
                 profile: selectedProfile,
                 destinationURL: destinationURL,
-                options: options
+                options: options,
+                titleSelection: titleSelection
             )
         } else {
             startSelectedConversions()

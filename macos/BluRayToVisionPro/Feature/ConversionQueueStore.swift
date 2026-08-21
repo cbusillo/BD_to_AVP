@@ -339,6 +339,11 @@ final class ConversionQueueStore: ObservableObject {
             if item.state == .failed, item.failure == nil {
                 throw ConversionQueueStoreError.invalidDocument
             }
+            if let titleIndex = item.intent.sourceFolderTitleIndex,
+               titleIndex < 0 || item.intent.sourceFolderDiscTitleSelection == nil
+            {
+                throw ConversionQueueStoreError.invalidDocument
+            }
         }
     }
 
