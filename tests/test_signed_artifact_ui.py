@@ -22,8 +22,10 @@ class FakeOperations:
         self.profiles_after = 1
         self.profiles_before = 0
         self.running = False
+        self.install_mount_point: Path | None = None
 
-    def install_app(self, _dmg_path: Path, destination: Path) -> None:
+    def install_app(self, _dmg_path: Path, destination: Path, mount_point: Path) -> None:
+        self.install_mount_point = mount_point
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
             raise AssertionError("test destination should start empty")
@@ -270,10 +272,12 @@ class SignedArtifactUITests(unittest.TestCase):
                 release_receipt_file_sha256=release_receipt_sha256,
             )
 
-            receipt = run(config, FakeOperations(app))
+            operations = FakeOperations(app)
+            receipt = run(config, operations)
 
             self.assertTrue(output_receipt.exists())
             self.assertFalse(config.qualification_root.exists())
+            self.assertEqual(operations.install_mount_point, config.qualification_root / "Mount")
             self.assertEqual(receipt["case_id"], "profile-save-action-accessibility")
             self.assertEqual(receipt["release_receipt"]["asset_id"], 4)
             self.assertEqual(receipt["dmg"]["name"], dmg.name)

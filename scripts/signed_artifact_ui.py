@@ -141,6 +141,7 @@ def _run(config: SignedArtifactUIConfig, operations: MacOSOperations) -> Mapping
 
     synthetic_home = config.qualification_root / "Home"
     app_path = config.qualification_root / "Applications" / APP_NAME
+    mount_point = config.qualification_root / "Mount"
     raw_ui_directory = config.qualification_root / "InstalledUIEvidence"
     marker_path = config.qualification_root / ".bd-to-avp-signed-artifact-ui.json"
     marker = {"owner": "bd-to-avp-signed-artifact-ui", "run_id": str(uuid.uuid4())}
@@ -148,7 +149,7 @@ def _run(config: SignedArtifactUIConfig, operations: MacOSOperations) -> Mapping
     marker_path.write_text(json.dumps(marker, sort_keys=True) + "\n", encoding="utf-8")
     try:
         synthetic_home.mkdir(parents=True)
-        operations.install_app(config.dmg, app_path)
+        operations.install_app(config.dmg, app_path, mount_point)
         installed_app_tree_sha256 = app_tree_sha256(app_path)
         if installed_app_tree_sha256 != expectation.signed_app_tree_sha256:
             raise SignedArtifactUIError("Installed app tree digest does not match the signed package receipt.")
