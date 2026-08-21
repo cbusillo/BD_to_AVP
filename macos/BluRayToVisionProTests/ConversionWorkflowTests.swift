@@ -686,6 +686,42 @@ final class ConversionWorkflowTests: XCTestCase {
         }
     }
 
+    func testBatchSummaryIdentifiesActiveDiscTitle() throws {
+        try withTemporaryDirectory { directoryURL in
+            let sourceURL = directoryURL.appendingPathComponent("Feature.iso")
+            _ = FileManager.default.createFile(atPath: sourceURL.path, contents: Data())
+            let folderSource = try XCTUnwrap(ConversionSource.infer(from: directoryURL))
+            let source = try XCTUnwrap(ConversionSource.infer(from: sourceURL))
+            let title = SourceTitle(
+                id: "makemkv:2",
+                name: "3D Video 1",
+                outputName: "Feature - 3D Video 1",
+                durationSeconds: 600,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: false
+            )
+            var item = SourceFolderQueueItem(source: source)
+            item.status = .converting
+            item.draft = ConversionDraft(
+                source: source,
+                sourceDetails: nil,
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: directoryURL,
+                options: ConversionOptions(),
+                selectedTitle: title
+            )
+            let queue = SourceFolderQueueState(
+                folderSource: folderSource,
+                items: [item],
+                activeItemID: item.id,
+                hasStarted: true
+            )
+
+            XCTAssertEqual(queue.summaryText, "Item 1 of 1: Feature.iso — 3D Video 1")
+        }
+    }
+
     func testBatchPreparationSnapshotsProfileDestinationAndOptionsPerItem() throws {
         try withTemporaryDirectory { directoryURL in
             let firstURL = directoryURL.appendingPathComponent("First.mkv")

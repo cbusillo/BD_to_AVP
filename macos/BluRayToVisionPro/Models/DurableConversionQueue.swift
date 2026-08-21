@@ -118,6 +118,11 @@ enum DurableQueueItemOrigin: String, Codable, Equatable {
     case sourceFolder
 }
 
+enum SourceFolderDiscTitleSelection: String, Codable, Equatable {
+    case mainFeature
+    case all3DVideos
+}
+
 enum DurableQueueItemState: String, Codable, Equatable, CaseIterable {
     case waiting
     case inspecting
@@ -137,27 +142,39 @@ struct DurableQueueItemIntent: Codable, Equatable {
     var destinationPath: String
     var options: ConversionOptions
     var selectedTitle: SourceTitle?
+    var sourceFolderDiscTitleSelection: SourceFolderDiscTitleSelection?
+    var sourceFolderTitleIndex: Int?
 
     init(
         source: DurableQueueSource,
         profile: DurableQueueProfile,
         destinationPath: String,
         options: ConversionOptions,
-        selectedTitle: SourceTitle? = nil
+        selectedTitle: SourceTitle? = nil,
+        sourceFolderDiscTitleSelection: SourceFolderDiscTitleSelection? = nil,
+        sourceFolderTitleIndex: Int? = nil
     ) {
         self.source = source
         self.profile = profile
         self.destinationPath = destinationPath
         self.options = options
         self.selectedTitle = selectedTitle
+        self.sourceFolderDiscTitleSelection = sourceFolderDiscTitleSelection
+        self.sourceFolderTitleIndex = sourceFolderTitleIndex
     }
 
-    init(draft: ConversionDraft) {
+    init(
+        draft: ConversionDraft,
+        sourceFolderDiscTitleSelection: SourceFolderDiscTitleSelection? = nil,
+        sourceFolderTitleIndex: Int? = nil
+    ) {
         source = DurableQueueSource(source: draft.source)
         profile = DurableQueueProfile(profile: draft.profile)
         destinationPath = draft.destinationURL.standardizedFileURL.path
         options = draft.options
         selectedTitle = draft.selectedTitle
+        self.sourceFolderDiscTitleSelection = sourceFolderDiscTitleSelection
+        self.sourceFolderTitleIndex = sourceFolderTitleIndex
     }
 }
 

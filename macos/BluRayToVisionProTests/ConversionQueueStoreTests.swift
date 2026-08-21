@@ -51,8 +51,7 @@ final class ConversionQueueStoreTests: XCTestCase {
             upscaleQuality: 83
         )
         options.job.removeOriginalAfterSuccess = false
-        let items = [
-            makeItem(
+        var firstItem = makeItem(
                 id: UUID(uuidString: "551519B2-7C66-4E8F-AF04-519127511D78")!,
                 ordinal: 0,
                 groupID: groupID,
@@ -60,7 +59,11 @@ final class ConversionQueueStoreTests: XCTestCase {
                 sourcePath: "/Volumes/Rips/first.iso",
                 options: options,
                 state: .waiting
-            ),
+            )
+        firstItem.intent.sourceFolderDiscTitleSelection = .all3DVideos
+        firstItem.intent.sourceFolderTitleIndex = 1
+        let items = [
+            firstItem,
             makeItem(
                 id: UUID(uuidString: "47B17E9C-26D9-4554-8994-CB744D97B377")!,
                 ordinal: 1,
@@ -86,6 +89,8 @@ final class ConversionQueueStoreTests: XCTestCase {
         XCTAssertEqual(restored.items.map(\.ordinal), [0, 1])
         XCTAssertEqual(restored.items.map(\.groupID), [groupID, groupID])
         XCTAssertEqual(restored.items.first?.intent.options, options)
+        XCTAssertEqual(restored.items.first?.intent.sourceFolderDiscTitleSelection, .all3DVideos)
+        XCTAssertEqual(restored.items.first?.intent.sourceFolderTitleIndex, 1)
         XCTAssertFalse(try XCTUnwrap(restored.items.first).intent.options.job.removeOriginalAfterSuccess)
     }
 

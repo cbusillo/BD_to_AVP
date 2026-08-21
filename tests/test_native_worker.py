@@ -2164,6 +2164,34 @@ class SourceConversionTests(unittest.TestCase):
             self.assertIs(process_each_mock.call_args.kwargs["activity"], activity)
             self.assertEqual(process_each_mock.call_args.kwargs["selected_title_id"], "makemkv:0")
 
+    def test_disc_conversions_forward_each_selected_title_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            source_path = temporary_path / "movie.iso"
+            source_path.write_bytes(b"disc")
+            destination_path = temporary_path / "output"
+            final_path = destination_path / "movie_AVP.mov"
+            final_path.parent.mkdir()
+            final_path.write_bytes(b"final")
+            jobs = []
+            for title_id in ("makemkv:0", "makemkv:2"):
+                request = json.loads(conversion_request_line(source_path, destination_path))
+                request["source"]["title_id"] = title_id
+                jobs.append(JobSpec.from_json_line(json.dumps(request)))
+
+            with (
+                patch.object(config, "configure_tool_environment"),
+                patch("bd_to_avp.modules.process.process_each", return_value=final_path) as process_each_mock,
+            ):
+                for job in jobs:
+                    emitter = WorkerEventEmitter(io.StringIO(), job.job_id)
+                    convert_source(job, WorkerProcessOwner(), WorkerActivityReporter(emitter))
+
+            self.assertEqual(
+                [call.kwargs["selected_title_id"] for call in process_each_mock.call_args_list],
+                ["makemkv:0", "makemkv:2"],
+            )
+
     def test_iso_makemkv_failure_requests_recovery_decision(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
