@@ -973,7 +973,7 @@ printf '%s' "$CODESIGN_METADATA"
         )
         self.assertEqual(
             release_operations["qualificationRecordPath"],
-            "docs/qualification/v0.3.2-beta.5-signed-qualification-v1.json",
+            "docs/qualification/v0.3.2-beta.6-signed-qualification-v1.json",
         )
         self.assertEqual(len(release_operations["qualificationReportArtifacts"]), 3)
         self.assertIn(
@@ -1276,6 +1276,7 @@ fi
         enforce = by_name["Enforce post-publication milestone evidence"]
 
         self.assertEqual(context["if"], "github.event_name == 'pull_request'")
+        self.assertEqual(context["env"], {"GH_TOKEN": "${{ github.token }}"})
         for step in (classify, upload, summarize, enforce):
             self.assertIn("steps.milestone-context.outputs.required == 'true'", step["if"])
         self.assertIn("scripts.release_milestone_context", context["run"])

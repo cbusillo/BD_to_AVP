@@ -7,6 +7,7 @@ import zipfile
 
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.release_milestone_context import (
     EVIDENCE_INDEX_PATH,
@@ -18,6 +19,7 @@ from scripts.release_milestone_context import (
     require_manifest_runner_sha,
     resolve_milestone_manifest_context,
     resolve_milestone_context,
+    verify_published_release_receipt,
 )
 from scripts.release_qualification_manifest import (
     SIGNAL_ARCHIVE_NAME,
@@ -378,6 +380,15 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                 "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.1-beta.2.dmg",
             }
         )
+        for field in (
+            "source_git_sha",
+            "release_run_id",
+            "release_id",
+            "dmg_sha256",
+            "appcast_sha256",
+            "signed_app_tree_sha256",
+        ):
+            next_qualification["candidate"][field] = None
         next_qualification["immutable_history"] = {"burned_builds": [162] if include_burned_build else []}
         next_path = root / "docs/qualification/v0.3.1-beta.2-signed-qualification-v1.json"
         next_path.write_text(json.dumps(next_qualification) + "\n", encoding="utf-8")
@@ -387,6 +398,151 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         config_path.write_text(json.dumps(config) + "\n", encoding="utf-8")
         subprocess.run(["git", "add", attempt_root, next_path, config_path], cwd=root, check=True)
         subprocess.run(["git", "commit", "-qm", "prepare successor beta"], cwd=root, check=True)
+        head_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        return base_sha, head_sha
+
+    @staticmethod
+    def prepare_published_prior_receipt_transition(
+        root: Path,
+        *,
+        bind_base_candidate: bool = False,
+        previous_beta_override: tuple[str, object] | None = None,
+        include_extra_evidence_file: bool = False,
+        tamper_config: bool = False,
+    ) -> tuple[str, str]:
+        base_qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
+        base_qualification = json.loads(base_qualification_path.read_text(encoding="utf-8"))
+        base_qualification["status"] = "preregistered_pending_exact_candidate"
+        base_qualification["candidate"].update(
+            {
+                "package_version": "0.3.1b1",
+                "public_version": "0.3.1-beta.1",
+                "build_version": "162",
+                "release_tag": "v0.3.1-beta.1",
+                "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.1-beta.1.dmg",
+                "workflow": "Prerelease",
+            }
+        )
+        for field in (
+            "source_git_sha",
+            "release_run_id",
+            "release_id",
+            "dmg_sha256",
+            "appcast_sha256",
+            "signed_app_tree_sha256",
+        ):
+            base_qualification["candidate"][field] = None
+        if bind_base_candidate:
+            base_qualification["candidate"]["release_id"] = 33333
+        base_qualification_path.write_text(json.dumps(base_qualification) + "\n", encoding="utf-8")
+        subprocess.run(["git", "add", base_qualification_path], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "prepare published beta"], cwd=root, check=True)
+        base_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        release_tag = "v0.3.1-beta.1"
+        subprocess.run(["git", "tag", release_tag, base_sha], cwd=root, check=True)
+
+        receipt_path = root / f"docs/release-evidence/{release_tag}/release-receipt.json"
+        receipt_path.parent.mkdir(parents=True)
+        receipt = build_receipt(
+            {
+                "release_route": "prerelease",
+                "source_sha": base_sha,
+                "workflow_actor": "shiny-code-bot",
+                "workflow_run_id": 22222,
+                "workflow_run_attempt": 1,
+                "package_version": "0.3.1b1",
+                "public_version": "0.3.1-beta.1",
+                "build_version": "162",
+                "release_tag": release_tag,
+                "release_name": release_tag,
+                "release_id": 33333,
+                "release_created_at": "2026-08-21T01:00:00Z",
+                "prerelease": True,
+                "make_latest": False,
+                "signed_app_tree_sha256": APP_TREE_SHA256,
+                "artifacts": [
+                    {
+                        "kind": "dmg",
+                        "name": "3D-Blu-ray-to-Vision-Pro-0.3.1-beta.1.dmg",
+                        "sha256": DMG_SHA256,
+                        "size_bytes": 1000,
+                        "asset_id": 1,
+                    },
+                    {
+                        "kind": "checksum",
+                        "name": "SHA256SUMS",
+                        "sha256": CHECKSUM_SHA256,
+                        "size_bytes": 100,
+                        "asset_id": 2,
+                    },
+                    {
+                        "kind": "appcast",
+                        "name": "appcast.xml",
+                        "sha256": APPCAST_SHA256,
+                        "size_bytes": 500,
+                        "asset_id": 3,
+                    },
+                ],
+            }
+        )
+        write_receipt(receipt, receipt_path)
+        next_qualification = json.loads(json.dumps(base_qualification))
+        next_qualification["candidate"].update(
+            {
+                "package_version": "0.3.1b2",
+                "public_version": "0.3.1-beta.2",
+                "build_version": "163",
+                "release_tag": "v0.3.1-beta.2",
+                "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.1-beta.2.dmg",
+            }
+        )
+        for field in (
+            "source_git_sha",
+            "release_run_id",
+            "release_id",
+            "dmg_sha256",
+            "appcast_sha256",
+            "signed_app_tree_sha256",
+        ):
+            next_qualification["candidate"][field] = None
+        next_qualification["immutable_history"] = {
+            "burned_builds": [],
+            "previous_beta": {
+                "appcast_sha256": APPCAST_SHA256,
+                "build_version": "162",
+                "dmg_sha256": DMG_SHA256,
+                "must_not_rebuild": True,
+                "package_version": "0.3.1b1",
+                "published_at": "2026-08-21T02:00:00Z",
+                "release_id": 33333,
+                "release_run_id": 22222,
+                "release_tag": release_tag,
+                "signed_app_tree_sha256": APP_TREE_SHA256,
+                "source_git_sha": base_sha,
+            },
+        }
+        if previous_beta_override is not None:
+            field, value = previous_beta_override
+            next_qualification["immutable_history"]["previous_beta"][field] = value
+        next_path = root / "docs/qualification/v0.3.1-beta.2-signed-qualification-v1.json"
+        next_path.write_text(json.dumps(next_qualification) + "\n", encoding="utf-8")
+        config_path = root / ".github/github.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["releaseOperations"]["qualificationRecordPath"] = next_path.relative_to(root).as_posix()
+        if tamper_config:
+            config["releaseOperations"]["qualificationPolicyPath"] = "docs/qualification/weakened-policy.json"
+        config_path.write_text(json.dumps(config) + "\n", encoding="utf-8")
+        paths = [receipt_path, next_path, config_path]
+        if include_extra_evidence_file:
+            publication_path = receipt_path.with_name("publication-record.json")
+            publication_path.write_text('{"schema_version": 1}\n', encoding="utf-8")
+            paths.append(publication_path)
+        subprocess.run(["git", "add", *paths], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "prepare successor after published beta"], cwd=root, check=True)
         head_sha = subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
         ).stdout.strip()
@@ -960,6 +1116,135 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                     base_branch="main",
                 )
 
+    def test_rejects_prior_receipt_carry_forward_outside_exact_prepare_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.prepare_published_prior_receipt_transition(root)
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "preparation branch"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="feature/carry-receipt",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                    published_receipt_verifier=lambda _path, _receipt, _digest: None,
+                )
+
+    def test_rejects_prior_receipt_when_base_candidate_is_partially_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.prepare_published_prior_receipt_transition(root, bind_base_candidate=True)
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "every base immutable candidate field"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="prepare/v0.3.1-beta.2",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                    published_receipt_verifier=lambda _path, _receipt, _digest: None,
+                )
+
+    def test_rejects_prior_receipt_with_unrelated_github_config_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.prepare_published_prior_receipt_transition(root, tamper_config=True)
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "only by advancing qualificationRecordPath"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="prepare/v0.3.1-beta.2",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                    published_receipt_verifier=lambda _path, _receipt, _digest: None,
+                )
+
+    def test_verifies_carried_receipt_against_immutable_release_and_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt_path = self.build_repository(root)
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt_digest = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+            release = receipt["release"]
+            workflow = receipt["workflow"]
+            release_response = {
+                "id": release["id"],
+                "tag_name": release["tag"],
+                "target_commitish": receipt["source_sha"],
+                "draft": False,
+                "prerelease": release["prerelease"],
+                "immutable": True,
+                "assets": [
+                    {
+                        "name": "release-receipt.json",
+                        "size": receipt_path.stat().st_size,
+                        "digest": f"sha256:{receipt_digest}",
+                    }
+                ],
+            }
+            run_response = {
+                "id": workflow["run_id"],
+                "name": workflow["name"],
+                "path": workflow["path"],
+                "head_sha": receipt["source_sha"],
+                "status": "completed",
+                "conclusion": "success",
+                "run_attempt": workflow["run_attempt"],
+                "event": "workflow_dispatch",
+                "head_branch": "main",
+                "actor": {"login": workflow["actor"]},
+            }
+            responses = [
+                subprocess.CompletedProcess([], 0, stdout=json.dumps(release_response), stderr=""),
+                subprocess.CompletedProcess([], 0, stdout=json.dumps(run_response), stderr=""),
+            ]
+
+            with patch("scripts.release_milestone_context.subprocess.run", side_effect=responses):
+                verify_published_release_receipt(receipt_path, receipt, receipt_digest)
+
+    def test_rejects_carried_receipt_that_differs_from_published_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            receipt_path = self.build_repository(root)
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt_digest = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+            release = receipt["release"]
+            release_response = {
+                "id": release["id"],
+                "tag_name": release["tag"],
+                "target_commitish": receipt["source_sha"],
+                "draft": False,
+                "prerelease": release["prerelease"],
+                "immutable": True,
+                "assets": [
+                    {
+                        "name": "release-receipt.json",
+                        "size": receipt_path.stat().st_size,
+                        "digest": f"sha256:{'0' * 64}",
+                    }
+                ],
+            }
+
+            with (
+                patch(
+                    "scripts.release_milestone_context.subprocess.run",
+                    return_value=subprocess.CompletedProcess([], 0, stdout=json.dumps(release_response), stderr=""),
+                ),
+                self.assertRaisesRegex(ReleaseMilestoneContextError, "asset field digest"),
+            ):
+                verify_published_release_receipt(receipt_path, receipt, receipt_digest)
+
     def test_allows_prepublication_qualification_evidence_change(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1106,9 +1391,71 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                 base_repo="cbusillo/BD_to_AVP",
                 head_repo="cbusillo/BD_to_AVP",
                 base_branch="main",
+                published_receipt_verifier=lambda _path, _receipt, _digest: None,
             )
 
         self.assertIsNone(discovered)
+
+    def test_allows_exact_published_prior_receipt_to_advance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.prepare_published_prior_receipt_transition(root)
+
+            discovered = discover_milestone_receipt(
+                root,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                head_branch="prepare/v0.3.1-beta.2",
+                base_repo="cbusillo/BD_to_AVP",
+                head_repo="cbusillo/BD_to_AVP",
+                base_branch="main",
+                published_receipt_verifier=lambda _path, _receipt, _digest: None,
+            )
+
+        self.assertIsNone(discovered)
+
+    def test_rejects_published_prior_receipt_identity_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.prepare_published_prior_receipt_transition(
+                root,
+                previous_beta_override=("dmg_sha256", "0" * 64),
+            )
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "previous_beta.dmg_sha256"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="prepare/v0.3.1-beta.2",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                    published_receipt_verifier=lambda _path, _receipt, _digest: None,
+                )
+
+    def test_rejects_extra_release_evidence_with_prior_receipt_carry_forward(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.prepare_published_prior_receipt_transition(
+                root,
+                include_extra_evidence_file=True,
+            )
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "may add only the exact checked receipt"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="prepare/v0.3.1-beta.2",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                    published_receipt_verifier=lambda _path, _receipt, _digest: None,
+                )
 
     def test_rejects_failed_candidate_with_wrong_receipt_digest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

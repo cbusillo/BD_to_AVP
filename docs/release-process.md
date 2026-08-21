@@ -29,9 +29,13 @@ Beta `0.3.2b3` build `165` is a failed unpublished signed attempt and its
 identity is permanently burned, as recorded in
 [the 0.3.2 Beta 3 cut packet](0.3.2-beta.3-cut-packet.md). Beta `0.3.2b4`
 build `166` is also a failed unpublished signed attempt and permanently burned,
-as recorded in [the 0.3.2 Beta 4 cut packet](0.3.2-beta.4-cut-packet.md). The
-next prepared identity is Beta `0.3.2b5` build `167`, tracked in
-[the 0.3.2 Beta 5 cut packet](0.3.2-beta.5-cut-packet.md) and issue #609.
+as recorded in [the 0.3.2 Beta 4 cut packet](0.3.2-beta.4-cut-packet.md). Beta
+`0.3.2b5` build `167` is published and immutable, but its post-publication
+exact-artifact qualification is blocked because the packaged worker reported
+`0.0.0` instead of `0.3.2b5`; the publication and qualification boundary are
+tracked in [the 0.3.2 Beta 5 cut packet](0.3.2-beta.5-cut-packet.md). The next
+prepared identity is corrective Beta `0.3.2b6` build `168`, tracked in
+[the 0.3.2 Beta 6 cut packet](0.3.2-beta.6-cut-packet.md) and issue #609.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
