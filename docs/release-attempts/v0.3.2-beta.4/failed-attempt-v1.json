@@ -1,0 +1,23 @@
+{
+  "build_version": "166",
+  "draft_deleted": true,
+  "draft_release_id": 374372418,
+  "failed_job": "Prove signed artifact UI accessibility",
+  "failed_job_id": 96765303632,
+  "failed_step": "Run installed candidate UI accessibility lane",
+  "must_not_rebuild": true,
+  "package_version": "0.3.2b4",
+  "public_version": "0.3.2-beta.4",
+  "published_at": null,
+  "recorded_at": "2026-08-21T13:03:51Z",
+  "release_receipt_file_sha256": "9a2833016f0dc352ecc6cce386f1f40cfd15180f0ffaa7ad3c5028139903e4f1",
+  "release_receipt_path": "docs/release-attempts/v0.3.2-beta.4/release-receipt.json",
+  "release_receipt_sha256": "a02c9aceac220a6db4626e0b70232ad2e61ef468e53a4b644de6ae5c93148f5a",
+  "release_tag": "v0.3.2-beta.4",
+  "schema_version": 1,
+  "source_sha": "1473d14ea86562ff743da6f3d78f230361b7de23",
+  "status": "failed_unpublished_signed_candidate",
+  "workflow_conclusion": "failure",
+  "workflow_run_attempt": 1,
+  "workflow_run_id": 32453767766
+}

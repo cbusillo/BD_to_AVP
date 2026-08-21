@@ -14,9 +14,9 @@ RC 2 (`0.3.0rc2`, build `159`), and RC 3 (`0.3.0rc3`, build `160`) are
 published and immutable. Stable `0.3.0` build `161` is also published and
 immutable. Stable `0.3.1` build `162`, Beta `0.3.2b1` build `163`, and Beta
 `0.3.2b2` build `164` are published and immutable. Beta `0.3.2b3` build `165`
-is a failed unpublished signed attempt and both identities are burned. The next
-prepared target is Beta `0.3.2b4` build `166`; issue #609 owns publication and
-exact-artifact qualification.
+and Beta `0.3.2b4` build `166` are failed unpublished signed attempts and their
+identities are burned. The next prepared target is Beta `0.3.2b5` build `167`;
+issue #609 owns publication and exact-artifact qualification.
 Run-bound signing approval
 remains a separate authorization boundary.
 
@@ -415,10 +415,9 @@ advances to Beta 4 build `166` rather than reusing either Beta 3 identity. The
 failed-attempt details are in
 [the 0.3.2 Beta 3 cut packet](0.3.2-beta.3-cut-packet.md).
 
-## 0.3.2 Beta 4 Prepared Target
+## 0.3.2 Beta 4 Failed Attempt
 
-The repository is prepared for review of guarded Prerelease dispatch for
-`v0.3.2-beta.4`:
+Beta 4 is failed, unpublished, and permanently burned:
 
 - internal version `0.3.2b4` and public version `0.3.2-beta.4`;
 - public tag and title `v0.3.2-beta.4`;
@@ -428,17 +427,45 @@ The repository is prepared for review of guarded Prerelease dispatch for
 - the same production product, bundle, feed, key, signing team, and diagnostics
   endpoint as Beta `0.3.2b2`.
 
-Publication must place Beta 4 above immutable Beta 2 build `164`, Beta 1 build
-`163`, Stable `0.3.1` build `162`, and all earlier published history, with
-failed Beta 3 build `165` absent. Stable and RC clients exclude the Beta item;
-Beta and Alpha clients can select it because build `166` is newer.
+Guarded Prerelease run `32453767766` built, Developer ID signed, notarized, and
+packaged build `166` from source SHA
+`1473d14ea86562ff743da6f3d78f230361b7de23`. The run failed before publication
+in the signed-artifact UI accessibility lane because the standalone fresh
+install had no pre-save `profiles.json`, which the qualification test
+incorrectly treated as an error. No public tag, release, appcast item, Pages
+state, PyPI version, or Homebrew change was created.
 
-As checked on August 21, 2026, no `v0.3.2-beta.4` tag, release, draft, PyPI
+The unpublished draft and its asset identities were recorded, then the draft
+was deleted after explicit recovery authorization. PR #620 corrected the
+qualification contract, and the successor advances to Beta 5 build `167`
+rather than reusing either Beta 4 identity. The failed-attempt details are in
+[the 0.3.2 Beta 4 cut packet](0.3.2-beta.4-cut-packet.md).
+
+## 0.3.2 Beta 5 Prepared Target
+
+The repository is prepared for review of guarded Prerelease dispatch for
+`v0.3.2-beta.5`:
+
+- internal version `0.3.2b5` and public version `0.3.2-beta.5`;
+- public tag and title `v0.3.2-beta.5`;
+- global build `167`;
+- Sparkle channel `beta`, making the item eligible only on Beta and Alpha;
+- GitHub prerelease, never Latest, PyPI, or Homebrew; and
+- the same production product, bundle, feed, key, signing team, and diagnostics
+  endpoint as Beta `0.3.2b2`.
+
+Publication must place Beta 5 above immutable Beta 2 build `164`, Beta 1 build
+`163`, Stable `0.3.1` build `162`, and all earlier published history, with
+failed Beta 3 build `165` and failed Beta 4 build `166` absent. Stable and RC
+clients exclude the Beta item; Beta and Alpha clients can select it because
+build `167` is newer.
+
+As checked on August 21, 2026, no `v0.3.2-beta.5` tag, release, draft, PyPI
 version, Homebrew pull request, or appcast item exists. Dispatch requires
 separate explicit release authorization under a fixed-`main` merge hold. The
 reviewed metadata, release-note seed, scope freeze, recovery evidence, and
 qualification boundary are in
-[the 0.3.2 Beta 4 cut packet](0.3.2-beta.4-cut-packet.md).
+[the 0.3.2 Beta 5 cut packet](0.3.2-beta.5-cut-packet.md).
 
 ## Historical Boundaries
 

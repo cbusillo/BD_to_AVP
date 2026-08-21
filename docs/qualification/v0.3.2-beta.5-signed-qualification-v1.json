@@ -1,0 +1,252 @@
+{
+  "acceptance": {
+    "blocking_case_ids": [
+      "sparkle-update-route",
+      "clean-machine-signed-update",
+      "installed-ui-accessibility"
+    ],
+    "milestone_complete": false,
+    "nonblocking_case_ids": [
+      "native-sparkle-release-notes",
+      "usb-bluray-makemkv",
+      "protected-real-media-conversion",
+      "vision-pro-physical-playback",
+      "public-diagnostics-and-field-closure"
+    ],
+    "passed": false,
+    "preregistered_matrix_case_ids": [
+      "release-workflow-identity",
+      "updater-route-v0.3.2-beta.2-to-v0.3.2-beta.5",
+      "native-sparkle-notes-beta5",
+      "profile-save-action-accessibility",
+      "signed-packaged-route-parity",
+      "gui-preview-low-local-ample-destination",
+      "gui-preview-cancel-cleanup",
+      "gui-preview-failure-cleanup",
+      "capacity-known-low",
+      "capacity-unknown-and-conflicting",
+      "network-generated-final-output",
+      "overwrite-and-conversion-cancel",
+      "malformed-pgs-parser-recovery",
+      "subtitle-partial-output-diagnostics",
+      "clean-machine-signed-update",
+      "installed-ui-accessibility",
+      "usb-bluray-makemkv",
+      "protected-real-media-conversion",
+      "vision-pro-physical-playback",
+      "public-diagnostics-and-field-closure"
+    ],
+    "required_case_ids": [
+      "release-workflow-identity",
+      "sparkle-update-route",
+      "profile-save-action-accessibility",
+      "signed-packaged-route-parity",
+      "gui-preview-low-local-ample-destination",
+      "gui-preview-cancel-cleanup",
+      "gui-preview-failure-cleanup",
+      "capacity-known-low",
+      "capacity-unknown-and-conflicting",
+      "network-generated-final-output",
+      "overwrite-and-conversion-cancel",
+      "malformed-pgs-parser-recovery",
+      "subtitle-partial-output-diagnostics",
+      "clean-machine-signed-update",
+      "installed-ui-accessibility"
+    ]
+  },
+  "candidate": {
+    "appcast_sha256": null,
+    "build_version": "167",
+    "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.2-beta.5.dmg",
+    "dmg_sha256": null,
+    "mapping_version": 2,
+    "package_version": "0.3.2b5",
+    "public_version": "0.3.2-beta.5",
+    "release_id": null,
+    "release_run_id": null,
+    "release_tag": "v0.3.2-beta.5",
+    "route_table_id": "route-relative-video-quality-v2",
+    "route_table_sha256": "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214",
+    "signed_app_tree_sha256": null,
+    "source_git_sha": null,
+    "worker_protocol_version": 12,
+    "workflow": "Prerelease"
+  },
+  "execution_policy": {
+    "approval_command": "uv run python -m scripts.github_release_run approve",
+    "approval_required_exit_code": 20,
+    "field_qualification_timing": "post_publication_exact_artifact",
+    "generic_run_waiter_is_sufficient": false,
+    "macos_signing_requires_fresh_explicit_run_bound_authorization": true,
+    "main_must_remain_fixed_while_nonterminal": true,
+    "release_stage": "beta",
+    "watch_command": "uv run python -m scripts.github_release_run watch"
+  },
+  "immutable_history": {
+    "abandoned_builds": [
+      157
+    ],
+  "burned_builds": [
+    147,
+    154,
+    165,
+    166
+  ],
+    "previous_beta": {
+      "appcast_sha256": "d9e589452cbcc0147170dcdfa0cfdc520b761075ccde929fec64dee82c528073",
+      "build_version": "164",
+      "dmg_sha256": "72b7cba55948804724eca39f67359ee1f295fc57c9640f4c4f1a9fd1006bb774",
+      "must_not_rebuild": true,
+      "package_version": "0.3.2b2",
+      "published_at": "2026-08-19T17:04:11Z",
+      "release_id": 373212973,
+      "release_run_id": 32277548249,
+      "release_tag": "v0.3.2-beta.2",
+      "signed_app_tree_sha256": "87a36f1a7c474fd408c0569afc4430e5cea79387f40b67e08ada65780c2dd24f",
+      "source_git_sha": "da307689f38ee696c872b98c7c784a17e9fe9d19"
+    }
+  },
+  "issues": [
+    "#542",
+    "#610",
+    "#617",
+    "#620",
+    "#609"
+  ],
+  "matrix": [
+    {
+      "id": "release-workflow-identity",
+      "migration": "release_run_receipt",
+      "phase": "workflow",
+      "policy_case_id": "release-workflow-identity"
+    },
+    {
+      "id": "updater-route-v0.3.2-beta.2-to-v0.3.2-beta.5",
+      "migration": "fresh_retest",
+      "phase": "milestone",
+      "policy_case_id": "sparkle-update-route"
+    },
+    {
+      "id": "native-sparkle-notes-beta5",
+      "migration": "scope_evaluated",
+      "phase": "milestone",
+      "policy_case_id": "native-sparkle-release-notes"
+    },
+    {
+      "id": "profile-save-action-accessibility",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "profile-save-action-accessibility"
+    },
+    {
+      "id": "signed-packaged-route-parity",
+      "migration": "release_run_receipt",
+      "phase": "signed_artifact",
+      "policy_case_id": "signed-packaged-route-parity"
+    },
+    {
+      "id": "gui-preview-low-local-ample-destination",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "gui-preview-low-local-ample-destination"
+    },
+    {
+      "id": "gui-preview-cancel-cleanup",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "gui-preview-cancel-cleanup"
+    },
+    {
+      "id": "gui-preview-failure-cleanup",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "gui-preview-failure-cleanup"
+    },
+    {
+      "id": "capacity-known-low",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "capacity-known-low"
+    },
+    {
+      "id": "capacity-unknown-and-conflicting",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "capacity-unknown-and-conflicting"
+    },
+    {
+      "id": "network-generated-final-output",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "network-generated-final-output"
+    },
+    {
+      "id": "overwrite-and-conversion-cancel",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "overwrite-and-conversion-cancel"
+    },
+    {
+      "id": "malformed-pgs-parser-recovery",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "malformed-pgs-parser-recovery"
+    },
+    {
+      "id": "subtitle-partial-output-diagnostics",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "subtitle-partial-output-diagnostics"
+    },
+    {
+      "id": "clean-machine-signed-update",
+      "migration": "fresh_retest",
+      "phase": "milestone",
+      "policy_case_id": "clean-machine-signed-update"
+    },
+    {
+      "id": "installed-ui-accessibility",
+      "migration": "fresh_retest",
+      "phase": "milestone",
+      "policy_case_id": "installed-ui-accessibility"
+    },
+    {
+      "id": "usb-bluray-makemkv",
+      "migration": "scope_evaluated",
+      "phase": "milestone",
+      "policy_case_id": "usb-bluray-makemkv"
+    },
+    {
+      "id": "protected-real-media-conversion",
+      "migration": "scope_evaluated",
+      "phase": "milestone",
+      "policy_case_id": "protected-real-media-conversion"
+    },
+    {
+      "id": "vision-pro-physical-playback",
+      "migration": "scope_evaluated",
+      "phase": "milestone",
+      "policy_case_id": "vision-pro-physical-playback"
+    },
+    {
+      "id": "public-diagnostics-and-field-closure",
+      "migration": "external_nonblocking",
+      "phase": "post_publication",
+      "policy_case_id": "public-diagnostics-and-field-closure"
+    }
+  ],
+  "prior_evidence": [
+    {
+      "id": "v0.3.2-beta.3-change-scoped-evidence-v1",
+      "scope": "immutable change-scoped preparation evidence carried from the failed unpublished Beta 3 attempt"
+    }
+  ],
+  "qualification_id": "v0.3.2-beta.5-signed-qualification-v1",
+  "qualification_policy": {
+    "id": "release-qualification-policy-v1",
+    "path": "docs/qualification/release-qualification-policy-v1.json",
+    "scope_command": "uv run python -m scripts.qualify_release_scope --qualification docs/qualification/v0.3.2-beta.5-signed-qualification-v1.json --candidate-sha <full-sha> --evidence docs/qualification/release-evidence-v1.json --release-stage beta --workflow-phase preparation --require-evidence"
+  },
+  "schema_version": 1,
+  "status": "preregistered_pending_exact_candidate"
+}
