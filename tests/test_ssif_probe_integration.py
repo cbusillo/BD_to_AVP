@@ -57,7 +57,11 @@ class SsifProbeIntegrationTests(unittest.TestCase):
 
         self.assertEqual(result.stderr, "")
         inspection = json.loads(result.stdout)
-        self.assertEqual(inspection["libbluray_version"], "1.4.1")
+        installed_libbluray_version = subprocess.check_output(
+            ["pkg-config", "--modversion", "libbluray"],
+            text=True,
+        ).strip()
+        self.assertEqual(inspection["libbluray_version"], installed_libbluray_version)
         self.assertTrue(inspection["content_3d"])
         self.assertFalse(inspection["aacs_detected"])
         self.assertFalse(inspection["aacs_handled"])
