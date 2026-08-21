@@ -279,6 +279,7 @@ def _validate_prepublication_candidate_transition(
     base_sha: str,
     qualification: Mapping[str, Any],
     candidate: Mapping[str, Any],
+    published_prior_receipt: Mapping[str, Any] | None = None,
 ) -> None:
     base_config = _load_json_at_revision(
         repo_root,
@@ -305,18 +306,43 @@ def _validate_prepublication_candidate_transition(
     )
     base_candidate = _mapping(base_qualification.get("candidate"), "base qualification candidate")
     if any(field not in base_candidate or base_candidate[field] is None for field in IMMUTABLE_CANDIDATE_FIELDS):
-        failed_build = _validate_failed_unpublished_candidate(
-            repo_root,
-            base_sha=base_sha,
-            base_qualification=base_qualification,
-            base_candidate=base_candidate,
-        )
-        immutable_history = _mapping(qualification.get("immutable_history"), "qualification immutable_history")
-        burned_builds = _sequence(immutable_history.get("burned_builds"), "qualification burned_builds")
-        if failed_build not in burned_builds:
-            raise ReleaseMilestoneContextError(
-                "The successor qualification must permanently burn the failed candidate build."
+        if published_prior_receipt is not None:
+            release = _mapping(published_prior_receipt.get("release"), "published prior receipt release")
+            versions = _mapping(published_prior_receipt.get("versions"), "published prior receipt versions")
+            workflow = _mapping(published_prior_receipt.get("workflow"), "published prior receipt workflow")
+            artifacts = [
+                _mapping(item, "published prior receipt artifact")
+                for item in _sequence(published_prior_receipt.get("artifacts"), "published prior receipt artifacts")
+            ]
+            dmg_artifacts = [item for item in artifacts if item.get("kind") == "dmg"]
+            if len(dmg_artifacts) != 1:
+                raise ReleaseMilestoneContextError("Published prior receipt must contain exactly one DMG artifact.")
+            expected_base_candidate = {
+                "package_version": versions.get("package"),
+                "public_version": versions.get("public"),
+                "build_version": versions.get("build"),
+                "release_tag": release.get("tag"),
+                "dmg_name": dmg_artifacts[0].get("name"),
+                "workflow": workflow.get("name"),
+            }
+            for field, expected in expected_base_candidate.items():
+                if base_candidate.get(field) != expected:
+                    raise ReleaseMilestoneContextError(
+                        f"Published prior receipt does not match base qualification candidate.{field}."
+                    )
+        else:
+            failed_build = _validate_failed_unpublished_candidate(
+                repo_root,
+                base_sha=base_sha,
+                base_qualification=base_qualification,
+                base_candidate=base_candidate,
             )
+            immutable_history = _mapping(qualification.get("immutable_history"), "qualification immutable_history")
+            burned_builds = _sequence(immutable_history.get("burned_builds"), "qualification burned_builds")
+            if failed_build not in burned_builds:
+                raise ReleaseMilestoneContextError(
+                    "The successor qualification must permanently burn the failed candidate build."
+                )
     try:
         base_version = parse_release_version(cast(str, base_candidate.get("package_version")))
         next_version = parse_release_version(cast(str, candidate.get("package_version")))
@@ -341,6 +367,76 @@ def _validate_prepublication_candidate_transition(
             raise ReleaseMilestoneContextError(
                 f"Prepublication qualification candidate.{field} does not match the derived Stable identity."
             )
+
+
+def _validate_carried_prior_receipt(
+    repo_root: Path,
+    *,
+    base_sha: str,
+    qualification: Mapping[str, Any],
+    receipt_relative: str,
+    release_tag: str,
+) -> Mapping[str, Any]:
+    tracked_in_base = subprocess.run(
+        ["git", "cat-file", "-e", f"{base_sha}:{receipt_relative}"],
+        cwd=repo_root,
+        capture_output=True,
+        check=False,
+    )
+    if tracked_in_base.returncode == 0:
+        raise ReleaseMilestoneContextError("A carried prior release receipt must be new to the preparation branch.")
+    try:
+        receipt, _receipt_file_sha256 = load_validated_checked_receipt(repo_root / receipt_relative)
+    except ReleaseReceiptError as error:
+        raise ReleaseMilestoneContextError(f"Carried prior release receipt is invalid: {error}") from error
+    release = _mapping(receipt.get("release"), "carried prior receipt release")
+    versions = _mapping(receipt.get("versions"), "carried prior receipt versions")
+    workflow = _mapping(receipt.get("workflow"), "carried prior receipt workflow")
+    if release.get("tag") != release_tag:
+        raise ReleaseMilestoneContextError("Carried prior release receipt path conflicts with its release tag.")
+    artifacts = [
+        _mapping(item, "carried prior receipt artifact")
+        for item in _sequence(receipt.get("artifacts"), "carried prior receipt artifacts")
+    ]
+    dmg_artifacts = [item for item in artifacts if item.get("kind") == "dmg"]
+    appcast_artifacts = [item for item in artifacts if item.get("kind") == "appcast"]
+    if len(dmg_artifacts) != 1 or len(appcast_artifacts) != 1:
+        raise ReleaseMilestoneContextError(
+            "Carried prior release receipt must contain exactly one DMG and one appcast artifact."
+        )
+    immutable_history = _mapping(qualification.get("immutable_history"), "qualification immutable_history")
+    previous_beta = _mapping(immutable_history.get("previous_beta"), "qualification previous_beta")
+    if previous_beta.get("must_not_rebuild") is not True:
+        raise ReleaseMilestoneContextError("Carried previous_beta must remain immutable and must_not_rebuild.")
+    expected_previous_beta = {
+        "release_tag": release_tag,
+        "package_version": versions.get("package"),
+        "build_version": versions.get("build"),
+        "source_git_sha": receipt.get("source_sha"),
+        "release_run_id": workflow.get("run_id"),
+        "release_id": release.get("id"),
+        "dmg_sha256": dmg_artifacts[0].get("sha256"),
+        "appcast_sha256": appcast_artifacts[0].get("sha256"),
+        "signed_app_tree_sha256": receipt.get("signed_app_tree_sha256"),
+    }
+    for field, expected in expected_previous_beta.items():
+        if previous_beta.get(field) != expected:
+            raise ReleaseMilestoneContextError(
+                f"Carried prior release receipt does not match qualification previous_beta.{field}."
+            )
+    _string(previous_beta.get("published_at"), "qualification previous_beta published_at")
+    source_sha = _string(receipt.get("source_sha"), "carried prior receipt source SHA")
+    tag_commit = subprocess.run(
+        ["git", "rev-parse", f"{release_tag}^{{commit}}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if tag_commit.returncode != 0 or tag_commit.stdout.strip() != source_sha:
+        raise ReleaseMilestoneContextError("Carried prior release receipt must match the immutable release tag commit.")
+    _require_source_ancestor(repo_root, source_sha)
+    return receipt
 
 
 def _validate_append_only_evidence_index(repo_root: Path, *, base_sha: str) -> list[Mapping[str, Any]]:
@@ -702,6 +798,48 @@ def discover_milestone_receipt(
     )
     evidence_index_mutation = EVIDENCE_INDEX_PATH in changed_paths
     qualification_mutation = qualification_relative in changed_paths
+    if len(receipt_matches) == 1 and qualification_mutation:
+        qualification = _load_json(repo_root / qualification_relative, "configured qualification record")
+        candidate = _mapping(qualification.get("candidate"), "configured qualification candidate")
+        missing_immutable_fields = [field for field in IMMUTABLE_CANDIDATE_FIELDS if field not in candidate]
+        if missing_immutable_fields:
+            raise ReleaseMilestoneContextError(
+                "Prepublication qualification must explicitly include every immutable candidate field as null."
+            )
+        if all(candidate[field] is None for field in IMMUTABLE_CANDIDATE_FIELDS):
+            receipt_relative, release_tag = receipt_matches[0]
+            runner_input_changes = sorted(RUNNER_BOUND_QUALIFICATION_PATHS.intersection(changed_paths))
+            if runner_input_changes:
+                raise ReleaseMilestoneContextError(
+                    "Prepublication prior-receipt carry-forward may not change runner-bound policy or route inputs: "
+                    f"{runner_input_changes!r}."
+                )
+            other_checked_release_changes = [
+                path
+                for path in changed_paths
+                if path.startswith("docs/release-evidence/")
+                and not _is_recovery_authorization_path(path)
+                and path != receipt_relative
+            ]
+            if other_checked_release_changes or evidence_index_mutation or RELEASE_LEDGER_PATH in changed_paths:
+                raise ReleaseMilestoneContextError(
+                    "Prepublication prior-receipt carry-forward may add only the exact checked receipt."
+                )
+            published_prior_receipt = _validate_carried_prior_receipt(
+                repo_root,
+                base_sha=base_sha,
+                qualification=qualification,
+                receipt_relative=receipt_relative,
+                release_tag=release_tag,
+            )
+            _validate_prepublication_candidate_transition(
+                repo_root,
+                base_sha=base_sha,
+                qualification=qualification,
+                candidate=candidate,
+                published_prior_receipt=published_prior_receipt,
+            )
+            return None
     if not receipt_matches:
         if checked_release_mutation:
             raise ReleaseMilestoneContextError(
