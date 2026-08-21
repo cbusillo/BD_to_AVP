@@ -46,6 +46,14 @@ class ReleaseSmokeTests(unittest.TestCase):
             with self.assertRaisesRegex(smoke_release_app.SmokeFailure, "MP4Box"):
                 smoke_release_app.smoke_app(app_path, skip_spctl=True)
 
+    def test_worker_protocol_rejects_packaged_version_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = make_fake_app(Path(temp_dir), version="1.2.3", worker_version="0.0.0")
+            bundle = smoke_release_app.read_bundle(app_path)
+
+            with self.assertRaisesRegex(smoke_release_app.SmokeFailure, "Packaged worker version mismatch"):
+                smoke_release_app.verify_worker_protocol(bundle, smoke_release_app.build_clean_env())
+
     def test_native_startup_uses_supported_smoke_flag(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             app_path = make_fake_app(Path(temp_dir), version="1.2.3")
@@ -312,6 +320,7 @@ def make_fake_app(
     root: Path,
     *,
     version: str,
+    worker_version: str | None = None,
     apple_vision_smoke: bool = True,
 ) -> Path:
     app_path = root / "3D Blu-ray to Vision Pro.app"
@@ -358,7 +367,7 @@ def make_fake_app(
             "#!/usr/bin/python3",
             "import json",
             "import sys",
-            f"version = {version!r}",
+            f"version = {(worker_version or version)!r}",
             f"apple_vision_smoke = {apple_vision_smoke!r}",
             "if sys.argv[1:] == ['--smoke-apple-vision-ocr']:",
             "    print('Apple Vision OCR import smoke passed' if apple_vision_smoke else 'Apple Vision unavailable')",

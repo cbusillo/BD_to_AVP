@@ -12,7 +12,7 @@ from typing import ClassVar, Iterable
 from bd_to_avp.modules.audio_mode import AudioMode
 from bd_to_avp.modules.preview_range import PreviewRange
 from bd_to_avp.modules.languages import LanguageCodeError, normalize_language_code
-from bd_to_avp.modules.util import get_pyproject_data
+from bd_to_avp.modules.util import get_bundled_app_version, get_pyproject_data
 from bd_to_avp.modules.video_mode import VideoMode
 from bd_to_avp.modules.video_quality_defaults import DEFAULT_AV1_CRF, DEFAULT_UPSCALE_QUALITY
 
@@ -140,6 +140,10 @@ class Config:
 
         @property
         def code_version(self) -> str:
+            bundled_version = get_bundled_app_version()
+            if bundled_version is not None:
+                return bundled_version
+
             try:
                 project, _ = get_pyproject_data()
                 return project["version"]
