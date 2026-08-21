@@ -478,7 +478,10 @@ identities and checked receipt are recorded under
 `docs/release-attempts/v0.3.2-beta.6/`; `.github/release-freezes.json` prevents
 redispatch of the Beta 6 tag. Build `168` must remain absent from future updater
 feeds. Issue #609 requires fresh explicit authorization before draft deletion
-and a newer successor identity, expected to begin at Beta 7/build `169`.
+and a checked `draft-deletion-v1.json` disposition before a newer successor
+identity, expected to begin at Beta 7/build `169`. Milestone-context validation
+accepts the cancelled candidate only after that disposition validates, then
+still requires build `168` in the successor qualification's burned-build list.
 
 ## Historical Boundaries
 

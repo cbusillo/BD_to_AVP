@@ -38,6 +38,7 @@ FAILED_ATTEMPT_ROOT = Path("docs/release-attempts")
 FAILED_ATTEMPT_RECORD_NAME = "failed-attempt-v1.json"
 FAILED_ATTEMPT_RECEIPT_NAME = "release-receipt.json"
 CANCELLED_ATTEMPT_RECORD_NAME = "cancelled-attempt-v1.json"
+DRAFT_DELETION_RECORD_NAME = "draft-deletion-v1.json"
 RECOVERY_AUTHORIZATION_PATHS = frozenset({"docs/release-evidence/v0.3.0-pypi-recovery.json"})
 EXPECTED_REPOSITORY = "cbusillo/BD_to_AVP"
 EXPECTED_BASE_BRANCH = "main"
@@ -116,6 +117,30 @@ CANCELLED_ATTEMPT_RECORD_KEYS = frozenset(
 )
 CANCELLED_ATTEMPT_ASSET_KEYS = frozenset({"asset_id", "kind", "name", "sha256", "size_bytes"})
 CANCELLED_ATTEMPT_ASSET_KINDS = frozenset({"appcast", "checksum", "dmg", "receipt"})
+DRAFT_DELETION_RECORD_KEYS = frozenset(
+    {
+        "action",
+        "attempt_record_file_sha256",
+        "attempt_record_path",
+        "authorization_actor",
+        "authorization_fingerprint",
+        "deleted_at",
+        "deleted_by",
+        "deletion_reason",
+        "draft_deleted",
+        "draft_exists",
+        "draft_release_id",
+        "published_at",
+        "receipt_file_sha256",
+        "recorded_at",
+        "release_tag",
+        "schema_version",
+        "source_sha",
+        "status",
+        "tag_exists",
+        "verified_absent_at",
+    }
+)
 
 
 class ReleaseMilestoneContextError(RuntimeError):
@@ -367,6 +392,92 @@ def validate_cancelled_attempt_record(repo_root: Path, release_tag: str) -> Mapp
     return record
 
 
+def build_draft_deletion_authorization_fingerprint(
+    *,
+    release_tag: str,
+    draft_release_id: int,
+    source_sha: str,
+    authorization_actor: str,
+) -> str:
+    payload = {
+        "action": "delete_abandoned_unpublished_draft",
+        "authorization_actor": authorization_actor,
+        "draft_release_id": draft_release_id,
+        "release_tag": release_tag,
+        "repository": EXPECTED_REPOSITORY,
+        "schema_version": 1,
+        "source_sha": source_sha,
+    }
+    encoded = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def validate_draft_deletion_record(
+    repo_root: Path,
+    release_tag: str,
+    attempt_record: Mapping[str, Any] | None = None,
+) -> Mapping[str, Any]:
+    attempt_root = FAILED_ATTEMPT_ROOT / release_tag
+    attempt_relative = attempt_root / CANCELLED_ATTEMPT_RECORD_NAME
+    deletion_relative = attempt_root / DRAFT_DELETION_RECORD_NAME
+    receipt_relative = attempt_root / FAILED_ATTEMPT_RECEIPT_NAME
+    attempt_record = attempt_record or validate_cancelled_attempt_record(repo_root, release_tag)
+    deletion = _load_json(repo_root / deletion_relative, "draft-deletion disposition record")
+    if set(deletion) != DRAFT_DELETION_RECORD_KEYS:
+        raise ReleaseMilestoneContextError("Draft-deletion disposition keys do not match the required schema.")
+    if (
+        deletion.get("schema_version") != 1
+        or deletion.get("status") != "deleted_abandoned_unpublished_draft"
+        or deletion.get("action") != "delete_abandoned_unpublished_draft"
+        or deletion.get("draft_deleted") is not True
+        or deletion.get("draft_exists") is not False
+        or deletion.get("tag_exists") is not False
+        or deletion.get("published_at") is not None
+    ):
+        raise ReleaseMilestoneContextError(
+            "Draft-deletion disposition must prove deletion of an unpublished draft without creating a tag."
+        )
+    if deletion.get("attempt_record_path") != attempt_relative.as_posix():
+        raise ReleaseMilestoneContextError("Draft-deletion disposition attempt path is not canonical.")
+    attempt_file_sha256 = hashlib.sha256((repo_root / attempt_relative).read_bytes()).hexdigest()
+    if deletion.get("attempt_record_file_sha256") != attempt_file_sha256:
+        raise ReleaseMilestoneContextError("Draft-deletion disposition does not bind the immutable attempt record.")
+    identity_pairs = {
+        "release_tag": attempt_record.get("release_tag"),
+        "draft_release_id": attempt_record.get("draft_release_id"),
+        "source_sha": attempt_record.get("source_sha"),
+        "receipt_file_sha256": attempt_record.get("release_receipt_file_sha256"),
+    }
+    if any(deletion.get(field) != value for field, value in identity_pairs.items()):
+        raise ReleaseMilestoneContextError("Draft-deletion disposition identity differs from the cancelled attempt.")
+    if receipt_relative.as_posix() != attempt_record.get("release_receipt_path"):
+        raise ReleaseMilestoneContextError("Draft-deletion disposition receipt path is not canonical.")
+    github_config = _load_json(repo_root / GITHUB_CONFIG_PATH, "GitHub repository configuration")
+    release_operations = _mapping(github_config.get("releaseOperations"), "release operations configuration")
+    authorization_actor = _string(deletion.get("authorization_actor"), "draft deletion authorization actor")
+    if authorization_actor != release_operations.get("approvalActor"):
+        raise ReleaseMilestoneContextError("Draft deletion authorization actor is invalid.")
+    expected_fingerprint = build_draft_deletion_authorization_fingerprint(
+        release_tag=release_tag,
+        draft_release_id=_positive_integer(deletion.get("draft_release_id"), "draft deletion release ID"),
+        source_sha=_sha(deletion.get("source_sha"), "draft deletion source SHA"),
+        authorization_actor=authorization_actor,
+    )
+    if deletion.get("authorization_fingerprint") != expected_fingerprint:
+        raise ReleaseMilestoneContextError("Draft deletion authorization fingerprint is invalid.")
+    _string(deletion.get("deleted_by"), "draft deletion actor")
+    deletion_reason = _string(deletion.get("deletion_reason"), "draft deletion reason")
+    if CANCELLATION_REASON_PATTERN.fullmatch(deletion_reason) is None:
+        raise ReleaseMilestoneContextError("Draft deletion reason must be a lowercase machine-readable identifier.")
+    attempt_recorded_at = _timestamp(attempt_record.get("recorded_at"), "cancelled release record timestamp")
+    deleted_at = _timestamp(deletion.get("deleted_at"), "draft deletion timestamp")
+    verified_absent_at = _timestamp(deletion.get("verified_absent_at"), "draft deletion absence verification")
+    recorded_at = _timestamp(deletion.get("recorded_at"), "draft deletion record timestamp")
+    if deleted_at < attempt_recorded_at or verified_absent_at < deleted_at or recorded_at < verified_absent_at:
+        raise ReleaseMilestoneContextError("Draft-deletion disposition timestamps are out of order.")
+    return deletion
+
+
 def _require_immutable_if_tracked(repo_root: Path, base_sha: str, relative_path: Path) -> None:
     tracked = subprocess.run(
         ["git", "cat-file", "-e", f"{base_sha}:{relative_path.as_posix()}"],
@@ -421,10 +532,20 @@ def _validate_failed_unpublished_candidate(
             raise ReleaseMilestoneContextError(
                 "Cancelled release-attempt record does not bind the base qualification candidate."
             )
-        raise ReleaseMilestoneContextError(
-            "Cancelled signed candidate still has a retained draft; an explicitly authorized draft-deletion "
-            "record is required before successor preparation."
-        )
+        deletion_relative = attempt_root / DRAFT_DELETION_RECORD_NAME
+        if not (repo_root / deletion_relative).is_file():
+            raise ReleaseMilestoneContextError(
+                "Cancelled signed candidate still has a retained draft; an explicitly authorized draft-deletion "
+                "record is required before successor preparation."
+            )
+        _require_immutable_if_tracked(repo_root, base_sha, deletion_relative)
+        validate_draft_deletion_record(repo_root, release_tag, record)
+        try:
+            return parse_build_version(_string(record.get("build_version"), "cancelled candidate build version"))
+        except ReleaseError as error:
+            raise ReleaseMilestoneContextError(
+                f"Cancelled release-attempt build identity is invalid: {error}"
+            ) from error
     record_relative = attempt_root / FAILED_ATTEMPT_RECORD_NAME
     receipt_relative = attempt_root / FAILED_ATTEMPT_RECEIPT_NAME
     for relative in (record_relative, receipt_relative):
@@ -1557,6 +1678,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     source.add_argument("--manifest", type=Path)
     source.add_argument("--base-sha")
     source.add_argument("--cancelled-attempt-tag")
+    source.add_argument("--draft-deletion-tag")
     parser.add_argument("--head-sha")
     parser.add_argument("--head-branch")
     parser.add_argument("--base-repo")
@@ -1572,6 +1694,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "build_version": _string(record.get("build_version"), "cancelled release build version"),
                 "release_tag": args.cancelled_attempt_tag,
                 "status": "validated_cancelled_attempt",
+            }
+            if args.github_output is not None:
+                _write_github_output(args.github_output, outputs)
+            print(json.dumps(outputs, sort_keys=True))
+            return 0
+        if args.draft_deletion_tag is not None:
+            attempt_record = validate_cancelled_attempt_record(args.repo_root.resolve(), args.draft_deletion_tag)
+            validate_draft_deletion_record(args.repo_root.resolve(), args.draft_deletion_tag, attempt_record)
+            outputs = {
+                "build_version": _string(attempt_record.get("build_version"), "cancelled release build version"),
+                "release_tag": args.draft_deletion_tag,
+                "status": "validated_draft_deletion",
             }
             if args.github_output is not None:
                 _write_github_output(args.github_output, outputs)
