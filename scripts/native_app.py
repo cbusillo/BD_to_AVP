@@ -693,6 +693,7 @@ def validate_mv_hevc_capability_probe(
 def smoke_packaged_worker(app_path: Path) -> None:
     app_path = app_path.resolve()
     contents = app_path / "Contents"
+    expected_worker_version, _ = bundle_versions(app_path)
     ffmpeg_path = contents / "Resources" / "app" / "bd_to_avp" / "bin" / "ffmpeg"
     worker_path = contents / "MacOS" / WORKER_EXECUTABLE_NAME
 
@@ -735,7 +736,7 @@ def smoke_packaged_worker(app_path: Path) -> None:
         )
         events: list[object] = [json.loads(line) for line in completed.stdout.splitlines()]
         try:
-            validate_smoke_events(events, job_id)
+            validate_smoke_events(events, job_id, expected_worker_version=expected_worker_version)
         except (TypeError, ValueError) as error:
             raise RuntimeError(
                 "Packaged worker smoke failed.\n"
@@ -756,7 +757,7 @@ def smoke_environment() -> dict[str, str]:
     return environment
 
 
-def validate_smoke_events(events: list[object], job_id: str) -> None:
+def validate_smoke_events(events: list[object], job_id: str, *, expected_worker_version: str | None = None) -> None:
     if len(events) < 4 or not all(isinstance(event, Mapping) for event in events):
         raise ValueError("Worker smoke did not return the required event stream.")
     typed_events = [cast(Mapping[str, Any], event) for event in events]
@@ -769,6 +770,13 @@ def validate_smoke_events(events: list[object], job_id: str) -> None:
     event_types = [event.get("type") for event in typed_events]
     if event_types[:3] != ["worker.ready", "job.started", "stage.started"]:
         raise ValueError("Worker smoke lifecycle prefix was incomplete.")
+    if expected_worker_version is not None:
+        ready_payload = typed_events[0].get("payload")
+        worker_version = ready_payload.get("worker_version") if isinstance(ready_payload, Mapping) else None
+        if worker_version != expected_worker_version:
+            raise ValueError(
+                f"Worker smoke version did not match {expected_worker_version!r}; found {worker_version!r}."
+            )
     if event_types[-1] != "job.completed":
         raise ValueError("Worker smoke did not complete.")
 

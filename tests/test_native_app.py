@@ -1266,7 +1266,7 @@ Load command 3
                 "type": "worker.ready",
                 "job_id": job_id,
                 "sequence": 0,
-                "payload": {"process_group_id": 123},
+                "payload": {"worker_version": NATIVE_SHORT_VERSION, "process_group_id": 123},
             },
             {
                 "protocol_version": WORKER_PROTOCOL_VERSION,
@@ -1305,7 +1305,57 @@ Load command 3
             },
         ]
 
-        validate_smoke_events(events, job_id)
+        validate_smoke_events(events, job_id, expected_worker_version=NATIVE_SHORT_VERSION)
+
+    def test_rejects_packaged_worker_version_mismatch(self) -> None:
+        job_id = "97456c4a-f3c5-44e4-a548-0bd833ead4bb"
+        events: list[object] = [
+            {
+                "protocol_version": WORKER_PROTOCOL_VERSION,
+                "type": "worker.ready",
+                "job_id": job_id,
+                "sequence": 0,
+                "payload": {"worker_version": "0.0.0", "process_group_id": 123},
+            },
+            {
+                "protocol_version": WORKER_PROTOCOL_VERSION,
+                "type": "job.started",
+                "job_id": job_id,
+                "sequence": 1,
+                "payload": {},
+            },
+            {
+                "protocol_version": WORKER_PROTOCOL_VERSION,
+                "type": "stage.started",
+                "job_id": job_id,
+                "sequence": 2,
+                "payload": {},
+            },
+            {
+                "protocol_version": WORKER_PROTOCOL_VERSION,
+                "type": "observability",
+                "job_id": job_id,
+                "sequence": 3,
+                "payload": {"event": canonical_ffprobe_event(job_id)},
+            },
+            {
+                "protocol_version": WORKER_PROTOCOL_VERSION,
+                "type": "job.completed",
+                "job_id": job_id,
+                "sequence": 4,
+                "payload": {
+                    "result": {
+                        "resolution": "160x90",
+                        "frame_rate": "24/1",
+                        "interlaced": False,
+                        "size_bytes": 1024,
+                    }
+                },
+            },
+        ]
+
+        with self.assertRaisesRegex(ValueError, "Worker smoke version did not match"):
+            validate_smoke_events(events, job_id, expected_worker_version=NATIVE_SHORT_VERSION)
 
     def test_worker_smoke_resolves_relative_app_path_before_changing_directory(self) -> None:
         job_id = "97456c4a-f3c5-44e4-a548-0bd833ead4bb"
@@ -1328,6 +1378,8 @@ Load command 3
                     if event_type == "job.completed"
                     else {"event": canonical_ffprobe_event(job_id)}
                     if event_type == "observability"
+                    else {"worker_version": NATIVE_SHORT_VERSION, "process_group_id": 123}
+                    if event_type == "worker.ready"
                     else {}
                 ),
             }
@@ -1345,6 +1397,10 @@ Load command 3
             relative_app_path = Path("package") / NATIVE_APP_NAME
             absolute_app_path = temporary_path / relative_app_path
             absolute_app_path.mkdir(parents=True)
+            info_path = absolute_app_path / "Contents" / "Info.plist"
+            info_path.parent.mkdir(parents=True)
+            with info_path.open("wb") as info_file:
+                plistlib.dump(production_info(), info_file)
             resolved_app_path = absolute_app_path.resolve()
             with (
                 chdir(temporary_path),
