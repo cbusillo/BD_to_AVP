@@ -1,0 +1,64 @@
+{
+  "build_version": "168",
+  "cancellation_reason": "operator_cancelled_for_release_fixture_hardening",
+  "cancelled_job": "Prove signed artifact UI accessibility",
+  "cancelled_job_id": 96839729307,
+  "cancelled_step": "Run installed candidate UI accessibility lane",
+  "delete_requires_authorization": true,
+  "draft_assets": [
+    {
+      "asset_id": 523987569,
+      "kind": "appcast",
+      "name": "appcast.xml",
+      "sha256": "136a9f5f2ebc54d616dba23b3fa1120c5a9eea58cb1115c63b407b9dccbd4451",
+      "size_bytes": 84793
+    },
+    {
+      "asset_id": 523986632,
+      "kind": "checksum",
+      "name": "SHA256SUMS",
+      "sha256": "c051267f8ea09527427a9bc05c70fe851883cf4505c7d894fb9af07bcd5562b8",
+      "size_bytes": 108
+    },
+    {
+      "asset_id": 523986431,
+      "kind": "dmg",
+      "name": "3D-Blu-ray-to-Vision-Pro-0.3.2-beta.6.dmg",
+      "sha256": "4a761933279a3e891908f059eed37634e5360f6233ef7bed1b3d0935dc1c7fb1",
+      "size_bytes": 166862194
+    },
+    {
+      "asset_id": 523988156,
+      "kind": "receipt",
+      "name": "release-receipt.json",
+      "sha256": "f4641acb7b6dbff6936508171bf2d1d964b4c2c6fbb7d7d63524883654aedb2f",
+      "size_bytes": 2297
+    }
+  ],
+  "draft_checked_at": "2026-08-21T18:31:47Z",
+  "draft_deleted": false,
+  "draft_release_id": 374538590,
+  "draft_state": "present",
+  "must_not_rebuild": true,
+  "package_version": "0.3.2b6",
+  "public_version": "0.3.2-beta.6",
+  "published_at": null,
+  "recorded_at": "2026-08-21T18:31:47Z",
+  "release_receipt_asset_id": 523988156,
+  "release_receipt_asset_size_bytes": 2297,
+  "release_receipt_file_sha256": "f4641acb7b6dbff6936508171bf2d1d964b4c2c6fbb7d7d63524883654aedb2f",
+  "release_receipt_path": "docs/release-attempts/v0.3.2-beta.6/release-receipt.json",
+  "release_receipt_sha256": "14bd8c5c4c2cd5242b34514c63361aad1a3314e9075e514c520de9ae87dc251f",
+  "release_tag": "v0.3.2-beta.6",
+  "schema_version": 1,
+  "signing_approval_environment": "macos-signing",
+  "signing_approval_fingerprint": "b29680899e9bf2f6d33ac552021f437b01f26b81cd85779ce951cf02c4da9c67",
+  "signing_approval_reviewer": "cbusillo",
+  "source_sha": "b4abf8829b6a539b40bb369bfd62dea504d35be1",
+  "status": "cancelled_unpublished_signed_candidate",
+  "tag_exists": false,
+  "workflow_completed_at": "2026-08-21T16:40:01Z",
+  "workflow_conclusion": "cancelled",
+  "workflow_run_attempt": 1,
+  "workflow_run_id": 32502068709
+}
