@@ -44,15 +44,23 @@ class RecordingSnapshot:
 class RecordingSink:
     def __init__(self) -> None:
         self._events: list[ObservabilityEvent] = []
-        self._lock = threading.Lock()
+        self._condition = threading.Condition()
 
     def emit(self, event: ObservabilityEvent) -> None:
-        with self._lock:
+        with self._condition:
             self._events.append(event)
+            self._condition.notify_all()
 
     def snapshot(self) -> RecordingSnapshot:
-        with self._lock:
+        with self._condition:
             return RecordingSnapshot(tuple(self._events))
+
+    def wait_for_kind(self, kind: str, *, timeout: float) -> bool:
+        with self._condition:
+            return self._condition.wait_for(
+                lambda: any(event.kind == kind for event in self._events),
+                timeout=timeout,
+            )
 
 
 class ChildProcessRunnerTests(unittest.TestCase):
@@ -259,7 +267,12 @@ class ChildProcessRunnerTests(unittest.TestCase):
         stages = (
             ProcessPipelineStage(
                 self.spec(
-                    "import os\nwhile True: os.write(1, b'x' * 65536)",
+                    "import os, time\n"
+                    "while True:\n"
+                    "    try:\n"
+                    "        os.write(1, b'x' * 65536)\n"
+                    "    except BrokenPipeError:\n"
+                    "        time.sleep(30)",
                     tool_id="producer",
                     display_name="producer",
                     termination_grace_seconds=0.1,
@@ -284,6 +297,21 @@ class ChildProcessRunnerTests(unittest.TestCase):
         final_error = raised.exception.result.stages[1].error
         self.assertIsInstance(final_error, subprocess.CalledProcessError)
         self.assertEqual(final_error.returncode, 4)
+
+    def test_closed_output_pipe_surfaces_broken_pipe(self) -> None:
+        read_descriptor, write_descriptor = os.pipe()
+        os.close(read_descriptor)
+        with os.fdopen(write_descriptor, "wb", buffering=0) as output:
+            with self.assertRaises(ProcessExecutionError) as raised:
+                ChildProcessRunner().run(
+                    self.spec(
+                        "import os; os.write(1, b'x' * 65536)",
+                        stdout=output,
+                        merge_stderr=False,
+                    )
+                )
+
+        self.assertIn("BrokenPipeError", raised.exception.stderr)
 
     def test_pipeline_external_cancellation_stops_all_stages(self) -> None:
         cancellation_event = threading.Event()
@@ -339,16 +367,39 @@ class ChildProcessRunnerTests(unittest.TestCase):
         sink = RecordingSink()
         context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER, sink))
 
-        ChildProcessRunner().run(
-            self.spec(
-                "import time; time.sleep(0.18)",
-                activity_interval_seconds=0.05,
-            ),
-            run_context=context,
-        )
+        with tempfile.TemporaryDirectory() as directory:
+            release_path = Path(directory) / "release"
+            heartbeat_observed = threading.Event()
+
+            def release_after_heartbeat() -> None:
+                if sink.wait_for_kind("tool.heartbeat", timeout=5):
+                    heartbeat_observed.set()
+                release_path.touch()
+
+            release_thread = threading.Thread(target=release_after_heartbeat)
+            release_thread.start()
+            try:
+                ChildProcessRunner().run(
+                    self.spec(
+                        "import pathlib, sys, time\n"
+                        "path = pathlib.Path(sys.argv[1])\n"
+                        "deadline = time.monotonic() + 10\n"
+                        "while not path.exists() and time.monotonic() < deadline:\n"
+                        "    time.sleep(0.01)\n"
+                        "raise SystemExit(0 if path.exists() else 2)",
+                        release_path,
+                        activity_interval_seconds=0.05,
+                    ),
+                    run_context=context,
+                )
+            finally:
+                release_path.touch(exist_ok=True)
+                release_thread.join(timeout=5)
+            self.assertFalse(release_thread.is_alive())
 
         heartbeats = [event for event in sink.snapshot().events if event.kind == "tool.heartbeat"]
-        self.assertGreaterEqual(len(heartbeats), 2)
+        self.assertTrue(heartbeat_observed.is_set())
+        self.assertGreaterEqual(len(heartbeats), 1)
         self.assertIsNotNone(heartbeats[-1].data.activity)
         self.assertGreaterEqual(heartbeats[-1].data.activity.last_output_age_seconds, 0)
 
@@ -543,7 +594,12 @@ class ChildProcessRunnerTests(unittest.TestCase):
             stages = (
                 ProcessPipelineStage(
                     self.spec(
-                        "import os\nwhile True: os.write(1, b'x' * 65536)",
+                        "import os, time\n"
+                        "while True:\n"
+                        "    try:\n"
+                        "        os.write(1, b'x' * 65536)\n"
+                        "    except BrokenPipeError:\n"
+                        "        time.sleep(30)",
                         tool_id="producer",
                         display_name="producer",
                         termination_grace_seconds=0.1,
@@ -571,11 +627,43 @@ class ChildProcessRunnerTests(unittest.TestCase):
                 ProcessPipelineRunner(exit_grace_seconds=0.1).run(stages)
 
         self.assertLess(time.monotonic() - started, 3)
-        self.assertIsInstance(
-            raised.exception.result.stages[0].error,
-            (ProcessCancelled, subprocess.CalledProcessError),
-        )
+        self.assertIsInstance(raised.exception.result.stages[0].error, ProcessCancelled)
         self.assertIsInstance(raised.exception.result.stages[1].error, ProcessArtifactNoProgressError)
+
+    def test_recorded_artifact_failure_precedes_late_cancellation(self) -> None:
+        sink = RecordingSink()
+        context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER, sink))
+        cancellation_event = threading.Event()
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "output.bin"
+            artifact.write_bytes(b"x" * 70000)
+            resolve_count = 0
+
+            def resolve_artifact() -> Path:
+                nonlocal resolve_count
+                resolve_count += 1
+                if resolve_count >= 2:
+                    cancellation_event.set()
+                return artifact
+
+            with self.assertRaises(ProcessArtifactNoProgressError):
+                ChildProcessRunner().run(
+                    self.spec(
+                        "import time; time.sleep(30)",
+                        artifacts=(ProcessArtifactProbe("output", resolver=resolve_artifact),),
+                        artifact_interval_seconds=0.01,
+                        artifact_no_growth_timeout_seconds=0.01,
+                        artifact_no_growth_retryable=True,
+                        termination_grace_seconds=0.1,
+                        kill_wait_seconds=0.1,
+                    ),
+                    run_context=context,
+                    cancellation_event=cancellation_event,
+                )
+
+        failures = [event for event in sink.snapshot().events if event.kind == "tool.failed"]
+        self.assertEqual(failures[-1].data.failure.code, "artifact_no_growth")
+        self.assertTrue(failures[-1].data.failure.retryable)
 
     def test_three_stage_artifact_plateau_preserves_final_error_and_cleans_up_splitter(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
