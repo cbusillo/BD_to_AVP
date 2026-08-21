@@ -576,8 +576,11 @@ An intentionally cancelled signed attempt uses an immutable
 must bind the checked receipt, all draft asset IDs and digests, the cancellation
 boundary, and the run-bound signing approval. Freeze the release tag immediately.
 A later deletion requires fresh explicit authorization and a separate immutable
-disposition record; never rewrite the cancelled-attempt record to claim that the
-draft was deleted.
+`draft-deletion-v1.json` disposition record. The disposition must bind the
+cancelled-attempt file digest, checked receipt digest, draft release ID, source
+SHA, authorization actor and canonical fingerprint, deletion actor and time, and
+subsequent absence of both draft and tag. Never rewrite the cancelled-attempt
+record to claim that the draft was deleted.
 
 To restore an earlier last-good cumulative feed, dispatch `Manage Sparkle Pages`
 from `main` with `restore` and the selected published release tag. The workflow
