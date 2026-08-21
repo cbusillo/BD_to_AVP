@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bd_to_avp"
-version = "0.3.2b2"
+version = "0.3.2b3"
 description = "Script to convert 3D Blu-ray Discs (and mts) to Apple Vision Pro (MV-HEVC) files"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -86,7 +86,7 @@ icon = "bd_to_avp/resources/app_icon"
 organization = "Shiny Computers"
 organization_domain = "com.shinycomputers"
 formal_name = "3D Blu-ray to Vision Pro"
-build_version = "164"
+build_version = "165"
 distribution_channel = "direct"
 
 [tool.bd_to_avp.sparkle]

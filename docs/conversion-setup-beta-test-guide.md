@@ -2,11 +2,11 @@
 
 ## Purpose
 
-This Beta is a focused test of the source-first Conversion Setup experience. It
-asks whether adding one movie or a folder is obvious, the selected Result makes
-sense, Advanced Settings remain understandable, and the same movie cannot be
-queued accidentally more than once. It is not a test of the future first-class
-persistent queue.
+This Beta keeps the source-first Conversion Setup checks and adds focused
+coverage for folders containing Blu-ray ISO images. It asks whether Main
+Feature versus All 3D Videos is clear, selected disc titles become distinct
+sequential conversions, retries remain safe, and non-disc files still convert
+exactly once. It is not a test of the future first-class persistent queue.
 
 Recruit three to five testers when possible:
 
@@ -107,6 +107,24 @@ made it obvious which item needed attention.
    reachable without horizontal scrolling.
 3. Repeat one Ready or Editor check in both light and dark appearance.
 
+### 6. Batch Folder Disc Titles
+
+1. Choose **Add Folder of Movies…** with a folder containing at least one
+   Blu-ray ISO and one ordinary supported movie file.
+2. Confirm the setup offers **Main Feature** and **All 3D Videos**, with Main
+   Feature selected by default.
+3. Run Main Feature and confirm each ISO contributes only its selected main
+   title while the ordinary movie is queued once.
+4. Repeat with All 3D Videos and confirm every eligible stereoscopic title is
+   represented by a distinct queue label and output identity.
+5. Confirm selected titles run sequentially and the source is not removed until
+   all selected titles from that source finish.
+6. Retry one failed title or rerun a completed batch and confirm existing
+   successful outputs are not silently duplicated or overwritten.
+
+Record whether title selection, queue labels, ordering, and retry behavior made
+the batch outcome predictable before conversion started.
+
 ## Playback Check
 
 Play at least one Beta-produced movie on Apple Vision Pro when available. Record:
@@ -151,10 +169,9 @@ written by the Beta. Restoring the backup is part of rollback.
 
 ## Deliberate Non-Goals
 
-The following work remains separate so feedback stays attributable to Conversion
-Setup:
+The following work remains separate so feedback stays attributable to the
+prepared Beta 3 scope:
 
-- batch-folder **Main Feature** versus **All 3D Titles** selection;
 - the first-class persistent queue workspace, scheduling, notifications,
   storage forecasting, history, unattended policies, and watch-folder intake;
 - the guided Vision Pro playback companion;
