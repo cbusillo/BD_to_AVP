@@ -18,9 +18,9 @@ immutable. Beta `0.3.2b3` build `165` and Beta `0.3.2b4` build `166` are failed
 unpublished signed attempts and their identities are burned. Beta 5's
 post-publication exact-artifact qualification is blocked by packaged worker
 version metadata. Corrective Beta `0.3.2b6` build `168` is a cancelled,
-unpublished signed attempt with retained draft `374538590`; its tag and build
-are permanently non-reusable. Issue #609 owns draft disposition and preparation
-of a newer successor.
+unpublished signed attempt whose draft `374538590` was deleted through the
+authorized immutable-disposition path; its tag and build are permanently
+non-reusable. Issue #609 owns preparation of a newer successor.
 Run-bound signing approval
 remains a separate authorization boundary.
 
@@ -473,15 +473,16 @@ was intentionally cancelled in the installed candidate UI accessibility lane
 before exact-artifact qualification, Pages deployment, or publication.
 
 No Git tag, public release, Pages appcast item, PyPI version, or Homebrew change
-was created. The retained draft is diagnostic evidence only. The exact asset
-identities and checked receipt are recorded under
+was created. The deleted draft was diagnostic evidence only. The exact asset
+identities, checked receipt, and authorized deletion disposition are recorded under
 `docs/release-attempts/v0.3.2-beta.6/`; `.github/release-freezes.json` prevents
 redispatch of the Beta 6 tag. Build `168` must remain absent from future updater
-feeds. Issue #609 requires fresh explicit authorization before draft deletion
-and a checked `draft-deletion-v1.json` disposition before a newer successor
-identity, expected to begin at Beta 7/build `169`. Milestone-context validation
-accepts the cancelled candidate only after that disposition validates, then
-still requires build `168` in the successor qualification's burned-build list.
+feeds. Explicit authorization was granted and draft `374538590` was deleted at
+`2026-08-21T22:58:29Z`; the checked `draft-deletion-v1.json` disposition records
+verified absence of both draft and tag. A newer successor identity is expected
+to begin at Beta 7/build `169`. Milestone-context validation accepts the
+cancelled candidate only after that disposition validates, then still requires
+build `168` in the successor qualification's burned-build list.
 
 ## Historical Boundaries
 
