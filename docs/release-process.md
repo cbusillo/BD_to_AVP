@@ -25,8 +25,11 @@ recorded in [the 0.3.1 cut packet](0.3.1-cut-packet.md). Beta `0.3.2b1` build
 `163` and Beta `0.3.2b2` build `164` are published and immutable, tracked in
 [the 0.3.2 Beta 1 cut packet](0.3.2-beta.1-cut-packet.md),
 [the 0.3.2 Beta 2 cut packet](0.3.2-beta.2-cut-packet.md), issues #584 and #593.
-The next prepared identity is Beta `0.3.2b3` build `165`, tracked in
-[the 0.3.2 Beta 3 cut packet](0.3.2-beta.3-cut-packet.md) and issue #609.
+Beta `0.3.2b3` build `165` is a failed unpublished signed attempt and its
+identity is permanently burned, as recorded in
+[the 0.3.2 Beta 3 cut packet](0.3.2-beta.3-cut-packet.md). The next prepared
+identity is Beta `0.3.2b4` build `166`, tracked in
+[the 0.3.2 Beta 4 cut packet](0.3.2-beta.4-cut-packet.md) and issue #609.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease

@@ -260,6 +260,139 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         return record
 
     @staticmethod
+    def prepare_failed_candidate_transition(
+        root: Path,
+        *,
+        include_burned_build: bool = True,
+        receipt_digest_override: str | None = None,
+    ) -> tuple[str, str]:
+        base_qualification_path = root / "docs/qualification/stable-signed-qualification-v1.json"
+        base_qualification = json.loads(base_qualification_path.read_text(encoding="utf-8"))
+        base_qualification["status"] = "preregistered_pending_exact_candidate"
+        base_qualification["candidate"].update(
+            {
+                "package_version": "0.3.1b1",
+                "public_version": "0.3.1-beta.1",
+                "build_version": "162",
+                "release_tag": "v0.3.1-beta.1",
+                "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.1-beta.1.dmg",
+                "workflow": "Prerelease",
+            }
+        )
+        for field in (
+            "source_git_sha",
+            "release_run_id",
+            "release_id",
+            "dmg_sha256",
+            "appcast_sha256",
+            "signed_app_tree_sha256",
+        ):
+            base_qualification["candidate"][field] = None
+        base_qualification_path.write_text(json.dumps(base_qualification) + "\n", encoding="utf-8")
+        subprocess.run(["git", "add", base_qualification_path], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "prepare failed beta"], cwd=root, check=True)
+        base_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+        release_tag = "v0.3.1-beta.1"
+        attempt_root = root / "docs/release-attempts" / release_tag
+        attempt_root.mkdir(parents=True)
+        receipt_path = attempt_root / "release-receipt.json"
+        receipt = build_receipt(
+            {
+                "release_route": "prerelease",
+                "source_sha": base_sha,
+                "workflow_actor": "shiny-code-bot",
+                "workflow_run_id": 22222,
+                "workflow_run_attempt": 1,
+                "package_version": "0.3.1b1",
+                "public_version": "0.3.1-beta.1",
+                "build_version": "162",
+                "release_tag": release_tag,
+                "release_name": release_tag,
+                "release_id": 33333,
+                "release_created_at": "2026-08-21T01:00:00Z",
+                "prerelease": True,
+                "make_latest": False,
+                "signed_app_tree_sha256": APP_TREE_SHA256,
+                "artifacts": [
+                    {
+                        "kind": "dmg",
+                        "name": "3D-Blu-ray-to-Vision-Pro-0.3.1-beta.1.dmg",
+                        "sha256": DMG_SHA256,
+                        "size_bytes": 1000,
+                        "asset_id": 1,
+                    },
+                    {
+                        "kind": "checksum",
+                        "name": "SHA256SUMS",
+                        "sha256": CHECKSUM_SHA256,
+                        "size_bytes": 100,
+                        "asset_id": 2,
+                    },
+                    {
+                        "kind": "appcast",
+                        "name": "appcast.xml",
+                        "sha256": APPCAST_SHA256,
+                        "size_bytes": 500,
+                        "asset_id": 3,
+                    },
+                ],
+            }
+        )
+        write_receipt(receipt, receipt_path)
+        record = {
+            "build_version": "162",
+            "draft_deleted": True,
+            "draft_release_id": 33333,
+            "failed_job": "Prove signed artifact UI accessibility",
+            "failed_job_id": 44444,
+            "failed_step": "Run installed candidate UI accessibility lane",
+            "must_not_rebuild": True,
+            "package_version": "0.3.1b1",
+            "public_version": "0.3.1-beta.1",
+            "published_at": None,
+            "recorded_at": "2026-08-21T02:00:00Z",
+            "release_receipt_file_sha256": receipt_digest_override
+            or hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+            "release_receipt_path": receipt_path.relative_to(root).as_posix(),
+            "release_receipt_sha256": receipt["receipt_sha256"],
+            "release_tag": release_tag,
+            "schema_version": 1,
+            "source_sha": base_sha,
+            "status": "failed_unpublished_signed_candidate",
+            "workflow_conclusion": "failure",
+            "workflow_run_attempt": 1,
+            "workflow_run_id": 22222,
+        }
+        (attempt_root / "failed-attempt-v1.json").write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+        next_qualification = json.loads(json.dumps(base_qualification))
+        next_qualification["candidate"].update(
+            {
+                "package_version": "0.3.1b2",
+                "public_version": "0.3.1-beta.2",
+                "build_version": "163",
+                "release_tag": "v0.3.1-beta.2",
+                "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.1-beta.2.dmg",
+            }
+        )
+        next_qualification["immutable_history"] = {"burned_builds": [162] if include_burned_build else []}
+        next_path = root / "docs/qualification/v0.3.1-beta.2-signed-qualification-v1.json"
+        next_path.write_text(json.dumps(next_qualification) + "\n", encoding="utf-8")
+        config_path = root / ".github/github.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["releaseOperations"]["qualificationRecordPath"] = next_path.relative_to(root).as_posix()
+        config_path.write_text(json.dumps(config) + "\n", encoding="utf-8")
+        subprocess.run(["git", "add", attempt_root, next_path, config_path], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "prepare successor beta"], cwd=root, check=True)
+        head_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        return base_sha, head_sha
+
+    @staticmethod
     def append_beta_change_scoped_evidence(
         root: Path,
         *,
@@ -958,6 +1091,61 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             )
 
         self.assertIsNone(discovered)
+
+    def test_allows_failed_unpublished_signed_candidate_to_advance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.prepare_failed_candidate_transition(root)
+
+            discovered = discover_milestone_receipt(
+                root,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                head_branch="prepare/v0.3.1-beta.2",
+                base_repo="cbusillo/BD_to_AVP",
+                head_repo="cbusillo/BD_to_AVP",
+                base_branch="main",
+            )
+
+        self.assertIsNone(discovered)
+
+    def test_rejects_failed_candidate_with_wrong_receipt_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.prepare_failed_candidate_transition(
+                root,
+                receipt_digest_override="0" * 64,
+            )
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "file digest"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="prepare/v0.3.1-beta.2",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
+
+    def test_rejects_successor_that_does_not_burn_failed_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            base_sha, head_sha = self.prepare_failed_candidate_transition(root, include_burned_build=False)
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "permanently burn"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="prepare/v0.3.1-beta.2",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
 
     def test_allows_beta_change_scoped_evidence_append_without_checked_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
