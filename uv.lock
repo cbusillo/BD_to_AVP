@@ -61,7 +61,7 @@ wheels = [
 
 [[package]]
 name = "bd-to-avp"
-version = "0.3.2b5"
+version = "0.3.2b6"
 source = { editable = "." }
 dependencies = [
     { name = "babelfish" },

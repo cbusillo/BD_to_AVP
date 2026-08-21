@@ -13,10 +13,12 @@ burned builds `147`, `154`, and abandoned metadata build `157`. Failed Beta 9
 RC 2 (`0.3.0rc2`, build `159`), and RC 3 (`0.3.0rc3`, build `160`) are
 published and immutable. Stable `0.3.0` build `161` is also published and
 immutable. Stable `0.3.1` build `162`, Beta `0.3.2b1` build `163`, and Beta
-`0.3.2b2` build `164` are published and immutable. Beta `0.3.2b3` build `165`
-and Beta `0.3.2b4` build `166` are failed unpublished signed attempts and their
-identities are burned. The next prepared target is Beta `0.3.2b5` build `167`;
-issue #609 owns publication and exact-artifact qualification.
+`0.3.2b2` build `164` and Beta `0.3.2b5` build `167` are published and
+immutable. Beta `0.3.2b3` build `165` and Beta `0.3.2b4` build `166` are failed
+unpublished signed attempts and their identities are burned. Beta 5's
+post-publication exact-artifact qualification is blocked by packaged worker
+version metadata. The next prepared target is corrective Beta `0.3.2b6` build
+`168`; issue #609 owns publication and exact-artifact qualification.
 Run-bound signing approval
 remains a separate authorization boundary.
 
@@ -441,31 +443,39 @@ qualification contract, and the successor advances to Beta 5 build `167`
 rather than reusing either Beta 4 identity. The failed-attempt details are in
 [the 0.3.2 Beta 4 cut packet](0.3.2-beta.4-cut-packet.md).
 
-## 0.3.2 Beta 5 Prepared Target
+## 0.3.2 Beta 5 Publication And Beta 6 Prepared Target
+
+Guarded Prerelease run `32488665999` published immutable
+`v0.3.2-beta.5` build `167` on August 21, 2026 from source SHA
+`f6ce414db07030e2ad2c081a9d4287639a113446`. Its exact DMG and appcast remain
+valid public artifacts, but post-publication qualification found that the
+embedded worker reported `0.0.0` instead of `0.3.2b5`. PR #623 corrects that
+diagnostics identity and strengthens the pre-signing package gate. PR #622
+remains blocked as the accurate Beta 5 evidence record.
 
 The repository is prepared for review of guarded Prerelease dispatch for
-`v0.3.2-beta.5`:
+`v0.3.2-beta.6`:
 
-- internal version `0.3.2b5` and public version `0.3.2-beta.5`;
-- public tag and title `v0.3.2-beta.5`;
-- global build `167`;
+- internal version `0.3.2b6` and public version `0.3.2-beta.6`;
+- public tag and title `v0.3.2-beta.6`;
+- global build `168`;
 - Sparkle channel `beta`, making the item eligible only on Beta and Alpha;
 - GitHub prerelease, never Latest, PyPI, or Homebrew; and
 - the same production product, bundle, feed, key, signing team, and diagnostics
-  endpoint as Beta `0.3.2b2`.
+  endpoint as published Beta `0.3.2b5`.
 
-Publication must place Beta 5 above immutable Beta 2 build `164`, Beta 1 build
-`163`, Stable `0.3.1` build `162`, and all earlier published history, with
-failed Beta 3 build `165` and failed Beta 4 build `166` absent. Stable and RC
-clients exclude the Beta item; Beta and Alpha clients can select it because
-build `167` is newer.
+Publication must place Beta 6 above immutable Beta 5 build `167`, Beta 2 build
+`164`, Beta 1 build `163`, Stable `0.3.1` build `162`, and all earlier
+published history, with failed Beta 3 build `165` and failed Beta 4 build `166`
+absent. Stable and RC clients exclude the Beta item; Beta and Alpha clients can
+select it because build `168` is newer.
 
-As checked on August 21, 2026, no `v0.3.2-beta.5` tag, release, draft, PyPI
+As checked on August 21, 2026, no `v0.3.2-beta.6` tag, release, draft, PyPI
 version, Homebrew pull request, or appcast item exists. Dispatch requires
 separate explicit release authorization under a fixed-`main` merge hold. The
-reviewed metadata, release-note seed, scope freeze, recovery evidence, and
-qualification boundary are in
-[the 0.3.2 Beta 5 cut packet](0.3.2-beta.5-cut-packet.md).
+reviewed metadata, release-note seed, corrective scope, immutable Beta 5 prior
+receipt, and qualification boundary are in
+[the 0.3.2 Beta 6 cut packet](0.3.2-beta.6-cut-packet.md).
 
 ## Historical Boundaries
 
