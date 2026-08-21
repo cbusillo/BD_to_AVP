@@ -13,9 +13,10 @@ burned builds `147`, `154`, and abandoned metadata build `157`. Failed Beta 9
 RC 2 (`0.3.0rc2`, build `159`), and RC 3 (`0.3.0rc3`, build `160`) are
 published and immutable. Stable `0.3.0` build `161` is also published and
 immutable. Stable `0.3.1` build `162`, Beta `0.3.2b1` build `163`, and Beta
-`0.3.2b2` build `164` are published and immutable. The next prepared target is
-Beta `0.3.2b3` build `165`; issue #609 owns publication and exact-artifact
-qualification.
+`0.3.2b2` build `164` are published and immutable. Beta `0.3.2b3` build `165`
+is a failed unpublished signed attempt and both identities are burned. The next
+prepared target is Beta `0.3.2b4` build `166`; issue #609 owns publication and
+exact-artifact qualification.
 Run-bound signing approval
 remains a separate authorization boundary.
 
@@ -389,10 +390,9 @@ The reviewed metadata, release-note seed, scope freeze, and qualification
 evidence are in
 [the 0.3.2 Beta 2 cut packet](0.3.2-beta.2-cut-packet.md).
 
-## 0.3.2 Beta 3 Prepared Target
+## 0.3.2 Beta 3 Failed Attempt
 
-The repository is prepared for review of guarded Prerelease dispatch for
-`v0.3.2-beta.3`:
+Beta 3 is failed, unpublished, and permanently burned:
 
 - internal version `0.3.2b3` and public version `0.3.2-beta.3`;
 - public tag and title `v0.3.2-beta.3`;
@@ -402,16 +402,43 @@ The repository is prepared for review of guarded Prerelease dispatch for
 - the same production product, bundle, feed, key, signing team, and diagnostics
   endpoint as Beta `0.3.2b2`.
 
-Publication must place Beta 3 above immutable Beta 2 build `164`, Beta 1 build
-`163`, Stable `0.3.1` build `162`, and all earlier history. Stable and RC
-clients exclude the Beta item; Beta and Alpha clients can select it because
-build `165` is newer.
+Guarded Prerelease run `32446869702` built, Developer ID signed, notarized, and
+packaged build `165` from source SHA
+`d2d455fdbedfde19b40a3be9c86e98997ec42981`. The run failed before publication
+in the signed-artifact UI accessibility lane because the installer call omitted
+its required DMG mount point. No public tag, release, appcast item, Pages state,
+PyPI version, or Homebrew change was created.
 
-As checked on August 21, 2026, no `v0.3.2-beta.3` tag, release, draft, PyPI
+The unpublished draft and its asset identities were recorded, then the draft
+was deleted after explicit recovery authorization. The corrected source
+advances to Beta 4 build `166` rather than reusing either Beta 3 identity. The
+failed-attempt details are in
+[the 0.3.2 Beta 3 cut packet](0.3.2-beta.3-cut-packet.md).
+
+## 0.3.2 Beta 4 Prepared Target
+
+The repository is prepared for review of guarded Prerelease dispatch for
+`v0.3.2-beta.4`:
+
+- internal version `0.3.2b4` and public version `0.3.2-beta.4`;
+- public tag and title `v0.3.2-beta.4`;
+- global build `166`;
+- Sparkle channel `beta`, making the item eligible only on Beta and Alpha;
+- GitHub prerelease, never Latest, PyPI, or Homebrew; and
+- the same production product, bundle, feed, key, signing team, and diagnostics
+  endpoint as Beta `0.3.2b2`.
+
+Publication must place Beta 4 above immutable Beta 2 build `164`, Beta 1 build
+`163`, Stable `0.3.1` build `162`, and all earlier published history, with
+failed Beta 3 build `165` absent. Stable and RC clients exclude the Beta item;
+Beta and Alpha clients can select it because build `166` is newer.
+
+As checked on August 21, 2026, no `v0.3.2-beta.4` tag, release, draft, PyPI
 version, Homebrew pull request, or appcast item exists. Dispatch requires
 separate explicit release authorization under a fixed-`main` merge hold. The
-reviewed metadata, release-note seed, scope freeze, and qualification boundary
-are in [the 0.3.2 Beta 3 cut packet](0.3.2-beta.3-cut-packet.md).
+reviewed metadata, release-note seed, scope freeze, recovery evidence, and
+qualification boundary are in
+[the 0.3.2 Beta 4 cut packet](0.3.2-beta.4-cut-packet.md).
 
 ## Historical Boundaries
 
