@@ -80,13 +80,13 @@ def _cleanup_qualification_workspace(
     operations: MacOSOperations,
     marker_path: Path,
     marker: Mapping[str, str],
-) -> list[BaseException]:
-    errors: list[BaseException] = []
+) -> list[Exception]:
+    errors: list[Exception] = []
     try:
         operations.quit_app()
         if operations.app_running():
             raise InstalledUIQualificationError("Installed UI qualification left the production app running.")
-    except BaseException as error:
+    except Exception as error:
         errors.append(error)
 
     if not config.qualification_root.exists():
@@ -101,7 +101,7 @@ def _cleanup_qualification_workspace(
         return errors
     try:
         shutil.rmtree(config.qualification_root)
-    except BaseException as error:
+    except Exception as error:
         errors.append(error)
     return errors
 
@@ -122,7 +122,7 @@ def _run(
     marker = {"owner": config.owner, "run_id": str(uuid.uuid4())}
     config.qualification_root.mkdir(parents=True)
     marker_path.write_text(json.dumps(marker, sort_keys=True) + "\n", encoding="utf-8")
-    primary_error: BaseException | None = None
+    primary_error: Exception | None = None
     try:
         synthetic_home.mkdir(parents=True)
         operations.install_app(config.dmg, app_path, mount_point)
@@ -145,11 +145,11 @@ def _run(
             config.evidence_directory,
             release_notes_url=config.release_notes_url,
         )
-    except BaseException as error:
+    except Exception as error:
         primary_error = error
         try:
             _preserve_failure_diagnostics(config, raw_ui_directory, error)
-        except BaseException as diagnostics_error:
+        except Exception as diagnostics_error:
             error.add_note(
                 "Installed UI failure diagnostics could not be preserved: "
                 f"{type(diagnostics_error).__name__}: {diagnostics_error}"
@@ -172,7 +172,7 @@ def run(
     operations = operations or MacOSOperations()
     try:
         return _run(config, operations)
-    except BaseException:
+    except Exception:
         if config.evidence_directory.exists():
             shutil.rmtree(config.evidence_directory)
         raise

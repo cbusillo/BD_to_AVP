@@ -129,11 +129,11 @@ def run(config: PreSigningUIConfig) -> Mapping[str, object]:
         }
         _write_report(config.output_report, report)
         return report
-    except BaseException as error:
+    except Exception as error:
         for path in (config.output_report, config.evidence_directory, config.dmg):
             try:
                 _remove_owned_output(path)
-            except BaseException as cleanup_error:
+            except Exception as cleanup_error:
                 error.add_note(
                     f"Pre-signing output cleanup failed for {path}: {type(cleanup_error).__name__}: {cleanup_error}"
                 )
