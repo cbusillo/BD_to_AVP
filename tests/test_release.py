@@ -228,9 +228,10 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("PR #620", cut_packet)
         self.assertIn("PR #623", cut_packet)
         self.assertIn("Privacy rules version `5`", cut_packet)
-        self.assertIn("Cancelled, unpublished, signed attempt", cut_packet)
-        self.assertIn("Draft release `374538590` remains present", cut_packet)
-        self.assertIn("build `168` is permanently burned", cut_packet)
+        self.assertIn(release.CUT_PACKET_CANCELLED, cut_packet)
+        self.assertIn("Draft release `374538590`", cut_packet)
+        self.assertIn("remains present", cut_packet)
+        self.assertIn("Build `168` is permanently burned", cut_packet)
         self.assertIn("PyPI", cut_packet)
         self.assertIn("Homebrew", cut_packet)
 
@@ -482,11 +483,17 @@ class ReleaseMetadataTests(unittest.TestCase):
                 Path("docs/1.2.3-beta.2-cut-packet.md"),
             )
 
+            cut_packet.write_text(f"> {release.CUT_PACKET_CANCELLED}\n", encoding="utf-8")
+            self.assertEqual(
+                release.validate_release_cut_packet(metadata, repo_root=root),
+                Path("docs/1.2.3-beta.2-cut-packet.md"),
+            )
+
             cut_packet.write_text(
                 "> **Prepared for guarded Prerelease dispatch; not yet authorized or published.**\n",
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(release.ReleaseError, "prepared-pending or published"):
+            with self.assertRaisesRegex(release.ReleaseError, "prepared, published"):
                 release.validate_release_cut_packet(metadata, repo_root=root)
 
     def test_rc2_records_immutable_published_identity(self) -> None:

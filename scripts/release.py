@@ -79,6 +79,7 @@ BETA3_RECOVERY_TARGET_BUILD = "148"
 CUT_PACKET_PREPARED = "**Prepared metadata; publication pending.**"
 CUT_PACKET_RECOVERY_PENDING = "**Published and immutable; PyPI recovery pending.**"
 CUT_PACKET_PUBLISHED = "**Published and immutable.**"
+CUT_PACKET_CANCELLED = "**Cancelled, unpublished, signed attempt; release identity permanently burned.**"
 
 
 class ReleaseError(RuntimeError):
@@ -776,9 +777,11 @@ def validate_release_cut_packet(metadata: ReleaseMetadata, *, repo_root: Path = 
         text = path.read_text(encoding="utf-8")
     except OSError as error:
         raise ReleaseError(f"Unable to load release cut packet from {path}: {error}") from error
-    recognized_states = (CUT_PACKET_PREPARED, CUT_PACKET_RECOVERY_PENDING, CUT_PACKET_PUBLISHED)
+    recognized_states = (CUT_PACKET_PREPARED, CUT_PACKET_RECOVERY_PENDING, CUT_PACKET_PUBLISHED, CUT_PACKET_CANCELLED)
     if sum(state in text for state in recognized_states) != 1:
-        raise ReleaseError("Release cut packet must declare exactly one prepared-pending or published immutable state.")
+        raise ReleaseError(
+            "Release cut packet must declare exactly one prepared, published, recovery-pending, or cancelled state."
+        )
     return relative
 
 
