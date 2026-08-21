@@ -86,11 +86,12 @@
     "abandoned_builds": [
       157
     ],
-    "burned_builds": [
-      147,
-      154,
-      165
-    ],
+  "burned_builds": [
+    147,
+    154,
+    165,
+    166
+  ],
     "previous_beta": {
       "appcast_sha256": "d9e589452cbcc0147170dcdfa0cfdc520b761075ccde929fec64dee82c528073",
       "build_version": "164",
