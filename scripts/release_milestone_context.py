@@ -37,9 +37,13 @@ CHANGE_SCOPED_EVIDENCE_PATH_PATTERN = re.compile(r"^docs/qualification/(v[^/]+)-
 FAILED_ATTEMPT_ROOT = Path("docs/release-attempts")
 FAILED_ATTEMPT_RECORD_NAME = "failed-attempt-v1.json"
 FAILED_ATTEMPT_RECEIPT_NAME = "release-receipt.json"
+CANCELLED_ATTEMPT_RECORD_NAME = "cancelled-attempt-v1.json"
 RECOVERY_AUTHORIZATION_PATHS = frozenset({"docs/release-evidence/v0.3.0-pypi-recovery.json"})
 EXPECTED_REPOSITORY = "cbusillo/BD_to_AVP"
 EXPECTED_BASE_BRANCH = "main"
+SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+CANCELLATION_REASON_PATTERN = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
 IMMUTABLE_CANDIDATE_FIELDS = (
     "source_git_sha",
     "release_run_id",
@@ -73,6 +77,45 @@ FAILED_ATTEMPT_RECORD_KEYS = frozenset(
         "workflow_run_id",
     }
 )
+CANCELLED_ATTEMPT_RECORD_KEYS = frozenset(
+    {
+        "build_version",
+        "cancellation_reason",
+        "cancelled_job",
+        "cancelled_job_id",
+        "cancelled_step",
+        "delete_requires_authorization",
+        "draft_assets",
+        "draft_checked_at",
+        "draft_deleted",
+        "draft_release_id",
+        "draft_state",
+        "must_not_rebuild",
+        "package_version",
+        "public_version",
+        "published_at",
+        "recorded_at",
+        "release_receipt_asset_id",
+        "release_receipt_asset_size_bytes",
+        "release_receipt_file_sha256",
+        "release_receipt_path",
+        "release_receipt_sha256",
+        "release_tag",
+        "schema_version",
+        "signing_approval_environment",
+        "signing_approval_fingerprint",
+        "signing_approval_reviewer",
+        "source_sha",
+        "status",
+        "tag_exists",
+        "workflow_completed_at",
+        "workflow_conclusion",
+        "workflow_run_attempt",
+        "workflow_run_id",
+    }
+)
+CANCELLED_ATTEMPT_ASSET_KEYS = frozenset({"asset_id", "kind", "name", "sha256", "size_bytes"})
+CANCELLED_ATTEMPT_ASSET_KINDS = frozenset({"appcast", "checksum", "dmg", "receipt"})
 
 
 class ReleaseMilestoneContextError(RuntimeError):
@@ -180,6 +223,168 @@ def _sequence(value: object, description: str) -> Sequence[Any]:
     return cast(Sequence[Any], value)
 
 
+def _positive_integer(value: object, description: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ReleaseMilestoneContextError(f"{description} must be a positive integer.")
+    return value
+
+
+def _sha(value: object, description: str) -> str:
+    text = _string(value, description)
+    if SHA_PATTERN.fullmatch(text) is None:
+        raise ReleaseMilestoneContextError(f"{description} must be a full lowercase Git SHA.")
+    return text
+
+
+def _sha256(value: object, description: str) -> str:
+    text = _string(value, description)
+    if SHA256_PATTERN.fullmatch(text) is None:
+        raise ReleaseMilestoneContextError(f"{description} must be a lowercase SHA-256 digest.")
+    return text
+
+
+def _timestamp(value: object, description: str) -> datetime:
+    text = _string(value, description)
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ReleaseMilestoneContextError(f"{description} must be an ISO-8601 timestamp.") from error
+
+
+def validate_cancelled_attempt_record(repo_root: Path, release_tag: str) -> Mapping[str, Any]:
+    attempt_root = FAILED_ATTEMPT_ROOT / release_tag
+    record_relative = attempt_root / CANCELLED_ATTEMPT_RECORD_NAME
+    receipt_relative = attempt_root / FAILED_ATTEMPT_RECEIPT_NAME
+    record = _load_json(repo_root / record_relative, "cancelled release-attempt record")
+    if set(record) != CANCELLED_ATTEMPT_RECORD_KEYS:
+        raise ReleaseMilestoneContextError("Cancelled release-attempt record keys do not match the required schema.")
+    if (
+        record.get("schema_version") != 1
+        or record.get("status") != "cancelled_unpublished_signed_candidate"
+        or record.get("workflow_conclusion") != "cancelled"
+        or record.get("published_at") is not None
+        or record.get("draft_deleted") is not False
+        or record.get("draft_state") != "present"
+        or record.get("tag_exists") is not False
+        or record.get("must_not_rebuild") is not True
+        or record.get("delete_requires_authorization") is not True
+    ):
+        raise ReleaseMilestoneContextError(
+            "Cancelled release-attempt record must prove a draft-present, unpublished, "
+            "permanently non-reusable candidate."
+        )
+    cancellation_reason = _string(record.get("cancellation_reason"), "cancelled release reason")
+    if CANCELLATION_REASON_PATTERN.fullmatch(cancellation_reason) is None:
+        raise ReleaseMilestoneContextError("Cancelled release reason must be a lowercase machine-readable identifier.")
+    if record.get("release_tag") != release_tag:
+        raise ReleaseMilestoneContextError("Cancelled release-attempt tag does not match its canonical directory.")
+    if record.get("release_receipt_path") != receipt_relative.as_posix():
+        raise ReleaseMilestoneContextError("Cancelled release-attempt receipt path is not canonical.")
+    github_config = _load_json(repo_root / GITHUB_CONFIG_PATH, "GitHub repository configuration")
+    release_operations = _mapping(github_config.get("releaseOperations"), "release operations configuration")
+    if record.get("signing_approval_environment") != release_operations.get("approvalEnvironment"):
+        raise ReleaseMilestoneContextError("Cancelled release-attempt signing approval environment is invalid.")
+    if record.get("signing_approval_reviewer") != release_operations.get("approvalActor"):
+        raise ReleaseMilestoneContextError("Cancelled release-attempt signing approval reviewer is invalid.")
+    _sha256(record.get("signing_approval_fingerprint"), "cancelled release signing approval fingerprint")
+    _string(record.get("cancelled_job"), "cancelled release job")
+    _positive_integer(record.get("cancelled_job_id"), "cancelled release job ID")
+    _string(record.get("cancelled_step"), "cancelled release step")
+    source_sha = _sha(record.get("source_sha"), "cancelled release source SHA")
+    workflow_completed_at = _timestamp(record.get("workflow_completed_at"), "cancelled release workflow completion")
+    draft_checked_at = _timestamp(record.get("draft_checked_at"), "cancelled release draft check")
+    recorded_at = _timestamp(record.get("recorded_at"), "cancelled release record timestamp")
+    if draft_checked_at < workflow_completed_at or recorded_at < draft_checked_at:
+        raise ReleaseMilestoneContextError("Cancelled release-attempt timestamps are out of order.")
+
+    try:
+        receipt, receipt_file_sha256 = load_validated_checked_receipt(repo_root / receipt_relative)
+    except ReleaseReceiptError as error:
+        raise ReleaseMilestoneContextError(f"Cancelled release-attempt receipt is invalid: {error}") from error
+    if record.get("release_receipt_file_sha256") != receipt_file_sha256:
+        raise ReleaseMilestoneContextError("Cancelled release-attempt receipt file digest does not match the record.")
+    if record.get("release_receipt_sha256") != receipt.get("receipt_sha256"):
+        raise ReleaseMilestoneContextError("Cancelled release-attempt receipt self-digest does not match the record.")
+
+    release = _mapping(receipt.get("release"), "cancelled release-attempt receipt release")
+    versions = _mapping(receipt.get("versions"), "cancelled release-attempt receipt versions")
+    workflow = _mapping(receipt.get("workflow"), "cancelled release-attempt receipt workflow")
+    identity_pairs = {
+        "package_version": versions.get("package"),
+        "public_version": versions.get("public"),
+        "build_version": versions.get("build"),
+        "release_tag": release.get("tag"),
+        "source_sha": receipt.get("source_sha"),
+        "workflow_run_id": workflow.get("run_id"),
+        "workflow_run_attempt": workflow.get("run_attempt"),
+        "draft_release_id": release.get("id"),
+    }
+    if any(record.get(field) != value for field, value in identity_pairs.items()):
+        raise ReleaseMilestoneContextError("Cancelled release-attempt identity differs from its checked receipt.")
+    if (
+        release.get("target_sha") != source_sha
+        or release.get("prerelease") is not True
+        or workflow.get("name") != "Prerelease"
+        or workflow.get("actor") != "shiny-code-bot"
+    ):
+        raise ReleaseMilestoneContextError(
+            "Cancelled release-attempt receipt does not preserve guarded prerelease identity."
+        )
+
+    draft_assets: dict[str, Mapping[str, Any]] = {}
+    for index, raw_asset in enumerate(_sequence(record.get("draft_assets"), "cancelled release draft assets")):
+        asset = _mapping(raw_asset, f"cancelled release draft asset {index}")
+        if set(asset) != CANCELLED_ATTEMPT_ASSET_KEYS:
+            raise ReleaseMilestoneContextError("Cancelled release draft asset keys do not match the required schema.")
+        kind = _string(asset.get("kind"), f"cancelled release draft asset {index} kind")
+        if kind not in CANCELLED_ATTEMPT_ASSET_KINDS or kind in draft_assets:
+            raise ReleaseMilestoneContextError(
+                "Cancelled release draft assets must contain four unique required kinds."
+            )
+        _positive_integer(asset.get("asset_id"), f"cancelled release draft asset {kind} ID")
+        _positive_integer(asset.get("size_bytes"), f"cancelled release draft asset {kind} size")
+        _string(asset.get("name"), f"cancelled release draft asset {kind} name")
+        _sha256(asset.get("sha256"), f"cancelled release draft asset {kind} digest")
+        draft_assets[kind] = asset
+    if set(draft_assets) != CANCELLED_ATTEMPT_ASSET_KINDS:
+        raise ReleaseMilestoneContextError("Cancelled release draft assets are incomplete.")
+
+    for raw_artifact in _sequence(receipt.get("artifacts"), "cancelled release-attempt receipt artifacts"):
+        artifact = _mapping(raw_artifact, "cancelled release-attempt receipt artifact")
+        kind = _string(artifact.get("kind"), "cancelled release-attempt receipt artifact kind")
+        if draft_assets.get(kind) != artifact:
+            raise ReleaseMilestoneContextError(
+                f"Cancelled release draft asset {kind} differs from the checked release receipt."
+            )
+    receipt_asset = draft_assets["receipt"]
+    if (
+        receipt_asset.get("name") != FAILED_ATTEMPT_RECEIPT_NAME
+        or receipt_asset.get("asset_id") != record.get("release_receipt_asset_id")
+        or receipt_asset.get("size_bytes") != record.get("release_receipt_asset_size_bytes")
+        or receipt_asset.get("sha256") != receipt_file_sha256
+    ):
+        raise ReleaseMilestoneContextError("Cancelled release receipt asset identity does not match the record.")
+    return record
+
+
+def _require_immutable_if_tracked(repo_root: Path, base_sha: str, relative_path: Path) -> None:
+    tracked = subprocess.run(
+        ["git", "cat-file", "-e", f"{base_sha}:{relative_path.as_posix()}"],
+        cwd=repo_root,
+        capture_output=True,
+        check=False,
+    )
+    if tracked.returncode != 0:
+        return
+    changed = subprocess.run(
+        ["git", "diff", "--quiet", base_sha, "--", relative_path.as_posix()],
+        cwd=repo_root,
+        check=False,
+    )
+    if changed.returncode != 0:
+        raise ReleaseMilestoneContextError("Committed cancelled release-attempt evidence must remain immutable.")
+
+
 def _validate_failed_unpublished_candidate(
     repo_root: Path,
     *,
@@ -189,6 +394,37 @@ def _validate_failed_unpublished_candidate(
 ) -> int:
     release_tag = _string(base_candidate.get("release_tag"), "failed candidate release tag")
     attempt_root = FAILED_ATTEMPT_ROOT / release_tag
+    cancelled_record_relative = attempt_root / CANCELLED_ATTEMPT_RECORD_NAME
+    cancelled_record_path = repo_root / cancelled_record_relative
+    if cancelled_record_path.is_file():
+        if (repo_root / attempt_root / FAILED_ATTEMPT_RECORD_NAME).exists():
+            raise ReleaseMilestoneContextError("Release attempt cannot have both failed and cancelled records.")
+        _require_immutable_if_tracked(repo_root, base_sha, cancelled_record_relative)
+        _require_immutable_if_tracked(repo_root, base_sha, attempt_root / FAILED_ATTEMPT_RECEIPT_NAME)
+        record = validate_cancelled_attempt_record(repo_root, release_tag)
+        expected_candidate = {
+            "package_version": record.get("package_version"),
+            "public_version": record.get("public_version"),
+            "build_version": record.get("build_version"),
+            "release_tag": record.get("release_tag"),
+            "dmg_name": next(
+                (
+                    asset.get("name")
+                    for asset in _sequence(record.get("draft_assets"), "cancelled release draft assets")
+                    if _mapping(asset, "cancelled release draft asset").get("kind") == "dmg"
+                ),
+                None,
+            ),
+            "workflow": "Prerelease",
+        }
+        if any(base_candidate.get(field) != value for field, value in expected_candidate.items()):
+            raise ReleaseMilestoneContextError(
+                "Cancelled release-attempt record does not bind the base qualification candidate."
+            )
+        raise ReleaseMilestoneContextError(
+            "Cancelled signed candidate still has a retained draft; an explicitly authorized draft-deletion "
+            "record is required before successor preparation."
+        )
     record_relative = attempt_root / FAILED_ATTEMPT_RECORD_NAME
     receipt_relative = attempt_root / FAILED_ATTEMPT_RECEIPT_NAME
     for relative in (record_relative, receipt_relative):
@@ -276,6 +512,14 @@ def _validate_failed_unpublished_candidate(
         raise ReleaseMilestoneContextError(f"Failed release-attempt build identity is invalid: {error}") from error
 
 
+def _requires_unpublished_candidate_recovery(repo_root: Path, base_candidate: Mapping[str, Any]) -> bool:
+    release_tag = _string(base_candidate.get("release_tag"), "base qualification candidate release tag")
+    cancelled_record = repo_root / FAILED_ATTEMPT_ROOT / release_tag / CANCELLED_ATTEMPT_RECORD_NAME
+    return cancelled_record.is_file() or any(
+        field not in base_candidate or base_candidate[field] is None for field in IMMUTABLE_CANDIDATE_FIELDS
+    )
+
+
 def _validate_prepublication_candidate_transition(
     repo_root: Path,
     *,
@@ -343,7 +587,7 @@ def _validate_prepublication_candidate_transition(
                 raise ReleaseMilestoneContextError(
                     f"Published prior receipt does not match base qualification candidate.{field}."
                 )
-    elif any(field not in base_candidate or base_candidate[field] is None for field in IMMUTABLE_CANDIDATE_FIELDS):
+    elif _requires_unpublished_candidate_recovery(repo_root, base_candidate):
         failed_build = _validate_failed_unpublished_candidate(
             repo_root,
             base_sha=base_sha,
@@ -1312,6 +1556,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     source.add_argument("--release-receipt", type=Path)
     source.add_argument("--manifest", type=Path)
     source.add_argument("--base-sha")
+    source.add_argument("--cancelled-attempt-tag")
     parser.add_argument("--head-sha")
     parser.add_argument("--head-branch")
     parser.add_argument("--base-repo")
@@ -1321,6 +1566,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.cancelled_attempt_tag is not None:
+            record = validate_cancelled_attempt_record(args.repo_root.resolve(), args.cancelled_attempt_tag)
+            outputs = {
+                "build_version": _string(record.get("build_version"), "cancelled release build version"),
+                "release_tag": args.cancelled_attempt_tag,
+                "status": "validated_cancelled_attempt",
+            }
+            if args.github_output is not None:
+                _write_github_output(args.github_output, outputs)
+            print(json.dumps(outputs, sort_keys=True))
+            return 0
         receipt_path = args.release_receipt
         manifest_path = args.manifest
         if args.base_sha is not None:

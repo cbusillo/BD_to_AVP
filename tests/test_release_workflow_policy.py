@@ -293,7 +293,7 @@ class ReleaseWorkflowPolicyTests(unittest.TestCase):
         self.assertIn("| GitHub Latest | No |", summary)
         self.assertIn("| PyPI publication | No |", summary)
 
-    def test_beta4_unfreeze_and_explicit_freeze_fail_closed(self) -> None:
+    def test_committed_and_explicit_release_freezes_fail_closed(self) -> None:
         beta3_environment = valid_metadata_environment(
             PRERELEASE_WORKFLOW_NAME,
             release_tag="v0.3.0-beta.3",
@@ -316,6 +316,17 @@ class ReleaseWorkflowPolicyTests(unittest.TestCase):
         )
         beta4_metadata = validate_release_metadata(beta4_environment)
         self.assertEqual(beta4_metadata.release_tag, "v0.3.0-beta.4")
+
+        beta6_environment = valid_metadata_environment(
+            PRERELEASE_WORKFLOW_NAME,
+            release_tag="v0.3.2-beta.6",
+            channel="beta",
+            prerelease="true",
+            make_latest="false",
+            publish_pypi="false",
+        )
+        with self.assertRaisesRegex(ReleaseWorkflowPolicyError, r"frozen by issue #609"):
+            validate_release_metadata(beta6_environment)
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             freezes_path = Path(temporary_directory) / "release-freezes.json"

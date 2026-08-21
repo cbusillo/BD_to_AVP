@@ -199,7 +199,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(app["bundle_identifier"], "com.shinycomputers.bd-to-avp")
         self.assertNotIn("briefcase", pyproject["tool"])
 
-    def test_repository_is_prepared_for_beta(self) -> None:
+    def test_repository_records_cancelled_beta6_metadata(self) -> None:
         metadata = release.load_release_metadata()
 
         self.assertEqual(metadata.package_version, "0.3.2b6")
@@ -215,7 +215,9 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertFalse(metadata.publish_pypi)
 
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
-        self.assertNotIn("v0.3.2-beta.6", freeze_policy["frozen_release_tags"])
+        beta6_freeze = freeze_policy["frozen_release_tags"]["v0.3.2-beta.6"]
+        self.assertEqual(beta6_freeze["issue"], 609)
+        self.assertIn("permanently non-reusable", beta6_freeze["reason"])
 
         cut_packet = (REPO_ROOT / "docs" / "0.3.2-beta.6-cut-packet.md").read_text(encoding="utf-8")
         self.assertIn("`0.3.2b6`", cut_packet)
@@ -226,8 +228,9 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("PR #620", cut_packet)
         self.assertIn("PR #623", cut_packet)
         self.assertIn("Privacy rules version `5`", cut_packet)
-        self.assertIn("Prepared metadata; publication pending.", cut_packet)
-        self.assertIn("Release dispatch is not authorized", cut_packet)
+        self.assertIn("Cancelled, unpublished, signed attempt", cut_packet)
+        self.assertIn("Draft release `374538590` remains present", cut_packet)
+        self.assertIn("build `168` is permanently burned", cut_packet)
         self.assertIn("PyPI", cut_packet)
         self.assertIn("Homebrew", cut_packet)
 

@@ -34,8 +34,12 @@ as recorded in [the 0.3.2 Beta 4 cut packet](0.3.2-beta.4-cut-packet.md). Beta
 exact-artifact qualification is blocked because the packaged worker reported
 `0.0.0` instead of `0.3.2b5`; the publication and qualification boundary are
 tracked in [the 0.3.2 Beta 5 cut packet](0.3.2-beta.5-cut-packet.md). The next
-prepared identity is corrective Beta `0.3.2b6` build `168`, tracked in
-[the 0.3.2 Beta 6 cut packet](0.3.2-beta.6-cut-packet.md) and issue #609.
+corrective identity, Beta `0.3.2b6` build `168`, became a cancelled unpublished
+signed attempt after draft creation and is permanently burned, as recorded in
+[the 0.3.2 Beta 6 cut packet](0.3.2-beta.6-cut-packet.md) and
+`docs/release-attempts/v0.3.2-beta.6/cancelled-attempt-v1.json`. Its draft
+remains present pending separate explicit deletion authorization. Issue #609
+owns that disposition and preparation of a newer successor identity.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease
@@ -567,6 +571,13 @@ diagnostic and retry evidence. If a newer immutable release supersedes a failed
 draft and no exact-commit retry remains useful, verify the published tag and
 assets, then delete only the abandoned draft through the GitHub Releases UI.
 Maintainers may otherwise see that draft pinned above newer published releases.
+An intentionally cancelled signed attempt uses an immutable
+`cancelled-attempt-v1.json` record while its draft remains present. That record
+must bind the checked receipt, all draft asset IDs and digests, the cancellation
+boundary, and the run-bound signing approval. Freeze the release tag immediately.
+A later deletion requires fresh explicit authorization and a separate immutable
+disposition record; never rewrite the cancelled-attempt record to claim that the
+draft was deleted.
 
 To restore an earlier last-good cumulative feed, dispatch `Manage Sparkle Pages`
 from `main` with `restore` and the selected published release tag. The workflow

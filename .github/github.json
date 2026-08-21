@@ -139,6 +139,7 @@
       "releaseQualificationResume": "uv run python -m unittest tests.test_release_qualification_resume",
       "releaseQualificationArtifact": "uv run python -m unittest tests.test_release_qualification_artifact",
       "releaseQualificationApply": "uv run python -m unittest tests.test_release_qualification_apply",
+      "cancelledReleaseAttempt": "uv run python -m scripts.release_milestone_context --cancelled-attempt-tag v0.3.2-beta.6",
       "releaseReceipt": "uv run python -m unittest tests.test_release_receipt",
       "signedArtifactReceipt": "uv run python -m unittest tests.test_signed_artifact_receipt",
       "signedArtifactUi": "uv run python -m unittest tests.test_signed_artifact_ui",

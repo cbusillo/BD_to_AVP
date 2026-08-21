@@ -13,6 +13,8 @@ from scripts.release_milestone_context import (
     EVIDENCE_INDEX_PATH,
     RELEASE_LEDGER_PATH,
     ReleaseMilestoneContextError,
+    _validate_failed_unpublished_candidate,
+    _requires_unpublished_candidate_recovery,
     discover_milestone_manifest,
     discover_milestone_receipt,
     require_manifest_evidence_baseline,
@@ -1493,6 +1495,42 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                     head_repo="cbusillo/BD_to_AVP",
                     base_branch="main",
                 )
+
+    def test_cancelled_attempt_blocks_successor_until_authorized_draft_deletion(self) -> None:
+        base_candidate = {
+            "package_version": "0.3.2b6",
+            "public_version": "0.3.2-beta.6",
+            "build_version": "168",
+            "release_tag": "v0.3.2-beta.6",
+            "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.2-beta.6.dmg",
+            "workflow": "Prerelease",
+        }
+
+        with self.assertRaisesRegex(ReleaseMilestoneContextError, "authorized draft-deletion"):
+            _validate_failed_unpublished_candidate(
+                REPO_ROOT,
+                base_sha="0" * 40,
+                base_qualification={"status": "preregistered_pending_exact_candidate"},
+                base_candidate=base_candidate,
+            )
+
+    def test_bound_cancelled_attempt_still_requires_recovery(self) -> None:
+        base_candidate = {
+            "release_tag": "v0.3.2-beta.6",
+            **{
+                field: "bound"
+                for field in (
+                    "source_git_sha",
+                    "release_run_id",
+                    "release_id",
+                    "dmg_sha256",
+                    "appcast_sha256",
+                    "signed_app_tree_sha256",
+                )
+            },
+        }
+
+        self.assertTrue(_requires_unpublished_candidate_recovery(REPO_ROOT, base_candidate))
 
     def test_allows_beta_change_scoped_evidence_append_without_checked_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

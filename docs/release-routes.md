@@ -17,8 +17,10 @@ immutable. Stable `0.3.1` build `162`, Beta `0.3.2b1` build `163`, and Beta
 immutable. Beta `0.3.2b3` build `165` and Beta `0.3.2b4` build `166` are failed
 unpublished signed attempts and their identities are burned. Beta 5's
 post-publication exact-artifact qualification is blocked by packaged worker
-version metadata. The next prepared target is corrective Beta `0.3.2b6` build
-`168`; issue #609 owns publication and exact-artifact qualification.
+version metadata. Corrective Beta `0.3.2b6` build `168` is a cancelled,
+unpublished signed attempt with retained draft `374538590`; its tag and build
+are permanently non-reusable. Issue #609 owns draft disposition and preparation
+of a newer successor.
 Run-bound signing approval
 remains a separate authorization boundary.
 
@@ -443,7 +445,7 @@ qualification contract, and the successor advances to Beta 5 build `167`
 rather than reusing either Beta 4 identity. The failed-attempt details are in
 [the 0.3.2 Beta 4 cut packet](0.3.2-beta.4-cut-packet.md).
 
-## 0.3.2 Beta 5 Publication And Beta 6 Prepared Target
+## 0.3.2 Beta 5 Publication And Cancelled Beta 6 Attempt
 
 Guarded Prerelease run `32488665999` published immutable
 `v0.3.2-beta.5` build `167` on August 21, 2026 from source SHA
@@ -453,8 +455,7 @@ embedded worker reported `0.0.0` instead of `0.3.2b5`. PR #623 corrects that
 diagnostics identity and strengthens the pre-signing package gate. PR #622
 remains blocked as the accurate Beta 5 evidence record.
 
-The repository is prepared for review of guarded Prerelease dispatch for
-`v0.3.2-beta.6`:
+The reviewed Beta 6 identity was:
 
 - internal version `0.3.2b6` and public version `0.3.2-beta.6`;
 - public tag and title `v0.3.2-beta.6`;
@@ -464,18 +465,20 @@ The repository is prepared for review of guarded Prerelease dispatch for
 - the same production product, bundle, feed, key, signing team, and diagnostics
   endpoint as published Beta `0.3.2b5`.
 
-Publication must place Beta 6 above immutable Beta 5 build `167`, Beta 2 build
-`164`, Beta 1 build `163`, Stable `0.3.1` build `162`, and all earlier
-published history, with failed Beta 3 build `165` and failed Beta 4 build `166`
-absent. Stable and RC clients exclude the Beta item; Beta and Alpha clients can
-select it because build `168` is newer.
+Guarded Prerelease run `32502068709` built, Developer ID signed, notarized, and
+verified build `168` from source SHA
+`b4abf8829b6a539b40bb369bfd62dea504d35be1`. It created unpublished draft
+`374538590`, cumulative appcast assets, and an immutable release receipt, then
+was intentionally cancelled in the installed candidate UI accessibility lane
+before exact-artifact qualification, Pages deployment, or publication.
 
-As checked on August 21, 2026, no `v0.3.2-beta.6` tag, release, draft, PyPI
-version, Homebrew pull request, or appcast item exists. Dispatch requires
-separate explicit release authorization under a fixed-`main` merge hold. The
-reviewed metadata, release-note seed, corrective scope, immutable Beta 5 prior
-receipt, and qualification boundary are in
-[the 0.3.2 Beta 6 cut packet](0.3.2-beta.6-cut-packet.md).
+No Git tag, public release, Pages appcast item, PyPI version, or Homebrew change
+was created. The retained draft is diagnostic evidence only. The exact asset
+identities and checked receipt are recorded under
+`docs/release-attempts/v0.3.2-beta.6/`; `.github/release-freezes.json` prevents
+redispatch of the Beta 6 tag. Build `168` must remain absent from future updater
+feeds. Issue #609 requires fresh explicit authorization before draft deletion
+and a newer successor identity, expected to begin at Beta 7/build `169`.
 
 ## Historical Boundaries
 

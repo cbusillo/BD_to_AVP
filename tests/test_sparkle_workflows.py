@@ -279,14 +279,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('--release-tag "$BASE_SNAPSHOT_TAG"', str(prepare))
         self.assertIn('--release-tag "$LATEST_SNAPSHOT_TAG"', str(prepare))
 
-    def test_beta4_unfreeze_retains_release_preflight_guards(self) -> None:
+    def test_release_freeze_retains_release_preflight_guards(self) -> None:
         workflow = load_release_engine()
         prepare_steps = workflow["jobs"]["prepare"]["steps"]
         step_names = [step["name"] for step in prepare_steps]
         freeze_policy = json.loads((REPO_ROOT / ".github" / "release-freezes.json").read_text(encoding="utf-8"))
 
         self.assertEqual(freeze_policy["schema"], "bd_to_avp.release_freezes")
-        self.assertEqual(freeze_policy["frozen_release_tags"], {})
+        self.assertEqual(
+            freeze_policy["frozen_release_tags"],
+            {
+                "v0.3.2-beta.6": {
+                    "issue": 609,
+                    "reason": (
+                        "Cancelled unpublished signed attempt; build 168 is permanently non-reusable pending "
+                        "explicitly authorized draft cleanup."
+                    ),
+                }
+            },
+        )
         self.assertLess(
             step_names.index("Validate route and summarize publication effects"),
             step_names.index("Reject existing release identity"),
