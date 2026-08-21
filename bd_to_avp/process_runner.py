@@ -661,7 +661,6 @@ class ChildProcessRunner:
         pending_error: BaseException | None = None
         failure_code: str | None = None
         cancelled = False
-        failure_precedes_cancellation = False
         keyboard_interrupt: KeyboardInterrupt | None = None
         termination_requested_at: float | None = None
         kill_requested_at: float | None = None
@@ -738,7 +737,6 @@ class ChildProcessRunner:
 
                 if self._is_cancelled(run_context, cancellation_event) or keyboard_interrupt is not None:
                     if not cancelled:
-                        failure_precedes_cancellation = pending_error is not None
                         cancelled = True
                     if termination_requested_at is None:
                         emitter.emit(
@@ -959,7 +957,7 @@ class ChildProcessRunner:
             now=self._monotonic_clock(),
         )
 
-        if cancelled and not failure_precedes_cancellation:
+        if cancelled:
             emitter.emit(
                 "tool.cancelled",
                 context=final_context,

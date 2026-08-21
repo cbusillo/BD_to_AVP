@@ -55,10 +55,10 @@ class RecordingSink:
         with self._condition:
             return RecordingSnapshot(tuple(self._events))
 
-    def wait_for_kind(self, kind: str, *, timeout: float) -> bool:
+    def wait_for_count(self, kind: str, count: int, *, timeout: float) -> bool:
         with self._condition:
             return self._condition.wait_for(
-                lambda: any(event.kind == kind for event in self._events),
+                lambda: sum(event.kind == kind for event in self._events) >= count,
                 timeout=timeout,
             )
 
@@ -372,7 +372,7 @@ class ChildProcessRunnerTests(unittest.TestCase):
             heartbeat_observed = threading.Event()
 
             def release_after_heartbeat() -> None:
-                if sink.wait_for_kind("tool.heartbeat", timeout=5):
+                if sink.wait_for_count("tool.heartbeat", 2, timeout=5):
                     heartbeat_observed.set()
                 release_path.touch()
 
@@ -399,7 +399,7 @@ class ChildProcessRunnerTests(unittest.TestCase):
 
         heartbeats = [event for event in sink.snapshot().events if event.kind == "tool.heartbeat"]
         self.assertTrue(heartbeat_observed.is_set())
-        self.assertGreaterEqual(len(heartbeats), 1)
+        self.assertGreaterEqual(len(heartbeats), 2)
         self.assertIsNotNone(heartbeats[-1].data.activity)
         self.assertGreaterEqual(heartbeats[-1].data.activity.last_output_age_seconds, 0)
 
@@ -629,41 +629,6 @@ class ChildProcessRunnerTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 3)
         self.assertIsInstance(raised.exception.result.stages[0].error, ProcessCancelled)
         self.assertIsInstance(raised.exception.result.stages[1].error, ProcessArtifactNoProgressError)
-
-    def test_recorded_artifact_failure_precedes_late_cancellation(self) -> None:
-        sink = RecordingSink()
-        context = RunContext(ObservabilityStream(ObservabilityEmitter.WORKER, sink))
-        cancellation_event = threading.Event()
-        with tempfile.TemporaryDirectory() as directory:
-            artifact = Path(directory) / "output.bin"
-            artifact.write_bytes(b"x" * 70000)
-            resolve_count = 0
-
-            def resolve_artifact() -> Path:
-                nonlocal resolve_count
-                resolve_count += 1
-                if resolve_count >= 2:
-                    cancellation_event.set()
-                return artifact
-
-            with self.assertRaises(ProcessArtifactNoProgressError):
-                ChildProcessRunner().run(
-                    self.spec(
-                        "import time; time.sleep(30)",
-                        artifacts=(ProcessArtifactProbe("output", resolver=resolve_artifact),),
-                        artifact_interval_seconds=0.01,
-                        artifact_no_growth_timeout_seconds=0.01,
-                        artifact_no_growth_retryable=True,
-                        termination_grace_seconds=0.1,
-                        kill_wait_seconds=0.1,
-                    ),
-                    run_context=context,
-                    cancellation_event=cancellation_event,
-                )
-
-        failures = [event for event in sink.snapshot().events if event.kind == "tool.failed"]
-        self.assertEqual(failures[-1].data.failure.code, "artifact_no_growth")
-        self.assertTrue(failures[-1].data.failure.retryable)
 
     def test_three_stage_artifact_plateau_preserves_final_error_and_cleans_up_splitter(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
