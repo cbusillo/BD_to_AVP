@@ -34,6 +34,9 @@ RUNNER_BOUND_QUALIFICATION_PATHS = {
 RECEIPT_PATH_PATTERN = re.compile(r"^docs/release-evidence/(v[^/]+)/release-receipt\.json$")
 MANIFEST_PATH_PATTERN = re.compile(rf"^docs/release-evidence/(v[^/]+)/{re.escape(MANIFEST_NAME)}$")
 CHANGE_SCOPED_EVIDENCE_PATH_PATTERN = re.compile(r"^docs/qualification/(v[^/]+)-change-scoped-evidence-v1\.json$")
+FAILED_ATTEMPT_ROOT = Path("docs/release-attempts")
+FAILED_ATTEMPT_RECORD_NAME = "failed-attempt-v1.json"
+FAILED_ATTEMPT_RECEIPT_NAME = "release-receipt.json"
 RECOVERY_AUTHORIZATION_PATHS = frozenset({"docs/release-evidence/v0.3.0-pypi-recovery.json"})
 EXPECTED_REPOSITORY = "cbusillo/BD_to_AVP"
 EXPECTED_BASE_BRANCH = "main"
@@ -44,6 +47,31 @@ IMMUTABLE_CANDIDATE_FIELDS = (
     "dmg_sha256",
     "appcast_sha256",
     "signed_app_tree_sha256",
+)
+FAILED_ATTEMPT_RECORD_KEYS = frozenset(
+    {
+        "build_version",
+        "draft_deleted",
+        "draft_release_id",
+        "failed_job",
+        "failed_job_id",
+        "failed_step",
+        "must_not_rebuild",
+        "package_version",
+        "public_version",
+        "published_at",
+        "recorded_at",
+        "release_receipt_file_sha256",
+        "release_receipt_path",
+        "release_receipt_sha256",
+        "release_tag",
+        "schema_version",
+        "source_sha",
+        "status",
+        "workflow_conclusion",
+        "workflow_run_attempt",
+        "workflow_run_id",
+    }
 )
 
 
@@ -149,10 +177,107 @@ def _sequence(value: object, description: str) -> Sequence[Any]:
     return cast(Sequence[Any], value)
 
 
+def _validate_failed_unpublished_candidate(
+    repo_root: Path,
+    *,
+    base_sha: str,
+    base_qualification: Mapping[str, Any],
+    base_candidate: Mapping[str, Any],
+) -> int:
+    release_tag = _string(base_candidate.get("release_tag"), "failed candidate release tag")
+    attempt_root = FAILED_ATTEMPT_ROOT / release_tag
+    record_relative = attempt_root / FAILED_ATTEMPT_RECORD_NAME
+    receipt_relative = attempt_root / FAILED_ATTEMPT_RECEIPT_NAME
+    for relative in (record_relative, receipt_relative):
+        tracked_in_base = subprocess.run(
+            ["git", "cat-file", "-e", f"{base_sha}:{relative.as_posix()}"],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        if tracked_in_base.returncode == 0:
+            raise ReleaseMilestoneContextError("Failed release-attempt recovery records must be new and immutable.")
+
+    record = _load_json(repo_root / record_relative, "failed release-attempt record")
+    if set(record) != FAILED_ATTEMPT_RECORD_KEYS:
+        raise ReleaseMilestoneContextError("Failed release-attempt record keys do not match the required schema.")
+    if (
+        record.get("schema_version") != 1
+        or record.get("status") != "failed_unpublished_signed_candidate"
+        or record.get("workflow_conclusion") != "failure"
+        or record.get("published_at") is not None
+        or record.get("draft_deleted") is not True
+        or record.get("must_not_rebuild") is not True
+        or base_qualification.get("status") != "preregistered_pending_exact_candidate"
+    ):
+        raise ReleaseMilestoneContextError(
+            "Failed release-attempt record must prove an unpublished, deleted-draft, permanently burned candidate."
+        )
+    if record.get("release_receipt_path") != receipt_relative.as_posix():
+        raise ReleaseMilestoneContextError("Failed release-attempt receipt path is not canonical.")
+
+    try:
+        receipt, receipt_file_sha256 = load_validated_checked_receipt(repo_root / receipt_relative)
+    except ReleaseReceiptError as error:
+        raise ReleaseMilestoneContextError(f"Failed release-attempt receipt is invalid: {error}") from error
+    if record.get("release_receipt_file_sha256") != receipt_file_sha256:
+        raise ReleaseMilestoneContextError("Failed release-attempt receipt file digest does not match the record.")
+    if record.get("release_receipt_sha256") != receipt.get("receipt_sha256"):
+        raise ReleaseMilestoneContextError("Failed release-attempt receipt self-digest does not match the record.")
+
+    release = _mapping(receipt.get("release"), "failed release-attempt receipt release")
+    versions = _mapping(receipt.get("versions"), "failed release-attempt receipt versions")
+    workflow = _mapping(receipt.get("workflow"), "failed release-attempt receipt workflow")
+    identity_pairs = {
+        "package_version": versions.get("package"),
+        "public_version": versions.get("public"),
+        "build_version": versions.get("build"),
+        "release_tag": release.get("tag"),
+        "source_sha": receipt.get("source_sha"),
+        "workflow_run_id": workflow.get("run_id"),
+        "workflow_run_attempt": workflow.get("run_attempt"),
+        "draft_release_id": release.get("id"),
+    }
+    if any(record.get(field) != value for field, value in identity_pairs.items()):
+        raise ReleaseMilestoneContextError("Failed release-attempt record identity differs from its checked receipt.")
+    expected_candidate = {
+        "package_version": versions.get("package"),
+        "public_version": versions.get("public"),
+        "build_version": versions.get("build"),
+        "release_tag": release.get("tag"),
+        "dmg_name": next(
+            (
+                artifact.get("name")
+                for artifact in _sequence(receipt.get("artifacts"), "failed release-attempt receipt artifacts")
+                if _mapping(artifact, "failed release-attempt receipt artifact").get("kind") == "dmg"
+            ),
+            None,
+        ),
+        "workflow": workflow.get("name"),
+    }
+    if any(base_candidate.get(field) != value for field, value in expected_candidate.items()):
+        raise ReleaseMilestoneContextError(
+            "Failed release-attempt receipt does not bind the base qualification candidate."
+        )
+    if (
+        release.get("target_sha") != record.get("source_sha")
+        or release.get("prerelease") is not True
+        or workflow.get("actor") != "shiny-code-bot"
+    ):
+        raise ReleaseMilestoneContextError(
+            "Failed release-attempt receipt does not preserve guarded prerelease identity."
+        )
+    try:
+        return parse_build_version(_string(record.get("build_version"), "failed candidate build version"))
+    except ReleaseError as error:
+        raise ReleaseMilestoneContextError(f"Failed release-attempt build identity is invalid: {error}") from error
+
+
 def _validate_prepublication_candidate_transition(
     repo_root: Path,
     *,
     base_sha: str,
+    qualification: Mapping[str, Any],
     candidate: Mapping[str, Any],
 ) -> None:
     base_config = _load_json_at_revision(
@@ -180,9 +305,18 @@ def _validate_prepublication_candidate_transition(
     )
     base_candidate = _mapping(base_qualification.get("candidate"), "base qualification candidate")
     if any(field not in base_candidate or base_candidate[field] is None for field in IMMUTABLE_CANDIDATE_FIELDS):
-        raise ReleaseMilestoneContextError(
-            "Prepublication qualification must advance from a bound published candidate."
+        failed_build = _validate_failed_unpublished_candidate(
+            repo_root,
+            base_sha=base_sha,
+            base_qualification=base_qualification,
+            base_candidate=base_candidate,
         )
+        immutable_history = _mapping(qualification.get("immutable_history"), "qualification immutable_history")
+        burned_builds = _sequence(immutable_history.get("burned_builds"), "qualification burned_builds")
+        if failed_build not in burned_builds:
+            raise ReleaseMilestoneContextError(
+                "The successor qualification must permanently burn the failed candidate build."
+            )
     try:
         base_version = parse_release_version(cast(str, base_candidate.get("package_version")))
         next_version = parse_release_version(cast(str, candidate.get("package_version")))
@@ -594,6 +728,7 @@ def discover_milestone_receipt(
             _validate_prepublication_candidate_transition(
                 repo_root,
                 base_sha=base_sha,
+                qualification=qualification,
                 candidate=candidate,
             )
             unbound_candidate = True
