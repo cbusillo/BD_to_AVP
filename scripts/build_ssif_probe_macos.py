@@ -20,12 +20,17 @@ COMMAND_TIMEOUT_SECONDS = 120
 
 
 @dataclass(frozen=True)
-class NativeDependency:
+class SourceProvenance:
     version: str
+    url: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class NativeDependency:
     pkg_config: str
-    source_url: str
-    source_sha256: str
     license: str
+    known_good_source: SourceProvenance
 
 
 @dataclass(frozen=True)
@@ -38,17 +43,34 @@ class SsifProbeManifest:
     libudfread: NativeDependency
 
 
+def parse_source_provenance(value: object, name: str) -> SourceProvenance:
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{name} known-good source must be a table")
+    expected_fields = {"version", "url", "sha256"}
+    unexpected_fields = sorted(set(value) - expected_fields)
+    if unexpected_fields:
+        raise RuntimeError(f"unexpected {name} known-good source fields: {', '.join(unexpected_fields)}")
+    for field in expected_fields:
+        if not isinstance(value.get(field), str) or not value[field]:
+            raise RuntimeError(f"{name} known-good source field is missing or invalid: {field}")
+    return SourceProvenance(**{field: value[field] for field in expected_fields})
+
+
 def parse_dependency(value: object, name: str) -> NativeDependency:
     if not isinstance(value, dict):
         raise RuntimeError(f"{name} manifest section must be a table")
-    expected_fields = {"version", "pkg_config", "source_url", "source_sha256", "license"}
+    expected_fields = {"pkg_config", "license", "known_good_source"}
     unexpected_fields = sorted(set(value) - expected_fields)
     if unexpected_fields:
         raise RuntimeError(f"unexpected {name} manifest fields: {', '.join(unexpected_fields)}")
-    for field in expected_fields:
+    for field in ("pkg_config", "license"):
         if not isinstance(value.get(field), str) or not value[field]:
             raise RuntimeError(f"{name} manifest field is missing or invalid: {field}")
-    return NativeDependency(**{field: value[field] for field in expected_fields})
+    return NativeDependency(
+        pkg_config=value["pkg_config"],
+        license=value["license"],
+        known_good_source=parse_source_provenance(value.get("known_good_source"), name),
+    )
 
 
 def load_manifest(path: Path) -> SsifProbeManifest:
@@ -64,7 +86,7 @@ def load_manifest(path: Path) -> SsifProbeManifest:
     unexpected_fields = sorted(set(data) - expected_fields)
     if unexpected_fields:
         raise RuntimeError(f"unexpected SSIF probe manifest fields: {', '.join(unexpected_fields)}")
-    if data.get("schema_version") != 1:
+    if data.get("schema_version") != 2:
         raise RuntimeError("unsupported SSIF probe manifest schema")
     for field in ("platform", "minimum_macos", "linkage"):
         if not isinstance(data.get(field), str) or not data[field]:
@@ -87,12 +109,14 @@ def pkg_config(arguments: list[str]) -> str:
     ).strip()
 
 
-def verify_dependency(dependency: NativeDependency) -> None:
-    installed_version = pkg_config(["--modversion", dependency.pkg_config])
-    if installed_version != dependency.version:
-        raise RuntimeError(
-            f"{dependency.pkg_config} {dependency.version} is required; found {installed_version or 'nothing'}"
-        )
+def verify_dependency(dependency: NativeDependency) -> str:
+    try:
+        installed_version = pkg_config(["--modversion", dependency.pkg_config])
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(f"{dependency.pkg_config} is required via pkg-config") from error
+    if not installed_version:
+        raise RuntimeError(f"{dependency.pkg_config} did not report an installed version")
+    return installed_version
 
 
 def build_command(
@@ -122,8 +146,8 @@ def build_command(
 def build_ssif_probe(output_path: Path, manifest: SsifProbeManifest) -> None:
     if manifest.linkage != "dynamic-development-only":
         raise RuntimeError(f"unsupported SSIF probe linkage: {manifest.linkage}")
-    verify_dependency(manifest.libbluray)
-    verify_dependency(manifest.libudfread)
+    libbluray_version = verify_dependency(manifest.libbluray)
+    libudfread_version = verify_dependency(manifest.libudfread)
     compiler = os.environ.get("CC") or shutil.which("clang")
     if compiler is None:
         raise RuntimeError("clang is required to build the SSIF probe")
@@ -158,6 +182,7 @@ def build_ssif_probe(output_path: Path, manifest: SsifProbeManifest) -> None:
     )
     if "libbluray" not in linked_libraries:
         raise RuntimeError("SSIF probe is not dynamically linked to libbluray")
+    print(f"Built against host libbluray {libbluray_version} and libudfread {libudfread_version}")
 
 
 def main() -> int:

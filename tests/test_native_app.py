@@ -119,6 +119,11 @@ def test_app(root: Path, payload: bytes = b"current build") -> Path:
 
 
 class NativeAppPackagingTests(unittest.TestCase):
+    def test_package_defaults_to_ad_hoc_signing(self) -> None:
+        args = parse_args(["package"])
+
+        self.assertEqual(args.sign_identity, "-")
+
     def test_worker_smoke_uses_current_protocol_version(self) -> None:
         self.assertEqual(WORKER_PROTOCOL_VERSION, PROTOCOL_VERSION)
 

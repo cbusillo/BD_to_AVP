@@ -606,12 +606,154 @@ jobs:
             exit "$QUALIFICATION_EXIT_CODE"
           fi
 
+  pre-signing-package:
+    name: Qualify production package before signing
+    needs:
+      - policy
+      - prepare
+      - qualify-preparation
+    runs-on: macos-26
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout validated main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Verify pre-signing runner and checkout
+        env:
+          EXPECTED_POLICY_FINGERPRINT: ${{ needs.policy.outputs.policy_fingerprint }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_EVENT_NAME: ${{ github.event_name }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_OPERATOR_WORKFLOW_REF: ${{ github.workflow_ref }}
+          RELEASE_OPERATOR_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RELEASE_ENGINE_WORKFLOW_REF: ${{ needs.policy.outputs.engine_workflow_ref }}
+          RELEASE_ENGINE_WORKFLOW_SHA: ${{ needs.policy.outputs.engine_workflow_sha }}
+          RELEASE_ENGINE_WORKFLOW_REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN_ID: ${{ github.run_id }}
+          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELEASE_ACTOR: ${{ github.actor }}
+          RELEASE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          INPUT_RELEASE_SHA: ${{ inputs.release_sha }}
+          INPUT_OPERATOR_WORKFLOW_REF: ${{ inputs.operator_workflow_ref }}
+          INPUT_OPERATOR_WORKFLOW_SHA: ${{ inputs.operator_workflow_sha }}
+          INPUT_OPERATOR_RUN_ID: ${{ inputs.operator_run_id }}
+          INPUT_OPERATOR_RUN_ATTEMPT: ${{ inputs.operator_run_attempt }}
+          INPUT_OPERATOR_ACTOR: ${{ inputs.operator_actor }}
+          INPUT_OPERATOR_TRIGGERING_ACTOR: ${{ inputs.operator_triggering_actor }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_workflow_policy.py engine \
+            --expected-fingerprint "$EXPECTED_POLICY_FINGERPRINT"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]; then
+            echo "Protected main moved before pre-signing qualification." >&2
+            exit 1
+          fi
+          test "$(uname -m)" = "arm64"
+          test "$(sw_vers -productVersion | cut -d. -f1)" = "26"
+          XCODE_PATH="/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+          if [ ! -d "$XCODE_PATH" ]; then
+            echo "Pinned Xcode path is unavailable: $XCODE_PATH" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_PATH"
+          test "$(xcodebuild -version | sed -n '1p')" = "Xcode $XCODE_VERSION"
+          test "$(xcodebuild -version | sed -n '2p')" = "Build version $XCODE_BUILD_VERSION"
+          if [ -n "${BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE:-}" ]; then
+            echo "Release builds must not override the macOS 26 deployment target." >&2
+            exit 1
+          fi
+
+      - name: Install pinned XcodeGen
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/xcodegen.zip"
+          curl --fail --location --silent --show-error \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip" \
+            --output "$ARCHIVE"
+          printf '%s  %s\n' "$XCODEGEN_SHA256" "$ARCHIVE" | shasum -a 256 --check
+          ditto -x -k "$ARCHIVE" "$RUNNER_TEMP"
+          test "$("$RUNNER_TEMP/xcodegen/bin/xcodegen" --version)" = "Version: $XCODEGEN_VERSION"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install Python and locked dependencies
+        run: |
+          uv python install 3.12
+          uv sync --locked --all-groups --python 3.12
+
+      - name: Build and smoke the production-shaped package
+        env:
+          BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE: ""
+          BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: ${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          APP_PATH="macos/build/package/3D Blu-ray to Vision Pro.app"
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+          uv run python scripts/native_app.py package --sign-identity -
+          test -d "$APP_PATH"
+          uv run python scripts/smoke_release_app.py \
+            --app-path "$APP_PATH" \
+            --skip-spctl \
+            | tee pre-signing-smoke.log
+
+      - name: Run installed UI qualification before signing
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.pre_signing_ui \
+            --app "$APP_PATH" \
+            --dmg "$RUNNER_TEMP/pre-signing-package.dmg" \
+            --qualification-root "$RUNNER_TEMP/pre-signing-installed-ui" \
+            --evidence-directory pre-signing-installed-ui-evidence \
+            --output-report pre-signing-installed-ui-report.json \
+            --failure-diagnostics-directory pre-signing-installed-ui-diagnostics \
+            --source-sha "$GITHUB_SHA" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - name: Retain pre-signing failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pre-signing-package-diagnostics-${{ github.run_attempt }}
+          path: |
+            pre-signing-smoke.log
+            pre-signing-installed-ui-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Retain pre-signing qualification report
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pre-signing-package-${{ github.run_attempt }}
+          path: |
+            pre-signing-smoke.log
+            pre-signing-installed-ui-evidence
+            pre-signing-installed-ui-report.json
+          if-no-files-found: error
+          retention-days: 7
+
   package:
     name: Build, sign, notarize, and validate DMG
     needs:
       - policy
       - prepare
       - qualify-preparation
+      - pre-signing-package
     runs-on: macos-26
     timeout-minutes: 180
     environment: macos-signing

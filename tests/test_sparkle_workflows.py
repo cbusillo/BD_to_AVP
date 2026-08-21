@@ -86,6 +86,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         }
         workflow = load_release_engine()
         prepare = workflow["jobs"]["prepare"]
+        pre_signing = workflow["jobs"]["pre-signing-package"]
         package = workflow["jobs"]["package"]
 
         self.assertEqual({operator["name"] for operator in operators.values()}, set(operators))
@@ -111,6 +112,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(checkout["with"]["persist-credentials"], "false")
         self.assertIn("refs/heads/main", str(prepare))
         self.assertIn("refs/remotes/origin/main", str(prepare))
+        self.assertIn("refs/remotes/origin/main", str(pre_signing))
+        self.assertIn("Protected main moved before pre-signing qualification", str(pre_signing))
+        self.assertIn("pre-signing-package", package["needs"])
         self.assertIn("refs/remotes/origin/main", str(package))
         self.assertIn("moved after signing approval", str(package))
         self.assertGreaterEqual(str(package).count("refs/remotes/origin/main"), 4)
@@ -230,7 +234,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("release_route", policy["outputs"])
         self.assertIn("operator_workflow_path", policy["outputs"])
         self.assertEqual(workflow["jobs"]["prepare"]["needs"], "policy")
-        self.assertEqual(set(workflow["jobs"]["package"]["needs"]), {"policy", "prepare", "qualify-preparation"})
+        self.assertEqual(
+            set(workflow["jobs"]["package"]["needs"]),
+            {"policy", "prepare", "qualify-preparation", "pre-signing-package"},
+        )
         self.assertIn("--expected-fingerprint", str(workflow["jobs"]["package"]))
         self.assertIn("needs.policy.outputs.engine_workflow_ref", str(workflow["jobs"]["package"]))
 
@@ -330,7 +337,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         cleanup_script = cleanup_step["run"]
         package_step = next(step for step in package["steps"] if step["name"] == "Package application for GitHub")
 
-        self.assertEqual(set(package["needs"]), {"policy", "prepare", "qualify-preparation"})
+        self.assertEqual(
+            set(package["needs"]),
+            {"policy", "prepare", "qualify-preparation", "pre-signing-package"},
+        )
         self.assertEqual(package["environment"], "macos-signing")
         self.assertEqual(package["permissions"]["contents"], "read")
         self.assertEqual(package["runs-on"], "macos-26")
@@ -795,6 +805,7 @@ printf '%s' "$CODESIGN_METADATA"
         workflow = load_release_engine()
         jobs = workflow["jobs"]
         qualify_prep = jobs["qualify-preparation"]
+        pre_signing = jobs["pre-signing-package"]
         package = jobs["package"]
         verify_draft = jobs["verify-draft"]
         build_receipt = jobs["build-receipt"]
@@ -809,25 +820,38 @@ printf '%s' "$CODESIGN_METADATA"
             )
         )
         self.assertIn("qualify-preparation", set(jobs["package"]["needs"]))
+        self.assertIn("pre-signing-package", set(jobs["package"]["needs"]))
         self.assertIn("qualify-preparation", set(jobs["build-python"]["needs"]))
         self.assertEqual(set(qualify_prep["needs"]), {"prepare"})
+        self.assertEqual(set(pre_signing["needs"]), {"policy", "prepare", "qualify-preparation"})
         self.assertIn("qualify-artifact", set(jobs["publish-release"]["needs"]))
         self.assertIn("signed-artifact-ui", set(jobs["publish-release"]["needs"]))
         self.assertIn("signed-artifact-ui", set(qualify_artifact["needs"]))
         self.assertIn("needs.signed-artifact-ui.result == 'success'", jobs["publish-release"]["if"])
         self.assertIn("needs.qualify-artifact.result == 'success'", jobs["publish-release"]["if"])
         self.assertNotIn("environment", qualify_prep)
+        self.assertNotIn("environment", pre_signing)
         self.assertNotIn("environment", signed_ui)
         self.assertNotIn("environment", qualify_artifact)
         self.assertNotIn("secrets.", str(qualify_prep))
+        self.assertNotIn("secrets.", str(pre_signing))
         self.assertNotIn("secrets.", str(signed_ui))
         self.assertNotIn("secrets.", str(qualify_artifact))
         self.assertEqual(qualify_prep["permissions"], {"contents": "read"})
+        self.assertEqual(pre_signing["permissions"], {"contents": "read"})
         self.assertEqual(signed_ui["permissions"], {"contents": "read"})
         self.assertEqual(qualify_artifact["permissions"], {"contents": "read"})
         self.assertIn("steps.release_package.outputs.artifact-id", package["outputs"]["workflow_artifact_id"])
         self.assertIn("steps.receipt_artifact.outputs.artifact-id", build_receipt["outputs"]["receipt_artifact_id"])
         self.assertIn("qualify_release_scope", str(qualify_prep))
+        self.assertEqual(pre_signing["runs-on"], "macos-26")
+        self.assertIn("scripts/native_app.py package --sign-identity -", str(pre_signing))
+        self.assertIn("scripts/smoke_release_app.py", str(pre_signing))
+        self.assertIn("--skip-spctl", str(pre_signing))
+        self.assertIn("scripts.pre_signing_ui", str(pre_signing))
+        self.assertNotIn("notarytool", str(pre_signing))
+        self.assertNotIn("CERTIFICATE", str(pre_signing))
+        self.assertNotIn("APPLE_ID", str(pre_signing))
         self.assertIn("signed_artifact_ui", str(signed_ui))
         self.assertIn("signed-artifact-ui-receipt.json", str(signed_ui))
         self.assertNotIn("GH_TOKEN", str(signed_ui))

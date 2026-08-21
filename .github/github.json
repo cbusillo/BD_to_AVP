@@ -142,6 +142,7 @@
       "releaseReceipt": "uv run python -m unittest tests.test_release_receipt",
       "signedArtifactReceipt": "uv run python -m unittest tests.test_signed_artifact_receipt",
       "signedArtifactUi": "uv run python -m unittest tests.test_signed_artifact_ui",
+      "preSigningUi": "uv run python -m unittest tests.test_installed_ui_qualification tests.test_pre_signing_ui tests.test_signed_artifact_ui",
       "tier3Receipt": "uv run python -m unittest tests.test_tier3_receipt",
       "tier3CleanMachine": "uv run python -m unittest tests.test_tier3_clean_machine",
       "tier3OperatorCollection": "uv run python -m unittest tests.test_tier3_operator_collect",

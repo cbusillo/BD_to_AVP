@@ -50,6 +50,8 @@ class SsifProbeTests(unittest.TestCase):
             raise unittest.SkipTest("pkg-config is unavailable")
         if subprocess.run(["pkg-config", "--exists", "libbluray"], check=False).returncode != 0:
             raise unittest.SkipTest("libbluray is unavailable")
+        if subprocess.run(["pkg-config", "--exists", "libudfread"], check=False).returncode != 0:
+            raise unittest.SkipTest("libudfread is unavailable")
         cls.temporary_directory = tempfile.TemporaryDirectory()
         cls.helper_path = Path(cls.temporary_directory.name) / "ssif_probe"
         build_result = subprocess.run(

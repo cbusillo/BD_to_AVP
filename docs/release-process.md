@@ -47,6 +47,16 @@ category is explicitly not applicable rather than failed. Metadata
 preparation and review do not authorize dispatch; run-bound signing approval
 remains a separate verified boundary.
 
+Before the `macos-signing` environment can request approval, the reusable
+release engine runs a secret-free macOS pre-signing package gate. That job
+builds the production package with ad-hoc signing, runs the complete maintained
+release-app smoke, creates a production-shaped DMG, and exercises the same
+installed UI accessibility fixture used by the signed-artifact lane. Failure,
+cancellation, or skipped execution prevents the signing job from starting. The
+later Developer ID, notarization, signed-DMG, exact-artifact UI, appcast, and
+post-publication gates remain mandatory; pre-signing qualification moves fixture
+and packaged-runtime feedback earlier without substituting for release evidence.
+
 ## Release Preparation
 
 Every release version and Sparkle build number is committed through a normal
