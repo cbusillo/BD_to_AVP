@@ -1,6 +1,7 @@
 import hashlib
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -79,6 +80,17 @@ class CancelledReleaseAttemptTests(unittest.TestCase):
         self.assertFalse(record["draft_deleted"])
         self.assertTrue(record["must_not_rebuild"])
 
+    def test_repository_draft_deletion_disposition_validates(self) -> None:
+        attempt = validate_cancelled_attempt_record(REPO_ROOT, RELEASE_TAG)
+        disposition = validate_draft_deletion_record(REPO_ROOT, RELEASE_TAG, attempt)
+
+        self.assertEqual(disposition["status"], "deleted_abandoned_unpublished_draft")
+        self.assertEqual(disposition["draft_release_id"], 374538590)
+        self.assertEqual(
+            disposition["authorization_fingerprint"],
+            "0ac759e7d6332cc2f3555083fd7ec74c0ec938afbb3f0be1005e5e0cbe4ce193",
+        )
+
     def assert_mutation_rejected(self, field: str, value: object, message: str) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -152,6 +164,42 @@ class CancelledReleaseAttemptTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ReleaseMilestoneContextError, "authorization fingerprint"):
                 validate_draft_deletion_record(root, RELEASE_TAG, attempt)
+
+    def test_rejects_mutation_of_committed_draft_deletion_disposition(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            attempt_root = self.copy_attempt(root)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "record deletion"], cwd=root, check=True)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                capture_output=True,
+                check=True,
+                text=True,
+            ).stdout.strip()
+            deletion_path = attempt_root / "draft-deletion-v1.json"
+            deletion = json.loads(deletion_path.read_text(encoding="utf-8"))
+            deletion["deletion_reason"] = "mutated_after_commit"
+            deletion_path.write_text(json.dumps(deletion, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "must remain immutable"):
+                _validate_failed_unpublished_candidate(
+                    root,
+                    base_sha=base_sha,
+                    base_qualification={"status": "preregistered_pending_exact_candidate"},
+                    base_candidate={
+                        "package_version": "0.3.2b6",
+                        "public_version": "0.3.2-beta.6",
+                        "build_version": "168",
+                        "release_tag": RELEASE_TAG,
+                        "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.2-beta.6.dmg",
+                        "workflow": "Prerelease",
+                    },
+                )
 
     def test_draft_deletion_cli_writes_validated_github_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

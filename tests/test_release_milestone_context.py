@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -1496,7 +1497,7 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
                     base_branch="main",
                 )
 
-    def test_cancelled_attempt_blocks_successor_until_authorized_draft_deletion(self) -> None:
+    def test_cancelled_attempt_blocks_successor_without_authorized_draft_deletion(self) -> None:
         base_candidate = {
             "package_version": "0.3.2b6",
             "public_version": "0.3.2-beta.6",
@@ -1506,13 +1507,23 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             "workflow": "Prerelease",
         }
 
-        with self.assertRaisesRegex(ReleaseMilestoneContextError, "authorized draft-deletion"):
-            _validate_failed_unpublished_candidate(
-                REPO_ROOT,
-                base_sha="0" * 40,
-                base_qualification={"status": "preregistered_pending_exact_candidate"},
-                base_candidate=base_candidate,
-            )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            attempt_source = REPO_ROOT / "docs/release-attempts/v0.3.2-beta.6"
+            attempt_destination = root / "docs/release-attempts/v0.3.2-beta.6"
+            shutil.copytree(attempt_source, attempt_destination)
+            (attempt_destination / "draft-deletion-v1.json").unlink()
+            config_destination = root / ".github/github.json"
+            config_destination.parent.mkdir(parents=True)
+            shutil.copy2(REPO_ROOT / ".github/github.json", config_destination)
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "authorized draft-deletion"):
+                _validate_failed_unpublished_candidate(
+                    root,
+                    base_sha="0" * 40,
+                    base_qualification={"status": "preregistered_pending_exact_candidate"},
+                    base_candidate=base_candidate,
+                )
 
     def test_bound_cancelled_attempt_still_requires_recovery(self) -> None:
         base_candidate = {
