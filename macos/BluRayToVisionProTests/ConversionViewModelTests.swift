@@ -1790,6 +1790,115 @@ final class ConversionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testBatchAllTitlesRetryFailsWhenSelectedTitleDisappears() async throws {
+        try await withTemporaryBatchSources(["Feature.iso"]) { folderURL, sourceURLs, destinationURL in
+            let originalTitle = SourceTitle(
+                id: "makemkv:0",
+                name: "Main Feature",
+                outputName: "Feature",
+                durationSeconds: 7_200,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: true
+            )
+            let unrelatedTitle = SourceTitle(
+                id: "makemkv:7",
+                name: "Different 3D Video",
+                outputName: "Different Feature",
+                durationSeconds: 900,
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                mainFeature: false
+            )
+            let inspections = [originalTitle, unrelatedTitle].map { title in
+                SourceInspection(
+                    name: "Feature",
+                    resolution: "1920x1080",
+                    frameRate: "24000/1001",
+                    interlaced: false,
+                    titles: [title]
+                )
+            }
+            let sourcePath = sourceURLs[0].path
+            let scenario = BatchWorkerScenario(
+                failConversionOnceFor: [sourcePath],
+                inspectionResults: [sourcePath: inspections]
+            )
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions(),
+                titleSelection: .all
+            )
+            await waitForBatchCompletion(viewModel)
+
+            var queue = try XCTUnwrap(viewModel.batchQueue)
+            viewModel.retryBatchItem(queue.items[0].id)
+            await waitForBatchCompletion(viewModel)
+
+            queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.failed])
+            XCTAssertEqual(queue.items[0].failureMessage, "The previously selected 3D video is no longer available.")
+            XCTAssertEqual(scenario.records.filter { $0.operation == "convert_source" }.count, 1)
+        }
+    }
+
+    @MainActor
+    func testBatchAllTitlesRejectsDuplicateGeneratedOutputs() async throws {
+        try await withTemporaryBatchSources(["Feature.iso"]) { folderURL, sourceURLs, destinationURL in
+            let inspection = SourceInspection(
+                name: "Feature",
+                resolution: "1920x1080",
+                frameRate: "24000/1001",
+                interlaced: false,
+                titles: [
+                    SourceTitle(
+                        id: "makemkv:0",
+                        name: "Main Feature",
+                        outputName: "Feature",
+                        durationSeconds: 7_200,
+                        resolution: "1920x1080",
+                        frameRate: "24000/1001",
+                        mainFeature: true
+                    ),
+                    SourceTitle(
+                        id: "makemkv:2",
+                        name: "Duplicate Output",
+                        outputName: "Feature",
+                        durationSeconds: 600,
+                        resolution: "1920x1080",
+                        frameRate: "24000/1001",
+                        mainFeature: false
+                    ),
+                ]
+            )
+            let scenario = BatchWorkerScenario(
+                inspectionResults: [sourceURLs[0].path: [inspection]]
+            )
+            let viewModel = ConversionViewModel { scenario.makeClient() }
+
+            viewModel.selectSource(folderURL)
+            viewModel.startBatchConversion(
+                profile: BuiltInProfile.balanced.profile,
+                destinationURL: destinationURL,
+                options: ConversionOptions(),
+                titleSelection: .all
+            )
+            await waitForBatchCompletion(viewModel)
+
+            let queue = try XCTUnwrap(viewModel.batchQueue)
+            XCTAssertEqual(queue.items.map(\.status), [.failed, .failed])
+            XCTAssertTrue(queue.items.allSatisfy {
+                $0.failureMessage == "Another queued source resolves to the same output file."
+            })
+            XCTAssertFalse(scenario.records.contains(where: { $0.operation == "convert_source" }))
+        }
+    }
+
+    @MainActor
     func testBatchAllTitlesRerunRediscoversSourcesInsteadOfProjectedRows() async throws {
         try await withTemporaryBatchSources(["Feature.iso"]) { folderURL, sourceURLs, destinationURL in
             let inspection = SourceInspection(

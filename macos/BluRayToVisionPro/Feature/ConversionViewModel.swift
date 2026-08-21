@@ -1349,7 +1349,7 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
         item: DurableConversionQueueItem,
         inspection: SourceInspection
     ) async throws {
-        var inspectedDraft = try conversionDraft(for: item, preserveStoredSourceRemoval: true)
+        let inspectedDraft = try conversionDraft(for: item, preserveStoredSourceRemoval: true)
             .withSourceDetails(inspection)
         let titleSelection = item.intent.sourceFolderDiscTitleSelection ?? .mainFeature
         let resolvedDrafts: [(draft: ConversionDraft, titleIndex: Int?)]
@@ -1357,13 +1357,15 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
             let resolvedTitles: [(offset: Int?, element: SourceTitle)]
             if let titleIndex = item.intent.sourceFolderTitleIndex {
                 let previousTitle = item.intent.selectedTitle
-                let resolvedIndex = previousTitle.flatMap { selectedTitle in
-                    inspection.titles.firstIndex(where: { $0.id == selectedTitle.id })
-                        ?? inspection.titles.firstIndex(where: { $0.outputName == selectedTitle.outputName })
-                        ?? (selectedTitle.mainFeature
+                let resolvedIndex = if let previousTitle {
+                    inspection.titles.firstIndex(where: { $0.id == previousTitle.id })
+                        ?? inspection.titles.firstIndex(where: { $0.outputName == previousTitle.outputName })
+                        ?? (previousTitle.mainFeature
                             ? inspection.titles.firstIndex(where: \.mainFeature)
-                            : inspection.titles.firstIndex(where: { $0.name == selectedTitle.name }))
-                } ?? (inspection.titles.indices.contains(titleIndex) ? titleIndex : nil)
+                            : inspection.titles.firstIndex(where: { $0.name == previousTitle.name }))
+                } else {
+                    inspection.titles.indices.contains(titleIndex) ? titleIndex : nil
+                }
                 guard let resolvedIndex else {
                     let failure = SourceFolderTerminalSnapshot(
                         phase: .failed,
@@ -1445,8 +1447,9 @@ final class ConversionViewModel: ObservableObject, UpdateInstallPostponing {
                     continue
                 }
                 let outputKey = candidateDraft.proposedOutputURL.standardizedFileURL.path.lowercased()
-                existingOutputOwners[outputKey] = candidate.intent.selectedTitle?.name
-                    ?? candidate.intent.source.displayName
+                existingOutputOwners[outputKey] = candidate.intent.selectedTitle.map {
+                    "\(candidate.intent.source.displayName) — \($0.name)"
+                } ?? candidate.intent.source.displayName
             }
 
             var outputCounts: [String: Int] = [:]

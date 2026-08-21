@@ -745,7 +745,7 @@ struct SourceWorkspaceView: View {
             LabeledContent("Disc images") {
                 Menu {
                     Button(action: selectMainTitle) {
-                        selectionOption("Main Feature", selected: titleSelection.isMain)
+                        selectionOption("Main Feature", selected: !titleSelection.isAll)
                     }
                     Button(action: selectAllTitles) {
                         selectionOption("All 3D Videos", selected: titleSelection.isAll)
