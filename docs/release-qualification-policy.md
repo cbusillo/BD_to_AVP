@@ -71,6 +71,15 @@ installed UI receipts. Other Tier 2 invalidations continue to block preparation
 and require another reviewed candidate rather than being deferred through
 publication.
 
+The release engine also runs a secret-free macOS package/UI qualification after
+preparation classification and before the `macos-signing` environment job. It
+uses an ad-hoc signed production package and production-shaped DMG to exercise
+worker identity, startup, cancellation, preview, bundled tools, clean-library
+profile creation, DMG installation, and installed accessibility behavior. This
+gate is preventive rather than evidentiary: it must pass before signing can
+begin, while the exact Developer ID signed artifact still requires fresh
+artifact and milestone receipts.
+
 ```sh
 uv run python -m scripts.qualify_release_scope \
   --candidate-sha "$CANDIDATE_SHA" \

@@ -81,12 +81,13 @@ def smoke_packaged_tools(app_path: Path) -> None:
         raise MacOSReleaseError(f"macOS bundled-tool smoke failed: {error}") from error
 
 
-def create_release_dmg(app_path: Path, output_path: Path) -> Path:
+def create_release_dmg(app_path: Path, output_path: Path, *, verify_signatures: bool = True) -> Path:
+    """Create the release DMG; unsigned verification is reserved for the preventive pre-signing fixture."""
     if output_path.suffix.lower() != ".dmg":
         raise MacOSReleaseError("Release output must use the .dmg extension.")
     if output_path.exists():
         raise MacOSReleaseError(f"Refusing to replace existing release DMG: {output_path}")
-    verify_release_app(app_path, verify_signatures=True)
+    verify_release_app(app_path, verify_signatures=verify_signatures)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="macos-release-dmg-", dir=output_path.parent) as temporary_directory:
