@@ -595,6 +595,30 @@
       "source": "signed_artifact_receipt",
       "source_sha": "e4bc85e2fa9fa75d17c2b84a5bc6510f7af1bfbd",
       "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-21T14:10:21Z",
+      "case_id": "release-workflow-identity",
+      "receipt_id": "v0.3.2-beta.5:release-workflow-identity",
+      "reference": "docs/release-evidence/v0.3.2-beta.5/release-receipt.json",
+      "release_run_id": 32488665999,
+      "sha256": "81e1568ff93c0fad946dff59c5d4e00c97008162db93218cc4f58dcd2ad8af6c",
+      "source": "release_run_receipt",
+      "source_sha": "f6ce414db07030e2ad2c081a9d4287639a113446",
+      "status": "accepted",
+      "workflow_conclusion": "success"
+    },
+    {
+      "accepted_at": "2026-08-21T14:10:21Z",
+      "case_id": "signed-packaged-route-parity",
+      "receipt_id": "v0.3.2-beta.5:signed-packaged-route-parity",
+      "reference": "docs/release-evidence/v0.3.2-beta.5/release-receipt.json",
+      "release_run_id": 32488665999,
+      "sha256": "81e1568ff93c0fad946dff59c5d4e00c97008162db93218cc4f58dcd2ad8af6c",
+      "source": "release_run_receipt",
+      "source_sha": "f6ce414db07030e2ad2c081a9d4287639a113446",
+      "status": "accepted",
+      "workflow_conclusion": "success"
     }
   ],
   "schema_version": 1
