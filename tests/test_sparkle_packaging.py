@@ -382,7 +382,7 @@ class SparkleBundleTests(unittest.TestCase):
     def test_repository_public_key_matches_app_metadata(self) -> None:
         info = sparkle_bundle.load_expected_info()
 
-        self.assertEqual(info["CFBundleVersion"], "164")
+        self.assertEqual(info["CFBundleVersion"], "165")
         self.assertEqual(info["SUPublicEDKey"], sparkle_bundle.PUBLIC_KEY_PATH.read_text().strip())
 
 
