@@ -1,0 +1,26 @@
+---
+name: Production Preflight
+
+"on":
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact full current protected main SHA to qualify
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: production-preflight
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Run release-independent production preflight
+    uses: ./.github/workflows/production-preflight-engine.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      support_diagnostics_endpoint: ${{ vars.SUPPORT_DIAGNOSTICS_ENDPOINT }}
+    permissions:
+      contents: read

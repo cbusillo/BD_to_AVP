@@ -58,6 +58,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_sparkle_bundle_uses_importable_module_entrypoint(self) -> None:
         workflow = load_release_engine()
         workflow_text = str(workflow)
+        production_preflight_text = str(load_workflow("production-preflight-engine.yml"))
         ci_text = str(load_workflow("ci.yml"))
         smoke_text = (REPO_ROOT / "docs" / "release-smoke.md").read_text(encoding="utf-8")
 
@@ -66,7 +67,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("python scripts/sparkle_bundle.py", smoke_text)
         self.assertNotIn("python scripts/briefcase_app.py", workflow_text + ci_text)
         self.assertNotIn("python -m scripts.briefcase_app", workflow_text + ci_text)
-        self.assertIn("python scripts/native_app.py package", workflow_text)
+        self.assertIn("python scripts/native_app.py package", production_preflight_text)
         self.assertIn("python scripts/native_app.py package", ci_text)
         self.assertIn("python -m scripts.macos_release", workflow_text)
 
@@ -85,7 +86,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "Prerelease": load_workflow("prerelease.yml"),
         }
         workflow = load_release_engine()
+        production_preflight = load_workflow("production-preflight-engine.yml")
         prepare = workflow["jobs"]["prepare"]
+        pre_signing_policy = workflow["jobs"]["pre-signing-policy"]
         pre_signing = workflow["jobs"]["pre-signing-package"]
         package = workflow["jobs"]["package"]
 
@@ -112,8 +115,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(checkout["with"]["persist-credentials"], "false")
         self.assertIn("refs/heads/main", str(prepare))
         self.assertIn("refs/remotes/origin/main", str(prepare))
-        self.assertIn("refs/remotes/origin/main", str(pre_signing))
-        self.assertIn("Protected main moved before pre-signing qualification", str(pre_signing))
+        self.assertIn("--expected-fingerprint", str(pre_signing_policy))
+        self.assertEqual(pre_signing["uses"], "./.github/workflows/production-preflight-engine.yml")
+        self.assertEqual(pre_signing["with"]["source_sha"], "${{ inputs.release_sha }}")
+        self.assertIn("refs/remotes/origin/main", str(production_preflight))
+        self.assertIn("scripts.production_preflight validate-source", str(production_preflight))
         self.assertIn("pre-signing-package", package["needs"])
         self.assertIn("refs/remotes/origin/main", str(package))
         self.assertIn("moved after signing approval", str(package))
@@ -124,6 +130,105 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("refs/tags/$RELEASE_TAG^{}", str(prepare))
         self.assertIn("jq -r .name", str(prepare))
         self.assertNotIn("refs/heads/release", str(workflow))
+
+    def test_release_independent_production_preflight_is_secret_free_and_non_publishing(self) -> None:
+        manual = load_workflow("production-preflight.yml")
+        shared = load_workflow("production-preflight-engine.yml")
+        release_engine = load_release_engine()
+        manual_job = manual["jobs"]["preflight"]
+        shared_call = shared["on"]["workflow_call"]
+        shared_job = shared["jobs"]["preflight"]
+        release_job = release_engine["jobs"]["pre-signing-package"]
+        shared_text = (REPO_ROOT / ".github/workflows/production-preflight-engine.yml").read_text(encoding="utf-8")
+        manual_text = (REPO_ROOT / ".github/workflows/production-preflight.yml").read_text(encoding="utf-8")
+
+        self.assertEqual(manual["name"], "Production Preflight")
+        self.assertEqual(set(manual["on"]), {"workflow_dispatch"})
+        source_input = manual["on"]["workflow_dispatch"]["inputs"]["source_sha"]
+        self.assertEqual(source_input["required"], "true")
+        self.assertEqual(source_input["type"], "string")
+        self.assertEqual(manual["permissions"], {})
+        self.assertEqual(manual_job["uses"], "./.github/workflows/production-preflight-engine.yml")
+        self.assertEqual(manual_job["with"]["source_sha"], "${{ inputs.source_sha }}")
+        self.assertEqual(manual_job["permissions"], {"contents": "read"})
+        self.assertNotIn("environment", manual_job)
+        self.assertNotIn("secrets", manual_job)
+
+        self.assertEqual(set(shared["on"]), {"workflow_call"})
+        self.assertEqual(set(shared_call["inputs"]), {"source_sha", "support_diagnostics_endpoint"})
+        self.assertNotIn("secrets", shared_call)
+        self.assertEqual(shared["permissions"], {"contents": "read"})
+        self.assertEqual(shared_job["permissions"], {"contents": "read"})
+        self.assertEqual(shared_job["runs-on"], "macos-26")
+        self.assertNotIn("environment", shared_job)
+        self.assertNotIn("secrets", shared_job)
+        self.assertNotIn("${{ secrets.", shared_text + manual_text)
+        self.assertNotIn("GH_TOKEN", shared_text)
+        self.assertNotIn("contents: write", shared_text + manual_text)
+        self.assertNotIn("id-token: write", shared_text + manual_text)
+        self.assertNotIn("attestations: write", shared_text + manual_text)
+        checkout = next(step for step in shared_job["steps"] if step.get("id") == "checkout")
+        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+        self.assertNotEqual(checkout["with"]["ref"], "${{ inputs.source_sha }}")
+
+        self.assertEqual(release_job["uses"], manual_job["uses"])
+        self.assertEqual(release_job["with"]["source_sha"], "${{ inputs.release_sha }}")
+        self.assertEqual(release_job["permissions"], {"contents": "read"})
+        self.assertEqual(set(release_job["needs"]), {"pre-signing-policy"})
+        self.assertNotIn("environment", release_job)
+        self.assertNotIn("secrets", release_job)
+
+        forbidden_side_effects = (
+            "gh release",
+            "git tag",
+            "repos/$github_repository/releases",
+            "appcast.xml",
+            "sparkle-pages",
+            "notarytool",
+            "twine upload",
+            "pypi publish",
+        )
+        for forbidden in forbidden_side_effects:
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, shared_text.lower())
+
+        step_names = [step["name"] for step in shared_job["steps"]]
+        required_order = [
+            "Require an exact protected main input",
+            "Checkout requested main commit",
+            "Bind source and workflow identity",
+            "Verify pinned production runner",
+            "Install pinned XcodeGen",
+            "Set up uv",
+            "Install Python and locked dependencies",
+            "Build the production-shaped app with ad-hoc signing",
+            "Smoke exact packaged worker identity and protocol",
+            "Create, install, and qualify the preventive DMG",
+            "Bind bounded success evidence",
+        ]
+        self.assertEqual([name for name in step_names if name in required_order], required_order)
+        self.assertIn("^[0-9a-f]{40}$", shared_text)
+        self.assertIn("refs/heads/main", shared_text)
+        self.assertIn("refs/remotes/origin/main", shared_text)
+        self.assertIn("scripts.production_preflight validate-source", shared_text)
+        self.assertIn("scripts/native_app.py package --sign-identity -", shared_text)
+        self.assertIn("scripts/smoke_release_app.py", shared_text)
+        self.assertIn("--skip-spctl", shared_text)
+        self.assertIn("scripts.pre_signing_ui", shared_text)
+        self.assertIn("scripts.production_preflight finalize", shared_text)
+        self.assertIn("tail -c 262144", shared_text)
+
+        success_upload = next(step for step in shared_job["steps"] if step["name"] == "Retain bounded success evidence")
+        failure_upload = next(
+            step for step in shared_job["steps"] if step["name"] == "Retain bounded failure diagnostics"
+        )
+        self.assertEqual(success_upload["with"]["retention-days"], "7")
+        self.assertEqual(failure_upload["with"]["retention-days"], "7")
+        self.assertNotIn(".dmg", success_upload["with"]["path"])
+        self.assertNotIn(".app", success_upload["with"]["path"])
+        self.assertIn("${{ inputs.source_sha }}", success_upload["with"]["name"])
+        self.assertIn("${{ github.run_id }}", success_upload["with"]["name"])
+        self.assertIn("${{ github.run_id }}", failure_upload["with"]["name"])
 
     def test_reusable_engine_rejects_direct_invocation_and_policy_bypass(self) -> None:
         stable = load_workflow("briefcase.yml")
@@ -814,8 +919,10 @@ printf '%s' "$CODESIGN_METADATA"
 
     def test_qualification_gates_block_signing_and_publication(self) -> None:
         workflow = load_release_engine()
+        production_preflight = load_workflow("production-preflight-engine.yml")
         jobs = workflow["jobs"]
         qualify_prep = jobs["qualify-preparation"]
+        pre_signing_policy = jobs["pre-signing-policy"]
         pre_signing = jobs["pre-signing-package"]
         package = jobs["package"]
         verify_draft = jobs["verify-draft"]
@@ -834,35 +941,41 @@ printf '%s' "$CODESIGN_METADATA"
         self.assertIn("pre-signing-package", set(jobs["package"]["needs"]))
         self.assertIn("qualify-preparation", set(jobs["build-python"]["needs"]))
         self.assertEqual(set(qualify_prep["needs"]), {"prepare"})
-        self.assertEqual(set(pre_signing["needs"]), {"policy", "prepare", "qualify-preparation"})
+        self.assertEqual(set(pre_signing_policy["needs"]), {"policy", "prepare", "qualify-preparation"})
+        self.assertEqual(set(pre_signing["needs"]), {"pre-signing-policy"})
         self.assertIn("qualify-artifact", set(jobs["publish-release"]["needs"]))
         self.assertIn("signed-artifact-ui", set(jobs["publish-release"]["needs"]))
         self.assertIn("signed-artifact-ui", set(qualify_artifact["needs"]))
         self.assertIn("needs.signed-artifact-ui.result == 'success'", jobs["publish-release"]["if"])
         self.assertIn("needs.qualify-artifact.result == 'success'", jobs["publish-release"]["if"])
         self.assertNotIn("environment", qualify_prep)
+        self.assertNotIn("environment", pre_signing_policy)
         self.assertNotIn("environment", pre_signing)
         self.assertNotIn("environment", signed_ui)
         self.assertNotIn("environment", qualify_artifact)
         self.assertNotIn("secrets.", str(qualify_prep))
+        self.assertNotIn("secrets.", str(pre_signing_policy))
         self.assertNotIn("secrets.", str(pre_signing))
         self.assertNotIn("secrets.", str(signed_ui))
         self.assertNotIn("secrets.", str(qualify_artifact))
         self.assertEqual(qualify_prep["permissions"], {"contents": "read"})
+        self.assertEqual(pre_signing_policy["permissions"], {"contents": "read"})
         self.assertEqual(pre_signing["permissions"], {"contents": "read"})
         self.assertEqual(signed_ui["permissions"], {"contents": "read"})
         self.assertEqual(qualify_artifact["permissions"], {"contents": "read"})
         self.assertIn("steps.release_package.outputs.artifact-id", package["outputs"]["workflow_artifact_id"])
         self.assertIn("steps.receipt_artifact.outputs.artifact-id", build_receipt["outputs"]["receipt_artifact_id"])
         self.assertIn("qualify_release_scope", str(qualify_prep))
-        self.assertEqual(pre_signing["runs-on"], "macos-26")
-        self.assertIn("scripts/native_app.py package --sign-identity -", str(pre_signing))
-        self.assertIn("scripts/smoke_release_app.py", str(pre_signing))
-        self.assertIn("--skip-spctl", str(pre_signing))
-        self.assertIn("scripts.pre_signing_ui", str(pre_signing))
-        self.assertNotIn("notarytool", str(pre_signing))
-        self.assertNotIn("CERTIFICATE", str(pre_signing))
-        self.assertNotIn("APPLE_ID", str(pre_signing))
+        self.assertIn("--expected-fingerprint", str(pre_signing_policy))
+        self.assertEqual(pre_signing["uses"], "./.github/workflows/production-preflight-engine.yml")
+        self.assertEqual(production_preflight["jobs"]["preflight"]["runs-on"], "macos-26")
+        self.assertIn("scripts/native_app.py package --sign-identity -", str(production_preflight))
+        self.assertIn("scripts/smoke_release_app.py", str(production_preflight))
+        self.assertIn("--skip-spctl", str(production_preflight))
+        self.assertIn("scripts.pre_signing_ui", str(production_preflight))
+        self.assertNotIn("notarytool", str(production_preflight))
+        self.assertNotIn("CERTIFICATE", str(production_preflight))
+        self.assertNotIn("APPLE_ID", str(production_preflight))
         self.assertIn("signed_artifact_ui", str(signed_ui))
         self.assertIn("signed-artifact-ui-receipt.json", str(signed_ui))
         self.assertNotIn("GH_TOKEN", str(signed_ui))
