@@ -188,9 +188,40 @@ class FailingOperations:
         return self.running
 
 
-class StaleInstallOperations(RecordingOperations):
-    def install_app(self, dmg_path: Path, destination: Path) -> None:  # type: ignore[override]
-        del dmg_path, destination
+class StaleInstallOperations:
+    def __init__(self, app_source: Path) -> None:
+        self.app_source = app_source
+        self.running = False
+        self.install_arguments: tuple[Path, Path] | None = None
+
+    def install_app(self, dmg_path: Path, destination: Path) -> None:
+        self.install_arguments = (dmg_path, destination)
+
+    def collect_ui_evidence(
+        self,
+        *,
+        repo: Path,
+        phase: str,
+        app_path: Path,
+        synthetic_home: Path,
+        output_directory: Path,
+        release_notes_url: str,
+    ) -> None:
+        self.collect_arguments = (
+            repo,
+            phase,
+            app_path,
+            synthetic_home,
+            output_directory,
+            release_notes_url,
+        )
+
+    def app_running(self, app_path: Path | None = None) -> bool:
+        self.running_app_path = app_path
+        return self.running
+
+    def quit_app(self) -> None:
+        self.running = False
 
 
 class InstalledUIQualificationTests(unittest.TestCase):
