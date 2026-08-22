@@ -167,6 +167,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("contents: write", shared_text + manual_text)
         self.assertNotIn("id-token: write", shared_text + manual_text)
         self.assertNotIn("attestations: write", shared_text + manual_text)
+        checkout = next(step for step in shared_job["steps"] if step.get("id") == "checkout")
+        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+        self.assertNotEqual(checkout["with"]["ref"], "${{ inputs.source_sha }}")
 
         self.assertEqual(release_job["uses"], manual_job["uses"])
         self.assertEqual(release_job["with"]["source_sha"], "${{ inputs.release_sha }}")

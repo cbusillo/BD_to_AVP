@@ -55,7 +55,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ github.sha }}
 
       - name: Bind source and workflow identity
         id: source
