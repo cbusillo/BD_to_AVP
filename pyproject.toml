@@ -54,8 +54,8 @@ dev = [
     "types-psutil>=5.9.5.20240516",
 ]
 runtime-build = [
-    "setuptools==80.9.0",
-    "wheel==0.45.1",
+    "setuptools==83.0.0",
+    "wheel==0.46.2",
 ]
 
 [tool.uv]
