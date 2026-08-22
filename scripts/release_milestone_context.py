@@ -221,6 +221,18 @@ def _load_json(path: Path, description: str) -> Mapping[str, Any]:
         raise ReleaseMilestoneContextError(f"Invalid JSON in {description} at {path}: {error}") from error
 
 
+def _load_release_attempt_json(path: Path, description: str) -> Mapping[str, Any]:
+    value = _load_json(path, description)
+    canonical = json.dumps(value, indent=2, sort_keys=True) + "\n"
+    try:
+        serialized = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ReleaseMilestoneContextError(f"Unable to read {description} at {path}: {error}") from error
+    if serialized != canonical:
+        raise ReleaseMilestoneContextError(f"{description.capitalize()} must use canonical JSON serialization.")
+    return value
+
+
 def _load_json_at_revision(
     repo_root: Path,
     revision: str,
@@ -280,7 +292,7 @@ def validate_cancelled_attempt_record(repo_root: Path, release_tag: str) -> Mapp
     attempt_root = FAILED_ATTEMPT_ROOT / release_tag
     record_relative = attempt_root / CANCELLED_ATTEMPT_RECORD_NAME
     receipt_relative = attempt_root / FAILED_ATTEMPT_RECEIPT_NAME
-    record = _load_json(repo_root / record_relative, "cancelled release-attempt record")
+    record = _load_release_attempt_json(repo_root / record_relative, "cancelled release-attempt record")
     if set(record) != CANCELLED_ATTEMPT_RECORD_KEYS:
         raise ReleaseMilestoneContextError("Cancelled release-attempt record keys do not match the required schema.")
     if (
@@ -422,7 +434,7 @@ def validate_draft_deletion_record(
     deletion_relative = attempt_root / DRAFT_DELETION_RECORD_NAME
     receipt_relative = attempt_root / FAILED_ATTEMPT_RECEIPT_NAME
     attempt_record = attempt_record or validate_cancelled_attempt_record(repo_root, release_tag)
-    deletion = _load_json(repo_root / deletion_relative, "draft-deletion disposition record")
+    deletion = _load_release_attempt_json(repo_root / deletion_relative, "draft-deletion disposition record")
     if set(deletion) != DRAFT_DELETION_RECORD_KEYS:
         raise ReleaseMilestoneContextError("Draft-deletion disposition keys do not match the required schema.")
     if (
@@ -496,6 +508,81 @@ def _require_immutable_if_tracked(repo_root: Path, base_sha: str, relative_path:
         raise ReleaseMilestoneContextError("Committed cancelled release-attempt evidence must remain immutable.")
 
 
+def _load_validated_failed_attempt(
+    repo_root: Path,
+    release_tag: str,
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    attempt_root = FAILED_ATTEMPT_ROOT / release_tag
+    record_relative = attempt_root / FAILED_ATTEMPT_RECORD_NAME
+    receipt_relative = attempt_root / FAILED_ATTEMPT_RECEIPT_NAME
+    record = _load_release_attempt_json(repo_root / record_relative, "failed release-attempt record")
+    if set(record) != FAILED_ATTEMPT_RECORD_KEYS:
+        raise ReleaseMilestoneContextError("Failed release-attempt record keys do not match the required schema.")
+    if (
+        record.get("schema_version") != 1
+        or record.get("status") != "failed_unpublished_signed_candidate"
+        or record.get("workflow_conclusion") != "failure"
+        or record.get("published_at") is not None
+        or record.get("draft_deleted") is not True
+        or record.get("must_not_rebuild") is not True
+    ):
+        raise ReleaseMilestoneContextError(
+            "Failed release-attempt record must prove an unpublished, deleted-draft, permanently burned candidate."
+        )
+    if record.get("release_tag") != release_tag:
+        raise ReleaseMilestoneContextError("Failed release-attempt tag does not match its canonical directory.")
+    if record.get("release_receipt_path") != receipt_relative.as_posix():
+        raise ReleaseMilestoneContextError("Failed release-attempt receipt path is not canonical.")
+    _string(record.get("failed_job"), "failed release job")
+    _positive_integer(record.get("failed_job_id"), "failed release job ID")
+    _string(record.get("failed_step"), "failed release step")
+    source_sha = _sha(record.get("source_sha"), "failed release source SHA")
+    _positive_integer(record.get("workflow_run_id"), "failed release workflow run ID")
+    _positive_integer(record.get("workflow_run_attempt"), "failed release workflow run attempt")
+    _positive_integer(record.get("draft_release_id"), "failed release draft ID")
+    _timestamp(record.get("recorded_at"), "failed release record timestamp")
+
+    try:
+        receipt, receipt_file_sha256 = load_validated_checked_receipt(repo_root / receipt_relative)
+    except ReleaseReceiptError as error:
+        raise ReleaseMilestoneContextError(f"Failed release-attempt receipt is invalid: {error}") from error
+    if record.get("release_receipt_file_sha256") != receipt_file_sha256:
+        raise ReleaseMilestoneContextError("Failed release-attempt receipt file digest does not match the record.")
+    if record.get("release_receipt_sha256") != receipt.get("receipt_sha256"):
+        raise ReleaseMilestoneContextError("Failed release-attempt receipt self-digest does not match the record.")
+
+    release = _mapping(receipt.get("release"), "failed release-attempt receipt release")
+    versions = _mapping(receipt.get("versions"), "failed release-attempt receipt versions")
+    workflow = _mapping(receipt.get("workflow"), "failed release-attempt receipt workflow")
+    identity_pairs = {
+        "package_version": versions.get("package"),
+        "public_version": versions.get("public"),
+        "build_version": versions.get("build"),
+        "release_tag": release.get("tag"),
+        "source_sha": receipt.get("source_sha"),
+        "workflow_run_id": workflow.get("run_id"),
+        "workflow_run_attempt": workflow.get("run_attempt"),
+        "draft_release_id": release.get("id"),
+    }
+    if any(record.get(field) != value for field, value in identity_pairs.items()):
+        raise ReleaseMilestoneContextError("Failed release-attempt record identity differs from its checked receipt.")
+    if (
+        release.get("target_sha") != source_sha
+        or release.get("prerelease") is not True
+        or workflow.get("name") != "Prerelease"
+        or workflow.get("actor") != "shiny-code-bot"
+    ):
+        raise ReleaseMilestoneContextError(
+            "Failed release-attempt receipt does not preserve guarded prerelease identity."
+        )
+    return record, receipt
+
+
+def validate_failed_attempt_record(repo_root: Path, release_tag: str) -> Mapping[str, Any]:
+    record, _receipt = _load_validated_failed_attempt(repo_root, release_tag)
+    return record
+
+
 def _validate_failed_unpublished_candidate(
     repo_root: Path,
     *,
@@ -558,48 +645,14 @@ def _validate_failed_unpublished_candidate(
         if tracked_in_base.returncode == 0:
             raise ReleaseMilestoneContextError("Failed release-attempt recovery records must be new and immutable.")
 
-    record = _load_json(repo_root / record_relative, "failed release-attempt record")
-    if set(record) != FAILED_ATTEMPT_RECORD_KEYS:
-        raise ReleaseMilestoneContextError("Failed release-attempt record keys do not match the required schema.")
-    if (
-        record.get("schema_version") != 1
-        or record.get("status") != "failed_unpublished_signed_candidate"
-        or record.get("workflow_conclusion") != "failure"
-        or record.get("published_at") is not None
-        or record.get("draft_deleted") is not True
-        or record.get("must_not_rebuild") is not True
-        or base_qualification.get("status") != "preregistered_pending_exact_candidate"
-    ):
+    record, receipt = _load_validated_failed_attempt(repo_root, release_tag)
+    if base_qualification.get("status") != "preregistered_pending_exact_candidate":
         raise ReleaseMilestoneContextError(
             "Failed release-attempt record must prove an unpublished, deleted-draft, permanently burned candidate."
         )
-    if record.get("release_receipt_path") != receipt_relative.as_posix():
-        raise ReleaseMilestoneContextError("Failed release-attempt receipt path is not canonical.")
-
-    try:
-        receipt, receipt_file_sha256 = load_validated_checked_receipt(repo_root / receipt_relative)
-    except ReleaseReceiptError as error:
-        raise ReleaseMilestoneContextError(f"Failed release-attempt receipt is invalid: {error}") from error
-    if record.get("release_receipt_file_sha256") != receipt_file_sha256:
-        raise ReleaseMilestoneContextError("Failed release-attempt receipt file digest does not match the record.")
-    if record.get("release_receipt_sha256") != receipt.get("receipt_sha256"):
-        raise ReleaseMilestoneContextError("Failed release-attempt receipt self-digest does not match the record.")
-
     release = _mapping(receipt.get("release"), "failed release-attempt receipt release")
     versions = _mapping(receipt.get("versions"), "failed release-attempt receipt versions")
     workflow = _mapping(receipt.get("workflow"), "failed release-attempt receipt workflow")
-    identity_pairs = {
-        "package_version": versions.get("package"),
-        "public_version": versions.get("public"),
-        "build_version": versions.get("build"),
-        "release_tag": release.get("tag"),
-        "source_sha": receipt.get("source_sha"),
-        "workflow_run_id": workflow.get("run_id"),
-        "workflow_run_attempt": workflow.get("run_attempt"),
-        "draft_release_id": release.get("id"),
-    }
-    if any(record.get(field) != value for field, value in identity_pairs.items()):
-        raise ReleaseMilestoneContextError("Failed release-attempt record identity differs from its checked receipt.")
     expected_candidate = {
         "package_version": versions.get("package"),
         "public_version": versions.get("public"),
@@ -619,18 +672,81 @@ def _validate_failed_unpublished_candidate(
         raise ReleaseMilestoneContextError(
             "Failed release-attempt receipt does not bind the base qualification candidate."
         )
-    if (
-        release.get("target_sha") != record.get("source_sha")
-        or release.get("prerelease") is not True
-        or workflow.get("actor") != "shiny-code-bot"
-    ):
-        raise ReleaseMilestoneContextError(
-            "Failed release-attempt receipt does not preserve guarded prerelease identity."
-        )
     try:
         return parse_build_version(_string(record.get("build_version"), "failed candidate build version"))
     except ReleaseError as error:
         raise ReleaseMilestoneContextError(f"Failed release-attempt build identity is invalid: {error}") from error
+
+
+def validate_release_recovery_records(repo_root: Path) -> Mapping[str, Mapping[str, Any]]:
+    records: dict[str, Mapping[str, Any]] = {}
+    attempts: list[tuple[tuple[int, ...], int, str]] = []
+    attempts_root = repo_root / FAILED_ATTEMPT_ROOT
+    try:
+        attempt_directories = sorted(path for path in attempts_root.iterdir() if path.is_dir())
+    except OSError as error:
+        raise ReleaseMilestoneContextError(f"Unable to inspect release-attempt records: {error}") from error
+    for attempt_directory in attempt_directories:
+        release_tag = attempt_directory.name
+        failed_path = attempt_directory / FAILED_ATTEMPT_RECORD_NAME
+        cancelled_path = attempt_directory / CANCELLED_ATTEMPT_RECORD_NAME
+        if failed_path.is_file() == cancelled_path.is_file():
+            raise ReleaseMilestoneContextError(
+                f"Release attempt {release_tag} must contain exactly one failed or cancelled attempt record."
+            )
+        if failed_path.is_file():
+            record = validate_failed_attempt_record(repo_root, release_tag)
+            entry: dict[str, Any] = {"attempt": record}
+        else:
+            record = validate_cancelled_attempt_record(repo_root, release_tag)
+            entry = {"attempt": record}
+            deletion_path = attempt_directory / DRAFT_DELETION_RECORD_NAME
+            if not deletion_path.is_file():
+                raise ReleaseMilestoneContextError(
+                    f"Cancelled release attempt {release_tag} requires an authorized draft-deletion disposition."
+                )
+            entry["disposition"] = validate_draft_deletion_record(repo_root, release_tag, record)
+        try:
+            version = parse_release_version(_string(record.get("package_version"), "release-attempt package version"))
+            build = parse_build_version(_string(record.get("build_version"), "release-attempt build version"))
+        except ReleaseError as error:
+            raise ReleaseMilestoneContextError(f"Release-attempt identity is invalid: {error}") from error
+        attempts.append((version.order_key, build, release_tag))
+        records[release_tag] = entry
+
+    qualifications: list[tuple[tuple[int, ...], Path, Mapping[str, Any]]] = []
+    qualification_root = repo_root / "docs" / "qualification"
+    for qualification_path in sorted(qualification_root.glob("*-signed-qualification-v1.json")):
+        qualification = _load_json(qualification_path, "signed qualification record")
+        candidate = _mapping(qualification.get("candidate"), "signed qualification candidate")
+        package_version = candidate.get("package_version")
+        if not isinstance(package_version, str):
+            continue
+        try:
+            version = parse_release_version(package_version)
+        except ReleaseError as error:
+            raise ReleaseMilestoneContextError(
+                f"Signed qualification candidate identity is invalid at {qualification_path}: {error}"
+            ) from error
+        qualifications.append((version.order_key, qualification_path, qualification))
+
+    for attempt_order, build, release_tag in attempts:
+        for qualification_order, qualification_path, qualification in qualifications:
+            if qualification_order <= attempt_order:
+                continue
+            immutable_history = _mapping(
+                qualification.get("immutable_history"),
+                f"signed qualification immutable history at {qualification_path}",
+            )
+            burned_builds = _sequence(
+                immutable_history.get("burned_builds"),
+                f"signed qualification burned builds at {qualification_path}",
+            )
+            if build not in burned_builds:
+                raise ReleaseMilestoneContextError(
+                    f"Signed qualification {qualification_path} must permanently burn build {build} from {release_tag}."
+                )
+    return records
 
 
 def _requires_unpublished_candidate_recovery(repo_root: Path, base_candidate: Mapping[str, Any]) -> bool:
