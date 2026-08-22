@@ -371,7 +371,10 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
             "workflow_run_attempt": 1,
             "workflow_run_id": 22222,
         }
-        (attempt_root / "failed-attempt-v1.json").write_text(json.dumps(record) + "\n", encoding="utf-8")
+        (attempt_root / "failed-attempt-v1.json").write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
         next_qualification = json.loads(json.dumps(base_qualification))
         next_qualification["candidate"].update(

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import inspect
 import shutil
 import uuid
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, cast, runtime_checkable
 
 from scripts.artifact_identity import app_tree_sha256
 from scripts.tier3_clean_machine import (
@@ -21,6 +22,30 @@ class InstalledUIQualificationError(RuntimeError):
     pass
 
 
+@runtime_checkable
+class InstalledUIOperations(Protocol):
+    def install_app(self, dmg_path: Path, destination: Path, mount_point: Path) -> None:
+        raise NotImplementedError
+
+    def collect_ui_evidence(
+        self,
+        *,
+        repo: Path,
+        phase: str,
+        app_path: Path,
+        synthetic_home: Path,
+        output_directory: Path,
+        release_notes_url: str,
+    ) -> None:
+        raise NotImplementedError
+
+    def app_running(self, app_path: Path | None = None) -> bool:
+        raise NotImplementedError
+
+    def quit_app(self) -> None:
+        raise NotImplementedError
+
+
 @dataclass(frozen=True)
 class InstalledUIQualificationConfig:
     repo: Path
@@ -31,6 +56,38 @@ class InstalledUIQualificationConfig:
     expected_app_tree_sha256: str
     owner: str
     failure_diagnostics_directory: Path | None = None
+
+
+def _operation_signature_shape(
+    operation: Callable[..., object],
+    *,
+    skip_self: bool,
+) -> tuple[tuple[str, inspect._ParameterKind, object], ...]:
+    parameters = tuple(inspect.signature(operation).parameters.values())
+    if skip_self:
+        parameters = parameters[1:]
+    return tuple((parameter.name, parameter.kind, parameter.default) for parameter in parameters)
+
+
+def validate_installed_ui_operations_contract(operations: object) -> InstalledUIOperations:
+    if not isinstance(operations, InstalledUIOperations):
+        raise InstalledUIQualificationError(
+            "Installed UI operations do not implement the maintained production operations contract."
+        )
+    for method_name in ("install_app", "collect_ui_evidence", "app_running", "quit_app"):
+        expected = _operation_signature_shape(
+            cast(Callable[..., object], getattr(InstalledUIOperations, method_name)),
+            skip_self=True,
+        )
+        observed = _operation_signature_shape(
+            cast(Callable[..., object], getattr(operations, method_name)),
+            skip_self=False,
+        )
+        if observed != expected:
+            raise InstalledUIQualificationError(
+                f"Installed UI operations method {method_name} does not match the maintained production contract."
+            )
+    return operations
 
 
 def _paths_overlap(left: Path, right: Path) -> bool:
@@ -77,7 +134,7 @@ def _preserve_failure_diagnostics(
 
 def _cleanup_qualification_workspace(
     config: InstalledUIQualificationConfig,
-    operations: MacOSOperations,
+    operations: InstalledUIOperations,
     marker_path: Path,
     marker: Mapping[str, str],
 ) -> list[Exception]:
@@ -108,9 +165,10 @@ def _cleanup_qualification_workspace(
 
 def _run(
     config: InstalledUIQualificationConfig,
-    operations: MacOSOperations,
+    operations: InstalledUIOperations,
 ) -> Mapping[str, Any]:
     validate_installed_ui_output_paths(config)
+    operations = validate_installed_ui_operations_contract(operations)
     if operations.app_running():
         raise InstalledUIQualificationError("The production app must not be running before installed UI qualification.")
 
@@ -122,7 +180,7 @@ def _run(
     marker = {"owner": config.owner, "run_id": str(uuid.uuid4())}
     config.qualification_root.mkdir(parents=True)
     marker_path.write_text(json.dumps(marker, sort_keys=True) + "\n", encoding="utf-8")
-    primary_error: Exception | None = None
+    primary_error: BaseException | None = None
     try:
         synthetic_home.mkdir(parents=True)
         operations.install_app(config.dmg, app_path, mount_point)
@@ -155,6 +213,9 @@ def _run(
                 f"{type(diagnostics_error).__name__}: {diagnostics_error}"
             )
         raise
+    except BaseException as error:
+        primary_error = error
+        raise
     finally:
         cleanup_errors = _cleanup_qualification_workspace(config, operations, marker_path, marker)
         if cleanup_errors:
@@ -167,12 +228,26 @@ def _run(
 
 def run(
     config: InstalledUIQualificationConfig,
-    operations: MacOSOperations | None = None,
+    operations: InstalledUIOperations | None = None,
 ) -> Mapping[str, Any]:
     operations = operations or MacOSOperations()
     try:
         return _run(config, operations)
-    except Exception:
+    except Exception as error:
         if config.evidence_directory.exists():
-            shutil.rmtree(config.evidence_directory)
+            try:
+                shutil.rmtree(config.evidence_directory)
+            except Exception as cleanup_error:
+                error.add_note(
+                    f"Installed UI evidence cleanup also failed: {type(cleanup_error).__name__}: {cleanup_error}"
+                )
+        raise
+    except BaseException as error:
+        if config.evidence_directory.exists():
+            try:
+                shutil.rmtree(config.evidence_directory)
+            except Exception as cleanup_error:
+                error.add_note(
+                    f"Installed UI evidence cleanup also failed: {type(cleanup_error).__name__}: {cleanup_error}"
+                )
         raise

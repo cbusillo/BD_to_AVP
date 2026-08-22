@@ -24,7 +24,8 @@ class FakeOperations:
         self.running = False
         self.install_mount_point: Path | None = None
 
-    def install_app(self, _dmg_path: Path, destination: Path, mount_point: Path) -> None:
+    def install_app(self, dmg_path: Path, destination: Path, mount_point: Path) -> None:
+        del dmg_path
         self.install_mount_point = mount_point
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
@@ -116,7 +117,8 @@ class FakeOperations:
     def quit_app(self) -> None:
         self.running = False
 
-    def app_running(self) -> bool:
+    def app_running(self, app_path: Path | None = None) -> bool:
+        del app_path
         return self.running
 
 
@@ -205,10 +207,17 @@ class SignedArtifactUITests(unittest.TestCase):
 
     def test_runner_preserves_bounded_failure_diagnostics(self) -> None:
         class FailingOperations(FakeOperations):
-            def collect_ui_evidence(self, **kwargs: object) -> None:
-                output_directory = kwargs["output_directory"]
-                if not isinstance(output_directory, Path):
-                    raise AssertionError("output_directory must be a path")
+            def collect_ui_evidence(
+                self,
+                *,
+                repo: Path,
+                phase: str,
+                app_path: Path,
+                synthetic_home: Path,
+                output_directory: Path,
+                release_notes_url: str,
+            ) -> None:
+                del repo, phase, app_path, synthetic_home, release_notes_url
                 output_directory.mkdir(parents=True)
                 (output_directory / "partial.json").write_text("{}\n", encoding="utf-8")
                 result_bundle = output_directory.parent / "InstalledUI-candidate.xcresult"

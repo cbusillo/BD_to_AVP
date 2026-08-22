@@ -24,6 +24,26 @@ final class InstalledUIAcceptanceTests: XCTestCase {
         XCTAssertNil(try readProfileSummaryIfPresent(syntheticHome: syntheticHome))
     }
 
+    func testSeededProfileDocumentReportsExistingLibrary() throws {
+        let syntheticHome = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: syntheticHome) }
+        let profileDirectory = syntheticHome
+            .appendingPathComponent("Library/Application Support/3D Blu-ray to Vision Pro", isDirectory: true)
+        try FileManager.default.createDirectory(at: profileDirectory, withIntermediateDirectories: true)
+        let profileDocument: [String: Any] = [
+            "profiles": [["name": "Seeded Profile"]],
+            "version": 6,
+        ]
+        try JSONSerialization.data(withJSONObject: profileDocument, options: [.sortedKeys])
+            .write(to: profileDirectory.appendingPathComponent("profiles.json"))
+
+        let summary = try XCTUnwrap(readProfileSummaryIfPresent(syntheticHome: syntheticHome))
+
+        XCTAssertEqual(summary.count, 1)
+        XCTAssertEqual(summary.names, ["Seeded Profile"])
+        XCTAssertEqual(summary.version, 6)
+    }
+
     func testPriorUpdaterControlsAndReleaseLinks() throws {
         let context = try QualificationContext.load(expectedPhase: "updater")
         let app = try launchInstalledApp(context: context, appearance: .light)

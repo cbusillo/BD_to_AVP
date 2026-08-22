@@ -165,6 +165,33 @@ class CancelledReleaseAttemptTests(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseMilestoneContextError, "authorization fingerprint"):
                 validate_draft_deletion_record(root, RELEASE_TAG, attempt)
 
+    def test_rejects_draft_deletion_authorization_and_evidence_binding_tampering(self) -> None:
+        mutations = (
+            ("attempt_record_path", "docs/release-attempts/other/cancelled-attempt-v1.json", "path is not canonical"),
+            ("attempt_record_file_sha256", "0" * 64, "immutable attempt record"),
+            ("release_tag", "v0.3.2-beta.99", "identity differs"),
+            ("draft_release_id", 1, "identity differs"),
+            ("source_sha", "0" * 40, "identity differs"),
+            ("receipt_file_sha256", "0" * 64, "identity differs"),
+            ("authorization_actor", "other-actor", "authorization actor"),
+            ("authorization_fingerprint", "0" * 64, "authorization fingerprint"),
+        )
+        for field, value, message in mutations:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                self.copy_attempt(root)
+                disposition_path = self.write_deletion_record(root)
+                disposition = json.loads(disposition_path.read_text(encoding="utf-8"))
+                disposition[field] = value
+                disposition_path.write_text(
+                    json.dumps(disposition, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                attempt = validate_cancelled_attempt_record(root, RELEASE_TAG)
+
+                with self.assertRaisesRegex(ReleaseMilestoneContextError, message):
+                    validate_draft_deletion_record(root, RELEASE_TAG, attempt)
+
     def test_rejects_mutation_of_committed_draft_deletion_disposition(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
