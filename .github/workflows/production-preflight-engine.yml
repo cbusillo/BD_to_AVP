@@ -1,0 +1,296 @@
+---
+name: Production preflight engine
+
+"on":
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact full current protected main SHA to qualify
+        required: true
+        type: string
+      support_diagnostics_endpoint:
+        description: Production support diagnostics endpoint embedded in the app
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  XCODEGEN_VERSION: 2.45.4
+  XCODEGEN_SHA256: 090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef
+  XCODE_VERSION: "26.5"
+  XCODE_BUILD_VERSION: 17F42
+
+jobs:
+  preflight:
+    name: Build and qualify the production package
+    runs-on: macos-26
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Require an exact protected main input
+        id: input
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Production preflight requires an exact full lowercase Git SHA." >&2
+            exit 1
+          fi
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Production preflight must be dispatched from protected main." >&2
+            exit 1
+          fi
+          if [ "$GITHUB_SHA" != "$SOURCE_SHA" ]; then
+            echo "Production preflight input must equal the dispatched main SHA." >&2
+            exit 1
+          fi
+
+      - name: Checkout requested main commit
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.source_sha }}
+
+      - name: Bind source and workflow identity
+        id: source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          python3 -m scripts.production_preflight validate-source \
+            --source-sha "$SOURCE_SHA" \
+            --output production-preflight-source.json
+
+      - name: Verify pinned production runner
+        id: runner
+        env:
+          BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE: ""
+          SUPPORT_DIAGNOSTICS_ENDPOINT: ${{ inputs.support_diagnostics_endpoint }}
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          test "$(sw_vers -productVersion | cut -d. -f1)" = "26"
+          test -n "$SUPPORT_DIAGNOSTICS_ENDPOINT"
+          XCODE_PATH="/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+          if [ ! -d "$XCODE_PATH" ]; then
+            echo "Pinned Xcode path is unavailable: $XCODE_PATH" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_PATH"
+          test "$(xcodebuild -version | sed -n '1p')" = "Xcode $XCODE_VERSION"
+          test "$(xcodebuild -version | sed -n '2p')" = "Build version $XCODE_BUILD_VERSION"
+          if [ -n "${BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE:-}" ]; then
+            echo "Production preflight must not override the macOS 26 deployment target." >&2
+            exit 1
+          fi
+
+      - name: Install pinned XcodeGen
+        id: xcodegen
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/xcodegen.zip"
+          curl --fail --location --silent --show-error \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip" \
+            --output "$ARCHIVE"
+          printf '%s  %s\n' "$XCODEGEN_SHA256" "$ARCHIVE" | shasum -a 256 --check
+          ditto -x -k "$ARCHIVE" "$RUNNER_TEMP"
+          test "$("$RUNNER_TEMP/xcodegen/bin/xcodegen" --version)" = "Version: $XCODEGEN_VERSION"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Set up uv
+        id: uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install Python and locked dependencies
+        id: dependencies
+        run: |
+          set -euo pipefail
+          uv python install 3.12
+          uv sync --locked --all-groups --python 3.12
+
+      - name: Build the production-shaped app with ad-hoc signing
+        id: package
+        env:
+          BD_TO_AVP_MACOS_DEPLOYMENT_TARGET_OVERRIDE: ""
+          BD_TO_AVP_SUPPORT_DIAGNOSTICS_ENDPOINT: ${{ inputs.support_diagnostics_endpoint }}
+        run: |
+          set -euo pipefail
+          APP_PATH="macos/build/package/3D Blu-ray to Vision Pro.app"
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+          uv run python scripts/native_app.py package --sign-identity - \
+            2>&1 | tee "$RUNNER_TEMP/production-preflight-package.log"
+          test -d "$APP_PATH"
+
+      - name: Smoke exact packaged worker identity and protocol
+        id: smoke
+        run: |
+          set -euo pipefail
+          uv run python scripts/smoke_release_app.py \
+            --app-path "$APP_PATH" \
+            --skip-spctl \
+            2>&1 | tee production-preflight-smoke.log
+
+      - name: Create, install, and qualify the preventive DMG
+        id: installed-ui
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.pre_signing_ui \
+            --app "$APP_PATH" \
+            --dmg "$RUNNER_TEMP/production-preflight.dmg" \
+            --qualification-root "$RUNNER_TEMP/production-preflight-installed-ui" \
+            --evidence-directory production-preflight-installed-ui-evidence \
+            --output-report production-preflight-installed-ui-report.json \
+            --failure-diagnostics-directory production-preflight-installed-ui-diagnostics \
+            --source-sha "$SOURCE_SHA" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            2>&1 | tee "$RUNNER_TEMP/production-preflight-installed-ui.log"
+
+      - name: Bind bounded success evidence
+        id: evidence
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.production_preflight finalize \
+            --source-report production-preflight-source.json \
+            --smoke-log production-preflight-smoke.log \
+            --installed-ui-report production-preflight-installed-ui-report.json \
+            --installed-ui-evidence production-preflight-installed-ui-evidence \
+            --output production-preflight-success.json
+
+      - name: Summarize production preflight
+        if: success()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Production preflight passed"
+            echo
+            echo "- Source: \`${{ inputs.source_sha }}\`"
+            echo "- Package version: \`$(jq -r .package_version production-preflight-success.json)\`"
+            echo "- App tree: \`$(jq -r .app_tree_sha256 production-preflight-success.json)\`"
+            echo "- Preventive DMG: \`$(jq -r .preventive_dmg.sha256 production-preflight-success.json)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect bounded failure diagnostics
+        if: failure()
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          DEPENDENCIES_OUTCOME: ${{ steps.dependencies.outcome }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+          INPUT_OUTCOME: ${{ steps.input.outcome }}
+          INSTALLED_UI_OUTCOME: ${{ steps.installed-ui.outcome }}
+          PACKAGE_OUTCOME: ${{ steps.package.outcome }}
+          RUNNER_OUTCOME: ${{ steps.runner.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          SOURCE_OUTCOME: ${{ steps.source.outcome }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          DIAGNOSTICS=production-preflight-diagnostics
+          mkdir "$DIAGNOSTICS"
+          CHECKOUT_SHA=$(git rev-parse HEAD 2>/dev/null || true)
+          MAIN_SHA=$(git rev-parse refs/remotes/origin/main 2>/dev/null || true)
+          jq -n \
+            --arg checkout_outcome "$CHECKOUT_OUTCOME" \
+            --arg checkout_sha "$CHECKOUT_SHA" \
+            --arg dependencies_outcome "$DEPENDENCIES_OUTCOME" \
+            --arg evidence_outcome "$EVIDENCE_OUTCOME" \
+            --arg input_outcome "$INPUT_OUTCOME" \
+            --arg installed_ui_outcome "$INSTALLED_UI_OUTCOME" \
+            --arg main_sha "$MAIN_SHA" \
+            --arg package_outcome "$PACKAGE_OUTCOME" \
+            --arg runner_outcome "$RUNNER_OUTCOME" \
+            --arg smoke_outcome "$SMOKE_OUTCOME" \
+            --arg source_outcome "$SOURCE_OUTCOME" \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg workflow_ref "$GITHUB_WORKFLOW_REF" \
+            --arg workflow_sha "$GITHUB_WORKFLOW_SHA" \
+            --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            '{
+              schema_version: 1,
+              source_sha: $source_sha,
+              checkout_sha: $checkout_sha,
+              protected_main_sha: $main_sha,
+              workflow: {
+                ref: $workflow_ref,
+                sha: $workflow_sha,
+                run_id: $run_id,
+                run_attempt: $run_attempt
+              },
+              outcomes: {
+                input: $input_outcome,
+                checkout: $checkout_outcome,
+                source: $source_outcome,
+                runner: $runner_outcome,
+                dependencies: $dependencies_outcome,
+                package: $package_outcome,
+                smoke: $smoke_outcome,
+                installed_ui: $installed_ui_outcome,
+                evidence: $evidence_outcome
+              }
+            }' > "$DIAGNOSTICS/context.json"
+          if [ -f production-preflight-source.json ]; then
+            cp production-preflight-source.json "$DIAGNOSTICS/"
+          fi
+          if [ -f "$RUNNER_TEMP/production-preflight-package.log" ]; then
+            tail -c 262144 "$RUNNER_TEMP/production-preflight-package.log" > "$DIAGNOSTICS/package-tail.log"
+          fi
+          if [ -f production-preflight-smoke.log ]; then
+            tail -c 262144 production-preflight-smoke.log > "$DIAGNOSTICS/smoke-tail.log"
+          fi
+          if [ -f "$RUNNER_TEMP/production-preflight-installed-ui.log" ]; then
+            tail -c 262144 "$RUNNER_TEMP/production-preflight-installed-ui.log" \
+              > "$DIAGNOSTICS/installed-ui-tail.log"
+          fi
+          if [ -d production-preflight-installed-ui-diagnostics ]; then
+            mkdir "$DIAGNOSTICS/installed-ui"
+            TOTAL_FILES=$(find production-preflight-installed-ui-diagnostics -type f | wc -l | tr -d ' ')
+            printf '%s\n' "$TOTAL_FILES" > "$DIAGNOSTICS/installed-ui-file-count.txt"
+            FILE_COUNT=0
+            while IFS= read -r FILE; do
+              FILE_COUNT=$((FILE_COUNT + 1))
+              if [ "$FILE_COUNT" -gt 50 ]; then
+                break
+              fi
+              RELATIVE_PATH=${FILE#production-preflight-installed-ui-diagnostics/}
+              DESTINATION="$DIAGNOSTICS/installed-ui/$RELATIVE_PATH"
+              mkdir -p "$(dirname "$DESTINATION")"
+              tail -c 131072 "$FILE" > "$DESTINATION"
+            done < <(find production-preflight-installed-ui-diagnostics -type f | LC_ALL=C sort)
+          fi
+
+      - name: Retain bounded failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: production-preflight-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            production-preflight-diagnostics
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Retain bounded success evidence
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: production-preflight-success-${{ inputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            production-preflight-success.json
+            production-preflight-source.json
+            production-preflight-smoke.log
+            production-preflight-installed-ui-evidence
+            production-preflight-installed-ui-report.json
+          if-no-files-found: error
+          retention-days: 7

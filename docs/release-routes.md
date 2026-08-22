@@ -513,7 +513,17 @@ prerelease flag; prerelease-form tags marked Stable are never accepted.
 
 ## Operator Boundaries
 
-Operators receive two manual entry workflows:
+`Production Preflight` is a separate manual, non-authorizing workflow. It accepts
+only an exact full current protected-`main` SHA and runs the production-shaped
+ad-hoc package, exact packaged-worker smoke, preventive DMG installation, and
+shared installed-UI qualification before a successor identity is prepared. It
+has no signing environment, secrets, write permission, route selection, tag,
+draft, appcast, or publication capability. Its bounded seven-day artifacts are
+source-specific readiness diagnostics, not signed release evidence. The guarded
+release engine invokes the same maintained preflight implementation again before
+the signing job can request `macos-signing` approval.
+
+Release operators receive two manual entry workflows:
 
 - **Stable**, which accepts only committed Stable metadata; and
 - **Prerelease**, which accepts committed Alpha, Beta, or RC metadata.

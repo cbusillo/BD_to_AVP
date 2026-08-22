@@ -70,6 +70,8 @@
     "requiredEvent": "workflow_dispatch",
     "approvalEnvironment": "macos-signing",
     "engineWorkflowPath": ".github/workflows/release-engine.yml",
+    "productionPreflightWorkflowPath": ".github/workflows/production-preflight.yml",
+    "productionPreflightEngineWorkflowPath": ".github/workflows/production-preflight-engine.yml",
     "evidenceWorkflowPath": ".github/workflows/release-evidence.yml",
     "milestoneQualificationWorkflowPath": ".github/workflows/milestone-qualification.yml",
     "qualificationPolicyPath": "docs/qualification/release-qualification-policy-v1.json",
@@ -109,6 +111,8 @@
     "releaseWorkflows": [
       ".github/workflows/briefcase.yml",
       ".github/workflows/prerelease.yml",
+      ".github/workflows/production-preflight.yml",
+      ".github/workflows/production-preflight-engine.yml",
       ".github/workflows/release-engine.yml",
       ".github/workflows/release-evidence.yml",
       ".github/workflows/milestone-qualification.yml",
@@ -176,6 +180,7 @@
   "importantWorkflows": [
     "CI",
     "CodeQL",
+    "Production Preflight",
     "Stable",
     "Prerelease",
     "Release Evidence",

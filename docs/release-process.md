@@ -51,20 +51,38 @@ category is explicitly not applicable rather than failed. Metadata
 preparation and review do not authorize dispatch; run-bound signing approval
 remains a separate verified boundary.
 
+Before a successor version or build identity is prepared, dispatch
+`Production Preflight` from protected `main` with the exact full current
+40-character `main` SHA. The release-independent workflow rejects abbreviated,
+non-`main`, mismatched, or stale SHAs before qualifying the package. It has
+read-only repository permission, uses no signing environment or secret, and
+cannot create a tag, release, draft, appcast deployment, or package publication.
+Its seven-day workflow artifact contains only source-bound validation, package
+smoke, installed-UI evidence, and a bounded success manifest; failure artifacts
+contain bounded source/workflow context and diagnostic tails rather than the app
+or preventive DMG. A passing run is readiness evidence for that exact SHA, not
+release authorization or signed-artifact evidence. If `main` moves, rerun the
+preflight before preparing metadata.
+
 Before the `macos-signing` environment can request approval, the reusable
-release engine runs a secret-free macOS pre-signing package gate. That job
-builds the production package with ad-hoc signing, runs the complete maintained
-release-app smoke, creates a production-shaped DMG, and exercises the same
-installed UI accessibility fixture used by the signed-artifact lane. Failure,
-cancellation, or skipped execution prevents the signing job from starting. The
-later Developer ID, notarization, signed-DMG, exact-artifact UI, appcast, and
-post-publication gates remain mandatory; pre-signing qualification moves fixture
-and packaged-runtime feedback earlier without substituting for release evidence.
+release engine invokes the same `.github/workflows/production-preflight-engine.yml`
+implementation again for its exact protected-`main` SHA. The shared job builds
+the production package with ad-hoc signing, runs the complete maintained
+release-app smoke (including exact embedded worker version and protocol
+readiness), creates and installs a production-shaped preventive DMG, and
+exercises the shared installed UI accessibility fixture. Failure, cancellation,
+or skipped execution prevents the signing job from starting. The later
+Developer ID, notarization, signed-DMG, exact-artifact UI, appcast, and
+post-publication gates remain mandatory; production preflight moves fixture and
+packaged-runtime feedback earlier without substituting for release evidence.
 
 ## Release Preparation
 
 Every release version and Sparkle build number is committed through a normal
-pull request before release orchestration runs. Use the repository command:
+pull request before release orchestration runs. First record a successful
+`Production Preflight` run for the exact protected `main` SHA that will be the
+base of the metadata change; do not consume the successor identity when that
+run is absent, failed, or stale. Then use the repository command:
 
 ```sh
 uv run python -m scripts.release prepare \
