@@ -20,7 +20,8 @@ post-publication exact-artifact qualification is blocked by packaged worker
 version metadata. Corrective Beta `0.3.2b6` build `168` is a cancelled,
 unpublished signed attempt whose draft `374538590` was deleted through the
 authorized immutable-disposition path; its tag and build are permanently
-non-reusable. Issue #609 owns preparation of a newer successor.
+non-reusable. Issue #609 owns prepared successor Beta `0.3.2b7` build `169`;
+dispatch, signing approval, and publication remain separately authorized.
 Run-bound signing approval
 remains a separate authorization boundary.
 
@@ -452,8 +453,9 @@ Guarded Prerelease run `32488665999` published immutable
 `f6ce414db07030e2ad2c081a9d4287639a113446`. Its exact DMG and appcast remain
 valid public artifacts, but post-publication qualification found that the
 embedded worker reported `0.0.0` instead of `0.3.2b5`. PR #623 corrects that
-diagnostics identity and strengthens the pre-signing package gate. PR #622
-remains blocked as the accurate Beta 5 evidence record.
+diagnostics identity and strengthens the pre-signing package gate. Superseded
+success-shaped evidence PR #622 was closed without merge after the accurate
+failed-post-publication disposition merged.
 
 The reviewed Beta 6 identity was:
 
@@ -483,6 +485,16 @@ verified absence of both draft and tag. A newer successor identity is expected
 to begin at Beta 7/build `169`. Milestone-context validation accepts the
 cancelled candidate only after that disposition validates, then still requires
 build `168` in the successor qualification's burned-build list.
+
+Beta 7 is prepared as internal version `0.3.2b7`, public tag and title
+`v0.3.2-beta.7`, and global build `169`. Published immutable Beta 5 remains its
+prior update-route input; failed builds `165` and `166` and cancelled build
+`168` remain burned. Release-independent Production Preflight run `32620933465`
+passed on exact protected-main SHA
+`02bf566e42b62a18e1a274e33caf1943d26827dd` before metadata preparation. No
+Beta 7 tag, release, draft, appcast item, PyPI version, or Homebrew change was
+created. The preparation contract is recorded in
+[the 0.3.2 Beta 7 cut packet](0.3.2-beta.7-cut-packet.md).
 
 ## Historical Boundaries
 

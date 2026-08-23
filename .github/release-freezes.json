@@ -4,7 +4,7 @@
   "frozen_release_tags": {
     "v0.3.2-beta.6": {
       "issue": 609,
-      "reason": "Cancelled unpublished signed attempt; build 168 is permanently non-reusable pending explicitly authorized draft cleanup."
+      "reason": "Cancelled unpublished signed attempt; its draft was deleted under the authorized immutable disposition and build 168 is permanently non-reusable."
     }
   }
 }

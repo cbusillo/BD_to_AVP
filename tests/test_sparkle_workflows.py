@@ -397,8 +397,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 "v0.3.2-beta.6": {
                     "issue": 609,
                     "reason": (
-                        "Cancelled unpublished signed attempt; build 168 is permanently non-reusable pending "
-                        "explicitly authorized draft cleanup."
+                        "Cancelled unpublished signed attempt; its draft was deleted under the authorized immutable "
+                        "disposition and build 168 is permanently non-reusable."
                     ),
                 }
             },
@@ -1121,7 +1121,7 @@ printf '%s' "$CODESIGN_METADATA"
         )
         self.assertEqual(
             release_operations["qualificationRecordPath"],
-            "docs/qualification/v0.3.2-beta.6-signed-qualification-v1.json",
+            "docs/qualification/v0.3.2-beta.7-signed-qualification-v1.json",
         )
         self.assertEqual(len(release_operations["qualificationReportArtifacts"]), 3)
         self.assertIn(
