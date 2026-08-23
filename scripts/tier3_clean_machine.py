@@ -2081,18 +2081,33 @@ def _seed_profile(synthetic_home: Path) -> tuple[Path, dict[str, Any]]:
     return profile_path, profile_document
 
 
-def _validate_profile_migration(
+def _validate_profile_before_update(
+    profile_path: Path,
+    seeded_profile: Mapping[str, Any],
+) -> tuple[str, dict[str, Any], str]:
+    expected_migrated = _load_profile_document(PROFILE_FIXTURE_V6_PATH, "Expected migrated profile fixture")
+    profile_before = _load_profile_document(profile_path, "Profile library before Sparkle update")
+    if seeded_profile.get("version") != 5 or expected_migrated.get("version") != 6:
+        raise CleanMachineError("Profile migration fixtures do not describe the expected version 5-to-6 transition.")
+    if profile_before == seeded_profile:
+        migration_timing = "v5-to-v6-during-update"
+    elif profile_before == expected_migrated:
+        migration_timing = "v5-to-v6-before-update"
+    else:
+        raise CleanMachineError("Profile library changed before the Sparkle update began.")
+    return file_sha256(profile_path), profile_before, migration_timing
+
+
+def _validate_profile_after_update(
     profile_path: Path,
     profile_before: Mapping[str, Any],
 ) -> tuple[str, dict[str, Any]]:
     expected_after = _load_profile_document(PROFILE_FIXTURE_V6_PATH, "Expected migrated profile fixture")
     profile_after = _load_profile_document(profile_path, "Profile library after Sparkle relaunch")
-    if profile_before.get("version") != 5 or expected_after.get("version") != 6:
+    if profile_before.get("version") not in {5, 6} or expected_after.get("version") != 6:
         raise CleanMachineError("Profile migration fixtures do not describe the expected version 5-to-6 transition.")
     if profile_after != expected_after:
-        raise CleanMachineError(
-            "Profile library did not match the expected version 5-to-6 migration across Sparkle relaunch."
-        )
+        raise CleanMachineError("Profile library did not match the expected version 6 state after Sparkle relaunch.")
     return file_sha256(profile_path), profile_after
 
 
@@ -2503,21 +2518,34 @@ def _run_qualification(
         if operations.read_preference(synthetic_home, SENTINEL_KEY) != SENTINEL_VALUE:
             raise CleanMachineError("Preference sentinel did not persist before the Sparkle update.")
 
-        operations.collect_ui_evidence(
-            repo=config.repo.resolve(),
-            phase="updater",
-            app_path=app_path,
-            synthetic_home=synthetic_home,
-            output_directory=raw_ui_directory,
-            release_notes_url=feed.release_notes_url,
-        )
-        operations.quit_app()
-        if operations.app_running():
-            raise CleanMachineError("Installed UI updater inspection left the production app running.")
-        profile_before = _load_profile_document(profile_path, "Profile library before Sparkle update")
-        if profile_before != seeded_profile:
-            raise CleanMachineError("Profile library changed before the Sparkle update began.")
-        profile_before_sha256 = file_sha256(profile_path)
+        failure_stage = "prior-installed-ui"
+        try:
+            operations.collect_ui_evidence(
+                repo=config.repo.resolve(),
+                phase="updater",
+                app_path=app_path,
+                synthetic_home=synthetic_home,
+                output_directory=raw_ui_directory,
+                release_notes_url=feed.release_notes_url,
+            )
+            operations.quit_app()
+            if operations.app_running():
+                raise CleanMachineError("Installed UI updater inspection left the production app running.")
+            failure_stage = "prior-profile-baseline"
+            profile_before_sha256, profile_before, profile_migration = _validate_profile_before_update(
+                profile_path, seeded_profile
+            )
+        except (CleanMachineError, OSError, subprocess.TimeoutExpired) as error:
+            diagnostic_summary = _record_sparkle_failure_diagnostics(
+                config=config,
+                operations=operations,
+                runtime_layout=runtime_layout,
+                prior=prior,
+                candidate=candidate,
+                failure_stage=failure_stage,
+                reason_code="pre-update-validation-failed",
+            )
+            raise CleanMachineError(f"{error} {diagnostic_summary}") from error
 
         failure_stage = "updater-state-machine"
         try:
@@ -2573,7 +2601,7 @@ def _run_qualification(
             raise CleanMachineError(f"{error} {diagnostic_summary}") from error
         route_after = operations.read_preference(synthetic_home, UPDATE_ROUTE_KEY)
         sentinel_after = operations.read_preference(synthetic_home, SENTINEL_KEY)
-        profile_after_sha256, profile_after = _validate_profile_migration(profile_path, profile_before)
+        profile_after_sha256, profile_after = _validate_profile_after_update(profile_path, profile_before)
         if route_after != config.route or sentinel_after != SENTINEL_VALUE:
             raise CleanMachineError("Update route or unrelated preference changed across Sparkle relaunch.")
 
@@ -2646,11 +2674,12 @@ def _run_qualification(
                 "profile_before_semantic_sha256": _semantic_json_sha256(profile_before),
                 "profile_encoding_options_preserved": True,
                 "profile_identity_preserved": True,
-                "profile_migration": "v5-to-v6",
+                "profile_migration": profile_migration,
                 "profile_migration_matched": True,
                 "profile_safe_pipeline_defaults_preserved": True,
                 "profile_version_after": profile_after["version"],
                 "profile_version_before": profile_before["version"],
+                "profile_version_seeded": seeded_profile["version"],
                 "route_after": route_after,
                 "route_preserved": True,
                 "sentinel_preserved": sentinel_after == SENTINEL_VALUE,
