@@ -534,6 +534,17 @@ commit exists; it never reconstructs receipts. If equivalent receipts are
 already committed and accepted, `status` reports no blockers and `resume`
 returns `complete` regardless of Actions retention.
 
+When a failed observed milestone run exposes a qualification-runner defect, a
+reviewed protected-main fix may refresh the canonical evidence manifest without
+changing the immutable release, receipt, or signed UI artifact. The controller
+does not silently discard the old checkpoint. It requires the exact failed run
+ID and attempt, the old checkpoint self-digest, and the refreshed main and
+manifest digests; it revalidates the historical run under the old identity,
+requires the new main to descend from the old runner, rejects changes to every
+decision-bearing manifest input and immutable release binding, rescans for a
+competing refreshed run at the mutation boundary, and atomically replaces only
+that observed checkpoint before dispatching the new runner identity.
+
 The initial evidence PR is expected to remain unmergeable while blocking
 live-artifact or automated Tier 3 receipts are absent. Collectors add validated
 receipts to that same idempotent branch. Optional physical and native-window
