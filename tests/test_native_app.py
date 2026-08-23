@@ -134,8 +134,8 @@ class NativeAppPackagingTests(unittest.TestCase):
         self.assertEqual(NATIVE_APP_NAME, "3D Blu-ray to Vision Pro.app")
         self.assertEqual(NATIVE_EXECUTABLE_NAME, NATIVE_PRODUCT_NAME)
         self.assertEqual(NATIVE_BUNDLE_IDENTIFIER, "com.shinycomputers.bd-to-avp")
-        self.assertEqual(NATIVE_SHORT_VERSION, "0.3.2b6")
-        self.assertEqual(NATIVE_BUILD_VERSION, "168")
+        self.assertEqual(NATIVE_SHORT_VERSION, "0.3.2b7")
+        self.assertEqual(NATIVE_BUILD_VERSION, "169")
         self.assertEqual(NATIVE_MINIMUM_SYSTEM_VERSION, "26.0")
         self.assertEqual(MV_HEVC_ENCODER_NAME, "mv-hevc-encoder")
 
