@@ -110,6 +110,7 @@ class FakeOperations(QualificationOperations):
         self.post_install_update_observations = 0
         self.checkpoint_root: Path | None = None
         self.profile_after_relaunch = PROFILE_FIXTURE_V6_PATH.read_bytes()
+        self.migrate_profile_during_updater_ui = False
         self.tamper_profile_before_update = False
 
     def inspect_environment(self, qualification_root: Path, environment_class: str) -> EnvironmentFacts:
@@ -318,6 +319,9 @@ class FakeOperations(QualificationOperations):
     ) -> None:
         if phase == "updater" and self.tamper_prior_before_update:
             (app_path / "tampered-before-updater").write_text("changed\n", encoding="utf-8")
+        if phase == "updater" and self.migrate_profile_during_updater_ui:
+            profile_path = synthetic_home / PROFILE_RELATIVE_PATH
+            profile_path.write_bytes(PROFILE_FIXTURE_V6_PATH.read_bytes())
         if phase == "updater" and self.tamper_profile_before_update:
             profile_path = synthetic_home / PROFILE_RELATIVE_PATH
             profile_document = json.loads(profile_path.read_text(encoding="utf-8"))
@@ -1080,7 +1084,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             profile_evidence = json.loads(
                 (config.evidence_directory / "profile-snapshot.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(profile_evidence["profile_migration"], "v5-to-v6")
+            self.assertEqual(profile_evidence["profile_migration"], "v5-to-v6-during-update")
             self.assertTrue(profile_evidence["profile_migration_matched"])
             self.assertTrue(profile_evidence["profile_identity_preserved"])
             self.assertTrue(profile_evidence["profile_encoding_options_preserved"])
@@ -1088,6 +1092,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
             self.assertTrue(profile_evidence["unsafe_legacy_run_defaults_removed"])
             self.assertEqual(profile_evidence["profile_version_before"], 5)
             self.assertEqual(profile_evidence["profile_version_after"], 6)
+            self.assertEqual(profile_evidence["profile_version_seeded"], 5)
             self.assertNotEqual(
                 profile_evidence["profile_before_sha256"],
                 profile_evidence["profile_after_sha256"],
@@ -1107,7 +1112,7 @@ class Tier3CleanMachineTests(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 CleanMachineError,
-                "did not match the expected version 5-to-6 migration",
+                "did not match the expected version 6 state",
             ):
                 run_qualification(config, operations)
 
@@ -1117,6 +1122,8 @@ class Tier3CleanMachineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             config, operations = self.fixture(root)
+            config = replace(config, diagnostics_output=root / "sparkle-install-diagnostics.json")
+            operations.migrate_profile_during_updater_ui = True
             operations.tamper_profile_before_update = True
 
             with self.assertRaisesRegex(
@@ -1127,6 +1134,31 @@ class Tier3CleanMachineTests(unittest.TestCase):
 
             self.assertFalse(operations.pressed_actions)
             self.assertFalse(config.evidence_directory.exists())
+            diagnostics = json.loads(config.diagnostics_output.read_text(encoding="utf-8"))
+            self.assertEqual(diagnostics["failure_stage"], "prior-profile-baseline")
+            self.assertEqual(diagnostics["reason_code"], "pre-update-validation-failed")
+            self.assertEqual(diagnostics["status"], "failed")
+
+    def test_run_accepts_profile_migrated_by_prior_release_before_update(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config, operations = self.fixture(root)
+            operations.migrate_profile_during_updater_ui = True
+
+            run_qualification(config, operations)
+
+            profile_evidence = json.loads(
+                (config.evidence_directory / "profile-snapshot.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(profile_evidence["profile_migration"], "v5-to-v6-before-update")
+            self.assertTrue(profile_evidence["profile_migration_matched"])
+            self.assertEqual(profile_evidence["profile_version_seeded"], 5)
+            self.assertEqual(profile_evidence["profile_version_before"], 6)
+            self.assertEqual(profile_evidence["profile_version_after"], 6)
+            self.assertEqual(
+                profile_evidence["profile_before_sha256"],
+                profile_evidence["profile_after_sha256"],
+            )
 
     def test_run_rejects_invalid_profile_document_after_relaunch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

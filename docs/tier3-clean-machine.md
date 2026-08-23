@@ -54,11 +54,12 @@ gh workflow run milestone-qualification.yml \
 
 The successful run uploads the validated signed-artifact UI receipt, both Tier
 3 receipts, normalized evidence, checked manifest digest, evidence branch SHA,
-and a bounded run summary with 30-day retention. A failed Sparkle installation
-uploads a separate `sparkle-install-diagnostics.json` artifact containing only
-fixed classifications, runtime-layout enums, directory-state enums, process
-state, and installed-build state; it excludes raw unified logs, paths,
-usernames, hostnames, process IDs, Accessibility output, and exception text.
+and a bounded run summary with 30-day retention. A failed pre-update validation
+or Sparkle installation uploads a separate `sparkle-install-diagnostics.json`
+artifact containing only fixed classifications, runtime-layout enums,
+directory-state enums, process state, and installed-build state; it excludes
+raw unified logs, paths, usernames, hostnames, process IDs, Accessibility
+output, and exception text.
 Download successful outputs,
 validate them again, and add the accepted receipts to the same evidence branch.
 The hosted collector proves the real Sparkle install/relaunch path, exact
@@ -153,10 +154,13 @@ The runner performs this bounded sequence:
    disappeared.
 6. Verify the final candidate bundle, build, signed app tree, and replacement
    running process, then verify the selected route and unrelated preference are
-   preserved and the seeded profile library matches the exact expected
-   semantic migration from schema version 5 to version 6. The migration must
-   preserve profile identity, encoding options, and safe pipeline defaults while
-   removing legacy per-run defaults that version 6 intentionally no longer stores.
+   preserved. The harness seeds the version 5 profile fixture and accepts the
+   exact version 6 migration either when the prior release first launches or
+   during the candidate relaunch. It records which boundary performed the
+   migration and requires the exact expected version 6 document afterward,
+   preserving profile identity, encoding options, and safe pipeline defaults
+   while removing legacy per-run defaults that version 6 intentionally no
+   longer stores.
 7. Run the candidate installed-app XCUITest lane. It verifies main-window
    readiness, profile-save accessibility and success, updater settings, the
    public releases link, and cropped light/dark app-window screenshots.
