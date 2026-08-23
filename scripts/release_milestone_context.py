@@ -42,6 +42,9 @@ RELEASE_EVIDENCE_RECEIPT_NAME = "release-receipt.json"
 CANCELLED_ATTEMPT_RECORD_NAME = "cancelled-attempt-v1.json"
 DRAFT_DELETION_RECORD_NAME = "draft-deletion-v1.json"
 FAILED_POST_PUBLICATION_QUALIFICATION_RECORD_NAME = "failed-post-publication-qualification-v1.json"
+FAILED_POST_PUBLICATION_PATH_PATTERN = re.compile(
+    rf"^docs/release-evidence/(v[^/]+)/{re.escape(FAILED_POST_PUBLICATION_QUALIFICATION_RECORD_NAME)}$"
+)
 RECOVERY_AUTHORIZATION_PATHS = frozenset({"docs/release-evidence/v0.3.0-pypi-recovery.json"})
 EXPECTED_REPOSITORY = "cbusillo/BD_to_AVP"
 EXPECTED_BASE_BRANCH = "main"
@@ -1777,6 +1780,53 @@ def discover_milestone_receipt(
     receipt_matches = [
         (path, match.group(1)) for path in changed_paths if (match := RECEIPT_PATH_PATTERN.fullmatch(path)) is not None
     ]
+    disposition_matches = [
+        (path, match.group(1))
+        for path in changed_paths
+        if (match := FAILED_POST_PUBLICATION_PATH_PATTERN.fullmatch(path)) is not None
+    ]
+    if disposition_matches:
+        if len(disposition_matches) != 1:
+            raise ReleaseMilestoneContextError(
+                "A failed post-publication disposition pull request must add exactly one disposition record."
+            )
+        disposition_relative, disposition_tag = disposition_matches[0]
+        release_evidence_changes = sorted(path for path in changed_paths if path.startswith("docs/release-evidence/"))
+        if release_evidence_changes != [disposition_relative]:
+            raise ReleaseMilestoneContextError(
+                "A failed post-publication disposition pull request may change only its new disposition record "
+                "under docs/release-evidence/."
+            )
+        disposition_in_base = subprocess.run(
+            ["git", "cat-file", "-e", f"{base_sha}:{disposition_relative}"],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        if disposition_in_base.returncode == 0:
+            raise ReleaseMilestoneContextError(
+                "A failed post-publication qualification disposition must be new and immutable."
+            )
+        receipt_relative = (RELEASE_EVIDENCE_ROOT / disposition_tag / RELEASE_EVIDENCE_RECEIPT_NAME).as_posix()
+        receipt_in_base = subprocess.run(
+            ["git", "cat-file", "-e", f"{base_sha}:{receipt_relative}"],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        receipt_changed = subprocess.run(
+            ["git", "diff", "--quiet", f"{base_sha}...{head_sha}", "--", receipt_relative],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        if receipt_in_base.returncode != 0 or receipt_changed.returncode != 0:
+            raise ReleaseMilestoneContextError(
+                "A failed post-publication qualification disposition must bind an unchanged checked receipt "
+                "from protected main."
+            )
+        validate_failed_post_publication_qualification_record(repo_root, disposition_tag)
+        return None
     config = _load_json(repo_root / GITHUB_CONFIG_PATH, "GitHub repository config")
     operations = _mapping(config.get("releaseOperations"), "releaseOperations")
     _policy_path, policy_relative = _repository_path(

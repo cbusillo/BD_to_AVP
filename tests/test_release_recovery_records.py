@@ -1,5 +1,6 @@
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -7,6 +8,7 @@ from pathlib import Path
 
 from scripts.release_milestone_context import (
     ReleaseMilestoneContextError,
+    discover_milestone_receipt,
     failed_post_publication_disposition_sha256,
     validate_failed_post_publication_qualification_record,
     validate_failed_attempt_record,
@@ -38,6 +40,42 @@ class ReleaseRecoveryRecordTests(unittest.TestCase):
         record["disposition_sha256"] = failed_post_publication_disposition_sha256(record)
         path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
+    @staticmethod
+    def build_disposition_repository(root: Path, *, tamper_receipt: bool = False) -> tuple[str, str]:
+        evidence_root = root / "docs" / "release-evidence" / "v0.3.2-beta.5"
+        evidence_root.mkdir(parents=True)
+        source_root = REPO_ROOT / "docs" / "release-evidence" / "v0.3.2-beta.5"
+        shutil.copy2(source_root / "release-receipt.json", evidence_root / "release-receipt.json")
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base receipt"], cwd=root, check=True)
+        base_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        shutil.copy2(
+            source_root / "failed-post-publication-qualification-v1.json",
+            evidence_root / "failed-post-publication-qualification-v1.json",
+        )
+        if tamper_receipt:
+            receipt_path = evidence_root / "release-receipt.json"
+            receipt_path.write_text(receipt_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "add disposition"], cwd=root, check=True)
+        head_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        return base_sha, head_sha
+
     def test_repository_recovery_records_validate_directly_from_disk(self) -> None:
         records = validate_release_recovery_records(REPO_ROOT)
 
@@ -68,6 +106,39 @@ class ReleaseRecoveryRecordTests(unittest.TestCase):
             record["disposition_sha256"],
             "a139a72172c9f40f655e4ccbc3416e400317058f26486881e3e0043963eb87b6",
         )
+
+    def test_discovers_failed_post_publication_disposition_without_requiring_milestone_success(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            base_sha, head_sha = self.build_disposition_repository(root)
+
+            receipt_path = discover_milestone_receipt(
+                root,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                head_branch="code/issue-634-beta5-disposition",
+                base_repo="cbusillo/BD_to_AVP",
+                head_repo="cbusillo/BD_to_AVP",
+                base_branch="main",
+            )
+
+        self.assertIsNone(receipt_path)
+
+    def test_rejects_disposition_pull_request_that_mutates_checked_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            base_sha, head_sha = self.build_disposition_repository(root, tamper_receipt=True)
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "may change only its new disposition record"):
+                discover_milestone_receipt(
+                    root,
+                    base_sha=base_sha,
+                    head_sha=head_sha,
+                    head_branch="code/issue-634-beta5-disposition",
+                    base_repo="cbusillo/BD_to_AVP",
+                    head_repo="cbusillo/BD_to_AVP",
+                    base_branch="main",
+                )
 
     def test_rejects_noncanonical_failed_post_publication_serialization(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
