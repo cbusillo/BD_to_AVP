@@ -33,13 +33,15 @@ as recorded in [the 0.3.2 Beta 4 cut packet](0.3.2-beta.4-cut-packet.md). Beta
 `0.3.2b5` build `167` is published and immutable, but its post-publication
 exact-artifact qualification is blocked because the packaged worker reported
 `0.0.0` instead of `0.3.2b5`; the publication and qualification boundary are
-tracked in [the 0.3.2 Beta 5 cut packet](0.3.2-beta.5-cut-packet.md). The next
-corrective identity, Beta `0.3.2b6` build `168`, became a cancelled unpublished
-signed attempt after draft creation and is permanently burned, as recorded in
+tracked in [the 0.3.2 Beta 5 cut packet](0.3.2-beta.5-cut-packet.md) and its
+immutable failed-post-publication disposition. The next corrective identity,
+Beta `0.3.2b6` build `168`, became a cancelled unpublished signed attempt after
+draft creation and is permanently burned, as recorded in
 [the 0.3.2 Beta 6 cut packet](0.3.2-beta.6-cut-packet.md) and
-`docs/release-attempts/v0.3.2-beta.6/cancelled-attempt-v1.json`. Its draft
-remains present pending separate explicit deletion authorization. Issue #609
-owns that disposition and preparation of a newer successor identity.
+`docs/release-attempts/v0.3.2-beta.6/cancelled-attempt-v1.json`. Its abandoned
+draft was deleted only after explicit authorization, with the immutable
+disposition at `docs/release-attempts/v0.3.2-beta.6/draft-deletion-v1.json`.
+Issue #609 owns any separately authorized newer successor preparation.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease

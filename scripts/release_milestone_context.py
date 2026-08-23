@@ -35,10 +35,13 @@ RECEIPT_PATH_PATTERN = re.compile(r"^docs/release-evidence/(v[^/]+)/release-rece
 MANIFEST_PATH_PATTERN = re.compile(rf"^docs/release-evidence/(v[^/]+)/{re.escape(MANIFEST_NAME)}$")
 CHANGE_SCOPED_EVIDENCE_PATH_PATTERN = re.compile(r"^docs/qualification/(v[^/]+)-change-scoped-evidence-v1\.json$")
 FAILED_ATTEMPT_ROOT = Path("docs/release-attempts")
+RELEASE_EVIDENCE_ROOT = Path("docs/release-evidence")
 FAILED_ATTEMPT_RECORD_NAME = "failed-attempt-v1.json"
 FAILED_ATTEMPT_RECEIPT_NAME = "release-receipt.json"
+RELEASE_EVIDENCE_RECEIPT_NAME = "release-receipt.json"
 CANCELLED_ATTEMPT_RECORD_NAME = "cancelled-attempt-v1.json"
 DRAFT_DELETION_RECORD_NAME = "draft-deletion-v1.json"
+FAILED_POST_PUBLICATION_QUALIFICATION_RECORD_NAME = "failed-post-publication-qualification-v1.json"
 RECOVERY_AUTHORIZATION_PATHS = frozenset({"docs/release-evidence/v0.3.0-pypi-recovery.json"})
 EXPECTED_REPOSITORY = "cbusillo/BD_to_AVP"
 EXPECTED_BASE_BRANCH = "main"
@@ -141,6 +144,101 @@ DRAFT_DELETION_RECORD_KEYS = frozenset(
         "verified_absent_at",
     }
 )
+FAILED_POST_PUBLICATION_QUALIFICATION_RECORD_KEYS = frozenset(
+    {
+        "assets",
+        "disposition_sha256",
+        "disposition_type",
+        "failed_qualification",
+        "preservation",
+        "receipt",
+        "recorded_at",
+        "recorded_by",
+        "release",
+        "release_workflow",
+        "remediation",
+        "schema_version",
+        "status",
+    }
+)
+FAILED_POST_PUBLICATION_RELEASE_KEYS = frozenset(
+    {
+        "build_version",
+        "immutable",
+        "package_version",
+        "prerelease",
+        "public_version",
+        "published_at",
+        "release_id",
+        "release_tag",
+        "source_sha",
+    }
+)
+FAILED_POST_PUBLICATION_RECEIPT_KEYS = frozenset({"file_sha256", "path", "payload_sha256"})
+FAILED_POST_PUBLICATION_ASSET_KEYS = frozenset({"asset_id", "kind", "name", "sha256", "size_bytes"})
+FAILED_POST_PUBLICATION_ASSET_KINDS = frozenset({"appcast", "checksum", "dmg", "receipt"})
+FAILED_POST_PUBLICATION_WORKFLOW_KEYS = frozenset(
+    {
+        "actor",
+        "completed_at",
+        "conclusion",
+        "engine_path",
+        "name",
+        "path",
+        "run_attempt",
+        "run_id",
+        "started_at",
+    }
+)
+FAILED_POST_PUBLICATION_QUALIFICATION_KEYS = frozenset(
+    {
+        "actor",
+        "build_version",
+        "completed_at",
+        "conclusion",
+        "expected",
+        "failure_code",
+        "failure_subject",
+        "failed_job",
+        "failed_job_completed_at",
+        "failed_job_id",
+        "failed_job_started_at",
+        "failed_step",
+        "failed_step_completed_at",
+        "failed_step_number",
+        "failed_step_started_at",
+        "manifest_sha256",
+        "observed",
+        "release_tag",
+        "run_attempt",
+        "run_id",
+        "source_sha",
+        "started_at",
+        "workflow_name",
+        "workflow_path",
+    }
+)
+FAILED_POST_PUBLICATION_REMEDIATION_KEYS = frozenset(
+    {
+        "author",
+        "merge_commit_sha",
+        "merged_at",
+        "merged_by",
+        "pull_request_number",
+        "released_artifact_unchanged",
+        "successor_only",
+    }
+)
+FAILED_POST_PUBLICATION_PRESERVATION_KEYS = frozenset(
+    {
+        "asset_replacement_prohibited",
+        "qualification_passed",
+        "rebuild_same_identity_prohibited",
+        "release_must_remain_published",
+        "release_mutation_prohibited",
+        "retag_prohibited",
+    }
+)
 
 
 class ReleaseMilestoneContextError(RuntimeError):
@@ -231,6 +329,13 @@ def _load_release_attempt_json(path: Path, description: str) -> Mapping[str, Any
     if serialized != canonical:
         raise ReleaseMilestoneContextError(f"{description.capitalize()} must use canonical JSON serialization.")
     return value
+
+
+def failed_post_publication_disposition_sha256(record: Mapping[str, Any]) -> str:
+    payload = dict(record)
+    payload.pop("disposition_sha256", None)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _load_json_at_revision(
@@ -490,6 +595,277 @@ def validate_draft_deletion_record(
     return deletion
 
 
+def validate_failed_post_publication_qualification_record(
+    repo_root: Path,
+    release_tag: str,
+) -> Mapping[str, Any]:
+    evidence_root = RELEASE_EVIDENCE_ROOT / release_tag
+    record_relative = evidence_root / FAILED_POST_PUBLICATION_QUALIFICATION_RECORD_NAME
+    receipt_relative = evidence_root / RELEASE_EVIDENCE_RECEIPT_NAME
+    record = _load_release_attempt_json(
+        repo_root / record_relative,
+        "failed post-publication qualification disposition",
+    )
+    if set(record) != FAILED_POST_PUBLICATION_QUALIFICATION_RECORD_KEYS:
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication qualification disposition keys do not match the required schema."
+        )
+    if (
+        record.get("schema_version") != 1
+        or record.get("disposition_type") != "failed_post_publication_qualification"
+        or record.get("status") != "recorded_failed_post_publication_qualification"
+    ):
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication qualification disposition status does not match the required schema."
+        )
+    if record.get("disposition_sha256") != failed_post_publication_disposition_sha256(record):
+        raise ReleaseMilestoneContextError("Failed post-publication qualification disposition self-digest mismatch.")
+
+    release = _mapping(record.get("release"), "failed post-publication disposition release")
+    receipt_binding = _mapping(record.get("receipt"), "failed post-publication disposition receipt")
+    release_workflow = _mapping(record.get("release_workflow"), "failed post-publication release workflow")
+    qualification = _mapping(record.get("failed_qualification"), "failed post-publication qualification")
+    remediation = _mapping(record.get("remediation"), "failed post-publication remediation")
+    preservation = _mapping(record.get("preservation"), "failed post-publication preservation")
+    if set(release) != FAILED_POST_PUBLICATION_RELEASE_KEYS:
+        raise ReleaseMilestoneContextError("Failed post-publication release keys do not match the required schema.")
+    if set(receipt_binding) != FAILED_POST_PUBLICATION_RECEIPT_KEYS:
+        raise ReleaseMilestoneContextError("Failed post-publication receipt keys do not match the required schema.")
+    if set(release_workflow) != FAILED_POST_PUBLICATION_WORKFLOW_KEYS:
+        raise ReleaseMilestoneContextError("Failed post-publication workflow keys do not match the required schema.")
+    if set(qualification) != FAILED_POST_PUBLICATION_QUALIFICATION_KEYS:
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication qualification keys do not match the required schema."
+        )
+    if set(remediation) != FAILED_POST_PUBLICATION_REMEDIATION_KEYS:
+        raise ReleaseMilestoneContextError("Failed post-publication remediation keys do not match the required schema.")
+    if set(preservation) != FAILED_POST_PUBLICATION_PRESERVATION_KEYS:
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication preservation keys do not match the required schema."
+        )
+
+    if release.get("release_tag") != release_tag:
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication qualification tag does not match its canonical directory."
+        )
+    if receipt_binding.get("path") != receipt_relative.as_posix():
+        raise ReleaseMilestoneContextError("Failed post-publication qualification receipt path is not canonical.")
+    try:
+        receipt, receipt_file_sha256 = load_validated_checked_receipt(repo_root / receipt_relative)
+    except ReleaseReceiptError as error:
+        raise ReleaseMilestoneContextError(
+            f"Failed post-publication qualification receipt is invalid: {error}"
+        ) from error
+    if receipt_binding.get("file_sha256") != receipt_file_sha256:
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication qualification receipt file digest does not match the record."
+        )
+    if receipt_binding.get("payload_sha256") != receipt.get("receipt_sha256"):
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication qualification receipt self-digest does not match the record."
+        )
+
+    checked_release = _mapping(receipt.get("release"), "failed post-publication checked release")
+    checked_versions = _mapping(receipt.get("versions"), "failed post-publication checked versions")
+    checked_workflow = _mapping(receipt.get("workflow"), "failed post-publication checked workflow")
+    release_identity = {
+        "build_version": checked_versions.get("build"),
+        "package_version": checked_versions.get("package"),
+        "prerelease": checked_release.get("prerelease"),
+        "public_version": checked_versions.get("public"),
+        "release_id": checked_release.get("id"),
+        "release_tag": checked_release.get("tag"),
+        "source_sha": receipt.get("source_sha"),
+    }
+    if any(release.get(field) != value for field, value in release_identity.items()):
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication qualification release identity differs from its checked receipt."
+        )
+    if release.get("immutable") is not True:
+        raise ReleaseMilestoneContextError("Failed post-publication qualification release must remain immutable.")
+    source_sha = _sha(release.get("source_sha"), "failed post-publication release source SHA")
+    _positive_integer(release.get("release_id"), "failed post-publication release ID")
+    _string(release.get("package_version"), "failed post-publication package version")
+    _string(release.get("public_version"), "failed post-publication public version")
+    _string(release.get("build_version"), "failed post-publication build version")
+    published_at = _timestamp(release.get("published_at"), "failed post-publication release timestamp")
+
+    checked_assets: dict[str, Mapping[str, Any]] = {}
+    asset_kinds: list[str] = []
+    for index, raw_asset in enumerate(_sequence(record.get("assets"), "failed post-publication assets")):
+        asset = _mapping(raw_asset, f"failed post-publication asset {index}")
+        if set(asset) != FAILED_POST_PUBLICATION_ASSET_KEYS:
+            raise ReleaseMilestoneContextError("Failed post-publication asset keys do not match the required schema.")
+        kind = _string(asset.get("kind"), f"failed post-publication asset {index} kind")
+        if kind not in FAILED_POST_PUBLICATION_ASSET_KINDS or kind in checked_assets:
+            raise ReleaseMilestoneContextError(
+                "Failed post-publication assets must contain four unique required kinds."
+            )
+        _positive_integer(asset.get("asset_id"), f"failed post-publication asset {kind} ID")
+        _positive_integer(asset.get("size_bytes"), f"failed post-publication asset {kind} size")
+        _string(asset.get("name"), f"failed post-publication asset {kind} name")
+        _sha256(asset.get("sha256"), f"failed post-publication asset {kind} digest")
+        checked_assets[kind] = asset
+        asset_kinds.append(kind)
+    if set(checked_assets) != FAILED_POST_PUBLICATION_ASSET_KINDS or asset_kinds != sorted(asset_kinds):
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication assets must contain the sorted complete required asset set."
+        )
+    for raw_artifact in _sequence(receipt.get("artifacts"), "failed post-publication receipt artifacts"):
+        artifact = _mapping(raw_artifact, "failed post-publication receipt artifact")
+        kind = _string(artifact.get("kind"), "failed post-publication receipt artifact kind")
+        if checked_assets.get(kind) != artifact:
+            raise ReleaseMilestoneContextError(
+                f"Failed post-publication asset {kind} differs from the checked release receipt."
+            )
+    receipt_asset = checked_assets["receipt"]
+    try:
+        receipt_size = (repo_root / receipt_relative).stat().st_size
+    except OSError as error:
+        raise ReleaseMilestoneContextError(
+            f"Unable to inspect failed post-publication receipt at {repo_root / receipt_relative}: {error}"
+        ) from error
+    if (
+        receipt_asset.get("name") != RELEASE_EVIDENCE_RECEIPT_NAME
+        or receipt_asset.get("sha256") != receipt_file_sha256
+        or receipt_asset.get("size_bytes") != receipt_size
+    ):
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication receipt asset identity does not match the checked receipt."
+        )
+
+    workflow_identity = {
+        "actor": checked_workflow.get("actor"),
+        "engine_path": checked_workflow.get("engine_path"),
+        "name": checked_workflow.get("name"),
+        "path": checked_workflow.get("path"),
+        "run_attempt": checked_workflow.get("run_attempt"),
+        "run_id": checked_workflow.get("run_id"),
+    }
+    if any(release_workflow.get(field) != value for field, value in workflow_identity.items()):
+        raise ReleaseMilestoneContextError("Failed post-publication release workflow differs from the checked receipt.")
+    if release_workflow.get("conclusion") != "success":
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication release workflow must preserve publication success."
+        )
+    release_started_at = _timestamp(
+        release_workflow.get("started_at"),
+        "failed post-publication release workflow start",
+    )
+    release_completed_at = _timestamp(
+        release_workflow.get("completed_at"),
+        "failed post-publication release workflow completion",
+    )
+
+    if (
+        qualification.get("release_tag") != release_tag
+        or qualification.get("source_sha") != source_sha
+        or qualification.get("build_version") != release.get("build_version")
+    ):
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication qualification does not bind the exact published release identity."
+        )
+    manifest_sha256 = _sha256(
+        qualification.get("manifest_sha256"),
+        "failed post-publication qualification manifest digest",
+    )
+    expected_workflow_name = f"Milestone {release_tag} {manifest_sha256}"
+    if (
+        qualification.get("conclusion") != "failure"
+        or qualification.get("workflow_name") != expected_workflow_name
+        or qualification.get("workflow_path") != ".github/workflows/milestone-qualification.yml"
+    ):
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication qualification workflow identity or conclusion is invalid."
+        )
+    _positive_integer(qualification.get("run_id"), "failed post-publication qualification run ID")
+    _positive_integer(qualification.get("run_attempt"), "failed post-publication qualification run attempt")
+    _positive_integer(qualification.get("failed_job_id"), "failed post-publication qualification job ID")
+    _positive_integer(
+        qualification.get("failed_step_number"),
+        "failed post-publication qualification step number",
+    )
+    _string(qualification.get("actor"), "failed post-publication qualification actor")
+    _string(qualification.get("failed_job"), "failed post-publication qualification failed job")
+    _string(qualification.get("failed_step"), "failed post-publication qualification failed step")
+    failure_code = _string(qualification.get("failure_code"), "failed post-publication qualification code")
+    if CANCELLATION_REASON_PATTERN.fullmatch(failure_code) is None:
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication qualification code must be a lowercase machine-readable identifier."
+        )
+    _string(qualification.get("failure_subject"), "failed post-publication qualification subject")
+    expected = _string(qualification.get("expected"), "failed post-publication qualification expected value")
+    observed = _string(qualification.get("observed"), "failed post-publication qualification observed value")
+    if expected == observed:
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication qualification expected and observed values must differ."
+        )
+    qualification_started_at = _timestamp(
+        qualification.get("started_at"),
+        "failed post-publication qualification start",
+    )
+    qualification_completed_at = _timestamp(
+        qualification.get("completed_at"),
+        "failed post-publication qualification completion",
+    )
+    job_started_at = _timestamp(
+        qualification.get("failed_job_started_at"),
+        "failed post-publication qualification job start",
+    )
+    job_completed_at = _timestamp(
+        qualification.get("failed_job_completed_at"),
+        "failed post-publication qualification job completion",
+    )
+    step_started_at = _timestamp(
+        qualification.get("failed_step_started_at"),
+        "failed post-publication qualification step start",
+    )
+    step_completed_at = _timestamp(
+        qualification.get("failed_step_completed_at"),
+        "failed post-publication qualification step completion",
+    )
+
+    _positive_integer(remediation.get("pull_request_number"), "failed post-publication remediation pull request")
+    _sha(remediation.get("merge_commit_sha"), "failed post-publication remediation merge commit")
+    _string(remediation.get("author"), "failed post-publication remediation author")
+    _string(remediation.get("merged_by"), "failed post-publication remediation merge actor")
+    merged_at = _timestamp(remediation.get("merged_at"), "failed post-publication remediation merge timestamp")
+    if remediation.get("successor_only") is not True or remediation.get("released_artifact_unchanged") is not True:
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication remediation must be successor-only and preserve the published artifact."
+        )
+    if preservation != {
+        "asset_replacement_prohibited": True,
+        "qualification_passed": False,
+        "rebuild_same_identity_prohibited": True,
+        "release_must_remain_published": True,
+        "release_mutation_prohibited": True,
+        "retag_prohibited": True,
+    }:
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication preservation requirements must prohibit published release mutation."
+        )
+    _string(record.get("recorded_by"), "failed post-publication disposition actor")
+    recorded_at = _timestamp(record.get("recorded_at"), "failed post-publication disposition timestamp")
+    if not (
+        release_started_at
+        <= published_at
+        <= release_completed_at
+        <= qualification_started_at
+        <= job_started_at
+        <= step_started_at
+        <= step_completed_at
+        <= job_completed_at
+        <= qualification_completed_at
+        <= merged_at
+        <= recorded_at
+    ):
+        raise ReleaseMilestoneContextError(
+            "Failed post-publication qualification disposition timestamps are out of order."
+        )
+    return record
+
+
 def _require_immutable_if_tracked(repo_root: Path, base_sha: str, relative_path: Path) -> None:
     tracked = subprocess.run(
         ["git", "cat-file", "-e", f"{base_sha}:{relative_path.as_posix()}"],
@@ -713,6 +1089,21 @@ def validate_release_recovery_records(repo_root: Path) -> Mapping[str, Mapping[s
             raise ReleaseMilestoneContextError(f"Release-attempt identity is invalid: {error}") from error
         attempts.append((version.order_key, build, release_tag))
         records[release_tag] = entry
+
+    evidence_root = repo_root / RELEASE_EVIDENCE_ROOT
+    for disposition_path in sorted(evidence_root.glob(f"*/{FAILED_POST_PUBLICATION_QUALIFICATION_RECORD_NAME}")):
+        release_tag = disposition_path.parent.name
+        if release_tag in records:
+            raise ReleaseMilestoneContextError(
+                f"Release {release_tag} cannot be both an unpublished attempt and a published qualification "
+                "disposition."
+            )
+        records[release_tag] = {
+            "qualification_disposition": validate_failed_post_publication_qualification_record(
+                repo_root,
+                release_tag,
+            )
+        }
 
     qualifications: list[tuple[tuple[int, ...], Path, Mapping[str, Any]]] = []
     qualification_root = repo_root / "docs" / "qualification"
@@ -1795,6 +2186,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     source.add_argument("--base-sha")
     source.add_argument("--cancelled-attempt-tag")
     source.add_argument("--draft-deletion-tag")
+    source.add_argument("--failed-post-publication-tag")
     parser.add_argument("--head-sha")
     parser.add_argument("--head-branch")
     parser.add_argument("--base-repo")
@@ -1822,6 +2214,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "build_version": _string(attempt_record.get("build_version"), "cancelled release build version"),
                 "release_tag": args.draft_deletion_tag,
                 "status": "validated_draft_deletion",
+            }
+            if args.github_output is not None:
+                _write_github_output(args.github_output, outputs)
+            print(json.dumps(outputs, sort_keys=True))
+            return 0
+        if args.failed_post_publication_tag is not None:
+            record = validate_failed_post_publication_qualification_record(
+                args.repo_root.resolve(),
+                args.failed_post_publication_tag,
+            )
+            release = _mapping(record.get("release"), "failed post-publication release")
+            qualification = _mapping(record.get("failed_qualification"), "failed post-publication qualification")
+            outputs = {
+                "build_version": _string(release.get("build_version"), "failed post-publication build version"),
+                "qualification_run_id": str(
+                    _positive_integer(
+                        qualification.get("run_id"),
+                        "failed post-publication qualification run ID",
+                    )
+                ),
+                "release_tag": args.failed_post_publication_tag,
+                "status": "validated_failed_post_publication_qualification",
             }
             if args.github_output is not None:
                 _write_github_output(args.github_output, outputs)

@@ -1,0 +1,108 @@
+{
+  "assets": [
+    {
+      "asset_id": 523818423,
+      "kind": "appcast",
+      "name": "appcast.xml",
+      "sha256": "aace6fba81fafd168e6b223fb75d6d670024f02d6da27bea306450a4404e8b68",
+      "size_bytes": 83171
+    },
+    {
+      "asset_id": 523816825,
+      "kind": "checksum",
+      "name": "SHA256SUMS",
+      "sha256": "04dbd1edddcb43dbaab1d95daa43a9ea317f72f4a7f128cd30ae150f11438ff1",
+      "size_bytes": 108
+    },
+    {
+      "asset_id": 523816722,
+      "kind": "dmg",
+      "name": "3D-Blu-ray-to-Vision-Pro-0.3.2-beta.5.dmg",
+      "sha256": "a1959ce18a4b15a5cbf438759ab35d86dfe8e02f301324f8cdff90fd91d7c1c8",
+      "size_bytes": 166966129
+    },
+    {
+      "asset_id": 523819236,
+      "kind": "receipt",
+      "name": "release-receipt.json",
+      "sha256": "81e1568ff93c0fad946dff59c5d4e00c97008162db93218cc4f58dcd2ad8af6c",
+      "size_bytes": 2297
+    }
+  ],
+  "disposition_sha256": "a139a72172c9f40f655e4ccbc3416e400317058f26486881e3e0043963eb87b6",
+  "disposition_type": "failed_post_publication_qualification",
+  "failed_qualification": {
+    "actor": "cbusillo",
+    "build_version": "167",
+    "completed_at": "2026-08-21T14:17:05Z",
+    "conclusion": "failure",
+    "expected": "0.3.2b5",
+    "failed_job": "Collect exact post-publication qualification receipts",
+    "failed_job_completed_at": "2026-08-21T14:17:05Z",
+    "failed_job_id": 96798878506,
+    "failed_job_started_at": "2026-08-21T14:15:32Z",
+    "failed_step": "Run exact clean-machine qualification",
+    "failed_step_completed_at": "2026-08-21T14:16:55Z",
+    "failed_step_number": 10,
+    "failed_step_started_at": "2026-08-21T14:16:20Z",
+    "failure_code": "packaged_worker_version_mismatch",
+    "failure_subject": "worker_version",
+    "manifest_sha256": "ab55cf416035c8809bd48d005289b0fc47e514e471709bfa5b1acaba0afcfe2d",
+    "observed": "0.0.0",
+    "release_tag": "v0.3.2-beta.5",
+    "run_attempt": 1,
+    "run_id": 32491156253,
+    "source_sha": "f6ce414db07030e2ad2c081a9d4287639a113446",
+    "started_at": "2026-08-21T14:15:27Z",
+    "workflow_name": "Milestone v0.3.2-beta.5 ab55cf416035c8809bd48d005289b0fc47e514e471709bfa5b1acaba0afcfe2d",
+    "workflow_path": ".github/workflows/milestone-qualification.yml"
+  },
+  "preservation": {
+    "asset_replacement_prohibited": true,
+    "qualification_passed": false,
+    "rebuild_same_identity_prohibited": true,
+    "release_must_remain_published": true,
+    "release_mutation_prohibited": true,
+    "retag_prohibited": true
+  },
+  "receipt": {
+    "file_sha256": "81e1568ff93c0fad946dff59c5d4e00c97008162db93218cc4f58dcd2ad8af6c",
+    "path": "docs/release-evidence/v0.3.2-beta.5/release-receipt.json",
+    "payload_sha256": "9ab74f3ef369ed64de0f5e25297f025c88aeeeb811bb4c73525e3a25f5db1b89"
+  },
+  "recorded_at": "2026-08-23T02:50:43Z",
+  "recorded_by": "cbusillo",
+  "release": {
+    "build_version": "167",
+    "immutable": true,
+    "package_version": "0.3.2b5",
+    "prerelease": true,
+    "public_version": "0.3.2-beta.5",
+    "published_at": "2026-08-21T14:10:21Z",
+    "release_id": 374445536,
+    "release_tag": "v0.3.2-beta.5",
+    "source_sha": "f6ce414db07030e2ad2c081a9d4287639a113446"
+  },
+  "release_workflow": {
+    "actor": "shiny-code-bot",
+    "completed_at": "2026-08-21T14:11:03Z",
+    "conclusion": "success",
+    "engine_path": ".github/workflows/release-engine.yml",
+    "name": "Prerelease",
+    "path": ".github/workflows/prerelease.yml",
+    "run_attempt": 1,
+    "run_id": 32488665999,
+    "started_at": "2026-08-21T13:47:16Z"
+  },
+  "remediation": {
+    "author": "shiny-code-bot",
+    "merge_commit_sha": "b83f9b7864db11f3f585bf3017e31eeb844932ef",
+    "merged_at": "2026-08-21T14:47:11Z",
+    "merged_by": "cbusillo",
+    "pull_request_number": 623,
+    "released_artifact_unchanged": true,
+    "successor_only": true
+  },
+  "schema_version": 1,
+  "status": "recorded_failed_post_publication_qualification"
+}

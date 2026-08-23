@@ -105,6 +105,28 @@ receipt makes the real prior artifact available to `qualification-base` and the
 next exact-artifact route; it does not convert a failed milestone result into
 accepted evidence.
 
+When exact post-publication qualification fails after a release is already
+immutable, record the terminal result in
+`docs/release-evidence/<tag>/failed-post-publication-qualification-v1.json`.
+The canonical, self-digested record binds the checked receipt and every release
+asset, the successful publication workflow, the exact failed qualification
+run/job/step and observation, successor-only remediation, actors, timestamps,
+and the prohibition on rebuilding, retagging, replacing, unpublishing, or
+claiming qualification success. Validate a tracked record directly with:
+
+```sh
+uv run python -m scripts.release_milestone_context \
+  --failed-post-publication-tag <published-tag>
+```
+
+This disposition preserves failed qualification truth. It is not an accepted
+qualification receipt, does not make the failed evidence PR mergeable, and does
+not authorize successor preparation or release operations.
+Workflow and publication timestamps are revalidated from GitHub before record
+creation, then locked by the exact run/release identifiers, canonical file, and
+disposition self-digest; the release receipt itself does not carry those
+timestamps.
+
 Carry-forward is allowed only when an accepted named receipt exists and the
 diff from that receipt's source SHA contains no path covered by the case's
 direct invalidation patterns or referenced contracts. Stable continues to
