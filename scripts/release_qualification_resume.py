@@ -906,6 +906,7 @@ def _dispatch(
     retry_of_run_id: int | None,
     replace_prepared_checkpoint_sha256: str | None,
     replace_observed_checkpoint_sha256: str | None,
+    replace_observed_run_conclusion: str | None,
     status_payload: Mapping[str, Any],
     poll_attempts: int,
     poll_seconds: float,
@@ -920,6 +921,7 @@ def _dispatch(
             retry_of_run_id=retry_of_run_id,
             replace_prepared_checkpoint_sha256=replace_prepared_checkpoint_sha256,
             replace_observed_checkpoint_sha256=replace_observed_checkpoint_sha256,
+            replace_observed_run_conclusion=replace_observed_run_conclusion,
             status_payload=status_payload,
             poll_attempts=poll_attempts,
             poll_seconds=poll_seconds,
@@ -936,6 +938,7 @@ def _dispatch_locked(
     retry_of_run_id: int | None,
     replace_prepared_checkpoint_sha256: str | None,
     replace_observed_checkpoint_sha256: str | None,
+    replace_observed_run_conclusion: str | None,
     status_payload: Mapping[str, Any],
     poll_attempts: int,
     poll_seconds: float,
@@ -945,6 +948,12 @@ def _dispatch_locked(
     _revalidate_remote_identity(client, identity)
     if replace_prepared_checkpoint_sha256 is not None and replace_observed_checkpoint_sha256 is not None:
         raise QualificationResumeSafetyError("Dispatch cannot replace prepared and observed checkpoints together.")
+    if (replace_observed_checkpoint_sha256 is None) != (replace_observed_run_conclusion is None):
+        raise QualificationResumeSafetyError(
+            "Observed checkpoint replacement requires its exact terminal run conclusion."
+        )
+    if replace_observed_run_conclusion not in {None, "failure", "success"}:
+        raise QualificationResumeSafetyError("Observed checkpoint replacement conclusion is unsupported.")
     existing_checkpoint = _load_checkpoint(checkpoint_path)
     if existing_checkpoint is not None:
         existing_identity = _identity_from_checkpoint(existing_checkpoint)
@@ -972,7 +981,7 @@ def _dispatch_locked(
             if (
                 previous_run["run_attempt"] != existing_run_attempt
                 or previous_run["status"] != TERMINAL_RUN_STATUS
-                or previous_run["conclusion"] != "failure"
+                or previous_run["conclusion"] != replace_observed_run_conclusion
             ):
                 raise QualificationResumeSafetyError(
                     "Observed checkpoint rebind run changed before the replacement dispatch."
@@ -1238,14 +1247,18 @@ def resume_qualification(
             )
             if previous_run["run_attempt"] != observed_run_attempt:
                 raise QualificationResumeSafetyError(
-                    "Qualification checkpoint rebind run attempt differs from the observed failed run."
+                    "Qualification checkpoint rebind run attempt differs from the observed terminal run."
                 )
-            if previous_run["status"] != TERMINAL_RUN_STATUS or previous_run["conclusion"] != "failure":
+            previous_conclusion = previous_run["conclusion"]
+            if previous_run["status"] != TERMINAL_RUN_STATUS or previous_conclusion not in {"failure", "success"}:
                 raise QualificationResumeSafetyError(
-                    "Qualification checkpoint rebind requires an exact terminal failed run."
+                    "Qualification checkpoint rebind requires an exact terminal failed or successful run."
                 )
+            refreshing_success = previous_conclusion == "success"
             mutation = {
-                "operation": "checkpoint_rebind_dispatch",
+                "operation": (
+                    "completed_checkpoint_refresh_dispatch" if refreshing_success else "checkpoint_rebind_dispatch"
+                ),
                 "endpoint": _workflow_dispatch_endpoint(),
                 "ref": MAIN_BRANCH,
                 "candidate_tag": identity.release_tag,
@@ -1255,7 +1268,7 @@ def resume_qualification(
             }
             if retry_run_id is None or retry_checkpoint_sha256 is None:
                 return _result(
-                    "checkpoint_rebind_required",
+                    "completed_checkpoint_refresh_required" if refreshing_success else "checkpoint_rebind_required",
                     EXIT_OPERATOR_REQUIRED,
                     status_payload,
                     identity=identity,
@@ -1270,7 +1283,7 @@ def resume_qualification(
                 )
             if retry_run_id != observed_run_id:
                 raise QualificationResumeSafetyError(
-                    "Checkpoint rebind retry run ID does not match the observed failed run."
+                    "Checkpoint rebind retry run ID does not match the observed terminal run."
                 )
             if retry_checkpoint_sha256 != checkpoint_digest:
                 raise QualificationResumeSafetyError(
@@ -1284,6 +1297,10 @@ def resume_qualification(
                 raise QualificationResumeSafetyError(
                     "Checkpoint rebind requires exact expected main and manifest authorization."
                 )
+            if refreshing_success and matches:
+                raise QualificationResumeSafetyError(
+                    "An exact refreshed qualification run already exists during completed checkpoint refresh."
+                )
             if active:
                 raise QualificationResumeSafetyError(
                     "An exact refreshed qualification run is already active during checkpoint rebind."
@@ -1296,6 +1313,7 @@ def resume_qualification(
                 retry_of_run_id=observed_run_id,
                 replace_prepared_checkpoint_sha256=None,
                 replace_observed_checkpoint_sha256=checkpoint_digest,
+                replace_observed_run_conclusion=cast(str, previous_conclusion),
                 status_payload=status_payload,
                 poll_attempts=poll_attempts,
                 poll_seconds=poll_seconds,
@@ -1354,6 +1372,7 @@ def resume_qualification(
                         retry_of_run_id=None,
                         replace_prepared_checkpoint_sha256=checkpoint_digest,
                         replace_observed_checkpoint_sha256=None,
+                        replace_observed_run_conclusion=None,
                         status_payload=status_payload,
                         poll_attempts=poll_attempts,
                         poll_seconds=poll_seconds,
@@ -1440,6 +1459,7 @@ def resume_qualification(
             retry_of_run_id=None,
             replace_prepared_checkpoint_sha256=None,
             replace_observed_checkpoint_sha256=None,
+            replace_observed_run_conclusion=None,
             status_payload=status_payload,
             poll_attempts=poll_attempts,
             poll_seconds=poll_seconds,
@@ -1585,6 +1605,7 @@ def resume_qualification(
         retry_of_run_id=run_id,
         replace_prepared_checkpoint_sha256=None,
         replace_observed_checkpoint_sha256=None,
+        replace_observed_run_conclusion=None,
         status_payload=status_payload,
         poll_attempts=poll_attempts,
         poll_seconds=poll_seconds,
