@@ -13,7 +13,7 @@
   "devDependencies": {
     "@types/node": "26.2.0",
     "typescript": "7.0.2",
-    "vitest": "4.1.10",
-    "wrangler": "4.123.0"
+    "vitest": "4.1.11",
+    "wrangler": "4.125.0"
   }
 }
