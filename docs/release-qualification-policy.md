@@ -513,6 +513,11 @@ The plan writes the two Tier 3 receipts, indexes the existing exact signed UI
 receipt for `profile-save-action-accessibility`, and derives the live
 `sparkle-update-route` record from the validated update, profile, release,
 publication, manifest, and artifact bindings.
+Fixed tag-case Tier 3 paths are first-write destinations. If a later exact run
+produces different valid bytes, reconciliation preserves the accepted fixed
+file and index record, then writes and indexes the new receipt at a deterministic
+run-scoped path only when the fixed file has an exact accepted immutable index
+binding.
 `--observe-only` stops at `artifact_available` without downloading.
 `reconciliation_planned` requires an explicit rerun with
 `--apply-plan-sha256 <plan-sha256>`;

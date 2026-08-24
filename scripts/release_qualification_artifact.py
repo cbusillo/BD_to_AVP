@@ -518,6 +518,86 @@ def _plan_file_operation(repo_root: Path, path: str, content: bytes) -> dict[str
     }
 
 
+def _load_evidence_index(repo_root: Path) -> tuple[dict[str, Any], list[dict[str, object]]]:
+    index_content = _checked_file(repo_root, EVIDENCE_INDEX_PATH)
+    if index_content is None:
+        raise QualificationArtifactSafetyError("Checked release qualification evidence index is missing.")
+    index = dict(_load_json_bytes(index_content, "release qualification evidence index"))
+    if index.get("schema_version") != 1:
+        raise QualificationArtifactSafetyError("Release qualification evidence index schema version changed.")
+    receipts = [
+        dict(_mapping(item, "release qualification evidence record"))
+        for item in _sequence(index.get("receipts"), "release qualification evidence records")
+    ]
+    receipt_ids: set[str] = set()
+    for record in receipts:
+        receipt_id = _string(record.get("receipt_id"), "release qualification evidence receipt ID")
+        if receipt_id in receipt_ids:
+            raise QualificationArtifactSafetyError(
+                f"Release qualification evidence repeats immutable receipt ID {receipt_id!r}."
+            )
+        receipt_ids.add(receipt_id)
+    return index, receipts
+
+
+def _resolved_rollover_path(
+    repo_root: Path,
+    *,
+    identity: QualificationIdentity,
+    case_id: str,
+    fixed_path: str,
+    rollover_path: str,
+    content: bytes,
+    source: str,
+    existing_records: Sequence[Mapping[str, Any]],
+) -> str:
+    existing = _checked_file(repo_root, fixed_path)
+    if existing is None or existing == content:
+        return fixed_path
+    path_records = [record for record in existing_records if record.get("reference") == fixed_path]
+    existing_digest = hashlib.sha256(existing).hexdigest()
+    receipt_id_pattern = re.compile(rf"^{re.escape(identity.release_tag)}:{re.escape(case_id)}:[1-9][0-9]*$")
+    if len(path_records) != 1:
+        raise QualificationArtifactSafetyError(f"Checked qualification receipt {fixed_path!r} conflicts.")
+    backing = path_records[0]
+    receipt_id = backing.get("receipt_id")
+    if (
+        not isinstance(receipt_id, str)
+        or receipt_id_pattern.fullmatch(receipt_id) is None
+        or backing.get("case_id") != case_id
+        or backing.get("sha256") != existing_digest
+        or backing.get("source") != source
+        or backing.get("source_sha") != identity.candidate_sha
+        or backing.get("status") != "accepted"
+    ):
+        raise QualificationArtifactSafetyError(f"Checked qualification receipt {fixed_path!r} conflicts.")
+    return rollover_path
+
+
+def _receipt_destinations(
+    repo_root: Path,
+    *,
+    identity: QualificationIdentity,
+    run_id: int,
+    receipt_contents: Mapping[str, bytes],
+    existing_records: Sequence[Mapping[str, Any]],
+) -> dict[str, str]:
+    destinations: dict[str, str] = {}
+    for case_id in CASE_IDS:
+        fixed_path = f"docs/qualification/{identity.release_tag}-{case_id}-v1.json"
+        destinations[case_id] = _resolved_rollover_path(
+            repo_root,
+            identity=identity,
+            case_id=case_id,
+            fixed_path=fixed_path,
+            rollover_path=f"docs/qualification/{identity.release_tag}-{case_id}-run-{run_id}-v1.json",
+            content=receipt_contents[case_id],
+            source="tier3_automation_receipt",
+            existing_records=existing_records,
+        )
+    return destinations
+
+
 def _validated_release_receipt(
     repo_root: Path,
     *,
@@ -646,6 +726,7 @@ def _build_live_qualification(
     entries: Mapping[str, bytes],
     release_receipt: Mapping[str, Any],
     qualification_run: Mapping[str, Any],
+    clean_receipt_path: str,
     accepted_at: str,
 ) -> bytes:
     _validate_live_publication_record(
@@ -700,7 +781,6 @@ def _build_live_qualification(
         != profile_snapshot.get("profile_after_semantic_sha256")
     ):
         raise QualificationArtifactSafetyError("Profile snapshot does not prove preservation across the update.")
-    clean_receipt_path = f"docs/qualification/{identity.release_tag}-clean-machine-signed-update-v1.json"
     clean_receipt_content = entries["clean-machine-signed-update.json"]
     artifact_digest = _string(artifact.get("digest"), "Milestone Qualification artifact digest")
     if not artifact_digest.startswith("sha256:"):
@@ -777,11 +857,13 @@ def _append_index_record(
 
 
 def _plan_index_operations(
-    repo_root: Path,
     *,
+    index: Mapping[str, Any],
+    existing_receipts: Sequence[Mapping[str, Any]],
     identity: QualificationIdentity,
     run: Mapping[str, Any],
     receipt_contents: Mapping[str, bytes],
+    receipt_destinations: Mapping[str, str],
     signed_ui_path: str,
     signed_ui_content: bytes,
     signed_ui_receipt: Mapping[str, Any],
@@ -789,20 +871,12 @@ def _plan_index_operations(
     live_content: bytes,
     accepted_at: str,
 ) -> tuple[list[dict[str, object]], bytes]:
-    index_content = _checked_file(repo_root, EVIDENCE_INDEX_PATH)
-    if index_content is None:
-        raise QualificationArtifactSafetyError("Checked release qualification evidence index is missing.")
-    index = dict(_load_json_bytes(index_content, "release qualification evidence index"))
-    if index.get("schema_version") != 1:
-        raise QualificationArtifactSafetyError("Release qualification evidence index schema version changed.")
-    receipts = [
-        dict(_mapping(item, "release qualification evidence record"))
-        for item in _sequence(index.get("receipts"), "release qualification evidence records")
-    ]
+    updated_index = dict(index)
+    receipts = [dict(record) for record in existing_receipts]
     run_id = _integer(run.get("id"), "workflow run ID")
     operations: list[dict[str, object]] = []
     for case_id in CASE_IDS:
-        destination = f"docs/qualification/{identity.release_tag}-{case_id}-v1.json"
+        destination = receipt_destinations[case_id]
         content = receipt_contents[case_id]
         record: dict[str, object] = {
             "accepted_at": accepted_at,
@@ -816,16 +890,24 @@ def _plan_index_operations(
         }
         _append_index_record(receipts, operations, record)
     signed_ui_workflow = _mapping(signed_ui_receipt.get("workflow"), "signed UI receipt workflow")
+    profile_receipt_id = (
+        f"{identity.release_tag}:{PROFILE_CASE_ID}:"
+        f"{_integer(signed_ui_workflow.get('run_id'), 'signed UI workflow run ID')}"
+    )
+    existing_profile_records = [record for record in receipts if record.get("receipt_id") == profile_receipt_id]
+    profile_accepted_at = accepted_at
+    if existing_profile_records:
+        profile_accepted_at = _string(
+            existing_profile_records[0].get("accepted_at"),
+            "existing signed UI evidence accepted_at",
+        )
     _append_index_record(
         receipts,
         operations,
         {
-            "accepted_at": accepted_at,
+            "accepted_at": profile_accepted_at,
             "case_id": PROFILE_CASE_ID,
-            "receipt_id": (
-                f"{identity.release_tag}:{PROFILE_CASE_ID}:"
-                f"{_integer(signed_ui_workflow.get('run_id'), 'signed UI workflow run ID')}"
-            ),
+            "receipt_id": profile_receipt_id,
             "reference": signed_ui_path,
             "sha256": hashlib.sha256(signed_ui_content).hexdigest(),
             "source": "signed_artifact_receipt",
@@ -847,8 +929,8 @@ def _plan_index_operations(
             "status": "accepted",
         },
     )
-    index["receipts"] = receipts
-    return operations, _pretty_json_bytes(index)
+    updated_index["receipts"] = receipts
+    return operations, _pretty_json_bytes(updated_index)
 
 
 def plan_reconciliation_bundle(
@@ -908,7 +990,17 @@ def plan_reconciliation_bundle(
         release_receipt=release_receipt,
         policy_id=_string(receipts[CASE_IDS[0]].get("policy_id"), "qualification policy ID"),
     )
-    live_path = f"docs/qualification/{identity.release_tag}-live-qualification-v1.json"
+    run_id = _integer(run.get("id"), "workflow run ID")
+    receipt_contents = {case_id: entries[f"{case_id}.json"] for case_id in CASE_IDS}
+    index, existing_index_receipts = _load_evidence_index(repo_root)
+    receipt_destinations = _receipt_destinations(
+        repo_root,
+        identity=identity,
+        run_id=run_id,
+        receipt_contents=receipt_contents,
+        existing_records=existing_index_receipts,
+    )
+    fixed_live_path = f"docs/qualification/{identity.release_tag}-live-qualification-v1.json"
     live_content = _build_live_qualification(
         repo_root,
         identity=identity,
@@ -918,15 +1010,25 @@ def plan_reconciliation_bundle(
         entries=entries,
         release_receipt=release_receipt,
         qualification_run=qualification_run,
+        clean_receipt_path=receipt_destinations["clean-machine-signed-update"],
         accepted_at=accepted_at,
     )
+    live_path = _resolved_rollover_path(
+        repo_root,
+        identity=identity,
+        case_id=SPARKLE_CASE_ID,
+        fixed_path=fixed_live_path,
+        rollover_path=f"docs/qualification/{identity.release_tag}-live-qualification-run-{run_id}-v1.json",
+        content=live_content,
+        source="signed_artifact_receipt",
+        existing_records=existing_index_receipts,
+    )
     operations: list[dict[str, object]] = []
-    receipt_contents = {case_id: entries[f"{case_id}.json"] for case_id in CASE_IDS}
     for case_id in CASE_IDS:
         operations.append(
             _plan_file_operation(
                 repo_root,
-                f"docs/qualification/{identity.release_tag}-{case_id}-v1.json",
+                receipt_destinations[case_id],
                 receipt_contents[case_id],
             )
         )
@@ -947,10 +1049,12 @@ def plan_reconciliation_bundle(
         }
     )
     index_operations, index_content = _plan_index_operations(
-        repo_root,
+        index=index,
+        existing_receipts=existing_index_receipts,
         identity=identity,
         run=run,
         receipt_contents=receipt_contents,
+        receipt_destinations=receipt_destinations,
         signed_ui_path=signed_ui_path,
         signed_ui_content=signed_ui_content,
         signed_ui_receipt=signed_ui_receipt,
@@ -971,10 +1075,7 @@ def plan_reconciliation_bundle(
     if not artifact_digest.startswith("sha256:"):
         raise QualificationArtifactError("Milestone Qualification artifact digest is invalid.")
     materialized_files = {
-        **{
-            f"docs/qualification/{identity.release_tag}-{case_id}-v1.json": receipt_contents[case_id]
-            for case_id in CASE_IDS
-        },
+        **{receipt_destinations[case_id]: receipt_contents[case_id] for case_id in CASE_IDS},
         live_path: live_content,
         EVIDENCE_INDEX_PATH: index_content,
     }

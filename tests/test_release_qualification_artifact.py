@@ -6,7 +6,7 @@ import tempfile
 import unittest
 import zipfile
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from scripts.qualify_release_scope import _validate_live_publication_evidence
@@ -259,6 +259,51 @@ class ReleaseQualificationArtifactTests(unittest.TestCase):
                 archive.writestr(name, content)
         return output.getvalue()
 
+    def later_run(
+        self,
+        entries: dict[str, bytes],
+        *,
+        run_id: int,
+    ) -> tuple[dict[str, bytes], dict[str, object], dict[str, object], bytes]:
+        updated = dict(entries)
+        receipt_digests: dict[str, str] = {}
+        for case_id in ("clean-machine-signed-update", "installed-ui-accessibility"):
+            receipt = json.loads(updated[f"{case_id}.json"])
+            for field in ("started_at", "completed_at"):
+                timestamp = datetime.fromisoformat(receipt["timestamps"][field].replace("Z", "+00:00"))
+                receipt["timestamps"][field] = (timestamp + timedelta(days=1)).isoformat().replace("+00:00", "Z")
+            expires_on = datetime.fromisoformat(receipt["cadence"]["expires_on"])
+            receipt["cadence"]["expires_on"] = (expires_on + timedelta(days=1)).date().isoformat()
+            receipt["receipt_sha256"] = receipt_sha256(receipt)
+            updated[f"{case_id}.json"] = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode()
+            receipt_digests[case_id] = receipt["receipt_sha256"]
+        qualification_run = json.loads(updated["qualification-run.json"])
+        for summary in qualification_run["tier3_receipts"]:
+            summary["receipt_sha256"] = receipt_digests[summary["case_id"]]
+        updated["qualification-run.json"] = (json.dumps(qualification_run, indent=2) + "\n").encode()
+        archive = self.archive(updated)
+        run = {"id": run_id, "run_attempt": 1, "updated_at": "2026-08-10T19:05:28Z"}
+        artifact = {
+            "digest": "sha256:" + hashlib.sha256(archive).hexdigest(),
+            "id": ARTIFACT_ID + 1,
+            "name": f"milestone-qualification-{RELEASE_TAG}-1",
+            "run_id": run_id,
+            "state": "available",
+        }
+        return updated, run, artifact, archive
+
+    def commit_initial_reconciliation(
+        self,
+        root: Path,
+        bundle,
+    ) -> None:
+        for file in bundle.files:
+            path = root / file.path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(file.content)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "initial reconciliation"], cwd=root, check=True)
+
     def test_valid_archive_produces_deterministic_plan(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -434,6 +479,139 @@ class ReleaseQualificationArtifactTests(unittest.TestCase):
             ["present", "present", "present", "present", "identical", "identical", "identical", "identical"],
         )
 
+    def test_later_run_rolls_over_accepted_tier3_receipts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            identity, manifest, run, artifact, entries, archive = self.fixture(root)
+            initial = plan_reconciliation_bundle(
+                repo_root=root,
+                identity=identity,
+                run=run,
+                artifact=artifact,
+                manifest=manifest,
+                archive_bytes=archive,
+            )
+            self.commit_initial_reconciliation(root, initial)
+            later_entries, later_run, later_artifact, later_archive = self.later_run(
+                entries,
+                run_id=RUN_ID + 1,
+            )
+
+            rollover = plan_reconciliation_bundle(
+                repo_root=root,
+                identity=identity,
+                run=later_run,
+                artifact=later_artifact,
+                manifest=manifest,
+                archive_bytes=later_archive,
+            )
+
+        files = {file.path: file.content for file in rollover.files}
+        clean_path = f"docs/qualification/{RELEASE_TAG}-clean-machine-signed-update-run-{RUN_ID + 1}-v1.json"
+        ui_path = f"docs/qualification/{RELEASE_TAG}-installed-ui-accessibility-run-{RUN_ID + 1}-v1.json"
+        self.assertEqual(files[clean_path], later_entries["clean-machine-signed-update.json"])
+        self.assertEqual(files[ui_path], later_entries["installed-ui-accessibility.json"])
+        self.assertNotIn(f"docs/qualification/{RELEASE_TAG}-clean-machine-signed-update-v1.json", files)
+        live_path = f"docs/qualification/{RELEASE_TAG}-live-qualification-run-{RUN_ID + 1}-v1.json"
+        live = json.loads(files[live_path])
+        observations = live["cases"][0]["observations"]
+        self.assertEqual(observations["qualification_receipt_reference"], clean_path)
+        self.assertEqual(
+            observations["qualification_receipt_sha256"],
+            hashlib.sha256(later_entries["clean-machine-signed-update.json"]).hexdigest(),
+        )
+        index = json.loads(files["docs/qualification/release-evidence-v1.json"])
+        records = {item["receipt_id"]: item for item in index["receipts"]}
+        self.assertIn(f"{RELEASE_TAG}:clean-machine-signed-update:{RUN_ID}", records)
+        self.assertIn(f"{RELEASE_TAG}:sparkle-update-route:{RUN_ID}", records)
+        self.assertEqual(
+            records[f"{RELEASE_TAG}:clean-machine-signed-update:{RUN_ID + 1}"]["reference"],
+            clean_path,
+        )
+        self.assertEqual(records[f"{RELEASE_TAG}:sparkle-update-route:{RUN_ID + 1}"]["reference"], live_path)
+
+    def test_later_run_rollover_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            identity, manifest, run, artifact, entries, archive = self.fixture(root)
+            initial = plan_reconciliation_bundle(
+                repo_root=root,
+                identity=identity,
+                run=run,
+                artifact=artifact,
+                manifest=manifest,
+                archive_bytes=archive,
+            )
+            self.commit_initial_reconciliation(root, initial)
+            _later_entries, later_run, later_artifact, later_archive = self.later_run(
+                entries,
+                run_id=RUN_ID + 1,
+            )
+            rollover = plan_reconciliation_bundle(
+                repo_root=root,
+                identity=identity,
+                run=later_run,
+                artifact=later_artifact,
+                manifest=manifest,
+                archive_bytes=later_archive,
+            )
+            for file in rollover.files:
+                path = root / file.path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(file.content)
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "rollover receipts"], cwd=root, check=True)
+
+            replay = plan_reconciliation(
+                repo_root=root,
+                identity=identity,
+                run=later_run,
+                artifact=later_artifact,
+                manifest=manifest,
+                archive_bytes=later_archive,
+            )
+
+        self.assertFalse(replay["requires_changes"])
+        self.assertTrue(all(operation["state"] in {"identical", "present"} for operation in replay["operations"]))
+
+    def test_later_run_rollover_rejects_ambiguous_fixed_path_backing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            identity, manifest, run, artifact, entries, archive = self.fixture(root)
+            initial = plan_reconciliation_bundle(
+                repo_root=root,
+                identity=identity,
+                run=run,
+                artifact=artifact,
+                manifest=manifest,
+                archive_bytes=archive,
+            )
+            self.commit_initial_reconciliation(root, initial)
+            index_path = root / "docs/qualification/release-evidence-v1.json"
+            index = json.loads(index_path.read_bytes())
+            fixed_path = f"docs/qualification/{RELEASE_TAG}-clean-machine-signed-update-v1.json"
+            backing = next(item for item in index["receipts"] if item["reference"] == fixed_path)
+            duplicate = dict(backing)
+            duplicate["receipt_id"] = f"{RELEASE_TAG}:clean-machine-signed-update:{RUN_ID + 99}"
+            index["receipts"].append(duplicate)
+            index_path.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "ambiguous fixed receipt"], cwd=root, check=True)
+            _later_entries, later_run, later_artifact, later_archive = self.later_run(
+                entries,
+                run_id=RUN_ID + 1,
+            )
+
+            with self.assertRaisesRegex(QualificationArtifactSafetyError, "conflicts"):
+                plan_reconciliation(
+                    repo_root=root,
+                    identity=identity,
+                    run=later_run,
+                    artifact=later_artifact,
+                    manifest=manifest,
+                    archive_bytes=later_archive,
+                )
+
     def test_signed_ui_identity_mismatch_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -537,6 +715,38 @@ class ReleaseQualificationArtifactTests(unittest.TestCase):
             index_path.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             subprocess.run(["git", "add", "."], cwd=root, check=True)
             subprocess.run(["git", "commit", "-qm", "conflicting profile record"], cwd=root, check=True)
+
+            with self.assertRaisesRegex(QualificationArtifactSafetyError, "immutable record"):
+                plan_reconciliation(
+                    repo_root=root,
+                    identity=identity,
+                    run=run,
+                    artifact=artifact,
+                    manifest=manifest,
+                    archive_bytes=archive,
+                )
+
+    def test_conflicting_sparkle_index_record_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            identity, manifest, run, artifact, _entries, archive = self.fixture(root)
+            index_path = root / "docs/qualification/release-evidence-v1.json"
+            index = json.loads(index_path.read_bytes())
+            index["receipts"].append(
+                {
+                    "accepted_at": "2026-08-09T19:05:28Z",
+                    "case_id": "sparkle-update-route",
+                    "receipt_id": f"{RELEASE_TAG}:sparkle-update-route:{RUN_ID}",
+                    "reference": f"docs/qualification/{RELEASE_TAG}-live-qualification-v1.json",
+                    "sha256": "0" * 64,
+                    "source": "signed_artifact_receipt",
+                    "source_sha": identity.candidate_sha,
+                    "status": "accepted",
+                }
+            )
+            index_path.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "conflicting sparkle record"], cwd=root, check=True)
 
             with self.assertRaisesRegex(QualificationArtifactSafetyError, "immutable record"):
                 plan_reconciliation(
