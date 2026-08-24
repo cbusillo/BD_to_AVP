@@ -548,6 +548,12 @@ requires the new main to descend from the old runner, rejects changes to every
 decision-bearing manifest input and immutable release binding, rescans for a
 competing refreshed run at the mutation boundary, and atomically replaces only
 that observed checkpoint before dispatching the new runner identity.
+The same fail-closed replacement is available after an exact successful run
+when a later protected-main reconciliation enhancement requires one fresh run
+bound to the refreshed runner. It uses the same exact run ID, checkpoint digest,
+main digest, manifest digest, ancestry, immutable-binding, projection, and
+duplicate-run checks; it never reuses the earlier artifact under the new
+manifest identity.
 
 The initial evidence PR is expected to remain unmergeable while blocking
 live-artifact or automated Tier 3 receipts are absent. Collectors add validated
