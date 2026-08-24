@@ -509,6 +509,10 @@ After successful job and artifact observation, `resume` automatically
 revalidates the exact artifact metadata, downloads the byte-bounded ZIP, rejects
 unsafe or unexpected members, validates its receipts against the runner-pinned
 policy and checked manifest, and emits a deterministic reconciliation plan.
+The plan writes the two Tier 3 receipts, indexes the existing exact signed UI
+receipt for `profile-save-action-accessibility`, and derives the live
+`sparkle-update-route` record from the validated update, profile, release,
+publication, manifest, and artifact bindings.
 `--observe-only` stops at `artifact_available` without downloading.
 `reconciliation_planned` requires an explicit rerun with
 `--apply-plan-sha256 <plan-sha256>`;

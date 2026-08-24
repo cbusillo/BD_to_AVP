@@ -19,7 +19,14 @@ from scripts.qualify_release_scope import (
     git_checked_reference_content,
     validate_policy,
 )
-from scripts.release_evidence import ReleaseEvidenceError, _merge_unique_record
+from scripts.release_evidence import ReleaseEvidenceError, _merge_unique_record, effective_successful_workflow_run_id
+from scripts.release_receipt import ReleaseReceiptError, validate_receipt as validate_release_receipt
+from scripts.signed_artifact_receipt import (
+    PROFILE_CASE_ID,
+    SignedArtifactReceiptError,
+    release_expectation_from_receipt,
+    validate_receipt as validate_signed_ui_receipt,
+)
 from scripts.tier3_receipt import Tier3ReceiptError, load_validated_receipt_bytes
 
 
@@ -37,6 +44,8 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ARCHIVE_PATH_PATTERN = re.compile(r"^[a-z0-9][a-z0-9./-]*$")
 CASE_IDS = ("clean-machine-signed-update", "installed-ui-accessibility")
+SPARKLE_CASE_ID = "sparkle-update-route"
+SPARKLE_ROUTES = {"alpha", "beta", "rc", "stable"}
 TOP_LEVEL_FILES = frozenset(
     {
         "clean-machine-signed-update.json",
@@ -509,12 +518,275 @@ def _plan_file_operation(repo_root: Path, path: str, content: bytes) -> dict[str
     }
 
 
+def _validated_release_receipt(
+    repo_root: Path,
+    *,
+    identity: QualificationIdentity,
+    manifest: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    manifest_receipt = _mapping(manifest.get("release_receipt"), "manifest release receipt")
+    expected_path = f"docs/release-evidence/{identity.release_tag}/release-receipt.json"
+    receipt_path = _string(manifest_receipt.get("path"), "manifest release receipt path")
+    if receipt_path != expected_path:
+        raise QualificationArtifactSafetyError("Manifest release receipt path conflicts with the candidate tag.")
+    content = _checked_file(repo_root, receipt_path)
+    if content is None:
+        raise QualificationArtifactSafetyError("Checked release receipt is missing.")
+    digest = hashlib.sha256(content).hexdigest()
+    if digest != identity.release_receipt_file_sha256 or digest != manifest_receipt.get("file_sha256"):
+        raise QualificationArtifactSafetyError("Checked release receipt file digest conflicts.")
+    receipt = _load_json_bytes(content, "checked release receipt")
+    try:
+        validate_release_receipt(receipt)
+    except ReleaseReceiptError as error:
+        raise QualificationArtifactSafetyError(f"Checked release receipt is invalid: {error}") from error
+    release = _mapping(receipt.get("release"), "checked release receipt release")
+    manifest_release = _mapping(manifest.get("release"), "manifest release")
+    if (
+        receipt.get("source_sha") != identity.candidate_sha
+        or release.get("id") != manifest_release.get("id")
+        or release.get("tag") != identity.release_tag
+        or receipt.get("receipt_sha256") != manifest_receipt.get("receipt_sha256")
+    ):
+        raise QualificationArtifactSafetyError("Checked release receipt identity conflicts.")
+    return receipt
+
+
+def _validated_signed_ui_receipt(
+    content: bytes,
+    *,
+    identity: QualificationIdentity,
+    manifest: Mapping[str, Any],
+    release_receipt: Mapping[str, Any],
+    policy_id: str,
+) -> Mapping[str, Any]:
+    if content != _pretty_json_bytes(_load_json_bytes(content, "signed UI receipt")):
+        raise QualificationArtifactSafetyError("Qualification artifact signed UI receipt is not canonical JSON.")
+    receipt = _load_json_bytes(content, "signed UI receipt")
+    manifest_workflow = _mapping(manifest.get("workflow"), "manifest workflow")
+    manifest_release_receipt = _mapping(manifest.get("release_receipt"), "manifest release receipt")
+    try:
+        expectation = release_expectation_from_receipt(
+            release_receipt,
+            policy_id=policy_id,
+            case_id=PROFILE_CASE_ID,
+            workflow_run_id=_integer(manifest_workflow.get("run_id"), "manifest workflow run ID"),
+            workflow_run_attempt=_integer(manifest_workflow.get("run_attempt"), "manifest workflow run attempt"),
+            release_receipt_asset_id=_integer(
+                manifest_release_receipt.get("asset_id"),
+                "manifest release receipt asset ID",
+            ),
+            release_receipt_file_sha256=identity.release_receipt_file_sha256,
+        )
+        validate_signed_ui_receipt(receipt, expectation)
+    except SignedArtifactReceiptError as error:
+        raise QualificationArtifactSafetyError(
+            f"Qualification artifact signed UI receipt is invalid: {error}"
+        ) from error
+    return receipt
+
+
+def _single_release_artifact(release_receipt: Mapping[str, Any], kind: str) -> Mapping[str, Any]:
+    artifacts = [
+        _mapping(item, "release receipt artifact")
+        for item in _sequence(release_receipt.get("artifacts"), "release receipt artifacts")
+    ]
+    matches = [artifact for artifact in artifacts if artifact.get("kind") == kind]
+    if len(matches) != 1:
+        raise QualificationArtifactSafetyError(f"Checked release receipt requires exactly one {kind} artifact.")
+    return matches[0]
+
+
+def _validate_live_publication_record(
+    repo_root: Path,
+    *,
+    identity: QualificationIdentity,
+    release_receipt: Mapping[str, Any],
+    accepted_at: str,
+) -> None:
+    publication_path = f"docs/release-evidence/{identity.release_tag}/publication-record.json"
+    content = _checked_file(repo_root, publication_path)
+    if content is None:
+        raise QualificationArtifactSafetyError("Checked live-publication record is missing.")
+    publication = _load_json_bytes(content, "checked live-publication record")
+    release = _mapping(release_receipt.get("release"), "release receipt release")
+    workflow = _mapping(release_receipt.get("workflow"), "release receipt workflow")
+    expected = {
+        "schema_version": 1,
+        "release_tag": identity.release_tag,
+        "release_id": release["id"],
+        "source_sha": identity.candidate_sha,
+        "workflow_run_id": workflow["run_id"],
+        "receipt_file_sha256": identity.release_receipt_file_sha256,
+    }
+    if any(publication.get(field) != value for field, value in expected.items()):
+        raise QualificationArtifactSafetyError("Checked live-publication record identity conflicts.")
+    if effective_successful_workflow_run_id(publication) is None:
+        raise QualificationArtifactSafetyError("Checked live-publication record does not prove a successful release.")
+    appcast = _single_release_artifact(release_receipt, "appcast")
+    live_pages = _mapping(publication.get("live_pages"), "checked live-publication live_pages")
+    if (
+        live_pages.get("state") != "verified"
+        or live_pages.get("sha256") != appcast.get("sha256")
+        or live_pages.get("url") != "https://cbusillo.github.io/BD_to_AVP/appcast.xml"
+    ):
+        raise QualificationArtifactSafetyError("Checked live-publication record does not match the live appcast.")
+    published_at = _parse_timestamp(publication.get("published_at"), "publication published_at")
+    if _parse_timestamp(accepted_at, "qualification accepted_at") < published_at:
+        raise QualificationArtifactSafetyError("Milestone qualification completed before live publication.")
+
+
+def _build_live_qualification(
+    repo_root: Path,
+    *,
+    identity: QualificationIdentity,
+    run: Mapping[str, Any],
+    artifact: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    entries: Mapping[str, bytes],
+    release_receipt: Mapping[str, Any],
+    qualification_run: Mapping[str, Any],
+    accepted_at: str,
+) -> bytes:
+    _validate_live_publication_record(
+        repo_root,
+        identity=identity,
+        release_receipt=release_receipt,
+        accepted_at=accepted_at,
+    )
+    route = _string(qualification_run.get("route"), "qualification Sparkle route")
+    if route not in SPARKLE_ROUTES:
+        raise QualificationArtifactSafetyError("Qualification artifact Sparkle route is unsupported.")
+    sparkle_update = _load_json_bytes(
+        entries[EVIDENCE_PREFIX + EVIDENCE_FILENAMES["sparkle-update"]],
+        "Sparkle update evidence",
+    )
+    profile_snapshot = _load_json_bytes(
+        entries[EVIDENCE_PREFIX + EVIDENCE_FILENAMES["profile-snapshot"]],
+        "profile snapshot evidence",
+    )
+    release = _mapping(release_receipt.get("release"), "release receipt release")
+    workflow = _mapping(release_receipt.get("workflow"), "release receipt workflow")
+    versions = _mapping(release_receipt.get("versions"), "release receipt versions")
+    appcast = _single_release_artifact(release_receipt, "appcast")
+    dmg = _single_release_artifact(release_receipt, "dmg")
+    signed_app_tree = _sha256(release_receipt.get("signed_app_tree_sha256"), "signed app tree digest")
+    sparkle_candidate = _mapping(sparkle_update.get("candidate"), "Sparkle update candidate")
+    if (
+        sparkle_update.get("status") != "passed"
+        or sparkle_update.get("outcome") != "install-and-relaunch"
+        or sparkle_update.get("button") != "Install and Relaunch"
+        or sparkle_update.get("route") != route
+        or sparkle_update.get("feed_sha256") != appcast.get("sha256")
+        or sparkle_candidate.get("build_version") != versions.get("build")
+        or sparkle_candidate.get("package_version") != versions.get("package")
+        or sparkle_candidate.get("signed_app_tree_sha256") != signed_app_tree
+    ):
+        raise QualificationArtifactSafetyError("Sparkle update evidence does not match the published candidate.")
+    required_profile_flags = (
+        "profile_encoding_options_preserved",
+        "profile_identity_preserved",
+        "profile_migration_matched",
+        "profile_safe_pipeline_defaults_preserved",
+        "route_preserved",
+        "sentinel_preserved",
+        "unsafe_legacy_run_defaults_removed",
+    )
+    if (
+        any(profile_snapshot.get(flag) is not True for flag in required_profile_flags)
+        or profile_snapshot.get("route_after") != route
+        or profile_snapshot.get("profile_before_sha256") != profile_snapshot.get("profile_after_sha256")
+        or profile_snapshot.get("profile_before_semantic_sha256")
+        != profile_snapshot.get("profile_after_semantic_sha256")
+    ):
+        raise QualificationArtifactSafetyError("Profile snapshot does not prove preservation across the update.")
+    clean_receipt_path = f"docs/qualification/{identity.release_tag}-clean-machine-signed-update-v1.json"
+    clean_receipt_content = entries["clean-machine-signed-update.json"]
+    artifact_digest = _string(artifact.get("digest"), "Milestone Qualification artifact digest")
+    if not artifact_digest.startswith("sha256:"):
+        raise QualificationArtifactError("Milestone Qualification artifact digest is invalid.")
+    qualification_channel = route if release.get("prerelease") is True else "stable"
+    document: dict[str, Any] = {
+        "candidate": {
+            "appcast_sha256": _sha256(appcast.get("sha256"), "appcast digest"),
+            "build": _string(versions.get("build"), "candidate build"),
+            "dmg_sha256": _sha256(dmg.get("sha256"), "DMG digest"),
+            "package_version": _string(versions.get("package"), "candidate package version"),
+            "public_version": _string(versions.get("public"), "candidate public version"),
+            "release_id": _integer(release.get("id"), "release ID"),
+            "release_run_id": _integer(workflow.get("run_id"), "release workflow run ID"),
+            "release_tag": identity.release_tag,
+            "signed_app_tree_sha256": signed_app_tree,
+            "source_sha": identity.candidate_sha,
+        },
+        "cases": [
+            {
+                "id": SPARKLE_CASE_ID,
+                "observations": {
+                    f"candidate_offered_on_{route}_route": True,
+                    "install_action": "Install and Relaunch",
+                    "post_update_build": _string(versions.get("build"), "candidate build"),
+                    "post_update_package_version": _string(
+                        versions.get("package"),
+                        "candidate package version",
+                    ),
+                    "post_update_signed_app_tree_sha256": signed_app_tree,
+                    "prior_release_tag": _string(qualification_run.get("prior_tag"), "prior release tag"),
+                    "profile_preserved": True,
+                    "qualification_artifact_digest": artifact_digest,
+                    "qualification_artifact_id": _integer(
+                        artifact.get("id"),
+                        "Milestone Qualification artifact ID",
+                    ),
+                    "qualification_evidence_sha": identity.evidence_sha,
+                    "qualification_manifest_sha256": identity.manifest_sha256,
+                    "qualification_receipt_reference": clean_receipt_path,
+                    "qualification_receipt_sha256": hashlib.sha256(clean_receipt_content).hexdigest(),
+                    "qualification_workflow_run_id": _integer(run.get("id"), "workflow run ID"),
+                    "route": route,
+                },
+                "result": "passed",
+            }
+        ],
+        "qualification_id": f"{qualification_channel}-live-qualification-v1",
+        "qualified_at": accepted_at,
+        "schema_version": 1,
+    }
+    return _pretty_json_bytes(document)
+
+
+def _append_index_record(
+    receipts: list[dict[str, object]],
+    operations: list[dict[str, object]],
+    record: dict[str, object],
+) -> None:
+    before = len(receipts)
+    try:
+        _merge_unique_record(receipts, record, "receipt_id")
+    except ReleaseEvidenceError as error:
+        raise QualificationArtifactSafetyError(str(error)) from error
+    operations.append(
+        {
+            "kind": "append_evidence_record",
+            "path": EVIDENCE_INDEX_PATH,
+            "receipt_id": record["receipt_id"],
+            "record": record,
+            "state": "append" if len(receipts) > before else "present",
+        }
+    )
+
+
 def _plan_index_operations(
     repo_root: Path,
     *,
     identity: QualificationIdentity,
     run: Mapping[str, Any],
     receipt_contents: Mapping[str, bytes],
+    signed_ui_path: str,
+    signed_ui_content: bytes,
+    signed_ui_receipt: Mapping[str, Any],
+    live_path: str,
+    live_content: bytes,
     accepted_at: str,
 ) -> tuple[list[dict[str, object]], bytes]:
     index_content = _checked_file(repo_root, EVIDENCE_INDEX_PATH)
@@ -542,20 +814,39 @@ def _plan_index_operations(
             "source_sha": identity.candidate_sha,
             "status": "accepted",
         }
-        before = len(receipts)
-        try:
-            _merge_unique_record(receipts, record, "receipt_id")
-        except ReleaseEvidenceError as error:
-            raise QualificationArtifactSafetyError(str(error)) from error
-        operations.append(
-            {
-                "kind": "append_evidence_record",
-                "path": EVIDENCE_INDEX_PATH,
-                "receipt_id": record["receipt_id"],
-                "record": record,
-                "state": "append" if len(receipts) > before else "present",
-            }
-        )
+        _append_index_record(receipts, operations, record)
+    signed_ui_workflow = _mapping(signed_ui_receipt.get("workflow"), "signed UI receipt workflow")
+    _append_index_record(
+        receipts,
+        operations,
+        {
+            "accepted_at": accepted_at,
+            "case_id": PROFILE_CASE_ID,
+            "receipt_id": (
+                f"{identity.release_tag}:{PROFILE_CASE_ID}:"
+                f"{_integer(signed_ui_workflow.get('run_id'), 'signed UI workflow run ID')}"
+            ),
+            "reference": signed_ui_path,
+            "sha256": hashlib.sha256(signed_ui_content).hexdigest(),
+            "source": "signed_artifact_receipt",
+            "source_sha": identity.candidate_sha,
+            "status": "accepted",
+        },
+    )
+    _append_index_record(
+        receipts,
+        operations,
+        {
+            "accepted_at": accepted_at,
+            "case_id": SPARKLE_CASE_ID,
+            "receipt_id": f"{identity.release_tag}:{SPARKLE_CASE_ID}:{run_id}",
+            "reference": live_path,
+            "sha256": hashlib.sha256(live_content).hexdigest(),
+            "source": "signed_artifact_receipt",
+            "source_sha": identity.candidate_sha,
+            "status": "accepted",
+        },
+    )
     index["receipts"] = receipts
     return operations, _pretty_json_bytes(index)
 
@@ -592,8 +883,16 @@ def plan_reconciliation_bundle(
         receipt_digests=receipt_digests,
     )
     _validate_evidence_files(entries, receipts)
+    release_receipt = _validated_release_receipt(
+        repo_root,
+        identity=identity,
+        manifest=manifest,
+    )
     manifest_signed_ui = _mapping(manifest.get("signed_ui_artifact"), "manifest signed UI artifact")
     signed_ui_path = _string(manifest_signed_ui.get("receipt_path"), "manifest signed UI receipt path")
+    expected_signed_ui_path = f"docs/release-evidence/{identity.release_tag}/signed-artifact-ui-receipt.json"
+    if signed_ui_path != expected_signed_ui_path:
+        raise QualificationArtifactSafetyError("Manifest signed UI receipt path conflicts with the candidate tag.")
     signed_ui_content = entries["signed-artifact-ui-receipt.json"]
     if hashlib.sha256(signed_ui_content).hexdigest() != manifest_signed_ui.get("receipt_file_sha256"):
         raise QualificationArtifactSafetyError("Qualification artifact signed UI receipt file digest conflicts.")
@@ -602,6 +901,25 @@ def plan_reconciliation_bundle(
         raise QualificationArtifactSafetyError(
             "Qualification artifact signed UI receipt conflicts with checked evidence."
         )
+    signed_ui_receipt = _validated_signed_ui_receipt(
+        signed_ui_content,
+        identity=identity,
+        manifest=manifest,
+        release_receipt=release_receipt,
+        policy_id=_string(receipts[CASE_IDS[0]].get("policy_id"), "qualification policy ID"),
+    )
+    live_path = f"docs/qualification/{identity.release_tag}-live-qualification-v1.json"
+    live_content = _build_live_qualification(
+        repo_root,
+        identity=identity,
+        run=run,
+        artifact=artifact,
+        manifest=manifest,
+        entries=entries,
+        release_receipt=release_receipt,
+        qualification_run=qualification_run,
+        accepted_at=accepted_at,
+    )
     operations: list[dict[str, object]] = []
     receipt_contents = {case_id: entries[f"{case_id}.json"] for case_id in CASE_IDS}
     for case_id in CASE_IDS:
@@ -612,6 +930,13 @@ def plan_reconciliation_bundle(
                 receipt_contents[case_id],
             )
         )
+    operations.append(
+        _plan_file_operation(
+            repo_root,
+            live_path,
+            live_content,
+        )
+    )
     operations.append(
         {
             "kind": "verify_file",
@@ -626,6 +951,11 @@ def plan_reconciliation_bundle(
         identity=identity,
         run=run,
         receipt_contents=receipt_contents,
+        signed_ui_path=signed_ui_path,
+        signed_ui_content=signed_ui_content,
+        signed_ui_receipt=signed_ui_receipt,
+        live_path=live_path,
+        live_content=live_content,
         accepted_at=accepted_at,
     )
     operations.extend(index_operations)
@@ -645,6 +975,7 @@ def plan_reconciliation_bundle(
             f"docs/qualification/{identity.release_tag}-{case_id}-v1.json": receipt_contents[case_id]
             for case_id in CASE_IDS
         },
+        live_path: live_content,
         EVIDENCE_INDEX_PATH: index_content,
     }
     file_states = {
