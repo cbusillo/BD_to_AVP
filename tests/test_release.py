@@ -199,7 +199,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(app["bundle_identifier"], "com.shinycomputers.bd-to-avp")
         self.assertNotIn("briefcase", pyproject["tool"])
 
-    def test_repository_records_beta7_preparation_and_beta6_cancellation(self) -> None:
+    def test_repository_records_beta7_release_state_and_beta6_cancellation(self) -> None:
         metadata = release.load_release_metadata()
 
         self.assertEqual(metadata.package_version, "0.3.2b7")
@@ -243,7 +243,15 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("Build `169`", beta7_cut_packet)
         self.assertIn("Production Preflight run `32620933465`", beta7_cut_packet)
         self.assertIn("Builds `165`, `166`, and `168` remain", beta7_cut_packet)
-        self.assertIn(release.CUT_PACKET_PREPARED, beta7_cut_packet)
+        beta7_release_receipt = REPO_ROOT / "docs" / "release-evidence" / metadata.release_tag / "release-receipt.json"
+        expected_beta7_state = (
+            release.CUT_PACKET_PUBLISHED if beta7_release_receipt.is_file() else release.CUT_PACKET_PREPARED
+        )
+        unexpected_beta7_state = (
+            release.CUT_PACKET_PREPARED if beta7_release_receipt.is_file() else release.CUT_PACKET_PUBLISHED
+        )
+        self.assertIn(expected_beta7_state, beta7_cut_packet)
+        self.assertNotIn(unexpected_beta7_state, beta7_cut_packet)
 
         github_config = json.loads((REPO_ROOT / ".github" / "github.json").read_text(encoding="utf-8"))
         qualification_relative = Path(github_config["releaseOperations"]["qualificationRecordPath"])
