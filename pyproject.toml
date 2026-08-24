@@ -32,7 +32,7 @@ dependencies = [
 [project.optional-dependencies]
 gui = [
     # PySide6 6.10+ includes macOS binaries that require macOS 15.
-    "pyside6>=6.7.1,<6.10",
+    "pyside6>=6.7.1,<6.12",
 ]
 
 [project.urls]
@@ -49,13 +49,13 @@ dev = [
     "black>=26.5.1,<27",
     "gitpython>=3.1.58,<4",
     "mypy>=2.1.0,<3",
-    "pyside6>=6.7.1,<6.10",
+    "pyside6>=6.7.1,<6.12",
     "ruff>=0.15.20,<0.17",
     "types-psutil>=5.9.5.20240516",
 ]
 runtime-build = [
-    "setuptools==83.0.0",
-    "wheel==0.46.2",
+    "setuptools==84.0.0",
+    "wheel==0.48.0",
 ]
 
 [tool.uv]
