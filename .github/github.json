@@ -146,6 +146,7 @@
       "cancelledReleaseAttempt": "uv run python -m scripts.release_milestone_context --cancelled-attempt-tag v0.3.2-beta.6",
       "failedPostPublicationQualification": "uv run python -m scripts.release_milestone_context --failed-post-publication-tag v0.3.2-beta.5",
       "releaseReceipt": "uv run python -m unittest tests.test_release_receipt",
+      "releaseEvidenceV2": "uv run python -m unittest tests.test_release_evidence_v2",
       "signedArtifactReceipt": "uv run python -m unittest tests.test_signed_artifact_receipt",
       "signedArtifactUi": "uv run python -m unittest tests.test_signed_artifact_ui",
       "preSigningUi": "uv run python -m unittest tests.test_installed_ui_qualification tests.test_pre_signing_ui tests.test_signed_artifact_ui",
