@@ -743,6 +743,70 @@
       "source": "signed_artifact_receipt",
       "source_sha": "1d691a6db7c18d09f55a425ec77a01ab6d917d80",
       "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-25T17:02:23Z",
+      "case_id": "release-workflow-identity",
+      "receipt_id": "v0.3.2:release-workflow-identity",
+      "reference": "docs/release-evidence/v0.3.2/release-receipt.json",
+      "release_run_id": 32872545337,
+      "sha256": "21e8d6fa0c4f8e014fd57565f993652cc76a4bb3a968e5752e2a4bcb2a1237b0",
+      "source": "release_run_receipt",
+      "source_sha": "3ab40c9eb745cd038d1129d55a94cdb1cc4c7bec",
+      "status": "accepted",
+      "workflow_conclusion": "success"
+    },
+    {
+      "accepted_at": "2026-08-25T17:02:23Z",
+      "case_id": "signed-packaged-route-parity",
+      "receipt_id": "v0.3.2:signed-packaged-route-parity",
+      "reference": "docs/release-evidence/v0.3.2/release-receipt.json",
+      "release_run_id": 32872545337,
+      "sha256": "21e8d6fa0c4f8e014fd57565f993652cc76a4bb3a968e5752e2a4bcb2a1237b0",
+      "source": "release_run_receipt",
+      "source_sha": "3ab40c9eb745cd038d1129d55a94cdb1cc4c7bec",
+      "status": "accepted",
+      "workflow_conclusion": "success"
+    },
+    {
+      "accepted_at": "2026-08-25T18:10:21Z",
+      "case_id": "clean-machine-signed-update",
+      "receipt_id": "v0.3.2:clean-machine-signed-update:32881574927",
+      "reference": "docs/qualification/v0.3.2-clean-machine-signed-update-v1.json",
+      "sha256": "90e8561e6a804ec1de0a606b56a6925238572f782122aa02b9b17a816cdd6335",
+      "source": "tier3_automation_receipt",
+      "source_sha": "3ab40c9eb745cd038d1129d55a94cdb1cc4c7bec",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-25T18:10:21Z",
+      "case_id": "installed-ui-accessibility",
+      "receipt_id": "v0.3.2:installed-ui-accessibility:32881574927",
+      "reference": "docs/qualification/v0.3.2-installed-ui-accessibility-v1.json",
+      "sha256": "e64e72a192edf50050845ce141fa9f129587cea7cdaca2227938072c65e7b073",
+      "source": "tier3_automation_receipt",
+      "source_sha": "3ab40c9eb745cd038d1129d55a94cdb1cc4c7bec",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-25T18:10:21Z",
+      "case_id": "profile-save-action-accessibility",
+      "receipt_id": "v0.3.2:profile-save-action-accessibility:32872545337",
+      "reference": "docs/release-evidence/v0.3.2/signed-artifact-ui-receipt.json",
+      "sha256": "db546c6b94b4676ea65b6f829be5331fbcfc288476d5ec29d7bea6479ffbe248",
+      "source": "signed_artifact_receipt",
+      "source_sha": "3ab40c9eb745cd038d1129d55a94cdb1cc4c7bec",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-25T18:10:21Z",
+      "case_id": "sparkle-update-route",
+      "receipt_id": "v0.3.2:sparkle-update-route:32881574927",
+      "reference": "docs/qualification/v0.3.2-live-qualification-v1.json",
+      "sha256": "533bdea5224fbe0766794fb41618af034cc0d1208096a078cdcc08dbb3c9bc33",
+      "source": "signed_artifact_receipt",
+      "source_sha": "3ab40c9eb745cd038d1129d55a94cdb1cc4c7bec",
+      "status": "accepted"
     }
   ],
   "schema_version": 1

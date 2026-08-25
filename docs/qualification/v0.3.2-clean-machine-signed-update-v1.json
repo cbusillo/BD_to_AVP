@@ -1,0 +1,108 @@
+{
+  "assertions": [
+    {
+      "id": "exact-app-installed",
+      "status": "passed"
+    },
+    {
+      "id": "final-identity-matched",
+      "status": "passed"
+    },
+    {
+      "id": "package-smoke-passed",
+      "status": "passed"
+    },
+    {
+      "id": "preconditions-proven",
+      "status": "passed"
+    },
+    {
+      "id": "profile-preserved",
+      "status": "passed"
+    },
+    {
+      "id": "sparkle-relaunch-passed",
+      "status": "passed"
+    }
+  ],
+  "automation_lane": "clean-machine-updater",
+  "cadence": {
+    "expires_on": "2026-09-24",
+    "expiry_basis": "completed_at",
+    "first_rc": true,
+    "max_age_days": 30,
+    "stable_candidate": true
+  },
+  "case_id": "clean-machine-signed-update",
+  "cleanup": {
+    "evidence_sha256": "4c6862f08d3bc1e020238a7ba35260f8e5b970c96f4842002a97eaf74e9bf9d9",
+    "status": "disposed"
+  },
+  "environment": {
+    "architecture": "arm64",
+    "environment_class": "resettable-vm",
+    "macos_build": "25F84",
+    "macos_version": "26.5.2"
+  },
+  "evidence": [
+    {
+      "kind": "install-log",
+      "sha256": "e4079a4449810efe26959b617743baba26000bc6218b2bb9f4a98a3847cd2535"
+    },
+    {
+      "kind": "package-smoke",
+      "sha256": "408e93df85c26a73168d54b3aa138df032238292db31096f8f6c20b460636107"
+    },
+    {
+      "kind": "sparkle-update",
+      "sha256": "3cc23ba01df9d171bf0352583dcf754379565130e41338a7a3ec25083a31aed0"
+    },
+    {
+      "kind": "profile-snapshot",
+      "sha256": "df8b8e46b3cd5717dcdce8a372ff611d7991b1da68ba04cd3940e9139fd7e2fb"
+    },
+    {
+      "kind": "cleanup",
+      "sha256": "4c6862f08d3bc1e020238a7ba35260f8e5b970c96f4842002a97eaf74e9bf9d9"
+    }
+  ],
+  "evidence_source": "tier3_automation_receipt",
+  "execution_mode": "automated",
+  "hardware": {
+    "class": "none",
+    "identity": {}
+  },
+  "policy_id": "release-qualification-policy-v1",
+  "receipt_sha256": "880bc146a8b7baab85fc23c7f24efae8337130cf9d27a1e296229631bd7c3d3a",
+  "receipt_type": "bd-to-avp-tier3-qualification",
+  "release_identity": {
+    "artifact_sha256": {
+      "appcast": "20eaa4b924fd82148961f3453b462366b3bdc1760e868c3e3ad2f673ffec4c3d",
+      "checksum": "eb0626f32cd8c6802959b6a8b3a933a566221889884b86bc863158384316a748",
+      "dmg": "ab395c3741d2e25b8bc8e348da355663919a9568bdb9c0dcd74e8a4667d94b60"
+    },
+    "release_receipt": {
+      "file_sha256": "21e8d6fa0c4f8e014fd57565f993652cc76a4bb3a968e5752e2a4bcb2a1237b0",
+      "receipt_sha256": "01d8c5643c07e1e0e2ca6a337123b1e8b5a0ed4037753347734c25c70028d2a4",
+      "reference": "docs/release-evidence/v0.3.2/release-receipt.json"
+    },
+    "release_route": "stable",
+    "release_tag": "v0.3.2",
+    "signed_app_tree_sha256": "4554b1852ef758481c417048a2d87bd8f8b165ff90110039bd430ec6fa257878",
+    "source_sha": "3ab40c9eb745cd038d1129d55a94cdb1cc4c7bec",
+    "versions": {
+      "build": "171",
+      "package": "0.3.2",
+      "public": "0.3.2"
+    }
+  },
+  "result": {
+    "reason_code": "all_assertions_passed",
+    "status": "passed"
+  },
+  "schema_version": 1,
+  "timestamps": {
+    "completed_at": "2026-08-25T18:10:21Z",
+    "started_at": "2026-08-25T18:04:43Z"
+  }
+}
