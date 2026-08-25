@@ -42,11 +42,12 @@ draft creation and is permanently burned, as recorded in
 draft was deleted only after explicit authorization, with the immutable
 disposition at `docs/release-attempts/v0.3.2-beta.6/draft-deletion-v1.json`.
 Issue #609 closed published and fully qualified Beta `0.3.2b7`, public tag
-`v0.3.2-beta.7`, and build `169`. Issue #613 owns prepared successor RC
-`0.3.2rc1`, public tag `v0.3.2-rc.1`, and build `170` under feature freeze.
-Its metadata and preregistered qualification are preparation-only; Prerelease
-dispatch, signing approval, and publication remain separately authorized
-boundaries.
+`v0.3.2-beta.7`, and build `169`. Issue #613 closed published and fully
+qualified RC `0.3.2rc1`, public tag `v0.3.2-rc.1`, and build `170` under
+feature freeze. Issue #614 owns prepared successor Stable `0.3.2`, public tag
+`v0.3.2`, and build `171`. Its metadata and preregistered qualification are
+preparation-only; Stable dispatch, signing approval, and publication remain
+separately authorized boundaries.
 
 The four-route updater preference, release metadata, production-history
 filtering, appcast validation, reusable engine, guarded Stable/Prerelease

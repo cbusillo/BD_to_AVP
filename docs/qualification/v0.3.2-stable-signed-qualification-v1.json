@@ -1,0 +1,273 @@
+{
+  "acceptance": {
+    "blocking_case_ids": [
+      "sparkle-update-route",
+      "clean-machine-signed-update",
+      "installed-ui-accessibility"
+    ],
+    "milestone_complete": false,
+    "nonblocking_case_ids": [
+      "native-sparkle-release-notes",
+      "usb-bluray-makemkv",
+      "protected-real-media-conversion",
+      "vision-pro-physical-playback",
+      "public-diagnostics-and-field-closure"
+    ],
+    "passed": false,
+    "preregistered_matrix_case_ids": [
+      "release-workflow-identity",
+      "updater-route-v0.3.2-rc.1-to-v0.3.2",
+      "native-sparkle-notes-stable",
+      "profile-save-action-accessibility",
+      "signed-packaged-route-parity",
+      "gui-preview-low-local-ample-destination",
+      "gui-preview-cancel-cleanup",
+      "gui-preview-failure-cleanup",
+      "capacity-known-low",
+      "capacity-unknown-and-conflicting",
+      "network-generated-final-output",
+      "overwrite-and-conversion-cancel",
+      "malformed-pgs-parser-recovery",
+      "subtitle-partial-output-diagnostics",
+      "clean-machine-signed-update",
+      "installed-ui-accessibility",
+      "usb-bluray-makemkv",
+      "protected-real-media-conversion",
+      "vision-pro-physical-playback",
+      "public-diagnostics-and-field-closure"
+    ],
+    "required_case_ids": [
+      "release-workflow-identity",
+      "sparkle-update-route",
+      "profile-save-action-accessibility",
+      "signed-packaged-route-parity",
+      "gui-preview-low-local-ample-destination",
+      "gui-preview-cancel-cleanup",
+      "gui-preview-failure-cleanup",
+      "capacity-known-low",
+      "capacity-unknown-and-conflicting",
+      "network-generated-final-output",
+      "overwrite-and-conversion-cancel",
+      "malformed-pgs-parser-recovery",
+      "subtitle-partial-output-diagnostics",
+      "clean-machine-signed-update",
+      "installed-ui-accessibility"
+    ]
+  },
+  "candidate": {
+    "appcast_sha256": null,
+    "build_version": "171",
+    "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.2.dmg",
+    "dmg_sha256": null,
+    "mapping_version": 2,
+    "package_version": "0.3.2",
+    "public_version": "0.3.2",
+    "release_id": null,
+    "release_run_id": null,
+    "release_tag": "v0.3.2",
+    "route_table_id": "route-relative-video-quality-v2",
+    "route_table_sha256": "37756b7327cffe22a5c6d80ec6e69c67324e731aba87f2ebe815b065989ce214",
+    "signed_app_tree_sha256": null,
+    "source_git_sha": null,
+    "worker_protocol_version": 12,
+    "workflow": "Stable"
+  },
+  "execution_policy": {
+    "approval_command": "uv run python -m scripts.github_release_run approve",
+    "approval_required_exit_code": 20,
+    "field_qualification_timing": "post_publication_exact_artifact",
+    "generic_run_waiter_is_sufficient": false,
+    "macos_signing_requires_fresh_explicit_run_bound_authorization": true,
+    "main_must_remain_fixed_while_nonterminal": true,
+    "release_stage": "stable",
+    "watch_command": "uv run python -m scripts.github_release_run watch"
+  },
+  "immutable_history": {
+    "abandoned_builds": [
+      157
+    ],
+    "burned_builds": [
+      147,
+      154,
+      165,
+      166,
+      168
+    ],
+    "previous_stable": {
+      "appcast_sha256": "0d824afeba2e8d4f12493818fe77e9280b463e5c6e0de8acd408ee9045ad4812",
+      "build_version": "162",
+      "dmg_sha256": "04fad8c2323f749a4057c6486d0193b278ad3428880be287838a2b5e80eca8c5",
+      "must_not_rebuild": true,
+      "package_version": "0.3.1",
+      "published_at": "2026-08-09T17:44:19Z",
+      "release_id": 367541840,
+      "release_run_id": 31325968679,
+      "release_tag": "v0.3.1",
+      "signed_app_tree_sha256": "e7f721a1d3b3797a879f0293ce6f3c43565956c288fc14e41cd297200fade5df",
+      "source_git_sha": "22982d5037e3b2bd03bbc9fa25332be2c8b04c97"
+    },
+    "rc1": {
+      "appcast_sha256": "a78ff9944cb6f9801913c7195c31907803e71aa7ebafbb7474bb3e4e4ec2f38a",
+      "build_version": "170",
+      "dmg_sha256": "62cb9c0b3fe4ee6ddb309504306520ba6a91292742140479081ff910a4b20dff",
+      "must_not_rebuild": true,
+      "package_version": "0.3.2rc1",
+      "published_at": "2026-08-25T01:38:46Z",
+      "release_id": 376092200,
+      "release_run_id": 32796196439,
+      "release_tag": "v0.3.2-rc.1",
+      "signed_app_tree_sha256": "00d5132b7b982f02bf1ffe23909df331bab1c733430756c3f8cbe002fa7f0004",
+      "source_git_sha": "1d691a6db7c18d09f55a425ec77a01ab6d917d80"
+    }
+  },
+  "issues": [
+    "#542",
+    "#610",
+    "#617",
+    "#620",
+    "#623",
+    "#609",
+    "#613",
+    "#614"
+  ],
+  "matrix": [
+    {
+      "id": "release-workflow-identity",
+      "migration": "release_run_receipt",
+      "phase": "workflow",
+      "policy_case_id": "release-workflow-identity"
+    },
+    {
+      "id": "updater-route-v0.3.2-rc.1-to-v0.3.2",
+      "migration": "fresh_retest",
+      "phase": "milestone",
+      "policy_case_id": "sparkle-update-route"
+    },
+    {
+      "id": "native-sparkle-notes-stable",
+      "migration": "scope_evaluated",
+      "phase": "milestone",
+      "policy_case_id": "native-sparkle-release-notes"
+    },
+    {
+      "id": "profile-save-action-accessibility",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "profile-save-action-accessibility"
+    },
+    {
+      "id": "signed-packaged-route-parity",
+      "migration": "release_run_receipt",
+      "phase": "signed_artifact",
+      "policy_case_id": "signed-packaged-route-parity"
+    },
+    {
+      "id": "gui-preview-low-local-ample-destination",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "gui-preview-low-local-ample-destination"
+    },
+    {
+      "id": "gui-preview-cancel-cleanup",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "gui-preview-cancel-cleanup"
+    },
+    {
+      "id": "gui-preview-failure-cleanup",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "gui-preview-failure-cleanup"
+    },
+    {
+      "id": "capacity-known-low",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "capacity-known-low"
+    },
+    {
+      "id": "capacity-unknown-and-conflicting",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "capacity-unknown-and-conflicting"
+    },
+    {
+      "id": "network-generated-final-output",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "network-generated-final-output"
+    },
+    {
+      "id": "overwrite-and-conversion-cancel",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "overwrite-and-conversion-cancel"
+    },
+    {
+      "id": "malformed-pgs-parser-recovery",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "malformed-pgs-parser-recovery"
+    },
+    {
+      "id": "subtitle-partial-output-diagnostics",
+      "migration": "scope_evaluated",
+      "phase": "signed_artifact",
+      "policy_case_id": "subtitle-partial-output-diagnostics"
+    },
+    {
+      "id": "clean-machine-signed-update",
+      "migration": "fresh_retest",
+      "phase": "milestone",
+      "policy_case_id": "clean-machine-signed-update"
+    },
+    {
+      "id": "installed-ui-accessibility",
+      "migration": "fresh_retest",
+      "phase": "milestone",
+      "policy_case_id": "installed-ui-accessibility"
+    },
+    {
+      "id": "usb-bluray-makemkv",
+      "migration": "scope_evaluated",
+      "phase": "milestone",
+      "policy_case_id": "usb-bluray-makemkv"
+    },
+    {
+      "id": "protected-real-media-conversion",
+      "migration": "scope_evaluated",
+      "phase": "milestone",
+      "policy_case_id": "protected-real-media-conversion"
+    },
+    {
+      "id": "vision-pro-physical-playback",
+      "migration": "scope_evaluated",
+      "phase": "milestone",
+      "policy_case_id": "vision-pro-physical-playback"
+    },
+    {
+      "id": "public-diagnostics-and-field-closure",
+      "migration": "external_nonblocking",
+      "phase": "post_publication",
+      "policy_case_id": "public-diagnostics-and-field-closure"
+    }
+  ],
+  "prior_evidence": [
+    {
+      "id": "v0.3.2-rc.1-release-evidence-v1",
+      "scope": "immutable qualified RC 1 identity, signed-artifact inputs, updater evidence, and publication receipts"
+    },
+    {
+      "id": "v0.3.1-appcast",
+      "scope": "previous Stable update route and release-note base"
+    }
+  ],
+  "qualification_id": "v0.3.2-stable-signed-qualification-v1",
+  "qualification_policy": {
+    "id": "release-qualification-policy-v1",
+    "path": "docs/qualification/release-qualification-policy-v1.json",
+    "scope_command": "uv run python -m scripts.qualify_release_scope --qualification docs/qualification/v0.3.2-stable-signed-qualification-v1.json --candidate-sha <full-sha> --evidence docs/qualification/release-evidence-v1.json --release-stage stable --workflow-phase preparation --require-evidence"
+  },
+  "schema_version": 1,
+  "status": "preregistered_pending_exact_candidate"
+}
