@@ -1,5 +1,8 @@
 # Protected-Main Release Process
 
+Release Evidence v2 record and offline-verification semantics are documented in
+[`release-evidence-v2.md`](release-evidence-v2.md).
+
 The normative production identity, version mapping, update routes, history
 boundary, and publication policy are defined in
 [Production Release Routes](release-routes.md).
