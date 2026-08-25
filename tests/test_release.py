@@ -199,7 +199,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(app["bundle_identifier"], "com.shinycomputers.bd-to-avp")
         self.assertNotIn("briefcase", pyproject["tool"])
 
-    def test_repository_records_rc1_preparation_and_prior_release_history(self) -> None:
+    def test_repository_records_rc1_release_state_and_prior_release_history(self) -> None:
         metadata = release.load_release_metadata()
 
         self.assertEqual(metadata.package_version, "0.3.2rc1")
@@ -260,8 +260,15 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("feature freeze", rc1_cut_packet.lower())
         self.assertIn("Production Preflight run `32791057931`", rc1_cut_packet)
         self.assertIn("Beta 7", rc1_cut_packet)
-        self.assertIn(release.CUT_PACKET_PREPARED, rc1_cut_packet)
-        self.assertNotIn(release.CUT_PACKET_PUBLISHED, rc1_cut_packet)
+        rc1_release_receipt = REPO_ROOT / "docs" / "release-evidence" / metadata.release_tag / "release-receipt.json"
+        expected_rc1_state = (
+            release.CUT_PACKET_PUBLISHED if rc1_release_receipt.is_file() else release.CUT_PACKET_PREPARED
+        )
+        unexpected_rc1_state = (
+            release.CUT_PACKET_PREPARED if rc1_release_receipt.is_file() else release.CUT_PACKET_PUBLISHED
+        )
+        self.assertIn(expected_rc1_state, rc1_cut_packet)
+        self.assertNotIn(unexpected_rc1_state, rc1_cut_packet)
 
         github_config = json.loads((REPO_ROOT / ".github" / "github.json").read_text(encoding="utf-8"))
         qualification_relative = Path(github_config["releaseOperations"]["qualificationRecordPath"])
