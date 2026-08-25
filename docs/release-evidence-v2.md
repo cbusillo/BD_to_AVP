@@ -50,6 +50,9 @@ itself from release inventories.
 Protected-main CI regenerates this view in memory and rejects committed index
 drift; the release-evidence workflow writes and immediately rechecks the same
 bytes before staging its advisory shadow output.
+Any later commit that adds terminal receipts or other checked files beneath a
+release bundle must regenerate `index-v2.json` with the documented `index
+--write` command before CI will accept the branch.
 
 ## Capture Record
 

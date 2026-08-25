@@ -717,9 +717,6 @@ def capture_v2(
     release_tag = sanitize_release_tag(release.get("tag"))
     if evidence_ref is not None:
         sanitize_evidence_ref(evidence_ref, release_tag)
-    capture_path = repo_root.resolve() / EVIDENCE_ROOT / release_tag / CAPTURE_NAME
-    if capture_path.exists():
-        return write_or_validate_capture_v2(repo_root, release_tag, {})
     record = build_capture_v2(
         repo_root,
         release_receipt_path=release_receipt_path,
@@ -747,7 +744,17 @@ def _tree_paths(reader: _BundleReader, prefix: str) -> list[str]:
         root, normalized = _repo_path(reader.repo_root, prefix, "evidence directory")
         if not root.is_dir():
             raise ReleaseEvidenceV2Error(f"Evidence directory does not exist: {normalized}.")
-        return sorted(path.relative_to(reader.repo_root).as_posix() for path in root.rglob("*") if path.is_file())
+        return sorted(
+            path
+            for path in _git_run(
+                reader.repo_root,
+                ["ls-files", "--cached", "--others", "--exclude-standard", "--", prefix],
+                "list worktree release evidence files",
+            )
+            .decode()
+            .splitlines()
+            if path.startswith(f"{prefix}/") and (reader.repo_root / path).is_file()
+        )
     if reader.revision is None:
         raise ReleaseEvidenceV2Error("Verification revision is missing.")
     return sorted(
@@ -788,7 +795,6 @@ def build_index_v2(
         files = [
             {"path": path, "sha256": _digest_bytes(reader.read(path, "release evidence file"))}
             for path in _tree_paths(reader, prefix)
-            if path != f"{EVIDENCE_ROOT.as_posix()}/{INDEX_NAME}"
         ]
         releases.append({"evidence_class": verified["class"], "files": files, "release_tag": release_tag})
     return {
@@ -801,11 +807,13 @@ def build_index_v2(
 def write_index_v2(repo_root: Path, index: Mapping[str, Any], *, output_path: Path | None = None) -> Path:
     repo_root = repo_root.resolve()
     target = output_path or repo_root / EVIDENCE_ROOT / INDEX_NAME
+    _relative_repo_path(repo_root, target, "index-v2 output path")
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("wb", dir=target.parent, delete=False) as temporary:
         temporary.write(canonical_index_bytes(index))
         temporary_path = Path(temporary.name)
     temporary_path.replace(target)
+    target.chmod(0o644)
     return target
 
 
@@ -830,7 +838,10 @@ def check_index_v2(
         relative = _relative_repo_path(repo_root, target, "index-v2 path")
         actual = reader.read(relative, "index-v2")
     if actual != expected:
-        raise ReleaseEvidenceV2Error(f"index-v2 bytes are not deterministic for the selected evidence tree: {target}.")
+        raise ReleaseEvidenceV2Error(
+            f"index-v2 is stale for the selected evidence tree: {target}. "
+            "Regenerate it with `uv run python -m scripts.release_evidence_v2 index --write --repo-root .`."
+        )
 
 
 def _load_record(reader: _BundleReader, relative_path: str, description: str) -> Mapping[str, Any]:
@@ -1961,7 +1972,6 @@ def _parse_arguments(argv: Sequence[str] | None) -> argparse.Namespace:
 
 def _parse_sanitize_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sanitize the canonical release evidence tag and branch ref.")
-    parser.add_argument("--repo-root", type=Path, default=REPO_ROOT)
     parser.add_argument("--release-receipt", type=Path)
     parser.add_argument("--release-tag")
     parser.add_argument("--evidence-ref")
@@ -2029,7 +2039,7 @@ def _run_sanitize(argv: Sequence[str]) -> int:
             _write_github_output(_path_from_cli(args.github_output), outputs)
         else:
             print(json.dumps(outputs, sort_keys=True, separators=(",", ":")))
-    except (ReleaseEvidenceError, ReleaseReceiptError, ReleaseEvidenceV2Error) as error:
+    except (OSError, ReleaseEvidenceError, ReleaseReceiptError, ReleaseEvidenceV2Error) as error:
         print(f"release-evidence-v2: {error}", file=sys.stderr)
         return 1
     return 0

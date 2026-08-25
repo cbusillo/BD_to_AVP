@@ -19,6 +19,7 @@ from scripts.release_evidence_v2 import (
     build_index_v2,
     canonical_index_bytes,
     canonical_record_bytes,
+    capture_v2,
     check_index_v2,
     evidence_ref_for_tag,
     sanitize_evidence_ref,
@@ -46,6 +47,8 @@ from scripts.tier3_receipt import build_receipt as build_tier3_receipt, receipt_
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TAG = "v0.3.0-rc.3"
+LIVE_APPCAST_BYTES = b"<appcast>test</appcast>\n"
+LIVE_APPCAST_SHA256 = hashlib.sha256(LIVE_APPCAST_BYTES).hexdigest()
 
 
 def digest(path: Path) -> str:
@@ -105,7 +108,13 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                         "asset_id": 1,
                     },
                     {"kind": "checksum", "name": "SHA256SUMS", "sha256": "b" * 64, "size_bytes": 100, "asset_id": 2},
-                    {"kind": "appcast", "name": "appcast.xml", "sha256": "c" * 64, "size_bytes": 500, "asset_id": 3},
+                    {
+                        "kind": "appcast",
+                        "name": "appcast.xml",
+                        "sha256": LIVE_APPCAST_SHA256,
+                        "size_bytes": len(LIVE_APPCAST_BYTES),
+                        "asset_id": 3,
+                    },
                 ],
             },
             policy_path=root / source_paths["policy"],
@@ -143,7 +152,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
         candidate = qualification["candidate"]
         candidate.update(
             {
-                "appcast_sha256": "c" * 64,
+                "appcast_sha256": LIVE_APPCAST_SHA256,
                 "build_version": "160",
                 "dmg_name": "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.3.dmg",
                 "dmg_sha256": "a" * 64,
@@ -160,6 +169,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
         (bundle_root / "qualification-record.json").write_text(
             json.dumps(qualification, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
+        (bundle_root / "live-appcast.xml").write_bytes(LIVE_APPCAST_BYTES)
         cases = {case["id"]: case for case in policy["cases"]}
         for case_id, sample_name in (
             ("clean-machine-signed-update", "v0.3.2-clean-machine-signed-update-v1.json"),
@@ -220,7 +230,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
                     "run_id": 22222,
                 },
                 "captured_at": "2026-08-05T12:01:00Z",
-                "live_appcast": {"sha256": "c" * 64, "verified_at": "2026-08-05T12:00:30Z"},
+                "live_appcast": {"sha256": LIVE_APPCAST_SHA256, "verified_at": "2026-08-05T12:00:30Z"},
                 "qualification_record": {
                     "path": f"docs/release-evidence/{TAG}/qualification-record.json",
                     "sha256": digest(bundle / "qualification-record.json"),
@@ -274,7 +284,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
         manifest = json.loads(qualification_manifest_path.read_text(encoding="utf-8"))
         live_qualification = {
             "candidate": {
-                "appcast_sha256": "c" * 64,
+                "appcast_sha256": LIVE_APPCAST_SHA256,
                 "build": versions["build"],
                 "dmg_sha256": "a" * 64,
                 "package_version": versions["package"],
@@ -1071,6 +1081,33 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseEvidenceV2Error, "different bytes"):
                 write_record(capture_path, changed)
 
+    def test_capture_v2_public_rerun_reuses_existing_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_sha, bundle = self.build_repository(root)
+            capture = self.write_capture(root, source_sha)
+            original = (bundle / CAPTURE_NAME).read_bytes()
+            reused = capture_v2(
+                root,
+                release_receipt_path=bundle / "release-receipt.json",
+                release_path=bundle / "qualification-manifest.json",
+                qualification_record_path=bundle / "qualification-record.json",
+                signed_ui_archive_path=bundle / "signed-artifact-ui.zip",
+                signed_ui_receipt_path=bundle / "signed-artifact-ui-receipt.json",
+                qualification_manifest_path=bundle / "qualification-manifest.json",
+                live_appcast_path=bundle / "live-appcast.xml",
+                captured_at="2026-08-05T12:02:00Z",
+                live_appcast_verified_at="2026-08-05T12:01:30Z",
+                capture_workflow_actor="shiny-code-bot",
+                capture_workflow_run_id=22223,
+                capture_workflow_run_attempt=2,
+                release_receipt_asset_id=99,
+                signed_ui_artifact_id=777,
+                evidence_ref=evidence_ref_for_tag(TAG),
+            )
+            self.assertEqual(reused["capture_sha256"], capture["capture_sha256"])
+            self.assertEqual((bundle / CAPTURE_NAME).read_bytes(), original)
+
     def test_workflow_contract_uses_unconditional_shadow_capture_and_index(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "release-evidence.yml").read_text(encoding="utf-8")
         ci_workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
@@ -1079,6 +1116,8 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
         self.assertIn("name: Generate and check shadow index-v2", workflow)
         self.assertIn("--captured-at", workflow)
         self.assertIn("--capture-workflow-run-id", workflow)
+        self.assertIn("name: Publish complete evidence outputs", workflow)
+        self.assertIn("CAPTURE_WORKFLOW_ACTOR: ${{ github.actor }}", workflow)
         self.assertIn("branch: ${{ needs.validate-and-prepare.outputs.evidence_ref }}", workflow)
         self.assertNotIn("if: vars.RELEASE_EVIDENCE_V2", workflow)
         self.assertIn("python -m scripts.release_evidence_v2 index --check --worktree", ci_workflow)
@@ -1090,7 +1129,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             index_path.write_bytes(canonical_index_bytes(index))
             check_index_v2(REPO_ROOT, worktree=True, output_path=index_path)
             index_path.write_bytes(index_path.read_bytes().replace(b"schema_version", b"schema-version", 1))
-            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "not deterministic"):
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "index-v2 is stale"):
                 check_index_v2(REPO_ROOT, worktree=True, output_path=index_path)
 
 

@@ -27,13 +27,13 @@ jobs:
       evidence_ref: ${{ steps.sanitize.outputs.evidence_ref }}
       existing_branch_sha: ${{ steps.reuse.outputs.existing_branch_sha }}
       has_changes: ${{ steps.stage.outputs.has_changes }}
-      manifest_sha256: ${{ steps.reconcile.outputs.manifest_sha256 }}
-      receipt_file_sha256: ${{ steps.reconcile.outputs.receipt_file_sha256 }}
-      release_run_id: ${{ steps.reconcile.outputs.release_run_id }}
+      manifest_sha256: ${{ steps.final-outputs.outputs.manifest_sha256 }}
+      receipt_file_sha256: ${{ steps.final-outputs.outputs.receipt_file_sha256 }}
+      release_run_id: ${{ steps.final-outputs.outputs.release_run_id }}
       release_tag: ${{ steps.sanitize.outputs.release_tag }}
-      signed_ui_receipt_sha256: ${{ steps.reconcile.outputs.signed_ui_receipt_sha256 }}
-      signed_ui_artifact_sha256: ${{ steps.reconcile.outputs.signed_ui_artifact_sha256 }}
-      source_sha: ${{ steps.reconcile.outputs.source_sha }}
+      signed_ui_receipt_sha256: ${{ steps.final-outputs.outputs.signed_ui_receipt_sha256 }}
+      signed_ui_artifact_sha256: ${{ steps.final-outputs.outputs.signed_ui_artifact_sha256 }}
+      source_sha: ${{ steps.final-outputs.outputs.source_sha }}
     steps:
       - name: Checkout current protected main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -373,7 +373,7 @@ jobs:
         id: capture-v2
         env:
           CAPTURE_TIMESTAMP: ${{ steps.publication.outputs.live_appcast_verified_at }}
-          CAPTURE_WORKFLOW_ACTOR: ${{ github.event.workflow_run.actor.login }}
+          CAPTURE_WORKFLOW_ACTOR: ${{ github.actor }}
           CAPTURE_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
           CAPTURE_WORKFLOW_RUN_ID: ${{ github.run_id }}
           EVIDENCE_REF: ${{ steps.sanitize.outputs.evidence_ref }}
@@ -404,6 +404,22 @@ jobs:
           set -euo pipefail
           python -m scripts.release_evidence_v2 index --write --repo-root "$GITHUB_WORKSPACE"
           python -m scripts.release_evidence_v2 index --check --worktree --repo-root "$GITHUB_WORKSPACE"
+
+      - name: Publish complete evidence outputs
+        id: final-outputs
+        env:
+          RELEASE_TAG: ${{ steps.sanitize.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          BUNDLE="docs/release-evidence/$RELEASE_TAG"
+          {
+            echo "manifest_sha256=$(jq -er .manifest_sha256 "$BUNDLE/qualification-manifest.json")"
+            echo "receipt_file_sha256=$(sha256sum "$BUNDLE/release-receipt.json" | awk '{print $1}')"
+            echo "release_run_id=$(jq -er .workflow.run_id "$BUNDLE/release-receipt.json")"
+            echo "signed_ui_receipt_sha256=$(jq -er .receipt_sha256 "$BUNDLE/signed-artifact-ui-receipt.json")"
+            echo "signed_ui_artifact_sha256=$(sha256sum "$BUNDLE/signed-artifact-ui.zip" | awk '{print $1}')"
+            echo "source_sha=$(jq -er .source_sha "$BUNDLE/release-receipt.json")"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Stage only generated evidence files
         id: stage
@@ -532,3 +548,5 @@ jobs:
             The release workflow, immutable asset identities, signed artifact UI receipt, live Pages appcast, qualification manifest, qualification record, release ledger, and cut packet were revalidated before this branch was prepared. Signing and deployment secrets are not available to this workflow.
 
             Publication is immutable, but this PR remains intentionally unmergeable until its post-publication milestone qualification check has accepted every blocking live-artifact and automated Tier 3 receipt. Optional physical-hardware and native-window presentation outcomes remain visible without blocking reconciliation. Add validated receipts to this idempotent branch; do not rebuild, retag, or replace the published release.
+
+            After adding or changing terminal evidence under `docs/release-evidence/<tag>/`, regenerate the advisory index with `uv run python -m scripts.release_evidence_v2 index --write --repo-root .` before pushing.
