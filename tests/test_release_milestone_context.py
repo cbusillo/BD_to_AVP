@@ -13,6 +13,7 @@ from unittest.mock import patch
 from scripts.release_milestone_context import (
     EVIDENCE_INDEX_PATH,
     RELEASE_LEDGER_PATH,
+    ReleaseMilestoneContext,
     ReleaseMilestoneContextError,
     _validate_failed_unpublished_candidate,
     _requires_unpublished_candidate_recovery,
@@ -896,9 +897,141 @@ class ReleaseMilestoneContextTests(unittest.TestCase):
         self.assertEqual(context.manifest_path, "docs/release-evidence/v0.3.0/qualification-manifest.json")
         self.assertEqual(context.manifest_sha256, manifest["manifest_sha256"])
         self.assertEqual(context.runner_sha, runner_sha)
-        require_manifest_runner_sha(context, runner_sha)
-        with self.assertRaisesRegex(ReleaseMilestoneContextError, "runner SHA"):
-            require_manifest_runner_sha(context, "8" * 40)
+        require_manifest_runner_sha(context, REPO_ROOT, runner_sha)
+
+    def test_manifest_runner_sha_accepts_validation_only_descendant_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            release_test = root / "tests/test_release.py"
+            milestone_context = root / "scripts/release_milestone_context.py"
+            release_test.parent.mkdir(parents=True, exist_ok=True)
+            milestone_context.parent.mkdir(parents=True, exist_ok=True)
+            release_test.write_text("prepared = True\n", encoding="utf-8")
+            milestone_context.write_text("strict = True\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "runner"], cwd=root, check=True)
+            runner_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            release_test.write_text("published = True\n", encoding="utf-8")
+            milestone_context.write_text("compatible = True\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "validation compatibility"], cwd=root, check=True)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            context = ReleaseMilestoneContext(
+                candidate_sha="a" * 40,
+                evidence_path=EVIDENCE_INDEX_PATH,
+                first_candidate_of_cycle=True,
+                policy_path="docs/qualification/release-qualification-policy-v1.json",
+                qualification_path="docs/qualification/stable-signed-qualification-v1.json",
+                release_receipt_path="docs/release-evidence/v0.3.0/release-receipt.json",
+                release_stage="stable",
+                release_tag="v0.3.0",
+                runner_sha=runner_sha,
+            )
+
+            require_manifest_runner_sha(context, root, base_sha)
+
+    def test_manifest_runner_sha_rejects_non_validation_base_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            runner_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            application_path = root / "bd_to_avp/app.py"
+            application_path.parent.mkdir(parents=True, exist_ok=True)
+            application_path.write_text("changed = True\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "application change"], cwd=root, check=True)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            context = ReleaseMilestoneContext(
+                candidate_sha="a" * 40,
+                evidence_path=EVIDENCE_INDEX_PATH,
+                first_candidate_of_cycle=True,
+                policy_path="docs/qualification/release-qualification-policy-v1.json",
+                qualification_path="docs/qualification/stable-signed-qualification-v1.json",
+                release_receipt_path="docs/release-evidence/v0.3.0/release-receipt.json",
+                release_stage="stable",
+                release_tag="v0.3.0",
+                runner_sha=runner_sha,
+            )
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "validation-only"):
+                require_manifest_runner_sha(context, root, base_sha)
+
+    def test_manifest_runner_sha_rejects_non_descendant_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self.build_repository(root)
+            baseline_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            runner_path = root / "tests/runner.py"
+            runner_path.parent.mkdir(parents=True, exist_ok=True)
+            runner_path.write_text("runner = True\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "runner"], cwd=root, check=True)
+            runner_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            subprocess.run(["git", "switch", "-q", "--detach", baseline_sha], cwd=root, check=True)
+            base_path = root / "tests/base.py"
+            base_path.parent.mkdir(parents=True, exist_ok=True)
+            base_path.write_text("base = True\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+            base_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            context = ReleaseMilestoneContext(
+                candidate_sha="a" * 40,
+                evidence_path=EVIDENCE_INDEX_PATH,
+                first_candidate_of_cycle=True,
+                policy_path="docs/qualification/release-qualification-policy-v1.json",
+                qualification_path="docs/qualification/stable-signed-qualification-v1.json",
+                release_receipt_path="docs/release-evidence/v0.3.0/release-receipt.json",
+                release_stage="stable",
+                release_tag="v0.3.0",
+                runner_sha=runner_sha,
+            )
+
+            with self.assertRaisesRegex(ReleaseMilestoneContextError, "ancestor"):
+                require_manifest_runner_sha(context, root, base_sha)
 
     def test_manifest_discovery_rejects_rewritten_evidence_history(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
