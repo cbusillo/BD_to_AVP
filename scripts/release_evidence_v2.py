@@ -50,6 +50,8 @@ from scripts.tier3_receipt import Tier3ReceiptError, load_validated_receipt_byte
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE_ROOT = PurePosixPath("docs/release-evidence")
 CAPTURE_NAME = "capture-v2.json"
+INDEX_NAME = "index-v2.json"
+LEGACY_INDEX_PATH = "docs/release-evidence/index-v1.json"
 QUALIFICATION_NAME = "qualification-v2.json"
 DISPOSITION_NAME = "disposition-v2.json"
 RECEIPT_NAME = "release-receipt.json"
@@ -77,7 +79,7 @@ REQUIRED_CASE_IDS = frozenset(
 )
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-TAG_PATTERN = re.compile(r"^v[0-9A-Za-z][0-9A-Za-z.-]*$")
+TAG_PATTERN = re.compile(r"^v[0-9A-Za-z](?:[0-9A-Za-z]|[.-][0-9A-Za-z])*$")
 TIMESTAMP_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$")
 IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 CAPTURE_KEYS = frozenset(
@@ -137,6 +139,22 @@ DISPOSITION_KEYS = frozenset(
 
 class ReleaseEvidenceV2Error(RuntimeError):
     pass
+
+
+def sanitize_release_tag(value: object) -> str:
+    return _tag(value, "release tag")
+
+
+def evidence_ref_for_tag(release_tag: object) -> str:
+    tag = sanitize_release_tag(release_tag)
+    return f"automation/release-evidence-{tag}"
+
+
+def sanitize_evidence_ref(value: object, release_tag: object) -> str:
+    expected = evidence_ref_for_tag(release_tag)
+    if value != expected:
+        raise ReleaseEvidenceV2Error("Evidence ref must exactly match the sanitized release tag.")
+    return expected
 
 
 @dataclass(frozen=True)
@@ -443,6 +461,342 @@ def write_record(path: Path, record: Mapping[str, Any]) -> None:
             ) from None
     except OSError as error:
         raise ReleaseEvidenceV2Error(f"Unable to create write-once record at {path}: {error}") from error
+
+
+def _load_json_path(path: Path, description: str) -> Mapping[str, Any]:
+    try:
+        return _load_json_bytes(path.read_bytes(), description)
+    except OSError as error:
+        raise ReleaseEvidenceV2Error(f"Unable to read {description} at {path}: {error}") from error
+
+
+def _relative_repo_path(repo_root: Path, path: Path, description: str) -> str:
+    try:
+        relative = path.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError as error:
+        raise ReleaseEvidenceV2Error(f"{description} must be inside the repository.") from error
+    return _path(relative, description)
+
+
+def _release_receipt_asset_id(release: Mapping[str, Any], receipt_file_sha256: str) -> int:
+    assets = release.get("assets")
+    if not isinstance(assets, Sequence) or isinstance(assets, (str, bytes, bytearray)):
+        raise ReleaseEvidenceV2Error("Published release assets must be a JSON array.")
+    matches = [
+        asset
+        for asset in assets
+        if isinstance(asset, Mapping)
+        and asset.get("name") == RECEIPT_NAME
+        and asset.get("digest") == f"sha256:{receipt_file_sha256}"
+    ]
+    if len(matches) != 1:
+        raise ReleaseEvidenceV2Error("Published release must contain exactly one matching release receipt asset.")
+    asset_id = matches[0].get("id")
+    return _positive_integer(asset_id, "published release receipt asset ID")
+
+
+def _manifest_signed_ui_artifact_id(path: Path) -> int:
+    manifest = _load_json_path(path, "qualification manifest")
+    signed_ui = _mapping(manifest.get("signed_ui_artifact"), "qualification manifest signed UI artifact")
+    return _positive_integer(signed_ui.get("artifact_id"), "qualification manifest signed UI artifact ID")
+
+
+def _capture_source_inputs(
+    repo_root: Path, source_sha: str, release_tag: str, release_route: str
+) -> dict[str, dict[str, str]]:
+    expected_paths = {
+        **SOURCE_INPUT_PATHS,
+        "qualification_template": qualification_template_path(release_tag, release_route),
+    }
+    inputs: dict[str, dict[str, str]] = {}
+    for name, relative_path in expected_paths.items():
+        data = _git_run(repo_root, ["show", f"{source_sha}:{relative_path}"], f"read source input {name}")
+        inputs[name] = {"path": relative_path, "sha256": _digest_bytes(data)}
+    return inputs
+
+
+def build_capture_v2(
+    repo_root: Path,
+    *,
+    release_receipt_path: Path,
+    release_path: Path,
+    qualification_record_path: Path,
+    signed_ui_archive_path: Path,
+    signed_ui_receipt_path: Path,
+    qualification_manifest_path: Path,
+    live_appcast_path: Path,
+    captured_at: str,
+    live_appcast_verified_at: str,
+    capture_workflow_actor: str,
+    capture_workflow_run_id: int,
+    capture_workflow_run_attempt: int,
+    capture_workflow_path: str = EVIDENCE_WORKFLOW_PATH,
+    release_receipt_asset_id: int | None = None,
+    signed_ui_artifact_id: int | None = None,
+    evidence_ref: str | None = None,
+) -> dict[str, Any]:
+    repo_root = repo_root.resolve()
+    receipt_relative = _relative_repo_path(repo_root, release_receipt_path, "release receipt path")
+    qualification_relative = _relative_repo_path(repo_root, qualification_record_path, "qualification record path")
+    signed_ui_archive_relative = _relative_repo_path(repo_root, signed_ui_archive_path, "signed UI archive path")
+    signed_ui_receipt_relative = _relative_repo_path(repo_root, signed_ui_receipt_path, "signed UI receipt path")
+    release_receipt_bytes = release_receipt_path.read_bytes()
+    release_receipt, receipt_file_sha256 = load_validated_checked_receipt(release_receipt_path)
+    release = _mapping(release_receipt.get("release"), "release receipt release")
+    release_tag = sanitize_release_tag(release.get("tag"))
+    if evidence_ref is not None:
+        sanitize_evidence_ref(evidence_ref, release_tag)
+    source_sha = _sha(release_receipt.get("source_sha"), "release receipt source SHA")
+    release_route = _string(release_receipt.get("release_route"), "release receipt release route")
+    _resolve_revision(repo_root, source_sha)
+    _verify_source_ancestry(_verification_reader(repo_root, verification_revision=None, worktree=True), source_sha)
+    receipt_path_expected = f"docs/release-evidence/{release_tag}/{RECEIPT_NAME}"
+    qualification_path_expected = f"docs/release-evidence/{release_tag}/{QUALIFICATION_RECORD_NAME}"
+    signed_ui_archive_path_expected = f"docs/release-evidence/{release_tag}/{SIGNED_UI_ARCHIVE_NAME}"
+    signed_ui_receipt_path_expected = f"docs/release-evidence/{release_tag}/{SIGNED_UI_RECEIPT_NAME}"
+    if receipt_relative != receipt_path_expected:
+        raise ReleaseEvidenceV2Error("Release receipt path does not match the sanitized release tag.")
+    if qualification_relative != qualification_path_expected:
+        raise ReleaseEvidenceV2Error("Qualification record path does not match the sanitized release tag.")
+    if signed_ui_archive_relative != signed_ui_archive_path_expected:
+        raise ReleaseEvidenceV2Error("Signed UI archive path does not match the sanitized release tag.")
+    if signed_ui_receipt_relative != signed_ui_receipt_path_expected:
+        raise ReleaseEvidenceV2Error("Signed UI receipt path does not match the sanitized release tag.")
+    if release_receipt_asset_id is None:
+        release_receipt_asset_id = _release_receipt_asset_id(
+            _load_json_path(release_path, "published release"), receipt_file_sha256
+        )
+    else:
+        release_receipt_asset_id = _positive_integer(release_receipt_asset_id, "release receipt asset ID")
+    if signed_ui_artifact_id is None:
+        signed_ui_artifact_id = _manifest_signed_ui_artifact_id(qualification_manifest_path)
+    else:
+        signed_ui_artifact_id = _positive_integer(signed_ui_artifact_id, "signed UI artifact ID")
+    qualification_bytes = qualification_record_path.read_bytes()
+    signed_ui_archive_bytes = signed_ui_archive_path.read_bytes()
+    signed_ui_receipt_bytes = signed_ui_receipt_path.read_bytes()
+    live_appcast_bytes = live_appcast_path.read_bytes()
+    signed_ui_receipt_sha256 = _sha256(
+        _mapping(_load_json_bytes(signed_ui_receipt_bytes, "signed UI receipt"), "signed UI receipt").get(
+            "receipt_sha256"
+        ),
+        "signed UI receipt self SHA-256",
+    )
+    signed_ui_receipt_file_sha256 = _digest_bytes(signed_ui_receipt_bytes)
+    live_appcast_sha256 = _digest_bytes(live_appcast_bytes)
+    receipt_appcast_sha256 = _receipt_artifact_digest(release_receipt, "appcast")
+    if live_appcast_sha256 != receipt_appcast_sha256:
+        raise ReleaseEvidenceV2Error("Live appcast bytes do not match the validated release receipt.")
+    _timestamp(captured_at, "capture-v2 captured_at")
+    _timestamp(live_appcast_verified_at, "capture-v2 live appcast verified_at")
+    workflow = _mapping(release_receipt.get("workflow"), "release receipt workflow")
+    release_workflow = {
+        "actor": _string(workflow.get("actor"), "release workflow actor"),
+        "path": _path(workflow.get("path"), "release workflow path"),
+        "run_attempt": _positive_integer(workflow.get("run_attempt"), "release workflow run attempt"),
+        "run_id": _positive_integer(workflow.get("run_id"), "release workflow run ID"),
+    }
+    capture_workflow = {
+        "actor": _string(capture_workflow_actor, "capture workflow actor"),
+        "path": _path(capture_workflow_path, "capture workflow path"),
+        "run_attempt": _positive_integer(capture_workflow_run_attempt, "capture workflow run attempt"),
+        "run_id": _positive_integer(capture_workflow_run_id, "capture workflow run ID"),
+    }
+    record = with_self_digest(
+        {
+            "capture_workflow": capture_workflow,
+            "captured_at": captured_at,
+            "live_appcast": {"sha256": live_appcast_sha256, "verified_at": live_appcast_verified_at},
+            "qualification_record": {
+                "path": qualification_relative,
+                "sha256": _digest_bytes(qualification_bytes),
+            },
+            "receipt": {
+                "asset_id": release_receipt_asset_id,
+                "file_sha256": receipt_file_sha256,
+                "path": receipt_relative,
+                "receipt_sha256": _sha256(release_receipt.get("receipt_sha256"), "release receipt self SHA-256"),
+            },
+            "record_type": "capture",
+            "release_tag": release_tag,
+            "release_workflow": release_workflow,
+            "repository": EXPECTED_REPOSITORY,
+            "schema_version": SCHEMA_VERSION,
+            "signed_ui": {
+                "archive": {"path": signed_ui_archive_relative, "sha256": _digest_bytes(signed_ui_archive_bytes)},
+                "artifact_id": signed_ui_artifact_id,
+                "receipt": {
+                    "file_sha256": signed_ui_receipt_file_sha256,
+                    "path": signed_ui_receipt_relative,
+                    "receipt_sha256": signed_ui_receipt_sha256,
+                },
+            },
+            "source_inputs": _capture_source_inputs(repo_root, source_sha, release_tag, release_route),
+            "source_sha": source_sha,
+            "state": "CAPTURED",
+        }
+    )
+    if _digest_bytes(release_receipt_bytes) != receipt_file_sha256:
+        raise ReleaseEvidenceV2Error("Release receipt digest changed while building capture-v2.")
+    return record
+
+
+def write_or_validate_capture_v2(
+    repo_root: Path,
+    release_tag: str,
+    record: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    tag = sanitize_release_tag(release_tag)
+    capture_path = repo_root / EVIDENCE_ROOT / tag / CAPTURE_NAME
+    if capture_path.exists():
+        existing = _load_record(
+            _verification_reader(repo_root, verification_revision=None, worktree=True),
+            f"{EVIDENCE_ROOT}/{tag}/{CAPTURE_NAME}",
+            "existing capture-v2 record",
+        )
+        validate_v2_bundle(repo_root, tag, worktree=True)
+        return existing
+    write_record(capture_path, record)
+    validate_v2_bundle(repo_root, tag, worktree=True)
+    return record
+
+
+def capture_v2(
+    repo_root: Path,
+    *,
+    release_receipt_path: Path,
+    release_path: Path,
+    qualification_record_path: Path,
+    signed_ui_archive_path: Path,
+    signed_ui_receipt_path: Path,
+    qualification_manifest_path: Path,
+    live_appcast_path: Path,
+    captured_at: str,
+    live_appcast_verified_at: str,
+    capture_workflow_actor: str,
+    capture_workflow_run_id: int,
+    capture_workflow_run_attempt: int,
+    capture_workflow_path: str = EVIDENCE_WORKFLOW_PATH,
+    release_receipt_asset_id: int | None = None,
+    signed_ui_artifact_id: int | None = None,
+    evidence_ref: str | None = None,
+) -> Mapping[str, Any]:
+    receipt, _ = load_validated_checked_receipt(release_receipt_path)
+    release = _mapping(receipt.get("release"), "release receipt release")
+    release_tag = sanitize_release_tag(release.get("tag"))
+    if evidence_ref is not None:
+        sanitize_evidence_ref(evidence_ref, release_tag)
+    capture_path = repo_root.resolve() / EVIDENCE_ROOT / release_tag / CAPTURE_NAME
+    if capture_path.exists():
+        return write_or_validate_capture_v2(repo_root, release_tag, {})
+    record = build_capture_v2(
+        repo_root,
+        release_receipt_path=release_receipt_path,
+        release_path=release_path,
+        qualification_record_path=qualification_record_path,
+        signed_ui_archive_path=signed_ui_archive_path,
+        signed_ui_receipt_path=signed_ui_receipt_path,
+        qualification_manifest_path=qualification_manifest_path,
+        live_appcast_path=live_appcast_path,
+        captured_at=captured_at,
+        live_appcast_verified_at=live_appcast_verified_at,
+        capture_workflow_actor=capture_workflow_actor,
+        capture_workflow_run_id=capture_workflow_run_id,
+        capture_workflow_run_attempt=capture_workflow_run_attempt,
+        capture_workflow_path=capture_workflow_path,
+        release_receipt_asset_id=release_receipt_asset_id,
+        signed_ui_artifact_id=signed_ui_artifact_id,
+        evidence_ref=evidence_ref,
+    )
+    return write_or_validate_capture_v2(repo_root, release_tag, record)
+
+
+def _tree_paths(reader: _BundleReader, prefix: str) -> list[str]:
+    if reader.worktree:
+        root, normalized = _repo_path(reader.repo_root, prefix, "evidence directory")
+        if not root.is_dir():
+            raise ReleaseEvidenceV2Error(f"Evidence directory does not exist: {normalized}.")
+        return sorted(path.relative_to(reader.repo_root).as_posix() for path in root.rglob("*") if path.is_file())
+    if reader.revision is None:
+        raise ReleaseEvidenceV2Error("Verification revision is missing.")
+    return sorted(
+        path
+        for path in _git_run(
+            reader.repo_root,
+            ["ls-tree", "-r", "--name-only", reader.revision, "--", prefix],
+            "list release evidence files",
+        )
+        .decode()
+        .splitlines()
+        if path.startswith(f"{prefix}/")
+    )
+
+
+def canonical_index_bytes(index: Mapping[str, Any]) -> bytes:
+    return (json.dumps(index, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode()
+
+
+def build_index_v2(
+    repo_root: Path,
+    *,
+    revision: str | None = None,
+    worktree: bool = False,
+) -> dict[str, Any]:
+    repo_root = repo_root.resolve()
+    reader = _verification_reader(repo_root, verification_revision=revision, worktree=worktree)
+    legacy_index_bytes = reader.read(LEGACY_INDEX_PATH, "legacy release evidence index")
+    releases: list[dict[str, Any]] = []
+    for release_tag in _tags_at_revision(reader):
+        verified = verify_tag(
+            repo_root,
+            release_tag,
+            verification_revision=reader.revision if not worktree else None,
+            worktree=worktree,
+        )
+        prefix = f"{EVIDENCE_ROOT.as_posix()}/{release_tag}"
+        files = [
+            {"path": path, "sha256": _digest_bytes(reader.read(path, "release evidence file"))}
+            for path in _tree_paths(reader, prefix)
+            if path != f"{EVIDENCE_ROOT.as_posix()}/{INDEX_NAME}"
+        ]
+        releases.append({"evidence_class": verified["class"], "files": files, "release_tag": release_tag})
+    return {
+        "legacy_index": {"path": LEGACY_INDEX_PATH, "sha256": _digest_bytes(legacy_index_bytes)},
+        "releases": releases,
+        "schema_version": SCHEMA_VERSION,
+    }
+
+
+def write_index_v2(repo_root: Path, index: Mapping[str, Any], *, output_path: Path | None = None) -> Path:
+    repo_root = repo_root.resolve()
+    target = output_path or repo_root / EVIDENCE_ROOT / INDEX_NAME
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(canonical_index_bytes(index))
+    return target
+
+
+def check_index_v2(
+    repo_root: Path,
+    *,
+    revision: str | None = None,
+    worktree: bool = False,
+    output_path: Path | None = None,
+) -> None:
+    repo_root = repo_root.resolve()
+    expected = canonical_index_bytes(build_index_v2(repo_root, revision=revision, worktree=worktree))
+    if worktree:
+        target = output_path or repo_root / EVIDENCE_ROOT / INDEX_NAME
+        try:
+            actual = target.read_bytes()
+        except OSError as error:
+            raise ReleaseEvidenceV2Error(f"Unable to read index-v2 at {target}: {error}") from error
+    else:
+        reader = _verification_reader(repo_root, verification_revision=revision, worktree=False)
+        target = output_path or repo_root / EVIDENCE_ROOT / INDEX_NAME
+        relative = _relative_repo_path(repo_root, target, "index-v2 path")
+        actual = reader.read(relative, "index-v2")
+    if actual != expected:
+        raise ReleaseEvidenceV2Error(f"index-v2 bytes are not deterministic for the selected evidence tree: {target}.")
 
 
 def _load_record(reader: _BundleReader, relative_path: str, description: str) -> Mapping[str, Any]:
@@ -1550,6 +1904,12 @@ def verify_all_tags(
     return results
 
 
+def _write_github_output(path: Path, outputs: Mapping[str, Any]) -> None:
+    with path.open("a", encoding="utf-8") as handle:
+        for key, value in outputs.items():
+            handle.write(f"{key}={value}\n")
+
+
 def _parse_arguments(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Verify passive release-evidence v2 and explicit historical v1 classes offline."
@@ -1565,7 +1925,154 @@ def _parse_arguments(argv: Sequence[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _parse_sanitize_arguments(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Sanitize the canonical release evidence tag and branch ref.")
+    parser.add_argument("--repo-root", type=Path, default=REPO_ROOT)
+    parser.add_argument("--release-receipt", type=Path)
+    parser.add_argument("--release-tag")
+    parser.add_argument("--evidence-ref")
+    parser.add_argument("--github-output", type=Path)
+    return parser.parse_args(argv)
+
+
+def _parse_capture_arguments(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build and write-once validate deterministic capture-v2 evidence.")
+    parser.add_argument("--repo-root", type=Path, default=REPO_ROOT)
+    parser.add_argument("--release-receipt", type=Path, required=True)
+    parser.add_argument("--release", type=Path, required=True)
+    parser.add_argument("--qualification-record", type=Path, required=True)
+    parser.add_argument("--qualification-manifest", type=Path, required=True)
+    parser.add_argument("--signed-ui-archive", type=Path, required=True)
+    parser.add_argument("--signed-ui-receipt", type=Path, required=True)
+    parser.add_argument("--live-appcast", type=Path, required=True)
+    parser.add_argument("--captured-at", required=True)
+    parser.add_argument("--live-appcast-verified-at", required=True)
+    parser.add_argument("--capture-workflow-actor", required=True)
+    parser.add_argument("--capture-workflow-path", default=EVIDENCE_WORKFLOW_PATH)
+    parser.add_argument("--capture-workflow-run-id", type=int, required=True)
+    parser.add_argument("--capture-workflow-run-attempt", type=int, required=True)
+    parser.add_argument("--release-receipt-asset-id", type=int)
+    parser.add_argument("--signed-ui-artifact-id", type=int)
+    parser.add_argument("--evidence-ref")
+    parser.add_argument("--github-output", type=Path)
+    return parser.parse_args(argv)
+
+
+def _parse_index_arguments(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate or check deterministic release evidence index-v2.")
+    parser.add_argument("--repo-root", type=Path, default=REPO_ROOT)
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--check", action="store_true")
+    action.add_argument("--write", action="store_true")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--revision")
+    source.add_argument("--worktree", action="store_true")
+    parser.add_argument("--output", type=Path)
+    return parser.parse_args(argv)
+
+
+def _path_from_cli(value: Path) -> Path:
+    return value if value.is_absolute() else Path.cwd() / value
+
+
+def _run_sanitize(argv: Sequence[str]) -> int:
+    args = _parse_sanitize_arguments(argv)
+    try:
+        tag: str
+        if args.release_receipt is not None:
+            receipt, _ = load_validated_checked_receipt(_path_from_cli(args.release_receipt))
+            release = _mapping(receipt.get("release"), "release receipt release")
+            tag = sanitize_release_tag(release.get("tag"))
+            if args.release_tag is not None and sanitize_release_tag(args.release_tag) != tag:
+                raise ReleaseEvidenceV2Error("Release tag does not match the validated release receipt.")
+        elif args.release_tag is not None:
+            tag = sanitize_release_tag(args.release_tag)
+        else:
+            raise ReleaseEvidenceV2Error("One of --release-receipt or --release-tag is required.")
+        evidence_ref = sanitize_evidence_ref(args.evidence_ref, tag) if args.evidence_ref else evidence_ref_for_tag(tag)
+        outputs = {"evidence_ref": evidence_ref, "release_tag": tag}
+        if args.github_output is not None:
+            _write_github_output(_path_from_cli(args.github_output), outputs)
+        else:
+            print(json.dumps(outputs, sort_keys=True, separators=(",", ":")))
+    except (ReleaseEvidenceError, ReleaseReceiptError, ReleaseEvidenceV2Error) as error:
+        print(f"release-evidence-v2: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _run_capture(argv: Sequence[str]) -> int:
+    args = _parse_capture_arguments(argv)
+    repo_root = args.repo_root.resolve()
+    try:
+        record = capture_v2(
+            repo_root,
+            release_receipt_path=_path_from_cli(args.release_receipt),
+            release_path=_path_from_cli(args.release),
+            qualification_record_path=_path_from_cli(args.qualification_record),
+            signed_ui_archive_path=_path_from_cli(args.signed_ui_archive),
+            signed_ui_receipt_path=_path_from_cli(args.signed_ui_receipt),
+            qualification_manifest_path=_path_from_cli(args.qualification_manifest),
+            live_appcast_path=_path_from_cli(args.live_appcast),
+            captured_at=args.captured_at,
+            live_appcast_verified_at=args.live_appcast_verified_at,
+            capture_workflow_actor=args.capture_workflow_actor,
+            capture_workflow_run_id=args.capture_workflow_run_id,
+            capture_workflow_run_attempt=args.capture_workflow_run_attempt,
+            capture_workflow_path=args.capture_workflow_path,
+            release_receipt_asset_id=args.release_receipt_asset_id,
+            signed_ui_artifact_id=args.signed_ui_artifact_id,
+            evidence_ref=args.evidence_ref,
+        )
+        release_tag = sanitize_release_tag(record.get("release_tag"))
+    except (OSError, ReleaseEvidenceError, ReleaseReceiptError, ReleaseEvidenceV2Error) as error:
+        print(f"release-evidence-v2: {error}", file=sys.stderr)
+        return 1
+    outputs = {
+        "capture_path": f"{EVIDENCE_ROOT.as_posix()}/{release_tag}/{CAPTURE_NAME}",
+        "capture_sha256": record["capture_sha256"],
+        "release_tag": release_tag,
+    }
+    if args.github_output is not None:
+        _write_github_output(_path_from_cli(args.github_output), outputs)
+    else:
+        print(json.dumps(outputs, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+def _run_index(argv: Sequence[str]) -> int:
+    args = _parse_index_arguments(argv)
+    repo_root = args.repo_root.resolve()
+    output_path = _path_from_cli(args.output) if args.output is not None else None
+    try:
+        if args.write:
+            if args.revision is not None:
+                raise ReleaseEvidenceV2Error("index-v2 --write cannot target a historical revision.")
+            index = build_index_v2(repo_root, worktree=True)
+            target = write_index_v2(repo_root, index, output_path=output_path)
+            print(json.dumps({"index_path": target.relative_to(repo_root).as_posix()}, separators=(",", ":")))
+        else:
+            check_index_v2(
+                repo_root,
+                revision=args.revision,
+                worktree=args.worktree,
+                output_path=output_path,
+            )
+            print(json.dumps({"index_checked": True}, separators=(",", ":")))
+    except (OSError, ReleaseEvidenceV2Error) as error:
+        print(f"release-evidence-v2: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    arguments = list(argv) if argv is not None else sys.argv[1:]
+    if arguments and arguments[0] == "sanitize":
+        return _run_sanitize(arguments[1:])
+    if arguments and arguments[0] in {"capture", "capture-v2"}:
+        return _run_capture(arguments[1:])
+    if arguments and arguments[0] in {"index", "index-v2"}:
+        return _run_index(arguments[1:])
     args = _parse_arguments(argv)
     try:
         if args.tag:

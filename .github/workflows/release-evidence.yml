@@ -24,12 +24,13 @@ jobs:
       contents: read
     outputs:
       base_main_sha: ${{ steps.base.outputs.sha }}
+      evidence_ref: ${{ steps.sanitize.outputs.evidence_ref }}
       existing_branch_sha: ${{ steps.reuse.outputs.existing_branch_sha }}
       has_changes: ${{ steps.stage.outputs.has_changes }}
       manifest_sha256: ${{ steps.reconcile.outputs.manifest_sha256 }}
       receipt_file_sha256: ${{ steps.reconcile.outputs.receipt_file_sha256 }}
       release_run_id: ${{ steps.reconcile.outputs.release_run_id }}
-      release_tag: ${{ steps.reconcile.outputs.release_tag }}
+      release_tag: ${{ steps.sanitize.outputs.release_tag }}
       signed_ui_receipt_sha256: ${{ steps.reconcile.outputs.signed_ui_receipt_sha256 }}
       signed_ui_artifact_sha256: ${{ steps.reconcile.outputs.signed_ui_artifact_sha256 }}
       source_sha: ${{ steps.reconcile.outputs.source_sha }}
@@ -127,13 +128,23 @@ jobs:
             "https://cbusillo.github.io/BD_to_AVP/appcast.xml" \
             --output live-appcast.xml
 
+      - name: Sanitize release evidence tag and ref
+        id: sanitize
+        run: |
+          set -euo pipefail
+          python -m scripts.release_evidence_v2 sanitize \
+            --release-receipt release-receipt.json \
+            --github-output "$GITHUB_OUTPUT"
+
       - name: Preserve an existing idempotent evidence branch
         id: reuse
+        env:
+          EVIDENCE_REF: ${{ steps.sanitize.outputs.evidence_ref }}
+          RELEASE_TAG: ${{ steps.sanitize.outputs.release_tag }}
         run: |
           set -euo pipefail
           RECEIPT_FILE_SHA256=$(sha256sum release-receipt.json | awk '{print $1}')
-          RELEASE_TAG=$(jq -r .release.tag release-receipt.json)
-          BRANCH_NAME="automation/release-evidence-$RELEASE_TAG"
+          BRANCH_NAME="$EVIDENCE_REF"
           MANIFEST_PATH="docs/release-evidence/$RELEASE_TAG/qualification-manifest.json"
           QUALIFICATION_RECORD_PATH="docs/release-evidence/$RELEASE_TAG/qualification-record.json"
           SIGNED_UI_ARCHIVE_PATH="docs/release-evidence/$RELEASE_TAG/signed-artifact-ui.zip"
@@ -348,13 +359,49 @@ jobs:
             --signed-ui-artifact-archive "${{ steps.signed-ui.outputs.archive_path }}" \
             --signed-ui-receipt "${{ steps.signed-ui.outputs.receipt_path }}" \
             --signed-ui-receipt-file-sha256 "${{ steps.signed-ui.outputs.receipt_file_sha256 }}" \
-            --evidence-ref "automation/release-evidence-$(jq -er .release.tag release-receipt.json)" \
+            --evidence-ref "${{ steps.sanitize.outputs.evidence_ref }}" \
             --evidence-base-sha "${{ steps.base.outputs.sha }}" \
             --runner-sha "${{ steps.base.outputs.sha }}" \
             --sparkle-route "${{ steps.signed-ui.outputs.sparkle_route }}" \
             --repo-root "$GITHUB_WORKSPACE" \
             "${RECOVERY_ARGS[@]}" \
             --github-output "$GITHUB_OUTPUT"
+
+      - name: Generate or validate shadow capture-v2
+        id: capture-v2
+        env:
+          CAPTURE_TIMESTAMP: ${{ github.event.workflow_run.updated_at }}
+          CAPTURE_WORKFLOW_ACTOR: ${{ github.event.workflow_run.actor.login }}
+          CAPTURE_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CAPTURE_WORKFLOW_RUN_ID: ${{ github.run_id }}
+          EVIDENCE_REF: ${{ steps.sanitize.outputs.evidence_ref }}
+          RELEASE_TAG: ${{ steps.sanitize.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          BUNDLE="docs/release-evidence/$RELEASE_TAG"
+          python -m scripts.release_evidence_v2 capture \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --release-receipt "$BUNDLE/release-receipt.json" \
+            --release release.json \
+            --qualification-record "$BUNDLE/qualification-record.json" \
+            --qualification-manifest "$BUNDLE/qualification-manifest.json" \
+            --signed-ui-archive "$BUNDLE/signed-artifact-ui.zip" \
+            --signed-ui-receipt "$BUNDLE/signed-artifact-ui-receipt.json" \
+            --live-appcast live-appcast.xml \
+            --captured-at "$CAPTURE_TIMESTAMP" \
+            --live-appcast-verified-at "$CAPTURE_TIMESTAMP" \
+            --capture-workflow-actor "$CAPTURE_WORKFLOW_ACTOR" \
+            --capture-workflow-path .github/workflows/release-evidence.yml \
+            --capture-workflow-run-id "$CAPTURE_WORKFLOW_RUN_ID" \
+            --capture-workflow-run-attempt "$CAPTURE_WORKFLOW_RUN_ATTEMPT" \
+            --evidence-ref "$EVIDENCE_REF" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Generate and check shadow index-v2
+        run: |
+          set -euo pipefail
+          python -m scripts.release_evidence_v2 index --write --repo-root "$GITHUB_WORKSPACE"
+          python -m scripts.release_evidence_v2 index --check --worktree --repo-root "$GITHUB_WORKSPACE"
 
       - name: Stage only generated evidence files
         id: stage
@@ -412,7 +459,7 @@ jobs:
 
       - name: Reject conflicting evidence on the idempotent branch
         env:
-          BRANCH_NAME: automation/release-evidence-${{ needs.validate-and-prepare.outputs.release_tag }}
+          EVIDENCE_REF: ${{ needs.validate-and-prepare.outputs.evidence_ref }}
           EXPECTED_EXISTING_BRANCH_SHA: ${{ needs.validate-and-prepare.outputs.existing_branch_sha }}
           EXPECTED_RECEIPT_FILE_SHA256: ${{ needs.validate-and-prepare.outputs.receipt_file_sha256 }}
           EXPECTED_SIGNED_UI_RECEIPT_SHA256: ${{ needs.validate-and-prepare.outputs.signed_ui_receipt_sha256 }}
@@ -420,6 +467,7 @@ jobs:
           RELEASE_TAG: ${{ needs.validate-and-prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
+          BRANCH_NAME="$EVIDENCE_REF"
           REMOTE_BRANCH_SHA=$(git ls-remote --heads origin "refs/heads/$BRANCH_NAME" | awk '{print $1}')
           if [ "$REMOTE_BRANCH_SHA" != "$EXPECTED_EXISTING_BRANCH_SHA" ]; then
             echo "Evidence branch moved after evidence preparation; rerun against its current head." >&2
@@ -467,7 +515,7 @@ jobs:
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
         with:
           add-paths: docs
-          branch: automation/release-evidence-${{ needs.validate-and-prepare.outputs.release_tag }}
+          branch: ${{ needs.validate-and-prepare.outputs.evidence_ref }}
           commit-message: Record immutable evidence for ${{ needs.validate-and-prepare.outputs.release_tag }}
           delete-branch: true
           title: Record immutable evidence for ${{ needs.validate-and-prepare.outputs.release_tag }}

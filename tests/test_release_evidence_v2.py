@@ -13,13 +13,21 @@ from typing import Any
 from scripts.release_evidence_v2 import (
     CAPTURE_NAME,
     DISPOSITION_NAME,
+    INDEX_NAME,
     QUALIFICATION_NAME,
     ReleaseEvidenceV2Error,
+    build_index_v2,
+    canonical_index_bytes,
     canonical_record_bytes,
+    check_index_v2,
+    evidence_ref_for_tag,
+    sanitize_evidence_ref,
+    sanitize_release_tag,
     validate_v2_bundle,
     verify_all_tags,
     verify_tag,
     verify_write_once_history,
+    write_or_validate_capture_v2,
     qualification_template_path,
     with_self_digest,
     write_record,
@@ -998,6 +1006,82 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             publication_path.write_text(json.dumps(publication, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(ReleaseEvidenceV2Error, "nearest recovery variant"):
                 verify_tag(publication_root, "v0.3.0", worktree=True)
+
+    def test_index_v2_is_deterministic_sorted_and_preserves_legacy_index_bytes(self) -> None:
+        revision = git(REPO_ROOT, "rev-parse", "HEAD")
+        legacy_before = (REPO_ROOT / "docs" / "release-evidence" / "index-v1.json").read_bytes()
+        first = build_index_v2(REPO_ROOT, revision=revision)
+        second = build_index_v2(REPO_ROOT, revision=revision)
+        self.assertEqual(canonical_index_bytes(first), canonical_index_bytes(second))
+        self.assertEqual(first["schema_version"], 2)
+        self.assertEqual(first["legacy_index"]["path"], "docs/release-evidence/index-v1.json")
+        self.assertEqual(first["legacy_index"]["sha256"], digest(REPO_ROOT / first["legacy_index"]["path"]))
+        self.assertEqual(
+            [release["release_tag"] for release in first["releases"]],
+            sorted(release["release_tag"] for release in first["releases"]),
+        )
+        for release in first["releases"]:
+            self.assertEqual(release["files"], sorted(release["files"], key=lambda item: item["path"]))
+            self.assertNotIn(f"docs/release-evidence/{INDEX_NAME}", {item["path"] for item in release["files"]})
+        self.assertEqual(legacy_before, (REPO_ROOT / "docs" / "release-evidence" / "index-v1.json").read_bytes())
+
+    def test_index_v2_historical_replay_contains_every_legacy_class(self) -> None:
+        index = build_index_v2(REPO_ROOT, revision="119b27f4bf0e72b1b979d5397993d1ae526db187")
+        classes = {release["evidence_class"] for release in index["releases"]}
+        self.assertIn("legacy-publication-v1", classes)
+        self.assertIn("legacy-qualification-manifest-v1", classes)
+        self.assertIn("legacy-failed-post-publication-v1", classes)
+
+    def test_tag_and_evidence_ref_sanitization_is_exact(self) -> None:
+        self.assertEqual(sanitize_release_tag("v0.3.2-beta.7"), "v0.3.2-beta.7")
+        self.assertEqual(evidence_ref_for_tag("v0.3.2-beta.7"), "automation/release-evidence-v0.3.2-beta.7")
+        self.assertEqual(
+            sanitize_evidence_ref("automation/release-evidence-v0.3.2-beta.7", "v0.3.2-beta.7"),
+            "automation/release-evidence-v0.3.2-beta.7",
+        )
+        for malicious in ("v0.3.2/evil", "v0.3.2..evil", "v0.3.2-", "v0.3.2\n"):
+            with self.assertRaises(ReleaseEvidenceV2Error):
+                sanitize_release_tag(malicious)
+        with self.assertRaises(ReleaseEvidenceV2Error):
+            sanitize_evidence_ref("automation/release-evidence-v0.3.2/evil", "v0.3.2")
+
+    def test_existing_capture_bytes_are_reused_and_conflicting_record_write_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_sha, bundle = self.build_repository(root)
+            capture = self.write_capture(root, source_sha)
+            capture_path = bundle / CAPTURE_NAME
+            original = capture_path.read_bytes()
+            changed = dict(capture)
+            changed["captured_at"] = "2026-08-05T12:02:00Z"
+            changed = with_self_digest(changed)
+            reused = write_or_validate_capture_v2(root, TAG, changed)
+            self.assertEqual(reused["capture_sha256"], capture["capture_sha256"])
+            self.assertEqual(capture_path.read_bytes(), original)
+            capture_path.unlink()
+            write_record(capture_path, capture)
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "different bytes"):
+                write_record(capture_path, changed)
+
+    def test_workflow_contract_uses_unconditional_shadow_capture_and_index(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release-evidence.yml").read_text(encoding="utf-8")
+        self.assertIn("name: Sanitize release evidence tag and ref", workflow)
+        self.assertIn("name: Generate or validate shadow capture-v2", workflow)
+        self.assertIn("name: Generate and check shadow index-v2", workflow)
+        self.assertIn("--captured-at", workflow)
+        self.assertIn("--capture-workflow-run-id", workflow)
+        self.assertIn("branch: ${{ needs.validate-and-prepare.outputs.evidence_ref }}", workflow)
+        self.assertNotIn("if: vars.RELEASE_EVIDENCE_V2", workflow)
+
+    def test_index_check_rejects_drift_without_changing_legacy_index(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            index = build_index_v2(REPO_ROOT, worktree=True)
+            index_path = Path(temporary_directory) / INDEX_NAME
+            index_path.write_bytes(canonical_index_bytes(index))
+            check_index_v2(REPO_ROOT, worktree=True, output_path=index_path)
+            index_path.write_bytes(index_path.read_bytes().replace(b"schema_version", b"schema-version", 1))
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "not deterministic"):
+                check_index_v2(REPO_ROOT, worktree=True, output_path=index_path)
 
 
 if __name__ == "__main__":
