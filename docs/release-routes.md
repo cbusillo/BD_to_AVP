@@ -20,11 +20,11 @@ post-publication exact-artifact qualification is blocked by packaged worker
 version metadata. Corrective Beta `0.3.2b6` build `168` is a cancelled,
 unpublished signed attempt whose draft `374538590` was deleted through the
 authorized immutable-disposition path; its tag and build are permanently
-non-reusable. Beta `0.3.2b7` build `169` is published, immutable, and fully
-qualified. Issue #613 owns prepared successor RC `0.3.2rc1` build `170` under
-feature freeze; dispatch, signing approval, and publication remain separately
-authorized. Run-bound signing approval remains a separate authorization
-boundary.
+non-reusable. Beta `0.3.2b7` build `169` and RC `0.3.2rc1` build `170` are
+published, immutable, and fully qualified. Issue #614 owns prepared successor
+Stable `0.3.2` build `171`; dispatch, signing approval, and publication remain
+separately authorized. Run-bound signing approval remains a separate
+authorization boundary.
 
 ## Production Identity
 
@@ -495,15 +495,23 @@ zero blocking or operator-required cases; the immutable publication and
 qualification contract is recorded in
 [the 0.3.2 Beta 7 cut packet](0.3.2-beta.7-cut-packet.md).
 
-RC 1 is prepared under feature freeze as internal version `0.3.2rc1`, public
-tag and title `v0.3.2-rc.1`, and global build `170`. Published immutable Beta 7
-is its immediate release-note and update-route predecessor; failed builds `165`
-and `166` and cancelled build `168` remain burned. Release-independent
-Production Preflight run `32791057931` passed on exact protected-main SHA
-`f65185dc9762c804ce8c879e6d044cfb8b9213a3` before metadata preparation. No RC
-1 tag, release, draft, appcast item, PyPI version, or Homebrew change was
-created. The preparation contract is recorded in
+RC 1 is published and immutable as internal version `0.3.2rc1`, public tag and
+title `v0.3.2-rc.1`, and global build `170`. Guarded Prerelease run
+`32796196439` published release `376092200` from source and tag SHA
+`1d691a6db7c18d09f55a425ec77a01ab6d917d80`. Final qualification passed with
+zero blocking cases and 15 completed cases. Its immutable publication and
+qualification contract is recorded in
 [the 0.3.2 RC 1 cut packet](0.3.2-rc.1-cut-packet.md).
+
+Stable 0.3.2 is prepared as internal and public version `0.3.2`, tag and title
+`v0.3.2`, and global build `171`. RC 1 is the immediate global predecessor and
+exact RC-route qualification base. Stable `v0.3.1` build `162` remains the
+previous Stable update and release-note base. The unchanneled Stable item is
+eligible on Stable, RC, Beta, and Alpha routes. Failed builds `165` and `166`
+and cancelled build `168` remain burned. No Stable dispatch, signing approval,
+tag, release, draft, appcast, PyPI, or Homebrew mutation is authorized by this
+preparation. The preparation contract is recorded in
+[the 0.3.2 Stable cut packet](0.3.2-cut-packet.md).
 
 ## Historical Boundaries
 
