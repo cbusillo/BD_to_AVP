@@ -451,7 +451,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             source_sha, bundle = self.build_repository(root)
-            capture = self.write_capture(root, source_sha)
+            self.write_capture(root, source_sha)
             (bundle / "release-receipt.json").write_bytes((bundle / "release-receipt.json").read_bytes() + b" ")
             with self.assertRaisesRegex(ReleaseEvidenceV2Error, "Release receipt digest"):
                 validate_v2_bundle(root, TAG, worktree=True)
