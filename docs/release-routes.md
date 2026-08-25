@@ -20,10 +20,11 @@ post-publication exact-artifact qualification is blocked by packaged worker
 version metadata. Corrective Beta `0.3.2b6` build `168` is a cancelled,
 unpublished signed attempt whose draft `374538590` was deleted through the
 authorized immutable-disposition path; its tag and build are permanently
-non-reusable. Issue #609 owns prepared successor Beta `0.3.2b7` build `169`;
-dispatch, signing approval, and publication remain separately authorized.
-Run-bound signing approval
-remains a separate authorization boundary.
+non-reusable. Beta `0.3.2b7` build `169` is published, immutable, and fully
+qualified. Issue #613 owns prepared successor RC `0.3.2rc1` build `170` under
+feature freeze; dispatch, signing approval, and publication remain separately
+authorized. Run-bound signing approval remains a separate authorization
+boundary.
 
 ## Production Identity
 
@@ -486,15 +487,23 @@ to begin at Beta 7/build `169`. Milestone-context validation accepts the
 cancelled candidate only after that disposition validates, then still requires
 build `168` in the successor qualification's burned-build list.
 
-Beta 7 is prepared as internal version `0.3.2b7`, public tag and title
-`v0.3.2-beta.7`, and global build `169`. Published immutable Beta 5 remains its
-prior update-route input; failed builds `165` and `166` and cancelled build
-`168` remain burned. Release-independent Production Preflight run `32620933465`
-passed on exact protected-main SHA
-`02bf566e42b62a18e1a274e33caf1943d26827dd` before metadata preparation. No
-Beta 7 tag, release, draft, appcast item, PyPI version, or Homebrew change was
-created. The preparation contract is recorded in
+Beta 7 is published and immutable as internal version `0.3.2b7`, public tag and
+title `v0.3.2-beta.7`, and global build `169`. Guarded Prerelease run
+`32666346343` published release `375333598` from source and tag SHA
+`d994ce11f9d4a669f068c89dc8e51ca269710290`. Final qualification passed with
+zero blocking or operator-required cases; the immutable publication and
+qualification contract is recorded in
 [the 0.3.2 Beta 7 cut packet](0.3.2-beta.7-cut-packet.md).
+
+RC 1 is prepared under feature freeze as internal version `0.3.2rc1`, public
+tag and title `v0.3.2-rc.1`, and global build `170`. Published immutable Beta 7
+is its immediate release-note and update-route predecessor; failed builds `165`
+and `166` and cancelled build `168` remain burned. Release-independent
+Production Preflight run `32791057931` passed on exact protected-main SHA
+`f65185dc9762c804ce8c879e6d044cfb8b9213a3` before metadata preparation. No RC
+1 tag, release, draft, appcast item, PyPI version, or Homebrew change was
+created. The preparation contract is recorded in
+[the 0.3.2 RC 1 cut packet](0.3.2-rc.1-cut-packet.md).
 
 ## Historical Boundaries
 
