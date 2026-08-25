@@ -647,18 +647,49 @@ def write_or_validate_capture_v2(
     record: Mapping[str, Any],
 ) -> Mapping[str, Any]:
     tag = sanitize_release_tag(release_tag)
+    reader = _verification_reader(repo_root, verification_revision=None, worktree=True)
+    candidate = _validate_capture(reader, record)
+    if candidate.release_tag != tag:
+        raise ReleaseEvidenceV2Error("Generated capture-v2 release tag conflicts with its bundle directory.")
     capture_path = repo_root / EVIDENCE_ROOT / tag / CAPTURE_NAME
     if capture_path.exists():
         existing = _load_record(
-            _verification_reader(repo_root, verification_revision=None, worktree=True),
+            reader,
             f"{EVIDENCE_ROOT}/{tag}/{CAPTURE_NAME}",
             "existing capture-v2 record",
         )
-        validate_v2_bundle(repo_root, tag, worktree=True)
+        _validate_capture(reader, existing)
+        existing_identity = _capture_immutable_identity(existing, "existing capture")
+        candidate_identity = _capture_immutable_identity(record, "generated capture")
+        if existing_identity != candidate_identity:
+            raise ReleaseEvidenceV2Error(
+                "Existing capture-v2 conflicts with the newly supplied immutable release evidence."
+            )
         return existing
     write_record(capture_path, record)
-    validate_v2_bundle(repo_root, tag, worktree=True)
     return record
+
+
+def _capture_immutable_identity(record: Mapping[str, Any], description: str) -> dict[str, Any]:
+    return {
+        "live_appcast_sha256": _mapping(record.get("live_appcast"), f"{description} live appcast").get("sha256"),
+        **{
+            key: record.get(key)
+            for key in (
+                "qualification_record",
+                "receipt",
+                "record_type",
+                "release_tag",
+                "release_workflow",
+                "repository",
+                "schema_version",
+                "signed_ui",
+                "source_inputs",
+                "source_sha",
+                "state",
+            )
+        },
+    }
 
 
 def capture_v2(
@@ -771,7 +802,10 @@ def write_index_v2(repo_root: Path, index: Mapping[str, Any], *, output_path: Pa
     repo_root = repo_root.resolve()
     target = output_path or repo_root / EVIDENCE_ROOT / INDEX_NAME
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(canonical_index_bytes(index))
+    with tempfile.NamedTemporaryFile("wb", dir=target.parent, delete=False) as temporary:
+        temporary.write(canonical_index_bytes(index))
+        temporary_path = Path(temporary.name)
+    temporary_path.replace(target)
     return target
 
 

@@ -83,6 +83,7 @@ jobs:
           fi
 
       - name: Resolve the immutable release and receipt
+        id: publication
         env:
           EXPECTED_RUN_ID: ${{ steps.source.outputs.release_run_id }}
           EXPECTED_SOURCE_SHA: ${{ steps.source.outputs.release_source_sha }}
@@ -127,6 +128,7 @@ jobs:
             --connect-timeout 10 --max-time 60 \
             "https://cbusillo.github.io/BD_to_AVP/appcast.xml" \
             --output live-appcast.xml
+          echo "live_appcast_verified_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
 
       - name: Sanitize release evidence tag and ref
         id: sanitize
@@ -370,7 +372,7 @@ jobs:
       - name: Generate or validate shadow capture-v2
         id: capture-v2
         env:
-          CAPTURE_TIMESTAMP: ${{ github.event.workflow_run.updated_at }}
+          CAPTURE_TIMESTAMP: ${{ steps.publication.outputs.live_appcast_verified_at }}
           CAPTURE_WORKFLOW_ACTOR: ${{ github.event.workflow_run.actor.login }}
           CAPTURE_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
           CAPTURE_WORKFLOW_RUN_ID: ${{ github.run_id }}

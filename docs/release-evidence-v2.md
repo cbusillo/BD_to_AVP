@@ -47,6 +47,9 @@ or Git ref use.
 existing verifier class and every sorted repo-relative file/digest in that tag
 directory. The index contains no timestamps or current-time fields and excludes
 itself from release inventories.
+Protected-main CI regenerates this view in memory and rejects committed index
+drift; the release-evidence workflow writes and immediately rechecks the same
+bytes before staging its advisory shadow output.
 
 ## Capture Record
 

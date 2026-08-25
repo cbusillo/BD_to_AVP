@@ -1058,6 +1058,14 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             reused = write_or_validate_capture_v2(root, TAG, changed)
             self.assertEqual(reused["capture_sha256"], capture["capture_sha256"])
             self.assertEqual(capture_path.read_bytes(), original)
+            conflicting = dict(capture)
+            conflicting["signed_ui"] = {
+                **capture["signed_ui"],
+                "artifact_id": capture["signed_ui"]["artifact_id"] + 1,
+            }
+            conflicting = with_self_digest(conflicting)
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "immutable release evidence"):
+                write_or_validate_capture_v2(root, TAG, conflicting)
             capture_path.unlink()
             write_record(capture_path, capture)
             with self.assertRaisesRegex(ReleaseEvidenceV2Error, "different bytes"):
@@ -1065,6 +1073,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
 
     def test_workflow_contract_uses_unconditional_shadow_capture_and_index(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "release-evidence.yml").read_text(encoding="utf-8")
+        ci_workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         self.assertIn("name: Sanitize release evidence tag and ref", workflow)
         self.assertIn("name: Generate or validate shadow capture-v2", workflow)
         self.assertIn("name: Generate and check shadow index-v2", workflow)
@@ -1072,6 +1081,7 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
         self.assertIn("--capture-workflow-run-id", workflow)
         self.assertIn("branch: ${{ needs.validate-and-prepare.outputs.evidence_ref }}", workflow)
         self.assertNotIn("if: vars.RELEASE_EVIDENCE_V2", workflow)
+        self.assertIn("python -m scripts.release_evidence_v2 index --check --worktree", ci_workflow)
 
     def test_index_check_rejects_drift_without_changing_legacy_index(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
