@@ -3,7 +3,8 @@
 Release Evidence v2 is an additive, offline-verifiable, write-once format for
 release evidence under `docs/release-evidence/<tag>/`. It does not alter
 release, qualification, or workflow/controller behavior. Evidence files are
-passive data: the verifier uses only local files and local Git object reads. It
+passive data: the verifier uses only local files and local Git operations. For
+legacy revision replay it creates and removes a temporary detached worktree. It
 does not invoke `gh`, `curl`, a network client, or credentials.
 
 ## Verification

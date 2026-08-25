@@ -892,11 +892,14 @@ def _case_source(case: Mapping[str, Any], case_id: str, source: str) -> None:
 def _validate_tier3_case_receipt(
     reader: _BundleReader,
     *,
+    accepted_at: datetime,
     case_id: str,
     binding: DigestBinding,
     source: str,
     policy_id: str,
     case: Mapping[str, Any],
+    capture: CaptureV2,
+    qualified_at: datetime,
 ) -> None:
     content = _require_digest(reader, binding, f"qualification case receipt {case_id}")
     receipt = _load_json_bytes(content, f"qualification case receipt {case_id}")
@@ -916,6 +919,28 @@ def _validate_tier3_case_receipt(
         raise ReleaseEvidenceV2Error(f"Qualification case receipt {case_id} identity is invalid.")
     if result.get("status") != "passed":
         raise ReleaseEvidenceV2Error(f"Qualification case receipt {case_id} did not pass.")
+    release_identity = _mapping(
+        validated.get("release_identity"), f"qualification case receipt {case_id} release identity"
+    )
+    release_reference = _mapping(
+        release_identity.get("release_receipt"),
+        f"qualification case receipt {case_id} release receipt reference",
+    )
+    if release_reference != {
+        "file_sha256": capture.receipt.file_sha256,
+        "receipt_sha256": capture.receipt.receipt_sha256,
+        "reference": capture.receipt.path,
+    }:
+        raise ReleaseEvidenceV2Error(
+            f"Qualification case receipt {case_id} is not bound to the captured release receipt."
+        )
+    timestamps = _mapping(validated.get("timestamps"), f"qualification case receipt {case_id} timestamps")
+    started_at = _timestamp(timestamps.get("started_at"), f"qualification case receipt {case_id} started_at")
+    completed_at = _timestamp(timestamps.get("completed_at"), f"qualification case receipt {case_id} completed_at")
+    if started_at < capture.captured_at or completed_at > qualified_at or accepted_at < completed_at:
+        raise ReleaseEvidenceV2Error(
+            f"Qualification case receipt {case_id} timestamps conflict with bundle chronology."
+        )
 
 
 def _release_channel(release_tag: str, prerelease: object) -> str:
@@ -1112,6 +1137,7 @@ def _validate_qualification(reader: _BundleReader, record: Mapping[str, Any], ca
         ),
     }
     validated_receipts: dict[str, DigestBinding] = {}
+    receipt_accepted_at: dict[str, datetime] = {}
     receipt_sources: dict[str, str] = {}
     for case_id in sorted(REQUIRED_CASE_IDS):
         receipt = _mapping(receipts.get(case_id), f"qualification-v2 receipt {case_id}")
@@ -1134,6 +1160,7 @@ def _validate_qualification(reader: _BundleReader, record: Mapping[str, Any], ca
             expected_path=expected_receipt_paths[case_id],
         )
         validated_receipts[case_id] = binding
+        receipt_accepted_at[case_id] = accepted_at
         receipt_sources[case_id] = source
     profile_receipt = validated_receipts[PROFILE_CASE_ID]
     if (
@@ -1145,11 +1172,14 @@ def _validate_qualification(reader: _BundleReader, record: Mapping[str, Any], ca
     for case_id in ("clean-machine-signed-update", "installed-ui-accessibility"):
         _validate_tier3_case_receipt(
             reader,
+            accepted_at=receipt_accepted_at[case_id],
             case_id=case_id,
             binding=validated_receipts[case_id],
             source=receipt_sources[case_id],
             policy_id=policy_id,
             case=policy_cases[case_id],
+            capture=capture,
+            qualified_at=qualified_at,
         )
     live_qualification_content = _require_digest(
         reader,

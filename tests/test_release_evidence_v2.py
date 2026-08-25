@@ -779,6 +779,92 @@ class ReleaseEvidenceV2Tests(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseEvidenceV2Error, "profile receipt conflicts"):
                 validate_v2_bundle(root / "profile", TAG, worktree=True)
 
+            foreign_root = root / "foreign"
+            source_sha, bundle = self.build_repository(foreign_root)
+            capture = self.write_capture(foreign_root, source_sha)
+            qualification = self.qualification_record(foreign_root, capture)
+            policy = json.loads(
+                (foreign_root / "docs" / "qualification" / "release-qualification-policy-v1.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            foreign_receipt = build_receipt(
+                {
+                    "release_route": "prerelease",
+                    "source_sha": "1" * 40,
+                    "workflow_actor": "shiny-code-bot",
+                    "workflow_run_id": 12344,
+                    "workflow_run_attempt": 1,
+                    "package_version": "0.3.0rc2",
+                    "public_version": "0.3.0-rc.2",
+                    "build_version": "159",
+                    "release_tag": "v0.3.0-rc.2",
+                    "release_name": "v0.3.0-rc.2",
+                    "release_id": 67889,
+                    "release_created_at": "2026-08-04T12:00:00Z",
+                    "prerelease": True,
+                    "make_latest": False,
+                    "signed_app_tree_sha256": "8" * 64,
+                    "artifacts": [
+                        {
+                            "kind": "dmg",
+                            "name": "3D-Blu-ray-to-Vision-Pro-0.3.0-rc.2.dmg",
+                            "sha256": "7" * 64,
+                            "size_bytes": 900,
+                            "asset_id": 11,
+                        },
+                        {
+                            "kind": "checksum",
+                            "name": "SHA256SUMS",
+                            "sha256": "6" * 64,
+                            "size_bytes": 90,
+                            "asset_id": 12,
+                        },
+                        {
+                            "kind": "appcast",
+                            "name": "appcast.xml",
+                            "sha256": "5" * 64,
+                            "size_bytes": 450,
+                            "asset_id": 13,
+                        },
+                    ],
+                },
+                policy_path=foreign_root / "docs" / "qualification" / "release-qualification-policy-v1.json",
+            )
+            foreign_receipt_path = foreign_root / "docs" / "release-evidence" / "v0.3.0-rc.2" / "release-receipt.json"
+            foreign_receipt_path.parent.mkdir(parents=True)
+            write_receipt(foreign_receipt, foreign_receipt_path)
+            sample = json.loads(
+                (REPO_ROOT / "docs" / "qualification" / "v0.3.2-clean-machine-signed-update-v1.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            foreign_tier3 = build_tier3_receipt(
+                {
+                    "assertions": {item["id"]: item["status"] for item in sample["assertions"]},
+                    "cleanup": sample["cleanup"],
+                    "completed_at": "2026-08-05T12:03:30Z",
+                    "environment": sample["environment"],
+                    "evidence": sample["evidence"],
+                    "evidence_source": sample["evidence_source"],
+                    "hardware": sample["hardware"],
+                    "release_receipt_file_sha256": digest(foreign_receipt_path),
+                    "release_receipt_reference": "docs/release-evidence/v0.3.0-rc.2/release-receipt.json",
+                    "result": sample["result"],
+                    "started_at": "2026-08-05T12:02:00Z",
+                },
+                policy_id=policy["policy_id"],
+                case={case["id"]: case for case in policy["cases"]}["clean-machine-signed-update"],
+                release_receipt=foreign_receipt,
+            )
+            clean_path = bundle / "clean-machine-signed-update-receipt.json"
+            clean_path.write_text(json.dumps(foreign_tier3, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            qualification["accepted_case_receipts"]["clean-machine-signed-update"]["sha256"] = digest(clean_path)
+            qualification = with_self_digest(qualification)
+            write_record(bundle / QUALIFICATION_NAME, qualification)
+            with self.assertRaisesRegex(ReleaseEvidenceV2Error, "not bound to the captured release receipt"):
+                validate_v2_bundle(foreign_root, TAG, worktree=True)
+
     def test_signed_ui_receipt_binding_has_no_asset_id_and_zip_rejects_extra_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
