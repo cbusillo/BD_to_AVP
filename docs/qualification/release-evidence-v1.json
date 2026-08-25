@@ -703,6 +703,46 @@
       "source_sha": "1d691a6db7c18d09f55a425ec77a01ab6d917d80",
       "status": "accepted",
       "workflow_conclusion": "success"
+    },
+    {
+      "accepted_at": "2026-08-25T02:10:09Z",
+      "case_id": "clean-machine-signed-update",
+      "receipt_id": "v0.3.2-rc.1:clean-machine-signed-update:32799964483",
+      "reference": "docs/qualification/v0.3.2-rc.1-clean-machine-signed-update-v1.json",
+      "sha256": "66ee6f0ee679f75d4ae3787015072ddb60ad68f7e79c4b5c9827b86f277a578f",
+      "source": "tier3_automation_receipt",
+      "source_sha": "1d691a6db7c18d09f55a425ec77a01ab6d917d80",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-25T02:10:09Z",
+      "case_id": "installed-ui-accessibility",
+      "receipt_id": "v0.3.2-rc.1:installed-ui-accessibility:32799964483",
+      "reference": "docs/qualification/v0.3.2-rc.1-installed-ui-accessibility-v1.json",
+      "sha256": "04fa78aa5e28b941ea64c4c1c05b4993e328f7db50b1450571b73833d2ee7b91",
+      "source": "tier3_automation_receipt",
+      "source_sha": "1d691a6db7c18d09f55a425ec77a01ab6d917d80",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-25T02:10:09Z",
+      "case_id": "profile-save-action-accessibility",
+      "receipt_id": "v0.3.2-rc.1:profile-save-action-accessibility:32796196439",
+      "reference": "docs/release-evidence/v0.3.2-rc.1/signed-artifact-ui-receipt.json",
+      "sha256": "9f3a0cf76896b8a7fa70e4ce5fc715e482e8fbbd4e30bffaac8bf0562b7e7fa1",
+      "source": "signed_artifact_receipt",
+      "source_sha": "1d691a6db7c18d09f55a425ec77a01ab6d917d80",
+      "status": "accepted"
+    },
+    {
+      "accepted_at": "2026-08-25T02:10:09Z",
+      "case_id": "sparkle-update-route",
+      "receipt_id": "v0.3.2-rc.1:sparkle-update-route:32799964483",
+      "reference": "docs/qualification/v0.3.2-rc.1-live-qualification-v1.json",
+      "sha256": "6714e43d8cd879bd3b6efeceffb5887e1d146d2d43e877620157c61414f88ada",
+      "source": "signed_artifact_receipt",
+      "source_sha": "1d691a6db7c18d09f55a425ec77a01ab6d917d80",
+      "status": "accepted"
     }
   ],
   "schema_version": 1
