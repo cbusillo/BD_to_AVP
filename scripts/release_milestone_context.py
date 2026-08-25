@@ -31,6 +31,8 @@ RUNNER_BOUND_QUALIFICATION_PATHS = {
     "docs/qualification/release-qualification-policy-v1.json",
     "docs/qualification/video-quality-route-table-v2.json",
 }
+MANIFEST_BASE_ADVANCE_ALLOWED_PATHS = frozenset({"scripts/release_milestone_context.py"})
+MANIFEST_BASE_ADVANCE_ALLOWED_PREFIXES = ("tests/",)
 RECEIPT_PATH_PATTERN = re.compile(r"^docs/release-evidence/(v[^/]+)/release-receipt\.json$")
 MANIFEST_PATH_PATTERN = re.compile(rf"^docs/release-evidence/(v[^/]+)/{re.escape(MANIFEST_NAME)}$")
 CHANGE_SCOPED_EVIDENCE_PATH_PATTERN = re.compile(r"^docs/qualification/(v[^/]+)-change-scoped-evidence-v1\.json$")
@@ -285,10 +287,45 @@ def _string(value: object, description: str) -> str:
     return value
 
 
-def require_manifest_runner_sha(context: ReleaseMilestoneContext, expected_sha: str) -> None:
-    if context.runner_sha != expected_sha:
+def require_manifest_runner_sha(context: ReleaseMilestoneContext, repo_root: Path, expected_sha: str) -> None:
+    if context.runner_sha == expected_sha:
+        return
+
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", context.runner_sha, expected_sha],
+        cwd=repo_root,
+        capture_output=True,
+        check=False,
+    )
+    if ancestry.returncode == 1:
         raise ReleaseMilestoneContextError(
-            "Milestone qualification manifest runner SHA must match the pull-request base SHA."
+            "Milestone qualification manifest runner SHA must be an ancestor of the pull-request base SHA."
+        )
+    if ancestry.returncode != 0:
+        raise ReleaseMilestoneContextError("Unable to verify milestone qualification manifest runner SHA ancestry.")
+
+    changed = subprocess.run(
+        ["git", "diff", "--name-only", "--no-renames", context.runner_sha, expected_sha, "--"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if changed.returncode != 0:
+        raise ReleaseMilestoneContextError(
+            "Unable to inspect protected-base changes after the milestone qualification manifest runner SHA."
+        )
+    changed_paths = tuple(path for path in changed.stdout.splitlines() if path)
+    unsafe_paths = sorted(
+        path
+        for path in changed_paths
+        if path not in MANIFEST_BASE_ADVANCE_ALLOWED_PATHS
+        and not path.startswith(MANIFEST_BASE_ADVANCE_ALLOWED_PREFIXES)
+    )
+    if unsafe_paths:
+        raise ReleaseMilestoneContextError(
+            "Milestone qualification manifest runner SHA may precede the pull-request base only when protected-base "
+            f"changes are validation-only: {unsafe_paths!r}."
         )
 
 
@@ -2065,6 +2102,9 @@ def resolve_milestone_manifest_context(repo_root: Path, manifest_path: Path) -> 
     evidence_ref = _string(evidence.get("ref"), "manifest evidence ref")
     if evidence_ref != f"automation/release-evidence-{release_tag}":
         raise ReleaseMilestoneContextError("Milestone manifest evidence ref conflicts with release tag.")
+    runner_sha = _string(manifest.get("runner_sha"), "manifest runner SHA")
+    if _string(evidence.get("base_sha"), "manifest evidence base SHA") != runner_sha:
+        raise ReleaseMilestoneContextError("Milestone manifest runner SHA must match its canonical evidence base SHA.")
     source_sha = cast(str, candidate["source_sha"])
     manifest_digest = _string(manifest.get("manifest_sha256"), "manifest digest")
     _require_tracked_path(repo_root, manifest_relative, "Milestone qualification manifest")
@@ -2085,7 +2125,7 @@ def resolve_milestone_manifest_context(repo_root: Path, manifest_path: Path) -> 
         release_receipt_path=cast(str, release_receipt["path"]),
         release_stage=version.stage,
         release_tag=release_tag,
-        runner_sha=_string(manifest.get("runner_sha"), "manifest runner SHA"),
+        runner_sha=runner_sha,
     )
 
 
@@ -2329,7 +2369,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if manifest_path is not None:
             context = resolve_milestone_manifest_context(args.repo_root, manifest_path)
             if args.base_sha is not None:
-                require_manifest_runner_sha(context, args.base_sha)
+                require_manifest_runner_sha(context, args.repo_root.resolve(), args.base_sha)
                 require_manifest_evidence_baseline(context, args.repo_root.resolve(), args.base_sha)
         elif receipt_path is None:
             outputs = {"required": "false"}
